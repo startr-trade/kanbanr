@@ -150,6 +150,32 @@ enum Command {
         #[arg(long)]
         all_projects: bool,
     },
+    /// Portfolio / program hierarchy: cross-project rollups & board. (FEAT-030)
+    #[command(subcommand)]
+    Portfolio(PortfolioCmd),
+}
+
+#[derive(Subcommand)]
+enum PortfolioCmd {
+    /// Show the portfolio index (workspace metadata + programs and their projects).
+    Show,
+    /// Show task-based rollups: milestone% → project% → program% → portfolio%.
+    Rollups,
+    /// Show the cross-project board (features grouped into normalized lanes).
+    Board,
+    /// Declare/replace a program in workspace.yaml (a write).
+    AddProgram {
+        /// Program id.
+        id: String,
+        /// Display name (defaults to the id).
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        /// Comma-separated project ids belonging to this program.
+        #[arg(long)]
+        projects: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -787,6 +813,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             print_board(&get_project(&client, &p)?);
             Ok(())
         }
+        Command::Portfolio(cmd) => run_portfolio(cli, &client, cmd),
         Command::Ready { all_projects } => run_readiness(cli, &client, "ready", *all_projects),
         Command::Blocked { all_projects } => run_readiness(cli, &client, "blocked", *all_projects),
         Command::Graph {
@@ -918,6 +945,126 @@ fn run_doctor(cli: &Cli, client: &Backend, all_projects: bool) -> anyhow::Result
         println!("clean: no integrity issues found");
     }
     Ok(())
+}
+
+fn run_portfolio(cli: &Cli, client: &Backend, cmd: &PortfolioCmd) -> anyhow::Result<()> {
+    match cmd {
+        PortfolioCmd::Show => {
+            let resp = client.get("/portfolio")?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let v: Value = serde_json::from_str(&resp)?;
+            println!("{}", v["name"].as_str().unwrap_or("Portfolio"));
+            for prog in v["programs"].as_array().cloned().unwrap_or_default() {
+                let projects = prog["projects"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|p| p.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                println!(
+                    "  {} [{}]: {projects}",
+                    prog["name"].as_str().unwrap_or(""),
+                    prog["id"].as_str().unwrap_or("")
+                );
+            }
+            Ok(())
+        }
+        PortfolioCmd::Rollups => {
+            let resp = client.get("/portfolio/rollups")?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let v: Value = serde_json::from_str(&resp)?;
+            let pct = |c: &Value| c["percent"].as_u64().unwrap_or(0);
+            println!(
+                "{} — {}% ({}/{} tasks)",
+                v["portfolio"].as_str().unwrap_or("Portfolio"),
+                pct(&v["counts"]),
+                v["counts"]["tasks_done"].as_u64().unwrap_or(0),
+                v["counts"]["tasks_total"].as_u64().unwrap_or(0),
+            );
+            for prog in v["programs"].as_array().cloned().unwrap_or_default() {
+                println!(
+                    "  {} — {}%",
+                    prog["name"].as_str().unwrap_or(""),
+                    pct(&prog["counts"])
+                );
+                for proj in prog["projects"].as_array().cloned().unwrap_or_default() {
+                    println!(
+                        "    {} — {}%",
+                        proj["name"].as_str().unwrap_or(""),
+                        pct(&proj["counts"])
+                    );
+                }
+            }
+            Ok(())
+        }
+        PortfolioCmd::Board => {
+            let resp = client.get("/portfolio/board")?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let v: Value = serde_json::from_str(&resp)?;
+            for lane in v["lanes"].as_array().cloned().unwrap_or_default() {
+                let cards = lane["cards"].as_array().cloned().unwrap_or_default();
+                println!(
+                    "[{}] ({})",
+                    lane["disposition"].as_str().unwrap_or(""),
+                    cards.len()
+                );
+                for c in cards {
+                    println!(
+                        "  {}:{} {} ({})",
+                        c["project"].as_str().unwrap_or(""),
+                        c["code"].as_str().unwrap_or(""),
+                        c["title"].as_str().unwrap_or(""),
+                        c["status"].as_str().unwrap_or("")
+                    );
+                }
+            }
+            Ok(())
+        }
+        PortfolioCmd::AddProgram {
+            id,
+            name,
+            description,
+            projects,
+        } => {
+            let project_list: Vec<&str> = projects
+                .as_deref()
+                .map(|s| {
+                    s.split(',')
+                        .map(|p| p.trim())
+                        .filter(|p| !p.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut body = Map::new();
+            body.insert("id".into(), json!(id));
+            body.insert("projects".into(), json!(project_list));
+            if let Some(n) = name {
+                body.insert("name".into(), json!(n));
+            }
+            if let Some(d) = description {
+                body.insert("description".into(), json!(d));
+            }
+            let resp = client.write(
+                Method::Post,
+                "/portfolio/programs",
+                Some(Value::Object(body)),
+            )?;
+            print_write(cli, &resp, format!("program {id} saved"));
+            Ok(())
+        }
+    }
 }
 
 fn print_write(cli: &Cli, resp: &str, human: String) {

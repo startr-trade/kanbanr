@@ -13,6 +13,7 @@ pub mod git;
 pub mod graph;
 pub mod mermaid;
 pub mod models;
+pub mod portfolio;
 pub mod project;
 pub mod store;
 pub mod validate;
@@ -1304,6 +1305,23 @@ mod tests {
         }
     }
 
+    // ---- portfolio / program hierarchy (FEAT-030) -------------------------------------------
+
+    /// Add a todo-list with `total` tasks to `feature`, mark `done` of them Completed.
+    fn seed_tasks(store: &Store, project: &str, feature: &str, total: usize, done: usize) {
+        let tl = store.add_todo_list(project, feature, "work", None).unwrap();
+        for i in 0..total {
+            let t = store
+                .add_task(project, feature, &tl.code, &format!("t{i}"), None)
+                .unwrap();
+            if i < done {
+                store
+                    .set_task_state(project, feature, &tl.code, &t.key, TaskState::Completed)
+                    .unwrap();
+            }
+        }
+    }
+
     #[test]
     fn mermaid_rejects_composite_state_diagram() {
         use crate::mermaid::parse_state_diagram;
@@ -1397,5 +1415,99 @@ mod tests {
             .unwrap_err(),
             CoreError::ProjectNotFound(_)
         ));
+    }
+
+    #[test]
+    fn portfolio_absent_workspace_is_default_program() {
+        let (store, _d) = temp_store();
+        new_project(&store, "alpha");
+        new_project(&store, "beta");
+        let view = crate::portfolio::view(&store).unwrap();
+        assert_eq!(view.programs.len(), 1);
+        let prog = &view.programs[0];
+        assert!(prog.implicit);
+        assert_eq!(prog.id, crate::portfolio::DEFAULT_PROGRAM_ID);
+        assert_eq!(prog.projects, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn portfolio_rollups_compute_percentages() {
+        let (store, _d) = temp_store();
+        new_project(&store, "alpha");
+        new_project(&store, "beta");
+        // alpha: one feature, 4 tasks, 2 done => 50%.
+        let fa = store.add_feature("alpha", "A", "", "M", None).unwrap();
+        seed_tasks(&store, "alpha", &fa.code, 4, 2);
+        // beta: one feature, 2 tasks, 2 done => 100%.
+        let fb = store.add_feature("beta", "B", "", "M", None).unwrap();
+        seed_tasks(&store, "beta", &fb.code, 2, 2);
+
+        // Two programs, one project each.
+        crate::portfolio::add_program(&store, "p1", None, None, vec!["alpha".into()]).unwrap();
+        crate::portfolio::add_program(&store, "p2", None, None, vec!["beta".into()]).unwrap();
+
+        let report = crate::portfolio::rollups(&store).unwrap();
+        assert_eq!(report.programs.len(), 2);
+        let p1 = report.programs.iter().find(|p| p.id == "p1").unwrap();
+        assert_eq!(p1.counts.percent, 50);
+        assert_eq!(p1.projects[0].id, "alpha");
+        assert_eq!(p1.projects[0].milestones[0].counts.percent, 50);
+        let p2 = report.programs.iter().find(|p| p.id == "p2").unwrap();
+        assert_eq!(p2.counts.percent, 100);
+        // Portfolio: 4 done / 6 total => 67%.
+        assert_eq!(report.counts.tasks_done, 4);
+        assert_eq!(report.counts.tasks_total, 6);
+        assert_eq!(report.counts.percent, 67);
+    }
+
+    #[test]
+    fn cross_project_board_groups_by_disposition() {
+        use crate::portfolio::Disposition;
+        let (store, _d) = temp_store();
+        new_project(&store, "alpha");
+        new_project(&store, "beta");
+
+        // alpha: not-started (no tasks) and in-progress (has tasks, not all done).
+        let ns = store.add_feature("alpha", "NS", "", "M", None).unwrap();
+        let ip = store.add_feature("alpha", "IP", "", "M", None).unwrap();
+        seed_tasks(&store, "alpha", &ip.code, 3, 1);
+        // beta: a done feature (moved to Completed).
+        let dn = store.add_feature("beta", "DN", "", "M", None).unwrap();
+        store.move_feature("beta", &dn.code, "Scheduled").unwrap();
+        store.move_feature("beta", &dn.code, "Completed").unwrap();
+
+        crate::portfolio::add_program(
+            &store,
+            "all",
+            None,
+            None,
+            vec!["alpha".into(), "beta".into()],
+        )
+        .unwrap();
+
+        let board = crate::portfolio::cross_project_board(&store).unwrap();
+        let lane = |d: Disposition| {
+            board
+                .lanes
+                .iter()
+                .find(|l| l.disposition == d)
+                .unwrap()
+                .cards
+                .clone()
+        };
+        let not_started = lane(Disposition::NotStarted);
+        assert_eq!(not_started.len(), 1);
+        assert_eq!(not_started[0].code, ns.code);
+        let in_progress = lane(Disposition::InProgress);
+        assert_eq!(in_progress.len(), 1);
+        assert_eq!(in_progress[0].code, ip.code);
+        let done = lane(Disposition::Done);
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].code, dn.code);
+
+        let totals = crate::portfolio::lane_totals(&board);
+        assert_eq!(totals.get("done"), Some(&1));
+        assert_eq!(totals.get("in-progress"), Some(&1));
+        assert_eq!(totals.get("not-started"), Some(&1));
     }
 }

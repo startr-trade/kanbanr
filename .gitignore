@@ -21,3 +21,4 @@
 # Defensive: kanbanr has no accounts/secrets, but if a security.yaml ever appears
 # (legacy data, an experiment), never let it into the source repo.
 security.yaml
+/web/tsconfig.tsbuildinfo

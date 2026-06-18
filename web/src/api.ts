@@ -1,4 +1,12 @@
-import type { Activity, DocFolder, Project, ProjectSummary } from "./types";
+import type {
+  Activity,
+  BoardReport,
+  DocFolder,
+  PortfolioView,
+  Project,
+  ProjectSummary,
+  RollupReport,
+} from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -20,6 +28,10 @@ async function getText(url: string): Promise<string> {
 
 export const api = {
   listProjects: () => getJson<ProjectSummary[]>("/api/projects"),
+  // Portfolio / program hierarchy (FEAT-030).
+  getPortfolio: () => getJson<PortfolioView>("/api/portfolio"),
+  getPortfolioRollups: () => getJson<RollupReport>("/api/portfolio/rollups"),
+  getPortfolioBoard: () => getJson<BoardReport>("/api/portfolio/board"),
   getProject: (id: string) => getJson<Project>(`/api/projects/${encodeURIComponent(id)}`),
   getDocTree: (id: string) => getJson<DocFolder>(`/api/projects/${encodeURIComponent(id)}/docs`),
   getDoc: (id: string, path: string) =>

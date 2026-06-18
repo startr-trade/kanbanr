@@ -15,6 +15,14 @@ export default function App() {
         <div className="brand">
           <Link to="/">▦ kanbanr</Link>
         </div>
+        <nav className="global-nav" aria-label="Global views">
+          <NavLink to="/" end className={({ isActive }) => (isActive ? "tab active" : "tab")}>
+            Projects
+          </NavLink>
+          <NavLink to="/portfolio" className={({ isActive }) => (isActive ? "tab active" : "tab")}>
+            Portfolio
+          </NavLink>
+        </nav>
         {project && (
           <nav className="crumbs">
             <Link to="/">Projects</Link>
