@@ -36,14 +36,36 @@ const SECRET_FILE: &str = "security.yaml";
 /// machine-local state, so it must never be tracked or pushed.
 pub const WRITE_LOCK_FILE: &str = ".kanbanr.lock";
 
-/// Ensure the data repo ignores machine-local files (the secrets file and the write lock), and
-/// stop tracking the secrets file if a pre-existing repo happened to track it (the file stays on
-/// disk; it just leaves the index/history going forward).
+/// The debounced-push state file (FEAT-034). It records that there are local commits not yet
+/// pushed to any remote, so a later `kanbanr sync` (or a debounce tick) knows there is work to do.
+/// Like the lock file it is machine-local and must never be tracked or pushed.
+pub const UNPUSHED_FILE: &str = ".kanbanr.unpushed";
+
+/// Mark the data dir as having local commits not yet pushed to remotes (FEAT-034). Cheap and
+/// best-effort; called after a local commit when push is debounced rather than immediate.
+pub fn mark_unpushed(dir: &Path) {
+    let _ = std::fs::write(dir.join(UNPUSHED_FILE), b"");
+}
+
+/// Clear the "unpushed" marker after a successful (or attempted) push (FEAT-034).
+pub fn clear_unpushed(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join(UNPUSHED_FILE));
+}
+
+/// Whether there are local commits awaiting a push (the debounce marker exists). (FEAT-034)
+#[must_use]
+pub fn has_unpushed(dir: &Path) -> bool {
+    dir.join(UNPUSHED_FILE).exists()
+}
+
+/// Ensure the data repo ignores machine-local files (the secrets file, the write lock, and the
+/// debounced-push marker), and stop tracking the secrets file if a pre-existing repo happened to
+/// track it (the file stays on disk; it just leaves the index/history going forward).
 fn ensure_secret_ignored(repo: &Repository, dir: &Path) {
     let gitignore = dir.join(".gitignore");
     let mut contents = std::fs::read_to_string(&gitignore).unwrap_or_default();
     let mut changed = false;
-    for entry in [SECRET_FILE, WRITE_LOCK_FILE] {
+    for entry in [SECRET_FILE, WRITE_LOCK_FILE, UNPUSHED_FILE] {
         if !contents.lines().any(|l| l.trim() == entry) {
             if !contents.is_empty() && !contents.ends_with('\n') {
                 contents.push('\n');

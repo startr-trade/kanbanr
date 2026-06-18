@@ -1010,6 +1010,7 @@ dependencies = [
  "anyhow",
  "clap",
  "fs2",
+ "git2",
  "kanbanr-core",
  "kanbanr-server",
  "serde",
@@ -1037,7 +1038,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "fs2",
  "futures",
+ "git2",
  "kanbanr-core",
  "notify",
  "serde",

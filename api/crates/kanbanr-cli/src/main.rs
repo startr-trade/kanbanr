@@ -56,7 +56,8 @@ enum Command {
         #[arg(long)]
         email: String,
     },
-    /// Run the view daemon (read-only web monitor) over this data folder.
+    /// Run the view daemon over this data folder. Read-only by default (a live web monitor); pass
+    /// `--allow-writes` to make it a single-writer daemon that also accepts mutations. (FEAT-034)
     Serve {
         /// Address to bind (default: $KANBANR_BIND or 127.0.0.1:8080).
         #[arg(long)]
@@ -64,7 +65,14 @@ enum Command {
         /// Built SPA directory to serve (default: $KANBANR_UI_DIR; omit to serve /api only).
         #[arg(long)]
         ui_dir: Option<String>,
+        /// Opt-in: expose write routes and serialize all mutations through this one process
+        /// (single-writer daemon). OFF by default — the default daemon only reads. (FEAT-034)
+        #[arg(long)]
+        allow_writes: bool,
     },
+    /// Push local commits to the configured git remotes now (FEAT-034). Writes commit locally and
+    /// push is debounced off the hot path by default; this flushes anything pending immediately.
+    Sync,
     /// Open the live monitor in your browser (warns if it isn't running).
     Open,
     /// Show recent activity for the project (from its changelog).
@@ -495,7 +503,14 @@ fn monitor_url() -> String {
 }
 
 /// Run the view daemon over this data folder — the single binary's serving mode (no Docker).
-fn run_serve(cli: &Cli, bind: Option<String>, ui_dir: Option<String>) -> anyhow::Result<()> {
+/// `allow_writes` opts into the single-writer daemon (write routes exposed); default OFF keeps the
+/// historical read-only monitor unchanged. (FEAT-034)
+fn run_serve(
+    cli: &Cli,
+    bind: Option<String>,
+    ui_dir: Option<String>,
+    allow_writes: bool,
+) -> anyhow::Result<()> {
     let dir = project::resolve_data_dir(cli.data_dir.as_deref());
     let bind = bind
         .or_else(|| std::env::var("KANBANR_BIND").ok().filter(|s| !s.is_empty()))
@@ -506,7 +521,7 @@ fn run_serve(cli: &Cli, bind: Option<String>, ui_dir: Option<String>) -> anyhow:
             .filter(|s| !s.is_empty())
     });
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(kanbanr_server::run(dir, bind, ui_dir))
+    rt.block_on(kanbanr_server::run(dir, bind, ui_dir, allow_writes))
 }
 
 /// Set the commit identity on the data repo.
@@ -725,7 +740,11 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 email.clone(),
             );
         }
-        Command::Serve { bind, ui_dir } => return run_serve(cli, bind.clone(), ui_dir.clone()),
+        Command::Serve {
+            bind,
+            ui_dir,
+            allow_writes,
+        } => return run_serve(cli, bind.clone(), ui_dir.clone(), *allow_writes),
         Command::Open => return run_open(cli),
         _ => {}
     }
@@ -734,6 +753,15 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     match &cli.command {
         Command::Identity { .. } | Command::Init { .. } | Command::Serve { .. } | Command::Open => {
             unreachable!()
+        }
+        Command::Sync => {
+            let had = client.sync()?;
+            if had {
+                println!("synced: pushed local commits to remotes");
+            } else {
+                println!("nothing to sync (no local commits pending)");
+            }
+            Ok(())
         }
         Command::Whoami => {
             let resp = client.get("/auth/whoami")?;

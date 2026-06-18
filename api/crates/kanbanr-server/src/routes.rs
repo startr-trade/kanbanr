@@ -269,3 +269,89 @@ pub async fn all_events(
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
+
+// ---- write routes (single-writer daemon, FEAT-034; mounted only when --allow-writes) ----------
+
+use axum::http::Method as HttpMethod;
+
+/// The project id from a dispatch path `/projects/<id>/...` (for SSE notification).
+fn project_id(path: &str) -> Option<String> {
+    let mut segs = path.split('/').filter(|s| !s.is_empty());
+    if segs.next()? != "projects" {
+        return None;
+    }
+    segs.next().map(|s| s.to_string())
+}
+
+/// Run a daemon write through the shared dispatch+commit+push path, then notify SSE listeners.
+/// `dispatch_path` is the reconstructed real route (e.g. `/projects/X/features`).
+fn run_write(
+    st: &AppState,
+    method: &HttpMethod,
+    dispatch_path: &str,
+    body: Option<&serde_json::Value>,
+) -> axum::response::Response {
+    let outcome = crate::write::write(
+        &st.store,
+        &st.data_dir,
+        &st.pending,
+        st.push,
+        method.as_str(),
+        dispatch_path,
+        body,
+    );
+    match outcome {
+        Ok(out) => {
+            for w in &out.warnings {
+                eprintln!("kanbanr: {w}");
+            }
+            // Tell the live monitor which project changed (or "*" for structural changes).
+            let _ = st
+                .tx
+                .send(project_id(dispatch_path).unwrap_or_else(|| "*".to_string()));
+            ([("content-type", "application/json")], out.body).into_response()
+        }
+        // The dispatch error text mirrors the read path; map structurally to a 400/conflict bucket.
+        Err(e) => {
+            let code = if e.contains("not found") {
+                StatusCode::NOT_FOUND
+            } else if e.contains("already exists") || e.contains("in use") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            (code, e).into_response()
+        }
+    }
+}
+
+/// Catch-all write handler for `/write/<rest>` — reconstructs `/{rest}` as the dispatch path.
+pub async fn write_route(
+    State(st): State<AppState>,
+    method: HttpMethod,
+    Path(rest): Path<String>,
+    body: Option<Json<serde_json::Value>>,
+) -> impl IntoResponse {
+    let dispatch_path = format!("/{rest}");
+    run_write(&st, &method, &dispatch_path, body.as_ref().map(|b| &b.0))
+}
+
+/// Write handler for the bare `/write` route (maps to dispatch path `/projects`, e.g. create
+/// project / portfolio root operations).
+pub async fn write_route_root(
+    State(st): State<AppState>,
+    method: HttpMethod,
+    body: Option<Json<serde_json::Value>>,
+) -> impl IntoResponse {
+    // The only bare mutation is "create project" (POST /projects); portfolio ops carry a sub-path.
+    run_write(&st, &method, "/projects", body.as_ref().map(|b| &b.0))
+}
+
+/// Explicit push of pending local commits (the daemon's `/sync`).
+pub async fn sync_now(State(st): State<AppState>) -> impl IntoResponse {
+    let warnings = crate::write::sync(&st.data_dir, &st.pending);
+    for w in &warnings {
+        eprintln!("kanbanr: {w}");
+    }
+    Json(serde_json::json!({ "synced": true, "warnings": warnings }))
+}
