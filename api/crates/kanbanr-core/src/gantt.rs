@@ -32,9 +32,11 @@ fn task_id(qualified: &str) -> String {
     qualified.replace([':', ' ', '-'], "_")
 }
 
-/// Escape a task label for the `<label> :` field (commas would split the task definition).
+/// Escape a task label for the `<label> :` field. Mermaid gantt splits a task line on the first
+/// `:` (label vs. metadata) and on `,` (metadata fields), so the label must contain NEITHER —
+/// otherwise a qualified id like `proj:CODE` corrupts the whole line. Render it as `proj/CODE`.
 fn label(s: &str) -> String {
-    s.replace(',', " ")
+    s.replace(':', "/").replace(',', " ")
 }
 
 /// Common gantt header.

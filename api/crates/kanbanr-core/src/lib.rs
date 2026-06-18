@@ -1898,6 +1898,20 @@ mod tests {
         );
         // The critical path (A->B) is marked `crit`.
         assert!(out.contains("crit"), "missing crit marker: {out}");
+        // Regression: task labels must NOT contain a raw qualified `proj:code` colon — Mermaid gantt
+        // splits a task line on the first ':', so a colon in the label corrupts every task. Labels
+        // render as `demo/FEAT-001` instead. Each task line's text before " :" must be colon-free.
+        for line in out.lines().filter(|l| l.contains(" :")) {
+            let title = line.split(" :").next().unwrap_or("");
+            assert!(
+                !title.contains(':'),
+                "task label has a colon (breaks gantt): {line}"
+            );
+        }
+        assert!(
+            out.contains("demo/FEAT-001"),
+            "label should be slash-qualified: {out}"
+        );
     }
 
     #[test]
