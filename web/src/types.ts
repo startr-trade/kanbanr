@@ -142,3 +142,79 @@ export interface DocFolder {
 export function displayedStates(config: ProjectConfig): string[] {
   return config.displayed_states.length ? config.displayed_states : config.statuses;
 }
+
+// ---- portfolio / program hierarchy (FEAT-030) ----------------------------------------------
+
+/** A program's project membership within the portfolio index. */
+export interface ProgramView {
+  id: string;
+  name: string;
+  description: string;
+  projects: string[];
+  /** True when this is the synthesized implicit default program. */
+  implicit: boolean;
+}
+
+export interface PortfolioView {
+  name: string;
+  description: string;
+  programs: ProgramView[];
+}
+
+/** Task counts + a derived done/total percentage. */
+export interface Counts {
+  features: number;
+  tasks_total: number;
+  tasks_done: number;
+  percent: number;
+}
+
+export interface MilestoneRollup {
+  code: string;
+  name: string;
+  counts: Counts;
+}
+
+export interface ProjectRollup {
+  id: string;
+  name: string;
+  counts: Counts;
+  milestones: MilestoneRollup[];
+}
+
+export interface ProgramRollup {
+  id: string;
+  name: string;
+  counts: Counts;
+  projects: ProjectRollup[];
+}
+
+export interface RollupReport {
+  portfolio: string;
+  counts: Counts;
+  programs: ProgramRollup[];
+}
+
+export type Disposition = "done" | "in-progress" | "not-started";
+
+export interface BoardCard {
+  project: string;
+  code: string;
+  title: string;
+  status: string;
+  milestone: string;
+  assignee?: string | null;
+  team?: string | null;
+  tasks_done: number;
+  tasks_total: number;
+  disposition: Disposition;
+}
+
+export interface BoardLane {
+  disposition: Disposition;
+  cards: BoardCard[];
+}
+
+export interface BoardReport {
+  lanes: BoardLane[];
+}

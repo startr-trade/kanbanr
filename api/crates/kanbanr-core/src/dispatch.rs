@@ -274,6 +274,23 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("GET", ["doctor"]) => ser(&crate::doctor::run(store)?),
         ("GET", ["projects", p, "doctor"]) => ser(&crate::doctor::run_project(store, p)?),
 
+        // ---- portfolio / program hierarchy (FEAT-030) ----
+        ("GET", ["portfolio"]) => ser(&crate::portfolio::view(store)?),
+        ("GET", ["portfolio", "rollups"]) => ser(&crate::portfolio::rollups(store)?),
+        ("GET", ["portfolio", "board"]) => ser(&crate::portfolio::cross_project_board(store)?),
+        ("POST", ["portfolio", "programs"]) => {
+            let id = str_field(b, "id").unwrap_or_default();
+            let projects = vec_field(b, "projects").unwrap_or_default();
+            let ws = crate::portfolio::add_program(
+                store,
+                &id,
+                str_field(b, "name"),
+                str_field(b, "description"),
+                projects,
+            )?;
+            ser(&ws)
+        }
+
         // ---- projects ----
         ("GET", ["projects"]) => ser(&list_summaries(store)?),
         ("POST", ["projects"]) => {
@@ -508,6 +525,10 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
     let s: Vec<&str> = path_only.split('/').filter(|x| !x.is_empty()).collect();
     let del = method.eq_ignore_ascii_case("DELETE");
     match s.as_slice() {
+        ["portfolio", "programs"] => body
+            .and_then(|b| b.get("id").and_then(|v| v.as_str()))
+            .map(|id| format!("add program {id}"))
+            .unwrap_or_else(|| "update portfolio".into()),
         ["projects"] => "create project".into(),
         ["projects", p] if del => format!("delete project {p}"),
         ["projects", p] => format!("edit project {p}"),

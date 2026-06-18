@@ -61,6 +61,31 @@ pub async fn list_projects(State(st): State<AppState>) -> impl IntoResponse {
     json_body(dispatch::dispatch(&st.store, "GET", "/projects", None))
 }
 
+/// Portfolio index (workspace + programs). (FEAT-030)
+pub async fn portfolio(State(st): State<AppState>) -> impl IntoResponse {
+    json_body(dispatch::dispatch(&st.store, "GET", "/portfolio", None))
+}
+
+/// Cross-project task-based rollups. (FEAT-030)
+pub async fn portfolio_rollups(State(st): State<AppState>) -> impl IntoResponse {
+    json_body(dispatch::dispatch(
+        &st.store,
+        "GET",
+        "/portfolio/rollups",
+        None,
+    ))
+}
+
+/// Cross-project board (normalized lanes). (FEAT-030)
+pub async fn portfolio_board(State(st): State<AppState>) -> impl IntoResponse {
+    json_body(dispatch::dispatch(
+        &st.store,
+        "GET",
+        "/portfolio/board",
+        None,
+    ))
+}
+
 pub async fn get_project(State(st): State<AppState>, Path(p): Path<String>) -> impl IntoResponse {
     json_body(dispatch::dispatch(
         &st.store,

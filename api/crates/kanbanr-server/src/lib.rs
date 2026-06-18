@@ -45,6 +45,9 @@ pub async fn run(data_dir: PathBuf, bind: String, ui_dir: Option<String>) -> any
     let _watcher = watcher::spawn(data_dir.join("projects"), tx.clone())?;
 
     let api = Router::new()
+        .route("/portfolio", get(routes::portfolio))
+        .route("/portfolio/rollups", get(routes::portfolio_rollups))
+        .route("/portfolio/board", get(routes::portfolio_board))
         .route("/projects", get(routes::list_projects))
         .route("/projects/:project", get(routes::get_project))
         .route(
