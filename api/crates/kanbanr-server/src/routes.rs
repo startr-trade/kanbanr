@@ -43,6 +43,7 @@ fn core_err(e: kanbanr_core::CoreError) -> (StatusCode, String) {
         | NoStatuses
         | DisplayedNoOp(_)
         | BatchOpFailed(_, _)
+        | InvalidMermaid(_)
         | Unsupported(_) => StatusCode::BAD_REQUEST,
         Io(_) | Yaml(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };

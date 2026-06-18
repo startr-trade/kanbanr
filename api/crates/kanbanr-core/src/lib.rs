@@ -11,6 +11,7 @@ pub mod error;
 pub mod export;
 pub mod git;
 pub mod graph;
+pub mod mermaid;
 pub mod models;
 pub mod project;
 pub mod store;
@@ -391,6 +392,7 @@ mod tests {
             "demo",
             vec!["Scheduled".into(), "Completed".into()], // drops Planned (in use)
             Default::default(),
+            None,
             None,
             None,
             None,
@@ -1209,5 +1211,191 @@ mod tests {
             .map(|f| f.code.as_str())
             .collect();
         assert_eq!(by_core, vec![a.code.as_str(), b.code.as_str()]);
+    }
+
+    // ---- FEAT-039: workflow terminal states + Mermaid I/O --------------------------------------
+
+    #[test]
+    fn mermaid_export_contains_start_transitions_and_terminal() {
+        use crate::mermaid::to_state_diagram;
+        let cfg = ProjectConfig::default_for("demo");
+        let out = to_state_diagram(&cfg);
+        // Start edge to the default state.
+        assert!(out.contains("[*] --> Planned"), "missing start edge: {out}");
+        // At least one declared transition.
+        assert!(
+            out.contains("Planned --> Scheduled"),
+            "missing transition: {out}"
+        );
+        // Terminal state edges to the end pseudo-state (default has terminal "Completed").
+        assert!(
+            out.contains("Completed --> [*]"),
+            "missing terminal edge: {out}"
+        );
+        // No-op states are annotated.
+        assert!(out.contains("note right of"), "missing no-op note: {out}");
+    }
+
+    #[test]
+    fn mermaid_export_aliases_non_plain_status_names() {
+        use crate::mermaid::to_state_diagram;
+        let mut cfg = ProjectConfig::default_for("demo");
+        cfg.statuses = vec!["To Do".into(), "In Progress".into(), "Out-of-Scope".into()];
+        cfg.transitions = Default::default();
+        cfg.transitions
+            .insert("To Do".into(), vec!["In Progress".into()]);
+        cfg.default_state = "To Do".into();
+        cfg.terminal_states = vec!["In Progress".into()];
+        cfg.no_op_states = vec!["Out-of-Scope".into()];
+        cfg.displayed_states = vec!["To Do".into(), "In Progress".into()];
+        let out = to_state_diagram(&cfg);
+        // Names with spaces/'-' are aliased; the edges reference the sanitized ids.
+        assert!(
+            out.contains("state \"To Do\" as To_Do"),
+            "missing alias: {out}"
+        );
+        assert!(
+            out.contains("state \"In Progress\" as In_Progress"),
+            "{out}"
+        );
+        assert!(out.contains("[*] --> To_Do"), "{out}");
+        assert!(out.contains("To_Do --> In_Progress"), "{out}");
+        assert!(out.contains("In_Progress --> [*]"), "{out}");
+    }
+
+    #[test]
+    fn mermaid_parse_known_diagram() {
+        use crate::mermaid::{parse_state_diagram, WorkflowDef};
+        let text = "stateDiagram-v2\n\
+            state \"To Do\" as To_Do\n\
+            [*] --> To_Do\n\
+            To_Do --> Done : finish\n\
+            Done --> [*]\n";
+        let def = parse_state_diagram(text).unwrap();
+        let mut transitions = std::collections::BTreeMap::new();
+        transitions.insert("To Do".to_string(), vec!["Done".to_string()]);
+        assert_eq!(
+            def,
+            WorkflowDef {
+                statuses: vec!["To Do".into(), "Done".into()],
+                transitions,
+                default_state: Some("To Do".into()),
+                terminal_states: vec!["Done".into()],
+            }
+        );
+    }
+
+    #[test]
+    fn mermaid_round_trip_reproduces_workflow() {
+        use crate::mermaid::{parse_state_diagram, to_state_diagram};
+        let cfg = ProjectConfig::default_for("demo");
+        let def = parse_state_diagram(&to_state_diagram(&cfg)).unwrap();
+        assert_eq!(def.default_state.as_deref(), Some("Planned"));
+        assert_eq!(def.terminal_states, vec!["Completed".to_string()]);
+        // Transitions survive the round-trip.
+        assert_eq!(def.transitions, cfg.transitions);
+        // Every original status is recovered (order-independent).
+        for s in &cfg.statuses {
+            assert!(
+                def.statuses.contains(s),
+                "lost status {s}: {:?}",
+                def.statuses
+            );
+        }
+    }
+
+    #[test]
+    fn mermaid_rejects_composite_state_diagram() {
+        use crate::mermaid::parse_state_diagram;
+        let text = "stateDiagram-v2\n\
+            [*] --> Active\n\
+            state Active {\n\
+            [*] --> Sub\n\
+            }\n";
+        assert!(matches!(
+            parse_state_diagram(text).unwrap_err(),
+            CoreError::InvalidMermaid(_)
+        ));
+    }
+
+    #[test]
+    fn terminal_states_make_feature_done_in_graph() {
+        use crate::graph::is_terminal_status;
+        let mut cfg = ProjectConfig::default_for("demo");
+        // A custom, non-"Completed", non-no-op status flagged terminal is treated as done.
+        cfg.statuses.push("Shipped".into());
+        cfg.terminal_states = vec!["Shipped".into()];
+        assert!(is_terminal_status(&cfg, "Shipped"));
+        // Empty terminal_states falls back to the legacy heuristic (Completed / no-op only).
+        let mut legacy = ProjectConfig::default_for("demo");
+        legacy.terminal_states.clear();
+        assert!(is_terminal_status(&legacy, "Completed"));
+        assert!(is_terminal_status(&legacy, "Out-of-Scope"));
+        assert!(!is_terminal_status(&legacy, "Planned"));
+    }
+
+    #[test]
+    fn set_workflow_validates_and_persists_terminal_states() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        // Unknown terminal status is rejected.
+        assert!(matches!(
+            store
+                .set_workflow(
+                    "demo",
+                    vec!["Planned".into(), "Completed".into()],
+                    Default::default(),
+                    Some("Planned".into()),
+                    Some(vec!["Planned".into()]),
+                    None,
+                    Some(vec!["Nope".into()]),
+                )
+                .unwrap_err(),
+            CoreError::UnknownStatus(_)
+        ));
+        // A valid terminal status persists.
+        let cfg = store
+            .set_workflow(
+                "demo",
+                vec!["Planned".into(), "Completed".into()],
+                Default::default(),
+                Some("Planned".into()),
+                Some(vec!["Planned".into()]),
+                None,
+                Some(vec!["Completed".into()]),
+            )
+            .unwrap();
+        assert_eq!(cfg.terminal_states, vec!["Completed".to_string()]);
+        assert_eq!(
+            store.load("demo").unwrap().config.terminal_states,
+            vec!["Completed".to_string()]
+        );
+    }
+
+    #[test]
+    fn dispatch_workflow_mermaid_export_route() {
+        use crate::dispatch::dispatch;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let out = dispatch(
+            &store,
+            "GET",
+            "/projects/demo/workflow?format=mermaid",
+            None,
+        )
+        .unwrap();
+        assert!(out.starts_with("stateDiagram-v2"));
+        assert!(out.contains("[*] --> Planned") && out.contains("Completed --> [*]"));
+        // Unknown project still 404s.
+        assert!(matches!(
+            dispatch(
+                &store,
+                "GET",
+                "/projects/ghost/workflow?format=mermaid",
+                None
+            )
+            .unwrap_err(),
+            CoreError::ProjectNotFound(_)
+        ));
     }
 }
