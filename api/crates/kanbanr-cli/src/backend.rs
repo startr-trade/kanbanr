@@ -20,9 +20,30 @@
 //! guidance and we print it; the change is already committed locally so it is safe to defer.
 
 use anyhow::{anyhow, Result};
-use kanbanr_core::{activity, dispatch, git, Store};
+use kanbanr_core::{activity, dispatch, eventing, git, Store};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::time::Duration;
+
+/// Best-effort webhook delivery for eventing (FEAT-036), backed by the CLI's `ureq` dependency.
+/// Failures (unreachable endpoint, non-2xx, timeout) are swallowed — eventing must never fail or
+/// slow a write. A short timeout keeps a slow webhook off the (already-committed) write's tail.
+struct UreqSender;
+
+impl eventing::WebhookSender for UreqSender {
+    fn post(&self, url: &str, body: &str) {
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(3))
+            .build();
+        if let Err(e) = agent
+            .post(url)
+            .set("content-type", "application/json")
+            .send_string(body)
+        {
+            eprintln!("kanbanr: webhook delivery to {url} failed: {e}");
+        }
+    }
+}
 
 /// When the local-first commit gets pushed to remotes (FEAT-034). Selected by `KANBANR_PUSH`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -126,6 +147,16 @@ impl Backend {
                 25,
             ))?);
         }
+        if let Some(project) = events_project(bare) {
+            let limit = query_param(path, "limit")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(25);
+            return Ok(serde_json::to_string(&eventing::read(
+                &self.data_dir,
+                &project,
+                limit,
+            ))?);
+        }
         dispatch::dispatch(&self.store, "GET", path, None).map_err(|e| anyhow!(e.to_string()))
     }
 
@@ -196,6 +227,10 @@ impl Backend {
             if git::commit_local(&self.data_dir, &msg) {
                 self.after_commit();
             }
+            // Eventing (FEAT-036): an additive, best-effort, opt-in tail step. Runs only after the
+            // mutation is already durable, never returns an error into the write path, and does
+            // nothing observable (beyond the local events log) unless a webhook is configured.
+            eventing::emit(&self.store, &self.data_dir, m, path, &out, &UreqSender);
         }
         Ok(out)
     }
@@ -266,6 +301,23 @@ impl Backend {
         Ok(saved)
     }
 
+    /// Emit a sample notification event for the given project (FEAT-036 `events test`): append it
+    /// to the events log and POST it to any configured webhook, best-effort. Returns whether any
+    /// webhook endpoint was configured (so the caller can tell the user delivery actually ran).
+    pub fn emit_test_event(&self, project: &str) -> bool {
+        let event = eventing::Event::new(
+            project,
+            eventing::EventKind::FeatureMoved,
+            None,
+            "test event from `kanbanr events test`",
+            json!({ "test": true }),
+        );
+        eventing::append(&self.data_dir, project, &event);
+        let config = eventing::WebhookConfig::load(&self.data_dir);
+        eventing::deliver(&config, &UreqSender, &event);
+        config.is_enabled()
+    }
+
     /// List the data folder's project ids (for portfolio-wide maintenance like `index`).
     pub fn list_projects(&self) -> Result<Vec<String>> {
         self.store
@@ -320,6 +372,24 @@ fn activity_project(path: &str) -> Option<String> {
         ["projects", p, "activity"] => Some(p.to_string()),
         _ => None,
     }
+}
+
+/// `/projects/<id>/events` -> the project id (FEAT-036 events-log read route).
+fn events_project(path: &str) -> Option<String> {
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    match segs.as_slice() {
+        ["projects", p, "events"] => Some(p.to_string()),
+        _ => None,
+    }
+}
+
+/// Read a single query-string parameter from a full path (e.g. `?limit=50`).
+fn query_param(path: &str, key: &str) -> Option<String> {
+    let query = path.split('?').nth(1)?;
+    query.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == key).then(|| v.to_string())
+    })
 }
 
 /// The feature code from `/projects/<id>/features/<CODE>/...` (for tagging activity).

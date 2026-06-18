@@ -65,7 +65,14 @@ fn ensure_secret_ignored(repo: &Repository, dir: &Path) {
     let gitignore = dir.join(".gitignore");
     let mut contents = std::fs::read_to_string(&gitignore).unwrap_or_default();
     let mut changed = false;
-    for entry in [SECRET_FILE, WRITE_LOCK_FILE, UNPUSHED_FILE] {
+    // `events.config.yaml` (FEAT-036) may hold webhook endpoint URLs — keep it machine-local and
+    // out of the pushed repo, like the secrets file and the lock/unpushed markers.
+    for entry in [
+        SECRET_FILE,
+        WRITE_LOCK_FILE,
+        UNPUSHED_FILE,
+        crate::eventing::CONFIG_FILE,
+    ] {
         if !contents.lines().any(|l| l.trim() == entry) {
             if !contents.is_empty() && !contents.ends_with('\n') {
                 contents.push('\n');

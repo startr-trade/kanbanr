@@ -8,6 +8,7 @@ pub mod dispatch;
 pub mod docs;
 pub mod doctor;
 pub mod error;
+pub mod eventing;
 pub mod export;
 pub mod gantt;
 pub mod git;

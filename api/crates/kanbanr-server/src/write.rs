@@ -11,7 +11,7 @@
 //!
 //! Binds localhost, no auth — consistent with the read-only monitor.
 
-use kanbanr_core::{activity, dispatch, git, Store};
+use kanbanr_core::{activity, dispatch, eventing, git, Store};
 use serde_json::Value;
 use std::path::Path;
 
@@ -130,6 +130,11 @@ pub fn write(
             if git::commit_local(data_dir, &msg) {
                 warnings = after_commit(data_dir, policy, pending);
             }
+            // Eventing (FEAT-036): additive best-effort tail step, after the mutation is durable.
+            // The daemon has no HTTP client, so it appends to the per-project events log only
+            // (NullSender). Webhook *delivery* is the CLI write path's responsibility for now;
+            // a daemon-side sender can be slotted in here later without touching this call site.
+            eventing::emit(store, data_dir, method, path, &out, &eventing::NullSender);
         }
         Ok(WriteOutcome {
             body: out,

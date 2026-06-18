@@ -77,6 +77,10 @@ enum Command {
     Open,
     /// Show recent activity for the project (from its changelog).
     Activity,
+    /// Show / test the notification events log for the project (FEAT-036). Events are emitted
+    /// best-effort on state changes (feature added/moved/completed, dependents becoming ready).
+    #[command(subcommand)]
+    Events(EventsCmd),
     /// Manage git remotes for the data repo (sharing/centralization is via the remote).
     #[command(subcommand)]
     Remote(RemoteCmd),
@@ -198,6 +202,19 @@ enum PortfolioCmd {
         #[arg(long)]
         projects: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum EventsCmd {
+    /// List recent notification events for the project (newest first).
+    List {
+        /// Maximum number of events to show (default 25).
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// Emit a sample event to verify the log + any configured webhook delivery (FEAT-036). Writes a
+    /// test event to the project's events log and POSTs it to every configured webhook.
+    Test,
 }
 
 #[derive(Subcommand)]
@@ -720,6 +737,52 @@ fn run_activity(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Show / test the project's notification events log (FEAT-036).
+fn run_events(cli: &Cli, client: &Backend, cmd: &EventsCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    match cmd {
+        EventsCmd::List { limit } => {
+            let limit = limit.unwrap_or(25);
+            let resp = client.get(&format!("/projects/{p}/events?limit={limit}"))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+            } else if let Some(arr) = serde_json::from_str::<Value>(&resp)?.as_array() {
+                if arr.is_empty() {
+                    println!("(no events yet)");
+                }
+                for e in arr {
+                    println!(
+                        "{:<20} {:<16} {}",
+                        e["time"].as_str().unwrap_or(""),
+                        e["kind"].as_str().unwrap_or(""),
+                        e["message"].as_str().unwrap_or("")
+                    );
+                }
+            }
+            Ok(())
+        }
+        EventsCmd::Test => {
+            let delivered = client.emit_test_event(&p);
+            if cli.json {
+                println!(
+                    "{}",
+                    json!({ "project": p, "webhook_configured": delivered })
+                );
+            } else if delivered {
+                println!("test event emitted to '{p}' and POSTed to configured webhook(s)");
+            } else {
+                println!(
+                    "test event emitted to '{p}' (log only — no webhook configured).\n\
+                     Configure one via {} or a `webhooks:` list in {} at the data-dir root.",
+                    kanbanr_core::eventing::WEBHOOK_ENV,
+                    kanbanr_core::eventing::CONFIG_FILE
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
 fn run_remote(cli: &Cli, client: &Backend, cmd: &RemoteCmd) -> anyhow::Result<()> {
     match cmd {
         RemoteCmd::Add { name, url } => {
@@ -850,6 +913,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Activity => run_activity(cli, &client),
+        Command::Events(cmd) => run_events(cli, &client, cmd),
         Command::Remote(cmd) => run_remote(cli, &client, cmd),
         Command::Project(cmd) => run_project(cli, &client, cmd),
         Command::Feature(cmd) => run_feature(cli, &client, cmd),
