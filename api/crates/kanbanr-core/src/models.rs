@@ -51,7 +51,10 @@ impl TodoList {
         !self.tasks.is_empty() && self.tasks.iter().all(|t| t.state == TaskState::Completed)
     }
     pub fn done_count(&self) -> usize {
-        self.tasks.iter().filter(|t| t.state == TaskState::Completed).count()
+        self.tasks
+            .iter()
+            .filter(|t| t.state == TaskState::Completed)
+            .count()
     }
 }
 
@@ -107,7 +110,9 @@ impl FeatureItem {
     }
 
     pub fn done_count(&self) -> usize {
-        self.all_tasks().filter(|t| t.state == TaskState::Completed).count()
+        self.all_tasks()
+            .filter(|t| t.state == TaskState::Completed)
+            .count()
     }
     pub fn task_count(&self) -> usize {
         self.all_tasks().count()

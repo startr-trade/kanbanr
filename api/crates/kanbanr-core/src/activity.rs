@@ -28,12 +28,18 @@ fn path(data_dir: &Path, project: &str) -> PathBuf {
 }
 
 fn load(file: &Path) -> Vec<Activity> {
-    std::fs::read_to_string(file).ok().and_then(|s| serde_yaml::from_str(&s).ok()).unwrap_or_default()
+    std::fs::read_to_string(file)
+        .ok()
+        .and_then(|s| serde_yaml::from_str(&s).ok())
+        .unwrap_or_default()
 }
 
 /// The most recent `limit` entries, newest first.
 pub fn read(data_dir: &Path, project: &str, limit: usize) -> Vec<Activity> {
-    load(&path(data_dir, project)).into_iter().take(limit).collect()
+    load(&path(data_dir, project))
+        .into_iter()
+        .take(limit)
+        .collect()
 }
 
 /// Append an entry (newest first), capping the file to the most recent `MAX`. `item` is the work

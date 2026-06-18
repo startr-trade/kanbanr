@@ -6,6 +6,7 @@ pub mod batch;
 pub mod config;
 pub mod dispatch;
 pub mod docs;
+pub mod doctor;
 pub mod error;
 pub mod export;
 pub mod git;
@@ -95,7 +96,9 @@ mod tests {
         // Default state is the declared default ("Planned").
         assert_eq!(f.status, "Planned");
         // Planned -> Completed is not allowed.
-        let err = store.move_feature("demo", &f.code, "Completed").unwrap_err();
+        let err = store
+            .move_feature("demo", &f.code, "Completed")
+            .unwrap_err();
         assert!(matches!(err, CoreError::TransitionNotAllowed { .. }));
         // Planned -> Scheduled is allowed.
         let f = store.move_feature("demo", &f.code, "Scheduled").unwrap();
@@ -108,7 +111,9 @@ mod tests {
         let mut cfg = ProjectConfig::default_for("demo");
         cfg.default_state = "Scheduled".to_string();
         store.init_project("demo", cfg).unwrap();
-        store.add_milestone("demo", "M", "", vec![], Some("M".into())).unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
         let f = store.add_feature("demo", "X", "", "M", None).unwrap();
         assert_eq!(f.status, "Scheduled");
     }
@@ -120,18 +125,29 @@ mod tests {
         let f = store.add_feature("demo", "Login", "", "M", None).unwrap();
         store.move_feature("demo", &f.code, "Scheduled").unwrap();
         // Tasks live in todo-lists now; auto-complete spans ALL of a feature's lists.
-        let tl1 = store.add_todo_list("demo", &f.code, "session 1", None).unwrap();
-        let tl2 = store.add_todo_list("demo", &f.code, "session 2", None).unwrap();
+        let tl1 = store
+            .add_todo_list("demo", &f.code, "session 1", None)
+            .unwrap();
+        let tl2 = store
+            .add_todo_list("demo", &f.code, "session 2", None)
+            .unwrap();
         assert_eq!(tl1.code, "TL-001");
         assert_eq!(tl2.code, "TL-002");
-        let t1 = store.add_task("demo", &f.code, &tl1.code, "do a", None).unwrap();
-        store.add_task("demo", &f.code, &tl2.code, "do b", None).unwrap();
+        let t1 = store
+            .add_task("demo", &f.code, &tl1.code, "do a", None)
+            .unwrap();
+        store
+            .add_task("demo", &f.code, &tl2.code, "do b", None)
+            .unwrap();
         assert_eq!(t1.key, "T1");
         // Completing only list 1's task does not complete the feature (list 2 still open).
         store
             .set_task_state("demo", &f.code, &tl1.code, "T1", TaskState::Completed)
             .unwrap();
-        assert_eq!(store.load("demo").unwrap().feature(&f.code).unwrap().status, "Scheduled");
+        assert_eq!(
+            store.load("demo").unwrap().feature(&f.code).unwrap().status,
+            "Scheduled"
+        );
         // Completing the last open task (in list 2) auto-completes the feature.
         let updated = store
             .set_task_state("demo", &f.code, &tl2.code, "T1", TaskState::Completed)
@@ -176,21 +192,42 @@ mod tests {
         let proj = d.path.join("projects").join("demo");
         // Default state is "Planned", so the files start in Planned/.
         let planned_yaml = proj.join("Planned").join("FEAT-001.yaml");
-        let planned_spec = proj.join("Planned").join("features-spec").join("FEAT-001.md");
+        let planned_spec = proj
+            .join("Planned")
+            .join("features-spec")
+            .join("FEAT-001.md");
         assert!(planned_yaml.is_file(), "yaml should start in Planned/");
-        assert!(planned_spec.is_file(), "spec md should start in Planned/features-spec/");
+        assert!(
+            planned_spec.is_file(),
+            "spec md should start in Planned/features-spec/"
+        );
 
         store.move_feature("demo", &f.code, "Scheduled").unwrap();
         assert!(!planned_yaml.exists(), "old yaml removed after move");
         assert!(!planned_spec.exists(), "old spec removed after move");
         assert!(proj.join("Scheduled").join("FEAT-001.yaml").is_file());
-        assert!(proj.join("Scheduled").join("features-spec").join("FEAT-001.md").is_file());
+        assert!(proj
+            .join("Scheduled")
+            .join("features-spec")
+            .join("FEAT-001.md")
+            .is_file());
 
         // The yaml metadata must NOT contain the specification (it lives in the .md).
         let yaml = std::fs::read_to_string(proj.join("Scheduled").join("FEAT-001.yaml")).unwrap();
-        assert!(!yaml.contains("specification"), "spec must not be in the yaml");
+        assert!(
+            !yaml.contains("specification"),
+            "spec must not be in the yaml"
+        );
         // Spec survives the move and reloads.
-        assert_eq!(store.load("demo").unwrap().feature(&f.code).unwrap().specification, "# spec");
+        assert_eq!(
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&f.code)
+                .unwrap()
+                .specification,
+            "# spec"
+        );
     }
 
     #[test]
@@ -214,20 +251,27 @@ mod tests {
         // The 3 default no-op states exist and are NOT displayed.
         assert!(p.config.no_op_states.iter().any(|s| s == "Out-of-Scope"));
         for n in &p.config.no_op_states {
-            assert!(!p.config.displayed_states.contains(n), "no-op must be non-displayed");
+            assert!(
+                !p.config.displayed_states.contains(n),
+                "no-op must be non-displayed"
+            );
         }
         // A feature in a no-op state stays inert: finishing its tasks does NOT auto-complete it.
         let f = store.add_feature("demo", "F", "", "M", None).unwrap();
         store.move_feature("demo", &f.code, "Out-of-Scope").unwrap();
         let tl = store.add_todo_list("demo", &f.code, "x", None).unwrap();
-        store.add_task("demo", &f.code, &tl.code, "t", None).unwrap();
+        store
+            .add_task("demo", &f.code, &tl.code, "t", None)
+            .unwrap();
         let updated = store
             .set_task_state("demo", &f.code, &tl.code, "T1", TaskState::Completed)
             .unwrap();
         assert_eq!(updated.status, "Out-of-Scope", "no-op state is inert");
         // A no-op state can never be displayed.
         assert!(matches!(
-            store.set_displayed_states("demo", vec!["Out-of-Scope".into()]).unwrap_err(),
+            store
+                .set_displayed_states("demo", vec!["Out-of-Scope".into()])
+                .unwrap_err(),
             CoreError::DisplayedNoOp(_)
         ));
     }
@@ -290,7 +334,10 @@ mod tests {
 
         let p = store.load("demo").unwrap();
         let f = p.features.iter().find(|f| f.title == "Login").unwrap();
-        assert_eq!(f.milestone, "MS-9", "ref alias resolved to the new milestone code");
+        assert_eq!(
+            f.milestone, "MS-9",
+            "ref alias resolved to the new milestone code"
+        );
         // Scheduled then all-tasks-done -> auto-completed.
         assert_eq!(f.status, "Completed");
         assert_eq!(f.todo_lists.len(), 1);
@@ -318,7 +365,9 @@ mod tests {
         ));
         // Unknown milestone is rejected.
         assert!(matches!(
-            store.add_feature("demo", "X", "", "NOPE", None).unwrap_err(),
+            store
+                .add_feature("demo", "X", "", "NOPE", None)
+                .unwrap_err(),
             CoreError::MilestoneNotFound(_)
         ));
     }
@@ -347,23 +396,74 @@ mod tests {
         assert_eq!(b2.labels, vec!["infra".to_string(), "ci".to_string()]);
         assert_eq!(b2.depends_on, vec![a.code.clone()]);
         // Persists/reloads.
-        assert_eq!(store.load("demo").unwrap().feature(&b.code).unwrap().kind.as_deref(), Some("chore"));
+        assert_eq!(
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&b.code)
+                .unwrap()
+                .kind
+                .as_deref(),
+            Some("chore")
+        );
 
         // Empty string clears; unknown dep rejected; cycle rejected; self-dep rejected.
-        let cleared = store.set_feature_attrs("demo", &b.code, Some("".into()), None, None, None, None).unwrap();
+        let cleared = store
+            .set_feature_attrs("demo", &b.code, Some("".into()), None, None, None, None)
+            .unwrap();
         assert!(cleared.kind.is_none());
         assert!(matches!(
-            store.set_feature_attrs("demo", &a.code, None, None, None, None, Some(vec!["NOPE".into()])).unwrap_err(),
+            store
+                .set_feature_attrs(
+                    "demo",
+                    &a.code,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(vec!["NOPE".into()])
+                )
+                .unwrap_err(),
             CoreError::UnknownDependency(_)
         ));
         // A depends on B, B depends on A -> cycle.
-        store.set_feature_attrs("demo", &b.code, None, None, None, None, Some(vec![a.code.clone()])).unwrap();
+        store
+            .set_feature_attrs(
+                "demo",
+                &b.code,
+                None,
+                None,
+                None,
+                None,
+                Some(vec![a.code.clone()]),
+            )
+            .unwrap();
         assert!(matches!(
-            store.set_feature_attrs("demo", &a.code, None, None, None, None, Some(vec![b.code.clone()])).unwrap_err(),
+            store
+                .set_feature_attrs(
+                    "demo",
+                    &a.code,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(vec![b.code.clone()])
+                )
+                .unwrap_err(),
             CoreError::DependencyCycle(_)
         ));
         assert!(matches!(
-            store.set_feature_attrs("demo", &a.code, None, None, None, None, Some(vec![a.code.clone()])).unwrap_err(),
+            store
+                .set_feature_attrs(
+                    "demo",
+                    &a.code,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(vec![a.code.clone()])
+                )
+                .unwrap_err(),
             CoreError::DependencyCycle(_)
         ));
     }
@@ -378,43 +478,96 @@ mod tests {
 
         // A qualified cross-project dependency resolves and is stored verbatim.
         store
-            .set_feature_attrs("beta", &b.code, None, None, None, None, Some(vec!["alpha:FEAT-001".into()]))
+            .set_feature_attrs(
+                "beta",
+                &b.code,
+                None,
+                None,
+                None,
+                None,
+                Some(vec!["alpha:FEAT-001".into()]),
+            )
             .unwrap();
         assert_eq!(
-            store.load("beta").unwrap().feature(&b.code).unwrap().depends_on,
+            store
+                .load("beta")
+                .unwrap()
+                .feature(&b.code)
+                .unwrap()
+                .depends_on,
             vec!["alpha:FEAT-001".to_string()]
         );
 
         // Dangling cross-project refs are rejected (missing code, and missing project).
         assert!(matches!(
-            store.set_feature_attrs("beta", &b.code, None, None, None, None, Some(vec!["alpha:FEAT-999".into()])).unwrap_err(),
+            store
+                .set_feature_attrs(
+                    "beta",
+                    &b.code,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(vec!["alpha:FEAT-999".into()])
+                )
+                .unwrap_err(),
             CoreError::UnknownDependency(_)
         ));
         assert!(matches!(
-            store.set_feature_attrs("beta", &b.code, None, None, None, None, Some(vec!["ghost:FEAT-001".into()])).unwrap_err(),
+            store
+                .set_feature_attrs(
+                    "beta",
+                    &b.code,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(vec!["ghost:FEAT-001".into()])
+                )
+                .unwrap_err(),
             CoreError::UnknownDependency(_)
         ));
 
         // Cross-project cycle: beta:B already depends on alpha:A, so alpha:A -> beta:B is a cycle.
         assert!(matches!(
-            store.set_feature_attrs("alpha", &a.code, None, None, None, None, Some(vec!["beta:FEAT-001".into()])).unwrap_err(),
+            store
+                .set_feature_attrs(
+                    "alpha",
+                    &a.code,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(vec!["beta:FEAT-001".into()])
+                )
+                .unwrap_err(),
             CoreError::DependencyCycle(_)
         ));
         // The rejected cyclic write did not persist.
-        assert!(store.load("alpha").unwrap().feature(&a.code).unwrap().depends_on.is_empty());
+        assert!(store
+            .load("alpha")
+            .unwrap()
+            .feature(&a.code)
+            .unwrap()
+            .depends_on
+            .is_empty());
     }
 
     #[test]
     fn rename_status_migrates_config_and_features() {
         let (store, d) = temp_store();
         new_project(&store, "demo"); // default workflow incl. "Scheduled"
-        let f = store.add_feature("demo", "Login", "# spec", "M", None).unwrap();
+        let f = store
+            .add_feature("demo", "Login", "# spec", "M", None)
+            .unwrap();
         store.move_feature("demo", &f.code, "Scheduled").unwrap();
         let proj = d.path.join("projects").join("demo");
         assert!(proj.join("Scheduled").join("FEAT-001.yaml").is_file());
 
         // Rename the status the feature is in.
-        store.rename_status("demo", "Scheduled", "In Progress").unwrap();
+        store
+            .rename_status("demo", "Scheduled", "In Progress")
+            .unwrap();
 
         // Config renamed everywhere; old status gone, new present and displayed.
         let p = store.load("demo").unwrap();
@@ -426,8 +579,138 @@ mod tests {
         assert!(!proj.join("Scheduled").exists());
 
         // Renaming an unknown status errors; renaming onto an existing one is rejected.
-        assert!(matches!(store.rename_status("demo", "Nope", "X").unwrap_err(), CoreError::UnknownStatus(_)));
-        assert!(store.rename_status("demo", "In Progress", "Completed").is_err());
+        assert!(matches!(
+            store.rename_status("demo", "Nope", "X").unwrap_err(),
+            CoreError::UnknownStatus(_)
+        ));
+        assert!(store
+            .rename_status("demo", "In Progress", "Completed")
+            .is_err());
+    }
+
+    #[test]
+    fn config_schema_version_defaults_and_stamps() {
+        use crate::config::CURRENT_SCHEMA_VERSION;
+        let (store, d) = temp_store();
+        // A freshly-init project carries the current schema version (stamped on save).
+        new_project(&store, "demo");
+        assert_eq!(
+            store.load("demo").unwrap().config.schema_version,
+            CURRENT_SCHEMA_VERSION
+        );
+
+        // A legacy config (no schema_version key) loads as 0.
+        let cfg_path = d.path.join("projects").join("demo").join("config.yaml");
+        let text = std::fs::read_to_string(&cfg_path).unwrap();
+        let legacy: String = text
+            .lines()
+            .filter(|l| !l.starts_with("schema_version"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!legacy.contains("schema_version"));
+        std::fs::write(&cfg_path, legacy).unwrap();
+        assert_eq!(store.load("demo").unwrap().config.schema_version, 0);
+
+        // Re-saving forward-stamps it back to current (non-destructive migration).
+        store
+            .set_project_meta("demo", Some("Demo".into()), None)
+            .unwrap();
+        assert_eq!(
+            store.load("demo").unwrap().config.schema_version,
+            CURRENT_SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn doctor_detects_integrity_problems() {
+        use crate::config::CURRENT_SCHEMA_VERSION;
+        use crate::doctor::{self, Severity};
+        let (store, d) = temp_store();
+        new_project(&store, "demo"); // seeds milestone "M", current schema
+        let f = store.add_feature("demo", "Login", "", "M", None).unwrap();
+
+        // A clean project reports no Errors.
+        let report = doctor::run(&store).unwrap();
+        assert!(
+            !report.has_errors(),
+            "clean project should have no errors: {report:?}"
+        );
+
+        // Unknown milestone (error): delete the feature's milestone reference by editing the yaml.
+        let feat_yaml = d
+            .path
+            .join("projects")
+            .join("demo")
+            .join("Planned")
+            .join(format!("{}.yaml", f.code));
+        let yaml = std::fs::read_to_string(&feat_yaml).unwrap();
+        let yaml = yaml.replace("milestone: M", "milestone: GONE");
+        std::fs::write(&feat_yaml, yaml).unwrap();
+
+        // Outdated schema (warning): rewrite the config to schema_version 0.
+        let cfg_path = d.path.join("projects").join("demo").join("config.yaml");
+        let cfg = std::fs::read_to_string(&cfg_path).unwrap();
+        let cfg = cfg.replace(
+            &format!("schema_version: {CURRENT_SCHEMA_VERSION}"),
+            "schema_version: 0",
+        );
+        std::fs::write(&cfg_path, cfg).unwrap();
+
+        let report = doctor::run(&store).unwrap();
+        assert!(
+            report.has_errors(),
+            "expected an error for the unknown milestone"
+        );
+        assert!(
+            report.issues.iter().any(|i| i.severity == Severity::Error
+                && i.code.as_deref() == Some(f.code.as_str())
+                && i.message.contains("unknown milestone")),
+            "missing unknown-milestone error: {report:?}"
+        );
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.severity == Severity::Warning && i.message.contains("schema_version")),
+            "missing outdated-schema warning: {report:?}"
+        );
+
+        // run_project scopes to one project but finds the same issues.
+        let scoped = doctor::run_project(&store, "demo").unwrap();
+        assert!(scoped.has_errors());
+    }
+
+    #[test]
+    fn doctor_detects_dangling_dependency() {
+        use crate::doctor::{self, Severity};
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        let f = store.add_feature("demo", "Login", "", "M", None).unwrap();
+
+        // Cross-project ref validation rejects CREATING a dangling dep, so write one to disk
+        // directly to simulate a ref that went stale (e.g. its target was renamed away).
+        let feat_yaml = d
+            .path
+            .join("projects")
+            .join("demo")
+            .join("Planned")
+            .join(format!("{}.yaml", f.code));
+        let yaml = std::fs::read_to_string(&feat_yaml).unwrap();
+        // The empty list serializes as `depends_on: []`; swap in a dangling same-project ref.
+        assert!(
+            yaml.contains("depends_on: []"),
+            "expected empty depends_on list: {yaml}"
+        );
+        let yaml = yaml.replace("depends_on: []", "depends_on:\n- FEAT-999");
+        std::fs::write(&feat_yaml, yaml).unwrap();
+
+        let report = doctor::run(&store).unwrap();
+        assert!(
+            report.issues.iter().any(|i| i.severity == Severity::Error
+                && i.message.contains("dangling dependency")
+                && i.message.contains("FEAT-999")),
+            "missing dangling-dependency error: {report:?}"
+        );
     }
 
     #[test]
@@ -435,8 +718,20 @@ mod tests {
         use crate::dispatch::{commit_message, dispatch, is_mutation};
         let (store, _d) = temp_store();
         // Create project, milestone, feature via the shared dispatcher (as local mode does).
-        dispatch(&store, "POST", "/projects", Some(&serde_json::json!({"name":"demo"}))).unwrap();
-        dispatch(&store, "POST", "/projects/demo/milestones", Some(&serde_json::json!({"name":"M","code":"MS-1"}))).unwrap();
+        dispatch(
+            &store,
+            "POST",
+            "/projects",
+            Some(&serde_json::json!({"name":"demo"})),
+        )
+        .unwrap();
+        dispatch(
+            &store,
+            "POST",
+            "/projects/demo/milestones",
+            Some(&serde_json::json!({"name":"M","code":"MS-1"})),
+        )
+        .unwrap();
         let out = dispatch(
             &store,
             "POST",
@@ -449,12 +744,24 @@ mod tests {
         let proj = dispatch(&store, "GET", "/projects/demo", None).unwrap();
         assert!(proj.contains("Login"));
         // Export (raw markdown, not JSON).
-        let md = dispatch(&store, "GET", "/projects/demo/features/FEAT-001/export?format=md", None).unwrap();
+        let md = dispatch(
+            &store,
+            "GET",
+            "/projects/demo/features/FEAT-001/export?format=md",
+            None,
+        )
+        .unwrap();
         assert!(md.contains("# s") || md.contains("Login"));
         // Helpers.
         assert!(is_mutation("POST") && !is_mutation("GET"));
-        assert_eq!(commit_message("POST", "/projects/demo/features", None), "add feature item");
+        assert_eq!(
+            commit_message("POST", "/projects/demo/features", None),
+            "add feature item"
+        );
         // Unknown route -> Unsupported.
-        assert!(matches!(dispatch(&store, "GET", "/nope", None).unwrap_err(), CoreError::Unsupported(_)));
+        assert!(matches!(
+            dispatch(&store, "GET", "/nope", None).unwrap_err(),
+            CoreError::Unsupported(_)
+        ));
     }
 }

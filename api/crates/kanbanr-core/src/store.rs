@@ -122,7 +122,11 @@ impl Store {
         }
         let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)?
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().map(|e| e == "yaml" || e == "yml").unwrap_or(false))
+            .filter(|p| {
+                p.extension()
+                    .map(|e| e == "yaml" || e == "yml")
+                    .unwrap_or(false)
+            })
             .collect();
         paths.sort();
         for p in paths {
@@ -137,8 +141,7 @@ impl Store {
         if !self.project_exists(id) {
             return Err(CoreError::ProjectNotFound(id.to_string()));
         }
-        let config: ProjectConfig =
-            Self::read_yaml(&self.project_dir(id).join("config.yaml"))?;
+        let config: ProjectConfig = Self::read_yaml(&self.project_dir(id).join("config.yaml"))?;
         let features = self.read_features(id, &config.statuses)?;
         let milestones = Self::read_dir_yaml(&self.milestones_dir(id))?;
         Ok(Project {
@@ -179,12 +182,18 @@ impl Store {
     }
 
     pub fn save_config(&self, id: &str, config: &ProjectConfig) -> Result<()> {
-        Self::write_yaml(&self.project_dir(id).join("config.yaml"), config)
+        // Forward-stamp the schema version on every write (minimal, non-destructive migration): a
+        // config that loaded as a legacy version (0) is brought up to current on its next save.
+        let mut config = config.clone();
+        config.schema_version = crate::config::CURRENT_SCHEMA_VERSION;
+        Self::write_yaml(&self.project_dir(id).join("config.yaml"), &config)
     }
 
     /// Feature metadata yaml lives under `<status>/<code>.yaml` (status folder at project root).
     fn feature_path(&self, id: &str, status: &str, code: &str) -> PathBuf {
-        self.project_dir(id).join(status).join(format!("{code}.yaml"))
+        self.project_dir(id)
+            .join(status)
+            .join(format!("{code}.yaml"))
     }
     /// Feature specification markdown lives under `<status>/features-spec/<code>.md`,
     /// co-located within the status folder so it moves together with the metadata.
@@ -228,7 +237,11 @@ impl Store {
             }
             let mut files: Vec<PathBuf> = std::fs::read_dir(&sdir)?
                 .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.extension().map(|e| e == "yaml" || e == "yml").unwrap_or(false))
+                .filter(|p| {
+                    p.extension()
+                        .map(|e| e == "yaml" || e == "yml")
+                        .unwrap_or(false)
+                })
                 .collect();
             files.sort();
             for path in files {
@@ -284,7 +297,14 @@ impl Store {
     ) -> Result<FeatureItem> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
-        let f = Self::add_feature_on(&mut project, &mut pending, title, specification, milestone, code)?;
+        let f = Self::add_feature_on(
+            &mut project,
+            &mut pending,
+            title,
+            specification,
+            milestone,
+            code,
+        )?;
         self.flush(id, &project, &pending)?;
         Ok(f)
     }
@@ -346,7 +366,15 @@ impl Store {
     ) -> Result<FeatureItem> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
-        let f = Self::edit_feature_on(&mut project, &mut pending, code, title, specification, milestone, new_code)?;
+        let f = Self::edit_feature_on(
+            &mut project,
+            &mut pending,
+            code,
+            title,
+            specification,
+            milestone,
+            new_code,
+        )?;
         self.flush(id, &project, &pending)?;
         Ok(f)
     }
@@ -400,7 +428,9 @@ impl Store {
         pending.persist_features.insert(updated.code.clone());
         if rename.is_some() {
             // The renamed feature is written at its new code; drop the old-code files (same status).
-            pending.remove_features.insert((updated.status.clone(), code.to_string()));
+            pending
+                .remove_features
+                .insert((updated.status.clone(), code.to_string()));
         }
         Ok(updated)
     }
@@ -425,7 +455,16 @@ impl Store {
         let deps_changed = depends_on.is_some();
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
-        let f = Self::set_feature_attrs_on(&mut project, &mut pending, code, kind, priority, due, labels, depends_on)?;
+        let f = Self::set_feature_attrs_on(
+            &mut project,
+            &mut pending,
+            code,
+            kind,
+            priority,
+            due,
+            labels,
+            depends_on,
+        )?;
         // When dependencies changed, validate them across the whole portfolio (qualified
         // `project:code` refs must resolve and the global graph must stay acyclic) before persisting.
         if deps_changed {
@@ -534,7 +573,8 @@ impl Store {
     ) -> Result<TodoList> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
-        let l = Self::add_todo_list_on(&mut project, &mut pending, feature, description, todo_code)?;
+        let l =
+            Self::add_todo_list_on(&mut project, &mut pending, feature, description, todo_code)?;
         self.flush(id, &project, &pending)?;
         Ok(l)
     }
@@ -693,7 +733,14 @@ impl Store {
     ) -> Result<Milestone> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
-        let m = Self::add_milestone_on(&mut project, &mut pending, name, description, depends_on, code)?;
+        let m = Self::add_milestone_on(
+            &mut project,
+            &mut pending,
+            name,
+            description,
+            depends_on,
+            code,
+        )?;
         self.flush(id, &project, &pending)?;
         Ok(m)
     }
@@ -764,7 +811,11 @@ impl Store {
         let project = self.load(id)?;
         project.milestone(code)?;
         // Referential integrity: a milestone in use by features cannot be deleted.
-        let refs = project.features.iter().filter(|f| f.milestone == code).count();
+        let refs = project
+            .features
+            .iter()
+            .filter(|f| f.milestone == code)
+            .count();
         if refs > 0 {
             return Err(CoreError::MilestoneInUse(code.to_string(), refs));
         }
@@ -801,16 +852,48 @@ impl Store {
 
         for (i, op) in ops.into_iter().enumerate() {
             let result: Result<serde_json::Value> = (|| match op {
-                FeatureAdd { alias, title, milestone, spec, code, kind, priority, due, labels, depends_on } => {
+                FeatureAdd {
+                    alias,
+                    title,
+                    milestone,
+                    spec,
+                    code,
+                    kind,
+                    priority,
+                    due,
+                    labels,
+                    depends_on,
+                } => {
                     let ms = resolve(&aliases, &milestone);
-                    let f = Self::add_feature_on(&mut project, &mut pending, &title, spec.as_deref().unwrap_or(""), &ms, code)?;
+                    let f = Self::add_feature_on(
+                        &mut project,
+                        &mut pending,
+                        &title,
+                        spec.as_deref().unwrap_or(""),
+                        &ms,
+                        code,
+                    )?;
                     if let Some(a) = &alias {
                         aliases.insert(a.clone(), f.code.clone());
                     }
                     let deps = depends_on.map(|d| d.iter().map(|x| resolve(&aliases, x)).collect());
                     let had_deps = deps.is_some();
-                    let f = if kind.is_some() || priority.is_some() || due.is_some() || labels.is_some() || deps.is_some() {
-                        Self::set_feature_attrs_on(&mut project, &mut pending, &f.code, kind, priority, due, labels, deps)?
+                    let f = if kind.is_some()
+                        || priority.is_some()
+                        || due.is_some()
+                        || labels.is_some()
+                        || deps.is_some()
+                    {
+                        Self::set_feature_attrs_on(
+                            &mut project,
+                            &mut pending,
+                            &f.code,
+                            kind,
+                            priority,
+                            due,
+                            labels,
+                            deps,
+                        )?
                     } else {
                         f
                     };
@@ -819,13 +902,46 @@ impl Store {
                     }
                     Ok(serde_json::json!({"op":"feature.add","code":f.code,"status":f.status}))
                 }
-                FeatureEdit { code, title, spec, milestone, new_code, kind, priority, due, labels, depends_on } => {
+                FeatureEdit {
+                    code,
+                    title,
+                    spec,
+                    milestone,
+                    new_code,
+                    kind,
+                    priority,
+                    due,
+                    labels,
+                    depends_on,
+                } => {
                     let ms = milestone.map(|m| Some(resolve(&aliases, &m)));
-                    let f = Self::edit_feature_on(&mut project, &mut pending, &resolve(&aliases, &code), title, spec, ms, new_code)?;
+                    let f = Self::edit_feature_on(
+                        &mut project,
+                        &mut pending,
+                        &resolve(&aliases, &code),
+                        title,
+                        spec,
+                        ms,
+                        new_code,
+                    )?;
                     let deps = depends_on.map(|d| d.iter().map(|x| resolve(&aliases, x)).collect());
                     let had_deps = deps.is_some();
-                    let f = if kind.is_some() || priority.is_some() || due.is_some() || labels.is_some() || deps.is_some() {
-                        Self::set_feature_attrs_on(&mut project, &mut pending, &f.code, kind, priority, due, labels, deps)?
+                    let f = if kind.is_some()
+                        || priority.is_some()
+                        || due.is_some()
+                        || labels.is_some()
+                        || deps.is_some()
+                    {
+                        Self::set_feature_attrs_on(
+                            &mut project,
+                            &mut pending,
+                            &f.code,
+                            kind,
+                            priority,
+                            due,
+                            labels,
+                            deps,
+                        )?
                     } else {
                         f
                     };
@@ -835,41 +951,98 @@ impl Store {
                     Ok(serde_json::json!({"op":"feature.edit","code":f.code}))
                 }
                 FeatureMove { code, to } => {
-                    let f = Self::move_feature_on(&mut project, &mut pending, &resolve(&aliases, &code), &to)?;
+                    let f = Self::move_feature_on(
+                        &mut project,
+                        &mut pending,
+                        &resolve(&aliases, &code),
+                        &to,
+                    )?;
                     Ok(serde_json::json!({"op":"feature.move","code":f.code,"status":f.status}))
                 }
-                MilestoneAdd { alias, name, code, description, depends_on } => {
+                MilestoneAdd {
+                    alias,
+                    name,
+                    code,
+                    description,
+                    depends_on,
+                } => {
                     let deps: Vec<String> = depends_on
                         .unwrap_or_default()
                         .iter()
                         .map(|d| resolve(&aliases, d))
                         .collect();
-                    let m = Self::add_milestone_on(&mut project, &mut pending, &name, description.as_deref().unwrap_or(""), deps, code)?;
+                    let m = Self::add_milestone_on(
+                        &mut project,
+                        &mut pending,
+                        &name,
+                        description.as_deref().unwrap_or(""),
+                        deps,
+                        code,
+                    )?;
                     if let Some(a) = alias {
                         aliases.insert(a, m.code.clone());
                     }
                     Ok(serde_json::json!({"op":"milestone.add","code":m.code}))
                 }
-                TodoAdd { alias, feature, description, code } => {
+                TodoAdd {
+                    alias,
+                    feature,
+                    description,
+                    code,
+                } => {
                     let feat = resolve(&aliases, &feature);
-                    let tl = Self::add_todo_list_on(&mut project, &mut pending, &feat, description.as_deref().unwrap_or(""), code)?;
+                    let tl = Self::add_todo_list_on(
+                        &mut project,
+                        &mut pending,
+                        &feat,
+                        description.as_deref().unwrap_or(""),
+                        code,
+                    )?;
                     if let Some(a) = alias {
                         aliases.insert(a, tl.code.clone());
                     }
                     Ok(serde_json::json!({"op":"todo.add","feature":feat,"code":tl.code}))
                 }
-                TaskAdd { feature, todo, text, key } => {
-                    let t = Self::add_task_on(&mut project, &mut pending, &resolve(&aliases, &feature), &resolve(&aliases, &todo), &text, key)?;
+                TaskAdd {
+                    feature,
+                    todo,
+                    text,
+                    key,
+                } => {
+                    let t = Self::add_task_on(
+                        &mut project,
+                        &mut pending,
+                        &resolve(&aliases, &feature),
+                        &resolve(&aliases, &todo),
+                        &text,
+                        key,
+                    )?;
                     Ok(serde_json::json!({"op":"task.add","key":t.key}))
                 }
-                TaskState { feature, todo, key, state } => {
+                TaskState {
+                    feature,
+                    todo,
+                    key,
+                    state,
+                } => {
                     let st = crate::models::TaskState::parse(&state)
                         .ok_or_else(|| CoreError::InvalidTaskState(state.clone()))?;
-                    let f = Self::set_task_state_on(&mut project, &mut pending, &resolve(&aliases, &feature), &resolve(&aliases, &todo), &key, st)?;
+                    let f = Self::set_task_state_on(
+                        &mut project,
+                        &mut pending,
+                        &resolve(&aliases, &feature),
+                        &resolve(&aliases, &todo),
+                        &key,
+                        st,
+                    )?;
                     Ok(serde_json::json!({"op":"task.state","status":f.status}))
                 }
                 // Doc ops write to disk directly (they don't touch the in-memory project).
-                DocFolder { path, name, description } => {
+                DocFolder {
+                    path,
+                    name,
+                    description,
+                } => {
                     self.write_folder_meta(id, &path, name, description)?;
                     Ok(serde_json::json!({"op":"doc.folder","path":path}))
                 }
@@ -908,7 +1081,13 @@ impl Store {
 
     // ---- config ops ----------------------------------------------------------------------
 
-    pub fn set_transition(&self, id: &str, from: &str, to: &str, allow: bool) -> Result<ProjectConfig> {
+    pub fn set_transition(
+        &self,
+        id: &str,
+        from: &str,
+        to: &str,
+        allow: bool,
+    ) -> Result<ProjectConfig> {
         let mut project = self.load(id)?;
         if !project.config.has_status(from) {
             return Err(CoreError::UnknownStatus(from.to_string()));
@@ -916,7 +1095,11 @@ impl Store {
         if !project.config.has_status(to) {
             return Err(CoreError::UnknownStatus(to.to_string()));
         }
-        let entry = project.config.transitions.entry(from.to_string()).or_default();
+        let entry = project
+            .config
+            .transitions
+            .entry(from.to_string())
+            .or_default();
         entry.retain(|t| t != to);
         if allow {
             entry.push(to.to_string());
@@ -963,7 +1146,11 @@ impl Store {
         }
         // No-op states are always non-displayed; default displayed to active states.
         let displayed = displayed_states.unwrap_or_else(|| {
-            statuses.iter().filter(|s| !no_ops.contains(s)).cloned().collect()
+            statuses
+                .iter()
+                .filter(|s| !no_ops.contains(s))
+                .cloned()
+                .collect()
         });
         for s in &displayed {
             if !known(s) {
@@ -1027,7 +1214,10 @@ impl Store {
                 return Err(CoreError::UnknownStatus(s.clone()));
             }
         }
-        project.config.displayed_states.retain(|s| !states.contains(s));
+        project
+            .config
+            .displayed_states
+            .retain(|s| !states.contains(s));
         project.config.no_op_states = states;
         self.save_config(id, &project.config)?;
         Ok(project.config)
@@ -1050,7 +1240,9 @@ impl Store {
             return Err(CoreError::UnknownStatus(old.to_string()));
         }
         if project.config.has_status(&new) {
-            return Err(CoreError::Unsupported(format!("status '{new}' already exists")));
+            return Err(CoreError::Unsupported(format!(
+                "status '{new}' already exists"
+            )));
         }
 
         // 1) Rename throughout the config.
@@ -1068,15 +1260,27 @@ impl Store {
             .transitions
             .iter()
             .map(|(from, tos)| {
-                let k = if from == old { new.clone() } else { from.clone() };
-                let v = tos.iter().map(|t| if t == old { new.clone() } else { t.clone() }).collect();
+                let k = if from == old {
+                    new.clone()
+                } else {
+                    from.clone()
+                };
+                let v = tos
+                    .iter()
+                    .map(|t| if t == old { new.clone() } else { t.clone() })
+                    .collect();
                 (k, v)
             })
             .collect();
         project.config.transitions = renamed;
 
         // 2) Migrate features in the old status to the new status folder.
-        let migrating: Vec<FeatureItem> = project.features.iter().filter(|f| f.status == old).cloned().collect();
+        let migrating: Vec<FeatureItem> = project
+            .features
+            .iter()
+            .filter(|f| f.status == old)
+            .cloned()
+            .collect();
         for f in &migrating {
             let mut moved = f.clone();
             moved.status = new.clone();

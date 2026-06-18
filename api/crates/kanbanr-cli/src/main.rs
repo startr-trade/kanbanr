@@ -12,7 +12,11 @@ use serde_json::{json, Map, Value};
 use std::process::ExitCode;
 
 #[derive(Parser)]
-#[command(name = "kanbanr", version, about = "Kanban task manager for Claude development (HTTP client)")]
+#[command(
+    name = "kanbanr",
+    version,
+    about = "Kanban task manager for Claude development (HTTP client)"
+)]
 struct Cli {
     /// Project to operate on (default: $KANBANR_PROJECT, .kanbanr marker, or cwd name).
     #[arg(long, global = true)]
@@ -109,6 +113,13 @@ enum Command {
     },
     /// Print a text kanban board for the project.
     Board,
+    /// Scan for integrity problems (dangling deps, unknown milestones, outdated schema).
+    /// Defaults to the current/selected project; pass --all-projects for the whole portfolio.
+    Doctor {
+        /// Scan every project in the portfolio.
+        #[arg(long)]
+        all_projects: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -293,7 +304,9 @@ enum MilestoneCmd {
         #[arg(long, value_delimiter = ',')]
         depends_on: Option<Vec<String>>,
     },
-    Delete { code: String },
+    Delete {
+        code: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -304,9 +317,14 @@ enum ConfigCmd {
         #[arg(value_delimiter = ',')]
         states: Vec<String>,
     },
-    DefaultState { state: String },
+    DefaultState {
+        state: String,
+    },
     /// Rename a status everywhere (config + transitions) and migrate the feature items in it.
-    RenameStatus { from: String, to: String },
+    RenameStatus {
+        from: String,
+        to: String,
+    },
     /// Set which statuses are functionally inert (no-op) dispositions (always non-displayed).
     NoOpStates {
         #[arg(value_delimiter = ',')]
@@ -350,8 +368,12 @@ enum DocCmd {
         #[arg(long)]
         description: Option<String>,
     },
-    Show { path: String },
-    Rm { path: String },
+    Show {
+        path: String,
+    },
+    Rm {
+        path: String,
+    },
 }
 
 #[derive(Args)]
@@ -394,7 +416,11 @@ fn run_serve(cli: &Cli, bind: Option<String>, ui_dir: Option<String>) -> anyhow:
     let bind = bind
         .or_else(|| std::env::var("KANBANR_BIND").ok().filter(|s| !s.is_empty()))
         .unwrap_or_else(|| "127.0.0.1:8080".to_string());
-    let ui_dir = ui_dir.or_else(|| std::env::var("KANBANR_UI_DIR").ok().filter(|s| !s.is_empty()));
+    let ui_dir = ui_dir.or_else(|| {
+        std::env::var("KANBANR_UI_DIR")
+            .ok()
+            .filter(|s| !s.is_empty())
+    });
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(kanbanr_server::run(dir, bind, ui_dir))
 }
@@ -405,7 +431,10 @@ fn run_identity(cli: &Cli, name: &str, email: &str) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir.join("projects"))?;
     kanbanr_core::git::ensure_repo(&dir);
     kanbanr_core::git::set_identity(&dir, name, email).map_err(|e| anyhow::anyhow!(e))?;
-    println!("local commit identity set: {name} <{email}>  (data dir: {})", dir.display());
+    println!(
+        "local commit identity set: {name} <{email}>  (data dir: {})",
+        dir.display()
+    );
     Ok(())
 }
 
@@ -424,7 +453,10 @@ fn run_init(
     if let (Some(n), Some(e)) = (&author, &email) {
         kanbanr_core::git::set_identity(&dir, n, e).map_err(|e| anyhow::anyhow!(e))?;
         println!("✓ commit identity: {n} <{e}>");
-    } else if kanbanr_core::git::identity(&dir).map(|(n, _)| n == "kanbanr").unwrap_or(true) {
+    } else if kanbanr_core::git::identity(&dir)
+        .map(|(n, _)| n == "kanbanr")
+        .unwrap_or(true)
+    {
         println!(
             "• tip: set your commit identity with `kanbanr identity --name \"You\" --email you@example.com`"
         );
@@ -460,7 +492,9 @@ fn run_open(_cli: &Cli) -> anyhow::Result<()> {
     let url = monitor_url();
     // Any HTTP status means the daemon is up; a transport error means it isn't.
     let up = !matches!(
-        ureq::get(&format!("{url}/api/projects")).timeout(std::time::Duration::from_millis(800)).call(),
+        ureq::get(&format!("{url}/api/projects"))
+            .timeout(std::time::Duration::from_millis(800))
+            .call(),
         Err(ureq::Error::Transport(_))
     );
     if !up {
@@ -488,8 +522,9 @@ fn open_in_browser(url: &str) {
 }
 
 fn require_project(cli: &Cli) -> anyhow::Result<String> {
-    project::resolve_project(cli.project.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("could not determine project; pass --project or set KANBANR_PROJECT"))
+    project::resolve_project(cli.project.as_deref()).ok_or_else(|| {
+        anyhow::anyhow!("could not determine project; pass --project or set KANBANR_PROJECT")
+    })
 }
 
 /// Print recent activity (from the project's changelog file).
@@ -517,7 +552,11 @@ fn run_activity(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
 fn run_remote(cli: &Cli, client: &Backend, cmd: &RemoteCmd) -> anyhow::Result<()> {
     match cmd {
         RemoteCmd::Add { name, url } => {
-            client.write(Method::Post, "/remotes", Some(json!({ "name": name, "url": url })))?;
+            client.write(
+                Method::Post,
+                "/remotes",
+                Some(json!({ "name": name, "url": url })),
+            )?;
             println!("added remote {name} -> {url}");
             Ok(())
         }
@@ -530,7 +569,11 @@ fn run_remote(cli: &Cli, client: &Backend, cmd: &RemoteCmd) -> anyhow::Result<()
                     println!("(no remotes)");
                 }
                 for r in arr {
-                    println!("{}  {}", r["name"].as_str().unwrap_or(""), r["url"].as_str().unwrap_or(""));
+                    println!(
+                        "{}  {}",
+                        r["name"].as_str().unwrap_or(""),
+                        r["url"].as_str().unwrap_or("")
+                    );
                 }
             }
             Ok(())
@@ -584,8 +627,19 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     // Identity / setup / serve commands handled before constructing the store backend.
     match &cli.command {
         Command::Identity { name, email } => return run_identity(cli, name, email),
-        Command::Init { name, description, author, email } => {
-            return run_init(cli, name.clone(), description.clone(), author.clone(), email.clone());
+        Command::Init {
+            name,
+            description,
+            author,
+            email,
+        } => {
+            return run_init(
+                cli,
+                name.clone(),
+                description.clone(),
+                author.clone(),
+                email.clone(),
+            );
         }
         Command::Serve { bind, ui_dir } => return run_serve(cli, bind.clone(), ui_dir.clone()),
         Command::Open => return run_open(cli),
@@ -675,7 +729,53 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             print_board(&get_project(&client, &p)?);
             Ok(())
         }
+        Command::Doctor { all_projects } => run_doctor(cli, &client, *all_projects),
     }
+}
+
+fn run_doctor(cli: &Cli, client: &Backend, all_projects: bool) -> anyhow::Result<()> {
+    let resp = if all_projects {
+        client.get("/doctor")?
+    } else {
+        let p = require_project(cli)?;
+        client.get(&format!("/projects/{p}/doctor"))?
+    };
+    if cli.json {
+        println!("{}", pretty(&resp));
+        return Ok(());
+    }
+    let report: Value = serde_json::from_str(&resp)?;
+    let issues = report["issues"].as_array().cloned().unwrap_or_default();
+    let errors: Vec<&Value> = issues.iter().filter(|i| i["severity"] == "error").collect();
+    let warnings: Vec<&Value> = issues
+        .iter()
+        .filter(|i| i["severity"] == "warning")
+        .collect();
+    let print_issue = |i: &Value| {
+        let proj = i["project"].as_str().unwrap_or("");
+        let code = i["code"]
+            .as_str()
+            .map(|c| format!(" {c}"))
+            .unwrap_or_default();
+        let msg = i["message"].as_str().unwrap_or("");
+        println!("  {proj}{code}: {msg}");
+    };
+    if !errors.is_empty() {
+        println!("Errors ({}):", errors.len());
+        for i in &errors {
+            print_issue(i);
+        }
+    }
+    if !warnings.is_empty() {
+        println!("Warnings ({}):", warnings.len());
+        for i in &warnings {
+            print_issue(i);
+        }
+    }
+    if issues.is_empty() {
+        println!("clean: no integrity issues found");
+    }
+    Ok(())
 }
 
 fn print_write(cli: &Cli, resp: &str, human: String) {
@@ -700,7 +800,10 @@ fn run_project(cli: &Cli, client: &Backend, cmd: &ProjectCmd) -> anyhow::Result<
                 ("name", Some(json!(name))),
                 ("description", description.clone().map(|d| json!(d))),
                 ("statuses", statuses.clone().map(|s| json!(s))),
-                ("displayed_states", displayed_states.clone().map(|s| json!(s))),
+                (
+                    "displayed_states",
+                    displayed_states.clone().map(|s| json!(s)),
+                ),
                 ("default_state", default_state.clone().map(|s| json!(s))),
                 ("no_op_states", no_op_states.clone().map(|s| json!(s))),
             ]);
@@ -788,11 +891,16 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                 ("labels", labels.clone().map(|l| json!(l))),
                 ("depends_on", depends_on.clone().map(|d| json!(d))),
             ]);
-            let resp = client.write(Method::Post, &format!("/projects/{p}/features"), Some(body))?;
+            let resp =
+                client.write(Method::Post, &format!("/projects/{p}/features"), Some(body))?;
             print_write(
                 cli,
                 &resp,
-                format!("created {} ({})", field(&resp, "code"), field(&resp, "status")),
+                format!(
+                    "created {} ({})",
+                    field(&resp, "code"),
+                    field(&resp, "status")
+                ),
             );
             Ok(())
         }
@@ -802,7 +910,12 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                 .features
                 .iter()
                 .filter(|f| status.as_ref().map(|s| &f.status == s).unwrap_or(true))
-                .filter(|f| milestone.as_ref().map(|m| &f.milestone == m).unwrap_or(true))
+                .filter(|f| {
+                    milestone
+                        .as_ref()
+                        .map(|m| &f.milestone == m)
+                        .unwrap_or(true)
+                })
                 .collect();
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&items)?);
@@ -851,7 +964,11 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                 ("labels", labels.clone().map(|l| json!(l))),
                 ("depends_on", depends_on.clone().map(|d| json!(d))),
             ]);
-            let resp = client.write(Method::Patch, &format!("/projects/{p}/features/{code}"), Some(body))?;
+            let resp = client.write(
+                Method::Patch,
+                &format!("/projects/{p}/features/{code}"),
+                Some(body),
+            )?;
             print_write(cli, &resp, format!("updated {}", field(&resp, "code")));
             Ok(())
         }
@@ -875,7 +992,11 @@ fn run_todo(cli: &Cli, client: &Backend, cmd: &TodoCmd) -> anyhow::Result<()> {
                 &format!("/projects/{p}/features/{feature}/todos"),
                 Some(body),
             )?;
-            print_write(cli, &resp, format!("added todo-list {} to {}", field(&resp, "code"), feature));
+            print_write(
+                cli,
+                &resp,
+                format!("added todo-list {} to {}", field(&resp, "code"), feature),
+            );
             Ok(())
         }
         TodoCmd::List { feature } => {
@@ -919,7 +1040,11 @@ fn run_task(cli: &Cli, client: &Backend, cmd: &TaskCmd) -> anyhow::Result<()> {
                 &format!("/projects/{p}/features/{feature}/todos/{todo}/tasks"),
                 Some(body),
             )?;
-            print_write(cli, &resp, format!("added task {} to {}/{}", field(&resp, "key"), feature, todo));
+            print_write(
+                cli,
+                &resp,
+                format!("added task {} to {}/{}", field(&resp, "key"), feature, todo),
+            );
             Ok(())
         }
         TaskCmd::State {
@@ -936,7 +1061,10 @@ fn run_task(cli: &Cli, client: &Backend, cmd: &TaskCmd) -> anyhow::Result<()> {
             print_write(
                 cli,
                 &resp,
-                format!("{feature}/{todo} {key} -> {state} (feature now {})", field(&resp, "status")),
+                format!(
+                    "{feature}/{todo} {key} -> {state} (feature now {})",
+                    field(&resp, "status")
+                ),
             );
             Ok(())
         }
@@ -978,8 +1106,16 @@ fn run_milestone(cli: &Cli, client: &Backend, cmd: &MilestoneCmd) -> anyhow::Res
                 ("depends_on", depends_on.clone().map(|d| json!(d))),
                 ("code", code.clone().map(|c| json!(c))),
             ]);
-            let resp = client.write(Method::Post, &format!("/projects/{p}/milestones"), Some(body))?;
-            print_write(cli, &resp, format!("created milestone {}", field(&resp, "code")));
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/milestones"),
+                Some(body),
+            )?;
+            print_write(
+                cli,
+                &resp,
+                format!("created milestone {}", field(&resp, "code")),
+            );
             Ok(())
         }
         MilestoneCmd::List => {
@@ -1009,12 +1145,24 @@ fn run_milestone(cli: &Cli, client: &Backend, cmd: &MilestoneCmd) -> anyhow::Res
                 ("description", description.clone().map(|d| json!(d))),
                 ("depends_on", depends_on.clone().map(|d| json!(d))),
             ]);
-            let resp = client.write(Method::Patch, &format!("/projects/{p}/milestones/{code}"), Some(body))?;
-            print_write(cli, &resp, format!("updated milestone {}", field(&resp, "code")));
+            let resp = client.write(
+                Method::Patch,
+                &format!("/projects/{p}/milestones/{code}"),
+                Some(body),
+            )?;
+            print_write(
+                cli,
+                &resp,
+                format!("updated milestone {}", field(&resp, "code")),
+            );
             Ok(())
         }
         MilestoneCmd::Delete { code } => {
-            client.write(Method::Delete, &format!("/projects/{p}/milestones/{code}"), None)?;
+            client.write(
+                Method::Delete,
+                &format!("/projects/{p}/milestones/{code}"),
+                None,
+            )?;
             println!("deleted milestone {code}");
             Ok(())
         }
@@ -1048,7 +1196,11 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 anyhow::bail!("pass exactly one of --allow or --deny");
             }
             let body = json!({ "from": args.from, "to": args.to, "allow": args.allow });
-            let resp = client.write(Method::Post, &format!("/projects/{p}/config/transition"), Some(body))?;
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/config/transition"),
+                Some(body),
+            )?;
             print_write(
                 cli,
                 &resp,
@@ -1068,7 +1220,11 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 &format!("/projects/{p}/config/displayed-states"),
                 Some(body),
             )?;
-            print_write(cli, &resp, format!("displayed_states: {}", states.join(", ")));
+            print_write(
+                cli,
+                &resp,
+                format!("displayed_states: {}", states.join(", ")),
+            );
             Ok(())
         }
         ConfigCmd::DefaultState { state } => {
@@ -1088,7 +1244,11 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 &format!("/projects/{p}/config/rename-status"),
                 Some(body),
             )?;
-            print_write(cli, &resp, format!("renamed status '{from}' -> '{to}' (features migrated)"));
+            print_write(
+                cli,
+                &resp,
+                format!("renamed status '{from}' -> '{to}' (features migrated)"),
+            );
             Ok(())
         }
         ConfigCmd::NoOpStates { states } => {
@@ -1113,9 +1273,9 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             let mut tmap: std::collections::BTreeMap<String, Vec<String>> = Default::default();
             if let Some(pairs) = transitions {
                 for pair in pairs {
-                    let (from, to) = pair
-                        .split_once('>')
-                        .ok_or_else(|| anyhow::anyhow!("bad transition '{pair}', expected From>To"))?;
+                    let (from, to) = pair.split_once('>').ok_or_else(|| {
+                        anyhow::anyhow!("bad transition '{pair}', expected From>To")
+                    })?;
                     tmap.entry(from.trim().to_string())
                         .or_default()
                         .push(to.trim().to_string());
@@ -1126,10 +1286,17 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 ("statuses", statuses.clone().map(|s| json!(s))),
                 ("transitions", transitions.as_ref().map(|_| json!(tmap))),
                 ("default_state", default_state.clone().map(|s| json!(s))),
-                ("displayed_states", displayed_states.clone().map(|s| json!(s))),
+                (
+                    "displayed_states",
+                    displayed_states.clone().map(|s| json!(s)),
+                ),
                 ("no_op_states", no_op_states.clone().map(|s| json!(s))),
             ]);
-            let resp = client.write(Method::Put, &format!("/projects/{p}/config/workflow"), Some(body))?;
+            let resp = client.write(
+                Method::Put,
+                &format!("/projects/{p}/config/workflow"),
+                Some(body),
+            )?;
             print_write(cli, &resp, "workflow updated".to_string());
             Ok(())
         }
@@ -1139,7 +1306,11 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
 fn run_doc(cli: &Cli, client: &Backend, cmd: &DocCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     match cmd {
-        DocCmd::Add { path, file, content } => {
+        DocCmd::Add {
+            path,
+            file,
+            content,
+        } => {
             // A `--file` whose bytes aren't UTF-8 (e.g. an image) is stored as a binary asset; text
             // (and `--content`) goes through the normal markdown path.
             if let Some(f) = file {
@@ -1166,7 +1337,8 @@ fn run_doc(cli: &Cli, client: &Backend, cmd: &DocCmd) -> anyhow::Result<()> {
             Ok(())
         }
         DocCmd::List => {
-            let tree: DocFolder = serde_json::from_str(&client.get(&format!("/projects/{p}/docs"))?)?;
+            let tree: DocFolder =
+                serde_json::from_str(&client.get(&format!("/projects/{p}/docs"))?)?;
             let mut files = Vec::new();
             collect_docs(&tree, &mut files);
             files.sort();
@@ -1182,7 +1354,8 @@ fn run_doc(cli: &Cli, client: &Backend, cmd: &DocCmd) -> anyhow::Result<()> {
             Ok(())
         }
         DocCmd::Tree => {
-            let tree: DocFolder = serde_json::from_str(&client.get(&format!("/projects/{p}/docs"))?)?;
+            let tree: DocFolder =
+                serde_json::from_str(&client.get(&format!("/projects/{p}/docs"))?)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&tree)?);
             } else {
@@ -1200,18 +1373,29 @@ fn run_doc(cli: &Cli, client: &Backend, cmd: &DocCmd) -> anyhow::Result<()> {
                 ("name", name.clone().map(|n| json!(n))),
                 ("description", description.clone().map(|d| json!(d))),
             ]);
-            client.write(Method::Put, &format!("/projects/{p}/docs/folder"), Some(body))?;
+            client.write(
+                Method::Put,
+                &format!("/projects/{p}/docs/folder"),
+                Some(body),
+            )?;
             println!("configured folder {path}");
             Ok(())
         }
         DocCmd::Show { path } => {
             let enc = urlencode(path);
-            println!("{}", client.get(&format!("/projects/{p}/docs/content?path={enc}"))?);
+            println!(
+                "{}",
+                client.get(&format!("/projects/{p}/docs/content?path={enc}"))?
+            );
             Ok(())
         }
         DocCmd::Rm { path } => {
             let enc = urlencode(path);
-            client.write(Method::Delete, &format!("/projects/{p}/docs/content?path={enc}"), None)?;
+            client.write(
+                Method::Delete,
+                &format!("/projects/{p}/docs/content?path={enc}"),
+                None,
+            )?;
             println!("removed doc {path}");
             Ok(())
         }
@@ -1266,10 +1450,20 @@ fn print_board(project: &Project) {
     };
     println!("# {} board\n", project.id);
     for state in states {
-        let items: Vec<_> = project.features.iter().filter(|f| f.status == state).collect();
+        let items: Vec<_> = project
+            .features
+            .iter()
+            .filter(|f| f.status == state)
+            .collect();
         println!("## {} ({})", state, items.len());
         for f in items {
-            println!("  - {} {} [{}/{}]", f.code, f.title, f.done_count(), f.task_count());
+            println!(
+                "  - {} {} [{}/{}]",
+                f.code,
+                f.title,
+                f.done_count(),
+                f.task_count()
+            );
         }
         println!();
     }

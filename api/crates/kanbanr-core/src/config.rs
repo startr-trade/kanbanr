@@ -4,8 +4,17 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// The schema version stamped onto freshly-written project configs. A legacy config that predates
+/// the field deserializes to `schema_version = 0` (via `#[serde(default)]`), letting `doctor` flag
+/// it as outdated. Bump this when the on-disk config shape changes in a way worth surfacing.
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
+    /// On-disk schema version. Absent in legacy configs (defaults to 0); forward-stamped to
+    /// `CURRENT_SCHEMA_VERSION` whenever the config is written.
+    #[serde(default)]
+    pub schema_version: u32,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
@@ -54,7 +63,10 @@ impl ProjectConfig {
             v
         };
         let mut transitions = BTreeMap::new();
-        transitions.insert("Deferred".to_string(), with_no_ops(vec!["Planned".to_string()]));
+        transitions.insert(
+            "Deferred".to_string(),
+            with_no_ops(vec!["Planned".to_string()]),
+        );
         transitions.insert(
             "Planned".to_string(),
             with_no_ops(vec!["Scheduled".to_string(), "Deferred".to_string()]),
@@ -69,6 +81,7 @@ impl ProjectConfig {
         }
 
         ProjectConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
             name: name.to_string(),
             description: String::new(),
             // No-op states (and Deferred) are intentionally NOT displayed.

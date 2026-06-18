@@ -32,9 +32,7 @@ pub fn resolve_project(explicit: Option<&str>) -> Option<String> {
             return Some(name.to_string());
         }
     }
-    std::env::current_dir()
-        .ok()
-        .and_then(|p| basename(&p))
+    std::env::current_dir().ok().and_then(|p| basename(&p))
 }
 
 fn basename(path: &Path) -> Option<String> {

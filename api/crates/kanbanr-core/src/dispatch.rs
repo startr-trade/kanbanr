@@ -28,9 +28,11 @@ fn bool_field(body: &Value, k: &str) -> Option<bool> {
     body.get(k).and_then(|v| v.as_bool())
 }
 fn vec_field(body: &Value, k: &str) -> Option<Vec<String>> {
-    body.get(k)
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+    body.get(k).and_then(|v| v.as_array()).map(|a| {
+        a.iter()
+            .filter_map(|x| x.as_str().map(String::from))
+            .collect()
+    })
 }
 
 /// If the body carries any optional feature attribute (kind/priority/due/labels/depends_on), apply
@@ -45,12 +47,23 @@ fn maybe_apply_attrs(store: &Store, p: &str, code: &str, b: &Value) -> Result<Op
     let v = |k: &str| {
         b.get(k).map(|val| {
             val.as_array()
-                .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default()
         })
     };
-    let f =
-        store.set_feature_attrs(p, code, s("kind"), s("priority"), s("due"), v("labels"), v("depends_on"))?;
+    let f = store.set_feature_attrs(
+        p,
+        code,
+        s("kind"),
+        s("priority"),
+        s("due"),
+        v("labels"),
+        v("depends_on"),
+    )?;
     Ok(Some(ser(&f)?))
 }
 
@@ -108,24 +121,37 @@ struct ProjectSummary {
 fn list_summaries(store: &Store) -> Result<Vec<ProjectSummary>> {
     let mut out = Vec::new();
     for id in store.list_projects()? {
-        let Ok(project) = store.load(&id) else { continue };
+        let Ok(project) = store.load(&id) else {
+            continue;
+        };
         let cfg = &project.config;
         let displayed = if cfg.displayed_states.is_empty() {
             cfg.statuses.clone()
         } else {
             cfg.displayed_states.clone()
         };
-        let other_states: Vec<String> =
-            cfg.statuses.iter().filter(|s| !displayed.contains(s)).cloned().collect();
+        let other_states: Vec<String> = cfg
+            .statuses
+            .iter()
+            .filter(|s| !displayed.contains(s))
+            .cloned()
+            .collect();
         let mut counts = BTreeMap::new();
         for s in &cfg.statuses {
-            counts.insert(s.clone(), project.features.iter().filter(|f| &f.status == s).count());
+            counts.insert(
+                s.clone(),
+                project.features.iter().filter(|f| &f.status == s).count(),
+            );
         }
         let has_docs = store
             .doc_tree(&id)
             .map(|t| !t.folders.is_empty() || !t.docs.is_empty())
             .unwrap_or(false);
-        let name = if cfg.name.is_empty() { id.clone() } else { cfg.name.clone() };
+        let name = if cfg.name.is_empty() {
+            id.clone()
+        } else {
+            cfg.name.clone()
+        };
         out.push(ProjectSummary {
             id,
             name,
@@ -152,6 +178,7 @@ fn build_project_config(name: &str, body: &Value) -> ProjectConfig {
         Some(s) => {
             let no_ops = no_op.clone().unwrap_or_default();
             ProjectConfig {
+                schema_version: crate::config::CURRENT_SCHEMA_VERSION,
                 name: name.to_string(),
                 description: String::new(),
                 displayed_states: displayed
@@ -195,16 +222,23 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
     let statuses = match (vec_field(body, "statuses"), &base) {
         (Some(s), _) => s,
         (None, Some(base)) => base.statuses.clone(),
-        (None, None) => return Err(CoreError::Unsupported("provide statuses (or defaults)".into())),
+        (None, None) => {
+            return Err(CoreError::Unsupported(
+                "provide statuses (or defaults)".into(),
+            ))
+        }
     };
     let transitions: BTreeMap<String, Vec<String>> = body
         .get("transitions")
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .or_else(|| base.as_ref().map(|x| x.transitions.clone()))
         .unwrap_or_default();
-    let default_state = str_field(body, "default_state").or_else(|| base.as_ref().map(|x| x.default_state.clone()));
-    let displayed = vec_field(body, "displayed_states").or_else(|| base.as_ref().map(|x| x.displayed_states.clone()));
-    let no_ops = vec_field(body, "no_op_states").or_else(|| base.as_ref().map(|x| x.no_op_states.clone()));
+    let default_state =
+        str_field(body, "default_state").or_else(|| base.as_ref().map(|x| x.default_state.clone()));
+    let displayed = vec_field(body, "displayed_states")
+        .or_else(|| base.as_ref().map(|x| x.displayed_states.clone()));
+    let no_ops =
+        vec_field(body, "no_op_states").or_else(|| base.as_ref().map(|x| x.no_op_states.clone()));
     ser(&store.set_workflow(p, statuses, transitions, default_state, displayed, no_ops)?)
 }
 
@@ -224,6 +258,10 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
     let b = body.unwrap_or(&null);
 
     match (m.as_str(), segs.as_slice()) {
+        // ---- doctor (portfolio integrity) ----
+        ("GET", ["doctor"]) => ser(&crate::doctor::run(store)?),
+        ("GET", ["projects", p, "doctor"]) => ser(&crate::doctor::run_project(store, p)?),
+
         // ---- projects ----
         ("GET", ["projects"]) => ser(&list_summaries(store)?),
         ("POST", ["projects"]) => {
@@ -300,13 +338,14 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             &str_field(b, "description").unwrap_or_default(),
             str_field(b, "code"),
         )?),
-        ("POST", ["projects", p, "features", code, "todos", todo, "tasks"]) => ser(&store.add_task(
-            p,
-            code,
-            todo,
-            &str_field(b, "text").unwrap_or_default(),
-            str_field(b, "key"),
-        )?),
+        ("POST", ["projects", p, "features", code, "todos", todo, "tasks"]) => ser(&store
+            .add_task(
+                p,
+                code,
+                todo,
+                &str_field(b, "text").unwrap_or_default(),
+                str_field(b, "key"),
+            )?),
         ("PUT", ["projects", p, "features", code, "todos", todo, "tasks", key]) => {
             let raw = str_field(b, "state").unwrap_or_default();
             let state = TaskState::parse(&raw).ok_or(CoreError::InvalidTaskState(raw))?;
@@ -360,7 +399,12 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("GET", ["projects", p, "docs"]) => ser(&store.doc_tree(p)?),
         ("PUT", ["projects", p, "docs", "folder"]) => {
             let folder = str_field(b, "path").unwrap_or_default();
-            store.write_folder_meta(p, &folder, str_field(b, "name"), str_field(b, "description"))?;
+            store.write_folder_meta(
+                p,
+                &folder,
+                str_field(b, "name"),
+                str_field(b, "description"),
+            )?;
             Ok(json!({ "path": folder }).to_string())
         }
         ("GET", ["projects", p, "docs", "content"]) => {
@@ -418,7 +462,9 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "features", c, "move"] => format!("move feature {c}"),
         ["projects", _p, "features", c, "todos"] => format!("add todo-list to {c}"),
         ["projects", _p, "features", c, "todos", t, "tasks"] => format!("add task to {c}/{t}"),
-        ["projects", _p, "features", c, "todos", t, "tasks", k] => format!("update task {k} ({c}/{t})"),
+        ["projects", _p, "features", c, "todos", t, "tasks", k] => {
+            format!("update task {k} ({c}/{t})")
+        }
         ["projects", _p, "milestones"] => "add milestone".into(),
         ["projects", _p, "milestones", c] if del => format!("delete milestone {c}"),
         ["projects", _p, "milestones", c] => format!("edit milestone {c}"),
