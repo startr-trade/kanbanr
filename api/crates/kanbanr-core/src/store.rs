@@ -182,7 +182,11 @@ impl Store {
     }
 
     pub fn save_config(&self, id: &str, config: &ProjectConfig) -> Result<()> {
-        Self::write_yaml(&self.project_dir(id).join("config.yaml"), config)
+        // Forward-stamp the schema version on every write (minimal, non-destructive migration): a
+        // config that loaded as a legacy version (0) is brought up to current on its next save.
+        let mut config = config.clone();
+        config.schema_version = crate::config::CURRENT_SCHEMA_VERSION;
+        Self::write_yaml(&self.project_dir(id).join("config.yaml"), &config)
     }
 
     /// Feature metadata yaml lives under `<status>/<code>.yaml` (status folder at project root).

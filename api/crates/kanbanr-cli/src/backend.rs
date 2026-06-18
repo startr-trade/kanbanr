@@ -80,6 +80,8 @@ impl Backend {
             .create(true)
             .truncate(false)
             .write(true)
+            // The lock file holds no content (advisory locking only); never truncate it.
+            .truncate(false)
             .open(&lock_path)
             .map_err(|e| anyhow!("could not open write lock {}: {e}", lock_path.display()))?;
         file.lock_exclusive()

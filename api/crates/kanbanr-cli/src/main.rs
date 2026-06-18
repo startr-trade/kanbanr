@@ -136,6 +136,13 @@ enum Command {
     },
     /// List features downstream of (impacted by) a feature — its transitive dependents. (FEAT-027)
     Impact { code: String },
+    /// Scan for integrity problems (dangling deps, unknown milestones, outdated schema). (FEAT-037)
+    /// Defaults to the current/selected project; pass --all-projects for the whole portfolio.
+    Doctor {
+        /// Scan every project in the portfolio.
+        #[arg(long)]
+        all_projects: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -773,6 +780,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             print_id_list(cli, &resp, "(nothing depends on it)");
             Ok(())
         }
+        Command::Doctor { all_projects } => run_doctor(cli, &client, *all_projects),
     }
 }
 
@@ -808,6 +816,51 @@ fn print_id_list(cli: &Cli, resp: &str, empty: &str) {
             }
         }
     }
+}
+
+fn run_doctor(cli: &Cli, client: &Backend, all_projects: bool) -> anyhow::Result<()> {
+    let resp = if all_projects {
+        client.get("/doctor")?
+    } else {
+        let p = require_project(cli)?;
+        client.get(&format!("/projects/{p}/doctor"))?
+    };
+    if cli.json {
+        println!("{}", pretty(&resp));
+        return Ok(());
+    }
+    let report: Value = serde_json::from_str(&resp)?;
+    let issues = report["issues"].as_array().cloned().unwrap_or_default();
+    let errors: Vec<&Value> = issues.iter().filter(|i| i["severity"] == "error").collect();
+    let warnings: Vec<&Value> = issues
+        .iter()
+        .filter(|i| i["severity"] == "warning")
+        .collect();
+    let print_issue = |i: &Value| {
+        let proj = i["project"].as_str().unwrap_or("");
+        let code = i["code"]
+            .as_str()
+            .map(|c| format!(" {c}"))
+            .unwrap_or_default();
+        let msg = i["message"].as_str().unwrap_or("");
+        println!("  {proj}{code}: {msg}");
+    };
+    if !errors.is_empty() {
+        println!("Errors ({}):", errors.len());
+        for i in &errors {
+            print_issue(i);
+        }
+    }
+    if !warnings.is_empty() {
+        println!("Warnings ({}):", warnings.len());
+        for i in &warnings {
+            print_issue(i);
+        }
+    }
+    if issues.is_empty() {
+        println!("clean: no integrity issues found");
+    }
+    Ok(())
 }
 
 fn print_write(cli: &Cli, resp: &str, human: String) {

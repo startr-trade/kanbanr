@@ -179,6 +179,7 @@ fn build_project_config(name: &str, body: &Value) -> ProjectConfig {
         Some(s) => {
             let no_ops = no_op.clone().unwrap_or_default();
             ProjectConfig {
+                schema_version: crate::config::CURRENT_SCHEMA_VERSION,
                 name: name.to_string(),
                 description: String::new(),
                 displayed_states: displayed
@@ -258,6 +259,10 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
     let b = body.unwrap_or(&null);
 
     match (m.as_str(), segs.as_slice()) {
+        // ---- doctor (portfolio integrity) ----
+        ("GET", ["doctor"]) => ser(&crate::doctor::run(store)?),
+        ("GET", ["projects", p, "doctor"]) => ser(&crate::doctor::run_project(store, p)?),
+
         // ---- projects ----
         ("GET", ["projects"]) => ser(&list_summaries(store)?),
         ("POST", ["projects"]) => {

@@ -6,6 +6,7 @@ pub mod batch;
 pub mod config;
 pub mod dispatch;
 pub mod docs;
+pub mod doctor;
 pub mod error;
 pub mod export;
 pub mod git;
@@ -650,6 +651,39 @@ mod tests {
     }
 
     #[test]
+    fn config_schema_version_defaults_and_stamps() {
+        use crate::config::CURRENT_SCHEMA_VERSION;
+        let (store, d) = temp_store();
+        // A freshly-init project carries the current schema version (stamped on save).
+        new_project(&store, "demo");
+        assert_eq!(
+            store.load("demo").unwrap().config.schema_version,
+            CURRENT_SCHEMA_VERSION
+        );
+
+        // A legacy config (no schema_version key) loads as 0.
+        let cfg_path = d.path.join("projects").join("demo").join("config.yaml");
+        let text = std::fs::read_to_string(&cfg_path).unwrap();
+        let legacy: String = text
+            .lines()
+            .filter(|l| !l.starts_with("schema_version"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!legacy.contains("schema_version"));
+        std::fs::write(&cfg_path, legacy).unwrap();
+        assert_eq!(store.load("demo").unwrap().config.schema_version, 0);
+
+        // Re-saving forward-stamps it back to current (non-destructive migration).
+        store
+            .set_project_meta("demo", Some("Demo".into()), None)
+            .unwrap();
+        assert_eq!(
+            store.load("demo").unwrap().config.schema_version,
+            CURRENT_SCHEMA_VERSION
+        );
+    }
+
+    #[test]
     fn impact_is_transitive_downstream_closure() {
         use crate::graph::{qualify, DependencyView};
         let (store, _d) = temp_store();
@@ -776,6 +810,98 @@ mod tests {
             dispatch(&store, "GET", "/projects/ghost/ready", None).unwrap_err(),
             CoreError::ProjectNotFound(_)
         ));
+    }
+
+    #[test]
+    fn doctor_detects_integrity_problems() {
+        use crate::config::CURRENT_SCHEMA_VERSION;
+        use crate::doctor::{self, Severity};
+        let (store, d) = temp_store();
+        new_project(&store, "demo"); // seeds milestone "M", current schema
+        let f = store.add_feature("demo", "Login", "", "M", None).unwrap();
+
+        // A clean project reports no Errors.
+        let report = doctor::run(&store).unwrap();
+        assert!(
+            !report.has_errors(),
+            "clean project should have no errors: {report:?}"
+        );
+
+        // Unknown milestone (error): delete the feature's milestone reference by editing the yaml.
+        let feat_yaml = d
+            .path
+            .join("projects")
+            .join("demo")
+            .join("Planned")
+            .join(format!("{}.yaml", f.code));
+        let yaml = std::fs::read_to_string(&feat_yaml).unwrap();
+        let yaml = yaml.replace("milestone: M", "milestone: GONE");
+        std::fs::write(&feat_yaml, yaml).unwrap();
+
+        // Outdated schema (warning): rewrite the config to schema_version 0.
+        let cfg_path = d.path.join("projects").join("demo").join("config.yaml");
+        let cfg = std::fs::read_to_string(&cfg_path).unwrap();
+        let cfg = cfg.replace(
+            &format!("schema_version: {CURRENT_SCHEMA_VERSION}"),
+            "schema_version: 0",
+        );
+        std::fs::write(&cfg_path, cfg).unwrap();
+
+        let report = doctor::run(&store).unwrap();
+        assert!(
+            report.has_errors(),
+            "expected an error for the unknown milestone"
+        );
+        assert!(
+            report.issues.iter().any(|i| i.severity == Severity::Error
+                && i.code.as_deref() == Some(f.code.as_str())
+                && i.message.contains("unknown milestone")),
+            "missing unknown-milestone error: {report:?}"
+        );
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.severity == Severity::Warning && i.message.contains("schema_version")),
+            "missing outdated-schema warning: {report:?}"
+        );
+
+        // run_project scopes to one project but finds the same issues.
+        let scoped = doctor::run_project(&store, "demo").unwrap();
+        assert!(scoped.has_errors());
+    }
+
+    #[test]
+    fn doctor_detects_dangling_dependency() {
+        use crate::doctor::{self, Severity};
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        let f = store.add_feature("demo", "Login", "", "M", None).unwrap();
+
+        // Cross-project ref validation rejects CREATING a dangling dep, so write one to disk
+        // directly to simulate a ref that went stale (e.g. its target was renamed away).
+        let feat_yaml = d
+            .path
+            .join("projects")
+            .join("demo")
+            .join("Planned")
+            .join(format!("{}.yaml", f.code));
+        let yaml = std::fs::read_to_string(&feat_yaml).unwrap();
+        // The empty list serializes as `depends_on: []`; swap in a dangling same-project ref.
+        assert!(
+            yaml.contains("depends_on: []"),
+            "expected empty depends_on list: {yaml}"
+        );
+        let yaml = yaml.replace("depends_on: []", "depends_on:\n- FEAT-999");
+        std::fs::write(&feat_yaml, yaml).unwrap();
+
+        let report = doctor::run(&store).unwrap();
+        assert!(
+            report.issues.iter().any(|i| i.severity == Severity::Error
+                && i.message.contains("dangling dependency")
+                && i.message.contains("FEAT-999")),
+            "missing dangling-dependency error: {report:?}"
+        );
     }
 
     #[test]
