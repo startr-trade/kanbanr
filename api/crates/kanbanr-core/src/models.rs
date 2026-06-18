@@ -199,6 +199,59 @@ pub struct FeatureMeta {
     pub updated_at: String,
 }
 
+/// A compact, spec-free per-feature row stored in the per-project `index.yaml` cache (FEAT-033).
+/// It carries everything board/list/graph/rollup callers need (status, milestone, attributes, and
+/// the todo-list done/total counts) WITHOUT any specification body, so a project's whole feature
+/// set can be read from one small file. It is a derivable cache: the status-folder yaml/md files
+/// remain the source of truth, and the index is rebuilt from them by `Store::rebuild_index`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexEntry {
+    pub code: String,
+    pub status: Status,
+    pub milestone: String,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub due: Option<String>,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    #[serde(default)]
+    pub team: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// Completed task count across all of the feature's todo-lists.
+    #[serde(default)]
+    pub done: usize,
+    /// Total task count across all of the feature's todo-lists.
+    #[serde(default)]
+    pub total: usize,
+}
+
+impl IndexEntry {
+    /// Build an index row from a (fully- or metadata-only-) loaded feature. The spec body is
+    /// intentionally ignored — only the cheap, listable attributes are captured.
+    pub fn from_feature(f: &FeatureItem) -> IndexEntry {
+        IndexEntry {
+            code: f.code.clone(),
+            status: f.status.clone(),
+            milestone: f.milestone.clone(),
+            kind: f.kind.clone(),
+            priority: f.priority.clone(),
+            due: f.due.clone(),
+            assignee: f.assignee.clone(),
+            team: f.team.clone(),
+            labels: f.labels.clone(),
+            depends_on: f.depends_on.clone(),
+            done: f.done_count(),
+            total: f.task_count(),
+        }
+    }
+}
+
 /// A milestone groups feature items and may depend on other milestones (the DAG).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Milestone {

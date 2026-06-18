@@ -143,6 +143,13 @@ enum Command {
         #[arg(long)]
         all_projects: bool,
     },
+    /// Rebuild the per-project index cache (index.yaml) from the source-of-truth files. (FEAT-033)
+    /// A maintenance command; defaults to the current/selected project, --all-projects for all.
+    Index {
+        /// Rebuild the index for every project in the portfolio.
+        #[arg(long)]
+        all_projects: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -799,7 +806,29 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Doctor { all_projects } => run_doctor(cli, &client, *all_projects),
+        Command::Index { all_projects } => run_index(cli, &client, *all_projects),
     }
+}
+
+/// Rebuild the per-project index cache (FEAT-033). Maintenance write: rebuilds index.yaml from the
+/// source-of-truth feature files for the selected project (or every project with --all-projects).
+fn run_index(cli: &Cli, client: &Backend, all_projects: bool) -> anyhow::Result<()> {
+    let ids = if all_projects {
+        client.list_projects()?
+    } else {
+        vec![require_project(cli)?]
+    };
+    client.rebuild_index(&ids)?;
+    if cli.json {
+        println!("{}", json!({ "rebuilt": ids }));
+    } else if ids.is_empty() {
+        println!("(no projects)");
+    } else {
+        for id in &ids {
+            println!("rebuilt index for {id}");
+        }
+    }
+    Ok(())
 }
 
 /// Print a `ready`/`blocked` list (portfolio-wide or for the current project).

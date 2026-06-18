@@ -163,6 +163,37 @@ impl Backend {
         Ok(saved)
     }
 
+    /// List the data folder's project ids (for portfolio-wide maintenance like `index`).
+    pub fn list_projects(&self) -> Result<Vec<String>> {
+        self.store
+            .list_projects()
+            .map_err(|e| anyhow!(e.to_string()))
+    }
+
+    /// Rebuild the per-project `index.yaml` cache for each given project, then commit the data repo
+    /// (a maintenance write). Serialized against other writers by the data-dir advisory lock. The
+    /// index is a derivable cache, so this never touches the source-of-truth feature files. (FEAT-033)
+    pub fn rebuild_index(&self, ids: &[String]) -> Result<()> {
+        self.with_write_lock(move || {
+            git::ensure_repo(&self.data_dir);
+            for id in ids {
+                self.store
+                    .rebuild_index(id)
+                    .map_err(|e| anyhow!(e.to_string()))?;
+            }
+            let msg = if ids.len() == 1 {
+                format!("rebuild index for {}", ids[0])
+            } else {
+                format!("rebuild index for {} projects", ids.len())
+            };
+            git::commit_local(&self.data_dir, &msg);
+            for w in git::sync_all(&self.data_dir) {
+                eprintln!("kanbanr: {w}");
+            }
+            Ok(())
+        })
+    }
+
     fn whoami_json(&self) -> String {
         let (name, email) = git::identity(&self.data_dir)
             .unwrap_or_else(|| ("kanbanr".into(), "kanbanr@local".into()));

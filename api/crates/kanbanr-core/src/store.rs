@@ -4,7 +4,7 @@
 use crate::config::ProjectConfig;
 use crate::docs::{DocFile, DocFolder, FolderMeta, FOLDER_META};
 use crate::error::{CoreError, Result};
-use crate::models::{FeatureItem, Milestone, Task, TaskState, TodoList};
+use crate::models::{FeatureItem, IndexEntry, Milestone, Task, TaskState, TodoList};
 use crate::{docs, now_rfc3339, validate};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -137,6 +137,10 @@ impl Store {
 
     // ---- load ----------------------------------------------------------------------------
 
+    /// Load a project **fully**: every feature carries its `specification` body (read from the
+    /// co-located `.md`). This is the canonical, spec-populated load — its public contract is
+    /// relied on by dispatch (`GET project`), export, `feature show`, and the daemon, so it must
+    /// not change. Cheap callers that never touch spec bodies should prefer `load_meta` (FEAT-033).
     pub fn load(&self, id: &str) -> Result<Project> {
         if !self.project_exists(id) {
             return Err(CoreError::ProjectNotFound(id.to_string()));
@@ -150,6 +154,103 @@ impl Store {
             features,
             milestones,
         })
+    }
+
+    /// Load a project's **metadata only**: every feature has `specification: String::new()` and no
+    /// `.md` files are read. Use this for board/list/graph/rollup callers that never need spec
+    /// bodies — it avoids one file read per feature. Pair with `feature_spec` to fetch a single
+    /// spec on demand. The shape (`Project`) is identical to `load` so callers are interchangeable;
+    /// the only difference is that feature spec bodies are empty (FEAT-033).
+    pub fn load_meta(&self, id: &str) -> Result<Project> {
+        if !self.project_exists(id) {
+            return Err(CoreError::ProjectNotFound(id.to_string()));
+        }
+        let config: ProjectConfig = Self::read_yaml(&self.project_dir(id).join("config.yaml"))?;
+        let features = self
+            .read_feature_metas(id, &config.statuses)?
+            .into_iter()
+            .map(|(_status, meta)| FeatureItem::from_meta(meta, String::new()))
+            .collect();
+        let milestones = Self::read_dir_yaml(&self.milestones_dir(id))?;
+        Ok(Project {
+            id: id.to_string(),
+            config,
+            features,
+            milestones,
+        })
+    }
+
+    /// Load a single feature's specification body on demand. Scans the configured status folders
+    /// for the feature's metadata to discover which `<status>/features-spec/<code>.md` to read.
+    /// Returns the feature-not-found error if no metadata file for `code` exists. (FEAT-033)
+    pub fn feature_spec(&self, id: &str, code: &str) -> Result<String> {
+        if !self.project_exists(id) {
+            return Err(CoreError::ProjectNotFound(id.to_string()));
+        }
+        let config: ProjectConfig = Self::read_yaml(&self.project_dir(id).join("config.yaml"))?;
+        for (status, meta) in self.read_feature_metas(id, &config.statuses)? {
+            if meta.code == code {
+                let spec_path = self.spec_path(id, &status, code);
+                return Ok(std::fs::read_to_string(&spec_path).unwrap_or_default());
+            }
+        }
+        Err(CoreError::FeatureNotFound(code.to_string()))
+    }
+
+    // ---- per-project index cache (FEAT-033) ----------------------------------------------
+    //
+    // `<project>/index.yaml` is a compact, spec-free list of `IndexEntry` rows — one per feature.
+    // It is a *cache*: the status-folder yaml/md files remain the source of truth, the index is
+    // always rebuildable from them, and an absent/stale index is never fatal (callers fall back to
+    // building it from `load_meta`). It is refreshed inside `flush` so it stays current after any
+    // feature mutation, and it lives in the (committed) data repo, which is fine.
+
+    fn index_path(&self, id: &str) -> PathBuf {
+        self.project_dir(id).join("index.yaml")
+    }
+
+    /// Build the index rows for a project from its metadata (source of truth), ordered as
+    /// `load_meta` returns features (configured-status order, then sorted within a status).
+    fn build_index_entries(&self, id: &str) -> Result<Vec<IndexEntry>> {
+        Ok(self
+            .load_meta(id)?
+            .features
+            .iter()
+            .map(IndexEntry::from_feature)
+            .collect())
+    }
+
+    /// (Re)write `<project>/index.yaml` from the given rows.
+    fn write_index(&self, id: &str, entries: &[IndexEntry]) -> Result<()> {
+        Self::write_yaml(&self.index_path(id), &entries.to_vec())
+    }
+
+    /// Rebuild and persist the per-project index from the source-of-truth feature files. (FEAT-033)
+    pub fn rebuild_index(&self, id: &str) -> Result<()> {
+        if !self.project_exists(id) {
+            return Err(CoreError::ProjectNotFound(id.to_string()));
+        }
+        let entries = self.build_index_entries(id)?;
+        self.write_index(id, &entries)
+    }
+
+    /// Load the per-project index. Reads the single `index.yaml` if present; if it is missing it is
+    /// built from `load_meta` and written, then returned. Treat the result as a cheap view — it
+    /// carries no spec bodies. (FEAT-033)
+    pub fn load_index(&self, id: &str) -> Result<Vec<IndexEntry>> {
+        if !self.project_exists(id) {
+            return Err(CoreError::ProjectNotFound(id.to_string()));
+        }
+        let path = self.index_path(id);
+        if path.is_file() {
+            // A corrupt/legacy index is non-fatal: fall back to rebuilding from the source of truth.
+            if let Ok(entries) = Self::read_yaml::<Vec<IndexEntry>>(&path) {
+                return Ok(entries);
+            }
+        }
+        let entries = self.build_index_entries(id)?;
+        self.write_index(id, &entries)?;
+        Ok(entries)
     }
 
     // ---- project ops ---------------------------------------------------------------------
@@ -224,11 +325,15 @@ impl Store {
         let _ = std::fs::remove_file(self.spec_path(id, status, code));
     }
 
-    /// Load all features by scanning each configured status folder `<status>/*.yaml` and
-    /// pairing each with its `<status>/features-spec/<code>.md` specification. Driving the scan
-    /// from the configured status list keeps status folders from colliding with
-    /// `milestones/`, `schedules/`, `docs/`, etc.
-    fn read_features(&self, id: &str, statuses: &[String]) -> Result<Vec<FeatureItem>> {
+    /// Read feature **metadata only** by scanning each configured status folder `<status>/*.yaml`
+    /// (the source of truth), returning each paired with the status folder it was found in. No
+    /// `.md` spec files are read. Driving the scan from the configured status list keeps status
+    /// folders from colliding with `milestones/`, `schedules/`, `docs/`, etc. (FEAT-033)
+    fn read_feature_metas(
+        &self,
+        id: &str,
+        statuses: &[String],
+    ) -> Result<Vec<(String, crate::models::FeatureMeta)>> {
         let mut out = Vec::new();
         for status in statuses {
             let sdir = self.project_dir(id).join(status);
@@ -246,10 +351,21 @@ impl Store {
             files.sort();
             for path in files {
                 let meta: crate::models::FeatureMeta = Self::read_yaml(&path)?;
-                let spec_path = self.spec_path(id, status, &meta.code);
-                let spec = std::fs::read_to_string(&spec_path).unwrap_or_default();
-                out.push(FeatureItem::from_meta(meta, spec));
+                out.push((status.clone(), meta));
             }
+        }
+        Ok(out)
+    }
+
+    /// Load all features by reading their metadata (`read_feature_metas`) and pairing each with its
+    /// `<status>/features-spec/<code>.md` specification body. This is the spec-populated path used
+    /// by `load`.
+    fn read_features(&self, id: &str, statuses: &[String]) -> Result<Vec<FeatureItem>> {
+        let mut out = Vec::new();
+        for (status, meta) in self.read_feature_metas(id, statuses)? {
+            let spec_path = self.spec_path(id, &status, &meta.code);
+            let spec = std::fs::read_to_string(&spec_path).unwrap_or_default();
+            out.push(FeatureItem::from_meta(meta, spec));
         }
         Ok(out)
     }
@@ -278,6 +394,16 @@ impl Store {
                 Self::write_yaml(&self.milestone_path(id, code), m)?;
             }
         }
+        // Refresh the per-project index cache after feature/milestone files are written, so it
+        // stays current following any mutation. The in-memory `project` is the just-applied state
+        // (already reflecting moves/removals), so we derive the index from it directly rather than
+        // re-reading from disk (FEAT-033).
+        let entries: Vec<IndexEntry> = project
+            .features
+            .iter()
+            .map(IndexEntry::from_feature)
+            .collect();
+        self.write_index(id, &entries)?;
         Ok(())
     }
 
@@ -1316,6 +1442,15 @@ impl Store {
         }
         // Drop the now-emptied old status folder (only its migrated feature files lived there).
         let _ = std::fs::remove_dir_all(self.project_dir(id).join(old));
+
+        // Migrated feature statuses changed on disk; refresh the index cache from the in-memory
+        // (post-rename) project so it doesn't go stale (this op bypasses `flush`) (FEAT-033).
+        let entries: Vec<IndexEntry> = project
+            .features
+            .iter()
+            .map(IndexEntry::from_feature)
+            .collect();
+        self.write_index(id, &entries)?;
 
         self.save_config(id, &project.config)?;
         Ok(project.config)

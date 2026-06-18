@@ -18,7 +18,7 @@ pub mod validate;
 
 pub use config::ProjectConfig;
 pub use error::{CoreError, Result};
-pub use models::{FeatureItem, Milestone, Status, Task, TaskState, TodoList};
+pub use models::{FeatureItem, IndexEntry, Milestone, Status, Task, TaskState, TodoList};
 pub use store::{Project, Store};
 
 use time::format_description::well_known::Rfc3339;
@@ -241,6 +241,105 @@ mod tests {
         let reloaded = store.load("demo").unwrap();
         assert_eq!(reloaded.features.len(), 1);
         assert_eq!(reloaded.features[0].title, "Login");
+    }
+
+    #[test]
+    fn load_meta_omits_specs_load_keeps_them() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        store
+            .add_feature("demo", "Login", "# the full spec body", "M", None)
+            .unwrap();
+
+        // load_meta returns correct metadata but EMPTY specification bodies.
+        let meta = store.load_meta("demo").unwrap();
+        assert_eq!(meta.features.len(), 1);
+        let f = &meta.features[0];
+        assert_eq!(f.code, "FEAT-001");
+        assert_eq!(f.title, "Login");
+        assert_eq!(f.status, "Planned");
+        assert_eq!(f.milestone, "M");
+        assert_eq!(f.specification, "", "load_meta must not populate specs");
+
+        // feature_spec loads the one body on demand.
+        assert_eq!(
+            store.feature_spec("demo", "FEAT-001").unwrap(),
+            "# the full spec body"
+        );
+        // Unknown code is a not-found error.
+        assert!(matches!(
+            store.feature_spec("demo", "NOPE").unwrap_err(),
+            CoreError::FeatureNotFound(_)
+        ));
+
+        // load() still returns the full spec (its contract is unchanged).
+        let full = store.load("demo").unwrap();
+        assert_eq!(
+            full.feature("FEAT-001").unwrap().specification,
+            "# the full spec body"
+        );
+    }
+
+    #[test]
+    fn index_is_written_on_add_and_matches_meta_then_rebuilds() {
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        let a = store
+            .add_feature("demo", "A", "# spec a", "M", None)
+            .unwrap();
+        store
+            .set_feature_attrs(
+                "demo",
+                &a.code,
+                Some("chore".into()),
+                Some("high".into()),
+                None,
+                Some("alice".into()),
+                Some("core".into()),
+                Some(vec!["infra".into()]),
+                None,
+            )
+            .unwrap();
+        store
+            .add_feature("demo", "B", "# spec b", "M", None)
+            .unwrap();
+
+        // index.yaml is written on a feature mutation and lives at the project root.
+        let index_file = d.path.join("projects").join("demo").join("index.yaml");
+        assert!(index_file.is_file(), "index.yaml should be written on add");
+        // It must NOT carry spec bodies.
+        let raw = std::fs::read_to_string(&index_file).unwrap();
+        assert!(!raw.contains("spec a") && !raw.contains("specification"));
+
+        // load_index matches load_meta (same codes/status/attrs, with done/total counts).
+        let index = store.load_index("demo").unwrap();
+        let meta = store.load_meta("demo").unwrap();
+        assert_eq!(index.len(), meta.features.len());
+        for f in &meta.features {
+            let e = index.iter().find(|e| e.code == f.code).unwrap();
+            assert_eq!(e.status, f.status);
+            assert_eq!(e.milestone, f.milestone);
+            assert_eq!(e.kind, f.kind);
+            assert_eq!(e.priority, f.priority);
+            assert_eq!(e.assignee, f.assignee);
+            assert_eq!(e.team, f.team);
+            assert_eq!(e.labels, f.labels);
+            assert_eq!(e.done, f.done_count());
+            assert_eq!(e.total, f.task_count());
+        }
+
+        // rebuild_index reconstructs the file after deletion.
+        std::fs::remove_file(&index_file).unwrap();
+        assert!(!index_file.exists());
+        store.rebuild_index("demo").unwrap();
+        assert!(index_file.is_file(), "rebuild_index recreates index.yaml");
+        assert_eq!(store.load_index("demo").unwrap(), index);
+
+        // load_index also self-heals: a missing file is rebuilt on read.
+        std::fs::remove_file(&index_file).unwrap();
+        let healed = store.load_index("demo").unwrap();
+        assert!(index_file.is_file());
+        assert_eq!(healed, index);
     }
 
     #[test]
