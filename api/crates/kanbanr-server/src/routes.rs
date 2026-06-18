@@ -3,8 +3,8 @@
 //! the store/activity log directly.
 
 use crate::AppState;
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{OriginalUri, Path, Query, State};
+use axum::http::{Method, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
 use axum::Json;
@@ -56,6 +56,29 @@ fn json_body(r: kanbanr_core::Result<String>) -> axum::response::Response {
         Ok(s) => ([("content-type", "application/json")], s).into_response(),
         Err(e) => core_err(e).into_response(),
     }
+}
+
+/// Generic GET passthrough for any core read route not explicitly wired above — `workflow`, `gantt`,
+/// `ready`/`blocked`/`graph`/`impact`, `critical-path`, `query`, `doctor`, etc. This keeps the read
+/// daemon's surface in lockstep with `kanbanr_core::dispatch` (one source of truth) without
+/// per-route wiring, so a new read route in core is automatically served. Mounted as the `/api`
+/// router fallback; non-GET methods are rejected (writes only exist behind `--allow-writes`).
+pub async fn read_passthrough(
+    State(st): State<AppState>,
+    method: Method,
+    OriginalUri(uri): OriginalUri,
+) -> axum::response::Response {
+    if method != Method::GET {
+        return (
+            StatusCode::METHOD_NOT_ALLOWED,
+            "this daemon route is read-only",
+        )
+            .into_response();
+    }
+    // OriginalUri keeps the `/api` prefix + query string; dispatch wants the path without `/api`.
+    let pq = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    let dpath = pq.strip_prefix("/api").unwrap_or(pq);
+    json_body(dispatch::dispatch(&st.store, "GET", dpath, None))
 }
 
 pub async fn list_projects(State(st): State<AppState>) -> impl IntoResponse {

@@ -106,7 +106,11 @@ pub async fn run(
         eprintln!("kanbanr: write routes ENABLED (single-writer daemon)");
     }
 
-    let api = api.with_state(state);
+    // Any GET read route supported by core `dispatch` but not explicitly wired above (workflow,
+    // gantt, ready/blocked/graph/impact, critical-path, query, doctor, …) is served by this
+    // fallback, keeping the daemon's read surface in lockstep with the CLI. (Without it such paths
+    // fell through to the SPA index.html — which broke the web Gantt page.)
+    let api = api.fallback(routes::read_passthrough).with_state(state);
 
     let mut app = Router::new()
         .route("/healthz", get(healthz))
