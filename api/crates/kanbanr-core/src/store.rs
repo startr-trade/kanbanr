@@ -323,6 +323,8 @@ impl Store {
             kind: None,
             priority: None,
             due: None,
+            assignee: None,
+            team: None,
             labels: Vec::new(),
             depends_on: Vec::new(),
             todo_lists: Vec::new(),
@@ -419,13 +421,15 @@ impl Store {
         kind: Option<String>,
         priority: Option<String>,
         due: Option<String>,
+        assignee: Option<String>,
+        team: Option<String>,
         labels: Option<Vec<String>>,
         depends_on: Option<Vec<String>>,
     ) -> Result<FeatureItem> {
         let deps_changed = depends_on.is_some();
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
-        let f = Self::set_feature_attrs_on(&mut project, &mut pending, code, kind, priority, due, labels, depends_on)?;
+        let f = Self::set_feature_attrs_on(&mut project, &mut pending, code, kind, priority, due, assignee, team, labels, depends_on)?;
         // When dependencies changed, validate them across the whole portfolio (qualified
         // `project:code` refs must resolve and the global graph must stay acyclic) before persisting.
         if deps_changed {
@@ -443,6 +447,8 @@ impl Store {
         kind: Option<String>,
         priority: Option<String>,
         due: Option<String>,
+        assignee: Option<String>,
+        team: Option<String>,
         labels: Option<Vec<String>>,
         depends_on: Option<Vec<String>>,
     ) -> Result<FeatureItem> {
@@ -473,6 +479,12 @@ impl Store {
         }
         if let Some(d) = due {
             feature.due = clean(d);
+        }
+        if let Some(a) = assignee {
+            feature.assignee = clean(a);
+        }
+        if let Some(t) = team {
+            feature.team = clean(t);
         }
         if let Some(l) = labels {
             feature.labels = l.into_iter().filter(|s| !s.trim().is_empty()).collect();
@@ -801,7 +813,7 @@ impl Store {
 
         for (i, op) in ops.into_iter().enumerate() {
             let result: Result<serde_json::Value> = (|| match op {
-                FeatureAdd { alias, title, milestone, spec, code, kind, priority, due, labels, depends_on } => {
+                FeatureAdd { alias, title, milestone, spec, code, kind, priority, due, assignee, team, labels, depends_on } => {
                     let ms = resolve(&aliases, &milestone);
                     let f = Self::add_feature_on(&mut project, &mut pending, &title, spec.as_deref().unwrap_or(""), &ms, code)?;
                     if let Some(a) = &alias {
@@ -809,8 +821,8 @@ impl Store {
                     }
                     let deps = depends_on.map(|d| d.iter().map(|x| resolve(&aliases, x)).collect());
                     let had_deps = deps.is_some();
-                    let f = if kind.is_some() || priority.is_some() || due.is_some() || labels.is_some() || deps.is_some() {
-                        Self::set_feature_attrs_on(&mut project, &mut pending, &f.code, kind, priority, due, labels, deps)?
+                    let f = if kind.is_some() || priority.is_some() || due.is_some() || assignee.is_some() || team.is_some() || labels.is_some() || deps.is_some() {
+                        Self::set_feature_attrs_on(&mut project, &mut pending, &f.code, kind, priority, due, assignee, team, labels, deps)?
                     } else {
                         f
                     };
@@ -819,13 +831,13 @@ impl Store {
                     }
                     Ok(serde_json::json!({"op":"feature.add","code":f.code,"status":f.status}))
                 }
-                FeatureEdit { code, title, spec, milestone, new_code, kind, priority, due, labels, depends_on } => {
+                FeatureEdit { code, title, spec, milestone, new_code, kind, priority, due, assignee, team, labels, depends_on } => {
                     let ms = milestone.map(|m| Some(resolve(&aliases, &m)));
                     let f = Self::edit_feature_on(&mut project, &mut pending, &resolve(&aliases, &code), title, spec, ms, new_code)?;
                     let deps = depends_on.map(|d| d.iter().map(|x| resolve(&aliases, x)).collect());
                     let had_deps = deps.is_some();
-                    let f = if kind.is_some() || priority.is_some() || due.is_some() || labels.is_some() || deps.is_some() {
-                        Self::set_feature_attrs_on(&mut project, &mut pending, &f.code, kind, priority, due, labels, deps)?
+                    let f = if kind.is_some() || priority.is_some() || due.is_some() || assignee.is_some() || team.is_some() || labels.is_some() || deps.is_some() {
+                        Self::set_feature_attrs_on(&mut project, &mut pending, &f.code, kind, priority, due, assignee, team, labels, deps)?
                     } else {
                         f
                     };

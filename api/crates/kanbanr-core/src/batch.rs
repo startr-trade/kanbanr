@@ -27,6 +27,10 @@ pub enum BatchOp {
         #[serde(default)]
         due: Option<String>,
         #[serde(default)]
+        assignee: Option<String>,
+        #[serde(default)]
+        team: Option<String>,
+        #[serde(default)]
         labels: Option<Vec<String>>,
         /// Feature codes (or `ref` aliases) this one is blocked by.
         #[serde(default)]
@@ -50,6 +54,10 @@ pub enum BatchOp {
         priority: Option<String>,
         #[serde(default)]
         due: Option<String>,
+        #[serde(default)]
+        assignee: Option<String>,
+        #[serde(default)]
+        team: Option<String>,
         #[serde(default)]
         labels: Option<Vec<String>>,
         #[serde(default)]

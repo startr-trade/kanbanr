@@ -183,6 +183,12 @@ enum FeatureCmd {
         /// Due date (free text, e.g. an ISO date).
         #[arg(long)]
         due: Option<String>,
+        /// Assignee (the person/agent owning this feature).
+        #[arg(long)]
+        assignee: Option<String>,
+        /// Owning team.
+        #[arg(long)]
+        team: Option<String>,
         /// Labels/tags (comma-separated).
         #[arg(long, value_delimiter = ',')]
         labels: Option<Vec<String>>,
@@ -196,6 +202,12 @@ enum FeatureCmd {
         status: Option<String>,
         #[arg(long)]
         milestone: Option<String>,
+        /// Filter to features with this assignee.
+        #[arg(long)]
+        assignee: Option<String>,
+        /// Filter to features with this team.
+        #[arg(long)]
+        team: Option<String>,
     },
     /// Show a single feature item (rendered markdown).
     Show { code: String },
@@ -222,6 +234,12 @@ enum FeatureCmd {
         /// Due date (empty string clears).
         #[arg(long)]
         due: Option<String>,
+        /// Assignee (empty string clears).
+        #[arg(long)]
+        assignee: Option<String>,
+        /// Owning team (empty string clears).
+        #[arg(long)]
+        team: Option<String>,
         /// Replace labels (comma-separated).
         #[arg(long, value_delimiter = ',')]
         labels: Option<Vec<String>>,
@@ -773,6 +791,8 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             kind,
             priority,
             due,
+            assignee,
+            team,
             labels,
             depends_on,
         } => {
@@ -785,6 +805,8 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                 ("kind", kind.clone().map(|k| json!(k))),
                 ("priority", priority.clone().map(|x| json!(x))),
                 ("due", due.clone().map(|d| json!(d))),
+                ("assignee", assignee.clone().map(|a| json!(a))),
+                ("team", team.clone().map(|t| json!(t))),
                 ("labels", labels.clone().map(|l| json!(l))),
                 ("depends_on", depends_on.clone().map(|d| json!(d))),
             ]);
@@ -796,13 +818,15 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             );
             Ok(())
         }
-        FeatureCmd::List { status, milestone } => {
+        FeatureCmd::List { status, milestone, assignee, team } => {
             let project = get_project(client, &p)?;
             let items: Vec<_> = project
                 .features
                 .iter()
                 .filter(|f| status.as_ref().map(|s| &f.status == s).unwrap_or(true))
                 .filter(|f| milestone.as_ref().map(|m| &f.milestone == m).unwrap_or(true))
+                .filter(|f| assignee.as_ref().map(|a| f.assignee.as_deref() == Some(a.as_str())).unwrap_or(true))
+                .filter(|f| team.as_ref().map(|t| f.team.as_deref() == Some(t.as_str())).unwrap_or(true))
                 .collect();
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&items)?);
@@ -836,6 +860,8 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             kind,
             priority,
             due,
+            assignee,
+            team,
             labels,
             depends_on,
         } => {
@@ -848,6 +874,8 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                 ("kind", kind.clone().map(|k| json!(k))),
                 ("priority", priority.clone().map(|x| json!(x))),
                 ("due", due.clone().map(|d| json!(d))),
+                ("assignee", assignee.clone().map(|a| json!(a))),
+                ("team", team.clone().map(|t| json!(t))),
                 ("labels", labels.clone().map(|l| json!(l))),
                 ("depends_on", depends_on.clone().map(|d| json!(d))),
             ]);

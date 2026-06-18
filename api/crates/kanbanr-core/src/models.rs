@@ -51,7 +51,10 @@ impl TodoList {
         !self.tasks.is_empty() && self.tasks.iter().all(|t| t.state == TaskState::Completed)
     }
     pub fn done_count(&self) -> usize {
-        self.tasks.iter().filter(|t| t.state == TaskState::Completed).count()
+        self.tasks
+            .iter()
+            .filter(|t| t.state == TaskState::Completed)
+            .count()
     }
 }
 
@@ -74,6 +77,12 @@ pub struct FeatureItem {
     /// Optional due date (e.g. an ISO date).
     #[serde(default)]
     pub due: Option<String>,
+    /// Optional assignee (the person/agent owning this feature); free text.
+    #[serde(default)]
+    pub assignee: Option<String>,
+    /// Optional owning team; free text.
+    #[serde(default)]
+    pub team: Option<String>,
     /// Free-form labels/tags.
     #[serde(default)]
     pub labels: Vec<String>,
@@ -107,7 +116,9 @@ impl FeatureItem {
     }
 
     pub fn done_count(&self) -> usize {
-        self.all_tasks().filter(|t| t.state == TaskState::Completed).count()
+        self.all_tasks()
+            .filter(|t| t.state == TaskState::Completed)
+            .count()
     }
     pub fn task_count(&self) -> usize {
         self.all_tasks().count()
@@ -127,6 +138,8 @@ impl FeatureItem {
             kind: self.kind.clone(),
             priority: self.priority.clone(),
             due: self.due.clone(),
+            assignee: self.assignee.clone(),
+            team: self.team.clone(),
             labels: self.labels.clone(),
             depends_on: self.depends_on.clone(),
             todo_lists: self.todo_lists.clone(),
@@ -146,6 +159,8 @@ impl FeatureItem {
             kind: meta.kind,
             priority: meta.priority,
             due: meta.due,
+            assignee: meta.assignee,
+            team: meta.team,
             labels: meta.labels,
             depends_on: meta.depends_on,
             todo_lists: meta.todo_lists,
@@ -170,6 +185,10 @@ pub struct FeatureMeta {
     pub priority: Option<String>,
     #[serde(default)]
     pub due: Option<String>,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    #[serde(default)]
+    pub team: Option<String>,
     #[serde(default)]
     pub labels: Vec<String>,
     #[serde(default)]

@@ -72,7 +72,7 @@ export function progress(tasks: Task[]): { done: number; total: number } {
   };
 }
 
-/** Small badges for a feature's kind / priority / labels (shared by cards + the feature page). */
+/** Small badges for a feature's kind / priority / owner / labels (shared by cards + the feature page). */
 export function FeatureBadges({ feature }: { feature: Feature }) {
   return (
     <>
@@ -80,6 +80,8 @@ export function FeatureBadges({ feature }: { feature: Feature }) {
       {feature.priority && (
         <span className={`badge prio ${feature.priority.toLowerCase()}`}>{feature.priority}</span>
       )}
+      {feature.assignee && <span className="badge assignee">@{feature.assignee}</span>}
+      {feature.team && <span className="badge team">{feature.team}</span>}
       {(feature.labels ?? []).map((l) => (
         <span key={l} className="badge label">
           {l}
