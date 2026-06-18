@@ -9,6 +9,7 @@ pub mod docs;
 pub mod doctor;
 pub mod error;
 pub mod export;
+pub mod gantt;
 pub mod git;
 pub mod graph;
 pub mod mermaid;
@@ -1778,5 +1779,201 @@ mod tests {
             dispatch(&store, "GET", "/projects/ghost/query", None).unwrap_err(),
             CoreError::ProjectNotFound(_)
         ));
+    }
+
+    // ---- scheduling: critical path + Gantt (FEAT-035) ------------------------------------------
+
+    #[test]
+    fn critical_path_and_schedule_offsets() {
+        use crate::graph::{qualify, DependencyView};
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        // Chain A -> B -> C with estimates 2, 3, 1.
+        let a = store.add_feature("demo", "A", "", "M", None).unwrap();
+        let b = store.add_feature("demo", "B", "", "M", None).unwrap();
+        let c = store.add_feature("demo", "C", "", "M", None).unwrap();
+        store
+            .set_feature_attrs(
+                "demo",
+                &b.code,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(vec![a.code.clone()]),
+            )
+            .unwrap();
+        store
+            .set_feature_attrs(
+                "demo",
+                &c.code,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(vec![b.code.clone()]),
+            )
+            .unwrap();
+        store
+            .set_feature_schedule("demo", &a.code, None, Some(2.0))
+            .unwrap();
+        store
+            .set_feature_schedule("demo", &b.code, None, Some(3.0))
+            .unwrap();
+        store
+            .set_feature_schedule("demo", &c.code, None, Some(1.0))
+            .unwrap();
+        // The estimate persists/reloads.
+        assert_eq!(
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&a.code)
+                .unwrap()
+                .estimate_days,
+            Some(2.0)
+        );
+
+        let view = DependencyView::build(&store, None).unwrap();
+        let sched = view.schedule(Some("demo"));
+        let qa = qualify("demo", &a.code);
+        let qb = qualify("demo", &b.code);
+        let qc = qualify("demo", &c.code);
+        // Offsets: A [0,2], B [2,5], C [5,6]; makespan 6; critical path A->B->C.
+        assert_eq!(sched.tasks[&qa].start, 0.0);
+        assert_eq!(sched.tasks[&qa].finish, 2.0);
+        assert_eq!(sched.tasks[&qb].start, 2.0);
+        assert_eq!(sched.tasks[&qb].finish, 5.0);
+        assert_eq!(sched.tasks[&qc].start, 5.0);
+        assert_eq!(sched.tasks[&qc].finish, 6.0);
+        assert_eq!(sched.makespan, 6.0);
+        assert_eq!(
+            view.critical_path(Some("demo")),
+            vec![qa.clone(), qb.clone(), qc.clone()]
+        );
+        assert!(sched.is_critical(&qb));
+    }
+
+    #[test]
+    fn gantt_has_sections_sequencing_and_crit_marker() {
+        use crate::gantt::project_gantt;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let a = store.add_feature("demo", "A", "", "M", None).unwrap();
+        let b = store.add_feature("demo", "B", "", "M", None).unwrap();
+        store
+            .set_feature_attrs(
+                "demo",
+                &b.code,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(vec![a.code.clone()]),
+            )
+            .unwrap();
+        // A has an explicit start date; B is sequenced after A.
+        store
+            .set_feature_schedule("demo", &a.code, Some("2026-07-01".into()), Some(2.0))
+            .unwrap();
+
+        let out = project_gantt(&store, "demo").unwrap();
+        assert!(out.starts_with("gantt"), "missing gantt header: {out}");
+        assert!(
+            out.contains("section M"),
+            "missing milestone section: {out}"
+        );
+        // A is dated; B is sequenced with `after`.
+        assert!(out.contains("2026-07-01"), "missing A date: {out}");
+        assert!(
+            out.contains("after"),
+            "missing dependency sequencing: {out}"
+        );
+        // The critical path (A->B) is marked `crit`.
+        assert!(out.contains("crit"), "missing crit marker: {out}");
+    }
+
+    #[test]
+    fn portfolio_gantt_spans_projects() {
+        use crate::gantt::portfolio_gantt;
+        let (store, _d) = temp_store();
+        new_project(&store, "alpha");
+        new_project(&store, "beta");
+        store.add_feature("alpha", "A", "", "M", None).unwrap();
+        store.add_feature("beta", "B", "", "M", None).unwrap();
+
+        let out = portfolio_gantt(&store).unwrap();
+        assert!(out.starts_with("gantt"));
+        assert!(
+            out.contains("section alpha") && out.contains("section beta"),
+            "{out}"
+        );
+        assert!(
+            out.contains("alpha_FEAT_001") && out.contains("beta_FEAT_001"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn dispatch_gantt_and_critical_path_routes() {
+        use crate::dispatch::dispatch;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let a = store.add_feature("demo", "A", "", "M", None).unwrap();
+        let b = store.add_feature("demo", "B", "", "M", None).unwrap();
+        store
+            .set_feature_attrs(
+                "demo",
+                &b.code,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(vec![a.code.clone()]),
+            )
+            .unwrap();
+
+        let gantt = dispatch(&store, "GET", "/projects/demo/gantt", None).unwrap();
+        assert!(gantt.starts_with("gantt") && gantt.contains("section"));
+        let cp = dispatch(&store, "GET", "/projects/demo/critical-path", None).unwrap();
+        assert!(cp.contains("critical_path") && cp.contains("demo:FEAT-001"));
+        // Portfolio-wide routes.
+        assert!(dispatch(&store, "GET", "/gantt", None)
+            .unwrap()
+            .starts_with("gantt"));
+        assert!(dispatch(&store, "GET", "/critical-path", None)
+            .unwrap()
+            .contains("critical_path"));
+        // Unknown project 404s.
+        assert!(matches!(
+            dispatch(&store, "GET", "/projects/ghost/gantt", None).unwrap_err(),
+            CoreError::ProjectNotFound(_)
+        ));
+    }
+
+    #[test]
+    fn feature_schedule_set_and_clear() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let a = store.add_feature("demo", "A", "", "M", None).unwrap();
+        let set = store
+            .set_feature_schedule("demo", &a.code, Some("2026-07-01".into()), Some(3.0))
+            .unwrap();
+        assert_eq!(set.start.as_deref(), Some("2026-07-01"));
+        assert_eq!(set.estimate_days, Some(3.0));
+        // Empty start clears; estimate <= 0 clears.
+        let cleared = store
+            .set_feature_schedule("demo", &a.code, Some("".into()), Some(0.0))
+            .unwrap();
+        assert!(cleared.start.is_none());
+        assert!(cleared.estimate_days.is_none());
     }
 }

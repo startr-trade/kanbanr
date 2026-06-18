@@ -12,6 +12,9 @@ use crate::{FeatureItem, Project, Store};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Default scheduling duration (in days) for a feature with no `estimate_days`.
+pub const DEFAULT_DURATION_DAYS: f64 = 1.0;
+
 /// A fully-qualified node id, `"<project>:<code>"`.
 pub fn qualify(project: &str, code: &str) -> String {
     format!("{project}:{code}")
@@ -155,6 +158,10 @@ pub struct GraphNode {
     pub status: String,
     /// True when the status is terminal per the owning project's config (Completed or no-op).
     pub terminal: bool,
+    /// Optional planned start date (ISO string), used by Gantt rendering when present.
+    pub start: Option<String>,
+    /// Scheduling duration in days for this task (from `estimate_days`, defaulting to 1.0).
+    pub duration: f64,
     /// Qualified ids of this node's direct dependencies (may include unresolved cross-project ids).
     pub depends_on: Vec<String>,
 }
@@ -197,6 +204,11 @@ impl DependencyView {
                         code: f.code.clone(),
                         status: f.status.clone(),
                         terminal: is_terminal_status(&project.config, &f.status),
+                        start: f.start.clone(),
+                        duration: f
+                            .estimate_days
+                            .filter(|d| *d > 0.0)
+                            .unwrap_or(DEFAULT_DURATION_DAYS),
                         depends_on: deps,
                     },
                 );
@@ -358,5 +370,167 @@ impl DependencyView {
         }
         out.push_str("}\n");
         out
+    }
+
+    // ---- critical path & scheduling (FEAT-035) --------------------------------------------
+
+    /// Compute a longest-path schedule over the dependency DAG, optionally scoped to one project.
+    ///
+    /// Each node's `start` offset is the maximum `finish` over its in-scope dependencies (0 when it
+    /// has none), and `finish = start + duration`. Durations come from `estimate_days` (default
+    /// `DEFAULT_DURATION_DAYS`). The longest finish identifies the project's makespan, and the chain
+    /// of dependencies realising it is the **critical path**. Cross-project dependencies are honored
+    /// when unscoped (`project = None`); when scoped, only intra-scope edges constrain the schedule.
+    pub fn schedule(&self, project: Option<&str>) -> Schedule {
+        let in_scope = |id: &str| {
+            project.is_none_or(|p| self.nodes.get(id).map(|n| n.project == p).unwrap_or(false))
+        };
+
+        // Nodes in scope, in a deterministic (sorted) order.
+        let ids: Vec<&str> = self
+            .nodes
+            .values()
+            .filter(|n| in_scope(&n.id))
+            .map(|n| n.id.as_str())
+            .collect();
+
+        let mut start: BTreeMap<String, f64> = BTreeMap::new();
+        let mut finish: BTreeMap<String, f64> = BTreeMap::new();
+        // The in-scope dependency that determined a node's start (its critical predecessor), if any.
+        let mut pred: BTreeMap<String, Option<String>> = BTreeMap::new();
+
+        // Resolve each node via memoized DFS over in-scope dependencies (DAG: validated acyclic).
+        fn resolve(
+            id: &str,
+            view: &DependencyView,
+            scoped: &dyn Fn(&str) -> bool,
+            start: &mut BTreeMap<String, f64>,
+            finish: &mut BTreeMap<String, f64>,
+            pred: &mut BTreeMap<String, Option<String>>,
+        ) -> f64 {
+            if let Some(f) = finish.get(id) {
+                return *f;
+            }
+            let node = match view.nodes.get(id) {
+                Some(n) => n,
+                None => return 0.0,
+            };
+            // Provisional insert guards against pathological cycles (should not occur post-validation).
+            finish.insert(id.to_string(), 0.0);
+            let mut best_start = 0.0_f64;
+            let mut best_pred: Option<String> = None;
+            for dep in &node.depends_on {
+                if !scoped(dep) || !view.nodes.contains_key(dep.as_str()) {
+                    continue;
+                }
+                let dep_finish = resolve(dep, view, scoped, start, finish, pred);
+                if dep_finish > best_start {
+                    best_start = dep_finish;
+                    best_pred = Some(dep.clone());
+                }
+            }
+            start.insert(id.to_string(), best_start);
+            pred.insert(id.to_string(), best_pred);
+            let f = best_start + node.duration;
+            finish.insert(id.to_string(), f);
+            f
+        }
+
+        for id in &ids {
+            resolve(id, self, &in_scope, &mut start, &mut finish, &mut pred);
+        }
+
+        // The makespan endpoint is the in-scope node with the greatest finish (ties: first sorted).
+        let endpoint = ids
+            .iter()
+            .copied()
+            .max_by(|a, b| {
+                let fa = finish.get(*a).copied().unwrap_or(0.0);
+                let fb = finish.get(*b).copied().unwrap_or(0.0);
+                fa.partial_cmp(&fb)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| b.cmp(a)) // earlier-sorted id wins ties
+            })
+            .map(String::from);
+
+        // Walk predecessors back from the endpoint to recover the critical path (start -> end).
+        let mut critical = Vec::new();
+        let mut cur = endpoint.clone();
+        while let Some(id) = cur {
+            critical.push(id.clone());
+            cur = pred.get(&id).cloned().flatten();
+        }
+        critical.reverse();
+
+        let makespan = endpoint
+            .as_ref()
+            .and_then(|e| finish.get(e).copied())
+            .unwrap_or(0.0);
+
+        let tasks = ids
+            .iter()
+            .map(|id| {
+                (
+                    id.to_string(),
+                    ScheduledTask {
+                        id: id.to_string(),
+                        start: start.get(*id).copied().unwrap_or(0.0),
+                        finish: finish.get(*id).copied().unwrap_or(0.0),
+                        duration: self.nodes.get(*id).map(|n| n.duration).unwrap_or(0.0),
+                    },
+                )
+            })
+            .collect();
+
+        Schedule {
+            tasks,
+            critical_path: critical.clone(),
+            critical: critical.into_iter().collect(),
+            makespan,
+        }
+    }
+
+    /// The critical path (longest dependency chain) over the DAG, optionally scoped to one project.
+    /// Returned start -> end as qualified ids.
+    pub fn critical_path(&self, project: Option<&str>) -> Vec<String> {
+        self.schedule(project).critical_path
+    }
+}
+
+/// One scheduled task: its longest-path `start`/`finish` offsets (in days, from time 0) and duration.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScheduledTask {
+    pub id: String,
+    pub start: f64,
+    pub finish: f64,
+    pub duration: f64,
+}
+
+/// A computed longest-path schedule over the dependency DAG (FEAT-035).
+#[derive(Debug, Clone, Serialize)]
+pub struct Schedule {
+    /// Per-node offsets, keyed by qualified id.
+    pub tasks: BTreeMap<String, ScheduledTask>,
+    /// The critical path as an ordered list of qualified ids (start -> end).
+    pub critical_path: Vec<String>,
+    /// The set of critical-path ids (for O(1) membership tests, e.g. when marking Gantt tasks).
+    #[serde(skip)]
+    pub critical: BTreeSet<String>,
+    /// Total project length in days (the greatest finish offset).
+    pub makespan: f64,
+}
+
+impl Schedule {
+    /// Is `id` on the critical path?
+    pub fn is_critical(&self, id: &str) -> bool {
+        self.critical.contains(id)
+    }
+    /// JSON-serializable view: ordered critical path, makespan, and per-node offsets.
+    pub fn to_json_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "critical_path": self.critical_path,
+            "makespan": self.makespan,
+            "tasks": self.tasks,
+        })
     }
 }
