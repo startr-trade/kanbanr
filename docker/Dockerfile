@@ -12,19 +12,40 @@ RUN npm install
 COPY web/ ./
 RUN npm run build      # -> /web/dist
 
-# ---- Stage 2: build the single `kanbanr` binary ----
-# Pin the build base to the SAME Debian suite as the runtime stage below (bookworm). The bare
+# ---- Stage 2: build the single `kanbanr` binary (cargo-chef for cached dependency layers) ----
+# cargo-chef separates DEPENDENCY compilation from APP compilation. The dependency tree — whose
+# slow part is the vendored libgit2 + OpenSSL compiled from source — is built once into a layer
+# keyed by `recipe.json` (distilled from the Cargo manifests + lockfile). Editing application source
+# then NO LONGER recompiles that whole tree: Docker reuses the cached `cook` layer and only the thin
+# kanbanr crates rebuild, cutting most image rebuilds from minutes to seconds.
+#
+# Pin the base to the SAME Debian suite as the runtime stage below (bookworm). The bare
 # `rust:1.95-slim` tag floats to the latest Debian (trixie, glibc 2.39); linking against that and
-# then running on bookworm (glibc 2.36) fails at startup with:
+# running on bookworm (glibc 2.36) fails at startup with
 #   "libc.so.6: version `GLIBC_2.39' not found (required by kanbanr)".
 # Keeping both stages on bookworm makes the binary link glibc 2.36 and run on bookworm and newer.
-FROM rust:1.95-slim-bookworm AS api
+FROM rust:1.95-slim-bookworm AS chef
+RUN cargo install cargo-chef --locked
+WORKDIR /api
+
+# Planner: distill the dependency graph into recipe.json (reads manifests/source; compiles nothing).
+FROM chef AS planner
+COPY api/ ./
+RUN cargo chef prepare --recipe-path recipe.json
+
+# Builder (named `api` so the runtime COPY below is unchanged): cook deps into a cached layer, then
+# compile the app against them.
+FROM chef AS api
 # Build-only toolchain for the vendored libgit2 + OpenSSL (compiled from source and statically
 # linked, so the RUNTIME image needs no git/libgit2/openssl packages). None of this ships.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         cmake make perl gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
-WORKDIR /api
+# Cook the dependencies. This is the expensive (vendored-C) step and its layer is cached until the
+# Cargo manifests/lockfile change — source-only edits skip it entirely.
+COPY --from=planner /api/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+# Now the real source; with deps already compiled in ./target, only the kanbanr crates rebuild.
 COPY api/ ./
 RUN cargo build --release -p kanbanr-cli
 
