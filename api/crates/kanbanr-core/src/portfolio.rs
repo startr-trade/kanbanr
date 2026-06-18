@@ -158,22 +158,29 @@ fn disposition(project: &Project, f: &crate::FeatureItem) -> Disposition {
 
 // ---- rollups -------------------------------------------------------------------------------
 
-/// Task counts + a derived percentage. The percentage is `done/total*100` rounded, or `0` when
-/// there are no tasks at all (so an empty project doesn't read as 100%).
+/// Feature-completion counts + a derived percentage. Completion is **status-aware**: a feature in a
+/// terminal status (Completed / no-op) counts as fully done even if it tracks no tasks (many
+/// features are completed by a status move, not by checking off tasks); a non-terminal feature with
+/// tasks gets partial credit (`done/total`); otherwise it's 0. `percent` is the mean per-feature
+/// completion across the group (rounded), or `0` when there are no features. `tasks_*` are retained
+/// for display (how many checklist items exist/are done) but no longer drive the percentage.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Counts {
     pub features: usize,
     pub tasks_total: usize,
     pub tasks_done: usize,
     pub percent: u32,
+    /// Sum of per-feature completion fractions (0.0–1.0 each); `percent = progress/features*100`.
+    #[serde(skip)]
+    progress: f64,
 }
 
 impl Counts {
     fn finalize(mut self) -> Self {
-        self.percent = if self.tasks_total == 0 {
+        self.percent = if self.features == 0 {
             0
         } else {
-            ((self.tasks_done as f64 / self.tasks_total as f64) * 100.0).round() as u32
+            ((self.progress / self.features as f64) * 100.0).round() as u32
         };
         self
     }
@@ -181,6 +188,20 @@ impl Counts {
         self.features += other.features;
         self.tasks_total += other.tasks_total;
         self.tasks_done += other.tasks_done;
+        self.progress += other.progress;
+    }
+    /// Fold one feature into the counts: full credit if terminal, else task progress, else 0.
+    fn add_feature(&mut self, project: &Project, f: &crate::FeatureItem) {
+        self.features += 1;
+        self.tasks_total += f.task_count();
+        self.tasks_done += f.done_count();
+        self.progress += if is_terminal(project, &f.status) {
+            1.0
+        } else if f.task_count() > 0 {
+            f.done_count() as f64 / f.task_count() as f64
+        } else {
+            0.0
+        };
     }
 }
 
@@ -215,9 +236,10 @@ pub struct RollupReport {
     pub programs: Vec<ProgramRollup>,
 }
 
-/// Compute task-based rollups across the portfolio. Percentages roll up from milestone (done/total
-/// tasks across its features) to project, program, and portfolio. A project listed in a program but
-/// missing from the store is skipped (it contributes nothing).
+/// Compute completion rollups across the portfolio. The percentage is the mean per-feature
+/// completion (status-aware: a terminal feature is 100% even with no tasks; a non-terminal feature
+/// with tasks gets `done/total`), rolled up milestone → project → program → portfolio. A project
+/// listed in a program but missing from the store is skipped (it contributes nothing).
 pub fn rollups(store: &Store) -> Result<RollupReport> {
     let ws = load(store)?;
     let programs = resolve_programs(store, &ws)?;
@@ -264,9 +286,7 @@ fn project_rollup(project: &Project) -> ProjectRollup {
     for ms in &project.milestones {
         let mut c = Counts::default();
         for f in project.features.iter().filter(|f| f.milestone == ms.code) {
-            c.features += 1;
-            c.tasks_total += f.task_count();
-            c.tasks_done += f.done_count();
+            c.add_feature(project, f);
         }
         let c = c.finalize();
         proj_counts.add(&c);
@@ -283,9 +303,7 @@ fn project_rollup(project: &Project) -> ProjectRollup {
         .iter()
         .filter(|f| !ms_codes.contains(&f.milestone.as_str()))
     {
-        proj_counts.features += 1;
-        proj_counts.tasks_total += f.task_count();
-        proj_counts.tasks_done += f.done_count();
+        proj_counts.add_feature(project, f);
     }
 
     let name = if project.config.name.is_empty() {

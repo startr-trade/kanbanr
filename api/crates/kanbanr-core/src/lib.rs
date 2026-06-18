@@ -1457,10 +1457,33 @@ mod tests {
         assert_eq!(p1.projects[0].milestones[0].counts.percent, 50);
         let p2 = report.programs.iter().find(|p| p.id == "p2").unwrap();
         assert_eq!(p2.counts.percent, 100);
-        // Portfolio: 4 done / 6 total => 67%.
+        // Percentage is mean per-feature completion: alpha A = 2/4 = 0.5, beta B = 2/2 = 1.0, so
+        // the portfolio is (0.5 + 1.0)/2 = 75%. Task totals (4/6) are retained for display.
         assert_eq!(report.counts.tasks_done, 4);
         assert_eq!(report.counts.tasks_total, 6);
-        assert_eq!(report.counts.percent, 67);
+        assert_eq!(report.counts.percent, 75);
+    }
+
+    #[test]
+    fn rollups_count_terminal_features_with_no_tasks_as_done() {
+        // Regression: features completed by a STATUS move (no checklist tasks — the common case)
+        // must roll up as 100%, not 0%. (A whole milestone of Completed, taskless features was
+        // reading 0% because the percentage used to be task-ratio only.)
+        let (store, _d) = temp_store();
+        new_project(&store, "demo"); // default workflow Planned -> Scheduled -> Completed
+        for title in ["A", "B"] {
+            let f = store.add_feature("demo", title, "", "M", None).unwrap();
+            store.move_feature("demo", &f.code, "Scheduled").unwrap();
+            store.move_feature("demo", &f.code, "Completed").unwrap();
+        }
+        let report = crate::portfolio::rollups(&store).unwrap();
+        let ms = &report.programs[0].projects[0].milestones[0];
+        assert_eq!(ms.counts.tasks_total, 0, "these features track no tasks");
+        assert_eq!(
+            ms.counts.percent, 100,
+            "terminal-by-status features must count as done"
+        );
+        assert_eq!(report.counts.percent, 100, "portfolio rolls up to 100%");
     }
 
     #[test]
