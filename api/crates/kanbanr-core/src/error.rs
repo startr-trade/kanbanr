@@ -54,6 +54,8 @@ pub enum CoreError {
     InvalidDocPath(String),
     #[error("document '{0}' not found")]
     DocNotFound(String),
+    #[error("invalid Mermaid state diagram: {0}")]
+    InvalidMermaid(String),
     #[error("unsupported operation: {0}")]
     Unsupported(String),
     #[error("io error: {0}")]

@@ -201,6 +201,7 @@ fn build_project_config(name: &str, body: &Value) -> ProjectConfig {
                     .unwrap_or_else(|| s.first().cloned().unwrap_or_default()),
                 transitions: Default::default(),
                 no_op_states: no_ops,
+                terminal_states: vec_field(body, "terminal_states").unwrap_or_default(),
                 statuses: s.clone(),
             }
         }
@@ -215,6 +216,9 @@ fn build_project_config(name: &str, body: &Value) -> ProjectConfig {
             if let Some(n) = &no_op {
                 c.no_op_states = n.clone();
                 c.displayed_states.retain(|s| !n.contains(s));
+            }
+            if let Some(t) = vec_field(body, "terminal_states") {
+                c.terminal_states = t;
             }
             c
         }
@@ -251,7 +255,17 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         .or_else(|| base.as_ref().map(|x| x.displayed_states.clone()));
     let no_ops =
         vec_field(body, "no_op_states").or_else(|| base.as_ref().map(|x| x.no_op_states.clone()));
-    ser(&store.set_workflow(p, statuses, transitions, default_state, displayed, no_ops)?)
+    let terminals = vec_field(body, "terminal_states")
+        .or_else(|| base.as_ref().map(|x| x.terminal_states.clone()));
+    ser(&store.set_workflow(
+        p,
+        statuses,
+        transitions,
+        default_state,
+        displayed,
+        no_ops,
+        terminals,
+    )?)
 }
 
 // ---- the dispatcher ------------------------------------------------------------------------
@@ -448,6 +462,17 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             &str_field(b, "new").unwrap_or_default(),
         )?),
         ("PUT", ["projects", p, "config", "workflow"]) => apply_workflow(store, p, b),
+        // Workflow export (FEAT-039): the config rendered as a Mermaid state diagram.
+        ("GET", ["projects", p, "workflow"]) => {
+            let project = store.load(p)?;
+            match query_param(query, "format").as_deref() {
+                Some("mermaid") => Ok(crate::mermaid::to_state_diagram(&project.config)),
+                other => Err(CoreError::Unsupported(format!(
+                    "workflow format '{}' (only 'mermaid' is supported)",
+                    other.unwrap_or("")
+                ))),
+            }
+        }
 
         // ---- docs ----
         ("GET", ["projects", p, "docs"]) => ser(&store.doc_tree(p)?),

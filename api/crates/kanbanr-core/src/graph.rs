@@ -167,10 +167,14 @@ pub struct DependencyView {
     pub nodes: BTreeMap<String, GraphNode>,
 }
 
-/// Is a status terminal (done) per a project's config? Terminal == case-insensitive "Completed"
-/// OR a no-op state (an inert disposition).
+/// Is a status terminal (done) per a project's config? Terminal == an explicitly declared
+/// `terminal_states` entry (FEAT-039), OR — as a fallback when none are declared — the built-in
+/// heuristic: case-insensitive "Completed" OR a no-op state (an inert disposition). Keeping the
+/// fallback means an empty `terminal_states` reproduces the pre-FEAT-039 behavior exactly.
 pub fn is_terminal_status(config: &crate::ProjectConfig, status: &str) -> bool {
-    status.eq_ignore_ascii_case("Completed") || config.is_no_op(status)
+    config.is_terminal(status)
+        || status.eq_ignore_ascii_case("Completed")
+        || config.is_no_op(status)
 }
 
 impl DependencyView {

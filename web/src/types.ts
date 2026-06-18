@@ -102,6 +102,8 @@ export interface ProjectConfig {
   displayed_states: string[];
   /** Statuses flagged as functionally inert (no-op); always non-displayed. */
   no_op_states: string[];
+  /** Explicit terminal (end) states — a feature here is "done" (FEAT-039). */
+  terminal_states?: string[];
 }
 
 export interface Project {

@@ -34,6 +34,11 @@ pub struct ProjectConfig {
     /// in a no-op state does not auto-advance to "Completed" when its tasks finish.
     #[serde(default)]
     pub no_op_states: Vec<String>,
+    /// Subset of `statuses` that are explicit terminal (end) states of the workflow — a feature
+    /// here is considered "done". Absent in legacy configs (defaults to empty), in which case
+    /// `graph::is_terminal_status` falls back to its built-in heuristic (Completed / no-op).
+    #[serde(default)]
+    pub terminal_states: Vec<String>,
 }
 
 /// The default no-op (inert disposition) states.
@@ -91,10 +96,16 @@ impl ProjectConfig {
                 "Completed".to_string(),
             ],
             default_state: "Planned".to_string(),
+            terminal_states: vec!["Completed".to_string()],
             no_op_states: no_ops,
             statuses,
             transitions,
         }
+    }
+
+    /// Is this status an explicit terminal (end) state of the workflow?
+    pub fn is_terminal(&self, status: &str) -> bool {
+        self.terminal_states.iter().any(|s| s == status)
     }
 
     pub fn has_status(&self, status: &str) -> bool {

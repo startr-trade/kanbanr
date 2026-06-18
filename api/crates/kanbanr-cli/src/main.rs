@@ -388,6 +388,16 @@ enum ConfigCmd {
         displayed_states: Option<Vec<String>>,
         #[arg(long, value_delimiter = ',')]
         no_op_states: Option<Vec<String>>,
+        /// Explicit terminal (end) states — a feature here is "done". (FEAT-039)
+        #[arg(long, value_delimiter = ',')]
+        terminal_states: Option<Vec<String>>,
+        /// Print the workflow as a Mermaid `stateDiagram-v2` (a read; ignores the other flags).
+        #[arg(long)]
+        to_mermaid: bool,
+        /// Import the workflow from a Mermaid `stateDiagram-v2` file (or `-` for stdin); replaces
+        /// statuses/transitions/default/terminal from the diagram.
+        #[arg(long, value_name = "FILE")]
+        from_mermaid: Option<String>,
     },
 }
 
@@ -1311,6 +1321,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 println!("default_state: {}", c.default_status());
                 println!("displayed_states: {}", c.displayed_states.join(", "));
                 println!("no_op_states: {}", c.no_op_states.join(", "));
+                println!("terminal_states: {}", c.terminal_states.join(", "));
                 println!("transitions:");
                 for (from, tos) in &c.transitions {
                     println!("  {from} -> {}", tos.join(", "));
@@ -1395,7 +1406,42 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             default_state,
             displayed_states,
             no_op_states,
+            terminal_states,
+            to_mermaid,
+            from_mermaid,
         } => {
+            // Export: print the workflow as a Mermaid state diagram (a read).
+            if *to_mermaid {
+                let diagram = client.get(&format!("/projects/{p}/workflow?format=mermaid"))?;
+                print!("{diagram}");
+                return Ok(());
+            }
+            // Import: parse a Mermaid diagram and feed its fields into the workflow write path.
+            if let Some(src) = from_mermaid {
+                let text = if src == "-" {
+                    use std::io::Read;
+                    let mut buf = String::new();
+                    std::io::stdin().read_to_string(&mut buf)?;
+                    buf
+                } else {
+                    std::fs::read_to_string(src)?
+                };
+                let def = kanbanr_core::mermaid::parse_state_diagram(&text)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+                let body = obj(vec![
+                    ("statuses", Some(json!(def.statuses))),
+                    ("transitions", Some(json!(def.transitions))),
+                    ("default_state", def.default_state.map(|s| json!(s))),
+                    ("terminal_states", Some(json!(def.terminal_states))),
+                ]);
+                let resp = client.write(
+                    Method::Put,
+                    &format!("/projects/{p}/config/workflow"),
+                    Some(body),
+                )?;
+                print_write(cli, &resp, "workflow imported from Mermaid".to_string());
+                return Ok(());
+            }
             // Parse "From>To" pairs into a { from: [to, ...] } map.
             let mut tmap: std::collections::BTreeMap<String, Vec<String>> = Default::default();
             if let Some(pairs) = transitions {
@@ -1418,6 +1464,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                     displayed_states.clone().map(|s| json!(s)),
                 ),
                 ("no_op_states", no_op_states.clone().map(|s| json!(s))),
+                ("terminal_states", terminal_states.clone().map(|s| json!(s))),
             ]);
             let resp = client.write(
                 Method::Put,

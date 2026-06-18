@@ -1134,9 +1134,11 @@ impl Store {
         Ok(project.config)
     }
 
-    /// Replace the whole workflow (statuses + transitions + default_state + displayed_states)
-    /// in one shot, preserving the project's name/description. Validates that transitions,
-    /// default_state, and displayed_states only reference the new status set.
+    /// Replace the whole workflow (statuses + transitions + default_state + displayed_states +
+    /// terminal_states) in one shot, preserving the project's name/description. Validates that
+    /// transitions, default_state, displayed_states, and terminal_states only reference the new
+    /// status set.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_workflow(
         &self,
         id: &str,
@@ -1145,6 +1147,7 @@ impl Store {
         default_state: Option<String>,
         displayed_states: Option<Vec<String>>,
         no_op_states: Option<Vec<String>>,
+        terminal_states: Option<Vec<String>>,
     ) -> Result<ProjectConfig> {
         if statuses.is_empty() {
             return Err(CoreError::NoStatuses);
@@ -1186,6 +1189,12 @@ impl Store {
                 return Err(CoreError::DisplayedNoOp(s.clone()));
             }
         }
+        let terminals = terminal_states.unwrap_or_default();
+        for s in &terminals {
+            if !known(s) {
+                return Err(CoreError::UnknownStatus(s.clone()));
+            }
+        }
         let mut project = self.load(id)?;
         // Referential integrity: a status being removed must not still hold feature items.
         for old in &project.config.statuses {
@@ -1201,6 +1210,7 @@ impl Store {
         project.config.default_state = default_state;
         project.config.displayed_states = displayed;
         project.config.no_op_states = no_ops;
+        project.config.terminal_states = terminals;
         self.save_config(id, &project.config)?;
         Ok(project.config)
     }
