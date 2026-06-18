@@ -1,0 +1,56 @@
+{
+  "_comment_about_this_file": [
+    "This is a SNIPPET showing how to register the kanbanr enforcement hooks in",
+    "your Claude Code settings (~/.claude/settings.json for user-global, or",
+    ".claude/settings.json in a project). Merge the `hooks` object below into",
+    "your existing settings — do not blindly overwrite a settings.json that",
+    "already has other hooks; add these entries to the SessionStart and Stop",
+    "arrays instead.",
+    "",
+    "NOTE: real settings.json is strict JSON and does NOT allow comments. The",
+    "`_comment*` keys here are explanatory only. They are ignored by Claude Code",
+    "but to be safe you may strip every `_comment*` key before saving.",
+    "",
+    "Replace the ABSOLUTE paths below with where these scripts actually live on",
+    "your machine (the hooks/ dir inside this repo's skill/kanbanr/). Make the",
+    "scripts executable first:  chmod +x session-start.sh stop-check.sh"
+  ],
+
+  "hooks": {
+    "_comment_SessionStart": [
+      "Runs once when a Claude Code session begins. Our script prints the",
+      "kanbanr board + recent activity to stdout, which Claude Code surfaces as",
+      "session context — so Claude recovers the project plan from kanbanr",
+      "instead of working from memory. Best-effort: exits 0 / prints nothing if",
+      "kanbanr isn't installed or the directory isn't a tracked project."
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/kanbanr/skill/kanbanr/hooks/session-start.sh"
+          }
+        ]
+      }
+    ],
+
+    "_comment_Stop": [
+      "Runs when Claude finishes responding. Our script checks whether the",
+      "kanbanr data git repo has a recent commit; if not, it prints an ADVISORY",
+      "reminder (to stderr) to record this session's work in kanbanr. It is a",
+      "best-effort recency heuristic and never blocks the Stop event (always",
+      "exits 0). Tune the window with the KANBANR_STOP_WINDOW_MIN env var."
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/kanbanr/skill/kanbanr/hooks/stop-check.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

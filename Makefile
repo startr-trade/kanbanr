@@ -1,0 +1,85 @@
+# kanbanr — convenience targets.
+# Layout: api/ (Rust workspace), web/ (React SPA), docker/, skill/, docs/, data/.
+#
+# Architecture: ONE binary. `kanbanr` is the local writer (the CLI, driven by the skill); it edits
+# the data folder directly (git-backed). `kanbanr serve` runs the read-only view daemon over the
+# same folder — localhost, no auth, no accounts. Sharing is via git remotes. Docker is optional.
+
+DATA_DIR ?= $(CURDIR)/data
+SKILLS_DIR ?= $(HOME)/.claude/skills
+IMAGE ?= kanbanr:latest
+
+.PHONY: help build test itest cli web install-cli install-skill install serve docker-build docker-up docker-down screenshots clean
+
+help:
+	@echo "Targets:"
+	@echo "  build         Build the Rust workspace + web SPA"
+	@echo "  test          Unit + Docker-less integration (CLI local writes + 'kanbanr serve' reads)"
+	@echo "  itest         Packaging smoke: build the image + run the testcontainers test"
+	@echo "  install-cli   cargo install the one 'kanbanr' binary onto your PATH"
+	@echo "  install-skill Symlink skill/kanbanr into ~/.claude/skills/"
+	@echo "  install       install-cli + install-skill"
+	@echo "  serve         Run the read-only view daemon (serves API + built SPA) on :8080"
+	@echo "  docker-build  Build the single Docker image (runs 'kanbanr serve')"
+	@echo "  docker-up     Build & run the view daemon container via docker compose"
+	@echo "  docker-down   Stop the docker container"
+
+build:
+	cd api && cargo build --release
+	cd web && npm install && npm run build
+
+test:
+	cd api && cargo test
+
+# Packaging smoke: spin up the real Docker image via testcontainers and confirm it boots and
+# serves the read-only view. Functional coverage is in `make test` (no Docker). The test is
+# #[ignore]d, so build the image first.
+itest: docker-build
+	docker build -f docker/Dockerfile -t kanbanr:itest .
+	cd api && cargo test -p kanbanr-cli -- --ignored
+
+cli:
+	cd api && cargo build --release -p kanbanr-cli
+
+web:
+	cd web && npm install && npm run build
+
+install-cli:
+	cd api && cargo install --path crates/kanbanr-cli
+	@echo "Installed 'kanbanr'. Set your commit identity once:"
+	@echo "  kanbanr identity --name \"You\" --email you@example.com"
+
+install-skill:
+	mkdir -p "$(SKILLS_DIR)"
+	ln -sfn "$(CURDIR)/skill/kanbanr" "$(SKILLS_DIR)/kanbanr"
+	@echo "linked $(SKILLS_DIR)/kanbanr -> $(CURDIR)/skill/kanbanr"
+
+install: install-cli install-skill
+
+# Local (no Docker) monitor: build the SPA then serve it read-only from the one binary.
+serve: web cli
+	KANBANR_DATA_DIR="$(DATA_DIR)" \
+	KANBANR_UI_DIR="$(CURDIR)/web/dist" \
+	KANBANR_BIND="127.0.0.1:8080" \
+	api/target/release/kanbanr serve
+
+docker-build:
+	docker build -f docker/Dockerfile -t $(IMAGE) .
+
+docker-up:
+	docker compose -f docker/docker-compose.yml up --build -d
+	@echo "kanbanr monitor at http://localhost:18080"
+
+docker-down:
+	docker compose -f docker/docker-compose.yml down
+
+# Regenerate docs/images/*.png by driving the live monitor through a Selenium Grid (Docker).
+# Needs Docker; starts a temporary `kanbanr serve` if one isn't already running. See
+# tools/screenshots/README.md.
+screenshots:
+	tools/screenshots/capture.sh
+
+clean:
+	cd api && cargo clean
+	cd tools/screenshots && cargo clean
+	rm -rf web/dist web/node_modules editor/vscode/node_modules

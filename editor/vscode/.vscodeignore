@@ -1,0 +1,12 @@
+# Source & build config — only the compiled output in out/ ships.
+src/**
+tsconfig.json
+.vscodeignore
+
+# Dev cruft
+node_modules/**
+.vscode-test/**
+**/*.map
+**/.gitignore
+**/tsconfig.tsbuildinfo
+.github/**

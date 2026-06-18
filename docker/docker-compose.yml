@@ -1,0 +1,15 @@
+# Single service: the kanbanr server serves both the API and the React monitor SPA.
+# The host repo `data/` folder is mounted so the container sees exactly what the CLI writes.
+services:
+  kanbanr:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: kanbanr:latest
+    container_name: kanbanr
+    ports:
+      - "18080:8080"
+    volumes:
+      # Host data dir (written by the CLI) <-> container data dir (read by the server).
+      - ../data:/data
+    restart: unless-stopped

@@ -1,0 +1,16 @@
+# Standalone tool (its own workspace — NOT part of api/) so building screenshots never
+# pulls thirtyfour/selenium deps into the main kanbanr build.
+[workspace]
+
+[package]
+name = "kanbanr-screenshots"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Captures screenshots of the kanbanr web monitor via a Selenium Grid (Docker)."
+
+[dependencies]
+thirtyfour = "0.32"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+anyhow = "1"

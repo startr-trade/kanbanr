@@ -1,0 +1,8 @@
+# Build-context excludes (context = repo root). Keeps the image build fast and clean.
+**/target
+**/node_modules
+**/dist
+data
+docs/images
+.git
+*.log

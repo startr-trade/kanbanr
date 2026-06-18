@@ -1,0 +1,110 @@
+name: CI
+
+# Continuous integration for the kanbanr monorepo:
+#   - api/  Rust workspace (kanbanr-core, kanbanr-cli [bin], kanbanr-server [lib])
+#   - web/  React + Vite app
+#
+# NOTE: The Rust build links a VENDORED libgit2 and a VENDORED OpenSSL, both
+# compiled from source. That means the CI machines need a full C toolchain
+# (cmake + make + a C compiler + perl) and the first build is heavy and slow.
+# Caching (Swatinem/rust-cache) keeps subsequent runs reasonable, but expect
+# the cold build to take a while — this is expected, not a hang.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Don't cancel the whole matrix if one OS fails — we want to see all of them.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    defaults:
+      run:
+        # All Rust commands run from the workspace root in api/.
+        working-directory: api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry / build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          # The workspace lives in api/, not at the repo root.
+          workspaces: "api"
+
+      # --- Build dependencies for the vendored C libraries (libgit2 + OpenSSL) ---
+      # These are needed to compile the vendored sources from scratch.
+
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake make perl gcc
+
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
+        # perl is preinstalled on the macOS runners; we just need cmake.
+        run: brew install cmake
+
+      # On the Windows runners, cmake and Strawberry Perl are preinstalled, and
+      # perl is already on PATH (which is what vendored OpenSSL's Configure
+      # script needs). We verify it here so that if a future runner image drops
+      # perl, this step fails loudly with a clear message instead of producing a
+      # confusing OpenSSL build error. If perl is ever missing, install it with:
+      #   choco install strawberryperl
+      # and prepend C:\Strawberry\perl\bin to GITHUB_PATH.
+      - name: Verify build deps (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cmake --version
+          perl --version
+
+      # --- Lint + format checks: run on Ubuntu only to keep the matrix fast. ---
+
+      - name: Check formatting (ubuntu only)
+        if: runner.os == 'Linux'
+        run: cargo fmt --all --check
+
+      - name: Clippy (ubuntu only)
+        if: runner.os == 'Linux'
+        run: cargo clippy --workspace -- -D warnings
+
+      # --- Tests: run on every OS in the matrix. ---
+
+      - name: Test
+        run: cargo test --workspace
+
+  web:
+    name: web
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # Prefer a clean, lockfile-respecting install; fall back to a plain
+      # install if the lockfile is out of sync with package.json.
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Build
+        run: npm run build

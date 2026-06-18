@@ -1,0 +1,11 @@
+# Alternative to capture.sh's `docker run`: start the Selenium Grid by hand with
+#   docker compose -f tools/screenshots/docker-compose.yml up -d
+# then run the tool with `cargo run` from this directory, and `... down` when finished.
+#
+# Host networking lets the in-container Chromium reach `kanbanr serve` on localhost:8080,
+# and exposes the WebDriver endpoint on the host's :4444 (what the tool connects to).
+services:
+  chromium:
+    image: selenium/standalone-chromium:latest
+    network_mode: "host"
+    shm_size: 2g

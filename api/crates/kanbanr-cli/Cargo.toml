@@ -1,0 +1,34 @@
+[package]
+name = "kanbanr-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "kanbanr CLI: a git-backed kanban writer for Claude-driven development, plus a read-only live monitor"
+
+# The single kanbanr runtime: a local-only writer that also runs the view daemon via `kanbanr serve`.
+[[bin]]
+name = "kanbanr"
+path = "src/main.rs"
+
+[dependencies]
+# The CLI writes the data folder directly (store + dispatch + git) — it IS the writer.
+kanbanr-core.workspace = true
+# The view daemon (read API + SSE + SPA), run in-process by `kanbanr serve` — one binary.
+kanbanr-server = { path = "../kanbanr-server" }
+serde.workspace = true
+serde_json.workspace = true
+clap = { version = "4", features = ["derive"] }
+anyhow.workspace = true
+# `serve` needs an async runtime to host the view daemon.
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+# Used by `kanbanr open` to check whether the view daemon is already running.
+ureq = { version = "2", default-features = false }
+# Cross-process advisory file lock so two concurrent writers can't interleave a mutate→commit
+# sequence on the same data dir (FEAT-029).
+fs2 = "0.4"
+
+[dev-dependencies]
+# Spin up the built Docker image to integration-test the view daemon end-to-end.
+# `blocking` provides the synchronous SyncRunner used by the tests.
+testcontainers = { version = "0.23", features = ["blocking"] }

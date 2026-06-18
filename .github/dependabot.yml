@@ -1,0 +1,34 @@
+version: 2
+updates:
+  # Rust workspace (manifests live under api/)
+  - package-ecosystem: cargo
+    directory: "/api"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      rust-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # Web SPA
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # VS Code extension dev deps
+  - package-ecosystem: npm
+    directory: "/editor/vscode"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+
+  # GitHub Actions used by the workflows
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

@@ -1,0 +1,78 @@
+{
+  "publisher": "kanbanr",
+  "name": "kanbanr",
+  "displayName": "kanbanr",
+  "version": "0.1.0",
+  "description": "VS Code viewer and thin command layer for kanbanr — the local, git-backed project management system of record. Open the live board monitor and drive the kanbanr CLI without leaving your editor.",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "kanban",
+    "kanbanr",
+    "project-management",
+    "board",
+    "roadmap"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:kanbanr.openBoard",
+    "onCommand:kanbanr.serve",
+    "onCommand:kanbanr.board",
+    "onCommand:kanbanr.addFeature",
+    "onCommand:kanbanr.move"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "kanbanr.openBoard",
+        "title": "Open Board (Live Monitor)",
+        "category": "kanbanr"
+      },
+      {
+        "command": "kanbanr.serve",
+        "title": "Start Server (kanbanr serve)",
+        "category": "kanbanr"
+      },
+      {
+        "command": "kanbanr.board",
+        "title": "Show Board (Text Snapshot)",
+        "category": "kanbanr"
+      },
+      {
+        "command": "kanbanr.addFeature",
+        "title": "Add Feature",
+        "category": "kanbanr"
+      },
+      {
+        "command": "kanbanr.move",
+        "title": "Move Feature",
+        "category": "kanbanr"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        { "command": "kanbanr.openBoard" },
+        { "command": "kanbanr.serve" },
+        { "command": "kanbanr.board" },
+        { "command": "kanbanr.addFeature" },
+        { "command": "kanbanr.move" }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.0"
+  }
+}

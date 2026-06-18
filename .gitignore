@@ -1,0 +1,21 @@
+# Rust
+/api/target
+# Node / web
+/web/node_modules
+/web/dist
+# VS Code extension (editor/vscode): build output + deps
+/editor/vscode/node_modules
+/editor/vscode/out
+/editor/vscode/*.vsix
+# Logs / OS
+*.log
+.DS_Store
+
+# The data folder is its OWN git repository (the kanban board, written by the CLI), so it is not
+# tracked by the source repo — it would otherwise be embedded as a gitlink. Keep it separate; it can
+# be wired up as a submodule later if the dogfood board should ship with the source.
+/data
+
+# Defensive: kanbanr has no accounts/secrets, but if a security.yaml ever appears
+# (legacy data, an experiment), never let it into the source repo.
+security.yaml

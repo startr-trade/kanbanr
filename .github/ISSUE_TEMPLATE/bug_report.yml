@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in kanbanr isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! For **security** issues, do not file here — see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: kanbanr version / commit
+      description: Output of `kanbanr --version` (or the git commit you built).
+      placeholder: "0.1.0 / abc1234"
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did it happen?
+      options:
+        - CLI (kanbanr ...)
+        - View daemon (kanbanr serve) / web monitor
+        - Claude skill / hooks
+        - Docker image
+        - Build / install
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / environment
+      placeholder: "Ubuntu 24.04 / macOS 14 / Windows 11"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands or clicks. Include the project's config if relevant.
+      placeholder: |
+        1. kanbanr feature add --title ... --milestone ...
+        2. kanbanr move FEAT-001 ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: Paste any CLI error or daemon log. This will be rendered as code.
+      render: shell

@@ -1,0 +1,82 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "_comment_about_this_file": [
+    "Claude Code PLUGIN manifest for kanbanr (roadmap FEAT-023).",
+    "It bundles kanbanr's Claude integration — the SKILL.md behavioral contract",
+    "plus the SessionStart/Stop enforcement hooks — so that, once installed via",
+    "a marketplace, a user gets the skill + hooks together in one step.",
+    "",
+    "VERIFY-AGAINST-DOCS (fields used here, per code.claude.com/docs/en/plugins",
+    "and /en/plugins-reference#plugin-manifest-schema, current as of 2026-06):",
+    "  - name (required): the plugin id + skill namespace (kebab-case).",
+    "  - description, version, author, homepage, repository, license, keywords:",
+    "    standard metadata.",
+    "  - skills (string|array): CUSTOM paths to directories that CONTAIN a",
+    "    <name>/SKILL.md. kanbanr's skill lives at the repo's `skill/kanbanr/`",
+    "    (note: singular `skill/`, NOT the default `skills/`), so we point at",
+    "    `${CLAUDE_PLUGIN_ROOT}/skill` and Claude Code discovers `skill/kanbanr/SKILL.md`.",
+    "  - hooks (object|string): inline hook config (used here) OR a path to a",
+    "    hooks file. Hook `command` paths MUST use ${CLAUDE_PLUGIN_ROOT} so they",
+    "    resolve inside the installed/cached plugin dir (NEVER hardcode absolute",
+    "    paths like /home/someone/...). ${CLAUDE_PLUGIN_ROOT} expands to this plugin's",
+    "    root directory at runtime.",
+    "",
+    "  NOTE on `_comment*` keys: real plugin.json is strict JSON and ignores",
+    "  unknown keys; these are explanatory only and safe to strip."
+  ],
+
+  "name": "kanbanr",
+  "description": "kanbanr — the project-management system of record for Claude-driven development. Bundles the kanbanr skill (recover/scope/plan/track work via the git-backed kanbanr CLI) with SessionStart + Stop enforcement hooks. Requires the `kanbanr` binary on PATH (ships separately via crates.io / GitHub Releases).",
+  "version": "0.1.0",
+  "author": {
+    "name": "startr-trade / kanbanr maintainers"
+  },
+  "homepage": "https://github.com/startr-trade/kanbanr",
+  "repository": "https://github.com/startr-trade/kanbanr",
+  "license": "Apache-2.0",
+  "keywords": ["kanbanr", "project-management", "kanban", "workflow", "system-of-record"],
+
+  "_comment_skills": [
+    "kanbanr's skill is at `skill/kanbanr/SKILL.md` (singular `skill/`). The",
+    "`skills` field lists directories that contain `<name>/SKILL.md`, so we give",
+    "the parent `skill` dir. VERIFY: if a future Claude Code requires the default",
+    "`skills/` layout, either rename the dir or keep this explicit path."
+  ],
+  "skills": ["${CLAUDE_PLUGIN_ROOT}/skill"],
+
+  "_comment_hooks": [
+    "Two enforcement hooks (roadmap FEAT-017), registered inline here using",
+    "${CLAUDE_PLUGIN_ROOT}-relative commands so they work after the plugin is",
+    "copied to the cache. These mirror skill/kanbanr/hooks/settings.snippet.json",
+    "but WITHOUT the hardcoded absolute paths.",
+    "",
+    "Cross-platform: Linux/macOS run the .sh scripts (type:command). Windows users",
+    "should run the .ps1 equivalents — see skill/kanbanr/hooks/README.md. If you",
+    "need a single manifest to serve both OSes, swap the command for the matching",
+    ".ps1 with a PowerShell invocation; we default to .sh here since that is the",
+    "common dev environment. VERIFY current per-OS hook syntax against",
+    "/en/hooks and /en/plugins-reference if you templatize this."
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/skill/kanbanr/hooks/session-start.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/skill/kanbanr/hooks/stop-check.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

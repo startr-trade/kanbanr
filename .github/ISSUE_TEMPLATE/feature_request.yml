@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest an improvement or new capability
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        kanbanr is a personal project maintained best-effort. Please describe the problem before the
+        solution — and keep in mind the design: one binary, the CLI is the only writer, the web/serve
+        layer is read-only, data is plain YAML/markdown, sharing is via git remotes.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: The use case / pain point, not just a proposed feature.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you'd like to happen. Note which surface it touches (CLI / core / web / skill).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: checkboxes
+    id: design-fit
+    attributes:
+      label: Design fit
+      options:
+        - label: This keeps the CLI as the only writer (the web/serve layer stays read-only).
+        - label: This doesn't require accounts/auth inside kanbanr (sharing stays a git-remote concern).

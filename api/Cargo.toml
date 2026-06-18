@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kanbanr-core",
+    "crates/kanbanr-cli",
+    "crates/kanbanr-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["the kanbanr authors"]
+repository = "https://github.com/startr-trade/kanbanr"
+description = "Kanban task manager for Claude-driven development: a git-backed CLI writer + read-only live monitor"
+
+[workspace.dependencies]
+kanbanr-core = { path = "crates/kanbanr-core" }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+time = { version = "0.3", features = ["formatting", "macros"] }
+
+[profile.release]
+opt-level = 2
