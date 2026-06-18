@@ -32,3 +32,5 @@ fs2 = "0.4"
 # Spin up the built Docker image to integration-test the view daemon end-to-end.
 # `blocking` provides the synchronous SyncRunner used by the tests.
 testcontainers = { version = "0.23", features = ["blocking"] }
+# FEAT-034 unit tests inspect the data repo's commit log directly (vendored, matches kanbanr-core).
+git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2", "vendored-openssl"] }
