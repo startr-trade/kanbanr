@@ -33,6 +33,8 @@ export const api = {
   getPortfolioRollups: () => getJson<RollupReport>("/api/portfolio/rollups"),
   getPortfolioBoard: () => getJson<BoardReport>("/api/portfolio/board"),
   getProject: (id: string) => getJson<Project>(`/api/projects/${encodeURIComponent(id)}`),
+  // Scheduling Gantt (FEAT-035): the daemon returns Mermaid `gantt` text.
+  getGantt: (id: string) => getText(`/api/projects/${encodeURIComponent(id)}/gantt`),
   getDocTree: (id: string) => getJson<DocFolder>(`/api/projects/${encodeURIComponent(id)}/docs`),
   getDoc: (id: string, path: string) =>
     getText(`/api/projects/${encodeURIComponent(id)}/docs/content?path=${encodeURIComponent(path)}`),

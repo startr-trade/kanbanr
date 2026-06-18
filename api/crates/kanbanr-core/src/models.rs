@@ -74,9 +74,16 @@ pub struct FeatureItem {
     /// Priority (low / medium / high …); free text.
     #[serde(default)]
     pub priority: Option<String>,
+    /// Optional planned start date (an ISO date, e.g. "2026-07-01"). Used by scheduling/Gantt.
+    #[serde(default)]
+    pub start: Option<String>,
     /// Optional due date (e.g. an ISO date).
     #[serde(default)]
     pub due: Option<String>,
+    /// Optional estimated effort, in days (used as the task duration for scheduling/Gantt;
+    /// defaults to 1 day when absent). Kept as a float so half-days etc. are expressible.
+    #[serde(default)]
+    pub estimate_days: Option<f64>,
     /// Optional assignee (the person/agent owning this feature); free text.
     #[serde(default)]
     pub assignee: Option<String>,
@@ -137,7 +144,9 @@ impl FeatureItem {
             milestone: self.milestone.clone(),
             kind: self.kind.clone(),
             priority: self.priority.clone(),
+            start: self.start.clone(),
             due: self.due.clone(),
+            estimate_days: self.estimate_days,
             assignee: self.assignee.clone(),
             team: self.team.clone(),
             labels: self.labels.clone(),
@@ -158,7 +167,9 @@ impl FeatureItem {
             milestone: meta.milestone,
             kind: meta.kind,
             priority: meta.priority,
+            start: meta.start,
             due: meta.due,
+            estimate_days: meta.estimate_days,
             assignee: meta.assignee,
             team: meta.team,
             labels: meta.labels,
@@ -184,7 +195,11 @@ pub struct FeatureMeta {
     #[serde(default)]
     pub priority: Option<String>,
     #[serde(default)]
+    pub start: Option<String>,
+    #[serde(default)]
     pub due: Option<String>,
+    #[serde(default)]
+    pub estimate_days: Option<f64>,
     #[serde(default)]
     pub assignee: Option<String>,
     #[serde(default)]
@@ -204,7 +219,7 @@ pub struct FeatureMeta {
 /// the todo-list done/total counts) WITHOUT any specification body, so a project's whole feature
 /// set can be read from one small file. It is a derivable cache: the status-folder yaml/md files
 /// remain the source of truth, and the index is rebuilt from them by `Store::rebuild_index`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndexEntry {
     pub code: String,
     pub status: Status,
@@ -214,7 +229,11 @@ pub struct IndexEntry {
     #[serde(default)]
     pub priority: Option<String>,
     #[serde(default)]
+    pub start: Option<String>,
+    #[serde(default)]
     pub due: Option<String>,
+    #[serde(default)]
+    pub estimate_days: Option<f64>,
     #[serde(default)]
     pub assignee: Option<String>,
     #[serde(default)]
@@ -241,7 +260,9 @@ impl IndexEntry {
             milestone: f.milestone.clone(),
             kind: f.kind.clone(),
             priority: f.priority.clone(),
+            start: f.start.clone(),
             due: f.due.clone(),
+            estimate_days: f.estimate_days,
             assignee: f.assignee.clone(),
             team: f.team.clone(),
             labels: f.labels.clone(),

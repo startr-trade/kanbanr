@@ -11,6 +11,7 @@ import FeaturePage from "./pages/FeaturePage";
 import MilestonesPage from "./pages/MilestonesPage";
 import MilestonePage from "./pages/MilestonePage";
 import SchedulePage from "./pages/SchedulePage";
+import GanttPage from "./pages/GanttPage";
 import WorkflowPage from "./pages/WorkflowPage";
 import DocsPage from "./pages/DocsPage";
 import DocPage from "./pages/DocPage";
@@ -28,6 +29,7 @@ const router = createBrowserRouter([
       { path: "p/:project/milestones", element: <MilestonesPage /> },
       { path: "p/:project/milestone/:code", element: <MilestonePage /> },
       { path: "p/:project/schedule", element: <SchedulePage /> },
+      { path: "p/:project/gantt", element: <GanttPage /> },
       { path: "p/:project/workflow", element: <WorkflowPage /> },
       { path: "p/:project/docs", element: <DocsPage /> },
       { path: "p/:project/docs/folder/*", element: <DocsPage /> },

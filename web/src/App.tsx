@@ -39,6 +39,7 @@ export default function App() {
             </ProjectTab>
             <ProjectTab to={`/p/${encodeURIComponent(project)}/milestones`}>Milestones</ProjectTab>
             <ProjectTab to={`/p/${encodeURIComponent(project)}/schedule`}>Schedule</ProjectTab>
+            <ProjectTab to={`/p/${encodeURIComponent(project)}/gantt`}>Gantt</ProjectTab>
             <ProjectTab to={`/p/${encodeURIComponent(project)}/workflow`}>Workflow</ProjectTab>
             <ProjectTab to={`/p/${encodeURIComponent(project)}/docs`}>Docs</ProjectTab>
           </nav>

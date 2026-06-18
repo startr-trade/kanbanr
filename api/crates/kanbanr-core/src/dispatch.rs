@@ -40,7 +40,7 @@ fn vec_field(body: &Value, k: &str) -> Option<Vec<String>> {
 /// (kind/priority/due/assignee/team/labels/depends_on), apply them to `code` and return the
 /// serialized updated feature; otherwise `None`.
 fn maybe_apply_attrs(store: &Store, p: &str, code: &str, b: &Value) -> Result<Option<String>> {
-    let keys = [
+    let attr_keys = [
         "kind",
         "priority",
         "due",
@@ -49,7 +49,12 @@ fn maybe_apply_attrs(store: &Store, p: &str, code: &str, b: &Value) -> Result<Op
         "labels",
         "depends_on",
     ];
-    if !keys.iter().any(|k| b.get(k).is_some()) {
+    // Scheduling attributes (FEAT-035) take a dedicated store path so the broad set_feature_attrs
+    // signature is untouched.
+    let sched_keys = ["start", "estimate_days", "estimate"];
+    let has_attrs = attr_keys.iter().any(|k| b.get(k).is_some());
+    let has_sched = sched_keys.iter().any(|k| b.get(k).is_some());
+    if !has_attrs && !has_sched {
         return Ok(None);
     }
     // A present string key sets it (empty string clears); a present array replaces the list.
@@ -65,18 +70,33 @@ fn maybe_apply_attrs(store: &Store, p: &str, code: &str, b: &Value) -> Result<Op
                 .unwrap_or_default()
         })
     };
-    let f = store.set_feature_attrs(
-        p,
-        code,
-        s("kind"),
-        s("priority"),
-        s("due"),
-        s("assignee"),
-        s("team"),
-        v("labels"),
-        v("depends_on"),
-    )?;
-    Ok(Some(ser(&f)?))
+    let mut f = None;
+    if has_attrs {
+        f = Some(store.set_feature_attrs(
+            p,
+            code,
+            s("kind"),
+            s("priority"),
+            s("due"),
+            s("assignee"),
+            s("team"),
+            v("labels"),
+            v("depends_on"),
+        )?);
+    }
+    if has_sched {
+        // `estimate` is an alias for `estimate_days`; either an empty string or <= 0 clears it.
+        let estimate = b
+            .get("estimate_days")
+            .or_else(|| b.get("estimate"))
+            .map(|val| val.as_f64().unwrap_or(0.0));
+        let updated = store.set_feature_schedule(p, code, s("start"), estimate)?;
+        f = Some(updated);
+    }
+    match f {
+        Some(f) => Ok(Some(ser(&f)?)),
+        None => Ok(None),
+    }
 }
 
 fn percent_decode(s: &str) -> String {
@@ -333,6 +353,18 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                 _ => Ok(view.to_json_value(Some(p)).to_string()),
             }
         }
+        // ---- scheduling: critical path & Gantt (FEAT-035) ----
+        ("GET", ["projects", p, "critical-path"]) => {
+            store.load(p)?; // 404 on unknown project
+            let view = DependencyView::build(store, None)?;
+            Ok(view.schedule(Some(p)).to_json_value().to_string())
+        }
+        ("GET", ["projects", p, "gantt"]) => Ok(crate::gantt::project_gantt(store, p)?),
+        ("GET", ["critical-path"]) => {
+            let view = DependencyView::build(store, None)?;
+            Ok(view.schedule(None).to_json_value().to_string())
+        }
+        ("GET", ["gantt"]) => Ok(crate::gantt::portfolio_gantt(store)?),
         ("GET", ["projects", p, "features", code, "impact"]) => {
             let project = store.load(p)?;
             project.feature(code)?; // 404 on unknown feature

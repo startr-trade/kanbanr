@@ -136,6 +136,18 @@ enum Command {
     },
     /// List features downstream of (impacted by) a feature — its transitive dependents. (FEAT-027)
     Impact { code: String },
+    /// Print a Mermaid `gantt` diagram of the schedule (dates/sequencing + critical path). (FEAT-035)
+    Gantt {
+        /// Span every project (portfolio-wide, sectioned by project) instead of just the current one.
+        #[arg(long)]
+        all_projects: bool,
+    },
+    /// Print the critical path (longest dependency chain) and per-task schedule offsets. (FEAT-035)
+    CriticalPath {
+        /// Span every project (portfolio-wide) instead of just the current one.
+        #[arg(long)]
+        all_projects: bool,
+    },
     /// Scan for integrity problems (dangling deps, unknown milestones, outdated schema). (FEAT-037)
     /// Defaults to the current/selected project; pass --all-projects for the whole portfolio.
     Doctor {
@@ -247,9 +259,15 @@ enum FeatureCmd {
         /// Priority (low / medium / high …).
         #[arg(long)]
         priority: Option<String>,
+        /// Planned start date (ISO date, e.g. 2026-07-01) for scheduling/Gantt.
+        #[arg(long)]
+        start: Option<String>,
         /// Due date (free text, e.g. an ISO date).
         #[arg(long)]
         due: Option<String>,
+        /// Estimated effort in days (used as the Gantt/scheduling duration; default 1).
+        #[arg(long)]
+        estimate: Option<f64>,
         /// Assignee (the person/agent owning this feature).
         #[arg(long)]
         assignee: Option<String>,
@@ -298,9 +316,15 @@ enum FeatureCmd {
         /// Priority (empty string clears).
         #[arg(long)]
         priority: Option<String>,
+        /// Planned start date (ISO date; empty string clears).
+        #[arg(long)]
+        start: Option<String>,
         /// Due date (empty string clears).
         #[arg(long)]
         due: Option<String>,
+        /// Estimated effort in days (a value <= 0 clears it).
+        #[arg(long)]
+        estimate: Option<f64>,
         /// Assignee (empty string clears).
         #[arg(long)]
         assignee: Option<String>,
@@ -842,6 +866,51 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             print_id_list(cli, &resp, "(nothing depends on it)");
             Ok(())
         }
+        Command::Gantt { all_projects } => {
+            let path = if *all_projects {
+                "/gantt".to_string()
+            } else {
+                let p = require_project(cli)?;
+                format!("/projects/{p}/gantt")
+            };
+            // Mermaid text comes back as a body string; print it verbatim.
+            println!("{}", client.get(&path)?);
+            Ok(())
+        }
+        Command::CriticalPath { all_projects } => {
+            let path = if *all_projects {
+                "/critical-path".to_string()
+            } else {
+                let p = require_project(cli)?;
+                format!("/projects/{p}/critical-path")
+            };
+            let resp = client.get(&path)?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+            } else {
+                // The critical path is the ordered list of qualified ids; surface it plainly.
+                let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or(json!({}));
+                let path_ids = v
+                    .get("critical_path")
+                    .and_then(|c| c.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" -> ")
+                    })
+                    .unwrap_or_default();
+                if path_ids.is_empty() {
+                    println!("(no critical path)");
+                } else {
+                    println!("{path_ids}");
+                    if let Some(m) = v.get("makespan").and_then(|m| m.as_f64()) {
+                        println!("makespan: {m} day(s)");
+                    }
+                }
+            }
+            Ok(())
+        }
         Command::Doctor { all_projects } => run_doctor(cli, &client, *all_projects),
         Command::Index { all_projects } => run_index(cli, &client, *all_projects),
     }
@@ -1164,7 +1233,9 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             code,
             kind,
             priority,
+            start,
             due,
+            estimate,
             assignee,
             team,
             labels,
@@ -1178,7 +1249,9 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                 ("code", code.clone().map(|c| json!(c))),
                 ("kind", kind.clone().map(|k| json!(k))),
                 ("priority", priority.clone().map(|x| json!(x))),
+                ("start", start.clone().map(|s| json!(s))),
                 ("due", due.clone().map(|d| json!(d))),
+                ("estimate_days", estimate.map(|e| json!(e))),
                 ("assignee", assignee.clone().map(|a| json!(a))),
                 ("team", team.clone().map(|t| json!(t))),
                 ("labels", labels.clone().map(|l| json!(l))),
@@ -1257,7 +1330,9 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             milestone,
             kind,
             priority,
+            start,
             due,
+            estimate,
             assignee,
             team,
             labels,
@@ -1271,7 +1346,9 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                 ("new_code", new_code.clone().map(|c| json!(c))),
                 ("kind", kind.clone().map(|k| json!(k))),
                 ("priority", priority.clone().map(|x| json!(x))),
+                ("start", start.clone().map(|s| json!(s))),
                 ("due", due.clone().map(|d| json!(d))),
+                ("estimate_days", estimate.map(|e| json!(e))),
                 ("assignee", assignee.clone().map(|a| json!(a))),
                 ("team", team.clone().map(|t| json!(t))),
                 ("labels", labels.clone().map(|l| json!(l))),

@@ -468,7 +468,9 @@ impl Store {
             milestone: milestone.to_string(),
             kind: None,
             priority: None,
+            start: None,
             due: None,
+            estimate_days: None,
             assignee: None,
             team: None,
             labels: Vec::new(),
@@ -662,6 +664,35 @@ impl Store {
         feature.updated_at = now_rfc3339();
         let updated = feature.clone();
         pending.persist_features.insert(updated.code.clone());
+        Ok(updated)
+    }
+
+    /// Set a feature's scheduling attributes (FEAT-035), kept on a dedicated path so the broad
+    /// `set_feature_attrs` signature (and its many call sites) is left untouched. `start` is an ISO
+    /// date string (a `Some("")` clears it). `estimate` is effort in days (`Some(<= 0)` clears it).
+    /// Either argument being `None` leaves that field unchanged.
+    pub fn set_feature_schedule(
+        &self,
+        id: &str,
+        code: &str,
+        start: Option<String>,
+        estimate: Option<f64>,
+    ) -> Result<FeatureItem> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        project.feature(code)?; // ensure it exists
+        let feature = project.feature_mut(code)?;
+        if let Some(s) = start {
+            let t = s.trim();
+            feature.start = (!t.is_empty()).then(|| t.to_string());
+        }
+        if let Some(e) = estimate {
+            feature.estimate_days = (e > 0.0).then_some(e);
+        }
+        feature.updated_at = now_rfc3339();
+        let updated = feature.clone();
+        pending.persist_features.insert(updated.code.clone());
+        self.flush(id, &project, &pending)?;
         Ok(updated)
     }
 
