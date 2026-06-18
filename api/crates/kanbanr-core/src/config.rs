@@ -54,7 +54,10 @@ impl ProjectConfig {
             v
         };
         let mut transitions = BTreeMap::new();
-        transitions.insert("Deferred".to_string(), with_no_ops(vec!["Planned".to_string()]));
+        transitions.insert(
+            "Deferred".to_string(),
+            with_no_ops(vec!["Planned".to_string()]),
+        );
         transitions.insert(
             "Planned".to_string(),
             with_no_ops(vec!["Scheduled".to_string(), "Deferred".to_string()]),

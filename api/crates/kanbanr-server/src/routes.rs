@@ -18,15 +18,32 @@ use tokio_stream::Stream;
 fn core_err(e: kanbanr_core::CoreError) -> (StatusCode, String) {
     use kanbanr_core::CoreError::*;
     let code = match &e {
-        ProjectNotFound(_) | FeatureNotFound(_) | MilestoneNotFound(_) | TaskNotFound(_, _)
-        | TodoListNotFound(_, _) | DocNotFound(_) => StatusCode::NOT_FOUND,
-        ProjectExists(_) | FeatureExists(_) | MilestoneExists(_) | TaskExists(_, _)
-        | TodoListExists(_, _) | MilestoneInUse(_, _) | StatusInUse(_, _) | ProjectNotEmpty(_, _, _) => {
-            StatusCode::CONFLICT
-        }
-        InvalidDocPath(_) | InvalidName(_) | UnknownStatus(_) | TransitionNotAllowed { .. }
-        | InvalidTaskState(_) | DependencyCycle(_) | UnknownDependency(_) | MilestoneRequired
-        | NoStatuses | DisplayedNoOp(_) | BatchOpFailed(_, _) | Unsupported(_) => StatusCode::BAD_REQUEST,
+        ProjectNotFound(_)
+        | FeatureNotFound(_)
+        | MilestoneNotFound(_)
+        | TaskNotFound(_, _)
+        | TodoListNotFound(_, _)
+        | DocNotFound(_) => StatusCode::NOT_FOUND,
+        ProjectExists(_)
+        | FeatureExists(_)
+        | MilestoneExists(_)
+        | TaskExists(_, _)
+        | TodoListExists(_, _)
+        | MilestoneInUse(_, _)
+        | StatusInUse(_, _)
+        | ProjectNotEmpty(_, _, _) => StatusCode::CONFLICT,
+        InvalidDocPath(_)
+        | InvalidName(_)
+        | UnknownStatus(_)
+        | TransitionNotAllowed { .. }
+        | InvalidTaskState(_)
+        | DependencyCycle(_)
+        | UnknownDependency(_)
+        | MilestoneRequired
+        | NoStatuses
+        | DisplayedNoOp(_)
+        | BatchOpFailed(_, _)
+        | Unsupported(_) => StatusCode::BAD_REQUEST,
         Io(_) | Yaml(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (code, e.to_string())
@@ -45,7 +62,12 @@ pub async fn list_projects(State(st): State<AppState>) -> impl IntoResponse {
 }
 
 pub async fn get_project(State(st): State<AppState>, Path(p): Path<String>) -> impl IntoResponse {
-    json_body(dispatch::dispatch(&st.store, "GET", &format!("/projects/{p}"), None))
+    json_body(dispatch::dispatch(
+        &st.store,
+        "GET",
+        &format!("/projects/{p}"),
+        None,
+    ))
 }
 
 #[derive(serde::Deserialize)]
@@ -73,7 +95,11 @@ pub async fn export_feature(
             Ok(s) => ([("content-type", "application/json")], s).into_response(),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         },
-        _ => ([("content-type", "text/markdown; charset=utf-8")], export::to_markdown(feature, ms)).into_response(),
+        _ => (
+            [("content-type", "text/markdown; charset=utf-8")],
+            export::to_markdown(feature, ms),
+        )
+            .into_response(),
     }
 }
 
@@ -95,13 +121,21 @@ pub async fn get_doc(
     Query(q): Query<DocQuery>,
 ) -> impl IntoResponse {
     match st.store.read_doc(&p, &q.path) {
-        Ok(content) => ([("content-type", "text/markdown; charset=utf-8")], content).into_response(),
+        Ok(content) => {
+            ([("content-type", "text/markdown; charset=utf-8")], content).into_response()
+        }
         Err(e) => core_err(e).into_response(),
     }
 }
 
 fn content_type_for(path: &str) -> &'static str {
-    match path.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+    match path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -151,11 +185,12 @@ pub async fn project_activity(
     if q.ongoing {
         match st.store.load(&p) {
             Ok(project) => {
-                let displayed: std::collections::HashSet<&String> = if project.config.displayed_states.is_empty() {
-                    project.config.statuses.iter().collect()
-                } else {
-                    project.config.displayed_states.iter().collect()
-                };
+                let displayed: std::collections::HashSet<&String> =
+                    if project.config.displayed_states.is_empty() {
+                        project.config.statuses.iter().collect()
+                    } else {
+                        project.config.displayed_states.iter().collect()
+                    };
                 // Feature codes whose current status is NOT displayed (ongoing/maintenance).
                 let ongoing_codes: std::collections::HashSet<String> = project
                     .features
@@ -163,7 +198,12 @@ pub async fn project_activity(
                     .filter(|f| !displayed.contains(&f.status))
                     .map(|f| f.code.clone())
                     .collect();
-                entries.retain(|e| e.item.as_ref().map(|c| ongoing_codes.contains(c)).unwrap_or(false));
+                entries.retain(|e| {
+                    e.item
+                        .as_ref()
+                        .map(|c| ongoing_codes.contains(c))
+                        .unwrap_or(false)
+                });
             }
             Err(_) => entries.clear(),
         }

@@ -93,7 +93,14 @@ pub fn ensure_repo(dir: &Path) {
             let tree_oid = stage_all(&repo)?;
             let tree = repo.find_tree(tree_oid)?;
             let sig = fallback_signature(&repo);
-            repo.commit(Some("HEAD"), &sig, &sig, "initialize data repository", &tree, &[])?;
+            repo.commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "initialize data repository",
+                &tree,
+                &[],
+            )?;
             Ok(())
         })();
     }
@@ -103,8 +110,10 @@ pub fn ensure_repo(dir: &Path) {
 pub fn set_identity(dir: &Path, name: &str, email: &str) -> Result<(), String> {
     let repo = Repository::open(dir).map_err(|e| e.message().to_string())?;
     let mut cfg = repo.config().map_err(|e| e.message().to_string())?;
-    cfg.set_str("user.name", name).map_err(|e| e.message().to_string())?;
-    cfg.set_str("user.email", email).map_err(|e| e.message().to_string())?;
+    cfg.set_str("user.name", name)
+        .map_err(|e| e.message().to_string())?;
+    cfg.set_str("user.email", email)
+        .map_err(|e| e.message().to_string())?;
     Ok(())
 }
 
@@ -214,7 +223,10 @@ fn pull(repo: &Repository, remote_name: &str, branch: &str) -> Result<(), git2::
     repo.merge(&[&their], None, None)?;
     let mut index = repo.index()?;
     if index.has_conflicts() {
-        repo.checkout_index(Some(&mut index), Some(git2::build::CheckoutBuilder::default().force()))?;
+        repo.checkout_index(
+            Some(&mut index),
+            Some(git2::build::CheckoutBuilder::default().force()),
+        )?;
         repo.cleanup_state()?;
         return Ok(());
     }
@@ -223,7 +235,14 @@ fn pull(repo: &Repository, remote_name: &str, branch: &str) -> Result<(), git2::
     let head = repo.head()?.peel_to_commit()?;
     let theirs = repo.find_commit(their.id())?;
     let sig = fallback_signature(repo);
-    repo.commit(Some("HEAD"), &sig, &sig, "merge remote changes", &tree, &[&head, &theirs])?;
+    repo.commit(
+        Some("HEAD"),
+        &sig,
+        &sig,
+        "merge remote changes",
+        &tree,
+        &[&head, &theirs],
+    )?;
     repo.cleanup_state()?;
     Ok(())
 }
@@ -293,13 +312,15 @@ pub fn list_remotes(dir: &Path) -> Vec<(String, String)> {
 /// Add a remote. Returns the git error text on failure.
 pub fn add_remote(dir: &Path, name: &str, url: &str) -> Result<(), String> {
     let repo = Repository::open(dir).map_err(|e| e.message().to_string())?;
-    repo.remote(name, url).map_err(|e| e.message().to_string())?;
+    repo.remote(name, url)
+        .map_err(|e| e.message().to_string())?;
     Ok(())
 }
 
 /// Remove a remote. Returns the git error text on failure.
 pub fn remove_remote(dir: &Path, name: &str) -> Result<(), String> {
     let repo = Repository::open(dir).map_err(|e| e.message().to_string())?;
-    repo.remote_delete(name).map_err(|e| e.message().to_string())?;
+    repo.remote_delete(name)
+        .map_err(|e| e.message().to_string())?;
     Ok(())
 }

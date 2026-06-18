@@ -34,8 +34,10 @@ pub fn next_task_key(existing: &[String]) -> String {
 
 /// Validate that the milestone dependency graph is acyclic and every referenced dep exists.
 pub fn validate_dependencies(milestones: &[Milestone], code: &str) -> Result<()> {
-    let nodes: Vec<(&str, &Vec<String>)> =
-        milestones.iter().map(|m| (m.code.as_str(), &m.depends_on)).collect();
+    let nodes: Vec<(&str, &Vec<String>)> = milestones
+        .iter()
+        .map(|m| (m.code.as_str(), &m.depends_on))
+        .collect();
     validate_dag(&nodes, code)
 }
 
@@ -46,7 +48,12 @@ pub fn validate_feature_dependencies(features: &[FeatureItem], code: &str) -> Re
     let filtered: Vec<(String, Vec<String>)> = features
         .iter()
         .map(|f| {
-            let local = f.depends_on.iter().filter(|d| !d.contains(':')).cloned().collect();
+            let local = f
+                .depends_on
+                .iter()
+                .filter(|d| !d.contains(':'))
+                .cloned()
+                .collect();
             (f.code.clone(), local)
         })
         .collect();
