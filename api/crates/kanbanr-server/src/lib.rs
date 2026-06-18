@@ -35,7 +35,11 @@ pub async fn run(data_dir: PathBuf, bind: String, ui_dir: Option<String>) -> any
     std::fs::create_dir_all(data_dir.join("projects"))?;
     let store = Arc::new(Store::new(data_dir.clone()));
     let (tx, _rx) = broadcast::channel::<String>(256);
-    let state = AppState { store, data_dir: data_dir.clone(), tx: tx.clone() };
+    let state = AppState {
+        store,
+        data_dir: data_dir.clone(),
+        tx: tx.clone(),
+    };
 
     // Watch the data folder and push SSE "changed" events as the CLI edits files.
     let _watcher = watcher::spawn(data_dir.join("projects"), tx.clone())?;
@@ -43,7 +47,10 @@ pub async fn run(data_dir: PathBuf, bind: String, ui_dir: Option<String>) -> any
     let api = Router::new()
         .route("/projects", get(routes::list_projects))
         .route("/projects/:project", get(routes::get_project))
-        .route("/projects/:project/features/:code/export", get(routes::export_feature))
+        .route(
+            "/projects/:project/features/:code/export",
+            get(routes::export_feature),
+        )
         .route("/projects/:project/docs", get(routes::list_docs))
         .route("/projects/:project/docs/content", get(routes::get_doc))
         .route("/projects/:project/docs/raw", get(routes::get_doc_raw))
@@ -63,16 +70,21 @@ pub async fn run(data_dir: PathBuf, bind: String, ui_dir: Option<String>) -> any
         // client-side routes work on direct load / refresh.
         let base = PathBuf::from(&dir);
         let index_html = std::fs::read_to_string(base.join("index.html")).unwrap_or_default();
-        app = app.nest_service("/assets", ServeDir::new(base.join("assets"))).fallback(move || {
-            let html = index_html.clone();
-            async move { axum::response::Html(html) }
-        });
+        app = app
+            .nest_service("/assets", ServeDir::new(base.join("assets")))
+            .fallback(move || {
+                let html = index_html.clone();
+                async move { axum::response::Html(html) }
+            });
         eprintln!("serving SPA from {dir}");
     }
 
     // Keep the watcher alive for the lifetime of the server.
     let _keep = _watcher;
-    eprintln!("kanbanr view daemon on http://{bind}  (data: {})", data_dir.display());
+    eprintln!(
+        "kanbanr view daemon on http://{bind}  (data: {})",
+        data_dir.display()
+    );
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     axum::serve(listener, app).await?;
     Ok(())
@@ -89,6 +101,10 @@ async fn log_requests(req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
     let started = Instant::now();
     let resp = next.run(req).await;
-    eprintln!("{method} {path} -> {} ({}ms)", resp.status().as_u16(), started.elapsed().as_millis());
+    eprintln!(
+        "{method} {path} -> {} ({}ms)",
+        resp.status().as_u16(),
+        started.elapsed().as_millis()
+    );
     resp
 }

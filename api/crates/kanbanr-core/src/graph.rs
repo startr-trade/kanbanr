@@ -9,7 +9,8 @@
 
 use crate::error::{CoreError, Result};
 use crate::{FeatureItem, Project, Store};
-use std::collections::BTreeMap;
+use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A fully-qualified node id, `"<project>:<code>"`.
 pub fn qualify(project: &str, code: &str) -> String {
@@ -124,4 +125,234 @@ pub fn validate_feature_deps(
         }
     }
     graph.assert_acyclic(&node)
+}
+
+// ---- derived dependency state (FEAT-027) ---------------------------------------------------
+
+/// The derived readiness disposition of a feature.
+///
+/// A feature is **done** when it is itself terminal (status case-insensitively "Completed", or a
+/// no-op state in *its own* project's config). A non-terminal feature is **blocked** when any of
+/// its DIRECT dependencies is not terminal, and **ready** otherwise (all deps terminal, or no deps).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Readiness {
+    /// The feature itself is terminal (Completed / no-op); neither ready nor blocked.
+    Done,
+    /// Every direct dependency is terminal (or there are no dependencies).
+    Ready,
+    /// At least one direct dependency is not terminal.
+    Blocked,
+}
+
+/// A node in the richer derived graph: its qualified id, status, terminal-ness, and dependencies.
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphNode {
+    /// Qualified id `"project:code"`.
+    pub id: String,
+    pub project: String,
+    pub code: String,
+    pub status: String,
+    /// True when the status is terminal per the owning project's config (Completed or no-op).
+    pub terminal: bool,
+    /// Qualified ids of this node's direct dependencies (may include unresolved cross-project ids).
+    pub depends_on: Vec<String>,
+}
+
+/// A richer, status-aware view over the portfolio graph. Knows each node's status and whether it is
+/// terminal (computed per the *owning* project's config, since projects may differ), so it can
+/// derive readiness, blocked sets, downstream impact, and graph exports.
+pub struct DependencyView {
+    /// Nodes keyed by qualified id `"project:code"`.
+    pub nodes: BTreeMap<String, GraphNode>,
+}
+
+/// Is a status terminal (done) per a project's config? Terminal == case-insensitive "Completed"
+/// OR a no-op state (an inert disposition).
+pub fn is_terminal_status(config: &crate::ProjectConfig, status: &str) -> bool {
+    status.eq_ignore_ascii_case("Completed") || config.is_no_op(status)
+}
+
+impl DependencyView {
+    /// Build the status-aware view across every project in the store. `overlay`, when given,
+    /// substitutes the in-memory state of one project for its on-disk state (matches
+    /// `FeatureGraph::build`).
+    pub fn build(store: &Store, overlay: Option<(&str, &Project)>) -> Result<DependencyView> {
+        let graph = FeatureGraph::build(store, overlay)?;
+        let mut nodes: BTreeMap<String, GraphNode> = BTreeMap::new();
+
+        let mut add = |pid: &str, project: &Project| {
+            for f in &project.features {
+                let id = qualify(pid, &f.code);
+                let deps = graph.edges.get(&id).cloned().unwrap_or_default();
+                nodes.insert(
+                    id.clone(),
+                    GraphNode {
+                        id,
+                        project: pid.to_string(),
+                        code: f.code.clone(),
+                        status: f.status.clone(),
+                        terminal: is_terminal_status(&project.config, &f.status),
+                        depends_on: deps,
+                    },
+                );
+            }
+        };
+
+        for pid in store.list_projects()? {
+            match overlay {
+                Some((oid, op)) if oid == pid => add(&pid, op),
+                _ => {
+                    let project = store.load(&pid)?;
+                    add(&pid, &project);
+                }
+            }
+        }
+        Ok(DependencyView { nodes })
+    }
+
+    /// The readiness disposition of a node. A dependency that doesn't resolve to a known node is
+    /// treated as non-terminal (conservatively blocking), so dangling refs surface as blocked.
+    pub fn readiness(&self, id: &str) -> Option<Readiness> {
+        let node = self.nodes.get(id)?;
+        if node.terminal {
+            return Some(Readiness::Done);
+        }
+        let blocked = node
+            .depends_on
+            .iter()
+            .any(|dep| self.nodes.get(dep).map(|d| !d.terminal).unwrap_or(true));
+        Some(if blocked {
+            Readiness::Blocked
+        } else {
+            Readiness::Ready
+        })
+    }
+
+    /// Qualified ids whose readiness is `Ready`, optionally restricted to one project.
+    pub fn ready(&self, project: Option<&str>) -> Vec<String> {
+        self.filter_by_readiness(Readiness::Ready, project)
+    }
+
+    /// Qualified ids whose readiness is `Blocked`, optionally restricted to one project.
+    pub fn blocked(&self, project: Option<&str>) -> Vec<String> {
+        self.filter_by_readiness(Readiness::Blocked, project)
+    }
+
+    fn filter_by_readiness(&self, want: Readiness, project: Option<&str>) -> Vec<String> {
+        self.nodes
+            .values()
+            .filter(|n| project.is_none_or(|p| n.project == p))
+            .filter(|n| self.readiness(&n.id) == Some(want))
+            .map(|n| n.id.clone())
+            .collect()
+    }
+
+    /// The downstream transitive closure of `id`: every node that depends on `id` directly or
+    /// transitively (i.e. everything `id` could unblock). Excludes `id` itself; returned sorted.
+    pub fn impact(&self, id: &str) -> Vec<String> {
+        // Reverse adjacency: dep -> dependents.
+        let mut dependents: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for node in self.nodes.values() {
+            for dep in &node.depends_on {
+                dependents
+                    .entry(dep.as_str())
+                    .or_default()
+                    .push(node.id.as_str());
+            }
+        }
+        let mut out: BTreeSet<String> = BTreeSet::new();
+        let mut stack: Vec<&str> = dependents.get(id).cloned().unwrap_or_default();
+        while let Some(cur) = stack.pop() {
+            if out.insert(cur.to_string()) {
+                if let Some(next) = dependents.get(cur) {
+                    stack.extend(next.iter().copied());
+                }
+            }
+        }
+        out.into_iter().collect()
+    }
+
+    /// JSON-serializable form of the graph (optionally scoped to one project): nodes carry status +
+    /// terminal-ness + readiness; edges are directed `from -> to` (depender -> dependency) pairs.
+    pub fn to_json_value(&self, project: Option<&str>) -> serde_json::Value {
+        let in_scope = |id: &str| {
+            project.is_none_or(|p| self.nodes.get(id).map(|n| n.project == p).unwrap_or(false))
+        };
+
+        let nodes: Vec<_> = self
+            .nodes
+            .values()
+            .filter(|n| project.is_none_or(|p| n.project == p))
+            .map(|n| {
+                serde_json::json!({
+                    "id": n.id,
+                    "project": n.project,
+                    "code": n.code,
+                    "status": n.status,
+                    "terminal": n.terminal,
+                    "readiness": self.readiness(&n.id),
+                    "depends_on": n.depends_on,
+                })
+            })
+            .collect();
+
+        let mut edges = Vec::new();
+        for n in self.nodes.values() {
+            if !in_scope(&n.id) {
+                continue;
+            }
+            for dep in &n.depends_on {
+                // When scoped to a project, keep only intra-scope edges.
+                if project.is_some() && !in_scope(dep) {
+                    continue;
+                }
+                edges.push(serde_json::json!({ "from": n.id, "to": dep }));
+            }
+        }
+        serde_json::json!({ "nodes": nodes, "edges": edges })
+    }
+
+    /// Graphviz DOT form of the graph (optionally scoped to one project). Nodes are colored by
+    /// readiness (done / ready / blocked); edges point depender -> dependency.
+    pub fn to_dot(&self, project: Option<&str>) -> String {
+        let in_scope = |id: &str| {
+            project.is_none_or(|p| self.nodes.get(id).map(|n| n.project == p).unwrap_or(false))
+        };
+        let esc = |s: &str| s.replace('"', "\\\"");
+
+        let mut out =
+            String::from("digraph kanbanr {\n  rankdir=LR;\n  node [shape=box, style=rounded];\n");
+        for n in self.nodes.values() {
+            if !in_scope(&n.id) {
+                continue;
+            }
+            let color = match self.readiness(&n.id) {
+                Some(Readiness::Done) => "gray",
+                Some(Readiness::Ready) => "green",
+                Some(Readiness::Blocked) => "red",
+                None => "black",
+            };
+            out.push_str(&format!(
+                "  \"{}\" [label=\"{}\\n{}\", color={}];\n",
+                esc(&n.id),
+                esc(&n.id),
+                esc(&n.status),
+                color
+            ));
+        }
+        for n in self.nodes.values() {
+            if !in_scope(&n.id) {
+                continue;
+            }
+            for dep in &n.depends_on {
+                if project.is_some() && !in_scope(dep) {
+                    continue;
+                }
+                out.push_str(&format!("  \"{}\" -> \"{}\";\n", esc(&n.id), esc(dep)));
+            }
+        }
+        out.push_str("}\n");
+        out
+    }
 }

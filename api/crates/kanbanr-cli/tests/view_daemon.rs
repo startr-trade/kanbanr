@@ -11,7 +11,11 @@ fn cli() -> PathBuf {
 }
 
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
 }
 
 struct Daemon(Child);
@@ -24,7 +28,8 @@ impl Drop for Daemon {
 
 #[test]
 fn view_daemon_serves_local_data_without_auth() {
-    let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("view-{}", std::process::id()));
+    let base =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("view-{}", std::process::id()));
     let data = base.join("data");
     let home = base.join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -38,14 +43,44 @@ fn view_daemon_serves_local_data_without_auth() {
             .env_remove("KANBANR_SERVER_URL")
             .output()
             .expect("run cli");
-        assert!(o.status.success(), "cmd {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        assert!(
+            o.status.success(),
+            "cmd {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
     };
 
     // Populate the folder locally (the CLI is the writer).
     run(&["identity", "--name", "Tester", "--email", "t@example.com"]);
-    run(&["--project", "demo", "project", "init", "demo", "--description", "views"]);
-    run(&["--project", "demo", "milestone", "add", "--name", "M", "--code", "MS-1"]);
-    run(&["--project", "demo", "feature", "add", "--title", "Login", "--milestone", "MS-1"]);
+    run(&[
+        "--project",
+        "demo",
+        "project",
+        "init",
+        "demo",
+        "--description",
+        "views",
+    ]);
+    run(&[
+        "--project",
+        "demo",
+        "milestone",
+        "add",
+        "--name",
+        "M",
+        "--code",
+        "MS-1",
+    ]);
+    run(&[
+        "--project",
+        "demo",
+        "feature",
+        "add",
+        "--title",
+        "Login",
+        "--milestone",
+        "MS-1",
+    ]);
 
     // Run the daemon over the same folder (same single binary, `serve` mode).
     let port = free_port();
@@ -70,14 +105,29 @@ fn view_daemon_serves_local_data_without_auth() {
     }
 
     // No auth: reads just work.
-    let projects = ureq::get(&format!("{url}/api/projects")).call().unwrap().into_string().unwrap();
+    let projects = ureq::get(&format!("{url}/api/projects"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
     assert!(projects.contains("demo"), "projects: {projects}");
-    let project = ureq::get(&format!("{url}/api/projects/demo")).call().unwrap().into_string().unwrap();
+    let project = ureq::get(&format!("{url}/api/projects/demo"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
     assert!(project.contains("Login"), "project: {project}");
 
     // The activity changelog was populated by the local writes and is served.
-    let activity = ureq::get(&format!("{url}/api/projects/demo/activity")).call().unwrap().into_string().unwrap();
-    assert!(activity.contains("Tester"), "activity should record the actor: {activity}");
+    let activity = ureq::get(&format!("{url}/api/projects/demo/activity"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(
+        activity.contains("Tester"),
+        "activity should record the actor: {activity}"
+    );
 
     let _ = std::fs::remove_dir_all(&base);
 }

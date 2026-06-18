@@ -89,14 +89,39 @@ export function FeatureBadges({ feature }: { feature: Feature }) {
   );
 }
 
+/**
+ * Whether `feature` is blocked by a same-project dependency that isn't yet Completed (FEAT-027).
+ * Computed client-side from the already-loaded sibling features. Cross-project deps (those carrying
+ * a `"proj:CODE"` form) are intentionally ignored here — the board only has this project loaded.
+ */
+export function isBlockedBySiblings(feature: Feature, siblings: Feature[]): boolean {
+  const deps = (feature.depends_on ?? []).filter((d) => !d.includes(":"));
+  if (deps.length === 0) return false;
+  return deps.some((code) => {
+    const dep = siblings.find((s) => s.code === code);
+    // An unresolved (missing) dep is treated as blocking; a present, non-Completed dep blocks.
+    return !dep || dep.status !== "Completed";
+  });
+}
+
 /** A feature card linking to its dedicated page. */
-export function FeatureCard({ project, feature }: { project: string; feature: Feature }) {
+export function FeatureCard({
+  project,
+  feature,
+  siblings,
+}: {
+  project: string;
+  feature: Feature;
+  siblings?: Feature[];
+}) {
   const p = featureProgress(feature);
+  const blocked = siblings ? isBlockedBySiblings(feature, siblings) : false;
   return (
     <Link className="card" to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(feature.code)}`}>
       <div className="card-code">{feature.code}</div>
       <div className="card-title">{feature.title}</div>
       <div className="card-meta">
+        {blocked && <span className="chip blocked">blocked</span>}
         {feature.milestone && <span className="chip">{feature.milestone}</span>}
         {p.total > 0 && (
           <span className="chip tasks">

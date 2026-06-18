@@ -55,7 +55,11 @@ impl Backend {
             return Ok(serde_json::to_string(&remotes)?);
         }
         if let Some(project) = activity_project(bare) {
-            return Ok(serde_json::to_string(&activity::read(&self.data_dir, &project, 25))?);
+            return Ok(serde_json::to_string(&activity::read(
+                &self.data_dir,
+                &project,
+                25,
+            ))?);
         }
         dispatch::dispatch(&self.store, "GET", path, None).map_err(|e| anyhow!(e.to_string()))
     }
@@ -74,6 +78,7 @@ impl Backend {
         let lock_path = self.data_dir.join(kanbanr_core::git::WRITE_LOCK_FILE);
         let file = std::fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(&lock_path)
             .map_err(|e| anyhow!("could not open write lock {}: {e}", lock_path.display()))?;
@@ -106,12 +111,21 @@ impl Backend {
 
         git::ensure_repo(&self.data_dir);
         let m = method_str(method);
-        let out = dispatch::dispatch(&self.store, m, path, body.as_ref()).map_err(|e| anyhow!(e.to_string()))?;
+        let out = dispatch::dispatch(&self.store, m, path, body.as_ref())
+            .map_err(|e| anyhow!(e.to_string()))?;
         if dispatch::is_mutation(m) {
             let msg = dispatch::commit_message(m, path, body.as_ref());
             if let Some(project) = project_of(path) {
-                let actor = git::identity(&self.data_dir).map(|(n, _)| n).unwrap_or_else(|| "kanbanr".into());
-                activity::append(&self.data_dir, &project, &actor, &msg, item_of(path).as_deref());
+                let actor = git::identity(&self.data_dir)
+                    .map(|(n, _)| n)
+                    .unwrap_or_else(|| "kanbanr".into());
+                activity::append(
+                    &self.data_dir,
+                    &project,
+                    &actor,
+                    &msg,
+                    item_of(path).as_deref(),
+                );
             }
             git::commit_local(&self.data_dir, &msg);
             // Best-effort remote sync; surface any push/conflict so the user can resolve with
@@ -132,9 +146,14 @@ impl Backend {
 
     fn write_doc_asset_locked(&self, project: &str, rel: &str, bytes: &[u8]) -> Result<String> {
         git::ensure_repo(&self.data_dir);
-        let saved = self.store.write_doc_bytes(project, rel, bytes).map_err(|e| anyhow!(e.to_string()))?;
+        let saved = self
+            .store
+            .write_doc_bytes(project, rel, bytes)
+            .map_err(|e| anyhow!(e.to_string()))?;
         let msg = format!("add document asset {saved}");
-        let actor = git::identity(&self.data_dir).map(|(n, _)| n).unwrap_or_else(|| "kanbanr".into());
+        let actor = git::identity(&self.data_dir)
+            .map(|(n, _)| n)
+            .unwrap_or_else(|| "kanbanr".into());
         activity::append(&self.data_dir, project, &actor, &msg, None);
         git::commit_local(&self.data_dir, &msg);
         for w in git::sync_all(&self.data_dir) {
@@ -144,8 +163,8 @@ impl Backend {
     }
 
     fn whoami_json(&self) -> String {
-        let (name, email) =
-            git::identity(&self.data_dir).unwrap_or_else(|| ("kanbanr".into(), "kanbanr@local".into()));
+        let (name, email) = git::identity(&self.data_dir)
+            .unwrap_or_else(|| ("kanbanr".into(), "kanbanr@local".into()));
         json!({ "user_id": name, "full_name": name, "email": email }).to_string()
     }
 }

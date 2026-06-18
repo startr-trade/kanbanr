@@ -8,7 +8,11 @@ use serde::Serialize;
 /// every feature item in full. Good for a snapshot/report or handing the whole plan to Claude.
 pub fn project_to_markdown(project: &Project) -> String {
     let cfg = &project.config;
-    let name = if cfg.name.is_empty() { &project.id } else { &cfg.name };
+    let name = if cfg.name.is_empty() {
+        &project.id
+    } else {
+        &cfg.name
+    };
     let mut out = String::new();
     out.push_str(&format!("# {name} — project export\n\n"));
     if !cfg.description.is_empty() {
@@ -23,7 +27,11 @@ pub fn project_to_markdown(project: &Project) -> String {
         }
         out.push_str(&format!("### {} ({})\n\n", s, items.len()));
         for f in items {
-            let kind = f.kind.as_deref().map(|k| format!(" · _{k}_")).unwrap_or_default();
+            let kind = f
+                .kind
+                .as_deref()
+                .map(|k| format!(" · _{k}_"))
+                .unwrap_or_default();
             out.push_str(&format!(
                 "- **{}** {} [{}/{}]{}\n",
                 f.code,
@@ -149,10 +157,7 @@ struct FeatureExport<'a> {
 }
 
 /// Render a feature as pretty JSON (includes resolved milestone when available).
-pub fn to_json(
-    feature: &FeatureItem,
-    milestone: Option<&Milestone>,
-) -> serde_json::Result<String> {
+pub fn to_json(feature: &FeatureItem, milestone: Option<&Milestone>) -> serde_json::Result<String> {
     let export = FeatureExport {
         feature,
         milestone_detail: milestone,

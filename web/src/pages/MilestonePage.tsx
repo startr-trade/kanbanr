@@ -57,7 +57,7 @@ export default function MilestonePage() {
         ) : (
           <div className="tiles">
             {features.map((f) => (
-              <FeatureCard key={f.code} project={project} feature={f} />
+              <FeatureCard key={f.code} project={project} feature={f} siblings={data.features} />
             ))}
           </div>
         )}

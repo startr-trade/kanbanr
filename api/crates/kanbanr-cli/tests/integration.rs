@@ -22,7 +22,9 @@ fn start() -> (testcontainers::Container<GenericImage>, String) {
         .with_cmd(vec!["sh".to_string(), "-c".to_string(), cmd.to_string()])
         .start()
         .expect("start kanbanr container (build it first: docker build -f docker/Dockerfile -t kanbanr:itest .)");
-    let port = container.get_host_port_ipv4(8080.tcp()).expect("mapped port");
+    let port = container
+        .get_host_port_ipv4(8080.tcp())
+        .expect("mapped port");
     (container, format!("http://127.0.0.1:{port}"))
 }
 
@@ -32,10 +34,15 @@ fn image_boots_and_serves_the_view() {
     let (_container, base) = start();
 
     // The view daemon is read-only and unauthenticated; the scaffolded project is visible.
-    let resp = ureq::get(&format!("{base}/api/projects")).call().expect("read projects");
+    let resp = ureq::get(&format!("{base}/api/projects"))
+        .call()
+        .expect("read projects");
     assert_eq!(resp.status(), 200, "image serves the read API");
     let body = resp.into_string().unwrap();
-    assert!(body.contains("demo"), "scaffolded project is served: {body}");
+    assert!(
+        body.contains("demo"),
+        "scaffolded project is served: {body}"
+    );
 
     // The SPA is served at the root.
     let root = ureq::get(&base).call().expect("read SPA");

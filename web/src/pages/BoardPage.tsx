@@ -99,7 +99,7 @@ export default function BoardPage() {
               </Link>
               <div className="column-body">
                 {shown.map((f) => (
-                  <FeatureCard key={f.code} project={project} feature={f} />
+                  <FeatureCard key={f.code} project={project} feature={f} siblings={data.features} />
                 ))}
                 {total === 0 && <div className="muted small pad">—</div>}
               </div>
