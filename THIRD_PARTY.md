@@ -24,9 +24,9 @@ apply to your build.
 
 The CLI/engine/daemon depend on the Rust crate ecosystem. The overwhelming majority are
 **MIT OR Apache-2.0** (or MIT). Notable direct dependencies include: `axum`, `tokio`, `serde`,
-`serde_yaml`, `serde_json`, `anyhow`, `thiserror`, `time`, `clap`, `git2`, `notify`, `ureq`, and
-`tower`/`tower-http`. See each crate's repository for its exact license text; the generated report
-(below) is authoritative.
+`serde_yaml`, `serde_json`, `anyhow`, `thiserror`, `time`, `clap`, `git2`, `notify`, `ureq`,
+`fs2` (cross-process advisory write lock — MIT/Apache-2.0), and `tower`/`tower-http`. See each
+crate's repository for its exact license text; the generated report (below) is authoritative.
 
 ## Web dependencies (web/)
 
