@@ -39,6 +39,40 @@ fn label(s: &str) -> String {
     s.replace(':', "/").replace(',', " ")
 }
 
+/// Format a `time::Date` as `YYYY-MM-DD`.
+fn fmt_date(d: time::Date) -> String {
+    format!("{:04}-{:02}-{:02}", d.year(), u8::from(d.month()), d.day())
+}
+
+/// Parse the `YYYY-MM-DD` prefix of an RFC3339 timestamp into a `time::Date` (no `parsing` feature
+/// needed — we only need the calendar date, which we build from the first 10 chars).
+fn parse_ymd(s: &str) -> Option<time::Date> {
+    let mut it = s.get(..10)?.split('-');
+    let y: i32 = it.next()?.parse().ok()?;
+    let m: u8 = it.next()?.parse().ok()?;
+    let d: u8 = it.next()?.parse().ok()?;
+    time::Date::from_calendar_date(y, time::Month::try_from(m).ok()?, d).ok()
+}
+
+/// Map a schedule offset (days from project start) to a concrete `YYYY-MM-DD` date. The base is a
+/// fixed, arbitrary epoch so the timeline is deterministic — used only when a task has neither a
+/// planned date, a dependency, nor parseable real timestamps.
+fn day_date(offset_days: f64) -> String {
+    let base = time::macros::date!(2025 - 01 - 01);
+    let n = offset_days.round().max(0.0) as i64;
+    fmt_date(base.checked_add(time::Duration::days(n)).unwrap_or(base))
+}
+
+/// Derive a concrete `(start_date, duration)` from a feature's REAL timestamps (`created_at` →
+/// `updated_at`) — the actuals fallback so the chart reflects history when there's no planned
+/// schedule. Duration is at least 1 day so a same-day item is still visible.
+fn actual_span(created_at: &str, updated_at: &str) -> Option<(String, String)> {
+    let c = parse_ymd(created_at)?;
+    let u = parse_ymd(updated_at).unwrap_or(c);
+    let dur = (u - c).whole_days().max(1);
+    Some((fmt_date(c), format!("{dur}d")))
+}
+
 /// Common gantt header.
 fn header(title: &str) -> String {
     format!("gantt\n    title {title}\n    dateFormat YYYY-MM-DD\n    axisFormat %m-%d\n")
@@ -98,12 +132,16 @@ fn emit_task(
         .map(|d| task_id(d))
         .collect();
     if deps.is_empty() {
-        // A root with no scheduling anchor: place it at its computed start offset (in days from 0)
-        // using Mermaid's relative form is not available without a date, so anchor explicitly.
-        out.push_str(&format!(
-            "    {lab} :{tag_prefix}{tid}, {dur}\n",
-            dur = days(dur)
-        ));
+        // No planned date and no in-scope predecessor. Prefer the feature's REAL timeline
+        // (created_at -> updated_at) so the chart reflects history instead of collapsing every
+        // unplanned task onto one synthetic day; fall back to the schedule offset only if the
+        // timestamps don't parse. A concrete start is required either way — a bare `id, duration`
+        // makes Mermaid read the id token as the start date ("Invalid date").
+        let (start, dur_s) = actual_span(&node.created_at, &node.updated_at).unwrap_or_else(|| {
+            let offset = sched.tasks.get(id).map(|t| t.start).unwrap_or(0.0);
+            (day_date(offset), days(dur))
+        });
+        out.push_str(&format!("    {lab} :{tag_prefix}{tid}, {start}, {dur_s}\n"));
     } else {
         out.push_str(&format!(
             "    {lab} :{tag_prefix}{tid}, after {after}, {dur}\n",

@@ -162,6 +162,10 @@ pub struct GraphNode {
     pub start: Option<String>,
     /// Scheduling duration in days for this task (from `estimate_days`, defaulting to 1.0).
     pub duration: f64,
+    /// Real timestamps (RFC3339), used by Gantt as an *actuals* fallback when a feature has no
+    /// planned start/estimate/dependency to schedule from.
+    pub created_at: String,
+    pub updated_at: String,
     /// Qualified ids of this node's direct dependencies (may include unresolved cross-project ids).
     pub depends_on: Vec<String>,
 }
@@ -209,6 +213,8 @@ impl DependencyView {
                             .estimate_days
                             .filter(|d| *d > 0.0)
                             .unwrap_or(DEFAULT_DURATION_DAYS),
+                        created_at: f.created_at.clone(),
+                        updated_at: f.updated_at.clone(),
                         depends_on: deps,
                     },
                 );

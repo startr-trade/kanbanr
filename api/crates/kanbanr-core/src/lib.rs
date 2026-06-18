@@ -1915,6 +1915,27 @@ mod tests {
     }
 
     #[test]
+    fn gantt_dateless_root_gets_a_concrete_start() {
+        use crate::gantt::project_gantt;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        // A root feature with no dependencies and no explicit start must still get a concrete
+        // YYYY-MM-DD start — a bare `id, duration` makes Mermaid read the id as the date and throw
+        // "Invalid date". With no planned schedule it anchors to the feature's real created_at date.
+        let f = store.add_feature("demo", "Root", "", "M", None).unwrap(); // FEAT-001
+        let out = project_gantt(&store, "demo").unwrap();
+        let line = out
+            .lines()
+            .find(|l| l.contains("demo/FEAT-001"))
+            .expect("root task line");
+        let day = &f.created_at[..10]; // YYYY-MM-DD
+        assert!(
+            line.contains(day),
+            "dateless root must anchor to its created_at date {day}: {line}"
+        );
+    }
+
+    #[test]
     fn portfolio_gantt_spans_projects() {
         use crate::gantt::portfolio_gantt;
         let (store, _d) = temp_store();
