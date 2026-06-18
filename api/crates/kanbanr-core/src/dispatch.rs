@@ -115,6 +115,45 @@ fn query_param(query: Option<&str>, key: &str) -> Option<String> {
     })
 }
 
+/// A boolean query-string flag: present with no/empty/"true"/"1" value -> true.
+fn query_flag(query: Option<&str>, key: &str) -> bool {
+    match query_param(query, key) {
+        Some(v) => v.is_empty() || v == "true" || v == "1",
+        None => query
+            .map(|q| q.split('&').any(|kv| kv == key))
+            .unwrap_or(false),
+    }
+}
+
+/// Build a feature [`Query`](crate::query::Query) from the URL query string. `project` scopes the
+/// search to one project (the per-project route) or `None` for portfolio-wide.
+fn build_query(project: Option<&str>, query: Option<&str>) -> crate::query::Query {
+    let labels = query_param(query, "label")
+        .map(|s| {
+            s.split(',')
+                .map(|x| x.trim().to_string())
+                .filter(|x| !x.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    crate::query::Query {
+        project: project.map(String::from),
+        status: query_param(query, "status"),
+        milestone: query_param(query, "milestone"),
+        kind: query_param(query, "kind"),
+        priority: query_param(query, "priority"),
+        labels,
+        assignee: query_param(query, "assignee"),
+        team: query_param(query, "team"),
+        due_after: query_param(query, "due_after"),
+        due_before: query_param(query, "due_before"),
+        ready: query_flag(query, "ready"),
+        blocked: query_flag(query, "blocked"),
+        text: query_param(query, "text"),
+        full_text: query_flag(query, "full_text"),
+    }
+}
+
 // ---- project summaries (mirrors the server's home-tile shape, sans user filtering) ----------
 
 #[derive(Serialize)]
@@ -354,6 +393,13 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                 Some("dot") => Ok(view.to_dot(None)),
                 _ => Ok(view.to_json_value(None).to_string()),
             }
+        }
+
+        // ---- query: rich filters + full-text, scoped or portfolio-wide (FEAT-032) ----
+        ("GET", ["query"]) => ser(&crate::query::run(store, &build_query(None, query))?),
+        ("GET", ["projects", p, "query"]) => {
+            store.load_meta(p)?; // 404 on unknown project
+            ser(&crate::query::run(store, &build_query(Some(p), query))?)
         }
         ("GET", ["projects", p, "export"]) => {
             let project = store.load(p)?;

@@ -15,6 +15,7 @@ pub mod mermaid;
 pub mod models;
 pub mod portfolio;
 pub mod project;
+pub mod query;
 pub mod store;
 pub mod validate;
 
@@ -1509,5 +1510,273 @@ mod tests {
         assert_eq!(totals.get("done"), Some(&1));
         assert_eq!(totals.get("in-progress"), Some(&1));
         assert_eq!(totals.get("not-started"), Some(&1));
+    }
+
+    // ---- query: rich filters + full-text + cross-project (FEAT-032) -------------------------
+
+    #[test]
+    fn query_filters_by_attributes_and_labels() {
+        use crate::query::{run, Query};
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let a = store.add_feature("demo", "Login", "", "M", None).unwrap(); // FEAT-001
+        let b = store.add_feature("demo", "Signup", "", "M", None).unwrap(); // FEAT-002
+        let c = store.add_feature("demo", "Reset", "", "M", None).unwrap(); // FEAT-003
+        store
+            .set_feature_attrs(
+                "demo",
+                &a.code,
+                Some("bug".into()),
+                Some("high".into()),
+                Some("2026-07-01".into()),
+                Some("alice".into()),
+                Some("core".into()),
+                Some(vec!["auth".into(), "infra".into()]),
+                None,
+            )
+            .unwrap();
+        store
+            .set_feature_attrs(
+                "demo",
+                &b.code,
+                Some("feature".into()),
+                None,
+                Some("2026-09-01".into()),
+                Some("bob".into()),
+                Some("core".into()),
+                Some(vec!["auth".into()]),
+                None,
+            )
+            .unwrap();
+        store
+            .set_feature_attrs(
+                "demo",
+                &c.code,
+                None,
+                None,
+                None,
+                Some("alice".into()),
+                None,
+                Some(vec!["ui".into()]),
+                None,
+            )
+            .unwrap();
+
+        let ids = |hits: Vec<crate::query::QueryHit>| -> Vec<String> {
+            hits.into_iter().map(|h| h.code).collect()
+        };
+
+        // assignee filter
+        let by_alice = run(
+            &store,
+            &Query {
+                project: Some("demo".into()),
+                assignee: Some("alice".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(ids(by_alice), vec!["FEAT-001", "FEAT-003"]);
+
+        // team filter
+        let by_core = run(
+            &store,
+            &Query {
+                project: Some("demo".into()),
+                team: Some("core".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(ids(by_core), vec!["FEAT-001", "FEAT-002"]);
+
+        // label any-of: "auth" matches A and B
+        let by_label = run(
+            &store,
+            &Query {
+                project: Some("demo".into()),
+                labels: vec!["auth".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(ids(by_label), vec!["FEAT-001", "FEAT-002"]);
+
+        // kind + priority combine (AND)
+        let bug_high = run(
+            &store,
+            &Query {
+                project: Some("demo".into()),
+                kind: Some("bug".into()),
+                priority: Some("high".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(ids(bug_high), vec!["FEAT-001"]);
+
+        // due range (string compare): on/before 2026-08-01 -> only A (Sep is after; C has no due)
+        let due = run(
+            &store,
+            &Query {
+                project: Some("demo".into()),
+                due_before: Some("2026-08-01".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(ids(due), vec!["FEAT-001"]);
+    }
+
+    #[test]
+    fn query_dep_state_and_full_text() {
+        use crate::query::{run, MatchField, Query};
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let a = store
+            .add_feature("demo", "Auth core", "secret handshake protocol", "M", None)
+            .unwrap(); // FEAT-001
+        let b = store
+            .add_feature("demo", "UI", "buttons", "M", None)
+            .unwrap(); // FEAT-002, deps on A
+        store
+            .set_feature_attrs(
+                "demo",
+                &b.code,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(vec![a.code.clone()]),
+            )
+            .unwrap();
+
+        // dep-state: A is ready (no deps), B is blocked (A is not terminal).
+        let ready = run(
+            &store,
+            &Query {
+                project: Some("demo".into()),
+                ready: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            ready.iter().map(|h| h.code.clone()).collect::<Vec<_>>(),
+            vec!["FEAT-001"]
+        );
+        let blocked = run(
+            &store,
+            &Query {
+                project: Some("demo".into()),
+                blocked: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            blocked.iter().map(|h| h.code.clone()).collect::<Vec<_>>(),
+            vec!["FEAT-002"]
+        );
+
+        // text over title only: "auth" matches A's title.
+        let title_hit = run(
+            &store,
+            &Query {
+                project: Some("demo".into()),
+                text: Some("auth".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(title_hit.len(), 1);
+        assert_eq!(title_hit[0].code, "FEAT-001");
+        assert_eq!(title_hit[0].matched, vec![MatchField::Title]);
+
+        // Without --full-text, a spec-only term does NOT match.
+        let no_ft = run(
+            &store,
+            &Query {
+                project: Some("demo".into()),
+                text: Some("handshake".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(no_ft.is_empty());
+
+        // With full_text, the spec body is searched.
+        let ft = run(
+            &store,
+            &Query {
+                project: Some("demo".into()),
+                text: Some("handshake".into()),
+                full_text: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(ft.len(), 1);
+        assert_eq!(ft[0].code, "FEAT-001");
+        assert_eq!(ft[0].matched, vec![MatchField::Spec]);
+    }
+
+    #[test]
+    fn query_spans_projects_and_dispatch_route() {
+        use crate::dispatch::dispatch;
+        use crate::query::{run, Query};
+        let (store, _d) = temp_store();
+        new_project(&store, "alpha");
+        new_project(&store, "beta");
+        store.add_feature("alpha", "A", "", "M", None).unwrap(); // alpha:FEAT-001
+        let bf = store.add_feature("beta", "B login", "", "M", None).unwrap(); // beta:FEAT-001
+        store
+            .set_feature_attrs(
+                "beta",
+                &bf.code,
+                None,
+                None,
+                None,
+                Some("alice".into()),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        // Cross-project (project: None) spans both, ordered by qualified id.
+        let all = run(&store, &Query::default()).unwrap();
+        assert_eq!(
+            all.iter().map(|h| h.id.clone()).collect::<Vec<_>>(),
+            vec!["alpha:FEAT-001", "beta:FEAT-001"]
+        );
+
+        // Cross-project assignee filter reaches into beta only.
+        let alice = run(
+            &store,
+            &Query {
+                assignee: Some("alice".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            alice.iter().map(|h| h.id.clone()).collect::<Vec<_>>(),
+            vec!["beta:FEAT-001"]
+        );
+
+        // Portfolio-wide dispatch route returns JSON hits.
+        let portfolio = dispatch(&store, "GET", "/query", None).unwrap();
+        assert!(portfolio.contains("alpha:FEAT-001") && portfolio.contains("beta:FEAT-001"));
+        // Per-project route + filter (text on title) via the query string.
+        let scoped = dispatch(&store, "GET", "/projects/beta/query?text=login", None).unwrap();
+        assert!(scoped.contains("beta:FEAT-001") && !scoped.contains("alpha"));
+        // Unknown project 404s.
+        assert!(matches!(
+            dispatch(&store, "GET", "/projects/ghost/query", None).unwrap_err(),
+            CoreError::ProjectNotFound(_)
+        ));
     }
 }

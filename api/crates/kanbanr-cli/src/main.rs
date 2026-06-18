@@ -136,6 +136,8 @@ enum Command {
     },
     /// List features downstream of (impacted by) a feature — its transitive dependents. (FEAT-027)
     Impact { code: String },
+    /// Search features with rich filters + full-text, in one project or across all. (FEAT-032)
+    Query(QueryArgs),
     /// Scan for integrity problems (dangling deps, unknown milestones, outdated schema). (FEAT-037)
     /// Defaults to the current/selected project; pass --all-projects for the whole portfolio.
     Doctor {
@@ -458,6 +460,52 @@ enum DocCmd {
     Rm {
         path: String,
     },
+}
+
+#[derive(Args)]
+struct QueryArgs {
+    /// Filter to this status.
+    #[arg(long)]
+    status: Option<String>,
+    /// Filter to this milestone.
+    #[arg(long)]
+    milestone: Option<String>,
+    /// Filter to this work kind.
+    #[arg(long)]
+    kind: Option<String>,
+    /// Filter to this priority.
+    #[arg(long)]
+    priority: Option<String>,
+    /// Filter to features carrying ANY of these labels (comma-separated).
+    #[arg(long, value_delimiter = ',')]
+    label: Option<Vec<String>>,
+    /// Filter to this assignee.
+    #[arg(long)]
+    assignee: Option<String>,
+    /// Filter to this team.
+    #[arg(long)]
+    team: Option<String>,
+    /// Due on/before this date (string compare; ISO dates sort lexically).
+    #[arg(long)]
+    due_before: Option<String>,
+    /// Due on/after this date (string compare).
+    #[arg(long)]
+    due_after: Option<String>,
+    /// Only features that are ready (all dependencies terminal).
+    #[arg(long)]
+    ready: bool,
+    /// Only features that are blocked (a dependency is not yet terminal).
+    #[arg(long)]
+    blocked: bool,
+    /// Free-text term matched against the title (and spec body with --full-text).
+    #[arg(long)]
+    text: Option<String>,
+    /// Also match --text against feature specification bodies (reads spec files).
+    #[arg(long)]
+    full_text: bool,
+    /// Span every project (portfolio-wide) instead of just the current one.
+    #[arg(long)]
+    all_projects: bool,
 }
 
 #[derive(Args)]
@@ -844,7 +892,84 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         Command::Doctor { all_projects } => run_doctor(cli, &client, *all_projects),
         Command::Index { all_projects } => run_index(cli, &client, *all_projects),
+        Command::Query(args) => run_query(cli, &client, args),
     }
+}
+
+/// Search features with rich filters + full-text, in one project or across all. (FEAT-032)
+fn run_query(cli: &Cli, client: &Backend, args: &QueryArgs) -> anyhow::Result<()> {
+    // Assemble the query string from the set filters, percent-encoding each value.
+    fn push(params: &mut Vec<String>, k: &str, v: &str) {
+        params.push(format!("{k}={}", urlencode(v)));
+    }
+    let mut params: Vec<String> = Vec::new();
+    if let Some(s) = &args.status {
+        push(&mut params, "status", s);
+    }
+    if let Some(s) = &args.milestone {
+        push(&mut params, "milestone", s);
+    }
+    if let Some(s) = &args.kind {
+        push(&mut params, "kind", s);
+    }
+    if let Some(s) = &args.priority {
+        push(&mut params, "priority", s);
+    }
+    if let Some(labels) = &args.label {
+        if !labels.is_empty() {
+            push(&mut params, "label", &labels.join(","));
+        }
+    }
+    if let Some(s) = &args.assignee {
+        push(&mut params, "assignee", s);
+    }
+    if let Some(s) = &args.team {
+        push(&mut params, "team", s);
+    }
+    if let Some(s) = &args.due_before {
+        push(&mut params, "due_before", s);
+    }
+    if let Some(s) = &args.due_after {
+        push(&mut params, "due_after", s);
+    }
+    if args.ready {
+        params.push("ready=1".to_string());
+    }
+    if args.blocked {
+        params.push("blocked=1".to_string());
+    }
+    if let Some(s) = &args.text {
+        push(&mut params, "text", s);
+    }
+    if args.full_text {
+        params.push("full_text=1".to_string());
+    }
+    let qs = params.join("&");
+
+    let path = if args.all_projects {
+        format!("/query?{qs}")
+    } else {
+        let p = require_project(cli)?;
+        format!("/projects/{p}/query?{qs}")
+    };
+    let resp = client.get(&path)?;
+    if cli.json {
+        println!("{}", pretty(&resp));
+    } else if let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(&resp) {
+        if arr.is_empty() {
+            println!("(no matching features)");
+        }
+        for h in arr {
+            println!(
+                "{:<22} {:<12} {:<10} {}",
+                h["id"].as_str().unwrap_or(""),
+                h["status"].as_str().unwrap_or(""),
+                h["milestone"].as_str().unwrap_or(""),
+                h["title"].as_str().unwrap_or("")
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Rebuild the per-project index cache (FEAT-033). Maintenance write: rebuilds index.yaml from the
