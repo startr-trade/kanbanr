@@ -343,6 +343,8 @@ impl Store {
             kind: None,
             priority: None,
             due: None,
+            assignee: None,
+            team: None,
             labels: Vec::new(),
             depends_on: Vec::new(),
             todo_lists: Vec::new(),
@@ -449,6 +451,8 @@ impl Store {
         kind: Option<String>,
         priority: Option<String>,
         due: Option<String>,
+        assignee: Option<String>,
+        team: Option<String>,
         labels: Option<Vec<String>>,
         depends_on: Option<Vec<String>>,
     ) -> Result<FeatureItem> {
@@ -462,6 +466,8 @@ impl Store {
             kind,
             priority,
             due,
+            assignee,
+            team,
             labels,
             depends_on,
         )?;
@@ -482,6 +488,8 @@ impl Store {
         kind: Option<String>,
         priority: Option<String>,
         due: Option<String>,
+        assignee: Option<String>,
+        team: Option<String>,
         labels: Option<Vec<String>>,
         depends_on: Option<Vec<String>>,
     ) -> Result<FeatureItem> {
@@ -512,6 +520,12 @@ impl Store {
         }
         if let Some(d) = due {
             feature.due = clean(d);
+        }
+        if let Some(a) = assignee {
+            feature.assignee = clean(a);
+        }
+        if let Some(t) = team {
+            feature.team = clean(t);
         }
         if let Some(l) = labels {
             feature.labels = l.into_iter().filter(|s| !s.trim().is_empty()).collect();
@@ -861,6 +875,8 @@ impl Store {
                     kind,
                     priority,
                     due,
+                    assignee,
+                    team,
                     labels,
                     depends_on,
                 } => {
@@ -881,6 +897,8 @@ impl Store {
                     let f = if kind.is_some()
                         || priority.is_some()
                         || due.is_some()
+                        || assignee.is_some()
+                        || team.is_some()
                         || labels.is_some()
                         || deps.is_some()
                     {
@@ -891,6 +909,8 @@ impl Store {
                             kind,
                             priority,
                             due,
+                            assignee,
+                            team,
                             labels,
                             deps,
                         )?
@@ -911,6 +931,8 @@ impl Store {
                     kind,
                     priority,
                     due,
+                    assignee,
+                    team,
                     labels,
                     depends_on,
                 } => {
@@ -929,6 +951,8 @@ impl Store {
                     let f = if kind.is_some()
                         || priority.is_some()
                         || due.is_some()
+                        || assignee.is_some()
+                        || team.is_some()
                         || labels.is_some()
                         || deps.is_some()
                     {
@@ -939,6 +963,8 @@ impl Store {
                             kind,
                             priority,
                             due,
+                            assignee,
+                            team,
                             labels,
                             deps,
                         )?

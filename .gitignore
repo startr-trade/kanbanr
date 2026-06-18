@@ -10,6 +10,8 @@
 # Logs / OS
 *.log
 .DS_Store
+# Local Claude Code tooling state (agent worktrees, etc.) — never part of the source repo.
+/.claude/
 
 # The data folder is its OWN git repository (the kanban board, written by the CLI), so it is not
 # tracked by the source repo — it would otherwise be embedded as a gitlink. Keep it separate; it can

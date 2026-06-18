@@ -33,6 +33,10 @@ export interface Feature {
   priority?: string | null;
   /** Optional due date. */
   due?: string | null;
+  /** Assignee (the person/agent owning this feature). */
+  assignee?: string | null;
+  /** Owning team. */
+  team?: string | null;
   /** Free-form labels/tags. */
   labels?: string[];
   /** Other feature codes this one is blocked by. */

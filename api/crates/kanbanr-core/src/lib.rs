@@ -387,6 +387,8 @@ mod tests {
                 Some("chore".into()),
                 Some("high".into()),
                 Some("2026-07-01".into()),
+                None,
+                None,
                 Some(vec!["infra".into(), "ci".into()]),
                 Some(vec![a.code.clone()]),
             )
@@ -409,7 +411,17 @@ mod tests {
 
         // Empty string clears; unknown dep rejected; cycle rejected; self-dep rejected.
         let cleared = store
-            .set_feature_attrs("demo", &b.code, Some("".into()), None, None, None, None)
+            .set_feature_attrs(
+                "demo",
+                &b.code,
+                Some("".into()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
             .unwrap();
         assert!(cleared.kind.is_none());
         assert!(matches!(
@@ -417,6 +429,8 @@ mod tests {
                 .set_feature_attrs(
                     "demo",
                     &a.code,
+                    None,
+                    None,
                     None,
                     None,
                     None,
@@ -435,6 +449,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
                 Some(vec![a.code.clone()]),
             )
             .unwrap();
@@ -443,6 +459,8 @@ mod tests {
                 .set_feature_attrs(
                     "demo",
                     &a.code,
+                    None,
+                    None,
                     None,
                     None,
                     None,
@@ -457,6 +475,8 @@ mod tests {
                 .set_feature_attrs(
                     "demo",
                     &a.code,
+                    None,
+                    None,
                     None,
                     None,
                     None,
@@ -485,6 +505,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
                 Some(vec!["alpha:FEAT-001".into()]),
             )
             .unwrap();
@@ -508,6 +530,8 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
+                    None,
                     Some(vec!["alpha:FEAT-999".into()])
                 )
                 .unwrap_err(),
@@ -518,6 +542,8 @@ mod tests {
                 .set_feature_attrs(
                     "beta",
                     &b.code,
+                    None,
+                    None,
                     None,
                     None,
                     None,
@@ -534,6 +560,8 @@ mod tests {
                 .set_feature_attrs(
                     "alpha",
                     &a.code,
+                    None,
+                    None,
                     None,
                     None,
                     None,
@@ -603,6 +631,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
                 Some(vec![a.code.clone()]),
             )
             .unwrap();
@@ -631,6 +661,8 @@ mod tests {
             .set_feature_attrs(
                 "demo",
                 &d.code,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -700,6 +732,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
                 Some(vec![a.code.clone()]),
             )
             .unwrap();
@@ -707,6 +741,8 @@ mod tests {
             .set_feature_attrs(
                 "demo",
                 &c.code,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -744,6 +780,8 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
+                None,
                 Some(vec!["alpha:FEAT-001".into()]),
             )
             .unwrap();
@@ -777,6 +815,8 @@ mod tests {
             .set_feature_attrs(
                 "demo",
                 &b.code,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -954,5 +994,121 @@ mod tests {
             dispatch(&store, "GET", "/nope", None).unwrap_err(),
             CoreError::Unsupported(_)
         ));
+    }
+
+    #[test]
+    fn feature_ownership_set_clear_and_persist() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let a = store.add_feature("demo", "A", "", "M", None).unwrap();
+
+        // Set assignee + team.
+        let set = store
+            .set_feature_attrs(
+                "demo",
+                &a.code,
+                None,
+                None,
+                None,
+                Some("alice".into()),
+                Some("core".into()),
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(set.assignee.as_deref(), Some("alice"));
+        assert_eq!(set.team.as_deref(), Some("core"));
+        // Persists/reloads.
+        let reloaded = store.load("demo").unwrap();
+        let f = reloaded.feature(&a.code).unwrap();
+        assert_eq!(f.assignee.as_deref(), Some("alice"));
+        assert_eq!(f.team.as_deref(), Some("core"));
+
+        // Empty string clears each.
+        let cleared = store
+            .set_feature_attrs(
+                "demo",
+                &a.code,
+                None,
+                None,
+                None,
+                Some("".into()),
+                Some("".into()),
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(cleared.assignee.is_none());
+        assert!(cleared.team.is_none());
+        let reloaded = store.load("demo").unwrap();
+        let f = reloaded.feature(&a.code).unwrap();
+        assert!(f.assignee.is_none());
+        assert!(f.team.is_none());
+    }
+
+    #[test]
+    fn feature_filter_by_owner() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let a = store.add_feature("demo", "A", "", "M", None).unwrap();
+        let b = store.add_feature("demo", "B", "", "M", None).unwrap();
+        let c = store.add_feature("demo", "C", "", "M", None).unwrap();
+        store
+            .set_feature_attrs(
+                "demo",
+                &a.code,
+                None,
+                None,
+                None,
+                Some("alice".into()),
+                Some("core".into()),
+                None,
+                None,
+            )
+            .unwrap();
+        store
+            .set_feature_attrs(
+                "demo",
+                &b.code,
+                None,
+                None,
+                None,
+                Some("bob".into()),
+                Some("core".into()),
+                None,
+                None,
+            )
+            .unwrap();
+        store
+            .set_feature_attrs(
+                "demo",
+                &c.code,
+                None,
+                None,
+                None,
+                Some("alice".into()),
+                Some("infra".into()),
+                None,
+                None,
+            )
+            .unwrap();
+
+        let project = store.load("demo").unwrap();
+        // Filter by assignee.
+        let by_alice: Vec<&str> = project
+            .features
+            .iter()
+            .filter(|f| f.assignee.as_deref() == Some("alice"))
+            .map(|f| f.code.as_str())
+            .collect();
+        assert_eq!(by_alice, vec![a.code.as_str(), c.code.as_str()]);
+        // Filter by team.
+        let by_core: Vec<&str> = project
+            .features
+            .iter()
+            .filter(|f| f.team.as_deref() == Some("core"))
+            .map(|f| f.code.as_str())
+            .collect();
+        assert_eq!(by_core, vec![a.code.as_str(), b.code.as_str()]);
     }
 }

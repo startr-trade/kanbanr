@@ -78,7 +78,6 @@ impl Backend {
         let lock_path = self.data_dir.join(kanbanr_core::git::WRITE_LOCK_FILE);
         let file = std::fs::OpenOptions::new()
             .create(true)
-            .truncate(false)
             .write(true)
             // The lock file holds no content (advisory locking only); never truncate it.
             .truncate(false)

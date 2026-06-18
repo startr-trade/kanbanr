@@ -36,10 +36,19 @@ fn vec_field(body: &Value, k: &str) -> Option<Vec<String>> {
     })
 }
 
-/// If the body carries any optional feature attribute (kind/priority/due/labels/depends_on), apply
-/// them to `code` and return the serialized updated feature; otherwise `None`.
+/// If the body carries any optional feature attribute
+/// (kind/priority/due/assignee/team/labels/depends_on), apply them to `code` and return the
+/// serialized updated feature; otherwise `None`.
 fn maybe_apply_attrs(store: &Store, p: &str, code: &str, b: &Value) -> Result<Option<String>> {
-    let keys = ["kind", "priority", "due", "labels", "depends_on"];
+    let keys = [
+        "kind",
+        "priority",
+        "due",
+        "assignee",
+        "team",
+        "labels",
+        "depends_on",
+    ];
     if !keys.iter().any(|k| b.get(k).is_some()) {
         return Ok(None);
     }
@@ -62,6 +71,8 @@ fn maybe_apply_attrs(store: &Store, p: &str, code: &str, b: &Value) -> Result<Op
         s("kind"),
         s("priority"),
         s("due"),
+        s("assignee"),
+        s("team"),
         v("labels"),
         v("depends_on"),
     )?;
