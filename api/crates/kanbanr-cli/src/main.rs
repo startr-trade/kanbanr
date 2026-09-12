@@ -3,12 +3,16 @@
 //! (auto-detected when no server is configured but a data dir is present; forced with `--local`).
 
 mod backend;
+mod mirror;
 
 use backend::{Backend, Method};
 use clap::{Args, Parser, Subcommand};
 use kanbanr_core::docs::DocFolder;
+use kanbanr_core::project::{DataDirSource, Marker};
 use kanbanr_core::{project, Project};
 use serde_json::{json, Map, Value};
+use std::io::{IsTerminal, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 #[derive(Parser)]
@@ -21,7 +25,7 @@ struct Cli {
     /// Project to operate on (default: $KANBANR_PROJECT, .kanbanr marker, or cwd name).
     #[arg(long, global = true)]
     project: Option<String>,
-    /// Data folder (default: $KANBANR_DATA_DIR or ./data).
+    /// Data folder (default: $KANBANR_DATA_DIR, the nearest .kanbanr marker's data_dir, or ./data).
     #[arg(long, global = true)]
     data_dir: Option<String>,
     /// Emit machine-readable JSON instead of human text.
@@ -37,6 +41,10 @@ enum Command {
     Whoami,
     /// One-shot setup: create the local data dir + git repo, set the commit identity, scaffold a
     /// first project, and select it here. Gets you to a working board in one command.
+    ///
+    /// Without --data-dir it asks where to keep the board (in a terminal), recommending a folder
+    /// next to the project's git repo named `<repo>.kanbanr`; non-interactively it uses that
+    /// recommendation. The choice is recorded in the `.kanbanr` marker.
     Init {
         /// Project name to scaffold (default: the current directory's name).
         name: Option<String>,
@@ -75,6 +83,9 @@ enum Command {
     Sync,
     /// Open the live monitor in your browser (warns if it isn't running).
     Open,
+    /// Print the data folder (board) this directory uses. With --json, also where that came from,
+    /// the recommended `<repo>.kanbanr` folder, and existing kanbanr folders next to the project.
+    Where,
     /// Show recent activity for the project (from its changelog).
     Activity,
     /// Show / test the notification events log for the project (FEAT-036). Events are emitted
@@ -116,6 +127,19 @@ enum Command {
         /// Commit message for this bundle (server frames one if omitted).
         #[arg(long)]
         message: Option<String>,
+        /// Validate the bundle and report what it would create or skip, writing nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Mirror this project's features to GitHub issues via `gh` (kanbanr → GitHub, one way).
+    #[command(subcommand)]
+    Mirror(MirrorCmd),
+    /// List imported features' sources and check whether file sources still exist in the project
+    /// (run it in the project folder). `--write` records `missing_since` on sources that are gone
+    /// (and clears it when they're back), so the monitor can label them. (FEAT-042)
+    Sources {
+        #[arg(long)]
+        write: bool,
     },
     /// Export a feature item as markdown or JSON (Claude-ready).
     Export {
@@ -557,6 +581,38 @@ struct QueryArgs {
     all_projects: bool,
 }
 
+#[derive(Subcommand)]
+enum MirrorCmd {
+    /// Turn the mirror on for this project. Requires `gh` logged in; refuses a public repo unless
+    /// --allow-public. Features created from now on get issues; `sync --all` backfills.
+    Enable {
+        /// GitHub repository, `owner/repo`.
+        #[arg(long)]
+        repo: String,
+        /// Allow mirroring to a public repository (specs and notes become public).
+        #[arg(long)]
+        allow_public: bool,
+    },
+    /// Turn the mirror off (existing issue links are kept).
+    Disable,
+    /// Show the mirror settings and what a sync would do (no GitHub calls).
+    Status {
+        /// Include older open features that don't have an issue yet.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Create/update issues for features that are missing or out of date.
+    Sync {
+        /// Also create issues for open features created before the mirror was enabled.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Link a feature to an existing issue (its content is replaced on the next sync).
+    Link { code: String, number: u64 },
+    /// Show what changed on GitHub since the last sync: edits, state, new comments (read-only).
+    Pull { code: String },
+}
+
 #[derive(Args)]
 struct SetTransitionArgs {
     from: String,
@@ -634,9 +690,23 @@ fn run_init(
     author: Option<String>,
     email: Option<String>,
 ) -> anyhow::Result<()> {
-    let dir = project::resolve_data_dir(cli.data_dir.as_deref());
+    let cwd = std::env::current_dir()?;
+    let (dir, record) = choose_init_data_dir(cli, &cwd)?;
+    if record {
+        if let Some(repo) = project::enclosing_git_worktree(&dir, project::home_dir().as_deref()) {
+            println!(
+                "⚠ {} is inside the git repo at {}: the board would be nested in that repo \
+                 (gitignore it, or pick a folder outside the repo)",
+                dir.display(),
+                repo.display()
+            );
+        }
+    }
     std::fs::create_dir_all(dir.join("projects"))?;
     kanbanr_core::git::ensure_repo(&dir);
+    if record {
+        println!("✓ board: {}", project::normalize(&dir).display());
+    }
 
     if let (Some(n), Some(e)) = (&author, &email) {
         kanbanr_core::git::set_identity(&dir, n, e).map_err(|e| anyhow::anyhow!(e))?;
@@ -665,13 +735,407 @@ fn run_init(
         }
         Err(e) => return Err(e),
     }
-    std::fs::write(".kanbanr", format!("{proj}\n"))?;
+    project::write_marker(
+        &cwd,
+        &Marker {
+            project: Some(proj.clone()),
+            data_dir: record.then(|| marker_path(&dir, &cwd)),
+        },
+    )?;
     println!("✓ selected '{proj}' here (.kanbanr)\n");
     println!("Next:");
     println!("  kanbanr milestone add --name \"v1\" --code MS-001");
     println!("  kanbanr feature add --title \"First feature\" --milestone MS-001 --spec \"# …\"");
     println!("  kanbanr board                 # see the board");
     println!("  kanbanr open                  # watch it live in the browser");
+    Ok(())
+}
+
+/// Pick the data folder for `init`. `--data-dir` or an existing marker wins (and is recorded in the
+/// marker); `$KANBANR_DATA_DIR` or an existing `./data` board is used as-is (not recorded).
+/// Otherwise ask in a terminal, or take the recommended `<repo>.kanbanr` sibling when there is no
+/// terminal. Returns the folder and whether to record it in the marker.
+fn choose_init_data_dir(cli: &Cli, cwd: &Path) -> anyhow::Result<(PathBuf, bool)> {
+    let home = project::home_dir();
+    let resolved = project::resolve_data_dir_detailed(cli.data_dir.as_deref());
+    match resolved.source {
+        DataDirSource::Flag | DataDirSource::Marker => return Ok((resolved.path, true)),
+        DataDirSource::Env => return Ok((resolved.path, false)),
+        DataDirSource::Default if resolved.path.join("projects").is_dir() => {
+            println!("• using the existing data folder ./data");
+            return Ok((resolved.path, false));
+        }
+        DataDirSource::Default => {}
+    }
+
+    let suggested =
+        project::suggested_data_dir(cwd, home.as_deref()).unwrap_or_else(|| cwd.join("data"));
+    if cli.json || !std::io::stdin().is_terminal() {
+        println!(
+            "• board folder: {} (pass --data-dir to choose another)",
+            suggested.display()
+        );
+        return Ok((suggested, true));
+    }
+
+    let mut options = vec![suggested];
+    for dir in project::nearby_data_dirs(cwd, home.as_deref()) {
+        if !options.contains(&dir) {
+            options.push(dir);
+        }
+    }
+    println!("Where should kanbanr keep this project's board? (a separate git repo)");
+    for (i, dir) in options.iter().enumerate() {
+        let note = if dir.join("projects").is_dir() {
+            "existing kanbanr folder, shared with its other projects"
+        } else {
+            "new folder next to the project, recommended"
+        };
+        println!("  {}) {}  ({note})", i + 1, dir.display());
+    }
+    print!("Choose a number or type a path [1]: ");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let answer = line.trim();
+    let picked = answer
+        .parse::<usize>()
+        .ok()
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|i| options.get(i));
+    let chosen = match picked {
+        _ if answer.is_empty() => options[0].clone(),
+        Some(dir) => dir.clone(),
+        None => cwd.join(project::expand_tilde(answer, home.as_deref())),
+    };
+    Ok((chosen, true))
+}
+
+/// Stamp file-sourced `feature.add` ops with the project repo's HEAD commit when the bundle didn't
+/// say, so an imported item records which version of the file it came from. (FEAT-042)
+fn fill_file_source_revisions(body: &mut Value) {
+    let Some(ops) = body["operations"].as_array_mut() else {
+        return;
+    };
+    let needs = |op: &Value| {
+        op["op"] == "feature.add"
+            && op["source"]["system"] == "file"
+            && op["source"]["revision"].is_null()
+    };
+    if !ops.iter().any(needs) {
+        return;
+    }
+    let Ok(cwd) = std::env::current_dir() else {
+        return;
+    };
+    let Some(rev) = project::project_revision(&cwd, project::home_dir().as_deref()) else {
+        return;
+    };
+    for op in ops.iter_mut().filter(|op| needs(op)) {
+        op["source"]["revision"] = json!(rev);
+    }
+}
+
+/// One line of a `batch --dry-run` preview.
+fn describe_batch_result(r: &Value) -> String {
+    let s = |k: &str| r[k].as_str().unwrap_or("").to_string();
+    let op = s("op");
+    if r["skipped"] == true {
+        return match op.as_str() {
+            "feature.add" | "milestone.add" => format!(
+                "  = skip {op:<12} {} {} ({})",
+                s("code"),
+                s("title"),
+                s("reason")
+            ),
+            _ => format!(
+                "  = skip {op:<12} (under already-imported '{}')",
+                s("target")
+            ),
+        };
+    }
+    let detail = match op.as_str() {
+        "feature.add" => format!("{} {} [{}]", s("code"), s("title"), s("status")),
+        "milestone.add" => format!("{} {}", s("code"), s("title")),
+        "todo.add" => format!("{} {}", s("feature"), s("code")),
+        "task.add" => s("key"),
+        "task.state" | "feature.move" => format!("{} {}", s("code"), s("status")),
+        "doc.write" | "doc.folder" => s("path"),
+        _ => s("code"),
+    };
+    format!("  + {op:<17} {}", detail.trim())
+}
+
+/// `kanbanr sources`: list imported features' provenance and check file sources against the
+/// project folder. With `write`, record/clear `missing_since` in one commit. (FEAT-042)
+fn run_sources(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let project = get_project(client, &p)?;
+    let cwd = std::env::current_dir()?;
+    let root = project::project_root(&cwd, project::home_dir().as_deref());
+    let today = kanbanr_core::now_rfc3339();
+
+    let mut rows = Vec::new();
+    let mut edits = Vec::new();
+    for f in &project.features {
+        let Some(src) = &f.source else { continue };
+        // Only file sources can be checked locally; `TODO.md:14` -> `TODO.md`.
+        let present = (src.system == "file").then(|| {
+            let path = match src.reference.rsplit_once(':') {
+                Some((file, line)) if line.chars().all(|c| c.is_ascii_digit()) => file,
+                _ => src.reference.as_str(),
+            };
+            root.join(path).exists()
+        });
+        let mut updated = src.clone();
+        match present {
+            Some(false) if src.missing_since.is_none() => {
+                updated.missing_since = Some(today.clone())
+            }
+            Some(true) if src.missing_since.is_some() => updated.missing_since = None,
+            _ => {}
+        }
+        if updated != *src {
+            edits.push(json!({"op": "feature.edit", "code": f.code, "source": updated}));
+        }
+        rows.push(json!({
+            "code": f.code,
+            "system": src.system,
+            "ref": src.reference,
+            "revision": src.revision,
+            "url": src.url,
+            "imported_at": src.imported_at,
+            "present": present,
+            "missing_since": updated.missing_since,
+        }));
+    }
+
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else if rows.is_empty() {
+        println!("(no imported features)");
+    } else {
+        for r in &rows {
+            let state = match r["present"].as_bool() {
+                Some(true) => "present".to_string(),
+                Some(false) => format!(
+                    "MISSING since {}",
+                    r["missing_since"]
+                        .as_str()
+                        .unwrap_or("")
+                        .get(..10)
+                        .unwrap_or("now")
+                ),
+                None => "-".to_string(),
+            };
+            let rev = r["revision"]
+                .as_str()
+                .map(|v| format!(" @{}", v.get(..7).unwrap_or(v)))
+                .unwrap_or_default();
+            println!(
+                "{:<12} {:<22} {} {}{rev}",
+                r["code"].as_str().unwrap_or(""),
+                state,
+                r["system"].as_str().unwrap_or(""),
+                r["ref"].as_str().unwrap_or(""),
+            );
+        }
+    }
+
+    if !edits.is_empty() {
+        if write {
+            client.write(
+                Method::Post,
+                &format!("/projects/{p}/batch"),
+                Some(
+                    json!({"operations": edits, "message": "sources: update missing-source marks"}),
+                ),
+            )?;
+            if !cli.json {
+                println!("recorded {} source change(s)", edits.len());
+            }
+        } else if !cli.json {
+            println!(
+                "{} source mark(s) out of date; run `kanbanr sources --write` to record them",
+                edits.len()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `kanbanr mirror …` (FEAT-043).
+fn run_mirror(cli: &Cli, client: &Backend, cmd: &MirrorCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let gh = mirror::GhCli::new();
+    match cmd {
+        MirrorCmd::Enable { repo, allow_public } => {
+            mirror::enable(client, &gh, &p, repo, *allow_public)?;
+            println!(
+                "issue mirror enabled: new features in '{p}' will be mirrored to {repo}.\n\
+                 Run `kanbanr mirror sync --all` to also create issues for existing open features."
+            );
+        }
+        MirrorCmd::Disable => {
+            mirror::disable(client, &p)?;
+            println!("issue mirror disabled for '{p}' (issue links are kept)");
+        }
+        MirrorCmd::Status { all } => {
+            let Some((cfg, actions, linked)) = mirror::status(client, &p, *all)? else {
+                if cli.json {
+                    println!("{}", json!({"enabled": false}));
+                } else {
+                    println!("issue mirror: off (kanbanr mirror enable --repo owner/repo)");
+                }
+                return Ok(());
+            };
+            let gh_ok = mirror::IssueTracker::check(&gh);
+            if cli.json {
+                let out = json!({
+                    "enabled": true, "repo": cfg.repo, "enabled_at": cfg.enabled_at,
+                    "gh": gh_ok.as_ref().map(|_| "ok").unwrap_or_else(|e| e.as_str()),
+                    "linked": linked, "actions": actions,
+                });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+                return Ok(());
+            }
+            println!(
+                "issue mirror: on → {} (since {})",
+                cfg.repo,
+                &cfg.enabled_at[..10.min(cfg.enabled_at.len())]
+            );
+            match gh_ok {
+                Ok(()) => println!("gh: ok"),
+                Err(e) => println!("gh: {e}"),
+            }
+            println!("{linked} feature(s) linked; {} pending:", actions.len());
+            for a in &actions {
+                match a.kind {
+                    kanbanr_core::mirror::MirrorActionKind::Create => {
+                        println!("  + create  {} {}", a.code, a.title)
+                    }
+                    kanbanr_core::mirror::MirrorActionKind::Update { number } => {
+                        println!("  ~ update  {} #{number} {}", a.code, a.title)
+                    }
+                }
+            }
+        }
+        MirrorCmd::Sync { all } => {
+            let out = mirror::sync(client, &gh, &p, *all)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&out)?);
+                return Ok(());
+            }
+            for (code, n) in &out.created {
+                println!("  + {code} → {}#{n}", out.repo);
+            }
+            for (code, n) in &out.updated {
+                println!("  ~ {code} → {}#{n}", out.repo);
+            }
+            for (code, e) in &out.failed {
+                println!("  ! {code}: {e}");
+            }
+            println!(
+                "created {}, updated {}, failed {}",
+                out.created.len(),
+                out.updated.len(),
+                out.failed.len()
+            );
+        }
+        MirrorCmd::Link { code, number } => {
+            let url = mirror::link(client, &gh, &p, code, *number)?;
+            println!("linked {code} → {url}\nThe next sync replaces that issue's title and body with kanbanr's.");
+        }
+        MirrorCmd::Pull { code } => {
+            let r = mirror::pull(client, &gh, &p, code)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+                return Ok(());
+            }
+            let state = if r.remote.doc.open { "open" } else { "closed" };
+            println!(
+                "{} ↔ {}#{} ({state}) {}",
+                r.code, r.repo, r.remote.number, r.remote.url
+            );
+            println!(
+                "last synced: {}",
+                r.last_synced_at.as_deref().unwrap_or("never")
+            );
+            println!(
+                "edited on GitHub since then: {}",
+                if r.edited_on_tracker { "yes" } else { "no" }
+            );
+            println!(
+                "changed in kanbanr since then: {}{}",
+                if r.changed_in_kanbanr { "yes" } else { "no" },
+                if r.edited_on_tracker && r.changed_in_kanbanr {
+                    " (a sync would overwrite the GitHub edits: bring them into kanbanr first)"
+                } else {
+                    ""
+                }
+            );
+            if r.edited_on_tracker {
+                println!("\nGitHub title: {}", r.remote.doc.title);
+                println!("GitHub labels: {}", r.remote.doc.labels.join(", "));
+                println!("GitHub body:\n{}", r.remote.doc.body.trim_end());
+            }
+            if r.comments.is_empty() {
+                println!("\nno new comments");
+            } else {
+                println!("\n{} new comment(s):", r.comments.len());
+                for c in &r.comments {
+                    println!(
+                        "  @{} ({}): {}",
+                        c.author,
+                        c.created_at.get(..10).unwrap_or(""),
+                        c.body.trim()
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// How a data folder is written into a marker in `marker_dir`: relative when nearby, else absolute.
+fn marker_path(data_dir: &Path, marker_dir: &Path) -> String {
+    project::relative_to(data_dir, marker_dir)
+        .display()
+        .to_string()
+}
+
+/// Print the data folder this directory resolves to (`--json`: provenance and suggestions too).
+fn run_where(cli: &Cli) -> anyhow::Result<()> {
+    let resolved = project::resolve_data_dir_detailed(cli.data_dir.as_deref());
+    let data_dir = project::normalize(&resolved.path);
+    if !cli.json {
+        println!("{}", data_dir.display());
+        return Ok(());
+    }
+    let cwd = std::env::current_dir()?;
+    let home = project::home_dir();
+    let home = home.as_deref();
+    let show = |p: &Path| p.display().to_string();
+    let suggested = project::suggested_data_dir(&cwd, home);
+    let out = json!({
+        "data_dir": show(&data_dir),
+        "source": resolved.source,
+        "exists": data_dir.join("projects").is_dir(),
+        "inside_git_repo": project::enclosing_git_worktree(&data_dir, home).map(|p| show(&p)),
+        "marker": resolved.marker.as_ref().map(|m| show(&m.path)),
+        "project": project::resolve_project(cli.project.as_deref()),
+        "project_root": show(&project::project_root(&cwd, home)),
+        "suggested_data_dir": suggested.as_deref().map(show),
+        "suggested_inside_git_repo": suggested
+            .as_deref()
+            .and_then(|s| project::enclosing_git_worktree(s, home))
+            .map(|p| show(&p)),
+        "existing_data_dirs": project::nearby_data_dirs(&cwd, home)
+            .iter()
+            .map(|p| show(p))
+            .collect::<Vec<_>>(),
+    });
+    println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
 }
 
@@ -881,12 +1345,17 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             allow_writes,
         } => return run_serve(cli, bind.clone(), ui_dir.clone(), *allow_writes),
         Command::Open => return run_open(cli),
+        Command::Where => return run_where(cli),
         _ => {}
     }
 
     let client = make_backend(cli);
     match &cli.command {
-        Command::Identity { .. } | Command::Init { .. } | Command::Serve { .. } | Command::Open => {
+        Command::Identity { .. }
+        | Command::Init { .. }
+        | Command::Serve { .. }
+        | Command::Open
+        | Command::Where => {
             unreachable!()
         }
         Command::Sync => {
@@ -932,7 +1401,11 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Milestone(cmd) => run_milestone(cli, &client, cmd),
         Command::Config(cmd) => run_config(cli, &client, cmd),
         Command::Doc(cmd) => run_doc(cli, &client, cmd),
-        Command::Batch { file, message } => {
+        Command::Batch {
+            file,
+            message,
+            dry_run,
+        } => {
             let p = require_project(cli)?;
             let raw = match file {
                 Some(path) => std::fs::read_to_string(path)?,
@@ -954,16 +1427,36 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             if let (Some(obj), Some(m)) = (body.as_object_mut(), message) {
                 obj.insert("message".to_string(), json!(m));
             }
-            let resp = client.write(Method::Post, &format!("/projects/{p}/batch"), Some(body))?;
+            fill_file_source_revisions(&mut body);
+            let path = format!("/projects/{p}/batch");
+            let resp = if *dry_run {
+                body["dry_run"] = json!(true);
+                client.preview(Method::Post, &path, Some(body))?
+            } else {
+                client.write(Method::Post, &path, Some(body))?
+            };
             if cli.json {
                 println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let v: Value = serde_json::from_str(&resp)?;
+            let results = v["results"].as_array().cloned().unwrap_or_default();
+            let skipped = results.iter().filter(|r| r["skipped"] == true).count();
+            let applied = results.len() - skipped;
+            if *dry_run {
+                for r in &results {
+                    println!("{}", describe_batch_result(r));
+                }
+                println!("dry run: nothing written ({applied} to apply, {skipped} skipped)");
+            } else if skipped > 0 {
+                println!("applied {applied} operation(s), skipped {skipped} (already present)");
             } else {
-                let v: Value = serde_json::from_str(&resp)?;
-                let n = v["results"].as_array().map(|a| a.len()).unwrap_or(0);
-                println!("applied {n} operation(s)");
+                println!("applied {applied} operation(s)");
             }
             Ok(())
         }
+        Command::Sources { write } => run_sources(cli, &client, *write),
+        Command::Mirror(cmd) => run_mirror(cli, &client, cmd),
         Command::Export { code, format } => {
             let p = require_project(cli)?;
             let resp = client.get(&format!(
@@ -1426,7 +1919,18 @@ fn run_project(cli: &Cli, client: &Backend, cmd: &ProjectCmd) -> anyhow::Result<
             Ok(())
         }
         ProjectCmd::Use { name } => {
-            std::fs::write(".kanbanr", format!("{name}\n"))?;
+            // Keep (or record, with --data-dir) where the board lives alongside the project name.
+            let cwd = std::env::current_dir()?;
+            let resolved = project::resolve_data_dir_detailed(cli.data_dir.as_deref());
+            let data_dir = matches!(resolved.source, DataDirSource::Flag | DataDirSource::Marker)
+                .then(|| marker_path(&resolved.path, &cwd));
+            project::write_marker(
+                &cwd,
+                &Marker {
+                    project: Some(name.clone()),
+                    data_dir,
+                },
+            )?;
             println!("selected project '{name}' (wrote .kanbanr)");
             Ok(())
         }

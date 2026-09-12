@@ -7,6 +7,39 @@ All notable changes to kanbanr are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **GitHub issue mirror** (FEAT-043): `kanbanr mirror enable --repo owner/repo` keeps a project's
+  features in step with GitHub issues through `gh`, one way (kanbanr is the source of truth).
+  - After every write, changed features are pushed: new feature → issue; title/spec/labels/tasks
+    → update; Completed → closed as completed; no-op state → closed as not planned. Change
+    detection uses a stable hash of the rendered issue, so unchanged features make no calls, and
+    failures never fail the write (`kanbanr mirror sync` catches up; `KANBANR_MIRROR=off` pauses).
+  - Refuses public repos without `--allow-public`; existing features are backfilled only with
+    `mirror sync --all`.
+  - `mirror status` (plan, no calls), `mirror link` (existing issue), `mirror pull` (read-only:
+    edits on GitHub since the last sync and new comments), `mirror disable`.
+  - Imported GitHub issues keep their `issue` link, so they are updated rather than duplicated.
+- **Import existing task trackers** (FEAT-042): at activation the skill offers to import work
+  already tracked in `TODO.md`/`ROADMAP.md`, AI-tool plan files (Spec Kit, Kiro), GitHub issues or
+  exports, after asking which sources to bring in (open items by default).
+  - `feature.add` accepts `source` (provenance: system, ref, revision, url), `original` (preserved
+    in the spec under "Imported from") and `issue`; kanbanr stamps `imported_at`, derives a stable
+    re-import `key`, and the CLI fills the project commit for file sources. Sources are history,
+    not live pointers, so deleted files or rewritten history leave nothing dangling.
+  - Re-running an import skips known sources, same-named milestones, and the ops under skipped
+    items.
+  - `kanbanr batch --dry-run` previews a bundle without writing (no activity entry, no commit).
+  - `kanbanr sources [--write]` checks whether file sources still exist and records
+    `missing_since`; the monitor labels vanished sources and links mirrored issues.
+- **Board next to the project** (FEAT-041): `kanbanr init` asks where to keep the board and
+  recommends a sibling of the project's git repo named `<repo>.kanbanr`, or an existing kanbanr
+  folder nearby so projects can share one. The choice is recorded in the `.kanbanr` marker
+  (`project:` + `data_dir:`, relative to the marker), which is now found by walking up from the
+  current directory. New `kanbanr where [--json]` shows the board folder in use. Data dir order:
+  `--data-dir` → `$KANBANR_DATA_DIR` → marker `data_dir` → `./data`. Legacy one-line markers and
+  `./data` boards keep working. The skill asks the user for the location on activation, and the
+  Stop hook finds the board via `kanbanr where`.
+- **Project docs default to kanbanr** (FEAT-040): the skill writes every document (requested or
+  self-initiated) as a kanbanr doc, and into the project folder only when the user asks.
 - **Enterprise-scale coordination (opt-in, milestone MS-005)** — kanbanr scales from a single
   project to a portfolio without losing the git-backed, file-per-entity model:
   - **Cross-project dependencies**: a `depends_on` entry may be qualified `"<project>:<code>"`; a

@@ -99,8 +99,76 @@ pub struct FeatureItem {
     /// Persistent todo-lists (newest-first ordering is applied by callers when displaying).
     #[serde(default)]
     pub todo_lists: Vec<TodoList>,
+    /// Where this feature was imported from, if it was (FEAT-042).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Source>,
+    /// The external issue this feature is mirrored to, if any (FEAT-043).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<IssueLink>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// Where an imported feature came from (FEAT-042). This is a record of history, not a live
+/// pointer: the original text is preserved in the feature's spec, so nothing depends on the
+/// source still existing (a deleted file, rewritten git history, a removed issue).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Source {
+    /// Tracker kind: `file`, `github`, `gitlab`, `jira`, `linear`, …
+    pub system: String,
+    /// Location in that tracker, for humans: `TODO.md:14`, `owner/repo#123`, `PROJ-45`.
+    #[serde(default, rename = "ref")]
+    pub reference: String,
+    /// Project repo commit at import time (file sources).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// When it was imported (RFC 3339); stamped by kanbanr.
+    #[serde(default)]
+    pub imported_at: String,
+    /// Stable identity used to skip re-imports; derived by kanbanr when not given.
+    #[serde(default)]
+    pub key: String,
+    /// When the source was found to be gone (set by `kanbanr sources --write`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub missing_since: Option<String>,
+}
+
+impl Source {
+    /// The re-import identity. Trackers with stable ids (anything but `file`) use
+    /// `<system>:<ref>`; files use a hash of the normalized title, so a moved, renumbered or
+    /// deleted file doesn't cause a re-import.
+    pub fn derive_key(&self, title: &str) -> String {
+        let system = self.system.trim().to_lowercase();
+        let reference = self.reference.trim();
+        if system != "file" && !reference.is_empty() {
+            return format!("{system}:{reference}");
+        }
+        let normalized = title
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+        format!("{system}:{}", crate::hash::stable_hash(&normalized))
+    }
+}
+
+/// A link from a feature to the external issue it is mirrored to (FEAT-043).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct IssueLink {
+    /// Tracker kind; currently `github`.
+    pub system: String,
+    /// `owner/repo`.
+    pub repo: String,
+    pub number: u64,
+    #[serde(default)]
+    pub url: String,
+    /// Hash of the issue content kanbanr last pushed; `None` until the first push.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synced_at: Option<String>,
 }
 
 impl FeatureItem {
@@ -152,6 +220,8 @@ impl FeatureItem {
             labels: self.labels.clone(),
             depends_on: self.depends_on.clone(),
             todo_lists: self.todo_lists.clone(),
+            source: self.source.clone(),
+            issue: self.issue.clone(),
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
         }
@@ -175,6 +245,8 @@ impl FeatureItem {
             labels: meta.labels,
             depends_on: meta.depends_on,
             todo_lists: meta.todo_lists,
+            source: meta.source,
+            issue: meta.issue,
             created_at: meta.created_at,
             updated_at: meta.updated_at,
         }
@@ -210,6 +282,10 @@ pub struct FeatureMeta {
     pub depends_on: Vec<String>,
     #[serde(default)]
     pub todo_lists: Vec<TodoList>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Source>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<IssueLink>,
     pub created_at: String,
     pub updated_at: String,
 }

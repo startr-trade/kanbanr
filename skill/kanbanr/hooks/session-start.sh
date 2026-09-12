@@ -68,7 +68,9 @@ echo
 
 echo "_kanbanr is the system of record for this project's PLAN (features/tasks/"
 echo "specs/decisions/progress). Resume from the board above; record new work in"
-echo "kanbanr as you go._"
+echo "kanbanr as you go. Every document (requested or self-initiated) goes in"
+echo "kanbanr docs (\`kanbanr doc add …\`), NOT the working folder — unless the user"
+echo "asks for it in the project folder._"
 
 # Always succeed: recovery is advisory, never fatal.
 exit 0

@@ -599,6 +599,15 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             Ok(String::new())
         }
 
+        // ---- issue mirror (FEAT-043) ----
+        ("GET", ["projects", p, "mirror"]) => ser(&crate::mirror::load_config(store, p)?),
+        ("PUT", ["projects", p, "mirror"]) => {
+            let config: crate::mirror::MirrorConfig = serde_json::from_value(b.clone())
+                .map_err(|e| CoreError::Unsupported(format!("invalid mirror config: {e}")))?;
+            crate::mirror::save_config(store, p, &config)?;
+            ser(&config)
+        }
+
         // ---- batch ----
         ("POST", ["projects", p, "batch"]) => {
             let ops: Vec<BatchOp> = b
@@ -608,12 +617,21 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                 .transpose()
                 .map_err(|e| CoreError::Unsupported(format!("invalid batch: {e}")))?
                 .unwrap_or_default();
-            let results = store.apply_batch(p, ops)?;
+            let dry_run = b.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
+            let results = store.apply_batch_with(p, ops, dry_run)?;
             Ok(json!({ "results": results }).to_string())
         }
 
         _ => Err(CoreError::Unsupported(format!("{method} {path_only}"))),
     }
+}
+
+/// Whether a write request is a dry run (`"dry_run": true` in the body, honored by the batch
+/// route): it changes nothing, so writers must not log activity or commit for it. (FEAT-042)
+pub fn is_dry_run(body: Option<&Value>) -> bool {
+    body.and_then(|b| b.get("dry_run"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Whether an HTTP method mutates state (and therefore should be committed in local mode).
@@ -635,6 +653,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects"] => "create project".into(),
         ["projects", p] if del => format!("delete project {p}"),
         ["projects", p] => format!("edit project {p}"),
+        ["projects", _p, "mirror"] => "configure issue mirror".into(),
         ["projects", _p, "features"] => "add feature item".into(),
         ["projects", _p, "features", c] => format!("edit feature {c}"),
         ["projects", _p, "features", c, "move"] => format!("move feature {c}"),

@@ -13,7 +13,9 @@ pub mod export;
 pub mod gantt;
 pub mod git;
 pub mod graph;
+pub mod hash;
 pub mod mermaid;
+pub mod mirror;
 pub mod models;
 pub mod portfolio;
 pub mod project;
@@ -23,7 +25,9 @@ pub mod validate;
 
 pub use config::ProjectConfig;
 pub use error::{CoreError, Result};
-pub use models::{FeatureItem, IndexEntry, Milestone, Status, Task, TaskState, TodoList};
+pub use models::{
+    FeatureItem, IndexEntry, IssueLink, Milestone, Source, Status, Task, TaskState, TodoList,
+};
 pub use store::{Project, Store};
 
 use time::format_description::well_known::Rfc3339;
@@ -455,6 +459,143 @@ mod tests {
         .unwrap();
         assert!(matches!(
             store.apply_batch("demo", bad).unwrap_err(),
+            CoreError::BatchOpFailed(0, _)
+        ));
+    }
+
+    fn ops(v: serde_json::Value) -> Vec<crate::batch::BatchOp> {
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn batch_import_records_provenance_and_preserves_the_original() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let results = store
+            .apply_batch(
+                "demo",
+                ops(serde_json::json!([
+                    {"op":"milestone.add","ref":"m","name":"Imported","code":"MS-1"},
+                    {"op":"feature.add","ref":"a","title":"Fix  login ","milestone":"m",
+                     "spec":"# Fix login",
+                     "source":{"system":"file","ref":"TODO.md:14","revision":"a1b2c3d"},
+                     "original":"- [ ] Fix login (see ```notes```)"},
+                    {"op":"feature.add","title":"Crash on save","milestone":"m",
+                     "source":{"system":"github","ref":"acme/app#12","url":"https://github.com/acme/app/issues/12"},
+                     "issue":{"system":"github","repo":"acme/app","number":12,"url":"https://github.com/acme/app/issues/12"}}
+                ])),
+            )
+            .unwrap();
+        assert_eq!(results.len(), 3);
+
+        let p = store.load("demo").unwrap();
+        let a = p
+            .features
+            .iter()
+            .find(|f| f.title == "Fix  login ")
+            .unwrap();
+        let src = a.source.as_ref().unwrap();
+        assert_eq!(src.reference, "TODO.md:14");
+        assert_eq!(src.revision.as_deref(), Some("a1b2c3d"));
+        assert!(!src.imported_at.is_empty(), "imported_at is stamped");
+        assert!(src.key.starts_with("file:"), "file keys hash the title");
+        assert!(a.specification.starts_with("# Fix login"));
+        assert!(a.specification.contains("## Imported from"));
+        assert!(a
+            .specification
+            .contains("`TODO.md:14` (file) at commit `a1b2c3d`"));
+        assert!(
+            a.specification
+                .contains("````text\n- [ ] Fix login (see ```notes```)\n````"),
+            "fence outgrows backtick runs: {}",
+            a.specification
+        );
+
+        let b = p
+            .features
+            .iter()
+            .find(|f| f.title == "Crash on save")
+            .unwrap();
+        assert_eq!(b.source.as_ref().unwrap().key, "github:acme/app#12");
+        assert_eq!(b.issue.as_ref().unwrap().number, 12);
+    }
+
+    #[test]
+    fn batch_reimport_skips_known_sources_and_the_ops_under_them() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let bundle = serde_json::json!([
+            {"op":"milestone.add","ref":"m","name":"Imported"},
+            // Title differs only in case/whitespace: same file key.
+            {"op":"feature.add","ref":"a","title":"Fix login","milestone":"m",
+             "source":{"system":"file","ref":"TODO.md:3"}},
+            {"op":"todo.add","ref":"t","feature":"a","description":"imported"},
+            {"op":"task.add","feature":"a","todo":"t","text":"write test"},
+            {"op":"task.state","feature":"a","todo":"t","key":"T1","state":"InProgress"},
+            {"op":"feature.add","ref":"b","title":"New thing","milestone":"M","depends_on":["a"],
+             "source":{"system":"file","ref":"ROADMAP.md:9"}}
+        ]);
+        store.apply_batch("demo", ops(bundle.clone())).unwrap();
+        assert_eq!(store.load("demo").unwrap().features.len(), 2);
+
+        // The same items again (one moved to another file, retitled in case) plus one new item.
+        let mut again = bundle.as_array().unwrap().clone();
+        again[1]["title"] = serde_json::json!("FIX   LOGIN");
+        again[1]["source"]["ref"] = serde_json::json!("docs/old-todo.md:40");
+        again.push(serde_json::json!(
+            {"op":"feature.add","title":"Brand new","milestone":"M","source":{"system":"file","ref":"TODO.md:5"}}
+        ));
+        let results = store
+            .apply_batch("demo", ops(serde_json::Value::Array(again)))
+            .unwrap();
+        let skipped = results.iter().filter(|r| r["skipped"] == true).count();
+        assert_eq!(
+            skipped, 6,
+            "the milestone, both known items and the ops under them: {results:?}"
+        );
+
+        let p = store.load("demo").unwrap();
+        assert_eq!(p.features.len(), 3, "only the new item was added");
+        assert_eq!(
+            p.milestones.iter().filter(|m| m.name == "Imported").count(),
+            1,
+            "milestone reused, not duplicated"
+        );
+        let a = p.features.iter().find(|f| f.title == "Fix login").unwrap();
+        assert_eq!(a.todo_lists.len(), 1, "no duplicate todo-list");
+        assert_eq!(a.todo_lists[0].tasks.len(), 1, "no duplicate task");
+    }
+
+    #[test]
+    fn batch_dry_run_reports_without_writing() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let before = store.load("demo").unwrap().features.len();
+        let results = store
+            .apply_batch_with(
+                "demo",
+                ops(serde_json::json!([
+                    {"op":"feature.add","ref":"a","title":"Preview me","milestone":"M"},
+                    {"op":"todo.add","feature":"a","description":"s1"},
+                    {"op":"doc.write","path":"imports/TODO.md","content":"# old"}
+                ])),
+                true,
+            )
+            .unwrap();
+        assert_eq!(results[0]["code"], "FEAT-001");
+        assert_eq!(results[0]["title"], "Preview me");
+        assert_eq!(store.load("demo").unwrap().features.len(), before);
+        assert!(store.read_doc("demo", "imports/TODO.md").is_err());
+
+        // A dry run still reports the failing op.
+        assert!(matches!(
+            store
+                .apply_batch_with(
+                    "demo",
+                    ops(serde_json::json!([{"op":"feature.add","title":"X","milestone":"NOPE"}])),
+                    true
+                )
+                .unwrap_err(),
             CoreError::BatchOpFailed(0, _)
         ));
     }

@@ -108,6 +108,8 @@ pub struct Backend {
     /// durable cross-process signal is the on-disk `git::UNPUSHED_FILE` marker; this is just the
     /// in-process tally that decides when a debounce tick fires.
     pending: std::cell::Cell<u32>,
+    /// Set while an issue-mirror sync runs, so the sync's own write-back doesn't sync again.
+    mirroring: std::cell::Cell<bool>,
 }
 
 impl Backend {
@@ -124,6 +126,7 @@ impl Backend {
             store,
             push,
             pending: std::cell::Cell::new(0),
+            mirroring: std::cell::Cell::new(false),
         }
     }
 
@@ -160,6 +163,13 @@ impl Backend {
         dispatch::dispatch(&self.store, "GET", path, None).map_err(|e| anyhow!(e.to_string()))
     }
 
+    /// Run a mutating route as a preview: dispatch only, with no lock, activity entry or commit.
+    /// Only meaningful for routes that honor a dry run (the batch route with `dry_run: true`).
+    pub fn preview(&self, method: Method, path: &str, body: Option<Value>) -> Result<String> {
+        dispatch::dispatch(&self.store, method_str(method), path, body.as_ref())
+            .map_err(|e| anyhow!(e.to_string()))
+    }
+
     /// Authenticated read — same as `get` in local mode.
     pub fn get_auth(&self, path: &str) -> Result<String> {
         self.get(path)
@@ -189,7 +199,60 @@ impl Backend {
     /// A write: git remotes act on the local repo; data routes dispatch + log + commit. Serialized
     /// against other writers by an advisory lock on the data dir.
     pub fn write(&self, method: Method, path: &str, body: Option<Value>) -> Result<String> {
-        self.with_write_lock(move || self.write_locked(method, path, body))
+        let dry_run = dispatch::is_dry_run(body.as_ref());
+        let out = self.with_write_lock(move || self.write_locked(method, path, body))?;
+        if let (false, Some(project)) = (dry_run, project_of(path)) {
+            self.auto_mirror(&project);
+        }
+        Ok(out)
+    }
+
+    /// Turn the automatic issue mirror off for this backend (tests must never reach GitHub).
+    #[cfg(test)]
+    pub fn disable_auto_mirror(&self) {
+        self.mirroring.set(true);
+    }
+
+    /// Run `f` with the automatic issue mirror switched off (for the mirror's own writes).
+    pub fn with_mirror_suppressed<T>(&self, f: impl FnOnce() -> T) -> T {
+        let was = self.mirroring.replace(true);
+        let out = f();
+        self.mirroring.set(was);
+        out
+    }
+
+    /// After a successful write, keep the project's mirrored issues in step (FEAT-043). Runs only
+    /// when the project has the mirror enabled, outside the write lock, and never fails the write:
+    /// problems are reported on stderr and a later `kanbanr mirror sync` catches up. Off for a
+    /// session with `KANBANR_MIRROR=off`.
+    fn auto_mirror(&self, project: &str) {
+        if self.mirroring.get() || std::env::var("KANBANR_MIRROR").as_deref() == Ok("off") {
+            return;
+        }
+        let config = self
+            .data_dir
+            .join("projects")
+            .join(project)
+            .join(kanbanr_core::mirror::MIRROR_FILE);
+        if !config.is_file() {
+            return;
+        }
+        match crate::mirror::sync(self, &crate::mirror::GhCli::new(), project, false) {
+            Ok(out) => {
+                for (code, n) in &out.created {
+                    eprintln!("kanbanr: mirrored {code} to {}#{n} (created)", out.repo);
+                }
+                for (code, n) in &out.updated {
+                    eprintln!("kanbanr: mirrored {code} to {}#{n} (updated)", out.repo);
+                }
+                for (code, e) in &out.failed {
+                    eprintln!("kanbanr: could not mirror {code}: {e}");
+                }
+            }
+            Err(e) => eprintln!(
+                "kanbanr: issue mirror skipped: {e} (run `kanbanr mirror sync` once that's fixed)"
+            ),
+        }
     }
 
     fn write_locked(&self, method: Method, path: &str, body: Option<Value>) -> Result<String> {
@@ -210,7 +273,7 @@ impl Backend {
         let m = method_str(method);
         let out = dispatch::dispatch(&self.store, m, path, body.as_ref())
             .map_err(|e| anyhow!(e.to_string()))?;
-        if dispatch::is_mutation(m) {
+        if dispatch::is_mutation(m) && !dispatch::is_dry_run(body.as_ref()) {
             let msg = dispatch::commit_message(m, path, body.as_ref());
             if let Some(project) = project_of(path) {
                 let actor = git::identity(&self.data_dir)

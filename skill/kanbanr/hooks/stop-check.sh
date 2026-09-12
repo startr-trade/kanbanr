@@ -55,9 +55,15 @@ if [ -z "${KANBANR_PROJECT:-}" ] && [ ! -f ".kanbanr" ]; then
 fi
 
 # --- Guard 3: locate the kanbanr DATA dir (a git repo). ------------------
-# Resolution mirrors the CLI: --data-dir is N/A here, so $KANBANR_DATA_DIR,
-# else ./data (the documented default).
-DATA_DIR="${KANBANR_DATA_DIR:-./data}"
+# Ask the CLI when it's installed: `kanbanr where` applies the full resolution
+# ($KANBANR_DATA_DIR, the nearest `.kanbanr` marker's data_dir, else ./data),
+# so a board kept next to the project (e.g. ../app.kanbanr) is found. Without
+# the CLI, fall back to $KANBANR_DATA_DIR, else ./data.
+DATA_DIR=""
+if command -v kanbanr >/dev/null 2>&1; then
+  DATA_DIR="$(kanbanr where 2>/dev/null || true)"
+fi
+[ -n "$DATA_DIR" ] || DATA_DIR="${KANBANR_DATA_DIR:-./data}"
 
 # Must be an existing directory that is (or is inside) a git work tree.
 [ -d "$DATA_DIR" ] || exit 0

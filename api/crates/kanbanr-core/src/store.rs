@@ -476,6 +476,8 @@ impl Store {
             labels: Vec::new(),
             depends_on: Vec::new(),
             todo_lists: Vec::new(),
+            source: None,
+            issue: None,
             created_at: now.clone(),
             updated_at: now,
         };
@@ -1004,21 +1006,45 @@ impl Store {
     /// instead of the old reload-and-persist-per-op cost (FEAT-028). On the first failing op the
     /// batch stops and returns `BatchOpFailed(index, msg)`; the ops already applied before it are
     /// still flushed (persisted), preserving the prior contract.
+    ///
+    /// Imports (FEAT-042): a `feature.add` whose source key already exists in the project is
+    /// skipped (its `ref` resolves to the existing feature), and so is every later op that targets
+    /// that `ref` as its feature (or a todo-list created under it), so re-running an import never
+    /// duplicates work.
     pub fn apply_batch(
         &self,
         id: &str,
         ops: Vec<crate::batch::BatchOp>,
     ) -> Result<Vec<serde_json::Value>> {
+        self.apply_batch_with(id, ops, false)
+    }
+
+    /// [`Store::apply_batch`], optionally as a **dry run**: every op is validated and reported
+    /// exactly as it would apply, but nothing is written to disk.
+    pub fn apply_batch_with(
+        &self,
+        id: &str,
+        ops: Vec<crate::batch::BatchOp>,
+        dry_run: bool,
+    ) -> Result<Vec<serde_json::Value>> {
         use crate::batch::BatchOp::*;
-        use std::collections::HashMap;
+        use std::collections::{HashMap, HashSet};
 
         fn resolve(aliases: &HashMap<String, String>, s: &str) -> String {
             aliases.get(s).cloned().unwrap_or_else(|| s.to_string())
+        }
+        fn skip(op: &str, target: &str) -> serde_json::Value {
+            serde_json::json!({
+                "op": op, "skipped": true, "target": target,
+                "reason": "targets an already-imported feature",
+            })
         }
 
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let mut aliases: HashMap<String, String> = HashMap::new();
+        // `ref` aliases of skipped (already imported) features, and of todo-lists under them.
+        let mut skipped: HashSet<String> = HashSet::new();
         let mut out = Vec::new();
 
         for (i, op) in ops.into_iter().enumerate() {
@@ -1036,16 +1062,53 @@ impl Store {
                     team,
                     labels,
                     depends_on,
+                    source,
+                    original,
+                    issue,
                 } => {
+                    let source = source.map(|mut src| {
+                        if src.key.trim().is_empty() {
+                            src.key = src.derive_key(&title);
+                        }
+                        if src.imported_at.trim().is_empty() {
+                            src.imported_at = now_rfc3339();
+                        }
+                        src
+                    });
+                    if let Some(src) = &source {
+                        let existing = project
+                            .features
+                            .iter()
+                            .find(|f| f.source.as_ref().is_some_and(|s| s.key == src.key));
+                        if let Some(existing) = existing {
+                            if let Some(a) = &alias {
+                                aliases.insert(a.clone(), existing.code.clone());
+                                skipped.insert(a.clone());
+                            }
+                            return Ok(serde_json::json!({
+                                "op": "feature.add", "skipped": true, "reason": "already imported",
+                                "code": existing.code, "title": existing.title, "key": src.key,
+                            }));
+                        }
+                    }
                     let ms = resolve(&aliases, &milestone);
+                    let mut spec_text = spec.unwrap_or_default();
+                    if let (Some(src), Some(orig)) = (&source, &original) {
+                        spec_text.push_str(&imported_section(src, orig));
+                    }
                     let f = Self::add_feature_on(
                         &mut project,
                         &mut pending,
                         &title,
-                        spec.as_deref().unwrap_or(""),
+                        &spec_text,
                         &ms,
                         code,
                     )?;
+                    if source.is_some() || issue.is_some() {
+                        let feature = project.feature_mut(&f.code)?;
+                        feature.source = source;
+                        feature.issue = issue;
+                    }
                     if let Some(a) = &alias {
                         aliases.insert(a.clone(), f.code.clone());
                     }
@@ -1077,7 +1140,9 @@ impl Store {
                     if had_deps {
                         crate::graph::validate_feature_deps(self, &project, id, &f.code)?;
                     }
-                    Ok(serde_json::json!({"op":"feature.add","code":f.code,"status":f.status}))
+                    Ok(serde_json::json!({
+                        "op": "feature.add", "code": f.code, "title": f.title, "status": f.status,
+                    }))
                 }
                 FeatureEdit {
                     code,
@@ -1092,7 +1157,12 @@ impl Store {
                     team,
                     labels,
                     depends_on,
+                    source,
+                    issue,
                 } => {
+                    if skipped.contains(&code) {
+                        return Ok(skip("feature.edit", &code));
+                    }
                     let ms = milestone.map(|m| Some(resolve(&aliases, &m)));
                     let f = Self::edit_feature_on(
                         &mut project,
@@ -1131,9 +1201,26 @@ impl Store {
                     if had_deps {
                         crate::graph::validate_feature_deps(self, &project, id, &f.code)?;
                     }
+                    if source.is_some() || issue.is_some() {
+                        let feature = project.feature_mut(&f.code)?;
+                        if let Some(mut src) = source {
+                            if src.key.trim().is_empty() {
+                                src.key = src.derive_key(&feature.title);
+                            }
+                            feature.source = Some(src);
+                        }
+                        if issue.is_some() {
+                            feature.issue = issue;
+                        }
+                        feature.updated_at = now_rfc3339();
+                        pending.persist_features.insert(f.code.clone());
+                    }
                     Ok(serde_json::json!({"op":"feature.edit","code":f.code}))
                 }
                 FeatureMove { code, to } => {
+                    if skipped.contains(&code) {
+                        return Ok(skip("feature.move", &code));
+                    }
                     let f = Self::move_feature_on(
                         &mut project,
                         &mut pending,
@@ -1149,6 +1236,21 @@ impl Store {
                     description,
                     depends_on,
                 } => {
+                    // Idempotent re-runs (FEAT-042): a milestone with the same name (and the same
+                    // code, when one is given) is reused instead of failing or duplicating.
+                    let same = project
+                        .milestones
+                        .iter()
+                        .find(|m| m.name == name && code.as_ref().is_none_or(|c| *c == m.code));
+                    if let Some(m) = same {
+                        if let Some(a) = alias {
+                            aliases.insert(a, m.code.clone());
+                        }
+                        return Ok(serde_json::json!({
+                            "op": "milestone.add", "skipped": true, "reason": "already exists",
+                            "code": m.code, "title": m.name,
+                        }));
+                    }
                     let deps: Vec<String> = depends_on
                         .unwrap_or_default()
                         .iter()
@@ -1165,7 +1267,7 @@ impl Store {
                     if let Some(a) = alias {
                         aliases.insert(a, m.code.clone());
                     }
-                    Ok(serde_json::json!({"op":"milestone.add","code":m.code}))
+                    Ok(serde_json::json!({"op":"milestone.add","code":m.code,"title":m.name}))
                 }
                 TodoAdd {
                     alias,
@@ -1173,6 +1275,12 @@ impl Store {
                     description,
                     code,
                 } => {
+                    if skipped.contains(&feature) {
+                        if let Some(a) = alias {
+                            skipped.insert(a);
+                        }
+                        return Ok(skip("todo.add", &feature));
+                    }
                     let feat = resolve(&aliases, &feature);
                     let tl = Self::add_todo_list_on(
                         &mut project,
@@ -1192,6 +1300,9 @@ impl Store {
                     text,
                     key,
                 } => {
+                    if skipped.contains(&feature) || skipped.contains(&todo) {
+                        return Ok(skip("task.add", &feature));
+                    }
                     let t = Self::add_task_on(
                         &mut project,
                         &mut pending,
@@ -1208,6 +1319,9 @@ impl Store {
                     key,
                     state,
                 } => {
+                    if skipped.contains(&feature) || skipped.contains(&todo) {
+                        return Ok(skip("task.state", &feature));
+                    }
                     let st = crate::models::TaskState::parse(&state)
                         .ok_or_else(|| CoreError::InvalidTaskState(state.clone()))?;
                     let f = Self::set_task_state_on(
@@ -1220,17 +1334,27 @@ impl Store {
                     )?;
                     Ok(serde_json::json!({"op":"task.state","status":f.status}))
                 }
-                // Doc ops write to disk directly (they don't touch the in-memory project).
+                // Doc ops write to disk directly (they don't touch the in-memory project); a dry
+                // run only validates the path.
                 DocFolder {
                     path,
                     name,
                     description,
                 } => {
-                    self.write_folder_meta(id, &path, name, description)?;
+                    if dry_run {
+                        self.doc_path(id, &path)?;
+                    } else {
+                        self.write_folder_meta(id, &path, name, description)?;
+                    }
                     Ok(serde_json::json!({"op":"doc.folder","path":path}))
                 }
                 DocWrite { path, content } => {
-                    let saved = self.write_doc(id, &path, &content)?;
+                    let saved = if dry_run {
+                        self.doc_path(id, &path)?;
+                        path
+                    } else {
+                        self.write_doc(id, &path, &content)?
+                    };
                     Ok(serde_json::json!({"op":"doc.write","path":saved}))
                 }
             })();
@@ -1239,12 +1363,16 @@ impl Store {
                 Ok(v) => out.push(v),
                 Err(e) => {
                     // Persist the ops applied before the failure (prior contract), then report it.
-                    let _ = self.flush(id, &project, &pending);
+                    if !dry_run {
+                        let _ = self.flush(id, &project, &pending);
+                    }
                     return Err(CoreError::BatchOpFailed(i, e.to_string()));
                 }
             }
         }
-        self.flush(id, &project, &pending)?;
+        if !dry_run {
+            self.flush(id, &project, &pending)?;
+        }
         Ok(out)
     }
 
@@ -1743,4 +1871,28 @@ fn build_folder(dir: &Path, base: &Path, rel: String) -> Result<DocFolder> {
         folders,
         docs: files,
     })
+}
+
+/// The "Imported from" spec section that preserves an imported item's original text (FEAT-042),
+/// so the content outlives its source.
+fn imported_section(src: &crate::models::Source, original: &str) -> String {
+    let mut origin = format!("`{}` ({})", src.reference, src.system);
+    if let Some(rev) = &src.revision {
+        origin.push_str(&format!(" at commit `{rev}`"));
+    }
+    if let Some(url) = &src.url {
+        origin.push_str(&format!(", <{url}>"));
+    }
+    let date = src.imported_at.get(..10).unwrap_or(&src.imported_at);
+    // A fence longer than any backtick run in the original, so it can't close early.
+    let longest = original
+        .split(|c| c != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat(longest.max(2) + 1);
+    format!(
+        "\n\n## Imported from\n\n{origin}, imported {date}.\n\n{fence}text\n{}\n{fence}\n",
+        original.trim_end()
+    )
 }

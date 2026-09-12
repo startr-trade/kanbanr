@@ -42,8 +42,20 @@ if (-not $env:KANBANR_PROJECT -and -not (Test-Path -LiteralPath '.kanbanr' -Path
 }
 
 # --- Guard 3: locate the kanbanr DATA dir (a git repo). ------------------
-# Mirrors the CLI: $env:KANBANR_DATA_DIR, else ./data (the documented default).
-$DataDir = if ($env:KANBANR_DATA_DIR) { $env:KANBANR_DATA_DIR } else { './data' }
+# Ask the CLI when it's installed: `kanbanr where` applies the full resolution
+# ($env:KANBANR_DATA_DIR, the nearest `.kanbanr` marker's data_dir, else ./data),
+# so a board kept next to the project (e.g. ../app.kanbanr) is found. Without
+# the CLI, fall back to $env:KANBANR_DATA_DIR, else ./data.
+$DataDir = $null
+if (Get-Command kanbanr -ErrorAction SilentlyContinue) {
+    try {
+        $where = & kanbanr where 2>$null
+        if ($LASTEXITCODE -eq 0 -and $where) { $DataDir = "$where".Trim() }
+    } catch { $DataDir = $null }
+}
+if (-not $DataDir) {
+    $DataDir = if ($env:KANBANR_DATA_DIR) { $env:KANBANR_DATA_DIR } else { './data' }
+}
 
 # Must be an existing directory that is (or is inside) a git work tree.
 if (-not (Test-Path -LiteralPath $DataDir -PathType Container)) { exit 0 }

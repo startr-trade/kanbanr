@@ -4,6 +4,7 @@ import { useAsync, useLiveTick } from "../live";
 import Markdown from "../components/Markdown";
 import { ErrorBox, FeatureBadges, Loading, LiveDot, TaskBadge, progress } from "../components/bits";
 import { featureProgress, listsNewestFirst, listFullyCompleted } from "../types";
+import type { Feature } from "../types";
 
 /** Dedicated page for one feature (epic): Specification + a tile per todo-list (newest first). */
 export default function FeaturePage() {
@@ -73,6 +74,8 @@ export default function FeaturePage() {
         </div>
       )}
 
+      <Provenance feature={feature} />
+
       <section className="section">
         <h2>Specification</h2>
         {feature.specification.trim() ? (
@@ -122,6 +125,53 @@ export default function FeaturePage() {
       </section>
 
       <FeatureActivity project={project} code={feature.code} tick={tick} />
+    </div>
+  );
+}
+
+const day = (ts?: string | null) => (ts ?? "").slice(0, 10);
+
+/** Where the feature was imported from, and the issue it is mirrored to. The source is history:
+ *  its original text lives in the spec, so a vanished source is labeled, never a broken link. */
+function Provenance({ feature }: { feature: Feature }) {
+  const { source, issue } = feature;
+  if (!source && !issue) return null;
+  return (
+    <div className="provenance">
+      {source && (
+        <span className="muted small">
+          Imported from <code>{source.ref}</code> ({source.system})
+          {source.revision && (
+            <>
+              {" "}at commit <code>{source.revision.slice(0, 7)}</code>
+            </>
+          )}{" "}
+          on {day(source.imported_at)}
+          {source.url && !source.missing_since && (
+            <>
+              {" · "}
+              <a href={source.url} target="_blank" rel="noreferrer">
+                open ↗
+              </a>
+            </>
+          )}
+        </span>
+      )}
+      {source?.missing_since && (
+        <span className="chip warn" title="The original text is preserved in the specification below.">
+          source no longer present (since {day(source.missing_since)})
+        </span>
+      )}
+      {issue && (
+        <a className="chip" href={issue.url} target="_blank" rel="noreferrer">
+          {issue.system === "github" ? "GitHub" : issue.system} issue #{issue.number} ↗
+        </a>
+      )}
+      {issue && (
+        <span className="muted small">
+          {issue.synced_at ? `mirrored ${day(issue.synced_at)}` : "not yet mirrored"}
+        </span>
+      )}
     </div>
   );
 }

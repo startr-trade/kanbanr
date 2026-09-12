@@ -43,8 +43,34 @@ export interface Feature {
   depends_on?: string[];
   /** Persistent todo-lists (an epic can hold many, added across sessions). */
   todo_lists: TodoList[];
+  /** Where this feature was imported from, if it was. */
+  source?: Source | null;
+  /** The external issue this feature is mirrored to, if any. */
+  issue?: IssueLink | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Import provenance: a record of where an item came from, not a live pointer. */
+export interface Source {
+  system: string;
+  ref: string;
+  revision?: string | null;
+  url?: string | null;
+  imported_at: string;
+  key: string;
+  /** Set when the source was found to be gone (deleted file, retired tracker). */
+  missing_since?: string | null;
+}
+
+/** A mirrored external issue (e.g. a GitHub issue kept in step with this feature). */
+export interface IssueLink {
+  system: string;
+  repo: string;
+  number: number;
+  url: string;
+  synced_hash?: string | null;
+  synced_at?: string | null;
 }
 
 /** True when a todo-list has tasks and all are completed. */

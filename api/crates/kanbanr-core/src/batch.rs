@@ -3,6 +3,7 @@
 //! task-state updates. Newly-created items can be given a client-chosen `ref` alias that later
 //! operations in the same bundle reference (since real codes are server-assigned).
 
+use crate::models::{IssueLink, Source};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -35,6 +36,16 @@ pub enum BatchOp {
         /// Feature codes (or `ref` aliases) this one is blocked by.
         #[serde(default)]
         depends_on: Option<Vec<String>>,
+        /// Where the item was imported from (FEAT-042). A feature whose source key already exists
+        /// in the project is skipped, along with the bundle's ops that target its `ref`.
+        #[serde(default)]
+        source: Option<Source>,
+        /// The item's original text, preserved in the spec under "Imported from".
+        #[serde(default)]
+        original: Option<String>,
+        /// An existing external issue to mirror this feature to (FEAT-043).
+        #[serde(default)]
+        issue: Option<IssueLink>,
     },
     /// Edit a feature item (title / spec / milestone / rename / attrs). Use `feature.move` for status.
     #[serde(rename = "feature.edit")]
@@ -62,6 +73,12 @@ pub enum BatchOp {
         labels: Option<Vec<String>>,
         #[serde(default)]
         depends_on: Option<Vec<String>>,
+        /// Replace the import provenance (FEAT-042).
+        #[serde(default)]
+        source: Option<Source>,
+        /// Set the mirrored issue link (FEAT-043).
+        #[serde(default)]
+        issue: Option<IssueLink>,
     },
     /// Move a feature to a new status (validated against the workflow).
     #[serde(rename = "feature.move")]

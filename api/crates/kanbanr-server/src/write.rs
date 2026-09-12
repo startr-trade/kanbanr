@@ -119,7 +119,7 @@ pub fn write(
         git::ensure_repo(data_dir);
         let out = dispatch::dispatch(store, method, path, body).map_err(|e| e.to_string())?;
         let mut warnings = Vec::new();
-        if dispatch::is_mutation(method) {
+        if dispatch::is_mutation(method) && !dispatch::is_dry_run(body) {
             let msg = dispatch::commit_message(method, path, body);
             if let Some(project) = project_of(path) {
                 let actor = git::identity(data_dir)

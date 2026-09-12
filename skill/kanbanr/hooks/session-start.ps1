@@ -71,7 +71,9 @@ Write-Output ""
 
 Write-Output "_kanbanr is the system of record for this project's PLAN (features/tasks/"
 Write-Output "specs/decisions/progress). Resume from the board above; record new work in"
-Write-Output "kanbanr as you go._"
+Write-Output "kanbanr as you go. Every document (requested or self-initiated) goes in"
+Write-Output "kanbanr docs (``kanbanr doc add …``), NOT the working folder — unless the user"
+Write-Output "asks for it in the project folder._"
 
 # Always succeed: recovery is advisory, never fatal.
 exit 0

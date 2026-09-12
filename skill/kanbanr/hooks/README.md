@@ -30,8 +30,9 @@ Keep the boundary crisp:
 
 - **kanbanr tracks the PLAN**: feature/work items, their specs, milestones,
   todo-lists and task states, decisions, progress, and documentation about the
-  project. This lives in kanbanr's own **data folder** (a git repo, default
-  `./data` or `$KANBANR_DATA_DIR`).
+  project. This lives in kanbanr's own **data folder**: a separate git repo,
+  usually next to the project (`../<project>.kanbanr`, recorded in the
+  `.kanbanr` marker), or `$KANBANR_DATA_DIR`, or legacy `./data`.
 - **kanbanr does NOT hold the code.** The actual source you build lives in the
   **project's own git repository**, entirely separate from the kanbanr data
   repo. These hooks reflect that: they read/inspect the kanbanr *data* repo for
@@ -90,8 +91,9 @@ it always exits 0.
 ### Configuration knobs (env vars)
 - `KANBANR_PROJECT` — names the active project; also serves as the "this dir is
   tracked" signal both hooks look for (alongside the `.kanbanr` marker).
-- `KANBANR_DATA_DIR` — where the kanbanr data git repo lives (default `./data`).
-  `stop-check.sh` inspects this repo's commit recency.
+- `KANBANR_DATA_DIR` — where the kanbanr data git repo lives. Normally unset:
+  the `.kanbanr` marker's `data_dir` says where the board is. `stop-check.sh`
+  asks `kanbanr where` for the folder and inspects that repo's commit recency.
 - `KANBANR_STOP_WINDOW_MIN` — how many minutes count as "updated this session"
   for the Stop nudge (default `30`).
 
