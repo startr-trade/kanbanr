@@ -3,6 +3,7 @@
 //! (auto-detected when no server is configured but a data dir is present; forced with `--local`).
 
 mod backend;
+mod hooks;
 mod mirror;
 
 use backend::{Backend, Method};
@@ -56,6 +57,10 @@ enum Command {
         /// Commit identity email.
         #[arg(long)]
         email: Option<String>,
+        /// Don't register kanbanr's Claude Code hooks (they're added to the global Claude Code
+        /// settings once, and act only in kanbanr-tracked folders).
+        #[arg(long)]
+        no_hooks: bool,
     },
     /// Set the commit identity (name + email) on this data repo.
     Identity {
@@ -131,6 +136,10 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Register kanbanr's Claude Code hooks (SessionStart: recover the board; Stop: nudge to record
+    /// work) in the global Claude Code settings. `kanbanr init` does this automatically.
+    #[command(subcommand)]
+    Hooks(HooksCmd),
     /// Mirror this project's features to GitHub issues via `gh` (kanbanr → GitHub, one way).
     #[command(subcommand)]
     Mirror(MirrorCmd),
@@ -582,6 +591,16 @@ struct QueryArgs {
 }
 
 #[derive(Subcommand)]
+enum HooksCmd {
+    /// Add the hooks (skipped if already there or provided by the kanbanr plugin).
+    Install,
+    /// Show whether the hooks are registered and their scripts exist.
+    Status,
+    /// Remove kanbanr's hooks (other hooks are left alone).
+    Uninstall,
+}
+
+#[derive(Subcommand)]
 enum MirrorCmd {
     /// Turn the mirror on for this project. Requires `gh` logged in; refuses a public repo unless
     /// --allow-public. Features created from now on get issues; `sync --all` backfills.
@@ -689,6 +708,7 @@ fn run_init(
     description: Option<String>,
     author: Option<String>,
     email: Option<String>,
+    no_hooks: bool,
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
     let (dir, record) = choose_init_data_dir(cli, &cwd)?;
@@ -742,12 +762,90 @@ fn run_init(
             data_dir: record.then(|| marker_path(&dir, &cwd)),
         },
     )?;
-    println!("✓ selected '{proj}' here (.kanbanr)\n");
+    println!("✓ selected '{proj}' here (.kanbanr)");
+    if !no_hooks {
+        report_hooks_install();
+    }
+    println!();
     println!("Next:");
     println!("  kanbanr milestone add --name \"v1\" --code MS-001");
     println!("  kanbanr feature add --title \"First feature\" --milestone MS-001 --spec \"# …\"");
     println!("  kanbanr board                 # see the board");
     println!("  kanbanr open                  # watch it live in the browser");
+    Ok(())
+}
+
+/// Register the Claude Code hooks during `init`; never fails `init`. (FEAT-044)
+fn report_hooks_install() {
+    let Some(dir) = hooks::claude_dir() else {
+        println!("• Claude Code hooks not installed: no home directory found");
+        return;
+    };
+    let settings = hooks::settings_path(&dir);
+    match hooks::install(&dir) {
+        Ok(hooks::Installed::Added(events)) => println!(
+            "✓ Claude Code hooks added to {} ({}); they act only in kanbanr-tracked folders",
+            settings.display(),
+            events.join(", ")
+        ),
+        Ok(hooks::Installed::AlreadyPresent) => println!("✓ Claude Code hooks already installed"),
+        Ok(hooks::Installed::ProvidedByPlugin) => {
+            println!("✓ Claude Code hooks provided by the kanbanr plugin")
+        }
+        Ok(hooks::Installed::SkillMissing(scripts)) => println!(
+            "• Claude Code hooks not installed: the kanbanr skill isn't at {}. Install it \
+             (`make install-skill` in the kanbanr repo), then run `kanbanr hooks install`.",
+            scripts.display()
+        ),
+        Err(e) => println!("• Claude Code hooks not installed: {e}"),
+    }
+}
+
+/// `kanbanr hooks …` (FEAT-044).
+fn run_hooks(cli: &Cli, cmd: &HooksCmd) -> anyhow::Result<()> {
+    let dir = hooks::claude_dir()
+        .ok_or_else(|| anyhow::anyhow!("no home directory: set CLAUDE_CONFIG_DIR"))?;
+    match cmd {
+        HooksCmd::Install => match hooks::install(&dir)? {
+            hooks::Installed::Added(events) => println!(
+                "added kanbanr hooks ({}) to {}. They take effect in new Claude Code sessions.",
+                events.join(", "),
+                hooks::settings_path(&dir).display()
+            ),
+            hooks::Installed::AlreadyPresent => println!("kanbanr hooks are already installed"),
+            hooks::Installed::ProvidedByPlugin => {
+                println!("the kanbanr plugin is enabled and provides the hooks; nothing to add")
+            }
+            hooks::Installed::SkillMissing(scripts) => anyhow::bail!(
+                "the kanbanr skill isn't installed at {}: run `make install-skill` in the kanbanr repo first",
+                scripts.display()
+            ),
+        },
+        HooksCmd::Uninstall => {
+            let n = hooks::uninstall(&dir)?;
+            println!("removed {n} kanbanr hook entr{}", if n == 1 { "y" } else { "ies" });
+        }
+        HooksCmd::Status => {
+            let st = hooks::status(&dir)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&st)?);
+                return Ok(());
+            }
+            println!("settings: {}", st.settings);
+            println!("skill installed: {}", if st.skill_installed { "yes" } else { "no" });
+            if st.plugin {
+                println!("kanbanr plugin: enabled (provides the hooks)");
+            }
+            for h in &st.hooks {
+                let event = h["event"].as_str().unwrap_or("");
+                match h["command"].as_str() {
+                    Some(c) if h["script_exists"] == true => println!("{event}: ✓ {c}"),
+                    Some(c) => println!("{event}: ✗ script missing: {c} (run `kanbanr hooks install`)"),
+                    None => println!("{event}: not registered"),
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1330,6 +1428,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             description,
             author,
             email,
+            no_hooks,
         } => {
             return run_init(
                 cli,
@@ -1337,8 +1436,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 description.clone(),
                 author.clone(),
                 email.clone(),
+                *no_hooks,
             );
         }
+        Command::Hooks(cmd) => return run_hooks(cli, cmd),
         Command::Serve {
             bind,
             ui_dir,
@@ -1355,7 +1456,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         | Command::Init { .. }
         | Command::Serve { .. }
         | Command::Open
-        | Command::Where => {
+        | Command::Where
+        | Command::Hooks(_) => {
             unreachable!()
         }
         Command::Sync => {

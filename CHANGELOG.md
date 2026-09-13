@@ -7,6 +7,12 @@ All notable changes to kanbanr are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Claude Code hooks set up automatically** (FEAT-044): `kanbanr init` registers the skill's
+  SessionStart and Stop hooks in the global Claude Code settings (`$CLAUDE_CONFIG_DIR` or
+  `~/.claude`), once per machine (`--no-hooks` to skip). The merge preserves existing keys and
+  hooks in order, writes atomically, leaves invalid JSON untouched, repairs registrations whose
+  script is gone, and defers to the kanbanr plugin when it is enabled. New
+  `kanbanr hooks install | status | uninstall`.
 - **GitHub issue mirror** (FEAT-043): `kanbanr mirror enable --repo owner/repo` keeps a project's
   features in step with GitHub issues through `gh`, one way (kanbanr is the source of truth).
   - After every write, changed features are pushed: new feature → issue; title/spec/labels/tasks
@@ -76,6 +82,13 @@ All notable changes to kanbanr are documented here. The format follows
 - Open-source scaffolding: dual `LICENSE-MIT`/`LICENSE-APACHE`, `CONTRIBUTING`, `SECURITY`,
   `CODE_OF_CONDUCT`, `THIRD_PARTY` notices, GitHub issue/PR templates, Dependabot, and a release
   workflow.
+
+### Fixed
+- The Stop hook's record-your-work reminder never reached Claude: it went to stderr with exit 0,
+  which Claude Code doesn't pass to the model (FEAT-045). It now answers with a block-once
+  `{"decision":"block","reason":…}` only when the board is stale, the project changed since the
+  last board update, no reminder was given in this session within the window, and Claude isn't
+  already continuing because of a Stop hook.
 
 ### Changed
 - Relicensed the workspace to **MIT OR Apache-2.0** (was MIT) — the Rust-ecosystem norm.

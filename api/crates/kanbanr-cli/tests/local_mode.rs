@@ -20,7 +20,8 @@ fn cli_local_mode_without_a_server() {
     let run = |args: &[&str]| -> Output {
         Command::new(cli())
             .args(args)
-            .env("HOME", &home) // isolate ~/.kanbanr -> no login profile
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR") // isolate ~/.kanbanr -> no login profile
             .env("KANBANR_DATA_DIR", &data)
             .env_remove("KANBANR_SERVER_URL")
             .env_remove("KANBANR_LOCAL")
@@ -178,6 +179,7 @@ fn cli_init_scaffolds_a_local_project() {
         ])
         .current_dir(&work)
         .env("HOME", &home)
+        .env_remove("CLAUDE_CONFIG_DIR")
         .env("KANBANR_DATA_DIR", &data)
         .env_remove("KANBANR_SERVER_URL")
         .output()
@@ -235,6 +237,7 @@ fn cli_init_puts_the_board_next_to_the_git_repo_and_finds_it_from_subfolders() {
             .args(args)
             .current_dir(cwd)
             .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
             .env_remove("KANBANR_DATA_DIR")
             .env_remove("KANBANR_PROJECT")
             .env_remove("KANBANR_SERVER_URL")
@@ -350,6 +353,7 @@ fn cli_import_preview_apply_reimport_and_missing_sources() {
             .args(args)
             .current_dir(&repo)
             .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
             .env_remove("KANBANR_DATA_DIR")
             .env_remove("KANBANR_PROJECT")
             .stdin(std::process::Stdio::null())
@@ -472,6 +476,7 @@ esac
         cmd.args(args)
             .current_dir(&work)
             .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
             .env("KANBANR_GH", &gh)
             .env("FAKE_GH_DIR", &fake)
             .env_remove("KANBANR_DATA_DIR")
@@ -568,6 +573,89 @@ esac
     assert_eq!(calls(), before);
     let (synced, _) = run(&["mirror", "sync"]);
     assert!(synced.contains("updated 1"), "{synced}");
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn cli_init_registers_claude_code_hooks_once_and_respects_no_hooks() {
+    let base = std::env::temp_dir().join(format!("kanbanr-hooks-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let scripts = home.join(".claude/skills/kanbanr/hooks");
+    std::fs::create_dir_all(&scripts).unwrap();
+    for name in ["session-start", "stop-check"] {
+        std::fs::write(scripts.join(format!("{name}.sh")), "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(scripts.join(format!("{name}.ps1")), "exit 0\n").unwrap();
+    }
+    let settings = home.join(".claude/settings.json");
+    std::fs::write(&settings, r#"{"theme": "dark"}"#).unwrap();
+
+    let run = |dir: &std::path::Path, args: &[&str]| -> String {
+        std::fs::create_dir_all(dir).unwrap();
+        let o = Command::new(cli())
+            .args(args)
+            .current_dir(dir)
+            .env("HOME", &home)
+            .env("USERPROFILE", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI");
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    let out = run(
+        &base.join("code/app"),
+        &["init", "app", "--author", "A", "--email", "a@x"],
+    );
+    assert!(out.contains("Claude Code hooks added"), "{out}");
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    assert_eq!(v["theme"], "dark");
+    assert!(v["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains("session-start"));
+    assert!(v["hooks"]["Stop"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap()
+        .contains("stop-check"));
+
+    // A second project: already installed, nothing duplicated.
+    let before = std::fs::read_to_string(&settings).unwrap();
+    let out = run(
+        &base.join("code/web"),
+        &["init", "web", "--author", "A", "--email", "a@x"],
+    );
+    assert!(out.contains("hooks already installed"), "{out}");
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), before);
+    assert!(run(&base.join("code/web"), &["hooks", "status"]).contains("SessionStart: ✓"));
+
+    // --no-hooks leaves the settings alone even when hooks are missing.
+    run(&base.join("code/web"), &["hooks", "uninstall"]);
+    let before = std::fs::read_to_string(&settings).unwrap();
+    let out = run(
+        &base.join("code/api"),
+        &[
+            "init",
+            "api",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    );
+    assert!(!out.contains("Claude Code hooks"), "{out}");
+    assert_eq!(std::fs::read_to_string(&settings).unwrap(), before);
 
     let _ = std::fs::remove_dir_all(&base);
 }

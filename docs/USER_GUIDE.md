@@ -33,6 +33,12 @@ selects it here (a `.kanbanr` marker). That's everything — there is **no serve
 no accounts**. Each change you make is a git commit authored by your identity. (libgit2 is linked
 in — no external `git` needed.)
 
+`init` also registers kanbanr's two **Claude Code hooks** in your global Claude Code settings
+(`~/.claude/settings.json`): one shows the board when a Claude session starts, the other reminds
+Claude to record its work. It's done once per machine and merged with your existing settings; the
+hooks only act in folders kanbanr tracks. Skip it with `kanbanr init --no-hooks`, and manage it
+later with `kanbanr hooks install | status | uninstall`.
+
 ### Where the board lives
 
 The board is its own git repo, so it belongs **next to** your project, not inside it. A board

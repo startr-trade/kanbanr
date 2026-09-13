@@ -53,42 +53,64 @@ session context, so Claude resumes from the real plan instead of from memory.
 If kanbanr isn't installed or no project is resolvable, it exits 0 and stays
 quiet — it will **never** break a session.
 
-### `stop-check.sh` — nudge to record work (Stop)
-Advisory only. After Claude finishes a turn, it checks whether the kanbanr
-**data git repo** has a commit within a recent window (default 30 min;
-override via `KANBANR_STOP_WINDOW_MIN`). If the latest commit is older than the
-window, it prints a reminder **to stderr** to record the session's work in
-kanbanr (features/tasks/specs/decisions/docs). It **warns, never blocks** —
-it always exits 0.
+### `stop-check.sh` — make sure work gets recorded (Stop)
+After Claude finishes a turn, it checks whether work may have gone unrecorded. Claude Code only
+shows a Stop hook's output to Claude when the hook asks to block the stop, so when a reminder is
+due the script prints `{"decision":"block","reason":"…"}`: Claude reads the reason, records any
+unrecorded work in kanbanr (or says in one line that there's nothing to record), and stops.
 
-> **Honest caveat:** the Stop check is a **best-effort recency heuristic**, not
-> proof. It can't see your code repo or the transcript, so it can't truly tell
-> whether *substantive* work happened — only whether a kanbanr commit is
-> recent. Expect occasional false reminders (ignore them if the plan is already
-> current) and occasional silence. It is intentionally cheap and non-blocking
-> for exactly this reason. The limitations are documented in detail in the
-> comments at the top of `stop-check.sh`.
+A reminder is due only when **all** of these hold:
+
+1. The kanbanr **data repo**'s last commit is older than the window (default 30 min; override
+   with `KANBANR_STOP_WINDOW_MIN`). Every kanbanr write is a commit, so this means the board
+   wasn't updated recently.
+2. The **project** shows work since that commit: uncommitted changes (the `.kanbanr` marker
+   aside) or a newer commit. Outside a git repo this can't be checked, so staleness alone counts.
+3. Claude hasn't been reminded in this session within the window (a per-session timestamp in the
+   temp dir).
+4. Claude isn't already continuing because of a Stop hook (`stop_hook_active`), so it never
+   blocks twice in a row and can't loop.
+
+> **Honest caveat:** this is a heuristic, not proof. It can't read the transcript, so it can't
+> tell whether the project changes it sees were already recorded in an older board commit, and
+> long-lived uncommitted work can trigger a reminder once per window. That's why the reminder
+> tells Claude to stop without changes when everything is already recorded. The rules are
+> documented at the top of `stop-check.sh`.
 
 ## Install
 
-1. Make the scripts executable:
-   ```bash
-   chmod +x session-start.sh stop-check.sh
-   ```
-2. Register them in your Claude Code settings. Open `~/.claude/settings.json`
-   (user-global) or a project's `.claude/settings.json`, and **merge** the
-   `hooks` object from [`settings.snippet.json`](./settings.snippet.json) into
-   it. If you already have `SessionStart`/`Stop` hooks, add these entries to
-   those arrays rather than overwriting them.
-3. Edit the `command` paths in the snippet to the **absolute path** of these
-   scripts on your machine (they point at this repo's `skill/kanbanr/hooks/`
-   by default). Strip the `_comment*` keys before saving if you want a minimal,
-   strictly-clean settings file.
-4. Start a new Claude Code session in a kanbanr-tracked directory (one with a
-   `.kanbanr` marker, or with `$KANBANR_PROJECT` exported). You should see the
-   board appear as recovered context at session start.
+**Automatic (recommended).** With the skill installed (`make install-skill`, which links it to
+`~/.claude/skills/kanbanr`), `kanbanr init` registers both hooks in your global Claude Code
+settings (`$CLAUDE_CONFIG_DIR/settings.json`, default `~/.claude/settings.json`). It happens once
+per machine: later `init`s see the hooks are already there. Pass `kanbanr init --no-hooks` to
+skip it. You can also manage them directly:
+
+```bash
+kanbanr hooks install     # add them (merges; keeps your other settings and hooks)
+kanbanr hooks status      # registered? do the scripts exist?
+kanbanr hooks uninstall   # remove only kanbanr's entries
+```
+
+The merge keeps your other keys and hooks in order, writes atomically, never touches a settings
+file that isn't valid JSON, replaces registrations whose script path no longer exists, and adds
+nothing when the kanbanr Claude Code plugin is enabled (the plugin brings its own hooks). On
+Windows the PowerShell scripts are registered.
+
+Because the scripts only act in kanbanr-tracked folders (a `.kanbanr` marker, or
+`$KANBANR_PROJECT`), one global registration covers every project, and nothing is written into
+project folders.
+
+**Manual.** To register them yourself, merge the `hooks` object from
+[`settings.snippet.json`](./settings.snippet.json) into `~/.claude/settings.json` (or a project's
+`.claude/settings.json`), pointing the `command` paths at these scripts. If you already have
+`SessionStart`/`Stop` hooks, add the entries to those arrays rather than overwriting them.
+
+Then start a new Claude Code session in a kanbanr-tracked directory: the board appears as recovered
+context at session start.
 
 ### Configuration knobs (env vars)
+- `CLAUDE_CONFIG_DIR` — where `kanbanr hooks install` / `kanbanr init` register the hooks
+  (default `~/.claude`).
 - `KANBANR_PROJECT` — names the active project; also serves as the "this dir is
   tracked" signal both hooks look for (alongside the `.kanbanr` marker).
 - `KANBANR_DATA_DIR` — where the kanbanr data git repo lives. Normally unset:
@@ -104,8 +126,9 @@ Both scripts are written to be **safe to fail silently**. They do not use
 or non-git data dir, and an untracked directory; and on **any** uncertainty
 they `exit 0` and do nothing. A hook that breaks sessions is worse than no hook,
 so these prefer to under-act rather than risk getting in your way. Neither hook
-writes anything — `session-start.sh` is read-only recovery, and `stop-check.sh`
-only inspects git history and prints a reminder.
+writes to the project or the board: `session-start.sh` is read-only recovery, and
+`stop-check.sh` only inspects git history, prints a reminder, and keeps a per-session timestamp in
+the temp dir.
 
 ## Cross-platform: Windows (PowerShell)
 
@@ -116,7 +139,7 @@ The same two hooks ship in two flavors so they work everywhere:
   `stop-check.ps1`. They mirror the `.sh` versions exactly — same positive-signal
   gating (`.kanbanr` marker or `$env:KANBANR_PROJECT`), same env knobs
   (`KANBANR_DATA_DIR`, `KANBANR_STOP_WINDOW_MIN`), and the same best-effort,
-  **never-fail / never-block** semantics (always `exit 0`).
+  **never-fail** semantics (always `exit 0`; the Stop reminder is a block-once JSON response).
 
 To register the PowerShell variants, use a hook entry with `"shell": "powershell"`
 (or `"pwsh"`) so Claude Code runs them under PowerShell instead of a POSIX shell,

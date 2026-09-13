@@ -17,7 +17,8 @@ kanbanr-core.workspace = true
 # The view daemon (read API + SSE + SPA), run in-process by `kanbanr serve` — one binary.
 kanbanr-server = { path = "../kanbanr-server" }
 serde.workspace = true
-serde_json.workspace = true
+# preserve_order: `kanbanr hooks install` edits the user's Claude settings without reordering keys.
+serde_json = { workspace = true, features = ["preserve_order"] }
 clap = { version = "4", features = ["derive"] }
 anyhow.workspace = true
 # `serve` needs an async runtime to host the view daemon.

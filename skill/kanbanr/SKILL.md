@@ -44,6 +44,9 @@ When the user says **"start using kanbanr for this project"** (or anything equiv
    writes a `.kanbanr` marker in the project folder recording the project and the board's
    location (e.g. `data_dir: ../app.kanbanr`). Every `kanbanr` command run anywhere inside the
    project then finds the board: no env vars needed.
+   `init` also registers kanbanr's Claude Code hooks (session-start board recovery, stop-time
+   reminder) in the global Claude Code settings, once per machine; relay what it printed. If it
+   says the skill isn't installed where the hooks expect it, pass that on to the user.
    If the Claude Code sandbox is on, writes outside the project folder can be blocked: tell the
    user to allow the board folder (e.g. `sandbox.filesystem.allowWrite`).
 4. **Offer to import existing tasks** (see "Importing existing task trackers" below).

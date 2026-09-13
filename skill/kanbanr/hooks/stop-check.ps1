@@ -1,22 +1,21 @@
 #!/usr/bin/env pwsh
 #
-# kanbanr Stop hook (PowerShell / Windows, ADVISORY)
+# kanbanr Stop hook (PowerShell / Windows)
 # ---------------------------------------------------------------------------
-# Windows equivalent of stop-check.sh. Same heuristic and semantics: when
-# Claude finishes responding, nudge it to record work in kanbanr if it looks
-# like substantive work happened but the kanbanr plan was not updated this
-# session (operationalizes the "Keep the tool updated — before AND after every
-# task" section of SKILL.md).
-#
-# ADVISORY, NOT a hard block: prints a reminder to STDERR, exits 0, never
-# blocks the Stop event.
-#
-# Heuristic: kanbanr's data folder is a git repo and every write is a commit.
-# So "did we update kanbanr recently?" ~= "does the data repo's HEAD have a
-# commit within the last N minutes?". If the latest commit is OLDER than the
-# window, assume the board was NOT touched this session and remind. This is a
-# best-effort recency heuristic, not proof (see the .sh version's header for
-# the full list of limitations) — so we WARN, never block.
+# Windows equivalent of stop-check.sh, with the same rules: when a reminder is
+# due, print {"decision":"block","reason":"..."} so Claude Code shows the reason
+# to Claude, which records unrecorded work (or says there's nothing to record)
+# and stops. A reminder is due only when ALL hold:
+#   1. the kanbanr data repo's last commit is older than the window
+#      (default 30 min; $env:KANBANR_STOP_WINDOW_MIN);
+#   2. the project shows work since then: uncommitted changes (the `.kanbanr`
+#      marker aside) or a newer commit (outside a git repo, staleness alone);
+#   3. no reminder in this session within the window (a per-session timestamp
+#      in the temp dir);
+#   4. Claude isn't already continuing because of a Stop hook
+#      (`stop_hook_active`), so it can never loop.
+# Best-effort: any missing tool or unexpected state exits 0 silently. See the
+# header of stop-check.sh for the limitations.
 # ---------------------------------------------------------------------------
 
 $ErrorActionPreference = 'Continue'
@@ -30,6 +29,14 @@ if ($env:KANBANR_STOP_WINDOW_MIN) {
         $WindowMin = $parsed
     }
 }
+
+# --- Hook input (JSON on stdin). -------------------------------------------
+$HookInput = $null
+if ([Console]::IsInputRedirected) {
+    try { $HookInput = [Console]::In.ReadToEnd() | ConvertFrom-Json } catch { $HookInput = $null }
+}
+# Rule 4: already continuing because of a Stop hook -> never block again.
+if ($HookInput -and $HookInput.stop_hook_active -eq $true) { exit 0 }
 
 # --- Guard 1: git must be available. -------------------------------------
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { exit 0 }
@@ -82,21 +89,34 @@ if ($AgeSec -lt 0) { exit 0 }
 # kanbanr was updated within the window: assume the plan is current.
 if ($AgeSec -le $WindowSec) { exit 0 }
 
-# --- Stale: emit an advisory reminder to STDERR (never block). -----------
-$AgeMin = [int][Math]::Floor($AgeSec / 60)
-$msg = @"
-── kanbanr reminder (advisory) ──────────────────────────────────────
-The kanbanr data repo's last commit was ~$AgeMin min ago (> $WindowMin min).
-If you did substantive work this session, record it in kanbanr — the
-single system of record for this project's PLAN:
-  • scope new work as feature items (with --spec) and milestones
-  • add/update todo-lists + tasks and their states (NotStarted/InProgress/Completed)
-  • update specs, decisions, and docs you changed; move feature statuses
-Bundle related changes into one 'kanbanr batch' call. (Note: this is a
-best-effort recency heuristic — ignore it if the plan is already current.)
-─────────────────────────────────────────────────────────────────────
-"@
-[Console]::Error.WriteLine($msg)
+# --- Rule 2: the project shows work since the last board update. --------
+$ChangedNote = ''
+& git rev-parse --is-inside-work-tree 2>$null | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    $dirty = (& git status --porcelain -- . ':(exclude).kanbanr' 2>$null | Select-Object -First 1)
+    $headRaw = (& git log -1 --format=%ct 2>$null)
+    $HeadEpoch = 0L
+    if ($headRaw) { [void][long]::TryParse("$headRaw".Trim(), [ref]$HeadEpoch) }
+    if (-not $dirty -and $HeadEpoch -le $LastCommitEpoch) { exit 0 }
+    $ChangedNote = ', but the project has changed since then'
+}
 
-# Advisory only: succeed so the Stop event is never blocked.
+# --- Rule 3: at most one reminder per window per session. ----------------
+$session = 'nosession'
+if ($HookInput -and $HookInput.session_id) {
+    $session = ("$($HookInput.session_id)" -replace '[^A-Za-z0-9_-]', '')
+}
+$Stamp = Join-Path ([System.IO.Path]::GetTempPath()) "kanbanr-stop-$session"
+if (Test-Path -LiteralPath $Stamp) {
+    $last = 0L
+    if ([long]::TryParse((Get-Content -LiteralPath $Stamp -Raw -ErrorAction SilentlyContinue), [ref]$last)) {
+        if (($NowEpoch - $last) -lt $WindowSec) { exit 0 }
+    }
+}
+try { Set-Content -LiteralPath $Stamp -Value "$NowEpoch" -NoNewline -ErrorAction Stop } catch { }
+
+# --- Remind Claude (block this stop once). -------------------------------
+$AgeMin = [int][Math]::Floor($AgeSec / 60)
+$reason = "kanbanr reminder: this project's board was last updated ~$AgeMin min ago$ChangedNote. If this session did project work that is not recorded in kanbanr yet, record it now in one kanbanr batch call: feature items and specs, todo-list task states, status moves, decisions and docs. If everything is already recorded, or nothing substantive happened, reply in one short line and stop without making changes."
+[ordered]@{ decision = 'block'; reason = $reason } | ConvertTo-Json -Compress
 exit 0
