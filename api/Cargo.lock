@@ -1015,6 +1015,7 @@ dependencies = [
  "kanbanr-server",
  "serde",
  "serde_json",
+ "serde_yaml",
  "testcontainers",
  "tokio",
  "ureq",

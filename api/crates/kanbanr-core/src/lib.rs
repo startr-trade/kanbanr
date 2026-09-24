@@ -3,6 +3,7 @@
 
 pub mod activity;
 pub mod batch;
+pub mod charter;
 pub mod config;
 pub mod dispatch;
 pub mod docs;
@@ -23,6 +24,7 @@ pub mod query;
 pub mod store;
 pub mod validate;
 
+pub use charter::{Charter, Goal, Stakeholder};
 pub use config::ProjectConfig;
 pub use error::{CoreError, Result};
 pub use models::{

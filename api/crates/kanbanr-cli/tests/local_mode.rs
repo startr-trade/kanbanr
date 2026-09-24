@@ -659,3 +659,98 @@ fn cli_init_registers_claude_code_hooks_once_and_respects_no_hooks() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// The project charter end to end (FEAT-046): an absent charter is a warning, a written one is
+/// round-tripped with goal ids assigned, and clearing it removes the file.
+#[test]
+fn cli_charter_round_trips_and_doctor_reports_its_absence() {
+    let base = std::env::temp_dir().join(format!("kanbanr-charter-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let run = |args: &[&str], stdin: Option<&str>| -> String {
+        let mut cmd = Command::new(cli());
+        cmd.args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT");
+        let o = match stdin {
+            None => cmd.stdin(std::process::Stdio::null()).output(),
+            Some(text) => {
+                cmd.stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                let mut child = cmd.spawn().expect("spawn kanbanr");
+                use std::io::Write;
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(text.as_bytes())
+                    .unwrap();
+                child.wait_with_output()
+            }
+        }
+        .expect("run kanbanr CLI");
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    run(
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+        None,
+    );
+
+    // No charter: doctor says so, in the words that tell you how to fix it.
+    let before = run(&["doctor"], None);
+    assert!(before.contains("no charter purpose"), "{before}");
+
+    // Written from stdin as YAML; the goal without an id gets one.
+    let yaml = "purpose: Carts vanish on mobile.\ngoals:\n  - statement: A cart survives 7 days\n    measure: recovery above 90%\nnon_goals:\n  - Payment rewrite\n";
+    let set = run(&["charter", "set"], Some(yaml));
+    assert!(set.contains("1 goal(s) G-1"), "{set}");
+
+    let shown = run(&["charter", "show"], None);
+    assert!(shown.contains("Carts vanish on mobile."), "{shown}");
+    assert!(
+        shown.contains("- **G-1** A cart survives 7 days"),
+        "{shown}"
+    );
+    assert!(shown.contains("_Measure:_ recovery above 90%"), "{shown}");
+    assert!(shown.contains("## Non-goals"), "{shown}");
+
+    let json: serde_json::Value =
+        serde_json::from_str(&run(&["--json", "charter", "show"], None)).unwrap();
+    assert_eq!(json["goals"][0]["id"], "G-1");
+    assert!(json["adopted_at"].as_str().is_some_and(|s| !s.is_empty()));
+
+    // With a purpose and a goal, the charter warnings are gone.
+    let after = run(&["doctor"], None);
+    assert!(!after.contains("charter"), "{after}");
+
+    // An empty charter clears the file.
+    let cleared = run(&["charter", "set"], Some("{}\n"));
+    assert!(cleared.contains("charter cleared"), "{cleared}");
+    assert!(!base
+        .join("code/shop.kanbanr/projects/shop/charter.yaml")
+        .exists());
+
+    let _ = std::fs::remove_dir_all(&base);
+}

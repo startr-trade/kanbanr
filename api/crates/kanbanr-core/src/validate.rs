@@ -19,17 +19,25 @@ pub fn next_code(prefix: &str, existing: &[String]) -> String {
     format!("{prefix}-{:03}", max + 1)
 }
 
-/// Generate the next task key for a feature (e.g. "T1") not colliding with existing keys.
-pub fn next_task_key(existing: &[String]) -> String {
+/// Generate the next unpadded key for a prefix (`"T"` -> `T1`, `"G-"` -> `G-1`, `"R-"` -> `R-1`),
+/// skipping past every numeric key already in use. Unpadded because these ids are quoted inline in
+/// prose, acceptance criteria and commit trailers — unlike feature codes, which are filenames and
+/// so stay zero-padded via [`next_code`].
+pub fn next_key(prefix: &str, existing: &[String]) -> String {
     let mut max = 0u32;
     for key in existing {
-        if let Some(rest) = key.strip_prefix('T') {
+        if let Some(rest) = key.strip_prefix(prefix) {
             if let Ok(n) = rest.parse::<u32>() {
                 max = max.max(n);
             }
         }
     }
-    format!("T{}", max + 1)
+    format!("{prefix}{}", max + 1)
+}
+
+/// Generate the next task key for a feature (e.g. "T1") not colliding with existing keys.
+pub fn next_task_key(existing: &[String]) -> String {
+    next_key("T", existing)
 }
 
 /// Validate that the milestone dependency graph is acyclic and every referenced dep exists.

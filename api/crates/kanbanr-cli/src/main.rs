@@ -136,6 +136,10 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// The project charter: why this project exists, its goals, stakeholders and non-goals.
+    /// Work items link goals by id, so the board can show what each item serves. (FEAT-046)
+    #[command(subcommand)]
+    Charter(CharterCmd),
     /// Register kanbanr's Claude Code hooks (SessionStart: recover the board; Stop: nudge to record
     /// work) in the global Claude Code settings. `kanbanr init` does this automatically.
     #[command(subcommand)]
@@ -588,6 +592,18 @@ struct QueryArgs {
     /// Span every project (portfolio-wide) instead of just the current one.
     #[arg(long)]
     all_projects: bool,
+}
+
+#[derive(Subcommand)]
+enum CharterCmd {
+    /// Print the charter as markdown (or JSON with --json).
+    Show,
+    /// Replace the charter from a YAML or JSON file (or stdin when --file is omitted).
+    /// Goals without an `id` are assigned one; an empty charter removes it.
+    Set {
+        #[arg(long)]
+        file: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1057,6 +1073,56 @@ fn run_sources(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
                 "{} source mark(s) out of date; run `kanbanr sources --write` to record them",
                 edits.len()
             );
+        }
+    }
+    Ok(())
+}
+
+/// `kanbanr charter …` (FEAT-046). The charter is the root of a project's reasoning: goals get
+/// ids here, and work items link them.
+fn run_charter(cli: &Cli, client: &Backend, cmd: &CharterCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let path = format!("/projects/{p}/charter");
+    match cmd {
+        CharterCmd::Show => {
+            let resp = client.get(&path)?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+            } else {
+                let charter: kanbanr_core::Charter = serde_json::from_str(&resp)?;
+                print!("{}", kanbanr_core::export::charter_to_markdown(&charter));
+            }
+        }
+        CharterCmd::Set { file } => {
+            let raw = match file {
+                Some(path) => std::fs::read_to_string(path)?,
+                None => {
+                    use std::io::Read;
+                    let mut s = String::new();
+                    std::io::stdin().read_to_string(&mut s)?;
+                    s
+                }
+            };
+            // YAML is a superset of JSON, so one parser accepts either form.
+            let charter: kanbanr_core::Charter = serde_yaml::from_str(&raw)
+                .map_err(|e| anyhow::anyhow!("invalid charter (YAML or JSON expected): {e}"))?;
+            let resp = client.write(Method::Put, &path, Some(serde_json::to_value(charter)?))?;
+            let saved: kanbanr_core::Charter = serde_json::from_str(&resp)?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+            } else if saved.is_empty() {
+                println!("charter cleared for '{p}'");
+            } else {
+                println!(
+                    "charter saved for '{p}': {} goal(s){}",
+                    saved.goals.len(),
+                    saved
+                        .goals
+                        .iter()
+                        .map(|g| format!(" {}", g.id))
+                        .collect::<String>()
+                );
+            }
         }
     }
     Ok(())
@@ -1558,6 +1624,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Sources { write } => run_sources(cli, &client, *write),
+        Command::Charter(cmd) => run_charter(cli, &client, cmd),
         Command::Mirror(cmd) => run_mirror(cli, &client, cmd),
         Command::Export { code, format } => {
             let p = require_project(cli)?;

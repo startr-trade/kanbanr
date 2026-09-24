@@ -58,6 +58,11 @@ pub fn run(store: &Store) -> Result<Report> {
 
     for project in &projects {
         scan_project(project, &existing, &mut report);
+        scan_charter(
+            &crate::charter::load(store, &project.id)?,
+            &project.id,
+            &mut report,
+        );
     }
     Ok(report)
 }
@@ -76,7 +81,34 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
         }
     }
     scan_project(&project, &existing, &mut report);
+    scan_charter(&crate::charter::load(store, id)?, id, &mut report);
     Ok(report)
+}
+
+/// Check a project's charter — the root of its reasoning (FEAT-046). Without a purpose there is
+/// nothing to judge work against; without goals, items have nothing to link to. Both are warnings:
+/// a project with no charter is incomplete, not broken.
+fn scan_charter(charter: &crate::Charter, project: &str, report: &mut Report) {
+    if charter.purpose.trim().is_empty() {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.to_string(),
+            code: None,
+            message: "no charter purpose — nothing states why this project exists \
+                      (write one with `kanbanr charter set --file charter.yaml`)"
+                .to_string(),
+        });
+    } else if charter.goals.is_empty() {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.to_string(),
+            code: None,
+            message:
+                "charter states a purpose but declares no goals — work items have no goal ids \
+                      to link to"
+                    .to_string(),
+        });
+    }
 }
 
 /// Run the three checks against one loaded project, given the universe of existing qualified
