@@ -754,3 +754,116 @@ fn cli_charter_round_trips_and_doctor_reports_its_absence() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// `kanbanr feature define` end to end (FEAT-047): a per-kind template, a definition written from
+/// a file with ids assigned and gaps reported, and clearing it again.
+#[test]
+fn cli_feature_define_templates_writes_and_clears() {
+    let base = std::env::temp_dir().join(format!("kanbanr-define-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let run = |args: &[&str]| -> String {
+        let o = Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI");
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Cart recovery",
+        "--milestone",
+        "MS-001",
+    ]);
+
+    // The template is shaped to the kind: a chore asserts an invariant, not new behaviour.
+    let chore = run(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--template",
+        "--kind",
+        "chore",
+    ]);
+    assert!(chore.contains("THE SYSTEM SHALL continue to"), "{chore}");
+    let defect = run(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--template",
+        "--kind",
+        "defect",
+    ]);
+    assert!(defect.contains("violates:"), "{defect}");
+    assert!(defect.contains("state: red"), "{defect}");
+
+    // A definition with a deliberate gap: `how` is left blank rather than invented.
+    let def = base.join("def.yaml");
+    std::fs::write(
+        &def,
+        "statement: Keep a cart for 7 days so a returning shopper resumes\n\
+         goals: [G-1]\n\
+         zachman:\n  what: cart persistence\n  how: \"\"\n  where: checkout service\n\
+         \x20 when: on every cart mutation\n  who: returning shoppers\n  why: carts vanish overnight\n\
+         requirements:\n  - kind: functional\n    text: \"WHEN a cart is abandoned, THE SYSTEM SHALL retain it for 7 days.\"\n\
+         \x20   tests:\n      - name: cart::retains_for_seven_days\n        kind: unit\n        state: planned\n",
+    )
+    .unwrap();
+    let out = run(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        def.to_str().unwrap(),
+    ]);
+    assert!(out.contains("1 requirement(s)"), "{out}");
+    assert!(
+        out.contains("[MISSING: How]"),
+        "gaps are reported, not invented: {out}"
+    );
+
+    let exported: serde_json::Value =
+        serde_json::from_str(&run(&["export", "FEAT-001", "--format", "json"])).unwrap();
+    assert_eq!(exported["definition"]["requirements"][0]["id"], "R-1");
+    assert_eq!(
+        exported["definition"]["requirements"][0]["tests"][0]["state"],
+        "planned"
+    );
+    assert_eq!(exported["definition"]["goals"][0], "G-1");
+
+    let cleared = run(&["feature", "define", "FEAT-001", "--clear"]);
+    assert!(cleared.contains("cleared the definition"), "{cleared}");
+    let exported: serde_json::Value =
+        serde_json::from_str(&run(&["export", "FEAT-001", "--format", "json"])).unwrap();
+    assert!(exported.get("definition").is_none(), "absent, not null");
+
+    let _ = std::fs::remove_dir_all(&base);
+}

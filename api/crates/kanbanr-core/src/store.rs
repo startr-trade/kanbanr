@@ -478,6 +478,7 @@ impl Store {
             todo_lists: Vec::new(),
             source: None,
             issue: None,
+            definition: None,
             created_at: now.clone(),
             updated_at: now,
         };
@@ -663,6 +664,43 @@ impl Store {
         if let Some(deps) = depends_on {
             feature.depends_on = deps.into_iter().filter(|s| !s.trim().is_empty()).collect();
         }
+        feature.updated_at = now_rfc3339();
+        let updated = feature.clone();
+        pending.persist_features.insert(updated.code.clone());
+        Ok(updated)
+    }
+
+    /// Replace a feature's definition — why it exists, what must be true, how it is verified
+    /// (FEAT-047). `None` clears it. Kept off `set_feature_attrs` for the same reason
+    /// `set_feature_schedule` is: that signature is already wide, and this is a block, not an
+    /// attribute. Requirement ids left blank are assigned here, so the CLI and the batch path
+    /// behave identically.
+    pub fn set_feature_definition(
+        &self,
+        id: &str,
+        code: &str,
+        definition: Option<crate::models::FeatureDefinition>,
+    ) -> Result<FeatureItem> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let f = Self::set_feature_definition_on(&mut project, &mut pending, code, definition)?;
+        self.flush(id, &project, &pending)?;
+        Ok(f)
+    }
+
+    fn set_feature_definition_on(
+        project: &mut Project,
+        pending: &mut Pending,
+        code: &str,
+        definition: Option<crate::models::FeatureDefinition>,
+    ) -> Result<FeatureItem> {
+        project.feature(code)?; // ensure it exists
+        let definition = definition.map(|mut def| {
+            assign_requirement_ids(&mut def);
+            def
+        });
+        let feature = project.feature_mut(code)?;
+        feature.definition = definition;
         feature.updated_at = now_rfc3339();
         let updated = feature.clone();
         pending.persist_features.insert(updated.code.clone());
@@ -1065,6 +1103,7 @@ impl Store {
                     source,
                     original,
                     issue,
+                    definition,
                 } => {
                     let source = source.map(|mut src| {
                         if src.key.trim().is_empty() {
@@ -1108,6 +1147,14 @@ impl Store {
                         let feature = project.feature_mut(&f.code)?;
                         feature.source = source;
                         feature.issue = issue;
+                    }
+                    if definition.is_some() {
+                        Self::set_feature_definition_on(
+                            &mut project,
+                            &mut pending,
+                            &f.code,
+                            definition,
+                        )?;
                     }
                     if let Some(a) = &alias {
                         aliases.insert(a.clone(), f.code.clone());
@@ -1159,6 +1206,7 @@ impl Store {
                     depends_on,
                     source,
                     issue,
+                    definition,
                 } => {
                     if skipped.contains(&code) {
                         return Ok(skip("feature.edit", &code));
@@ -1200,6 +1248,14 @@ impl Store {
                     };
                     if had_deps {
                         crate::graph::validate_feature_deps(self, &project, id, &f.code)?;
+                    }
+                    if definition.is_some() {
+                        Self::set_feature_definition_on(
+                            &mut project,
+                            &mut pending,
+                            &f.code,
+                            definition,
+                        )?;
                     }
                     if source.is_some() || issue.is_some() {
                         let feature = project.feature_mut(&f.code)?;
@@ -1895,4 +1951,26 @@ fn imported_section(src: &crate::models::Source, original: &str) -> String {
         "\n\n## Imported from\n\n{origin}, imported {date}.\n\n{fence}text\n{}\n{fence}\n",
         original.trim_end()
     )
+}
+
+/// Give every requirement an id, leaving existing ones alone, so an author can write requirements
+/// without inventing identifiers and still get stable link targets for tests, commits and ADRs.
+/// Ids are handed out above the highest in use: a lower free id may belong to a deleted
+/// requirement that a commit trailer still references.
+fn assign_requirement_ids(definition: &mut crate::models::FeatureDefinition) {
+    let mut taken: Vec<String> = definition
+        .requirements
+        .iter()
+        .map(|r| r.id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    for requirement in &mut definition.requirements {
+        if requirement.id.trim().is_empty() {
+            let id = validate::next_key("R-", &taken);
+            taken.push(id.clone());
+            requirement.id = id;
+        } else {
+            requirement.id = requirement.id.trim().to_string();
+        }
+    }
 }

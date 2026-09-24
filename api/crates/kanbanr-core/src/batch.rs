@@ -3,7 +3,7 @@
 //! task-state updates. Newly-created items can be given a client-chosen `ref` alias that later
 //! operations in the same bundle reference (since real codes are server-assigned).
 
-use crate::models::{IssueLink, Source};
+use crate::models::{FeatureDefinition, IssueLink, Source};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -46,6 +46,9 @@ pub enum BatchOp {
         /// An existing external issue to mirror this feature to (FEAT-043).
         #[serde(default)]
         issue: Option<IssueLink>,
+        /// Why this item exists, what must be true, and how it is verified (FEAT-047).
+        #[serde(default)]
+        definition: Option<FeatureDefinition>,
     },
     /// Edit a feature item (title / spec / milestone / rename / attrs). Use `feature.move` for status.
     #[serde(rename = "feature.edit")]
@@ -79,6 +82,9 @@ pub enum BatchOp {
         /// Set the mirrored issue link (FEAT-043).
         #[serde(default)]
         issue: Option<IssueLink>,
+        /// Replace the definition block (FEAT-047).
+        #[serde(default)]
+        definition: Option<FeatureDefinition>,
     },
     /// Move a feature to a new status (validated against the workflow).
     #[serde(rename = "feature.move")]
