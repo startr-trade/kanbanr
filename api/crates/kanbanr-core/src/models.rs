@@ -105,6 +105,9 @@ pub struct FeatureItem {
     /// The external issue this feature is mirrored to, if any (FEAT-043).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issue: Option<IssueLink>,
+    /// Why this item exists, what must be true, and how it is verified (FEAT-047).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<FeatureDefinition>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -151,6 +154,174 @@ impl Source {
             .join(" ")
             .to_lowercase();
         format!("{system}:{}", crate::hash::stable_hash(&normalized))
+    }
+}
+
+/// Why a work item exists, what must be true, and how that is verified (FEAT-047).
+///
+/// The prose case *for* the work stays in the item's specification markdown — this block holds the
+/// short, checkable parts: one-line answers, ids that link to the charter, and requirements each
+/// carrying the tests that verify them. Keeping it one-line-per-field is deliberate: a structured
+/// copy of the spec would rot into a second, disagreeing version of the same argument.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FeatureDefinition {
+    /// One sentence: what, for whom, and why.
+    #[serde(default)]
+    pub statement: String,
+    /// Charter goal ids this item serves — the link that makes "why" checkable rather than prose.
+    #[serde(default)]
+    pub goals: Vec<String>,
+    /// The six completeness dimensions, one line each.
+    #[serde(default)]
+    pub zachman: Zachman,
+    /// Optional pointer into the board's doc tree (a design note), rather than an inline diagram.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub design_doc: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requirements: Vec<Requirement>,
+    /// A recorded reason this item is exempt from gap reporting. An escape hatch that is visible
+    /// beats one that is habitual (`--no-verify` teaches itself).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub exempt: String,
+}
+
+/// The six completeness dimensions. Answers are one line; anything longer belongs in the spec.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Zachman {
+    #[serde(default)]
+    pub what: String,
+    #[serde(default)]
+    pub how: String,
+    #[serde(default, rename = "where")]
+    pub where_: String,
+    #[serde(default)]
+    pub when: String,
+    #[serde(default)]
+    pub who: String,
+    #[serde(default)]
+    pub why: String,
+}
+
+impl Zachman {
+    /// The six columns in order — the only place `where_` is spelled out.
+    pub fn columns(&self) -> [(&'static str, &str); 6] {
+        [
+            ("What", self.what.as_str()),
+            ("How", self.how.as_str()),
+            ("Where", self.where_.as_str()),
+            ("When", self.when.as_str()),
+            ("Who", self.who.as_str()),
+            ("Why", self.why.as_str()),
+        ]
+    }
+
+    /// The columns left blank. Gaps are DERIVED here and rendered as `[MISSING: …]`; storing the
+    /// marker would let the data disagree with the check.
+    pub fn missing(&self) -> Vec<&'static str> {
+        self.columns()
+            .iter()
+            .filter(|(_, v)| v.trim().is_empty())
+            .map(|(k, _)| *k)
+            .collect()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.missing().len() == 6
+    }
+}
+
+/// Functional behaviour, or a quality the system must exhibit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RequirementKind {
+    #[default]
+    Functional,
+    Nfr,
+}
+
+/// One requirement: a single behaviour, stated so it can be tested.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Requirement {
+    /// `R-1`, `R-2`, … assigned when left blank.
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub kind: RequirementKind,
+    /// The requirement itself, ideally in EARS form. Stored verbatim: the EARS pattern is derived
+    /// when rendering or checking, never persisted, so stored text cannot disagree with the
+    /// classifier.
+    pub text: String,
+    /// ISO/IEC 25010 characteristics, for NFRs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "iso25010")]
+    pub iso: Vec<String>,
+    /// The quality attribute scenario behind an NFR.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scenario: Option<QualityScenario>,
+    /// How this requirement is verified. A requirement with no test is not ready.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tests: Vec<TestRef>,
+    /// For a defect: the requirement it violates (`FEAT-046/R-2`), or blank when the defect
+    /// reveals that no requirement covered the case — which is itself the finding.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub violates: String,
+}
+
+/// Stimulus / environment / response / measure — what turns "it should be fast" into something
+/// checkable. The `measure` names the test or benchmark that checks it; a number with nothing
+/// behind it is reported as an unsupported claim.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct QualityScenario {
+    #[serde(default)]
+    pub stimulus: String,
+    #[serde(default)]
+    pub environment: String,
+    #[serde(default)]
+    pub response: String,
+    #[serde(default)]
+    pub measure: String,
+}
+
+/// A test that verifies a requirement, and where it currently stands.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TestRef {
+    /// The test's name as it appears in the codebase, so it can be checked for existence.
+    pub name: String,
+    /// unit | integration | e2e | manual | property — free text, like `kind` elsewhere.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    #[serde(default)]
+    pub state: TestState,
+    /// The project revision at which this was last observed green. A green older than HEAD is
+    /// stale rather than trustworthy.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub checked_rev: String,
+}
+
+/// The TDD lifecycle of a test: written but not yet run, failing, passing.
+///
+/// Serialized lowercase (`state: green`) because that is how it is written in definition files and
+/// on the command line; the aliases keep hand-written YAML forgiving.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TestState {
+    #[default]
+    #[serde(alias = "todo", alias = "notwritten")]
+    Planned,
+    #[serde(alias = "failing", alias = "fail")]
+    Red,
+    #[serde(alias = "passing", alias = "pass", alias = "passed")]
+    Green,
+}
+
+impl TestState {
+    /// Lenient parsing, like [`TaskState::parse`], so both TDD and plain wording work.
+    pub fn parse(s: &str) -> Option<TestState> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "planned" | "todo" | "notwritten" | "not_started" => Some(TestState::Planned),
+            "red" | "failing" | "fail" => Some(TestState::Red),
+            "green" | "passing" | "pass" | "passed" => Some(TestState::Green),
+            _ => None,
+        }
     }
 }
 
@@ -222,6 +393,7 @@ impl FeatureItem {
             todo_lists: self.todo_lists.clone(),
             source: self.source.clone(),
             issue: self.issue.clone(),
+            definition: self.definition.clone(),
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
         }
@@ -247,6 +419,7 @@ impl FeatureItem {
             todo_lists: meta.todo_lists,
             source: meta.source,
             issue: meta.issue,
+            definition: meta.definition,
             created_at: meta.created_at,
             updated_at: meta.updated_at,
         }
@@ -286,6 +459,8 @@ pub struct FeatureMeta {
     pub source: Option<Source>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issue: Option<IssueLink>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<FeatureDefinition>,
     pub created_at: String,
     pub updated_at: String,
 }

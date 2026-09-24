@@ -599,6 +599,19 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             Ok(String::new())
         }
 
+        // ---- feature definition (FEAT-047) ----
+        ("PUT", ["projects", p, "features", code, "definition"]) => {
+            let definition: Option<crate::models::FeatureDefinition> = if b.is_null() {
+                None // an explicit null clears the block
+            } else {
+                Some(
+                    serde_json::from_value(b.clone())
+                        .map_err(|e| CoreError::Unsupported(format!("invalid definition: {e}")))?,
+                )
+            };
+            ser(&store.set_feature_definition(p, code, definition)?)
+        }
+
         // ---- project charter (FEAT-046) ----
         ("GET", ["projects", p, "charter"]) => {
             store.load_meta(p)?; // the project must exist; an absent charter is a valid default
@@ -666,6 +679,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", p] if del => format!("delete project {p}"),
         ["projects", p] => format!("edit project {p}"),
         ["projects", _p, "charter"] => "update project charter".into(),
+        ["projects", _p, "features", c, "definition"] => format!("define feature {c}"),
         ["projects", _p, "mirror"] => "configure issue mirror".into(),
         ["projects", _p, "features"] => "add feature item".into(),
         ["projects", _p, "features", c] => format!("edit feature {c}"),

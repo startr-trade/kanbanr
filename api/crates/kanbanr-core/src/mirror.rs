@@ -235,6 +235,7 @@ mod tests {
             todo_lists: vec![],
             source: None,
             issue: None,
+            definition: None,
             created_at: created_at.into(),
             updated_at: created_at.into(),
         }

@@ -603,6 +603,163 @@ mod tests {
     }
 
     #[test]
+    fn definition_round_trips_through_meta_and_assigns_requirement_ids() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let f = store
+            .add_feature("demo", "Mirror", "# Mirror", "M", None)
+            .unwrap();
+
+        let def: crate::models::FeatureDefinition = serde_yaml::from_str(
+            r#"
+statement: Mirror items to GitHub so collaborators see the board
+goals: [G-2]
+zachman:
+  what: A one-way push of items to issues
+  how: gh, gated on a content hash
+  where: kanbanr-core/mirror.rs
+  when: after every successful write
+  who: solo dev and repo collaborators
+  why: collaborators live in issues
+requirements:
+  - kind: functional
+    text: "WHEN content differs from the last push, THE SYSTEM SHALL update the issue."
+    tests:
+      - name: mirror::tests::plan_skips_unchanged
+        kind: unit
+        state: green
+  - id: R-9
+    kind: nfr
+    text: "IF gh is unavailable, THE SYSTEM SHALL complete the write."
+    iso25010: [Reliability]
+    scenario:
+      stimulus: gh is logged out
+      environment: a normal write
+      response: the write succeeds with a warning
+      measure: "0 failed writes; local_mode::mirror_failure_does_not_fail_write"
+    tests:
+      - name: local_mode::mirror_failure_does_not_fail_write
+        kind: integration
+        state: red
+"#,
+        )
+        .unwrap();
+        let saved = store
+            .set_feature_definition("demo", &f.code, Some(def))
+            .unwrap();
+        let saved_def = saved.definition.clone().unwrap();
+
+        // Blank ids are filled above the highest in use; a hand-written one is kept.
+        assert_eq!(saved_def.requirements[0].id, "R-10");
+        assert_eq!(saved_def.requirements[1].id, "R-9");
+        assert!(saved_def.zachman.missing().is_empty(), "all six answered");
+
+        // The whole block survives the yaml round-trip THROUGH meta()/from_meta() — the split that
+        // silently drops a field if it is not added in all three places.
+        let reloaded = store.load("demo").unwrap();
+        let reloaded = reloaded.feature(&f.code).unwrap();
+        assert_eq!(reloaded.definition.as_ref(), Some(&saved_def));
+        assert_eq!(
+            reloaded.definition.as_ref().unwrap().requirements[1]
+                .scenario
+                .as_ref()
+                .unwrap()
+                .measure,
+            "0 failed writes; local_mode::mirror_failure_does_not_fail_write"
+        );
+        assert_eq!(
+            reloaded.definition.as_ref().unwrap().requirements[1].tests[0].state,
+            crate::models::TestState::Red
+        );
+
+        // It travels with the item when the status folder changes, and clears on demand.
+        store.move_feature("demo", &f.code, "Scheduled").unwrap();
+        let moved = store.load("demo").unwrap();
+        assert_eq!(
+            moved.feature(&f.code).unwrap().definition.as_ref(),
+            Some(&saved_def)
+        );
+        store.set_feature_definition("demo", &f.code, None).unwrap();
+        assert!(store
+            .load("demo")
+            .unwrap()
+            .feature(&f.code)
+            .unwrap()
+            .definition
+            .is_none());
+    }
+
+    #[test]
+    fn a_feature_without_a_definition_is_untouched_on_disk() {
+        // Existing boards must keep loading AND re-saving byte-identically: `skip_serializing_if`
+        // is what stops an unrelated edit from adding `definition: null` to all 45 files.
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        let f = store
+            .add_feature("demo", "Legacy", "# Legacy", "M", None)
+            .unwrap();
+        let path = d
+            .path
+            .join("projects/demo/Planned")
+            .join(format!("{}.yaml", f.code));
+        let before = std::fs::read_to_string(&path).unwrap();
+        assert!(!before.contains("definition"), "not written when absent");
+
+        store
+            .set_feature_attrs(
+                "demo",
+                &f.code,
+                Some("chore".into()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !after.contains("definition"),
+            "an unrelated edit must not introduce the key: {after}"
+        );
+
+        // And a hand-written legacy yaml (no `definition` key at all) still parses.
+        let meta: crate::models::FeatureMeta = serde_yaml::from_str(&before).unwrap();
+        assert!(meta.definition.is_none());
+    }
+
+    #[test]
+    fn batch_feature_add_carries_a_definition() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let results = store
+            .apply_batch(
+                "demo",
+                ops(serde_json::json!([
+                    {"op":"feature.add","ref":"a","title":"Defined","milestone":"M",
+                     "definition":{
+                       "statement":"Do the thing",
+                       "goals":["G-1"],
+                       "zachman":{"what":"w","how":"h","where":"e","when":"n","who":"o","why":"y"},
+                       "requirements":[{"kind":"functional","text":"THE SYSTEM SHALL do the thing.",
+                         "tests":[{"name":"core::does_the_thing","state":"planned"}]}]}},
+                    {"op":"feature.edit","code":"a","definition":{"statement":"Do it better"}}
+                ])),
+            )
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        let p = store.load("demo").unwrap();
+        let f = p.features.iter().find(|f| f.title == "Defined").unwrap();
+        let def = f.definition.as_ref().unwrap();
+        assert_eq!(def.statement, "Do it better", "edit replaces the block");
+        assert!(
+            def.requirements.is_empty(),
+            "replace, not merge — the block is authored whole"
+        );
+    }
+
+    #[test]
     fn feature_requires_existing_milestone() {
         let (store, _d) = temp_store();
         new_project(&store, "demo");

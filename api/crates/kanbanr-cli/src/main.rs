@@ -304,6 +304,22 @@ enum ProjectCmd {
 
 #[derive(Subcommand)]
 enum FeatureCmd {
+    /// Record why an item exists, what must be true, and how it is verified (FEAT-047).
+    /// Reads YAML or JSON from --file (or stdin). `--template` prints a skeleton for a kind
+    /// instead of writing; `--clear` removes the block.
+    Define {
+        code: String,
+        #[arg(long)]
+        file: Option<String>,
+        #[arg(long)]
+        clear: bool,
+        /// Print a skeleton for this kind and exit (feature | defect | chore | docs | recurring).
+        #[arg(long)]
+        template: bool,
+        /// Which shape the template should take (default: feature, the strictest).
+        #[arg(long)]
+        kind: Option<String>,
+    },
     /// Add a feature item (a milestone is required; code auto-generates if omitted).
     Add {
         #[arg(long)]
@@ -1076,6 +1092,104 @@ fn run_sources(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// A starting skeleton for a definition, shaped to the kind of work (FEAT-047). Every kind states
+/// why it exists and how it is verified; what differs is the FORM a requirement takes — a feature
+/// asserts new behaviour, a defect names the requirement it violates, a chore asserts an invariant.
+/// Printing only the fields that apply keeps an author from staring at a form full of blanks.
+fn definition_template(kind: &str) -> String {
+    let head = "\
+# Why this item exists, what must be true, and how that is verified.
+# Fill what you know; leave the rest BLANK so `kanbanr doctor` can flag it — never invent.
+statement: \"<capability> for <whom> so that <why>\"
+goals: [G-1]          # charter goal ids this serves (kanbanr charter show)
+zachman:
+  what:  \"\"            # data, functions, rules
+  how:   \"\"            # approach
+  where: \"\"            # component or service
+  when:  \"\"            # trigger, frequency, timing
+  who:   \"\"            # stakeholder role
+  why:   \"\"            # the problem or goal served
+";
+    let requirements = match kind.trim().to_ascii_lowercase().as_str() {
+        "defect" | "bug" => {
+            "\
+requirements:
+  # A defect violates a requirement. If none covers the case, THAT is the finding: add the
+  # missing requirement here instead of leaving `violates` blank.
+  - kind: functional
+    violates: FEAT-000/R-0
+    text: \"WHEN <the trigger>, THE SYSTEM SHALL <the behaviour that was wrong>\"
+    tests:
+      - name: \"<test that reproduces it>\"
+        kind: unit
+        state: red      # red first, then green once fixed
+"
+        }
+        "chore" | "refactor" => {
+            "\
+requirements:
+  # No new behaviour: the requirement is what must NOT change.
+  - kind: functional
+    text: \"THE SYSTEM SHALL continue to <invariant this work must preserve>\"
+    tests:
+      - name: \"<existing suite that proves it>\"
+        kind: integration
+        state: green
+"
+        }
+        "docs" => {
+            "\
+requirements:
+  # The requirement is the contract the documentation must match.
+  - kind: functional
+    text: \"THE SYSTEM SHALL document <the contract> as it actually behaves\"
+    tests:
+      - name: \"<doc check or doctor rule>\"
+        kind: manual
+        state: planned
+"
+        }
+        "recurring" => {
+            "\
+requirements:
+  # Standing work: one statement, verified per occurrence by its checklist.
+  - kind: functional
+    text: \"THE SYSTEM SHALL <the standing obligation>\"
+    tests:
+      - name: \"<per-occurrence check>\"
+        kind: manual
+        state: planned
+"
+        }
+        _ => {
+            "\
+requirements:
+  - kind: functional
+    text: \"WHEN <trigger>, THE SYSTEM SHALL <response>\"
+    tests:
+      - name: \"<test that verifies it>\"
+        kind: unit
+        state: planned
+  # A quality requirement needs a tag AND a measure that names what checks it — a number with
+  # nothing behind it is an unsupported claim, so leave it out unless it is real.
+  - kind: nfr
+    text: \"WHERE <condition>, THE SYSTEM SHALL <quality behaviour>\"
+    iso25010: [Reliability]
+    scenario:
+      stimulus: \"\"
+      environment: \"\"
+      response: \"\"
+      measure: \"<number, and the test or benchmark that checks it>\"
+    tests:
+      - name: \"<test that verifies it>\"
+        kind: integration
+        state: planned
+"
+        }
+    };
+    format!("{head}{requirements}")
 }
 
 /// `kanbanr charter …` (FEAT-046). The charter is the root of a project's reasoning: goals get
@@ -2203,6 +2317,68 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                         f.title
                     );
                 }
+            }
+            Ok(())
+        }
+        FeatureCmd::Define {
+            code,
+            file,
+            clear,
+            template,
+            kind,
+        } => {
+            if *template {
+                print!(
+                    "{}",
+                    definition_template(kind.as_deref().unwrap_or("feature"))
+                );
+                return Ok(());
+            }
+            let path = format!("/projects/{p}/features/{code}/definition");
+            let body = if *clear {
+                Value::Null
+            } else {
+                let raw = match file {
+                    Some(path) => std::fs::read_to_string(path)?,
+                    None => {
+                        use std::io::Read;
+                        let mut s = String::new();
+                        std::io::stdin().read_to_string(&mut s)?;
+                        s
+                    }
+                };
+                // YAML is a superset of JSON, so one parser accepts either form.
+                let def: kanbanr_core::models::FeatureDefinition = serde_yaml::from_str(&raw)
+                    .map_err(|e| {
+                        anyhow::anyhow!("invalid definition (YAML or JSON expected): {e}")
+                    })?;
+                serde_json::to_value(def)?
+            };
+            let resp = client.write(Method::Put, &path, Some(body))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+            } else if *clear {
+                println!("cleared the definition of {code}");
+            } else {
+                let f: kanbanr_core::FeatureItem = serde_json::from_str(&resp)?;
+                let def = f.definition.as_ref();
+                let reqs = def.map(|d| d.requirements.len()).unwrap_or(0);
+                let missing = def.map(|d| d.zachman.missing()).unwrap_or_default();
+                println!(
+                    "defined {code}: {reqs} requirement(s){}",
+                    if missing.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "; gaps: {}",
+                            missing
+                                .iter()
+                                .map(|c| format!("[MISSING: {c}]"))
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        )
+                    }
+                );
             }
             Ok(())
         }
