@@ -43,12 +43,40 @@ export interface Feature {
   depends_on?: string[];
   /** Persistent todo-lists (an epic can hold many, added across sessions). */
   todo_lists: TodoList[];
+  /** Why this item exists, what must be true, and how it is verified (FEAT-047). */
+  definition?: FeatureDefinition | null;
   /** Where this feature was imported from, if it was. */
   source?: Source | null;
   /** The external issue this feature is mirrored to, if any. */
   issue?: IssueLink | null;
   created_at: string;
   updated_at: string;
+}
+
+/** The project charter: why the project exists and what it commits to (FEAT-046). */
+export interface Charter {
+  purpose: string;
+  vision?: string;
+  goals: Goal[];
+  non_goals?: string[];
+  stakeholders?: Stakeholder[];
+  constraints?: string[];
+  /** When the charter was first written; items created earlier predate the method. */
+  adopted_at?: string;
+}
+
+/** An outcome the project commits to. Work items link these by id. */
+export interface Goal {
+  id: string;
+  statement: string;
+  measure?: string;
+  horizon?: string;
+}
+
+export interface Stakeholder {
+  name: string;
+  role?: string;
+  interest?: string;
 }
 
 /** Import provenance: a record of where an item came from, not a live pointer. */
@@ -61,6 +89,13 @@ export interface Source {
   key: string;
   /** Set when the source was found to be gone (deleted file, retired tracker). */
   missing_since?: string | null;
+}
+
+/** The reasoning and evidence for a work item (FEAT-047). Grows as later items land. */
+export interface FeatureDefinition {
+  statement?: string;
+  /** Charter goal ids this item serves. */
+  goals?: string[];
 }
 
 /** A mirrored external issue (e.g. a GitHub issue kept in step with this feature). */

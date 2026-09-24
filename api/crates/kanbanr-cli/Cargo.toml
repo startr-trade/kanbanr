@@ -19,6 +19,8 @@ kanbanr-server = { path = "../kanbanr-server" }
 serde.workspace = true
 # preserve_order: `kanbanr hooks install` edits the user's Claude settings without reordering keys.
 serde_json = { workspace = true, features = ["preserve_order"] }
+# `charter set` / `feature define` accept YAML or JSON from a file or stdin (YAML parses both).
+serde_yaml.workspace = true
 clap = { version = "4", features = ["derive"] }
 anyhow.workspace = true
 # `serve` needs an async runtime to host the view daemon.

@@ -1,6 +1,7 @@
 import type {
   Activity,
   BoardReport,
+  Charter,
   DocFolder,
   PortfolioView,
   Project,
@@ -34,6 +35,7 @@ export const api = {
   getPortfolioBoard: () => getJson<BoardReport>("/api/portfolio/board"),
   getProject: (id: string) => getJson<Project>(`/api/projects/${encodeURIComponent(id)}`),
   // Scheduling Gantt (FEAT-035): the daemon returns Mermaid `gantt` text.
+  getCharter: (id: string) => getJson<Charter>(`/api/projects/${encodeURIComponent(id)}/charter`),
   getGantt: (id: string) => getText(`/api/projects/${encodeURIComponent(id)}/gantt`),
   getDocTree: (id: string) => getJson<DocFolder>(`/api/projects/${encodeURIComponent(id)}/docs`),
   getDoc: (id: string, path: string) =>

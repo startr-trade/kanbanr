@@ -84,6 +84,68 @@ fn checkbox(s: TaskState) -> &'static str {
     }
 }
 
+/// Render a project charter as markdown — the human-readable "why" of a project, used by
+/// `kanbanr charter show`. (FEAT-046)
+pub fn charter_to_markdown(charter: &crate::Charter) -> String {
+    let mut out = String::from("# Charter\n\n");
+    if charter.purpose.trim().is_empty() {
+        out.push_str("_No purpose recorded._\n");
+    } else {
+        out.push_str(charter.purpose.trim());
+        out.push('\n');
+    }
+    if !charter.vision.trim().is_empty() {
+        out.push_str(&format!("\n**Vision:** {}\n", charter.vision.trim()));
+    }
+
+    out.push_str("\n## Goals\n\n");
+    if charter.goals.is_empty() {
+        out.push_str("_No goals recorded — work items have nothing to link to._\n");
+    }
+    for goal in &charter.goals {
+        out.push_str(&format!("- **{}** {}", goal.id, goal.statement.trim()));
+        if !goal.measure.trim().is_empty() {
+            out.push_str(&format!("\n  - _Measure:_ {}", goal.measure.trim()));
+        }
+        if !goal.horizon.trim().is_empty() {
+            out.push_str(&format!("\n  - _Horizon:_ {}", goal.horizon.trim()));
+        }
+        out.push('\n');
+    }
+
+    fn bullets(out: &mut String, title: &str, items: &[String]) {
+        if items.is_empty() {
+            return;
+        }
+        out.push_str(&format!("\n## {title}\n\n"));
+        for item in items {
+            out.push_str(&format!("- {}\n", item.trim()));
+        }
+    }
+    bullets(&mut out, "Non-goals", &charter.non_goals);
+
+    if !charter.stakeholders.is_empty() {
+        out.push_str("\n## Stakeholders\n\n");
+        for s in &charter.stakeholders {
+            out.push_str(&format!("- **{}**", s.name.trim()));
+            if !s.role.trim().is_empty() {
+                out.push_str(&format!(" ({})", s.role.trim()));
+            }
+            if !s.interest.trim().is_empty() {
+                out.push_str(&format!(" — {}", s.interest.trim()));
+            }
+            out.push('\n');
+        }
+    }
+    bullets(&mut out, "Constraints", &charter.constraints);
+
+    if !charter.adopted_at.trim().is_empty() {
+        let day = charter.adopted_at.get(..10).unwrap_or(&charter.adopted_at);
+        out.push_str(&format!("\n_Adopted {day}._\n"));
+    }
+    out
+}
+
 /// Render a feature as a self-contained markdown brief Claude can act on.
 pub fn to_markdown(feature: &FeatureItem, milestone: Option<&Milestone>) -> String {
     let mut out = String::new();

@@ -599,6 +599,18 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             Ok(String::new())
         }
 
+        // ---- project charter (FEAT-046) ----
+        ("GET", ["projects", p, "charter"]) => {
+            store.load_meta(p)?; // the project must exist; an absent charter is a valid default
+            ser(&crate::charter::load(store, p)?)
+        }
+        ("PUT", ["projects", p, "charter"]) => {
+            store.load_meta(p)?;
+            let charter: crate::charter::Charter = serde_json::from_value(b.clone())
+                .map_err(|e| CoreError::Unsupported(format!("invalid charter: {e}")))?;
+            ser(&crate::charter::save(store, p, &charter)?)
+        }
+
         // ---- issue mirror (FEAT-043) ----
         ("GET", ["projects", p, "mirror"]) => ser(&crate::mirror::load_config(store, p)?),
         ("PUT", ["projects", p, "mirror"]) => {
@@ -653,6 +665,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects"] => "create project".into(),
         ["projects", p] if del => format!("delete project {p}"),
         ["projects", p] => format!("edit project {p}"),
+        ["projects", _p, "charter"] => "update project charter".into(),
         ["projects", _p, "mirror"] => "configure issue mirror".into(),
         ["projects", _p, "features"] => "add feature item".into(),
         ["projects", _p, "features", c] => format!("edit feature {c}"),
