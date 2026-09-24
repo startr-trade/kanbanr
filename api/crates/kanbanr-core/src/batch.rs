@@ -86,9 +86,23 @@ pub enum BatchOp {
         #[serde(default)]
         definition: Option<FeatureDefinition>,
     },
-    /// Move a feature to a new status (validated against the workflow).
+    /// Move a feature to a new status (validated against the workflow). Entering an active status
+    /// also requires a current approval (FEAT-048); `unapproved` records an explicit reason to go
+    /// ahead without one.
     #[serde(rename = "feature.move")]
-    FeatureMove { code: String, to: String },
+    FeatureMove {
+        code: String,
+        to: String,
+        #[serde(default)]
+        unapproved: Option<String>,
+    },
+    /// Record agreement to an item's definition as it stands (FEAT-048).
+    #[serde(rename = "feature.approve")]
+    FeatureApprove {
+        code: String,
+        #[serde(default)]
+        by: Option<String>,
+    },
     /// Create a milestone. `ref` aliases the new MS code.
     #[serde(rename = "milestone.add")]
     MilestoneAdd {

@@ -493,8 +493,20 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             }
         }
         ("POST", ["projects", p, "features", code, "move"]) => {
-            ser(&store.move_feature(p, code, &str_field(b, "to").unwrap_or_default())?)
+            // Entering an active status needs a current approval (FEAT-048); an explicit
+            // `unapproved` reason is recorded rather than silently allowed.
+            ser(&store.move_feature_approved(
+                p,
+                code,
+                &str_field(b, "to").unwrap_or_default(),
+                str_field(b, "unapproved").as_deref(),
+            )?)
         }
+        ("POST", ["projects", p, "features", code, "approve"]) => ser(&store.approve_feature(
+            p,
+            code,
+            &str_field(b, "by").unwrap_or_else(|| "unknown".to_string()),
+        )?),
         ("POST", ["projects", p, "features", code, "todos"]) => ser(&store.add_todo_list(
             p,
             code,
@@ -684,6 +696,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "features"] => "add feature item".into(),
         ["projects", _p, "features", c] => format!("edit feature {c}"),
         ["projects", _p, "features", c, "move"] => format!("move feature {c}"),
+        ["projects", _p, "features", c, "approve"] => format!("approve definition of {c}"),
         ["projects", _p, "features", c, "todos"] => format!("add todo-list to {c}"),
         ["projects", _p, "features", c, "todos", t, "tasks"] => format!("add task to {c}/{t}"),
         ["projects", _p, "features", c, "todos", t, "tasks", k] => {

@@ -694,9 +694,20 @@ impl Store {
         code: &str,
         definition: Option<crate::models::FeatureDefinition>,
     ) -> Result<FeatureItem> {
-        project.feature(code)?; // ensure it exists
+        let previous = project.feature(code)?.definition.clone();
         let definition = definition.map(|mut def| {
             assign_requirement_ids(&mut def);
+            // Carry the approval record forward: a redefinition must LAPSE the approval, not erase
+            // it. Erasing would lose who agreed to what, and would report "never approved" for an
+            // item whose scope simply changed after a yes — the exact distinction that matters.
+            if let Some(prev) = previous.as_ref() {
+                if def.approval.is_none() {
+                    def.approval = prev.approval.clone();
+                }
+                if def.started_unapproved.trim().is_empty() {
+                    def.started_unapproved = prev.started_unapproved.clone();
+                }
+            }
             def
         });
         let feature = project.feature_mut(code)?;
@@ -734,6 +745,103 @@ impl Store {
         pending.persist_features.insert(updated.code.clone());
         self.flush(id, &project, &pending)?;
         Ok(updated)
+    }
+
+    /// Record agreement to an item's definition as it currently stands (FEAT-048).
+    pub fn approve_feature(&self, id: &str, code: &str, by: &str) -> Result<FeatureItem> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let feature = project.feature_mut(code)?;
+        let definition = feature.definition.as_mut().ok_or_else(|| {
+            CoreError::Unsupported(format!(
+                "{code} has no definition to approve — write one with `kanbanr feature define`"
+            ))
+        })?;
+        definition.approval = Some(crate::models::Approval {
+            by: by.to_string(),
+            at: now_rfc3339(),
+            rev: definition.content_rev(),
+        });
+        feature.updated_at = now_rfc3339();
+        let updated = feature.clone();
+        pending.persist_features.insert(updated.code.clone());
+        self.flush(id, &project, &pending)?;
+        Ok(updated)
+    }
+
+    /// Move a feature, refusing to start work whose reasoning nobody agreed to (FEAT-048).
+    /// `unapproved` records an explicit reason to go ahead anyway.
+    pub fn move_feature_approved(
+        &self,
+        id: &str,
+        code: &str,
+        to: &str,
+        unapproved: Option<&str>,
+    ) -> Result<FeatureItem> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let charter = crate::charter::load(self, id)?;
+        Self::check_start_gate(&project, &charter, code, to, unapproved)?;
+        if let Some(reason) = unapproved.filter(|r| !r.trim().is_empty()) {
+            if let Ok(feature) = project.feature_mut(code) {
+                if let Some(def) = feature.definition.as_mut() {
+                    def.started_unapproved = reason.trim().to_string();
+                }
+            }
+        }
+        let f = Self::move_feature_on(&mut project, &mut pending, code, to)?;
+        self.flush(id, &project, &pending)?;
+        Ok(f)
+    }
+
+    /// The start gate: entering an **active** status — one that is neither the default backlog
+    /// state, nor terminal, nor a no-op disposition — requires a current approval. Closing or
+    /// dispositioning an item is never gated: you can always stop work.
+    fn check_start_gate(
+        project: &Project,
+        charter: &crate::Charter,
+        code: &str,
+        to: &str,
+        unapproved: Option<&str>,
+    ) -> Result<()> {
+        // Adoption is never retroactive. A project with no charter has not taken up the method, and
+        // items created before the charter was adopted predate it — gating either would make
+        // upgrading kanbanr break every board in existence, which no amount of rigour justifies.
+        if charter.adopted_at.trim().is_empty() {
+            return Ok(());
+        }
+        if project
+            .feature(code)
+            .is_ok_and(|f| f.created_at.as_str() < charter.adopted_at.as_str())
+        {
+            return Ok(());
+        }
+        let config = &project.config;
+        let gated = to != config.default_state
+            && !crate::graph::is_terminal_status(config, to)
+            && !config.is_no_op(to);
+        if !gated || unapproved.is_some_and(|r| !r.trim().is_empty()) {
+            return Ok(());
+        }
+        let feature = project.feature(code)?;
+        let missing = match feature.definition.as_ref() {
+            None => "it has no definition (run `kanbanr feature define`)".to_string(),
+            Some(def) => match def.approval_state() {
+                crate::models::ApprovalState::Current => return Ok(()),
+                crate::models::ApprovalState::Missing => {
+                    "its definition is not approved (review it, then `kanbanr approve`)".to_string()
+                }
+                crate::models::ApprovalState::Lapsed => {
+                    "its approval lapsed — the definition changed after it was approved, so \
+                     re-approve what is now proposed"
+                        .to_string()
+                }
+            },
+        };
+        Err(CoreError::Unsupported(format!(
+            "cannot move {code} to '{to}': {missing}. To proceed anyway, record why with \
+             --unapproved \"<reason>\""
+        )))
     }
 
     pub fn move_feature(&self, id: &str, code: &str, to: &str) -> Result<FeatureItem> {
@@ -1079,6 +1187,7 @@ impl Store {
         }
 
         let mut project = self.load(id)?;
+        let charter = crate::charter::load(self, id)?;
         let mut pending = Pending::default();
         let mut aliases: HashMap<String, String> = HashMap::new();
         // `ref` aliases of skipped (already imported) features, and of todo-lists under them.
@@ -1273,9 +1382,30 @@ impl Store {
                     }
                     Ok(serde_json::json!({"op":"feature.edit","code":f.code}))
                 }
-                FeatureMove { code, to } => {
+                FeatureMove {
+                    code,
+                    to,
+                    unapproved,
+                } => {
                     if skipped.contains(&code) {
                         return Ok(skip("feature.move", &code));
+                    }
+                    // The gate applies on the batch path too — it is the primary way work is
+                    // started, so exempting it would make the gate decorative.
+                    let resolved = resolve(&aliases, &code);
+                    Self::check_start_gate(
+                        &project,
+                        &charter,
+                        &resolved,
+                        &to,
+                        unapproved.as_deref(),
+                    )?;
+                    if let Some(reason) = unapproved.as_deref().filter(|r| !r.trim().is_empty()) {
+                        if let Ok(feature) = project.feature_mut(&resolved) {
+                            if let Some(def) = feature.definition.as_mut() {
+                                def.started_unapproved = reason.trim().to_string();
+                            }
+                        }
                     }
                     let f = Self::move_feature_on(
                         &mut project,
@@ -1284,6 +1414,21 @@ impl Store {
                         &to,
                     )?;
                     Ok(serde_json::json!({"op":"feature.move","code":f.code,"status":f.status}))
+                }
+                FeatureApprove { code, by } => {
+                    let resolved = resolve(&aliases, &code);
+                    let feature = project.feature_mut(&resolved)?;
+                    let definition = feature.definition.as_mut().ok_or_else(|| {
+                        CoreError::Unsupported(format!("{resolved} has no definition to approve"))
+                    })?;
+                    definition.approval = Some(crate::models::Approval {
+                        by: by.unwrap_or_else(|| "unknown".to_string()),
+                        at: now_rfc3339(),
+                        rev: definition.content_rev(),
+                    });
+                    feature.updated_at = now_rfc3339();
+                    pending.persist_features.insert(resolved.clone());
+                    Ok(serde_json::json!({"op":"feature.approve","code":resolved}))
                 }
                 MilestoneAdd {
                     alias,

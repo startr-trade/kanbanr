@@ -107,7 +107,25 @@ enum Command {
     #[command(subcommand)]
     Feature(FeatureCmd),
     /// Move a feature to a new status (validated against the workflow).
-    Move { code: String, status: String },
+    Move {
+        code: String,
+        status: String,
+        /// Start work whose definition is not approved, recording why. The reason is stored on the
+        /// item — a bypass that leaves a trace beats one that is silent.
+        #[arg(long)]
+        unapproved: Option<String>,
+    },
+    /// Print the one-screen decision brief for an item: what is proposed, why, and how it will be
+    /// verified. Read this BEFORE the work, not after. (FEAT-048)
+    Review { code: String },
+    /// Record agreement to an item's definition as it currently stands. Editing the definition
+    /// afterwards lapses the approval. (FEAT-048)
+    Approve {
+        code: String,
+        /// Who is approving (defaults to the data repo's commit identity).
+        #[arg(long)]
+        by: Option<String>,
+    },
     /// Manage a feature's persistent todo-lists (an epic can hold many).
     #[command(subcommand)]
     Todo(TodoCmd),
@@ -1594,6 +1612,15 @@ fn field(s: &str, key: &str) -> String {
         .unwrap_or_default()
 }
 
+/// One feature, straight from the project payload.
+fn get_feature(client: &Backend, p: &str, code: &str) -> anyhow::Result<kanbanr_core::FeatureItem> {
+    get_project(client, p)?
+        .features
+        .into_iter()
+        .find(|f| f.code == code)
+        .ok_or_else(|| anyhow::anyhow!("feature '{code}' not found"))
+}
+
 fn get_project(client: &Backend, p: &str) -> anyhow::Result<Project> {
     let s = client.get(&format!("/projects/{p}"))?;
     Ok(serde_json::from_str(&s)?)
@@ -1668,14 +1695,56 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Remote(cmd) => run_remote(cli, &client, cmd),
         Command::Project(cmd) => run_project(cli, &client, cmd),
         Command::Feature(cmd) => run_feature(cli, &client, cmd),
-        Command::Move { code, status } => {
+        Command::Move {
+            code,
+            status,
+            unapproved,
+        } => {
             let p = require_project(cli)?;
+            let mut body = json!({ "to": status });
+            if let Some(reason) = unapproved {
+                body["unapproved"] = json!(reason);
+            }
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/features/{code}/move"),
-                Some(json!({ "to": status })),
+                Some(body),
             )?;
             print_write(cli, &resp, format!("{code} -> {}", field(&resp, "status")));
+            Ok(())
+        }
+        Command::Review { code } => {
+            let p = require_project(cli)?;
+            let feature = get_feature(&client, &p, code)?;
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "code": feature.code,
+                        "approval": feature.definition.as_ref().map(|d| d.approval_state()),
+                        "definition": feature.definition,
+                    }))?
+                );
+            } else {
+                print!("{}", kanbanr_core::export::definition_brief(&feature));
+            }
+            Ok(())
+        }
+        Command::Approve { code, by } => {
+            let p = require_project(cli)?;
+            let who = match by {
+                Some(name) => name.clone(),
+                None => serde_json::from_str::<Value>(&client.get("/auth/whoami")?)
+                    .ok()
+                    .and_then(|v| v["name"].as_str().map(str::to_string))
+                    .unwrap_or_else(|| "unknown".to_string()),
+            };
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/features/{code}/approve"),
+                Some(json!({ "by": who })),
+            )?;
+            print_write(cli, &resp, format!("{code} approved by {who}"));
             Ok(())
         }
         Command::Todo(cmd) => run_todo(cli, &client, cmd),
