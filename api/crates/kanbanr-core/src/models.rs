@@ -179,10 +179,61 @@ pub struct FeatureDefinition {
     pub design_doc: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requirements: Vec<Requirement>,
+    /// Who agreed to this definition, when, and what exactly they agreed to (FEAT-048).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<Approval>,
+    /// A recorded reason work started without approval. An escape hatch that leaves a trace beats
+    /// one that is silent — an unrecorded bypass just teaches itself.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub started_unapproved: String,
     /// A recorded reason this item is exempt from gap reporting. An escape hatch that is visible
     /// beats one that is habitual (`--no-verify` teaches itself).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub exempt: String,
+}
+
+/// Agreement to a definition, pinned to its content (FEAT-048).
+///
+/// `rev` is a hash of the definition as approved. If the definition changes afterwards the hash no
+/// longer matches and the approval has **lapsed** — so scope cannot drift silently past a "yes",
+/// which is exactly how work gets built and then rejected.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Approval {
+    pub by: String,
+    pub at: String,
+    pub rev: String,
+}
+
+/// Where an item stands against its approval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalState {
+    /// No definition, or no approval recorded.
+    Missing,
+    /// Approved, and the definition has not changed since.
+    Current,
+    /// Approved once, but the definition changed afterwards.
+    Lapsed,
+}
+
+impl FeatureDefinition {
+    /// A stable hash of the definition's content, excluding the approval itself — otherwise
+    /// recording an approval would immediately invalidate it.
+    pub fn content_rev(&self) -> String {
+        let mut bare = self.clone();
+        bare.approval = None;
+        bare.started_unapproved = String::new();
+        crate::hash::stable_hash(&serde_yaml::to_string(&bare).unwrap_or_default())
+    }
+
+    /// Whether this definition is approved as it currently stands.
+    pub fn approval_state(&self) -> ApprovalState {
+        match &self.approval {
+            None => ApprovalState::Missing,
+            Some(a) if a.rev == self.content_rev() => ApprovalState::Current,
+            Some(_) => ApprovalState::Lapsed,
+        }
+    }
 }
 
 /// The six completeness dimensions. Answers are one line; anything longer belongs in the spec.

@@ -146,6 +146,102 @@ pub fn charter_to_markdown(charter: &crate::Charter) -> String {
     out
 }
 
+/// The decision brief for an item: what is proposed and why, on one screen, so agreement happens
+/// BEFORE the work rather than after it (FEAT-048). Gaps are rendered, never stored.
+pub fn definition_brief(feature: &FeatureItem) -> String {
+    let Some(def) = feature.definition.as_ref() else {
+        return format!(
+            "# {} — {}\n\n_No definition yet. Write one with `kanbanr feature define {}`._\n",
+            feature.code, feature.title, feature.code
+        );
+    };
+    let mut out = format!("# {} — {}\n\n", feature.code, feature.title);
+    if def.statement.trim().is_empty() {
+        out.push_str("_[MISSING: statement]_\n");
+    } else {
+        out.push_str(&format!("> {}\n", def.statement.trim()));
+    }
+    out.push_str(&format!(
+        "\n**Serves:** {}\n",
+        if def.goals.is_empty() {
+            "[MISSING: goal link]".to_string()
+        } else {
+            def.goals.join(", ")
+        }
+    ));
+
+    out.push_str("\n| Dimension | Answer |\n|---|---|\n");
+    for (column, answer) in def.zachman.columns() {
+        let answer = if answer.trim().is_empty() {
+            format!("[MISSING: {column}]")
+        } else {
+            answer.trim().replace('|', "\\|")
+        };
+        out.push_str(&format!("| {column} | {answer} |\n"));
+    }
+
+    out.push_str("\n## Requirements\n\n");
+    if def.requirements.is_empty() {
+        out.push_str("_None yet — an item with no requirement cannot be verified._\n");
+    }
+    for r in &def.requirements {
+        let kind = match r.kind {
+            crate::models::RequirementKind::Functional => "functional",
+            crate::models::RequirementKind::Nfr => "nfr",
+        };
+        out.push_str(&format!("- **{}** ({kind}) {}\n", r.id, r.text.trim()));
+        if !r.violates.trim().is_empty() {
+            out.push_str(&format!("  - violates `{}`\n", r.violates.trim()));
+        }
+        if !r.iso.is_empty() {
+            out.push_str(&format!("  - quality: {}\n", r.iso.join(", ")));
+        }
+        if let Some(s) = &r.scenario {
+            if !s.measure.trim().is_empty() {
+                out.push_str(&format!("  - measure: {}\n", s.measure.trim()));
+            }
+        }
+        if r.tests.is_empty() {
+            out.push_str("  - _[MISSING: test]_\n");
+        } else {
+            for t in &r.tests {
+                let state = match t.state {
+                    crate::models::TestState::Planned => "planned",
+                    crate::models::TestState::Red => "red",
+                    crate::models::TestState::Green => "green",
+                };
+                out.push_str(&format!("  - test `{}` ({state})\n", t.name));
+            }
+        }
+    }
+
+    let approval = match def.approval_state() {
+        crate::models::ApprovalState::Current => def
+            .approval
+            .as_ref()
+            .map(|a| {
+                format!(
+                    "approved by {} on {}",
+                    a.by,
+                    a.at.get(..10).unwrap_or(&a.at)
+                )
+            })
+            .unwrap_or_default(),
+        crate::models::ApprovalState::Lapsed => {
+            "**approval lapsed** — the definition changed after it was approved".to_string()
+        }
+        crate::models::ApprovalState::Missing => "**not approved**".to_string(),
+    };
+    out.push_str(&format!("\n_Status: {approval}._\n"));
+    if !def.started_unapproved.trim().is_empty() {
+        out.push_str(&format!(
+            "_Started without approval: {}._\n",
+            def.started_unapproved.trim()
+        ));
+    }
+    out
+}
+
 /// Render a feature as a self-contained markdown brief Claude can act on.
 pub fn to_markdown(feature: &FeatureItem, milestone: Option<&Milestone>) -> String {
     let mut out = String::new();

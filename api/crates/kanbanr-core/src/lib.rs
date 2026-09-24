@@ -759,6 +759,193 @@ requirements:
         );
     }
 
+    /// Adopt the method: the start gate only applies to projects that have a charter, and only to
+    /// items created after it was adopted — so upgrading never breaks an existing board.
+    fn adopt_charter(store: &Store, id: &str) {
+        crate::charter::save(
+            store,
+            id,
+            &crate::Charter {
+                purpose: "Because reasons".into(),
+                goals: vec![crate::Goal {
+                    statement: "Ship the thing".into(),
+                    ..crate::Goal::default()
+                }],
+                ..crate::Charter::default()
+            },
+        )
+        .unwrap();
+    }
+
+    /// A definition that answers everything, so gate tests exercise approval and not gaps.
+    fn full_definition(statement: &str) -> crate::models::FeatureDefinition {
+        serde_yaml::from_str(&format!(
+            r#"
+statement: {statement}
+goals: [G-1]
+zachman:
+  what: w
+  how: h
+  where: e
+  when: n
+  who: o
+  why: y
+requirements:
+  - kind: functional
+    text: "THE SYSTEM SHALL do the thing."
+    tests:
+      - name: core::does_the_thing
+        state: planned
+"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn approval_is_pinned_to_content_and_lapses_when_the_definition_changes() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        use crate::models::ApprovalState;
+
+        store
+            .set_feature_definition("demo", &f.code, Some(full_definition("Keep carts 7 days")))
+            .unwrap();
+        let def = |store: &Store| {
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&f.code)
+                .unwrap()
+                .definition
+                .clone()
+                .unwrap()
+        };
+        assert_eq!(def(&store).approval_state(), ApprovalState::Missing);
+
+        store.approve_feature("demo", &f.code, "Venkat").unwrap();
+        assert_eq!(def(&store).approval_state(), ApprovalState::Current);
+        assert_eq!(def(&store).approval.unwrap().by, "Venkat");
+
+        // Scope changes after the yes: the approval LAPSES rather than vanishing, so the record of
+        // who agreed to what survives and the message can say which it is.
+        store
+            .set_feature_definition("demo", &f.code, Some(full_definition("Keep carts 30 days")))
+            .unwrap();
+        assert_eq!(def(&store).approval_state(), ApprovalState::Lapsed);
+        assert_eq!(def(&store).approval.unwrap().by, "Venkat");
+
+        store.approve_feature("demo", &f.code, "Venkat").unwrap();
+        assert_eq!(def(&store).approval_state(), ApprovalState::Current);
+    }
+
+    #[test]
+    fn the_start_gate_refuses_unapproved_work_but_never_blocks_closing_it() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        let code = f.code.as_str();
+
+        // No definition: starting work is refused, in words that say what to do.
+        let err = store
+            .move_feature_approved("demo", code, "Scheduled", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no definition"), "{err}");
+
+        // Defined but unapproved: still refused.
+        store
+            .set_feature_definition("demo", code, Some(full_definition("Keep carts")))
+            .unwrap();
+        let err = store
+            .move_feature_approved("demo", code, "Scheduled", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not approved"), "{err}");
+
+        // Dispositioning is never gated — you can always stop work you never started.
+        store
+            .move_feature_approved("demo", code, "Out-of-Scope", None)
+            .unwrap();
+        store.move_feature("demo", code, "Planned").unwrap();
+
+        // Approved: it starts.
+        store.approve_feature("demo", code, "V").unwrap();
+        let moved = store
+            .move_feature_approved("demo", code, "Scheduled", None)
+            .unwrap();
+        assert_eq!(moved.status, "Scheduled");
+
+        // Terminal moves stay ungated even once the approval lapses.
+        store
+            .set_feature_definition("demo", code, Some(full_definition("Changed scope")))
+            .unwrap();
+        store
+            .move_feature_approved("demo", code, "Completed", None)
+            .unwrap();
+    }
+
+    #[test]
+    fn an_override_is_recorded_and_the_batch_path_is_gated_too() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        let code = f.code.clone();
+        store
+            .set_feature_definition("demo", &code, Some(full_definition("Keep carts")))
+            .unwrap();
+
+        // The batch path is how work is usually started, so exempting it would make the gate
+        // decorative.
+        let err = store
+            .apply_batch(
+                "demo",
+                ops(serde_json::json!([{"op":"feature.move","code":code,"to":"Scheduled"}])),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not approved"), "{err}");
+
+        // An override goes through, and leaves a trace on the item.
+        store
+            .apply_batch(
+                "demo",
+                ops(serde_json::json!([
+                    {"op":"feature.move","code":code,"to":"Scheduled","unapproved":"prod outage"}
+                ])),
+            )
+            .unwrap();
+        let def = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        assert_eq!(def.started_unapproved, "prod outage");
+
+        // And approving through the batch path works, so one bundle can define, approve and start.
+        store
+            .apply_batch(
+                "demo",
+                ops(serde_json::json!([{"op":"feature.approve","code":code,"by":"V"}])),
+            )
+            .unwrap();
+        let def = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        assert_eq!(def.approval_state(), crate::models::ApprovalState::Current);
+    }
+
     #[test]
     fn feature_requires_existing_milestone() {
         let (store, _d) = temp_store();
