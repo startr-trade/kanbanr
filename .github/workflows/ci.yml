@@ -108,3 +108,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # A mermaid diagram that does not parse renders as nothing, and nothing reads as a missing
+      # image rather than a syntax error — so it survives review. Parse them with the same library
+      # the monitor renders them with.
+      - name: Docs diagrams parse
+        run: npm run check:docs
