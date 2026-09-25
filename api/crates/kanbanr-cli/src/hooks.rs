@@ -6,8 +6,8 @@
 //! The settings file belongs to the user: it is merged, never replaced — other keys and hooks keep
 //! their order, the write is atomic, and a file that isn't valid JSON is left alone.
 
-use anyhow::{anyhow, Context};
-use serde_json::{json, Value};
+use anyhow::{Context, anyhow};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 /// (Claude Code event, script base name).
@@ -305,14 +305,18 @@ mod tests {
             v["hooks"]["Stop"][0]["hooks"][0]["command"],
             "notify-send done"
         );
-        assert!(v["hooks"]["Stop"][1]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .contains("stop-check"));
-        assert!(v["hooks"]["SessionStart"][0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .contains("session-start"));
+        assert!(
+            v["hooks"]["Stop"][1]["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("stop-check")
+        );
+        assert!(
+            v["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("session-start")
+        );
 
         // Idempotent.
         assert_eq!(install(&dir).unwrap(), Installed::AlreadyPresent);
@@ -348,10 +352,12 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap();
         let starts = v["hooks"]["SessionStart"].as_array().unwrap();
         assert_eq!(starts.len(), 1, "stale entry replaced, not kept: {v}");
-        assert!(!starts[0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .starts_with("/old/place"));
+        assert!(
+            !starts[0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .starts_with("/old/place")
+        );
     }
 
     #[test]

@@ -19,9 +19,9 @@
 //! Push warnings/conflicts are surfaced exactly as before — `git::sync_all` returns per-remote
 //! guidance and we print it; the change is already committed locally so it is safe to defer.
 
-use anyhow::{anyhow, Result};
-use kanbanr_core::{activity, dispatch, eventing, git, Store};
-use serde_json::{json, Value};
+use anyhow::{Result, anyhow};
+use kanbanr_core::{Store, activity, dispatch, eventing, git};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::time::Duration;
 

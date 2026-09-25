@@ -3,16 +3,16 @@
 //! the store/activity log directly.
 
 use crate::AppState;
+use axum::Json;
 use axum::extract::{OriginalUri, Path, Query, State};
 use axum::http::{Method, StatusCode};
-use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
-use axum::Json;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use futures::stream::StreamExt;
 use kanbanr_core::{dispatch, export};
 use std::convert::Infallible;
-use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::Stream;
+use tokio_stream::wrappers::BroadcastStream;
 
 /// Map a CoreError to an HTTP status + message.
 fn core_err(e: kanbanr_core::CoreError) -> (StatusCode, String) {

@@ -4,10 +4,10 @@
 
 use crate::backend::{Backend, Method};
 use anyhow::{anyhow, bail};
-use kanbanr_core::mirror::{self, GithubMirror, IssueDoc, MirrorActionKind, MirrorConfig};
 use kanbanr_core::Project;
+use kanbanr_core::mirror::{self, GithubMirror, IssueDoc, MirrorActionKind, MirrorConfig};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::Write;
 use std::process::{Command, Stdio};
 

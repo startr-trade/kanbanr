@@ -407,10 +407,12 @@ fn cli_import_preview_apply_reimport_and_missing_sources() {
     let shown = run(&["export", "FEAT-001", "--format", "json"]);
     let f: serde_json::Value = serde_json::from_str(&shown).unwrap();
     assert_eq!(f["source"]["revision"], head[..12]);
-    assert!(f["specification"]
-        .as_str()
-        .unwrap()
-        .contains("## Imported from"));
+    assert!(
+        f["specification"]
+            .as_str()
+            .unwrap()
+            .contains("## Imported from")
+    );
 
     // Re-import: everything skipped, nothing duplicated.
     let again = run(&["batch", "--file", file]);
@@ -620,14 +622,18 @@ fn cli_init_registers_claude_code_hooks_once_and_respects_no_hooks() {
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
     assert_eq!(v["theme"], "dark");
-    assert!(v["hooks"]["SessionStart"][0]["hooks"][0]["command"]
-        .as_str()
-        .unwrap()
-        .contains("session-start"));
-    assert!(v["hooks"]["Stop"][0]["hooks"][0]["command"]
-        .as_str()
-        .unwrap()
-        .contains("stop-check"));
+    assert!(
+        v["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("session-start")
+    );
+    assert!(
+        v["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("stop-check")
+    );
 
     // A second project: already installed, nothing duplicated.
     let before = std::fs::read_to_string(&settings).unwrap();
@@ -741,16 +747,20 @@ fn cli_charter_round_trips_and_doctor_reports_its_absence() {
     assert_eq!(json["goals"][0]["id"], "G-1");
     assert!(json["adopted_at"].as_str().is_some_and(|s| !s.is_empty()));
 
-    // With a purpose and a goal, the charter warnings are gone.
+    // With a purpose and a goal, the "no charter" warning is gone. What remains is the honest
+    // observation that nothing is linked to the goal yet (FEAT-049).
     let after = run(&["doctor"], None);
-    assert!(!after.contains("charter"), "{after}");
+    assert!(!after.contains("no charter purpose"), "{after}");
+    assert!(after.contains("G-1 has no work linked to it"), "{after}");
 
     // An empty charter clears the file.
     let cleared = run(&["charter", "set"], Some("{}\n"));
     assert!(cleared.contains("charter cleared"), "{cleared}");
-    assert!(!base
-        .join("code/shop.kanbanr/projects/shop/charter.yaml")
-        .exists());
+    assert!(
+        !base
+            .join("code/shop.kanbanr/projects/shop/charter.yaml")
+            .exists()
+    );
 
     let _ = std::fs::remove_dir_all(&base);
 }

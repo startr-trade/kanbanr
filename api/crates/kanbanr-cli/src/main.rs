@@ -10,8 +10,8 @@ use backend::{Backend, Method};
 use clap::{Args, Parser, Subcommand};
 use kanbanr_core::docs::DocFolder;
 use kanbanr_core::project::{DataDirSource, Marker};
-use kanbanr_core::{project, Project};
-use serde_json::{json, Map, Value};
+use kanbanr_core::{Project, project};
+use serde_json::{Map, Value, json};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -762,15 +762,15 @@ fn run_init(
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
     let (dir, record) = choose_init_data_dir(cli, &cwd)?;
-    if record {
-        if let Some(repo) = project::enclosing_git_worktree(&dir, project::home_dir().as_deref()) {
-            println!(
-                "⚠ {} is inside the git repo at {}: the board would be nested in that repo \
+    if record
+        && let Some(repo) = project::enclosing_git_worktree(&dir, project::home_dir().as_deref())
+    {
+        println!(
+            "⚠ {} is inside the git repo at {}: the board would be nested in that repo \
                  (gitignore it, or pick a folder outside the repo)",
-                dir.display(),
-                repo.display()
-            );
-        }
+            dir.display(),
+            repo.display()
+        );
     }
     std::fs::create_dir_all(dir.join("projects"))?;
     kanbanr_core::git::ensure_repo(&dir);
@@ -873,7 +873,10 @@ fn run_hooks(cli: &Cli, cmd: &HooksCmd) -> anyhow::Result<()> {
         },
         HooksCmd::Uninstall => {
             let n = hooks::uninstall(&dir)?;
-            println!("removed {n} kanbanr hook entr{}", if n == 1 { "y" } else { "ies" });
+            println!(
+                "removed {n} kanbanr hook entr{}",
+                if n == 1 { "y" } else { "ies" }
+            );
         }
         HooksCmd::Status => {
             let st = hooks::status(&dir)?;
@@ -882,7 +885,10 @@ fn run_hooks(cli: &Cli, cmd: &HooksCmd) -> anyhow::Result<()> {
                 return Ok(());
             }
             println!("settings: {}", st.settings);
-            println!("skill installed: {}", if st.skill_installed { "yes" } else { "no" });
+            println!(
+                "skill installed: {}",
+                if st.skill_installed { "yes" } else { "no" }
+            );
             if st.plugin {
                 println!("kanbanr plugin: enabled (provides the hooks)");
             }
@@ -890,7 +896,9 @@ fn run_hooks(cli: &Cli, cmd: &HooksCmd) -> anyhow::Result<()> {
                 let event = h["event"].as_str().unwrap_or("");
                 match h["command"].as_str() {
                     Some(c) if h["script_exists"] == true => println!("{event}: ✓ {c}"),
-                    Some(c) => println!("{event}: ✗ script missing: {c} (run `kanbanr hooks install`)"),
+                    Some(c) => {
+                        println!("{event}: ✗ script missing: {c} (run `kanbanr hooks install`)")
+                    }
                     None => println!("{event}: not registered"),
                 }
             }
@@ -1340,7 +1348,9 @@ fn run_mirror(cli: &Cli, client: &Backend, cmd: &MirrorCmd) -> anyhow::Result<()
         }
         MirrorCmd::Link { code, number } => {
             let url = mirror::link(client, &gh, &p, code, *number)?;
-            println!("linked {code} → {url}\nThe next sync replaces that issue's title and body with kanbanr's.");
+            println!(
+                "linked {code} → {url}\nThe next sync replaces that issue's title and body with kanbanr's."
+            );
         }
         MirrorCmd::Pull { code } => {
             let r = mirror::pull(client, &gh, &p, code)?;
@@ -1921,10 +1931,10 @@ fn run_query(cli: &Cli, client: &Backend, args: &QueryArgs) -> anyhow::Result<()
     if let Some(s) = &args.priority {
         push(&mut params, "priority", s);
     }
-    if let Some(labels) = &args.label {
-        if !labels.is_empty() {
-            push(&mut params, "label", &labels.join(","));
-        }
+    if let Some(labels) = &args.label
+        && !labels.is_empty()
+    {
+        push(&mut params, "label", &labels.join(","));
     }
     if let Some(s) = &args.assignee {
         push(&mut params, "assignee", s);

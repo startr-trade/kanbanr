@@ -11,7 +11,7 @@
 //!
 //! Binds localhost, no auth — consistent with the read-only monitor.
 
-use kanbanr_core::{activity, dispatch, eventing, git, Store};
+use kanbanr_core::{Store, activity, dispatch, eventing, git};
 use serde_json::Value;
 use std::path::Path;
 

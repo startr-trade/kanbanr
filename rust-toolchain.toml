@@ -1,0 +1,5 @@
+# Pin the toolchain so the maintainer, the Docker build and CI compile with the same rustc.
+# Bump deliberately (a chore item), not by drifting: `docker/Dockerfile` pins the same version.
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]

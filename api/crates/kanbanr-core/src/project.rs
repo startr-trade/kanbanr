@@ -35,13 +35,13 @@ pub struct Marker {
 impl Marker {
     /// Parse a marker: a YAML mapping, or a legacy single line holding just the project name.
     pub fn parse(content: &str) -> Marker {
-        if let Ok(v @ serde_yaml::Value::Mapping(_)) = serde_yaml::from_str(content) {
-            if let Ok(m) = serde_yaml::from_value::<Marker>(v) {
-                return Marker {
-                    project: non_empty(m.project),
-                    data_dir: non_empty(m.data_dir),
-                };
-            }
+        if let Ok(v @ serde_yaml::Value::Mapping(_)) = serde_yaml::from_str(content)
+            && let Ok(m) = serde_yaml::from_value::<Marker>(v)
+        {
+            return Marker {
+                project: non_empty(m.project),
+                data_dir: non_empty(m.data_dir),
+            };
         }
         let name = content.lines().next().unwrap_or("").trim();
         Marker {
