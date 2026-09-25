@@ -89,6 +89,10 @@ pub struct Retro {
     pub approximate: Vec<String>,
     pub evidence: Evidence,
     pub estimates: Vec<Estimate>,
+    /// What this wave taught, as it stood when the retro was produced (FEAT-064). Derived from the
+    /// lessons rows rather than copied into the document, so the scored record stays canonical —
+    /// but a reader looking for "what did we learn" finds it where they look for it.
+    pub lessons: Vec<crate::lessons::Lesson>,
 }
 
 /// Why the wave is bigger than it started. Each bucket is something an item *says* about itself.
@@ -169,6 +173,7 @@ pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
         approximate: Vec::new(),
         evidence: Evidence::default(),
         estimates: Vec::new(),
+        lessons: Vec::new(),
     };
     let wave_codes: Vec<&str> = items.iter().map(|f| f.code.as_str()).collect();
     let mut cycle_times: Vec<f64> = Vec::new();
@@ -266,6 +271,27 @@ pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
     }
 
     retro.cycle_time_days = percentiles(&mut cycle_times);
+    // A lesson belongs to the wave whose work taught it, or to the retrospective that promoted it.
+    // Retired ones are included: a retrospective is a historical account, and the wave did learn
+    // it — what changed afterwards is a fact about the lesson, not about the wave.
+    let document = document_path(wave, wave.milestone.as_deref());
+    retro.lessons = crate::lessons::load(store, id)?
+        .into_iter()
+        .filter(|l| {
+            wave_codes.contains(&l.from_item.as_str())
+                || (!l.from_retro.trim().is_empty()
+                    && (l.from_retro == document
+                        || wave
+                            .milestone
+                            .as_deref()
+                            .is_some_and(|m| l.from_retro.contains(m))))
+        })
+        .collect();
+    retro.lessons.sort_by(|a, b| {
+        b.confidence_now()
+            .partial_cmp(&a.confidence_now())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(retro)
 }
 
@@ -710,6 +736,77 @@ mod tests {
         assert!(
             r.finished.is_none(),
             "a wave is not over while an item is open"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FEAT-064: lessons are scored rows so they can be matched and decay — but a reader asking
+    /// "what did this wave teach us?" looks in the retrospective, and nothing was there.
+    #[test]
+    fn a_waves_lessons_are_part_of_its_retrospective() {
+        let (store, dir) = fixture();
+        let item = store
+            .add_feature("demo", "The work", "", "MS-1", None)
+            .unwrap();
+        let wave = Wave {
+            milestone: Some("MS-1".into()),
+            ..Default::default()
+        };
+        assert!(run(&store, "demo", &wave).unwrap().lessons.is_empty());
+
+        // A lesson recorded against an item of this wave belongs to this wave.
+        crate::lessons::add(
+            &store,
+            "demo",
+            crate::lessons::Lesson {
+                lesson: "Run it against the real board first".into(),
+                from_item: item.code.clone(),
+                evidence: "it was wrong twice".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // One promoted by the retrospective itself belongs to it too.
+        crate::lessons::add(
+            &store,
+            "demo",
+            crate::lessons::Lesson {
+                lesson: "Waves grow by defects more than by discovery".into(),
+                from_retro: "retros/MS-1-2026-09-26.md".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // A lesson from elsewhere does not.
+        crate::lessons::add(
+            &store,
+            "demo",
+            crate::lessons::Lesson {
+                lesson: "Something learned on another wave entirely".into(),
+                from_item: "FEAT-999".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let r = run(&store, "demo", &wave).unwrap();
+        let texts: Vec<&str> = r.lessons.iter().map(|l| l.lesson.as_str()).collect();
+        assert_eq!(r.lessons.len(), 2, "{texts:?}");
+        assert!(texts.iter().any(|t| t.contains("real board first")));
+        assert!(texts.iter().any(|t| t.contains("Waves grow by defects")));
+        assert!(!texts.iter().any(|t| t.contains("another wave entirely")));
+
+        // Contradicted into retirement, it is still part of what this wave learned: a retro is a
+        // historical account, and what changed later is a fact about the lesson, not the wave.
+        let retired =
+            crate::lessons::judge(&store, "demo", "L-1", false, "it did not hold").unwrap();
+        assert_eq!(retired.status, crate::lessons::LessonStatus::Retired);
+        let r = run(&store, "demo", &wave).unwrap();
+        assert_eq!(r.lessons.len(), 2, "still two — one of them now retired");
+        assert!(
+            r.lessons
+                .iter()
+                .any(|l| l.status == crate::lessons::LessonStatus::Retired)
         );
         let _ = std::fs::remove_dir_all(dir);
     }
