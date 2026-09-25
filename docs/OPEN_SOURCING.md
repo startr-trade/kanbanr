@@ -18,7 +18,7 @@
 > if you want a personal name on the licence.
 >
 >   ```bash
->   # from the repo root, once you've picked your GitHub owner slug:
+>   # Forking this under a different owner? One pass replaces every reference:
 >   grep -rl 'startr-trade' . --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=target \
 >     | xargs sed -i 's/startr-trade/YOUR_GITHUB_OWNER/g'
 >   ```
@@ -257,8 +257,8 @@ on `PATH`; the hooks are best-effort and stay silent if it isn't installed. Keep
       with **no undocumented step**. (Ideally on macOS/Windows too.)
 - [ ] `make` / `cargo test` / web build all green in CI.
 - [x] LICENSE(s), CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG, THIRD_PARTY present.
-- [ ] `startr-trade` + copyright/email placeholders filled (see the top of this file); **names reserved**;
-      image + binaries published for the first tagged release.
+- [x] Owner slug (`startr-trade`) + copyright/email placeholders filled (see the top of this file).
+- [ ] **Names reserved** (GitHub, crates.io); image + binaries published for the first tagged release.
 - [ ] Dependabot is on, Discussions enabled (optional), `release.yml` secrets/variables set if publishing.
 - [ ] Secrets sweep (§0) re-confirmed on the exact commit you'll make public.
 - [ ] Screenshots (`make screenshots`) + a couple of example projects under `data/projects/` (non-sensitive).
@@ -277,12 +277,11 @@ on `PATH`; the hooks are best-effort and stay silent if it isn't installed. Keep
 Most of the scaffolding now exists in the repo. The **shortest path to a public v0.1.0** is just the
 manual steps only you can do:
 
-1. Pick your GitHub `startr-trade`, create the repo, and run the `sed` find/replace at the top of this file.
-2. Fill the copyright/contact placeholders in `LICENSE-*`, `CODE_OF_CONDUCT.md`, `SECURITY.md`.
-3. Run the **secrets sweep** (§0); remove `data/security.yaml`; decide what `data/` to publish.
-4. `git init` (if needed), commit, push, make the repo **public**.
-5. Reserve the crate name + set up crates.io publishing (token **or** Trusted Publishing).
-6. `git tag v0.1.0 && git push origin v0.1.0` → the release workflow builds binaries + the GHCR image.
-7. Add screenshots to the README (`make screenshots`), then announce.
+1. Create the `startr-trade/kanbanr` repository on GitHub (the owner slug is already filled in throughout).
+2. Run the **secrets sweep** (§0); remove `data/security.yaml`; decide what `data/` to publish.
+3. `git init` (if needed), commit, push, make the repo **public**.
+4. Reserve the crate name + set up crates.io publishing (token **or** Trusted Publishing).
+5. `git tag v0.1.0 && git push origin v0.1.0` → the release workflow builds binaries + the GHCR image.
+6. Add screenshots to the README (`make screenshots`), then announce.
 
 Everything else (Open VSX, npm reservation, MCP, badges polish) can follow.
