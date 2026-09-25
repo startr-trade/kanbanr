@@ -1301,6 +1301,19 @@ fn cli_git_guardrails_in_a_scratch_repo() {
             .success()
     );
     assert!(!check("chore: rotate a key\n\n[no-ref]\n").status.success());
+    // Explaining the escape is not taking it: this commit has a reference and keeps it.
+    assert!(
+        check("docs: describe `[no-ref] <why>`\n\nRefs: kanbanr:FEAT-001\n")
+            .status
+            .success(),
+        "a referenced commit that mentions the escape is still a referenced commit"
+    );
+    assert!(
+        !check("docs: describe `[no-ref] <why>` in the guide\n")
+            .status
+            .success(),
+        "...and mentioning it does not excuse having no reference"
+    );
 
     // The branch check refuses the default branch, and `start` moves you off it.
     let on_main = exec(&["git", "check-branch"]);

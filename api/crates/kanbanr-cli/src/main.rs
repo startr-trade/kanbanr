@@ -1383,13 +1383,14 @@ fn run_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     let Some(message) = inline_message(command) else {
         return Ok(());
     };
-    if kanbanr_core::scm::is_generated_commit(&message)
-        || kanbanr_core::scm::escape_reason(&message).is_some()
-    {
+    if kanbanr_core::scm::is_generated_commit(&message) {
         return Ok(());
     }
     let refs = kanbanr_core::scm::parse_refs(&message);
     if refs.is_empty() {
+        if kanbanr_core::scm::escape_reason(&message).is_some() {
+            return Ok(());
+        }
         let suggestion = branch_item(&ctx)
             .map(|code| format!("Refs: kanbanr:{code}"))
             .unwrap_or_else(|| "Refs: kanbanr:<CODE>".to_string());
@@ -1470,16 +1471,18 @@ fn run_check_msg(cli: &Cli, client: &Backend, file: &Path) -> anyhow::Result<()>
     if scm::is_generated_commit(&message) {
         return Ok(()); // git wrote it; there is no author to ask for a reference
     }
-    if let Some(reason) = scm::escape_reason(&message) {
-        eprintln!("kanbanr: committing with no reference — recorded reason: {reason}");
-        return Ok(());
-    }
     // Not a kanbanr project (or no board reachable): say nothing, block nothing.
     let Ok(ctx) = scm_context(cli, client) else {
         return Ok(());
     };
+    // References are read before the escape is considered: a message that carries both is a
+    // referenced commit that happens to mention the escape, not an escape.
     let refs = scm::parse_refs(&message);
     if refs.is_empty() {
+        if let Some(reason) = scm::escape_reason(&message) {
+            eprintln!("kanbanr: committing with no reference — recorded reason: {reason}");
+            return Ok(());
+        }
         let suggestion = branch_item(&ctx)
             .map(|code| format!("Refs: kanbanr:{code}"))
             .unwrap_or_else(|| "Refs: kanbanr:FEAT-001".to_string());

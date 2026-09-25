@@ -101,11 +101,15 @@ fn parse_token(token: &str) -> Option<ItemRef> {
 /// It has to exist and it has to cost a sentence. Without an escape people learn `--no-verify`,
 /// which removes the check entirely and leaves no record at all; with one, the reason lives in the
 /// commit message forever, where a reviewer reads it.
+/// It has to **open a line**, too. This module found that out the hard way: a commit message that
+/// merely explained the escape in prose was read as one, and a commit with a perfectly good
+/// trailer was waved through as unreferenced.
 pub fn escape_reason(message: &str) -> Option<&str> {
-    let at = message.find("[no-ref]")?;
-    let rest = message[at + "[no-ref]".len()..].trim_start_matches([':', ' ', '\t']);
-    let reason = rest.lines().next().unwrap_or("").trim();
-    (!reason.is_empty()).then_some(reason)
+    message.lines().find_map(|line| {
+        let rest = line.trim_start().strip_prefix("[no-ref]")?;
+        let reason = rest.trim_start_matches([':', ' ', '\t']).trim();
+        (!reason.is_empty()).then_some(reason)
+    })
 }
 
 /// Commits git writes on the author's behalf, which carry no reference of their own.
@@ -281,6 +285,13 @@ mod tests {
         // Present but silent: not an escape. An empty excuse is how a guardrail becomes a habit.
         assert_eq!(escape_reason("chore: whatever\n\n[no-ref]"), None);
         assert_eq!(escape_reason("chore: whatever"), None);
+        // Talking about the escape is not taking it — the token has to open a line.
+        assert_eq!(
+            escape_reason(
+                "docs: explain the guardrail\n\nA commit may use `[no-ref] <why>` to opt out."
+            ),
+            None
+        );
     }
 
     #[test]
