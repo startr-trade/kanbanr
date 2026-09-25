@@ -25,6 +25,11 @@ local folder; a read-only web monitor renders it live.
 ## Activation (one phrase, whole project)
 
 When the user says **"start using kanbanr for this project"** (or anything equivalent):
+0. **Write the charter first.** A project with no stated purpose cannot have its work judged
+   against anything. Ask the user for the purpose, the goals (an outcome plus how you would know it
+   happened), what is explicitly **not** in scope, and who it is for; then
+   `kanbanr charter set --file charter.yaml`. Goals get ids (`G-1`) that every item links.
+   Read it back at the start of a session with `kanbanr charter show`, alongside `kanbanr board`.
 1. **Check whether it's already set up.** Run `kanbanr where --json`. If `source` is `marker` and
    `exists` is true, the project is already tracked: skip to step 4.
 2. **Ask the user where to keep the board.** The board is its own git repo and should live
@@ -134,6 +139,72 @@ enable it only with the user's yes.
   matters into kanbanr (spec, tasks, status) deliberately; the next sync then pushes the result.
 - `kanbanr mirror disable` turns it off; issue links are kept.
 
+## Defining work: why it exists, what must be true, how it is verified
+
+Every item the project creates carries a **definition** — this is not optional, and not only for
+features. Work whose reasoning was never written down is work that can be built for seven hours
+and then rejected.
+
+**The contract, identical for every item:**
+
+1. a **statement** — one sentence: what, for whom, why;
+2. a **goal link** — the charter goal id this serves (`kanbanr charter show`);
+3. the **six dimensions** — what / how / where / when / who / why, one line each;
+4. at least one **requirement**;
+5. **test evidence** for every requirement.
+
+What varies by `kind` is only the *shape* of a requirement, because the thing being asserted
+differs. Start from the skeleton: `kanbanr feature define <CODE> --template --kind <kind>`.
+
+| kind | the requirement is | the evidence is |
+|---|---|---|
+| feature | a new behaviour, in EARS | a test per requirement |
+| defect / bug | the requirement it **violates** (or the missing one it adds) | the test that reproduces it, `red` → `green` |
+| chore / refactor | an **invariant**: "THE SYSTEM SHALL continue to …" | the named existing suite, still green |
+| docs | the contract the documentation must match | a doc or doctor check |
+| recurring | the standing obligation | the per-occurrence checklist |
+
+**EARS** — one behaviour per requirement, independently testable:
+`THE SYSTEM SHALL …` · `WHEN <trigger>, THE SYSTEM SHALL …` · `WHILE <state>, THE SYSTEM SHALL …`
+· `WHERE <feature is included>, THE SYSTEM SHALL …` · `IF <undesired condition>, THE SYSTEM SHALL …`
+
+A **quality requirement** (`kind: nfr`) carries an ISO/IEC 25010 tag *and* a measure that names the
+test or benchmark checking it. A number with nothing behind it is an unsupported claim — leave it
+out rather than invent one.
+
+**Never invent an answer.** If a dimension is genuinely unknown, ask the user **one** clarifying
+question. If it stays unknown, leave the field **blank** so `kanbanr doctor` flags it — a blank is
+visible, a plausible guess is not. Never write `[MISSING: …]` into the data; the tools derive it.
+
+Write the definition with the batch path (`definition` on `feature.add`/`feature.edit`) or
+`kanbanr feature define <CODE> --file def.yaml`.
+
+## Agreement before work: the approval gate
+
+**Scope → define → present the brief → wait for the user's approval → only then write code.**
+
+- `kanbanr review <CODE>` prints the one-screen decision brief. Show it, or its substance, and
+  **stop**. Do not start implementing while the answer is still outstanding.
+- The user approves with `kanbanr approve <CODE>`; ask them to, rather than approving on their
+  behalf — an agent approving its own brief is the failure this exists to prevent.
+- kanbanr enforces it: moving an item into an active status is refused unless its definition is
+  approved. If the definition changes after approval, the approval **lapses** and must be renewed —
+  so scope cannot drift silently past a yes.
+- Genuinely urgent work can proceed with `kanbanr move <CODE> <status> --unapproved "<reason>"`.
+  The reason is recorded on the item. Use it for real emergencies, not to avoid asking.
+- **Subagents inherit, never invent.** A coordinator passes the approved definition to each
+  subagent as its brief. A subagent that finds work outside it returns a **proposed change to the
+  definition**, not merged code.
+- The gate is dormant for projects with no charter, and for items created before the charter was
+  adopted — so adopting the method never breaks an existing board.
+
+## Tests are evidence, not intentions
+
+Work test-first: create each test entry as `planned`, set it `red` when the failing test exists,
+and `green` only when it actually passes. Flip states in the same bundle as the task update, never
+as an afterthought. A requirement with no test is not ready, and an item is not done because its
+checkboxes are ticked — it is done when its requirements have passing tests.
+
 ## The prime directive: one system of record
 
 **kanbanr is the single source of truth for everything about the project's activity.** The ONLY
@@ -180,15 +251,19 @@ run `kanbanr board` and read the relevant feature items (`kanbanr feature show �
 Treat kanbanr updates as part of doing the work, not an afterthought:
 
 - **Scope first.** Turn requested work into **feature items** with clear `--spec` markdown (and
-  milestones as needed). Each FI starts in the project's default state.
+  milestones as needed) AND a **definition** (see "Defining work" above). Each FI starts in the
+  project's default state.
+- **Get agreement before building.** Present the decision brief (`kanbanr review <CODE>`) and wait
+  for the user's approval. Moving an item into an active status is refused without it.
 - **Before starting** a chunk of work on a feature: make sure it has a **todo-list** for this
   effort with its **items**, and mark the item you're about to do as **InProgress**.
 - **Spec-staleness check:** when moving a feature item **from `Deferred` into any active state**
   (anything that is not Completed and not a no-op state), first **review the feature's
   specification for staleness** and update it if it no longer reflects reality — *before*
   proceeding with the work.
-- **After finishing** a task: mark its item **Completed**, update the **specification** and any
-  **documentation** affected, and **move** the feature's status as appropriate. When every task
+- **After finishing** a task: mark its item **Completed**, flip the requirement's test entries to
+  `green` once they actually pass, update the **specification** and any **documentation**
+  affected, and **move** the feature's status as appropriate. When every task
   across all of a feature's todo-lists is Completed it auto-advances to "Completed".
 
 ## Feature items are permanent
@@ -251,12 +326,14 @@ kanbanr batch <<'JSON'
 ]}
 JSON
 ```
-Batch op types: `feature.add`, `feature.edit`, `feature.move`, `milestone.add`, `todo.add`,
+Batch op types: `feature.add`, `feature.edit`, `feature.move` (accepts `unapproved`),
+`feature.approve`, `milestone.add`, `todo.add`,
 `task.add`, `task.state`, `doc.folder`, `doc.write`. Operations apply in order; on failure the
 response names the failing operation index. The whole bundle is **one git commit** — pass
 `--message "…"` to title it (a default is framed if you omit it). `feature.add` also accepts
-`source`, `original` and `issue` (for imports; see above), and `feature.edit` accepts `source`
-and `issue`. `kanbanr batch --dry-run` validates a bundle and reports what it would do without
+`source`, `original` and `issue` (for imports; see above), plus `definition`; `feature.edit`
+accepts `source`, `issue` and `definition` (which replaces the block wholesale — it is authored
+whole, not merged). `kanbanr batch --dry-run` validates a bundle and reports what it would do without
 writing anything.
 
 ---
@@ -297,6 +374,12 @@ kanbanr project edit <name> [--name N] [--description D]
 kanbanr project list
 kanbanr project use <name>        # mark this directory as tracked by <name> (keeps the marker's data_dir)
 kanbanr where [--json]            # which board folder this directory uses (+ suggestions with --json)
+kanbanr charter show | set --file charter.yaml     # the project's purpose, goals, non-goals
+kanbanr feature define FEAT-001 --template --kind defect   # skeleton for that kind
+kanbanr feature define FEAT-001 --file def.yaml | --clear  # write / clear the definition
+kanbanr review FEAT-001           # the one-screen decision brief — show this BEFORE building
+kanbanr approve FEAT-001          # the user records agreement (do not approve on their behalf)
+kanbanr move FEAT-001 Scheduled [--unapproved \"<reason>\"]   # gated; the override is recorded
 kanbanr batch --dry-run --file b.json   # preview a bundle (e.g. an import) without writing
 kanbanr sources [--write]         # imported items' sources; --write records ones that are gone
 kanbanr mirror enable --repo owner/repo [--allow-public] | disable | status [--all]

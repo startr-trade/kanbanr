@@ -8,6 +8,7 @@ pub mod config;
 pub mod dispatch;
 pub mod docs;
 pub mod doctor;
+pub mod ears;
 pub mod error;
 pub mod eventing;
 pub mod export;
@@ -944,6 +945,115 @@ requirements:
             .clone()
             .unwrap();
         assert_eq!(def.approval_state(), crate::models::ApprovalState::Current);
+    }
+
+    #[test]
+    fn gap_reporting_stays_quiet_about_work_that_predates_the_method() {
+        // The check that decides whether anyone ever runs `doctor` again: a board full of finished
+        // items must produce nothing, or the signal drowns.
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let old = store.add_feature("demo", "Ancient", "", "M", None).unwrap();
+        store.move_feature("demo", &old.code, "Scheduled").unwrap();
+        let done = store
+            .add_feature("demo", "Finished", "", "M", None)
+            .unwrap();
+        adopt_charter(&store, "demo");
+        let live = store.add_feature("demo", "Live", "", "M", None).unwrap();
+        store.move_feature("demo", &done.code, "Scheduled").unwrap();
+        store.move_feature("demo", &done.code, "Completed").unwrap();
+
+        let report = crate::doctor::run_project(&store, "demo").unwrap();
+        let definition_issues: Vec<&crate::doctor::Issue> =
+            report.issues.iter().filter(|i| i.code.is_some()).collect();
+        assert_eq!(
+            definition_issues.len(),
+            1,
+            "only the item created after adoption is in scope: {definition_issues:?}"
+        );
+        assert_eq!(
+            definition_issues[0].code.as_deref(),
+            Some(live.code.as_str())
+        );
+        assert!(definition_issues[0].message.contains("no definition"));
+
+        // A goal nobody is working on is worth saying once, at project level.
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.code.is_none() && i.message.contains("has no work linked to it")));
+    }
+
+    #[test]
+    fn requirement_checks_name_gaps_and_unsupported_claims() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        let f = store.add_feature("demo", "Live", "", "M", None).unwrap();
+        let def: crate::models::FeatureDefinition = serde_yaml::from_str(
+            r#"
+statement: A statement
+goals: [G-1]
+zachman: {what: w, how: h, where: e, when: n, who: o, why: y}
+requirements:
+  - kind: functional
+    text: "The cart should be user friendly."
+    tests: [{name: cart::friendly, state: planned}]
+  - kind: functional
+    text: "WHEN a cart is abandoned, THE SYSTEM SHALL retain it."
+  - kind: nfr
+    text: "THE SYSTEM SHALL respond quickly."
+    iso25010: [Speediness]
+    scenario: {stimulus: s, environment: e, response: r, measure: "under 200 ms"}
+    tests: [{name: bench::latency, state: planned}]
+"#,
+        )
+        .unwrap();
+        store
+            .set_feature_definition("demo", &f.code, Some(def))
+            .unwrap();
+        let messages: Vec<String> = crate::doctor::run_project(&store, "demo")
+            .unwrap()
+            .issues
+            .iter()
+            .filter(|i| i.code.as_deref() == Some(f.code.as_str()))
+            .map(|i| i.message.clone())
+            .collect();
+        let said = |needle: &str| messages.iter().any(|m| m.contains(needle));
+
+        assert!(said("R-1 is not in EARS form"), "{messages:?}");
+        assert!(said("R-2 has no test"), "{messages:?}");
+        assert!(said("'Speediness', which is not an ISO"), "{messages:?}");
+        // The measure says "under 200 ms" but names nothing that checks it — rigour by appearance.
+        assert!(said("R-3: the measure names no test"), "{messages:?}");
+        // R-1 has a test and R-3 has a tag+scenario, so those are NOT reported.
+        assert!(!said("R-1 has no test"), "{messages:?}");
+        assert!(
+            !said("R-3 is a quality requirement with no ISO"),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn an_exempt_item_and_a_linked_goal_go_unreported() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        let f = store.add_feature("demo", "Spike", "", "M", None).unwrap();
+        let def: crate::models::FeatureDefinition =
+            serde_yaml::from_str("exempt: throwaway spike, deleted on Friday\nstatement: \"\"\n")
+                .unwrap();
+        store
+            .set_feature_definition("demo", &f.code, Some(def))
+            .unwrap();
+        let issues = crate::doctor::run_project(&store, "demo").unwrap();
+        assert!(
+            !issues
+                .issues
+                .iter()
+                .any(|i| i.code.as_deref() == Some(f.code.as_str())),
+            "a recorded exemption silences the item: {issues:?}"
+        );
     }
 
     #[test]
