@@ -5,7 +5,9 @@
 # the data folder directly (git-backed). `kanbanr serve` runs the read-only view daemon over the
 # same folder — localhost, no auth, no accounts. Sharing is via git remotes. Docker is optional.
 
-DATA_DIR ?= $(CURDIR)/data
+# The board lives BESIDE the repo, not inside it (FEAT-041): a data folder inside a checkout is
+# one `git add -A` away from being committed, and a sibling cannot be. Override for another board.
+DATA_DIR ?= $(CURDIR)/../$(notdir $(CURDIR)).kanbanr
 SKILLS_DIR ?= $(HOME)/.claude/skills
 IMAGE ?= kanbanr:latest
 

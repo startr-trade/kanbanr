@@ -36,7 +36,8 @@ if ! curl -fsS -o /dev/null "$KANBANR_URL/healthz" 2>/dev/null; then
   echo "kanbanr serve not reachable at $KANBANR_URL — starting a temporary one…"
   ( cd "$ROOT/api" && cargo build --release -p kanbanr-cli )
   ( cd "$ROOT/web" && npm install && npm run build )
-  KANBANR_DATA_DIR="$ROOT/data" "$ROOT/api/target/release/kanbanr" serve \
+  KANBANR_DATA_DIR="${KANBANR_DATA_DIR:-$ROOT/../$(basename "$ROOT").kanbanr}" \
+      "$ROOT/api/target/release/kanbanr" serve \
       --bind 127.0.0.1:8080 --ui-dir "$ROOT/web/dist" &
   TEMP_SERVE_PID=$!
   for _ in $(seq 1 30); do curl -fsS -o /dev/null "$KANBANR_URL/healthz" 2>/dev/null && break; sleep 1; done

@@ -11,5 +11,7 @@ services:
       - "18080:8080"
     volumes:
       # Host data dir (written by the CLI) <-> container data dir (read by the server).
-      - ../data:/data
+      # The board is a sibling of the repo, not a folder inside it (FEAT-041). Set
+      # KANBANR_DATA_DIR to point somewhere else.
+      - ${KANBANR_DATA_DIR:-../../kanbanr.kanbanr}:/data
     restart: unless-stopped

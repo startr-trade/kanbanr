@@ -111,13 +111,14 @@ kanbanr has **no accounts, passwords, or tokens of its own** (single-writer CLI 
 see [DESIGN.md](DESIGN.md)), so there are no app secrets to leak. The real risks are your **own
 content** and your **publish credentials**:
 
-- [ ] **Decide what `data/` you want public.** `data/projects/kanbanr/` is *this* project's own plan
-      and is fine (even nice) to publish. Any *other* boards you've tracked locally may be private —
-      move them out, or keep `data/` out of the published repo entirely (uncomment `/data` in
-      [../.gitignore](../.gitignore)).
-- [ ] **Remove the legacy `data/security.yaml`** if present — it's an inert leftover from the removed
-      auth model, git-ignored defensively. Confirm it isn't tracked:
-      `git ls-files | grep security.yaml` should print nothing; delete the file regardless.
+- [x] **Nothing of the board ships with the source.** kanbanr's own board lives in a sibling
+      repository (`../kanbanr.kanbanr`), which is the layout the tool recommends to everyone
+      (FEAT-041): a board inside a checkout is one `git add -A` away from being committed, and a
+      sibling cannot be. Publishing it, if you ever want to, is a separate `git remote add` on that
+      repository — not a decision about this one.
+- [x] **The legacy `security.yaml` is gone** — an inert leftover from the removed auth model
+      (ADR-0001). It was never tracked (`git ls-files | grep security.yaml` prints nothing in both
+      repositories) and the file itself has been deleted.
 - [ ] **Check git remotes for embedded credentials.** A remote like
       `https://user:token@host/repo.git` leaks the token — use SSH remotes; run `git remote -v` to confirm.
 - [ ] **Grep the tree *and history*** for anything sensitive:
