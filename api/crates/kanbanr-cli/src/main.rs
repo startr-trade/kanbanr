@@ -127,6 +127,18 @@ enum Command {
         #[arg(long)]
         rev: Option<String>,
     },
+    /// Record a lesson, or judge one that is already recorded (FEAT-055).
+    #[command(subcommand)]
+    Lesson(LessonCmd),
+    /// The lessons worth reading right now, most believed first. Read these BEFORE starting work.
+    Lessons {
+        /// Only those that bear on this item (its labels, kind and goals).
+        #[arg(long = "for")]
+        for_item: Option<String>,
+        /// Include retired ones — kept as a record, normally not surfaced.
+        #[arg(long)]
+        all: bool,
+    },
     /// How a wave actually went (FEAT-054): scope growth by recorded cause, defects and escapes,
     /// cycle time, rework, evidence at completion, estimate against actual. Facts only — the
     /// narrative is yours to write, and `--write` leaves a section for it.
@@ -786,6 +798,44 @@ enum HooksCmd {
 }
 
 #[derive(Subcommand)]
+enum LessonCmd {
+    /// Record what was learned. Recording one that already exists affirms it instead.
+    Add {
+        lesson: String,
+        /// practice | pitfall | decision.
+        #[arg(long, default_value = "pitfall")]
+        kind: String,
+        /// The item that taught it.
+        #[arg(long = "from")]
+        from_item: Option<String>,
+        /// The retrospective that promoted it.
+        #[arg(long)]
+        from_retro: Option<String>,
+        /// What actually happened — without this it is an opinion.
+        #[arg(long)]
+        evidence: Option<String>,
+        /// Labels this applies to, comma-separated.
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+        /// Charter goals it bears on, comma-separated.
+        #[arg(long, value_delimiter = ',')]
+        goals: Vec<String>,
+    },
+    /// It held again: raise confidence and reset the clock.
+    Affirm {
+        id: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// It did not hold: drop confidence further than an affirmation raises it.
+    Contradict {
+        id: String,
+        #[arg(long)]
+        note: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum GitCmd {
     /// Install the commit-msg and pre-commit hooks in this repository.
     InstallHooks {
@@ -1308,6 +1358,88 @@ fn stale_line(stale: &[String]) -> String {
              suite to refresh it",
             stale.len()
         )
+    }
+}
+
+/// Lessons (FEAT-055). Confidence is printed as a percentage, with what it came from, because a
+/// lesson you cannot trace is advice — and advice with a number on it is worse than advice.
+fn lesson_line(l: &kanbanr_core::lessons::Lesson) -> String {
+    let mut out = format!(
+        "{:<6} {:>3}%  {}\n",
+        l.id,
+        (l.confidence_now() * 100.0).round() as i64,
+        l.lesson.trim()
+    );
+    let mut origin: Vec<String> = Vec::new();
+    if !l.from_item.is_empty() {
+        origin.push(format!("from {}", l.from_item));
+    }
+    if !l.from_retro.is_empty() {
+        origin.push(format!("retro {}", l.from_retro));
+    }
+    if !l.evidence.is_empty() {
+        origin.push(l.evidence.trim().to_string());
+    }
+    if !l.tags.is_empty() {
+        origin.push(format!("tags: {}", l.tags.join(", ")));
+    }
+    if !origin.is_empty() {
+        out.push_str(&format!("       {}\n", origin.join(" · ")));
+    }
+    out
+}
+
+fn run_lesson(cli: &Cli, client: &Backend, cmd: &LessonCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    match cmd {
+        LessonCmd::Add {
+            lesson,
+            kind,
+            from_item,
+            from_retro,
+            evidence,
+            tags,
+            goals,
+        } => {
+            let body = json!({
+                "lesson": lesson,
+                "kind": kind,
+                "from_item": from_item.clone().unwrap_or_default(),
+                "from_retro": from_retro.clone().unwrap_or_default(),
+                "evidence": evidence.clone().unwrap_or_default(),
+                "tags": tags,
+                "goals": goals,
+            });
+            let resp = client.write(Method::Post, &format!("/projects/{p}/lessons"), Some(body))?;
+            let recorded: kanbanr_core::lessons::Lesson = serde_json::from_str(&resp)?;
+            print_write(cli, &resp, lesson_line(&recorded).trim_end().to_string());
+            Ok(())
+        }
+        LessonCmd::Affirm { id, note } | LessonCmd::Contradict { id, note } => {
+            let affirm = matches!(cmd, LessonCmd::Affirm { .. });
+            let verdict = if affirm { "affirm" } else { "contradict" };
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/lessons/{id}/{verdict}"),
+                Some(json!({ "note": note.clone().unwrap_or_default() })),
+            )?;
+            let judged: kanbanr_core::lessons::Lesson = serde_json::from_str(&resp)?;
+            let retired = judged.status == kanbanr_core::lessons::LessonStatus::Retired;
+            print_write(
+                cli,
+                &resp,
+                format!(
+                    "{}{}",
+                    lesson_line(&judged).trim_end(),
+                    if retired {
+                        "\n       retired — kept as a record, no longer surfaced"
+                    } else {
+                        ""
+                    }
+                ),
+            );
+            Ok(())
+        }
     }
 }
 
@@ -2928,6 +3060,34 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 &resp,
                 format!("{code}/{requirement} · {test} -> {state}"),
             );
+            Ok(())
+        }
+        Command::Lesson(cmd) => run_lesson(cli, &client, cmd),
+        Command::Lessons { for_item, all } => {
+            let p = require_project(cli)?;
+            let mut query = Vec::new();
+            if let Some(code) = for_item {
+                query.push(format!("for={}", urlencode(code)));
+            }
+            if *all {
+                query.push("all=1".to_string());
+            }
+            let resp = client.get(&format!(
+                "/projects/{p}/lessons{}{}",
+                if query.is_empty() { "" } else { "?" },
+                query.join("&")
+            ))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let lessons: Vec<kanbanr_core::lessons::Lesson> = serde_json::from_str(&resp)?;
+            if lessons.is_empty() {
+                println!("(nothing learned here yet)");
+            }
+            for l in &lessons {
+                print!("{}", lesson_line(l));
+            }
             Ok(())
         }
         Command::Retro {

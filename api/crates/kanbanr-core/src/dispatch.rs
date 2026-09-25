@@ -667,6 +667,45 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             ser(&store.set_defect(p, code, defect)?)
         }
 
+        // ---- lessons learned (FEAT-055) ----
+        ("GET", ["projects", p, "lessons"]) => {
+            // `for` narrows to the lessons that bear on one item; `all` includes retired ones.
+            let all = query_param(query, "all").is_some();
+            let lessons = match query_param(query, "for") {
+                Some(code) => {
+                    let project = store.load_meta(p)?;
+                    let feature = project.feature(&code)?.clone();
+                    crate::lessons::surfaced(store, p, Some(&feature))?
+                }
+                None if all => crate::lessons::load(store, p)?,
+                None => crate::lessons::surfaced(store, p, None)?,
+            };
+            ser(&lessons)
+        }
+        ("POST", ["projects", p, "lessons"]) => {
+            let lesson: crate::lessons::Lesson = serde_json::from_value(b.clone())
+                .map_err(|e| CoreError::Unsupported(format!("invalid lesson: {e}")))?;
+            ser(&crate::lessons::add(store, p, lesson)?)
+        }
+        ("POST", ["projects", p, "lessons", id, verdict]) => {
+            let affirm = match *verdict {
+                "affirm" => true,
+                "contradict" => false,
+                other => {
+                    return Err(CoreError::Unsupported(format!(
+                        "a lesson is affirmed or contradicted, not '{other}'"
+                    )));
+                }
+            };
+            ser(&crate::lessons::judge(
+                store,
+                p,
+                id,
+                affirm,
+                &str_field(b, "note").unwrap_or_default(),
+            )?)
+        }
+
         // ---- wave retrospective (FEAT-054) ----
         ("GET", ["projects", p, "retro"]) => {
             let wave = crate::retro::Wave {
@@ -766,6 +805,8 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "charter"] => "update project charter".into(),
         ["projects", _p, "features", c, "definition"] => format!("define feature {c}"),
         ["projects", _p, "features", c, "defect"] => format!("record defect details for {c}"),
+        ["projects", _p, "lessons"] => "record a lesson".into(),
+        ["projects", _p, "lessons", l, v] => format!("{v} lesson {l}"),
         ["projects", _p, "features", c, "split-from"] => format!("record what {c} was split from"),
         ["projects", _p, "mirror"] => "configure issue mirror".into(),
         ["projects", _p, "features"] => "add feature item".into(),

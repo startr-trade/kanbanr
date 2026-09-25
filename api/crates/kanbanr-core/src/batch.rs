@@ -118,6 +118,23 @@ pub enum BatchOp {
         #[serde(default)]
         checked_rev: Option<String>,
     },
+    /// Record a lesson learned (FEAT-055). Saying one that is already recorded affirms it.
+    #[serde(rename = "lesson.add")]
+    LessonAdd {
+        lesson: String,
+        #[serde(default)]
+        kind: Option<String>,
+        #[serde(default)]
+        from_item: Option<String>,
+        #[serde(default)]
+        from_retro: Option<String>,
+        #[serde(default)]
+        evidence: Option<String>,
+        #[serde(default)]
+        tags: Option<Vec<String>>,
+        #[serde(default)]
+        goals: Option<Vec<String>>,
+    },
     /// Record agreement to an item's definition as it stands (FEAT-048).
     #[serde(rename = "feature.approve")]
     FeatureApprove {

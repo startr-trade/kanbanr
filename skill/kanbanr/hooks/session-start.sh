@@ -66,6 +66,19 @@ if ! kanbanr "${PROJECT_ARGS[@]}" activity 2>/dev/null; then
 fi
 echo
 
+# Lessons (FEAT-055): the few most-believed ones, so the next piece of work
+# starts from what this project already learned rather than rediscovering it.
+# Confidence decays, so this list stays short on its own.
+LESSONS="$(kanbanr "${PROJECT_ARGS[@]}" lessons 2>/dev/null | head -n 10 || true)"
+if [ -n "$LESSONS" ] && [ "$LESSONS" != "(nothing learned here yet)" ]; then
+  echo "### Lessons this project has learned"
+  printf '%s\n' "$LESSONS"
+  echo
+  echo "_Before starting an item, check \`kanbanr lessons --for <CODE>\`. If one of"
+  echo "these turns out to be wrong, say so: \`kanbanr lesson contradict <L-n> --note '…'\`._"
+  echo
+fi
+
 echo "_kanbanr is the system of record for this project's PLAN (features/tasks/"
 echo "specs/decisions/progress). Resume from the board above; record new work in"
 echo "kanbanr as you go. Every document (requested or self-initiated) goes in"
