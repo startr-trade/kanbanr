@@ -126,6 +126,42 @@ enum Command {
         #[arg(long)]
         rev: Option<String>,
     },
+    /// Record what a defect cost and where it came from (FEAT-053). Whether it *escaped* is
+    /// derived — it escaped if the work that introduced it had already been called done.
+    Defect {
+        code: String,
+        /// low | medium | high | critical.
+        #[arg(long)]
+        severity: Option<String>,
+        /// The item whose work introduced it — a fix that caused this points at that fix.
+        #[arg(long)]
+        introduced_by: Option<String>,
+        /// Where it was found: a status, an environment, or "production".
+        #[arg(long)]
+        found_in: Option<String>,
+        #[arg(long)]
+        root_cause: Option<String>,
+        /// Found after the work was called done. Derived from `--introduced-by` when omitted.
+        #[arg(long)]
+        escaped: bool,
+        /// The commit or test that proves it is fixed.
+        #[arg(long)]
+        fixed_by: Option<String>,
+        /// Remove the defect record.
+        #[arg(long)]
+        clear: bool,
+    },
+    /// Flow and quality, derived from what the board already records: throughput, cycle time,
+    /// rework, defect escape rate and requirement coverage. Nothing here is self-reported.
+    Report {
+        /// Window, e.g. `14d` or an RFC3339 timestamp. Items are counted by when they finished.
+        #[arg(long)]
+        since: Option<String>,
+    },
+    /// Record test results from a real run (FEAT-053). Reads a Claude Code PostToolUse payload on
+    /// stdin, finds the test names the board is tracking, and flips their state to match what
+    /// actually happened — so evidence is measured, never claimed.
+    Capture,
     /// Is this item actually ready? Reports what it has not said and what it cannot yet show:
     /// missing dimensions, requirements with no test, unproven requirements, approval state.
     Check {
@@ -182,6 +218,13 @@ enum Command {
     /// Mirror this project's features to GitHub issues via `gh` (kanbanr → GitHub, one way).
     #[command(subcommand)]
     Mirror(MirrorCmd),
+    /// List the tests the board is tracking and check each name still exists in the project (run
+    /// it in the project folder). `--write` returns a green whose test has vanished to `planned`,
+    /// because evidence from a test nobody can run is not evidence. (FEAT-053)
+    Tests {
+        #[arg(long)]
+        write: bool,
+    },
     /// List imported features' sources and check whether file sources still exist in the project
     /// (run it in the project folder). `--write` records `missing_since` on sources that are gone
     /// (and clears it when they're back), so the monitor can label them. (FEAT-042)
@@ -1152,6 +1195,148 @@ fn run_sources(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Check that every tracked test name still exists in the project (FEAT-053), modelled on
+/// `run_sources`. A test that has been renamed or deleted leaves its last result behind, and that
+/// stale green is the most misleading thing a board can hold: it reports a requirement as proven
+/// by something nobody can run. `--write` returns those to `planned` rather than deleting them —
+/// the requirement still needs a test, it just no longer has one.
+fn run_tests(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
+    use kanbanr_core::models::TestState;
+    let p = require_project(cli)?;
+    let project = get_project(client, &p)?;
+    let cwd = std::env::current_dir()?;
+    let root = project::project_root(&cwd, project::home_dir().as_deref());
+    // The board itself records every test name, and the data folder often sits inside the project
+    // — searching it would find every test in its own definition and report all of them present.
+    let board = project::resolve_data_dir(cli.data_dir.as_deref());
+
+    let mut rows = Vec::new();
+    let mut ops = Vec::new();
+    for f in &project.features {
+        let Some(def) = &f.definition else { continue };
+        for r in &def.requirements {
+            for t in &r.tests {
+                let name = t.name.trim();
+                // A manual check is performed by a person and has no name in the repo to find;
+                // treating its absence as rot would push people to stop recording manual gates.
+                if name.is_empty() || t.kind.trim().eq_ignore_ascii_case("manual") {
+                    continue;
+                }
+                let found = test_exists(&root, &board, name);
+                rows.push(json!({
+                    "code": f.code, "requirement": r.id, "test": name,
+                    "state": t.state, "found": found,
+                }));
+                // Only recorded evidence is worth correcting: a `planned` test is expected to be
+                // absent — that is what planned means.
+                if !found && t.state != TestState::Planned {
+                    ops.push(json!({
+                        "op": "test.state", "feature": f.code, "requirement": r.id,
+                        "test": name, "state": "planned", "checked_rev": "",
+                    }));
+                }
+            }
+        }
+    }
+
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+    } else if rows.is_empty() {
+        println!("(no tests are tracked yet)");
+    } else {
+        for r in &rows {
+            println!(
+                "{:<12} {:<6} {:<8} {} {}",
+                r["code"].as_str().unwrap_or(""),
+                r["requirement"].as_str().unwrap_or(""),
+                r["state"].as_str().unwrap_or(""),
+                if r["found"].as_bool() == Some(true) {
+                    "found"
+                } else {
+                    "NOT IN THE REPO"
+                },
+                r["test"].as_str().unwrap_or(""),
+            );
+        }
+    }
+
+    if !ops.is_empty() {
+        if write {
+            let n = ops.len();
+            client.write(
+                Method::Post,
+                &format!("/projects/{p}/batch"),
+                Some(json!({
+                    "operations": ops,
+                    "message": format!("tests: {n} result(s) whose test no longer exists are back to planned"),
+                })),
+            )?;
+            if !cli.json {
+                println!("returned {n} result(s) to planned");
+            }
+        } else if !cli.json {
+            println!(
+                "{} recorded result(s) name a test that is not in the repo; \
+                 run `kanbanr tests --write` to return them to planned",
+                ops.len()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Is this test name still in the project? A path-like name (`src/cart.test.ts`) is a file; any
+/// other name is searched for in the tracked sources. `git grep` is used when the folder is a git
+/// repo — it already knows what to skip — with a bounded walk as the fallback.
+fn test_exists(root: &std::path::Path, board: &std::path::Path, name: &str) -> bool {
+    if name.contains('/') && root.join(name).exists() {
+        return true;
+    }
+    // A cargo test path is `module::path::test_name`; the source only contains the last segment.
+    let needle = name.rsplit("::").next().unwrap_or(name);
+    if let Ok(out) = std::process::Command::new("git")
+        .args(["grep", "-l", "-F", "--", needle])
+        .current_dir(root)
+        .output()
+    {
+        // 0 = matched, 1 = searched and found nothing, anything else (not a repo) = fall back.
+        match out.status.code() {
+            Some(0) => return !out.stdout.is_empty(),
+            Some(1) => return false,
+            _ => {}
+        }
+    }
+    walk_for(root, board, needle, 0)
+}
+
+fn walk_for(dir: &std::path::Path, board: &std::path::Path, needle: &str, depth: usize) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || matches!(&*name, "target" | "node_modules" | "dist") {
+            continue;
+        }
+        if path == board {
+            continue;
+        }
+        if path.is_dir() {
+            if walk_for(&path, board, needle, depth + 1) {
+                return true;
+            }
+        } else if std::fs::read_to_string(&path).is_ok_and(|text| text.contains(needle)) {
+            return true;
+        }
+    }
+    false
+}
+
 /// A starting skeleton for a definition, shaped to the kind of work (FEAT-047). Every kind states
 /// why it exists and how it is verified; what differs is the FORM a requirement takes — a feature
 /// asserts new behaviour, a defect names the requirement it violates, a chore asserts an invariant.
@@ -1654,6 +1839,115 @@ fn field(s: &str, key: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The project repo's current short revision, for stamping test evidence.
+fn project_head_rev() -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    project::project_revision(&cwd, project::home_dir().as_deref())
+}
+
+/// Record test results from a real run (FEAT-053).
+///
+/// Reads a Claude Code PostToolUse payload on stdin, extracts the test names that passed and
+/// failed, and flips the state of every one the board is tracking. Matching by test NAME rather
+/// than by "whatever item is in progress" is what makes this trustworthy: it records what ran,
+/// not what someone meant to run, and it is silent when nothing it knows about ran.
+fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
+    use std::io::Read;
+    let mut raw = String::new();
+    std::io::stdin().read_to_string(&mut raw)?;
+    let payload: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+    // The tool output lives in different places depending on the tool; take the lot as text.
+    let text = [
+        payload["tool_response"]["stdout"].as_str(),
+        payload["tool_response"]["stderr"].as_str(),
+        payload["tool_response"]["output"].as_str(),
+        payload["tool_response"].as_str(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("\n");
+    let results = parse_test_results(&text);
+    if results.is_empty() {
+        return Ok(()); // not a test run, or nothing recognizable: stay quiet
+    }
+
+    let p = require_project(cli)?;
+    let project = get_project(client, &p)?;
+    let rev = project_head_rev();
+    let mut ops = Vec::new();
+    for f in &project.features {
+        let Some(def) = &f.definition else { continue };
+        for r in &def.requirements {
+            for t in &r.tests {
+                if let Some(passed) = results.get(t.name.as_str()) {
+                    let state = if *passed { "green" } else { "red" };
+                    if t.state == kanbanr_core::models::TestState::parse(state).unwrap_or_default()
+                        && (!passed || t.checked_rev.as_str() == rev.as_deref().unwrap_or(""))
+                    {
+                        continue; // already recorded at this revision; nothing to say
+                    }
+                    let mut op = json!({
+                        "op": "test.state", "feature": f.code, "requirement": r.id,
+                        "test": t.name, "state": state,
+                    });
+                    if let Some(rev) = &rev {
+                        op["checked_rev"] = json!(rev);
+                    }
+                    ops.push(op);
+                }
+            }
+        }
+    }
+    if ops.is_empty() {
+        return Ok(());
+    }
+    let n = ops.len();
+    client.write(
+        Method::Post,
+        &format!("/projects/{p}/batch"),
+        Some(json!({ "operations": ops, "message": format!("record {n} test result(s) from a run") })),
+    )?;
+    eprintln!("kanbanr: recorded {n} test result(s) from this run");
+    Ok(())
+}
+
+/// Test name -> passed, parsed from a test runner's output. Handles `cargo test` (`test NAME ...
+/// ok`) and the common `✓ NAME` / `✗ NAME` shape used by JS runners. Unknown formats yield
+/// nothing, which is the right failure: recording a guess would be worse than recording nothing.
+fn parse_test_results(text: &str) -> std::collections::BTreeMap<String, bool> {
+    let mut out = std::collections::BTreeMap::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("test ") {
+            // cargo: `test module::name ... ok` / `... FAILED`
+            if let Some((name, verdict)) = rest.rsplit_once(" ... ") {
+                let name = name.trim();
+                match verdict.trim() {
+                    "ok" => {
+                        out.insert(name.to_string(), true);
+                    }
+                    "FAILED" => {
+                        out.insert(name.to_string(), false);
+                    }
+                    _ => {}
+                }
+            }
+        } else if let Some(name) = line
+            .strip_prefix("\u{2713} ")
+            .or_else(|| line.strip_prefix("PASS "))
+        {
+            out.insert(name.trim().to_string(), true);
+        } else if let Some(name) = line
+            .strip_prefix("\u{2717} ")
+            .or_else(|| line.strip_prefix("FAIL "))
+        {
+            out.insert(name.trim().to_string(), false);
+        }
+    }
+    out
+}
+
 /// What an item has not said, and what it cannot yet show (FEAT-051). The same rules `doctor`
 /// applies, focused on one item and phrased as work left to do rather than as a complaint.
 fn check_report(f: &kanbanr_core::FeatureItem) -> Value {
@@ -1833,6 +2127,145 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             );
             Ok(())
         }
+        Command::Defect {
+            code,
+            severity,
+            introduced_by,
+            found_in,
+            root_cause,
+            escaped,
+            fixed_by,
+            clear,
+        } => {
+            let p = require_project(cli)?;
+            let body = if *clear {
+                Value::Null
+            } else {
+                // Start from what is already recorded, so one flag at a time is enough.
+                let mut d = get_feature(&client, &p, code)?.defect.unwrap_or_default();
+                let set = |field: &mut String, value: &Option<String>| {
+                    if let Some(v) = value {
+                        *field = v.clone();
+                    }
+                };
+                set(&mut d.severity, severity);
+                set(&mut d.introduced_by, introduced_by);
+                set(&mut d.found_in, found_in);
+                set(&mut d.root_cause, root_cause);
+                set(&mut d.fixed_by, fixed_by);
+                d.escaped = d.escaped || *escaped;
+                serde_json::to_value(&d)?
+            };
+            let path = format!("/projects/{p}/features/{code}/defect");
+            let resp = client.write(Method::Put, &path, Some(body))?;
+            let f: kanbanr_core::FeatureItem = serde_json::from_str(&resp)?;
+            let unset = |s: &String| {
+                if s.is_empty() {
+                    "unset".to_string()
+                } else {
+                    s.clone()
+                }
+            };
+            let line = match &f.defect {
+                None => format!("{code}: defect record cleared"),
+                Some(d) => format!(
+                    "{code}: severity {} · found in {} · {}",
+                    unset(&d.severity),
+                    unset(&d.found_in),
+                    if d.escaped {
+                        "escaped (the work it came from had already been called done)"
+                    } else {
+                        "caught before done"
+                    }
+                ),
+            };
+            print_write(cli, &resp, line);
+            Ok(())
+        }
+        Command::Report { since } => {
+            let p = require_project(cli)?;
+            let since = since.as_deref().map(|s| match s.strip_suffix('d') {
+                Some(days) => days
+                    .parse::<i64>()
+                    .map(kanbanr_core::report::days_ago)
+                    .unwrap_or_else(|_| s.to_string()),
+                None => s.to_string(),
+            });
+            let rev = project_head_rev();
+            let mut query = Vec::new();
+            if let Some(s) = &since {
+                query.push(format!("since={}", urlencode(s)));
+            }
+            if let Some(r) = &rev {
+                query.push(format!("rev={}", urlencode(r)));
+            }
+            let path = format!(
+                "/projects/{p}/report{}{}",
+                if query.is_empty() { "" } else { "?" },
+                query.join("&")
+            );
+            let resp = client.get(&path)?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let r: Value = serde_json::from_str(&resp)?;
+            let n = |k: &str| r[k].as_u64().unwrap_or(0);
+            println!(
+                "window: {}",
+                r["since"].as_str().unwrap_or("everything on the board")
+            );
+            println!(
+                "completed: {}   in progress: {}",
+                n("completed"),
+                n("in_progress")
+            );
+            match r["cycle_time_days"].as_object() {
+                Some(ct) => println!(
+                    "cycle time (days): p50 {:.1}   p90 {:.1}   max {:.1}",
+                    ct["p50"].as_f64().unwrap_or(0.0),
+                    ct["p90"].as_f64().unwrap_or(0.0),
+                    ct["max"].as_f64().unwrap_or(0.0)
+                ),
+                None => println!("cycle time: no completed item has a recorded history yet"),
+            }
+            println!("rework (done -> reopened): {}", n("rework"));
+            let (d, e) = (n("defects"), n("escaped_defects"));
+            println!(
+                "defects: {d}   escaped: {e}{}",
+                if d > 0 {
+                    format!(" ({:.0}% escape rate)", (e as f64 / d as f64) * 100.0)
+                } else {
+                    String::new()
+                }
+            );
+            let cov = &r["requirement_coverage"];
+            let (proven, total) = (
+                cov["proven"].as_u64().unwrap_or(0),
+                cov["total"].as_u64().unwrap_or(0),
+            );
+            println!(
+                "requirements proven by a green test: {proven}/{total}{}",
+                if total > 0 {
+                    format!(" ({:.0}%)", (proven as f64 / total as f64) * 100.0)
+                } else {
+                    String::new()
+                }
+            );
+            let stale = r["stale_evidence"].as_array().cloned().unwrap_or_default();
+            if !stale.is_empty() {
+                println!(
+                    "stale evidence (green at an older revision): {}",
+                    stale
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            Ok(())
+        }
+        Command::Capture => run_capture(cli, &client),
         Command::Check { code } => {
             let p = require_project(cli)?;
             let project = get_project(&client, &p)?;
@@ -1983,6 +2416,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Sources { write } => run_sources(cli, &client, *write),
+        Command::Tests { write } => run_tests(cli, &client, *write),
         Command::Charter(cmd) => run_charter(cli, &client, cmd),
         Command::Mirror(cmd) => run_mirror(cli, &client, cmd),
         Command::Export { code, format } => {
@@ -3214,5 +3648,38 @@ fn print_board(project: &Project) {
             );
         }
         println!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The capture hook is only as good as this parser: a name it misreads is evidence recorded
+    /// against the wrong test, which is worse than no evidence at all.
+    #[test]
+    fn test_output_is_read_from_the_formats_a_run_actually_prints() {
+        let text = "\
+running 3 tests
+test hooks::tests::install_merges ... ok
+test report::tests::cycle_time ... FAILED
+test slow::case ... ignored
+✓ cart retains items for 7 days
+✗ cart empties on sign-out
+PASS src/cart.test.ts
+FAIL src/checkout.test.ts
+some unrelated line ... ok";
+        let results = parse_test_results(text);
+        assert_eq!(results.get("hooks::tests::install_merges"), Some(&true));
+        assert_eq!(results.get("report::tests::cycle_time"), Some(&false));
+        assert_eq!(results.get("cart retains items for 7 days"), Some(&true));
+        assert_eq!(results.get("cart empties on sign-out"), Some(&false));
+        assert_eq!(results.get("src/cart.test.ts"), Some(&true));
+        assert_eq!(results.get("src/checkout.test.ts"), Some(&false));
+        // An ignored test proves nothing, and a line that merely ends in "ok" is not a result.
+        assert_eq!(results.get("slow::case"), None);
+        assert_eq!(results.len(), 6, "{results:?}");
+        // Nothing recognizable: the hook stays quiet rather than guessing.
+        assert!(parse_test_results("cargo build finished in 3.2s").is_empty());
     }
 }

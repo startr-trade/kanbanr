@@ -22,6 +22,7 @@ pub mod models;
 pub mod portfolio;
 pub mod project;
 pub mod query;
+pub mod report;
 pub mod store;
 pub mod validate;
 

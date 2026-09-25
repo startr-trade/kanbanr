@@ -653,6 +653,32 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             ser(&store.set_feature_definition(p, code, definition)?)
         }
 
+        // ---- defect record (FEAT-053) ----
+        ("PUT", ["projects", p, "features", code, "defect"]) => {
+            let defect: Option<crate::models::Defect> = if b.is_null() {
+                None // an explicit null clears the block
+            } else {
+                Some(
+                    serde_json::from_value(b.clone())
+                        .map_err(|e| CoreError::Unsupported(format!("invalid defect: {e}")))?,
+                )
+            };
+            ser(&store.set_defect(p, code, defect)?)
+        }
+
+        // ---- flow and quality report (FEAT-053) ----
+        ("GET", ["projects", p, "report"]) => {
+            let window = crate::report::Window {
+                since: query_param(query, "since"),
+            };
+            ser(&crate::report::run(
+                store,
+                p,
+                &window,
+                query_param(query, "rev").as_deref(),
+            )?)
+        }
+
         // ---- project charter (FEAT-046) ----
         ("GET", ["projects", p, "charter"]) => {
             store.load_meta(p)?; // the project must exist; an absent charter is a valid default
@@ -721,6 +747,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", p] => format!("edit project {p}"),
         ["projects", _p, "charter"] => "update project charter".into(),
         ["projects", _p, "features", c, "definition"] => format!("define feature {c}"),
+        ["projects", _p, "features", c, "defect"] => format!("record defect details for {c}"),
         ["projects", _p, "mirror"] => "configure issue mirror".into(),
         ["projects", _p, "features"] => "add feature item".into(),
         ["projects", _p, "features", c] => format!("edit feature {c}"),

@@ -108,6 +108,14 @@ pub struct FeatureItem {
     /// Why this item exists, what must be true, and how it is verified (FEAT-047).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition: Option<FeatureDefinition>,
+    /// For a defect: what it cost and where it came from (FEAT-053).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defect: Option<Defect>,
+    /// Every status change, appended (FEAT-053). Cycle time, time-in-status, WIP aging and rework
+    /// are all derived from this; without it the board records where work IS but never how it got
+    /// there.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<Transition>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -387,6 +395,41 @@ impl TestState {
     }
 }
 
+/// One status change. Append-only: the board's memory of how work actually moved.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Transition {
+    pub at: String,
+    pub from: String,
+    pub to: String,
+}
+
+/// What a defect cost and where it came from (FEAT-053).
+///
+/// `escaped` is the field that earns its keep: a defect found after the work was called done is a
+/// different animal from one caught during it, and the ratio between them is the one quality
+/// number a board can honestly produce.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Defect {
+    /// Free text, like `kind` and `priority`: low | medium | high | critical.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub severity: String,
+    /// The item or commit that introduced it. A defect caused by a fix points at that fix, which
+    /// is how fix-induced chains become visible.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub introduced_by: String,
+    /// Where it was found: a status, an environment, or "production".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub found_in: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub root_cause: String,
+    /// Found after the work was called done.
+    #[serde(default)]
+    pub escaped: bool,
+    /// The commit or test that proves it is fixed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fixed_by: String,
+}
+
 /// A link from a feature to the external issue it is mirrored to (FEAT-043).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct IssueLink {
@@ -456,6 +499,8 @@ impl FeatureItem {
             source: self.source.clone(),
             issue: self.issue.clone(),
             definition: self.definition.clone(),
+            defect: self.defect.clone(),
+            history: self.history.clone(),
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
         }
@@ -482,6 +527,8 @@ impl FeatureItem {
             source: meta.source,
             issue: meta.issue,
             definition: meta.definition,
+            defect: meta.defect,
+            history: meta.history,
             created_at: meta.created_at,
             updated_at: meta.updated_at,
         }
@@ -523,6 +570,10 @@ pub struct FeatureMeta {
     pub issue: Option<IssueLink>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition: Option<FeatureDefinition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defect: Option<Defect>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<Transition>,
     pub created_at: String,
     pub updated_at: String,
 }
