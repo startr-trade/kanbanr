@@ -14,7 +14,7 @@
 
 use crate::error::Result;
 use crate::models::TestState;
-use crate::report::{cycle_time_days, finished_at, parse_time, percentiles, within};
+use crate::report::{cycle_time_days, finished_at, parse_time, percentiles};
 use crate::store::Project;
 use crate::{FeatureItem, Store};
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,9 @@ impl Wave {
         }
     }
 
+    /// `since` bounds the wave by when an item was last touched, so a window means "the work of
+    /// the last fortnight" rather than "items created in it" — an item that started earlier and
+    /// finished inside the window is part of what that window delivered.
     fn covers(&self, feature: &FeatureItem) -> bool {
         self.milestone
             .as_ref()
@@ -56,6 +59,7 @@ impl Wave {
                 .label
                 .as_ref()
                 .is_none_or(|l| feature.labels.iter().any(|x| x == l))
+            && crate::report::within(Some(feature.updated_at.as_str()), self.since.as_deref())
     }
 }
 
@@ -125,12 +129,14 @@ pub struct Estimate {
 }
 
 /// Build the retro for one wave.
-pub fn run(store: &Store, id: &str, wave: &Wave, head_rev: Option<&str>) -> Result<Retro> {
+pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
     let project = store.load_meta(id)?;
     let moves = crate::activity::read(store.data_dir(), id, 1000);
     let items: Vec<&FeatureItem> = project.features.iter().filter(|f| wave.covers(f)).collect();
 
-    // The wave begins when its earliest item was created: everything after that is growth.
+    // The wave begins when work on it begins — the first recorded transition across its items,
+    // NOT the earliest creation. Items planned together are created seconds apart, so measuring
+    // growth from a creation time makes every one of them after the first look like it crept in.
     let started = items.iter().filter_map(|f| first_move(f, &moves)).min();
     let finished = items
         .iter()
@@ -164,10 +170,6 @@ pub fn run(store: &Store, id: &str, wave: &Wave, head_rev: Option<&str>) -> Resu
         } else {
             retro.still_open += 1;
         }
-        if !within(Some(f.created_at.as_str()), wave.since.as_deref()) && wave.since.is_some() {
-            // Outside the window: counted as part of the wave, but not as growth within it.
-        }
-
         // Scope growth: an item created after the wave's first item began is an addition.
         let joined_late = started
             .as_deref()
@@ -231,11 +233,11 @@ pub fn run(store: &Store, id: &str, wave: &Wave, head_rev: Option<&str>) -> Resu
             let mut unproven = 0;
             for r in &def.requirements {
                 retro.evidence.requirements += 1;
-                let green = r.tests.iter().any(|t| {
-                    t.state == TestState::Green
-                        && head_rev
-                            .is_none_or(|head| t.checked_rev.is_empty() || t.checked_rev == head)
-                });
+                // A retrospective is a historical account: what matters is whether the wave
+                // produced evidence, not whether that evidence is current. Staleness against the
+                // project's head is `kanbanr report`'s question, and applying it here erased every
+                // requirement proven before the most recent commit.
+                let green = r.tests.iter().any(|t| t.state == TestState::Green);
                 if green {
                     retro.evidence.proven += 1;
                 } else {
@@ -271,7 +273,6 @@ fn first_move(f: &FeatureItem, moves: &[crate::activity::Activity]) -> Option<St
         .first()
         .map(|t| t.at.clone())
         .or_else(|| activity_times(f, moves).into_iter().min())
-        .or_else(|| Some(f.created_at.clone()))
 }
 
 /// The activity log records every write with the item it touched, so an item created before
@@ -401,7 +402,7 @@ mod tests {
             milestone: Some("MS-1".into()),
             ..Default::default()
         };
-        let r = run(&store, "demo", &wave, None).unwrap();
+        let r = run(&store, "demo", &wave).unwrap();
         assert_eq!(r.items, 4);
         assert_eq!(
             r.scope_growth.original, 1,
@@ -423,6 +424,90 @@ mod tests {
         assert_eq!(
             r.defects.self_inflicted,
             vec![format!("{} ← {}", defect.code, first.code)]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The bug this test exists for (FEAT-060): twelve items planned in one batch were reported
+    /// as "1 to begin with, 11 added", because the wave's start was read from a creation time and
+    /// items created milliseconds apart therefore looked like creep.
+    #[test]
+    fn planned_together_is_not_scope_growth() {
+        let (store, dir) = fixture();
+        let planned: Vec<String> = (0..3)
+            .map(|i| {
+                store
+                    .add_feature("demo", &format!("Item {i}"), "", "MS-1", None)
+                    .unwrap()
+                    .code
+            })
+            .collect();
+        let wave = Wave {
+            milestone: Some("MS-1".into()),
+            ..Default::default()
+        };
+
+        // Nothing has moved: the wave has not started, so nothing can have crept in.
+        let r = run(&store, "demo", &wave).unwrap();
+        assert_eq!(r.scope_growth.original, 3);
+        assert_eq!(r.scope_growth.added(), 0, "{:?}", r.scope_growth);
+        assert!(r.started.is_none());
+
+        // Work begins, and only what arrives afterwards is growth.
+        store
+            .move_feature("demo", &planned[0], "Scheduled")
+            .unwrap();
+        let late = store.add_feature("demo", "Late", "", "MS-1", None).unwrap();
+        let r = run(&store, "demo", &wave).unwrap();
+        assert_eq!(r.scope_growth.original, 3);
+        assert_eq!(r.scope_growth.unclassified, vec![late.code]);
+        assert!(r.started.is_some());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Also FEAT-060: a retro is a historical account. Evidence recorded during the wave counts,
+    /// whatever the project's head is now — staleness is the report's question, not this one's.
+    #[test]
+    fn evidence_recorded_during_the_wave_still_counts() {
+        let (store, dir) = fixture();
+        let f = store.add_feature("demo", "Cart", "", "MS-1", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "THE SYSTEM SHALL hold the cart.".into(),
+                        tests: vec![TestRef {
+                            name: "cart::holds".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        // Green, recorded at a revision the project has long since moved past.
+        store
+            .set_test_state(
+                "demo",
+                &f.code,
+                "R-1",
+                "cart::holds",
+                TestState::Green,
+                Some("a-commit-from-during-the-wave"),
+            )
+            .unwrap();
+        complete(&store, &f.code);
+
+        let r = run(&store, "demo", &Wave::default()).unwrap();
+        assert_eq!((r.evidence.proven, r.evidence.requirements), (1, 1));
+        assert!(
+            r.evidence.finished_unproven.is_empty(),
+            "the wave did prove it: {:?}",
+            r.evidence.finished_unproven
         );
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -452,7 +537,7 @@ mod tests {
         complete(&store, &f.code);
 
         let wave = Wave::default();
-        let r = run(&store, "demo", &wave, None).unwrap();
+        let r = run(&store, "demo", &wave).unwrap();
         assert_eq!((r.completed, r.still_open), (1, 0));
         assert_eq!(r.evidence.requirements, 1);
         assert_eq!(r.evidence.proven, 0);
@@ -475,7 +560,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        let r = run(&store, "demo", &wave, None).unwrap();
+        let r = run(&store, "demo", &wave).unwrap();
         assert_eq!(r.rework.len(), 1, "{:?}", r.rework);
         assert_eq!(r.evidence.proven, 1);
         assert!(
