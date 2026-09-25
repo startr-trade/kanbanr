@@ -2,7 +2,8 @@
 
 > A concrete, checklist-style path to publishing kanbanr publicly and keeping it maintainable —
 > sized for a **personal open-source project** (one maintainer, friendly to contributors), not a
-> foundation-governed one. Pair with [ASSESSMENT.md](ASSESSMENT.md) and [ROADMAP.md](ROADMAP.md).
+> foundation-governed one. Pair with [ROADMAP.md](ROADMAP.md) and the board's own assessment
+> (`kanbanr doc show notes/assessment.md`).
 >
 > Status today (updated): the workspace is now relicensed **MIT OR Apache-2.0** with
 > `LICENSE-MIT` + `LICENSE-APACHE` files; `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`,
@@ -148,9 +149,9 @@ content** and your **publish credentials**:
 
 - [ ] **README** polish: one-line pitch, a screenshot or short GIF of the live monitor, the
       60-second quickstart, the architecture diagram (reuse [DESIGN.md](DESIGN.md)), and a clear
-      "is this for me?" (personal, git-backed, Claude-driven — see [ASSESSMENT.md](ASSESSMENT.md)).
+      "is this for me?" (personal, git-backed, Claude-driven).
 - [ ] Badges: CI status, license, latest release, crates.io version.
-- [ ] A `docs/` index linking USER_GUIDE, DESIGN, ASSESSMENT, ROADMAP, this file.
+- [ ] A `docs/` index linking USER_GUIDE, DESIGN, ROADMAP, this file.
 - [ ] Capture screenshots in `docs/images/` (board, feature page, status page, milestones, docs).
       A reproducible **Selenium-Grid-in-Docker screenshot tool** lives in
       [`../tools/screenshots/`](../tools/screenshots/) — `make screenshots` regenerates them all
@@ -210,7 +211,7 @@ The skill is the product surface for Claude users — make it trivial to install
       on `PATH`.
 - [ ] Investigate publishing via the **Claude plugin/skill marketplace** (the lowest-friction path
       for users) and link it from the README once available.
-- [ ] If the MCP direction is taken ([ROADMAP.md](ROADMAP.md) P1), document the MCP server install
+- [ ] If the MCP direction is taken (ADR-0006 on the board), document the MCP server install
       alongside the skill.
 
 ### Distribution as a Claude Code plugin (FEAT-023)
@@ -267,7 +268,8 @@ on `PATH`; the hooks are best-effort and stay silent if it isn't installed. Keep
 ## 8. After launch (keep it alive without burning out)
 
 - [ ] Triage with labels; be explicit that it's a personal project (best-effort).
-- [ ] Keep [ROADMAP.md](ROADMAP.md) current so contributors know where to help.
+- [ ] Keep the board current so contributors know where to help — `kanbanr ready` is the answer
+      to "what can I pick up?".
 - [ ] Dependabot/`cargo update` + `npm audit` cadence; re-run `cargo deny`.
 - [ ] Cut releases from `CHANGELOG.md`; don't let `main` drift far ahead of a tagged release.
 

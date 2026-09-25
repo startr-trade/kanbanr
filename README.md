@@ -121,7 +121,7 @@ kanbanr/
 │             kanbanr-server (view-daemon library used by `kanbanr serve`)
 ├── web/      React + Vite read-only monitor (built SPA, served by `kanbanr serve`)
 ├── docker/   Optional single-image Dockerfile (runs `kanbanr serve`)
-├── docs/     USER_GUIDE.md, DESIGN.md, ASSESSMENT.md, ROADMAP.md, OPEN_SOURCING.md
+├── docs/     USER_GUIDE.md, DESIGN.md, ROADMAP.md, OPEN_SOURCING.md
 ├── skill/    The Claude skill (skill/kanbanr/SKILL.md)
 └── data/     The data git repo: projects/<name>/… (YAML/markdown). No accounts/secrets.
 ```
@@ -158,4 +158,6 @@ make itest    # packaging smoke (testcontainers): the image boots and serves the
 ```
 
 See **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**, **[docs/DESIGN.md](docs/DESIGN.md)**,
-**[docs/ASSESSMENT.md](docs/ASSESSMENT.md)**, and **[docs/ROADMAP.md](docs/ROADMAP.md)**.
+and **[docs/ROADMAP.md](docs/ROADMAP.md)**. The project's own assessment, decisions and proposals
+live on its board (`kanbanr adr list`, `kanbanr doc tree`) rather than in this repository — they are
+reasoning about the work, not part of the shipped artifact.

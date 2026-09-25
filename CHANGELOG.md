@@ -7,6 +7,64 @@ All notable changes to kanbanr are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+
+#### Reasoning, evidence and traceability (MS-006)
+
+A board records *what* is being built; this milestone adds **why it exists, what must be true, and
+what proves it** — and refuses to record anything it cannot derive. All of it is opt-in: a project
+with no charter behaves exactly as before, and items created before a charter was adopted are never
+reported against it.
+
+- **Project charter** (FEAT-046): `charter.yaml` holds the purpose, vision, goals with ids,
+  non-goals, stakeholders and constraints. Work items link goals; `kanbanr charter show|set` and a
+  Charter tab in the monitor. A goal with no work behind it, and an item serving no goal, are both
+  reported.
+- **Feature definitions** (FEAT-047): why an item exists, the six Zachman dimensions in a line
+  each, requirements in EARS form with the tests that prove them, and a design-doc pointer —
+  inline on the item, so an older board still loads byte-identically. `kanbanr feature define
+  [--template --kind defect]`.
+- **Approval gates** (FEAT-048): `kanbanr review` renders a one-screen decision brief, `approve`
+  records agreement pinned to a hash of the definition's *content*, and starting an item without a
+  current approval is refused. Editing the definition afterwards **lapses** the approval rather
+  than silently keeping it; the override (`--unapproved "<reason>"`) is recorded on the item.
+- **EARS and ISO/IEC 25010 checks** (FEAT-049): requirements are classified into the five EARS
+  patterns (never rejected), quality tags canonicalised against the nine 2023 characteristics, and
+  `doctor` reports unsupported claims — a measured scenario whose measure names no test, a quality
+  tag with no scenario, a blank dimension.
+- **Surfacing and search** (FEAT-050): definitions render in `feature show`, `query --goal/--gap`
+  searches them, and the monitor shows the definition grid, requirements with their evidence, and
+  gap chips.
+- **TDD test states** (FEAT-051): each requirement carries its tests through planned → red → green
+  with the revision they were observed at; `kanbanr check` reports what an item has not said and
+  cannot yet show. Optional TOGAF phase preset for the workflow.
+- **Measurement** (FEAT-053): every status change appends to the item's history; a defect record
+  whose *escaped* flag is derived (it escaped if the work that introduced it was already called
+  done); a PostToolUse hook that reads real test output and records which tracked tests passed,
+  stamped with the revision; `kanbanr report --since` for throughput, cycle time, rework, escape
+  rate and requirement coverage; `kanbanr tests --write` returns a green whose test no longer
+  exists to planned.
+- **Wave retrospectives** (FEAT-054): `kanbanr retro <milestone|--since|--label> [--write]` reports
+  scope growth split by what items record, self-inflicted defects, cycle time, rework, evidence at
+  completion and estimate vs actual, and writes a document whose computed facts and narrative are
+  separate sections. Finishing a milestone's last item emits an event; the Stop hook surfaces a
+  retro that is due. `kanbanr split-from` records work sliced out of another item.
+- **Lessons with confidence decay** (FEAT-055): recorded in flight with their evidence, deduplicated
+  (saying one again affirms it), decaying unless reaffirmed, contradiction weighted heavier than
+  affirmation, and retired rather than deleted below the threshold. Surfaced at session start, per
+  item (`kanbanr lessons --for`), and on the Charter tab.
+- **SCM traceability** (FEAT-056): one item, one branch, one reference per commit. `kanbanr start`
+  branches and moves the item, `kanbanr commit` fills in `Refs: kanbanr:FEAT-046/R-2`, `finish`
+  refuses while tasks are open or requirements unproven. `kanbanr git install-hooks` adds commit-msg
+  and pre-commit checks that keep any hook already there, and a Claude Code guard answers the same
+  rules *before* a commit is attempted. Escapes are explicit: `[no-ref] <why>` stays in git history.
+- **Code tied to the why** (FEAT-057): `kanbanr trace` down from a goal, item or requirement —
+  ending in the gaps — and `kanbanr why <file>:<line>` up through the annotation or the commit
+  trailer to requirement, goal and purpose. Architecture decisions become documents with
+  front-matter that joins them to the graph (`adr new|list|supersede|history`), with `Docs:` and
+  `ADR:` commit trailers validated like any other reference, and `trace --zachman` reporting the
+  columns nothing addresses.
+
+### Added
 - **Claude Code hooks set up automatically** (FEAT-044): `kanbanr init` registers the skill's
   SessionStart and Stop hooks in the global Claude Code settings (`$CLAUDE_CONFIG_DIR` or
   `~/.claude`), once per machine (`--no-hooks` to skip). The merge preserves existing keys and
@@ -84,6 +142,21 @@ All notable changes to kanbanr are documented here. The format follows
   workflow.
 
 ### Fixed
+
+- **Auto-completion left no transition behind** (FEAT-061): ticking an item's last task completed it
+  by assigning the status directly, so cycle time was blind to the normal way items finish and
+  reported only on hand-moved ones.
+- **The retrospective over-claimed** (FEAT-060, FEAT-063): it counted items planned together as
+  scope growth, required evidence to match the current revision in a historical account, demanded
+  retrospectives for waves the board never watched, and reported changelog timestamps — which time
+  board writes, not work — as cycle time.
+- **Report warnings that fired on everything** (FEAT-062): sub-day cycle times printed as `0.0`
+  days, and every green recorded before the last commit was listed as stale evidence.
+- **A guardrail that matched its own explanation** (FEAT-056): a commit message explaining the
+  `[no-ref]` escape was read as taking it, waving through a commit that had a valid reference.
+- **A mermaid diagram in DESIGN.md that rendered as nothing** — a `;` inside a sequence-diagram
+  message is a statement separator. `npm run check:docs` now parses every diagram in CI with the
+  same library the monitor renders them with.
 - The Stop hook's record-your-work reminder never reached Claude: it went to stderr with exit 0,
   which Claude Code doesn't pass to the model (FEAT-045). It now answers with a block-once
   `{"decision":"block","reason":…}` only when the board is stale, the project changed since the

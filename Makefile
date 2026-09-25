@@ -11,7 +11,7 @@ DATA_DIR ?= $(CURDIR)/../$(notdir $(CURDIR)).kanbanr
 SKILLS_DIR ?= $(HOME)/.claude/skills
 IMAGE ?= kanbanr:latest
 
-.PHONY: help build test itest cli web install-cli install-skill install serve docker-build docker-up docker-down screenshots clean
+.PHONY: help build test itest cli web check-docs install-cli install-skill install serve docker-build docker-up docker-down screenshots clean
 
 help:
 	@echo "Targets:"
@@ -45,6 +45,11 @@ cli:
 
 web:
 	cd web && npm install && npm run build
+
+# Every mermaid diagram in the docs parses with the library the monitor renders them with. A
+# diagram that fails renders as nothing, which reads as a missing image rather than an error.
+check-docs:
+	cd web && npm install && npm run check:docs
 
 install-cli:
 	cd api && cargo install --path crates/kanbanr-cli

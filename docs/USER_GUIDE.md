@@ -241,6 +241,111 @@ don't have to say anything about kanbanr — Claude treats it as the **single sy
 - For several changes at once, Claude sends **one bundled `kanbanr batch` call** (new/edited
   feature items, status moves, new todo-lists + items, task-state updates, doc changes).
 
+## The method: why work exists, and what proves it done
+
+Everything above tracks *what* is being built. This section is about *why* — the part a board
+normally loses. It is opt-in: a project with no charter behaves exactly as it always did, and items
+created before a charter was adopted are never reported against it.
+
+### The charter — what the project is for
+
+```bash
+kanbanr charter show
+kanbanr charter set --file charter.yaml     # purpose, vision, goals, non-goals, stakeholders
+```
+
+Goals carry ids (`G-1`, `G-2`) that work items link. A goal with no work behind it is a stated
+intention nobody is delivering, and the Charter tab shows that; so is an item that serves no goal.
+
+### Defining an item — the bar, and it is the same for everything
+
+```bash
+kanbanr feature define FEAT-001 --template --kind defect   # a skeleton shaped to the kind
+kanbanr feature define FEAT-001 --file def.yaml            # write it
+kanbanr check FEAT-001                                     # what it has not said, and cannot show
+```
+
+A definition states the item in one sentence, links a goal, answers the six Zachman dimensions
+(what / how / where / when / who / why) in a line each, and carries **requirements** in
+[EARS](https://alistairmavin.com/ears/) form with the tests that will prove them. Quality
+requirements additionally carry an ISO/IEC 25010 characteristic and a measured scenario whose
+measure names the test that checks it.
+
+What varies by kind is only the *shape* of a requirement: a feature asserts new behaviour, a defect
+names the requirement it violates, a chore asserts an invariant ("shall continue to …"). The bar
+does not move. **Leave what you do not know blank** — `kanbanr doctor` reports a blank; it cannot
+report an invented answer.
+
+### Agreement before work
+
+```bash
+kanbanr review FEAT-001      # the one-screen decision brief — read this BEFORE building
+kanbanr approve FEAT-001     # records agreement, pinned to the definition's content
+kanbanr start FEAT-001       # refuses without a current approval
+```
+
+Approval is pinned to a hash of the definition, so editing the definition afterwards **lapses** the
+approval rather than silently keeping it. The escape is explicit and recorded:
+`kanbanr start FEAT-001 --unapproved "why you are going ahead anyway"`, which stays on the item and
+is reported by `doctor` until it is reviewed.
+
+### Evidence, not intentions
+
+```bash
+kanbanr test FEAT-001 R-1 cart::retains green    # normally you never run this by hand
+kanbanr tests [--write]                          # tracked tests that no longer exist in the repo
+```
+
+A PostToolUse hook reads the output of every test run you make and flips the tracked tests to match,
+stamped with the project revision it saw. Name a test exactly as your runner prints it
+(`cart::retains_for_seven_days`, `src/cart.test.ts`) or the run cannot find it. A green recorded at
+an older revision is reported as **stale evidence**, not as proof; re-running the suite refreshes
+it. Mark a check a person performs as `kind: manual` — it is exempt from the rot sweep, so use it
+only when a person really did it.
+
+## Measuring what happened
+
+```bash
+kanbanr report --since 14d        # throughput, cycle time, rework, escape rate, coverage
+kanbanr retro MS-006 --write      # a wave's account, written to a document
+kanbanr retro --due               # finished waves whose retro is unwritten
+kanbanr defect FEAT-042 --introduced-by FEAT-031 --found-in production --severity high
+kanbanr lessons [--for FEAT-001]  # what this project learned, most believed first
+kanbanr lesson add "…" --kind pitfall --from FEAT-043 --evidence "what actually happened"
+kanbanr lesson affirm L-1 | kanbanr lesson contradict L-1 --note "…"
+```
+
+Every number is derived from what the board recorded — status history, defect records, test states
+— and anything that cannot be derived is **absent rather than estimated**. Whether a defect
+*escaped* is not asked, it is derived: it escaped if the work that introduced it had already been
+called done. Lessons lose confidence with age unless something reaffirms them, and one that falls
+below the threshold retires: kept as a record, no longer surfaced.
+
+## Tying code to the reason for it
+
+```bash
+kanbanr start FEAT-001                       # branches feat/FEAT-001-<slug>, moves the item
+kanbanr commit -m "feat(x): …" --ref R-2     # fills in Refs: kanbanr:FEAT-001/R-2
+kanbanr finish                               # refuses while tasks are open or requirements unproven
+kanbanr git install-hooks                    # commit-msg + pre-commit checks in your repo
+kanbanr trace G-2 | FEAT-001 | FEAT-001/R-2  # down the chain, ending in the gaps
+kanbanr trace MS-006 --zachman               # which of the six columns nothing addresses
+kanbanr why src/cart.rs:42                   # up: annotation or trailer → requirement → goal
+kanbanr adr new "…" --affects FEAT-001 --driven-by FEAT-001/R-2 --quality Reliability
+kanbanr adr list [--for FEAT-001] | adr supersede ADR-0007 --replaces ADR-0003 | adr history ADR-0007
+```
+
+One item, one branch, and every commit says what it serves. The hooks refuse a commit on the
+default branch, a branch that names no item, and a message with no reference — and they let through
+merges, reverts, `spike/*` branches, and a recorded escape (`[no-ref] <why>` in the message, which
+leaves the reason in git history forever). If kanbanr is not on PATH the hooks step aside rather
+than making the repository uncommittable for someone who never installed it.
+
+Architecture decisions stay **documents** with front-matter that joins them to the graph: they have
+no estimate, branch or tests, so counting them as work items would distort the flow metrics.
+Deciding is still work — it is a task on the item that needed the decision, and the ADR is its
+output.
+
 ## 4. Everyday use — just talk to Claude
 
 | You say to Claude | What the skill runs |
@@ -385,6 +490,64 @@ per project. Select the active project with `--project`, `$KANBANR_PROJECT`, or 
   data dir, and `kanbanr serve` serves it read-only over a port.
 - `make itest` — builds the Docker image and runs the **testcontainers** smoke test (the image
   boots and serves the read-only view, no auth).
+
+## Complete command reference
+
+Everything the CLI does, grouped by what you are trying to find out. `--json` works on every read.
+
+**Setting up and looking around**
+
+| Command | What it does |
+|---|---|
+| `kanbanr init <name>` | data folder + git repo + identity + project, in one step |
+| `kanbanr project init/edit/list/use/delete` | create, rename, select (writes the `.kanbanr` marker) |
+| `kanbanr where [--json]` | which board folder this directory uses, and why |
+| `kanbanr whoami` / `kanbanr identity` | the commit identity this data folder writes as |
+| `kanbanr config show / set-transition / displayed-states / default-state / no-op-states / workflow` | the workflow |
+| `kanbanr hooks install / status / uninstall` | the Claude Code hooks (session start, stop nudge, test capture, commit guard) |
+| `kanbanr serve [--ui-dir …]` | the read-only monitor over this board |
+
+**The work**
+
+| Command | What it does |
+|---|---|
+| `kanbanr board` / `kanbanr feature list / show / add / edit` | the kanban and its items |
+| `kanbanr move <CODE> <STATUS> [--unapproved "…"]` | a status change, validated against the workflow |
+| `kanbanr milestone add / list / edit / delete` | milestones (a dependency DAG; cycles rejected) |
+| `kanbanr todo add / list`, `kanbanr task add / state / list` | persistent todo-lists on an item |
+| `kanbanr export <CODE> --format md\|json` | one item, rendered for a human or a machine |
+| `kanbanr query "text" [--goal G-1] [--gap …] [--all-projects]` | rich filters plus full text, across projects |
+| `kanbanr activity` / `kanbanr events` | the changelog, and the notification event log |
+| `kanbanr doc folder / add / tree / list / show / rm` | the documentation tree |
+
+**Dependencies and scheduling**
+
+| Command | What it does |
+|---|---|
+| `kanbanr ready` / `kanbanr blocked` | what can be started now, and what is waiting on something |
+| `kanbanr impact <CODE>` | everything downstream of an item — what breaks if it slips |
+| `kanbanr graph [--format dot\|json]` | the dependency graph |
+| `kanbanr critical-path` / `kanbanr gantt` | the longest chain, and a Mermaid schedule |
+| `kanbanr portfolio …` | cross-project rollups for a program of several boards |
+
+**Keeping it honest**
+
+| Command | What it does |
+|---|---|
+| `kanbanr doctor` | every broken reference and every gap, across the board |
+| `kanbanr check [CODE]` | what one item has not said, and what it cannot yet show |
+| `kanbanr capture` | reads a test run's output (run by the hook; you never call it) |
+| `kanbanr split-from <CODE> <PARENT>` | records that an item was sliced out of another |
+| `kanbanr sources [--write]` | imported items whose source file has gone |
+| `kanbanr index` | rebuild the per-project cache from the source-of-truth files |
+
+**Sharing**
+
+| Command | What it does |
+|---|---|
+| `kanbanr remote add / list / remove`, `kanbanr sync` | git remotes for the board, and an immediate push |
+| `kanbanr mirror enable / disable / status / sync / link / pull` | one-way mirror of items to GitHub issues |
+| `kanbanr batch [--dry-run] [--file …]` | many changes in one call and one commit |
 
 ## 10. Troubleshooting
 
