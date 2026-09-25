@@ -259,6 +259,7 @@ fn build_project_config(name: &str, body: &Value) -> ProjectConfig {
         Some(s) => {
             let no_ops = no_op.clone().unwrap_or_default();
             ProjectConfig {
+                branch_pattern: None,
                 schema_version: crate::config::CURRENT_SCHEMA_VERSION,
                 name: name.to_string(),
                 description: String::new(),

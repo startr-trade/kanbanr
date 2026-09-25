@@ -5,6 +5,7 @@
 mod backend;
 mod hooks;
 mod mirror;
+mod scm;
 
 use backend::{Backend, Method};
 use clap::{Args, Parser, Subcommand};
@@ -218,6 +219,41 @@ enum Command {
     /// Mirror this project's features to GitHub issues via `gh` (kanbanr → GitHub, one way).
     #[command(subcommand)]
     Mirror(MirrorCmd),
+    /// Tie the code repo to the board: hooks that require a reference, and the checks they run.
+    #[command(subcommand)]
+    Git(GitCmd),
+    /// Begin work on an item: branch for it, and move it into an active status. The branch is how
+    /// everything else knows what you are working on. (FEAT-056)
+    Start {
+        code: String,
+        /// The status to move it to (default: the first active status on the board).
+        #[arg(long)]
+        to: Option<String>,
+        /// Move the item without creating or switching a branch.
+        #[arg(long)]
+        no_branch: bool,
+        /// Start without an approved definition, recording why. The reason stays on the item.
+        #[arg(long)]
+        unapproved: Option<String>,
+    },
+    /// Finish an item: refuse while tasks are open or requirements are unproven, then move it to
+    /// a terminal status. Merging stays yours. (FEAT-056)
+    Finish {
+        /// Defaults to the item this branch belongs to.
+        code: Option<String>,
+    },
+    /// Commit with the board reference filled in from the current branch. (FEAT-056)
+    Commit {
+        #[arg(short, long)]
+        message: String,
+        /// Stage every tracked change first (`git commit -a`).
+        #[arg(short, long)]
+        all: bool,
+        /// Reference something more precise than the item: `R-2`, `TL-001/T3`, or another item's
+        /// code. Repeatable.
+        #[arg(long = "ref")]
+        refs: Vec<String>,
+    },
     /// List the tests the board is tracking and check each name still exists in the project (run
     /// it in the project folder). `--write` returns a green whose test has vanished to `planned`,
     /// because evidence from a test nobody can run is not evidence. (FEAT-053)
@@ -726,6 +762,27 @@ enum HooksCmd {
 }
 
 #[derive(Subcommand)]
+enum GitCmd {
+    /// Install the commit-msg and pre-commit hooks in this repository.
+    InstallHooks {
+        /// Keep an existing hook (moved to `<name>.pre-kanbanr`) and chain it first.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Remove kanbanr's hooks, restoring anything they replaced.
+    UninstallHooks,
+    /// Validate a commit message file (run by the commit-msg hook).
+    CheckMsg { file: PathBuf },
+    /// Check the current branch belongs to an item (run by the pre-commit hook).
+    CheckBranch,
+    /// What is installed, which branch this is, and which item it belongs to.
+    Status,
+    /// Check a `git commit` before it is attempted (run by the Claude Code PreToolUse hook).
+    /// Reads the tool payload on stdin and answers with a decision and a reason.
+    Guard,
+}
+
+#[derive(Subcommand)]
 enum MirrorCmd {
     /// Turn the mirror on for this project. Requires `gh` logged in; refuses a public repo unless
     /// --allow-public. Features created from now on get issues; `sync --all` backfills.
@@ -1191,6 +1248,488 @@ fn run_sources(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
                 edits.len()
             );
         }
+    }
+    Ok(())
+}
+
+/// The board, the repo and the branch, resolved together (FEAT-056). Every SCM command needs the
+/// same three things, and needs to fail the same helpful way when one is missing.
+struct Context {
+    project: Project,
+    root: PathBuf,
+    branch: Option<String>,
+}
+
+fn scm_context(cli: &Cli, client: &Backend) -> anyhow::Result<Context> {
+    let p = require_project(cli)?;
+    let project = get_project(client, &p)?;
+    let root = scm::repo_root().ok_or_else(|| {
+        anyhow::anyhow!("not inside a git repository — run this in the code repo")
+    })?;
+    let branch = scm::current_branch(&root);
+    Ok(Context {
+        project,
+        root,
+        branch,
+    })
+}
+
+/// The item the current branch is about. This is the whole reason the branch rule exists: with it,
+/// nothing else has to ask what is being worked on.
+fn branch_item(ctx: &Context) -> Option<String> {
+    let pattern = ctx.project.config.branch_pattern();
+    let code = kanbanr_core::scm::code_from_branch(pattern, ctx.branch.as_deref()?)?;
+    ctx.project
+        .features
+        .iter()
+        .any(|f| f.code == code)
+        .then_some(code)
+}
+
+fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
+    match cmd {
+        GitCmd::InstallHooks { force } => {
+            let root =
+                scm::repo_root().ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
+            let installed = scm::install_hooks(&root, *force)?;
+            println!(
+                "installed {} in {}: a commit now has to say which item it serves",
+                installed.join(" and "),
+                root.display()
+            );
+            Ok(())
+        }
+        GitCmd::UninstallHooks => {
+            let root =
+                scm::repo_root().ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
+            let removed = scm::uninstall_hooks(&root)?;
+            println!("removed {removed} kanbanr hook(s)");
+            Ok(())
+        }
+        GitCmd::CheckMsg { file } => run_check_msg(cli, client, file),
+        GitCmd::Guard => run_guard(cli, client),
+        GitCmd::CheckBranch => run_check_branch(cli, client),
+        GitCmd::Status => {
+            let ctx = scm_context(cli, client)?;
+            let item = branch_item(&ctx);
+            println!("repo:    {}", ctx.root.display());
+            println!(
+                "hooks:   {}",
+                if scm::hooks_installed(&ctx.root) {
+                    "installed"
+                } else {
+                    "not installed (kanbanr git install-hooks)"
+                }
+            );
+            println!("branch:  {}", ctx.branch.as_deref().unwrap_or("(detached)"));
+            println!("default: {}", scm::default_branch(&ctx.root));
+            match item {
+                Some(code) => println!("item:    {code}"),
+                None => println!("item:    (this branch belongs to no item)"),
+            }
+            Ok(())
+        }
+    }
+}
+
+/// The Claude Code side of the commit guardrail (FEAT-056): the same rules as the git hooks, but
+/// answered *before* the command runs, with the reference to use. Feedback that arrives as a
+/// failed command teaches avoidance; feedback that arrives with the fix teaches the rule.
+///
+/// It only ever denies a `git commit`. Anything it cannot parse, and any repo without a board,
+/// passes silently — a guard that blocks what it does not understand would be turned off.
+fn run_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
+    use std::io::Read;
+    let mut raw = String::new();
+    std::io::stdin().read_to_string(&mut raw)?;
+    let payload: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+    let command = payload["tool_input"]["command"].as_str().unwrap_or("");
+    if !is_git_commit(command) {
+        return Ok(());
+    }
+    let deny = |reason: String| {
+        println!(
+            "{}",
+            json!({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }})
+        );
+    };
+    if command.contains("--no-verify") || command.contains(" -n ") {
+        deny(
+            "This skips the commit hooks, which is how a reference gets lost. If the commit \
+             genuinely serves no board item, say so on the record instead: put `[no-ref] <why>` \
+             in the message."
+                .to_string(),
+        );
+        return Ok(());
+    }
+    let Ok(ctx) = scm_context(cli, client) else {
+        return Ok(()); // not a kanbanr project: not this guard's business
+    };
+    if let Some(branch) = &ctx.branch
+        && branch == &scm::default_branch(&ctx.root)
+    {
+        deny(format!(
+            "This would commit straight to {branch}. Work belongs on a branch for its item: run \
+             `kanbanr start <CODE>` first."
+        ));
+        return Ok(());
+    }
+    // The message is only visible when it is given inline; a commit that opens an editor is
+    // checked by the commit-msg hook instead.
+    let Some(message) = inline_message(command) else {
+        return Ok(());
+    };
+    if kanbanr_core::scm::is_generated_commit(&message)
+        || kanbanr_core::scm::escape_reason(&message).is_some()
+    {
+        return Ok(());
+    }
+    let refs = kanbanr_core::scm::parse_refs(&message);
+    if refs.is_empty() {
+        let suggestion = branch_item(&ctx)
+            .map(|code| format!("Refs: kanbanr:{code}"))
+            .unwrap_or_else(|| "Refs: kanbanr:<CODE>".to_string());
+        deny(format!(
+            "This commit does not say which item it serves. Add the trailer `{suggestion}` (a \
+             requirement is better: `kanbanr:<CODE>/R-2`), or run `kanbanr commit -m \"…\"`, \
+             which fills it in from the branch."
+        ));
+        return Ok(());
+    }
+    let problems = kanbanr_core::scm::validate_refs(&ctx.project, &refs);
+    if !problems.is_empty() {
+        deny(format!(
+            "This commit references something that is not on the board:\n{}",
+            problems.join("\n")
+        ));
+    }
+    Ok(())
+}
+
+/// Is this shell command a `git commit`? Deliberately narrow: `git -C x commit`, `git commit`, and
+/// the same after a `&&`. Anything cleverer risks guessing wrong about someone's shell.
+fn is_git_commit(command: &str) -> bool {
+    command.split("&&").any(|part| {
+        let mut words = part.split_whitespace().skip_while(|w| *w == "sudo");
+        if words.next().is_none_or(|w| !w.ends_with("git")) {
+            return false;
+        }
+        // Skip git's own options (`-C <dir>`, `-c k=v`) to reach the subcommand.
+        let mut skip_next = false;
+        for word in words {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+            if word == "-C" || word == "-c" {
+                skip_next = true;
+                continue;
+            }
+            if word.starts_with('-') {
+                continue;
+            }
+            return word == "commit";
+        }
+        false
+    })
+}
+
+/// The message of a `git commit -m "…"`, when it is written inline.
+fn inline_message(command: &str) -> Option<String> {
+    let at = command
+        .find("-m")
+        .map(|i| i + 2)
+        .or_else(|| command.find("--message").map(|i| i + "--message".len()))?;
+    let rest = command[at..].trim_start_matches(['=', ' ']);
+    let quote = rest.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return Some(rest.split_whitespace().next()?.to_string());
+    }
+    let body = &rest[1..];
+    let end = body.find(quote)?;
+    Some(body[..end].replace("\\n", "\n"))
+}
+
+/// The commit-msg hook. Every exit here is a decision about whether a commit happens, so each
+/// refusal says what to write instead — a guardrail that only says "no" gets bypassed.
+fn run_check_msg(cli: &Cli, client: &Backend, file: &Path) -> anyhow::Result<()> {
+    use kanbanr_core::scm;
+    let message = std::fs::read_to_string(file)
+        .map_err(|e| anyhow::anyhow!("could not read the commit message ({e})"))?;
+    // Comment lines are git's own; they are not part of the message.
+    let message: String = message
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if scm::is_generated_commit(&message) {
+        return Ok(()); // git wrote it; there is no author to ask for a reference
+    }
+    if let Some(reason) = scm::escape_reason(&message) {
+        eprintln!("kanbanr: committing with no reference — recorded reason: {reason}");
+        return Ok(());
+    }
+    // Not a kanbanr project (or no board reachable): say nothing, block nothing.
+    let Ok(ctx) = scm_context(cli, client) else {
+        return Ok(());
+    };
+    let refs = scm::parse_refs(&message);
+    if refs.is_empty() {
+        let suggestion = branch_item(&ctx)
+            .map(|code| format!("Refs: kanbanr:{code}"))
+            .unwrap_or_else(|| "Refs: kanbanr:FEAT-001".to_string());
+        anyhow::bail!(
+            "this commit says which code changed but not which item it serves.\n\
+             Add a trailer:\n\n    {suggestion}\n\n\
+             or `kanbanr commit -m \"…\"`, which fills it in from the branch.\n\
+             If it genuinely serves no item, say so on the record: `[no-ref] <why>`."
+        );
+    }
+    let problems = scm::validate_refs(&ctx.project, &refs);
+    if !problems.is_empty() {
+        anyhow::bail!(
+            "this commit references something that is not on the board:\n  {}",
+            problems.join("\n  ")
+        );
+    }
+    Ok(())
+}
+
+/// The pre-commit hook: work belongs on a branch that names the item it serves.
+fn run_check_branch(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
+    let Ok(ctx) = scm_context(cli, client) else {
+        return Ok(());
+    };
+    let Some(branch) = ctx.branch.clone() else {
+        return Ok(()); // detached head: a rebase or a bisect, not a place for a policy argument
+    };
+    if branch.starts_with(kanbanr_core::scm::SPIKE_PREFIX) {
+        return Ok(()); // a spike is allowed to exist; `finish` is where it is refused
+    }
+    if branch == scm::default_branch(&ctx.root) {
+        anyhow::bail!(
+            "this is {branch}, the default branch. Work belongs on a branch for its item:\n\n    \
+             kanbanr start <CODE>\n\n\
+             (or `spike/<name>` to explore — spikes produce a definition change, not merged code.)"
+        );
+    }
+    if branch_item(&ctx).is_none() {
+        anyhow::bail!(
+            "the branch '{branch}' does not name an item on the board, so nothing here can be \
+             traced back to a reason. Use `kanbanr start <CODE>` (pattern: {}), or `spike/<name>`.",
+            ctx.project.config.branch_pattern()
+        );
+    }
+    Ok(())
+}
+
+fn run_start(
+    cli: &Cli,
+    client: &Backend,
+    code: &str,
+    to: Option<&str>,
+    no_branch: bool,
+    unapproved: Option<&str>,
+) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let project = get_project(client, &p)?;
+    let feature = project
+        .features
+        .iter()
+        .find(|f| f.code == code)
+        .ok_or_else(|| anyhow::anyhow!("feature '{code}' not found"))?;
+    let status = match to {
+        Some(s) => s.to_string(),
+        None => first_active_status(&project)?,
+    };
+
+    if !no_branch {
+        let root = scm::repo_root()
+            .ok_or_else(|| anyhow::anyhow!("not inside a git repository — use --no-branch"))?;
+        let branch =
+            kanbanr_core::scm::branch_for(project.config.branch_pattern(), code, &feature.title);
+        if scm::current_branch(&root).as_deref() == Some(branch.as_str()) {
+            println!("already on {branch}");
+        } else if scm::git(&root, &["rev-parse", "--verify", "--quiet", &branch]).is_ok() {
+            scm::git(&root, &["checkout", "-q", &branch])?;
+            println!("switched to {branch}");
+        } else {
+            // Branch from the default branch, not from wherever you happen to be standing.
+            let base = scm::default_branch(&root);
+            scm::git(&root, &["checkout", "-q", "-b", &branch, &base])
+                .or_else(|_| scm::git(&root, &["checkout", "-q", "-b", &branch]))?;
+            println!("created {branch} from {base}");
+        }
+    }
+
+    if feature.status == status {
+        println!("{code} is already {status}");
+        return Ok(());
+    }
+    let mut body = json!({ "to": status });
+    if let Some(reason) = unapproved {
+        body["unapproved"] = json!(reason);
+    }
+    let resp = client.write(
+        Method::Post,
+        &format!("/projects/{p}/features/{code}/move"),
+        Some(body),
+    )?;
+    print_write(cli, &resp, format!("{code} -> {status}"));
+    Ok(())
+}
+
+/// The first status that means "being worked on": displayed, not the default, not terminal.
+fn first_active_status(project: &Project) -> anyhow::Result<String> {
+    project
+        .config
+        .displayed_states
+        .iter()
+        .find(|s| {
+            *s != &project.config.default_state
+                && !kanbanr_core::graph::is_terminal_status(&project.config, s)
+        })
+        .cloned()
+        .ok_or_else(|| {
+            anyhow::anyhow!("this workflow has no active status to start in; pass --to <STATUS>")
+        })
+}
+
+fn run_finish(cli: &Cli, client: &Backend, code: Option<&str>) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let project = get_project(client, &p)?;
+    let ctx_branch = scm::repo_root().and_then(|r| scm::current_branch(&r));
+    let code = match code {
+        Some(c) => c.to_string(),
+        None => {
+            let branch = ctx_branch
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("no branch to infer the item from; name it"))?;
+            if branch.starts_with(kanbanr_core::scm::SPIKE_PREFIX) {
+                anyhow::bail!(
+                    "'{branch}' is a spike. A spike's output is a change to an item's definition, \
+                     not merged code — write that up, then start the item it belongs to."
+                );
+            }
+            kanbanr_core::scm::code_from_branch(project.config.branch_pattern(), &branch)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("the branch '{branch}' names no item; pass the code")
+                })?
+        }
+    };
+    let feature = project
+        .features
+        .iter()
+        .find(|f| f.code == code)
+        .ok_or_else(|| anyhow::anyhow!("feature '{code}' not found"))?;
+
+    // Everything that makes "done" mean something, checked before it is claimed.
+    let report = check_report(feature);
+    let gaps: Vec<String> = report["gaps"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|g| g.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let open: Vec<String> = feature
+        .todo_lists
+        .iter()
+        .flat_map(|l| {
+            l.tasks
+                .iter()
+                .filter(|t| t.state != kanbanr_core::models::TaskState::Completed)
+                .map(move |t| format!("{}/{} {}", l.code, t.key, t.text))
+        })
+        .collect();
+    if !gaps.is_empty() || !open.is_empty() {
+        let mut lines = gaps;
+        lines.extend(open.iter().map(|t| format!("task not finished: {t}")));
+        anyhow::bail!(
+            "{code} is not finished:\n  {}\n\nFix these, or move it by hand if you disagree.",
+            lines.join("\n  ")
+        );
+    }
+
+    let terminal = project
+        .config
+        .terminal_states
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "Completed".to_string());
+    let resp = client.write(
+        Method::Post,
+        &format!("/projects/{p}/features/{code}/move"),
+        Some(json!({ "to": terminal })),
+    )?;
+    print_write(
+        cli,
+        &resp,
+        format!("{code} -> {terminal}. Merge when you are ready; the branch is not the archive."),
+    );
+    Ok(())
+}
+
+fn run_commit(
+    cli: &Cli,
+    client: &Backend,
+    message: &str,
+    all: bool,
+    refs: &[String],
+) -> anyhow::Result<()> {
+    let ctx = scm_context(cli, client)?;
+    let item = branch_item(&ctx);
+    // A `--ref` that starts with a code this board knows stands on its own (a cross-cutting
+    // change may serve several items); anything else is read as part of the branch's item.
+    let known = |value: &str| {
+        value
+            .split('/')
+            .next()
+            .is_some_and(|code| ctx.project.features.iter().any(|f| f.code == code))
+    };
+    let tokens: Vec<String> = if refs.is_empty() {
+        item.iter().map(|c| format!("kanbanr:{c}")).collect()
+    } else {
+        refs.iter()
+            .map(|r| match (&item, known(r)) {
+                (_, true) => format!("kanbanr:{r}"),
+                (Some(code), false) => format!("kanbanr:{code}/{r}"),
+                (None, false) => format!("kanbanr:{r}"),
+            })
+            .collect()
+    };
+    if tokens.is_empty() {
+        anyhow::bail!(
+            "this branch names no item, so there is nothing to reference. \
+             `kanbanr start <CODE>` first, or pass --ref."
+        );
+    }
+    let parsed = kanbanr_core::scm::parse_refs(&tokens.join(" "));
+    let problems = kanbanr_core::scm::validate_refs(&ctx.project, &parsed);
+    if !problems.is_empty() {
+        anyhow::bail!("{}", problems.join("\n"));
+    }
+    let message = format!("{}\n\nRefs: {}\n", message.trim_end(), tokens.join(", "));
+
+    let mut args: Vec<&str> = vec!["commit"];
+    if all {
+        args.push("-a");
+    }
+    args.push("-m");
+    args.push(&message);
+    let out = std::process::Command::new("git")
+        .args(&args)
+        .current_dir(&ctx.root)
+        .status()
+        .map_err(|e| anyhow::anyhow!("could not run git: {e}"))?;
+    if !out.success() {
+        anyhow::bail!("git commit failed");
     }
     Ok(())
 }
@@ -2415,6 +2954,22 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Command::Git(cmd) => run_git(cli, &client, cmd),
+        Command::Start {
+            code,
+            to,
+            no_branch,
+            unapproved,
+        } => run_start(
+            cli,
+            &client,
+            code,
+            to.as_deref(),
+            *no_branch,
+            unapproved.as_deref(),
+        ),
+        Command::Finish { code } => run_finish(cli, &client, code.as_deref()),
+        Command::Commit { message, all, refs } => run_commit(cli, &client, message, *all, refs),
         Command::Sources { write } => run_sources(cli, &client, *write),
         Command::Tests { write } => run_tests(cli, &client, *write),
         Command::Charter(cmd) => run_charter(cli, &client, cmd),
@@ -3657,6 +4212,29 @@ mod tests {
 
     /// The capture hook is only as good as this parser: a name it misreads is evidence recorded
     /// against the wrong test, which is worse than no evidence at all.
+    /// The guard only speaks about commits, and only when it can see the message. Everything it
+    /// misreads here is either a commit it wrongly blocks or one it wrongly waves through.
+    #[test]
+    fn the_commit_guard_recognizes_a_commit_and_reads_its_message() {
+        assert!(is_git_commit("git commit -m \"x\""));
+        assert!(is_git_commit("git -C /repo commit -am \"x\""));
+        assert!(is_git_commit("cd /repo && git commit"));
+        assert!(!is_git_commit("git status"));
+        assert!(!is_git_commit("git log --oneline -1 && echo commit"));
+        assert!(!is_git_commit("echo 'git commit'"));
+
+        assert_eq!(
+            inline_message("git commit -m \"feat: a thing\"").as_deref(),
+            Some("feat: a thing")
+        );
+        assert_eq!(
+            inline_message("git commit -m 'feat: a thing\\n\\nRefs: kanbanr:FEAT-001'").as_deref(),
+            Some("feat: a thing\n\nRefs: kanbanr:FEAT-001")
+        );
+        // An editor commit has no inline message; the commit-msg hook covers that one.
+        assert_eq!(inline_message("git commit"), None);
+    }
+
     #[test]
     fn test_output_is_read_from_the_formats_a_run_actually_prints() {
         let text = "\

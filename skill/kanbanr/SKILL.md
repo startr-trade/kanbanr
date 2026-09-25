@@ -198,6 +198,30 @@ Write the definition with the batch path (`definition` on `feature.add`/`feature
 - The gate is dormant for projects with no charter, and for items created before the charter was
   adopted — so adopting the method never breaks an existing board.
 
+## Code points back at the item that justifies it
+
+One item, one branch, and every commit says what it serves. Do not commit on the default branch,
+and do not start work without a branch — the branch is how everything else knows what you are
+working on, including the commit check and the test capture.
+
+```
+kanbanr start FEAT-046            # branches feat/FEAT-046-<slug> and moves the item to active
+kanbanr commit -m "feat(x): …"    # fills in `Refs: kanbanr:FEAT-046` from the branch
+kanbanr commit -m "…" --ref R-2   # better: the requirement this change exists to satisfy
+kanbanr finish                    # refuses while tasks are open or requirements unproven
+```
+
+- Reference the **requirement** (`kanbanr:FEAT-046/R-2`) or the **task**
+  (`kanbanr:FEAT-046/TL-001/T3`) when you know which one the change serves; the item alone is the
+  floor, not the goal. One commit may reference several items — a cross-cutting change needs no
+  artificial split.
+- **Never** pass `--no-verify`. If a commit genuinely serves no item, say so on the record:
+  `[no-ref] <why>` in the message passes the check and leaves the reason in git history.
+- `spike/<name>` branches are for exploring. Their output is a **change to a definition**, never
+  merged code — `kanbanr finish` refuses them.
+- `kanbanr git install-hooks` puts the checks in the repo (an existing hook is kept and chained
+  with `--force`). The board's own data folder is exempt: kanbanr authors those commits itself.
+
 ## Tests are evidence, not intentions
 
 Work test-first: create each test entry as `planned`, set it `red` when the failing test exists,
@@ -415,6 +439,10 @@ kanbanr check [FEAT-001]          # what this item has not said and cannot yet s
 kanbanr test FEAT-001 R-1 cart::retains green [--rev <sha>]   # normally the capture hook does this
 kanbanr report [--since 14d]      # throughput, cycle time, rework, escape rate, coverage
 kanbanr tests [--write]           # tracked tests that no longer exist; --write un-proves them
+kanbanr start FEAT-001 [--to STATUS] [--no-branch] [--unapproved "<reason>"]
+kanbanr commit -m "…" [--ref R-2] [--ref TL-001/T3] [-a]   # trailer filled from the branch
+kanbanr finish [FEAT-001]         # gated: tasks complete, requirements proven
+kanbanr git install-hooks [--force] | uninstall-hooks | status
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
 kanbanr approve FEAT-001          # the user records agreement (do not approve on their behalf)
 kanbanr move FEAT-001 Scheduled [--unapproved \"<reason>\"]   # gated; the override is recorded

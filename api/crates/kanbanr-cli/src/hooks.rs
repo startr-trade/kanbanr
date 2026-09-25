@@ -13,12 +13,15 @@ use std::path::{Path, PathBuf};
 /// (Claude Code event, script base name).
 const HOOKS: [(&str, &str); 2] = [("SessionStart", "session-start"), ("Stop", "stop-check")];
 
-/// The test-capture hook (FEAT-053) is not a script in the skill folder: it runs the CLI itself,
-/// reading the command's output and recording which tracked tests actually passed. Registered on
-/// Bash, because that is where test runs happen.
-const CAPTURE_EVENT: &str = "PostToolUse";
-const CAPTURE_MATCHER: &str = "Bash";
-const CAPTURE_COMMAND: &str = "kanbanr capture";
+/// Hooks that run the CLI itself rather than a script in the skill folder: `(event, matcher,
+/// command)`. Both watch Bash, because that is where test runs and commits happen — one reads the
+/// output of a run to record which tracked tests actually passed (FEAT-053), the other checks a
+/// `git commit` before it is attempted, so the feedback arrives with a suggestion rather than as a
+/// failure after the fact (FEAT-056).
+const CLI_HOOKS: [(&str, &str, &str); 2] = [
+    ("PostToolUse", "Bash", "kanbanr capture"),
+    ("PreToolUse", "Bash", "kanbanr git guard"),
+];
 
 /// The Claude Code config dir: `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
 pub fn claude_dir() -> Option<PathBuf> {
@@ -100,9 +103,11 @@ pub fn missing(settings: &Value) -> Vec<&'static str> {
         })
         .map(|(event, _)| *event)
         .collect();
-    // The capture hook runs the CLI, so there is no script to check for — only the registration.
-    if !commands(settings, CAPTURE_EVENT).any(|c| c.trim() == CAPTURE_COMMAND) {
-        missing.push(CAPTURE_EVENT);
+    // These run the CLI, so there is no script to check for — only the registration.
+    for (event, _, command) in CLI_HOOKS {
+        if !commands(settings, event).any(|c| c.trim() == command) {
+            missing.push(event);
+        }
     }
     missing
 }
@@ -114,19 +119,25 @@ fn remove(settings: &mut Value, only_stale: bool) -> usize {
     let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) else {
         return 0;
     };
-    // The capture hook is matched by its command, not by a script path, so it is never "stale".
-    if !only_stale && let Some(groups) = hooks.get_mut(CAPTURE_EVENT).and_then(Value::as_array_mut)
-    {
+    // These are matched by their command, not by a script path, so they are never "stale" — and
+    // every other hook on the same event (another tool's, the user's own) is left untouched.
+    for (event, _, command) in CLI_HOOKS {
+        if only_stale {
+            break;
+        }
+        let Some(groups) = hooks.get_mut(event).and_then(Value::as_array_mut) else {
+            continue;
+        };
         for group in groups.iter_mut() {
             if let Some(entries) = group.get_mut("hooks").and_then(Value::as_array_mut) {
                 let before = entries.len();
-                entries.retain(|h| h["command"].as_str().unwrap_or("").trim() != CAPTURE_COMMAND);
+                entries.retain(|h| h["command"].as_str().unwrap_or("").trim() != command);
                 removed += before - entries.len();
             }
         }
         groups.retain(|g| g["hooks"].as_array().is_none_or(|e| !e.is_empty()));
         if groups.is_empty() {
-            hooks.remove(CAPTURE_EVENT);
+            hooks.remove(event);
         }
     }
     for (event, name) in HOOKS {
@@ -167,15 +178,15 @@ pub fn add(settings: &mut Value, scripts: &Path) -> anyhow::Result<Vec<&'static 
         .or_insert_with(|| json!({}))
         .as_object_mut()
         .ok_or_else(|| anyhow!("\"hooks\" in settings.json is not an object"))?;
-    if added.contains(&CAPTURE_EVENT) {
+    for (event, matcher, command) in CLI_HOOKS.iter().filter(|(e, _, _)| added.contains(e)) {
         hooks
-            .entry(CAPTURE_EVENT)
+            .entry(*event)
             .or_insert_with(|| json!([]))
             .as_array_mut()
-            .ok_or_else(|| anyhow!("\"hooks.{CAPTURE_EVENT}\" in settings.json is not a list"))?
+            .ok_or_else(|| anyhow!("\"hooks.{event}\" in settings.json is not a list"))?
             .push(json!({
-                "matcher": CAPTURE_MATCHER,
-                "hooks": [{ "type": "command", "command": CAPTURE_COMMAND }],
+                "matcher": matcher,
+                "hooks": [{ "type": "command", "command": command }],
             }));
     }
     for (event, name) in HOOKS.iter().filter(|(e, _)| added.contains(e)) {
@@ -287,15 +298,14 @@ pub fn status(claude_dir: &Path) -> anyhow::Result<Status> {
                     "script_exists": command.map(|c| script_of(c).is_file()),
                 })
             })
-            // The capture hook runs the CLI, so "does its script exist" is not a question that
-            // applies: being registered is the whole of its health.
-            .chain(std::iter::once_with(|| {
-                let command =
-                    commands(&settings, CAPTURE_EVENT).find(|c| c.trim() == CAPTURE_COMMAND);
+            // These run the CLI, so "does its script exist" is not a question that applies:
+            // being registered is the whole of their health.
+            .chain(CLI_HOOKS.iter().map(|(event, _, command)| {
+                let found = commands(&settings, event).find(|c| c.trim() == *command);
                 json!({
-                    "event": CAPTURE_EVENT,
-                    "command": command,
-                    "script_exists": command.map(|_| true),
+                    "event": event,
+                    "command": found,
+                    "script_exists": found.map(|_| true),
                 })
             }))
             .collect(),
@@ -340,7 +350,7 @@ mod tests {
 
         assert_eq!(
             install(&dir).unwrap(),
-            Installed::Added(vec!["SessionStart", "Stop", "PostToolUse"])
+            Installed::Added(vec!["SessionStart", "Stop", "PostToolUse", "PreToolUse"])
         );
         let text = std::fs::read_to_string(settings_path(&dir)).unwrap();
         let v: Value = serde_json::from_str(&text).unwrap();
@@ -370,6 +380,14 @@ mod tests {
         let capture = &v["hooks"]["PostToolUse"][0];
         assert_eq!(capture["matcher"], "Bash");
         assert_eq!(capture["hooks"][0]["command"], "kanbanr capture");
+        // The commit guard sits on PreToolUse, beside whatever else was already watching Bash.
+        let guard = v["hooks"]["PreToolUse"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["hooks"][0]["command"] == "kanbanr git guard")
+            .expect("the guard is registered");
+        assert_eq!(guard["matcher"], "Bash");
 
         // Idempotent.
         assert_eq!(install(&dir).unwrap(), Installed::AlreadyPresent);
@@ -378,8 +396,8 @@ mod tests {
         // Uninstall removes only kanbanr's entries.
         assert_eq!(
             uninstall(&dir).unwrap(),
-            3,
-            "two script hooks plus the capture hook"
+            4,
+            "two script hooks plus the two that run the CLI"
         );
         let v: Value =
             serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap();
@@ -403,7 +421,7 @@ mod tests {
         std::fs::write(settings_path(&dir), stale.to_string()).unwrap();
         assert_eq!(
             install(&dir).unwrap(),
-            Installed::Added(vec!["SessionStart", "Stop", "PostToolUse"])
+            Installed::Added(vec!["SessionStart", "Stop", "PostToolUse", "PreToolUse"])
         );
         let v: Value =
             serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap();
