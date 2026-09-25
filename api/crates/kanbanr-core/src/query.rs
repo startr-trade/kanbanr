@@ -181,10 +181,10 @@ pub fn run(store: &Store, query: &Query) -> Result<Vec<QueryHit>> {
                     continue;
                 }
             }
-            if let Some(gap) = &query.gap {
-                if !has_gap(f, gap) {
-                    continue;
-                }
+            if let Some(gap) = &query.gap
+                && !has_gap(f, gap)
+            {
+                continue;
             }
 
             // ---- full-text (title always; spec only when --full-text and a term is set) ----
