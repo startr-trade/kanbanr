@@ -3,8 +3,13 @@ import { api } from "../api";
 import { useAsync, useLiveTick } from "../live";
 import Markdown from "../components/Markdown";
 import { ErrorBox, FeatureBadges, Loading, LiveDot, TaskBadge, progress } from "../components/bits";
-import { featureProgress, listsNewestFirst, listFullyCompleted } from "../types";
-import type { Feature } from "../types";
+import {
+  featureProgress,
+  listsNewestFirst,
+  listFullyCompleted,
+  zachmanColumns,
+} from "../types";
+import type { Feature, Requirement, TestRef } from "../types";
 
 /** Dedicated page for one feature (epic): Specification + a tile per todo-list (newest first). */
 export default function FeaturePage() {
@@ -75,6 +80,7 @@ export default function FeaturePage() {
       )}
 
       <Provenance feature={feature} />
+      <Definition feature={feature} project={project} />
 
       <section className="section">
         <h2>Specification</h2>
@@ -130,6 +136,122 @@ export default function FeaturePage() {
 }
 
 const day = (ts?: string | null) => (ts ?? "").slice(0, 10);
+
+/**
+ * Why this item exists, what must be true, and how it is verified (FEAT-047..049).
+ * Blanks are shown as gaps rather than hidden: an unanswered dimension is information, and
+ * hiding it is how a board ends up looking complete while saying nothing.
+ */
+function Definition({ feature, project }: { feature: Feature; project: string }) {
+  const def = feature.definition;
+  if (!def) return null;
+  const approval =
+    def.approval == null
+      ? { label: "not approved", cls: "chip warn" }
+      : { label: `approved by ${def.approval.by} · ${day(def.approval.at)}`, cls: "chip" };
+
+  return (
+    <>
+      <section className="section">
+        <h2>Definition</h2>
+        {def.statement?.trim() ? (
+          <blockquote className="muted">{def.statement}</blockquote>
+        ) : (
+          <span className="chip warn">[MISSING: statement]</span>
+        )}
+        <div className="provenance">
+          {(def.goals ?? []).length ? (
+            (def.goals ?? []).map((g) => (
+              <Link key={g} className="chip" to={`/p/${encodeURIComponent(project)}/charter#${g}`}>
+                {g}
+              </Link>
+            ))
+          ) : (
+            <span className="chip warn">no goal link</span>
+          )}
+          <span className={approval.cls}>{approval.label}</span>
+          {def.started_unapproved?.trim() ? (
+            <span className="chip warn">started unapproved: {def.started_unapproved}</span>
+          ) : null}
+          {def.exempt?.trim() ? <span className="chip">exempt: {def.exempt}</span> : null}
+        </div>
+        <div className="tiles">
+          {zachmanColumns(def.zachman).map(({ column, answer }) => (
+            <div className="tile" key={column}>
+              <div className="tile-title">{column}</div>
+              {answer.trim() ? (
+                <div className="tile-desc">{answer}</div>
+              ) : (
+                <span className="chip warn">[MISSING: {column}]</span>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="section">
+        <h2>
+          Requirements <span className="muted small">(and the evidence for each)</span>
+        </h2>
+        {(def.requirements ?? []).length === 0 ? (
+          <p className="muted">Nothing states what must be true for this to be done.</p>
+        ) : (
+          <div className="todo-tiles">
+            {(def.requirements ?? []).map((r) => (
+              <RequirementTile key={r.id} requirement={r} />
+            ))}
+          </div>
+        )}
+      </section>
+    </>
+  );
+}
+
+function RequirementTile({ requirement: r }: { requirement: Requirement }) {
+  const tests = r.tests ?? [];
+  return (
+    <section className="todo-tile">
+      <div className="todo-tile-head">
+        <code className="taskkey">{r.id}</code>
+        <span className="badge kind">{r.kind}</span>
+        {(r.iso25010 ?? []).map((tag) => (
+          <span className="badge label" key={tag}>
+            {tag}
+          </span>
+        ))}
+        {r.violates?.trim() ? <span className="chip blocked">violates {r.violates}</span> : null}
+      </div>
+      <div className="pad">{r.text}</div>
+      {r.scenario ? (
+        <div className="muted small pad">
+          {r.scenario.stimulus} / {r.scenario.environment} / {r.scenario.response} —{" "}
+          <strong>{r.scenario.measure || "[MISSING: measure]"}</strong>
+        </div>
+      ) : null}
+      {tests.length === 0 ? (
+        <div className="pad">
+          <span className="chip warn">no test — this cannot be shown to be met</span>
+        </div>
+      ) : (
+        <ul className="tasklist">
+          {tests.map((t) => (
+            <li key={t.name}>
+              <code className="taskkey">{t.kind || "test"}</code>
+              <span className="tasktext">{t.name}</span>
+              <TestBadge test={t} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** planned / red / green, reusing the task badge colours: todo, in-progress, done. */
+function TestBadge({ test }: { test: TestRef }) {
+  const cls = test.state === "green" ? "done" : test.state === "red" ? "wip" : "todo";
+  return <span className={`taskbadge ${cls}`}>{test.state}</span>;
+}
 
 /** Where the feature was imported from, and the issue it is mirrored to. The source is history:
  *  its original text lives in the spec, so a vanished source is labeled, never a broken link. */

@@ -43,12 +43,22 @@ pub struct Query {
     /// When set, the `text` term is also matched against each feature's specification body. This
     /// reads spec files, so it is opt-in to keep the default path cheap.
     pub full_text: bool,
+    /// Only items serving this charter goal id (FEAT-050) — the "what is this for?" filter.
+    pub goal: Option<String>,
+    /// Only items with this kind of gap: `why` (no definition or missing dimensions), `test`
+    /// (a requirement with no test, or none green), `approval` (unapproved, lapsed, or started
+    /// without one). This is the troubleshooting half of search.
+    pub gap: Option<String>,
 }
 
 /// Which field a full-text term matched in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MatchField {
+    /// The statement, a dimension answer, or a requirement's text.
+    Definition,
+    /// A test name recorded against a requirement.
+    Test,
     Title,
     Spec,
 }
@@ -161,11 +171,57 @@ pub fn run(store: &Store, query: &Query) -> Result<Vec<QueryHit>> {
                 }
             }
 
+            // ---- goal and gap filters (FEAT-050): the troubleshooting half of search ----
+            if let Some(goal) = &query.goal {
+                let serves = f
+                    .definition
+                    .as_ref()
+                    .is_some_and(|d| d.goals.iter().any(|g| g == goal));
+                if !serves {
+                    continue;
+                }
+            }
+            if let Some(gap) = &query.gap {
+                if !has_gap(f, gap) {
+                    continue;
+                }
+            }
+
             // ---- full-text (title always; spec only when --full-text and a term is set) ----
             let mut matched = Vec::new();
             if let Some(needle) = &needle {
                 if f.title.to_lowercase().contains(needle) {
                     matched.push(MatchField::Title);
+                }
+                // The definition is already in memory, so searching it costs nothing — unlike the
+                // spec body, which is read from disk only when asked for.
+                if let Some(def) = &f.definition {
+                    let in_definition = [
+                        def.statement.as_str(),
+                        def.zachman.what.as_str(),
+                        def.zachman.how.as_str(),
+                        def.zachman.where_.as_str(),
+                        def.zachman.when.as_str(),
+                        def.zachman.who.as_str(),
+                        def.zachman.why.as_str(),
+                    ]
+                    .iter()
+                    .any(|v| v.to_lowercase().contains(needle))
+                        || def
+                            .requirements
+                            .iter()
+                            .any(|r| r.text.to_lowercase().contains(needle));
+                    if in_definition {
+                        matched.push(MatchField::Definition);
+                    }
+                    if def
+                        .requirements
+                        .iter()
+                        .flat_map(|r| r.tests.iter())
+                        .any(|t| t.name.to_lowercase().contains(needle))
+                    {
+                        matched.push(MatchField::Test);
+                    }
                 }
                 if query.full_text {
                     // Read the one spec body on demand (kept out of the cheap path).
@@ -193,4 +249,40 @@ pub fn run(store: &Store, query: &Query) -> Result<Vec<QueryHit>> {
 
     hits.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(hits)
+}
+
+/// Does this item have the named kind of gap? The vocabulary is deliberately small — these are the
+/// three questions asked when something has gone wrong: why does this exist, is it verified, and
+/// did anyone agree to it.
+fn has_gap(f: &crate::FeatureItem, gap: &str) -> bool {
+    use crate::models::{ApprovalState, TestState};
+    let def = f.definition.as_ref();
+    match gap.trim().to_ascii_lowercase().as_str() {
+        "why" => match def {
+            None => true,
+            Some(d) => {
+                d.statement.trim().is_empty()
+                    || !d.zachman.missing().is_empty()
+                    || d.goals.is_empty()
+            }
+        },
+        "test" => match def {
+            None => true,
+            Some(d) => {
+                d.requirements.is_empty()
+                    || d.requirements.iter().any(|r| {
+                        r.tests.is_empty() || !r.tests.iter().any(|t| t.state == TestState::Green)
+                    })
+            }
+        },
+        "approval" => match def {
+            None => true,
+            Some(d) => {
+                !matches!(d.approval_state(), ApprovalState::Current)
+                    || !d.started_unapproved.trim().is_empty()
+            }
+        },
+        // An unknown gap name matches nothing, rather than silently matching everything.
+        _ => false,
+    }
 }

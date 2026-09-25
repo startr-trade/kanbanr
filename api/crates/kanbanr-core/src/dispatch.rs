@@ -171,6 +171,8 @@ fn build_query(project: Option<&str>, query: Option<&str>) -> crate::query::Quer
         blocked: query_flag(query, "blocked"),
         text: query_param(query, "text"),
         full_text: query_flag(query, "full_text"),
+        goal: query_param(query, "goal"),
+        gap: query_param(query, "gap"),
     }
 }
 
