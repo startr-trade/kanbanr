@@ -833,6 +833,25 @@ requirements:
         assert_eq!(def(&store).approval_state(), ApprovalState::Current);
         assert_eq!(def(&store).approval.unwrap().by, "Venkat");
 
+        // Evidence moving is not a scope change: a test going green must NOT lapse the approval,
+        // or people learn to re-approve reflexively and the gate becomes a rubber stamp.
+        let mut progressed = def(&store);
+        progressed.requirements[0].tests[0].state = crate::models::TestState::Green;
+        progressed.requirements[0].tests[0].checked_rev = "abc1234".into();
+        store
+            .set_feature_definition("demo", &f.code, Some(progressed))
+            .unwrap();
+        assert_eq!(def(&store).approval_state(), ApprovalState::Current);
+
+        // Changing WHAT verifies it is a scope change, and does lapse.
+        let mut retested = def(&store);
+        retested.requirements[0].tests[0].name = "core::something_else".into();
+        store
+            .set_feature_definition("demo", &f.code, Some(retested))
+            .unwrap();
+        assert_eq!(def(&store).approval_state(), ApprovalState::Lapsed);
+        store.approve_feature("demo", &f.code, "Venkat").unwrap();
+
         // Scope changes after the yes: the approval LAPSES rather than vanishing, so the record of
         // who agreed to what survives and the message can say which it is.
         store

@@ -217,12 +217,23 @@ pub enum ApprovalState {
 }
 
 impl FeatureDefinition {
-    /// A stable hash of the definition's content, excluding the approval itself — otherwise
-    /// recording an approval would immediately invalidate it.
+    /// A stable hash of what was agreed to, so an approval can be pinned to it.
+    ///
+    /// Excluded: the approval itself (recording it would otherwise invalidate it), and each test's
+    /// **state** and `checked_rev`. Those are evidence, not scope — a test going from planned to
+    /// green means the work is progressing as agreed, and lapsing the approval for it would train
+    /// people to re-approve reflexively, which is how a gate becomes a rubber stamp. Adding,
+    /// removing or renaming a test DOES change the hash: what is verified is part of the deal.
     pub fn content_rev(&self) -> String {
         let mut bare = self.clone();
         bare.approval = None;
         bare.started_unapproved = String::new();
+        for requirement in &mut bare.requirements {
+            for test in &mut requirement.tests {
+                test.state = TestState::default();
+                test.checked_rev = String::new();
+            }
+        }
         crate::hash::stable_hash(&serde_yaml::to_string(&bare).unwrap_or_default())
     }
 
