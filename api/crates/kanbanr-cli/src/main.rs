@@ -115,6 +115,23 @@ enum Command {
         #[arg(long)]
         unapproved: Option<String>,
     },
+    /// Move one test along the TDD lifecycle: planned | red | green. Flip it when the test
+    /// actually runs, not when you intend to write it. (FEAT-051)
+    Test {
+        code: String,
+        requirement: String,
+        test: String,
+        state: String,
+        /// The project revision the result was observed at; a green older than HEAD is stale.
+        #[arg(long)]
+        rev: Option<String>,
+    },
+    /// Is this item actually ready? Reports what it has not said and what it cannot yet show:
+    /// missing dimensions, requirements with no test, unproven requirements, approval state.
+    Check {
+        /// One item; omit for every item currently in scope.
+        code: Option<String>,
+    },
     /// Print the one-screen decision brief for an item: what is proposed, why, and how it will be
     /// verified. Read this BEFORE the work, not after. (FEAT-048)
     Review { code: String },
@@ -298,6 +315,10 @@ enum ProjectCmd {
         /// Statuses that are functionally inert (no-op) dispositions; always non-displayed.
         #[arg(long, value_delimiter = ',')]
         no_op_states: Option<Vec<String>>,
+        /// Use a named workflow preset instead of the default: `togaf` gives the six architecture
+        /// phases as board columns.
+        #[arg(long)]
+        workflow: Option<String>,
     },
     /// Update a project's display name / description.
     Edit {
@@ -532,6 +553,11 @@ enum ConfigCmd {
         /// the 3 default no-op states); any flags below then override it.
         #[arg(long)]
         defaults: bool,
+        /// Start from the TOGAF phase workflow instead: Vision → Business Arch → System Design →
+        /// Implementation → Migration → Operations. The phase is the status; there is no second
+        /// field to keep in step.
+        #[arg(long)]
+        togaf: bool,
         #[arg(long, value_delimiter = ',')]
         statuses: Option<Vec<String>>,
         /// Allowed transitions as `From>To` pairs, e.g. --transitions "Planned>Scheduled,Scheduled>Done".
@@ -1628,6 +1654,56 @@ fn field(s: &str, key: &str) -> String {
         .unwrap_or_default()
 }
 
+/// What an item has not said, and what it cannot yet show (FEAT-051). The same rules `doctor`
+/// applies, focused on one item and phrased as work left to do rather than as a complaint.
+fn check_report(f: &kanbanr_core::FeatureItem) -> Value {
+    use kanbanr_core::models::{ApprovalState, TestState};
+    let mut gaps: Vec<String> = Vec::new();
+    match f.definition.as_ref() {
+        None => {
+            gaps.push("no definition — why it exists, what must be true, how it is verified".into())
+        }
+        Some(def) if !def.exempt.trim().is_empty() => {}
+        Some(def) => {
+            if def.statement.trim().is_empty() {
+                gaps.push("[MISSING: statement]".into());
+            }
+            for column in def.zachman.missing() {
+                gaps.push(format!("[MISSING: {column}]"));
+            }
+            if def.goals.is_empty() {
+                gaps.push("no goal link — nothing says what this is for".into());
+            }
+            match def.approval_state() {
+                ApprovalState::Current => {}
+                ApprovalState::Missing => gaps.push("not approved".into()),
+                ApprovalState::Lapsed => gaps
+                    .push("approval lapsed — the definition changed after it was approved".into()),
+            }
+            if !def.started_unapproved.trim().is_empty() {
+                gaps.push(format!(
+                    "started without approval: {}",
+                    def.started_unapproved.trim()
+                ));
+            }
+            if def.requirements.is_empty() {
+                gaps.push("no requirements".into());
+            }
+            for r in &def.requirements {
+                if kanbanr_core::ears::classify(&r.text).is_none() {
+                    gaps.push(format!("{} is not in EARS form", r.id));
+                }
+                if r.tests.is_empty() {
+                    gaps.push(format!("{} has no test", r.id));
+                } else if !r.tests.iter().any(|t| t.state == TestState::Green) {
+                    gaps.push(format!("{} is not yet proven — no test is green", r.id));
+                }
+            }
+        }
+    }
+    json!({ "code": f.code, "title": f.title, "status": f.status, "gaps": gaps })
+}
+
 /// One feature, straight from the project payload.
 fn get_feature(client: &Backend, p: &str, code: &str) -> anyhow::Result<kanbanr_core::FeatureItem> {
     get_project(client, p)?
@@ -1727,6 +1803,90 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 Some(body),
             )?;
             print_write(cli, &resp, format!("{code} -> {}", field(&resp, "status")));
+            Ok(())
+        }
+        Command::Test {
+            code,
+            requirement,
+            test,
+            state,
+            rev,
+        } => {
+            let p = require_project(cli)?;
+            let mut body = json!({ "state": state });
+            if let Some(rev) = rev {
+                body["checked_rev"] = json!(rev);
+            }
+            let resp = client.write(
+                Method::Put,
+                &format!(
+                    "/projects/{p}/features/{code}/tests/{}/{}",
+                    urlencode(requirement),
+                    urlencode(test)
+                ),
+                Some(body),
+            )?;
+            print_write(
+                cli,
+                &resp,
+                format!("{code}/{requirement} · {test} -> {state}"),
+            );
+            Ok(())
+        }
+        Command::Check { code } => {
+            let p = require_project(cli)?;
+            let project = get_project(&client, &p)?;
+            let features: Vec<&kanbanr_core::FeatureItem> = match code {
+                Some(c) => project
+                    .features
+                    .iter()
+                    .filter(|f| &f.code == c)
+                    .collect::<Vec<_>>(),
+                None => project
+                    .features
+                    .iter()
+                    .filter(|f| {
+                        project
+                            .config
+                            .displayed_states
+                            .iter()
+                            .any(|s| s == &f.status)
+                    })
+                    .filter(|f| {
+                        !kanbanr_core::graph::is_terminal_status(&project.config, &f.status)
+                    })
+                    .collect(),
+            };
+            if features.is_empty() {
+                anyhow::bail!("no such item, or nothing in scope");
+            }
+            let reports: Vec<Value> = features.iter().map(|f| check_report(f)).collect();
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&reports)?);
+                return Ok(());
+            }
+            let mut ready = 0;
+            for r in &reports {
+                let gaps = r["gaps"].as_array().cloned().unwrap_or_default();
+                if gaps.is_empty() {
+                    ready += 1;
+                    println!(
+                        "✓ {} {}",
+                        r["code"].as_str().unwrap_or(""),
+                        r["title"].as_str().unwrap_or("")
+                    );
+                } else {
+                    println!(
+                        "✗ {} {}",
+                        r["code"].as_str().unwrap_or(""),
+                        r["title"].as_str().unwrap_or("")
+                    );
+                    for gap in gaps {
+                        println!("    {}", gap.as_str().unwrap_or(""));
+                    }
+                }
+            }
+            println!("\n{ready}/{} ready", reports.len());
             Ok(())
         }
         Command::Review { code } => {
@@ -2237,10 +2397,12 @@ fn run_project(cli: &Cli, client: &Backend, cmd: &ProjectCmd) -> anyhow::Result<
             displayed_states,
             default_state,
             no_op_states,
+            workflow,
         } => {
             let body = obj(vec![
                 ("name", Some(json!(name))),
                 ("description", description.clone().map(|d| json!(d))),
+                ("workflow", workflow.clone().map(|w| json!(w))),
                 ("statuses", statuses.clone().map(|s| json!(s))),
                 (
                     "displayed_states",
@@ -2811,6 +2973,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
         }
         ConfigCmd::Workflow {
             defaults,
+            togaf,
             statuses,
             transitions,
             default_state,
@@ -2866,6 +3029,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             }
             let body = obj(vec![
                 ("defaults", Some(json!(defaults))),
+                ("togaf", Some(json!(togaf))),
                 ("statuses", statuses.clone().map(|s| json!(s))),
                 ("transitions", transitions.as_ref().map(|_| json!(tmap))),
                 ("default_state", default_state.clone().map(|s| json!(s))),

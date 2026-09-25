@@ -50,6 +50,54 @@ pub fn default_no_op_states() -> Vec<String> {
     ]
 }
 
+/// An optional TOGAF-phase workflow (FEAT-051), for projects that want architecture phases as
+/// board columns: Vision → Business Arch → System Design → Implementation → Migration →
+/// Operations. Opt-in, because a phase model is a real commitment; the default workflow stays a
+/// plain backlog → scheduled → done. The phase IS the status — there is no second field to keep
+/// in step.
+pub fn togaf_preset(name: &str) -> ProjectConfig {
+    let phases = [
+        "Vision",
+        "Business Arch",
+        "System Design",
+        "Implementation",
+        "Migration",
+        "Operations",
+    ];
+    let no_ops = default_no_op_states();
+    let mut statuses: Vec<String> = phases.iter().map(|s| s.to_string()).collect();
+    statuses.extend(no_ops.iter().cloned());
+
+    // Forward one phase, back one phase (rework is normal), and out to any no-op disposition.
+    let mut transitions = BTreeMap::new();
+    for (i, phase) in phases.iter().enumerate() {
+        let mut next: Vec<String> = Vec::new();
+        if let Some(forward) = phases.get(i + 1) {
+            next.push(forward.to_string());
+        }
+        if i > 0 {
+            next.push(phases[i - 1].to_string());
+        }
+        next.extend(no_ops.iter().cloned());
+        transitions.insert(phase.to_string(), next);
+    }
+    for n in &no_ops {
+        transitions.insert(n.clone(), vec!["Vision".to_string()]);
+    }
+
+    ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        name: name.to_string(),
+        description: String::new(),
+        displayed_states: phases.iter().map(|s| s.to_string()).collect(),
+        default_state: "Vision".to_string(),
+        terminal_states: vec!["Operations".to_string()],
+        no_op_states: no_ops,
+        statuses,
+        transitions,
+    }
+}
+
 impl ProjectConfig {
     /// Sensible defaults for a new project.
     pub fn default_for(name: &str) -> ProjectConfig {
