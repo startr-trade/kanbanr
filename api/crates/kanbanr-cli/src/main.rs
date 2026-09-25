@@ -1276,6 +1276,41 @@ fn run_sources(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A duration a person would recognise. Days are the unit that matters for a board, but work that
+/// takes an afternoon is not "0.0 days" — printing it that way makes a working metric look broken
+/// and teaches the reader to skip the line (FEAT-062).
+fn duration(days: f64) -> String {
+    if days >= 1.0 {
+        format!("{days:.1}d")
+    } else if days * 24.0 >= 1.0 {
+        format!("{:.0}h", days * 24.0)
+    } else {
+        format!("{:.0}m", days * 24.0 * 60.0)
+    }
+}
+
+/// Stale evidence, summarised. Every commit moves HEAD, so in an active repo this fires on nearly
+/// everything and clears on the next full test run — enumerating it buries the cases that matter
+/// and trains the reader to ignore the line entirely (FEAT-062).
+fn stale_line(stale: &[String]) -> String {
+    const SHOWN: usize = 3;
+    let head = stale
+        .iter()
+        .take(SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if stale.len() <= SHOWN {
+        format!("evidence recorded at an earlier revision: {head} — re-run the suite to refresh it")
+    } else {
+        format!(
+            "evidence recorded at an earlier revision: {} requirement(s), e.g. {head} — re-run the \
+             suite to refresh it",
+            stale.len()
+        )
+    }
+}
+
 /// A wave's retrospective (FEAT-054). The printed form is deliberately plain: these are the
 /// numbers a narrative has to be consistent with, and a chart would invite reading a trend into
 /// five data points.
@@ -1418,8 +1453,10 @@ fn retro_markdown(r: &kanbanr_core::retro::Retro) -> String {
         Some(c) => {
             let _ = writeln!(
                 out,
-                "- cycle time (days): p50 {:.1}, p90 {:.1}, max {:.1}",
-                c.p50, c.p90, c.max
+                "- cycle time: p50 {}, p90 {}, max {}",
+                duration(c.p50),
+                duration(c.p90),
+                duration(c.max)
             );
         }
         None => {
@@ -1449,14 +1486,14 @@ fn retro_markdown(r: &kanbanr_core::retro::Retro) -> String {
         );
     }
     if !r.estimates.is_empty() {
-        let _ = writeln!(out, "- estimate vs actual (days):");
+        let _ = writeln!(out, "- estimate vs actual:");
         for e in &r.estimates {
             let _ = writeln!(
                 out,
-                "  - {}: estimated {:.1}, took {:.1} ({:.1}×)",
+                "  - {}: estimated {}, took {} ({:.1}×)",
                 e.code,
-                e.estimate_days,
-                e.actual_days,
+                duration(e.estimate_days),
+                duration(e.actual_days),
                 if e.estimate_days > 0.0 {
                     e.actual_days / e.estimate_days
                 } else {
@@ -3018,10 +3055,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             );
             match r["cycle_time_days"].as_object() {
                 Some(ct) => println!(
-                    "cycle time (days): p50 {:.1}   p90 {:.1}   max {:.1}",
-                    ct["p50"].as_f64().unwrap_or(0.0),
-                    ct["p90"].as_f64().unwrap_or(0.0),
-                    ct["max"].as_f64().unwrap_or(0.0)
+                    "cycle time: p50 {}   p90 {}   max {}",
+                    duration(ct["p50"].as_f64().unwrap_or(0.0)),
+                    duration(ct["p90"].as_f64().unwrap_or(0.0)),
+                    duration(ct["max"].as_f64().unwrap_or(0.0))
                 ),
                 None => println!("cycle time: no completed item has a recorded history yet"),
             }
@@ -3048,16 +3085,16 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     String::new()
                 }
             );
-            let stale = r["stale_evidence"].as_array().cloned().unwrap_or_default();
+            let stale: Vec<String> = r["stale_evidence"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
             if !stale.is_empty() {
-                println!(
-                    "stale evidence (green at an older revision): {}",
-                    stale
-                        .iter()
-                        .filter_map(|v| v.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
+                println!("{}", stale_line(&stale));
             }
             Ok(())
         }
@@ -4471,6 +4508,36 @@ mod tests {
     /// against the wrong test, which is worse than no evidence at all.
     /// The guard only speaks about commits, and only when it can see the message. Everything it
     /// misreads here is either a commit it wrongly blocks or one it wrongly waves through.
+    #[test]
+    fn durations_read_the_way_a_person_would_say_them() {
+        assert_eq!(duration(3.5), "3.5d");
+        assert_eq!(duration(1.0), "1.0d");
+        // An afternoon's work is not "0.0 days" — the number that made the metric look broken.
+        assert_eq!(duration(0.25), "6h");
+        assert_eq!(duration(0.02), "29m");
+        assert_eq!(duration(0.0), "0m");
+    }
+
+    #[test]
+    fn stale_evidence_is_summarised_rather_than_enumerated() {
+        let few = vec!["FEAT-001/R-1".to_string(), "FEAT-001/R-2".to_string()];
+        let line = stale_line(&few);
+        assert!(line.contains("FEAT-001/R-1, FEAT-001/R-2"), "{line}");
+        assert!(line.contains("re-run the suite"), "{line}");
+
+        let many: Vec<String> = (1..=27).map(|i| format!("FEAT-001/R-{i}")).collect();
+        let line = stale_line(&many);
+        assert!(line.contains("27 requirement(s)"), "{line}");
+        assert!(
+            line.contains("e.g. FEAT-001/R-1, FEAT-001/R-2, FEAT-001/R-3"),
+            "{line}"
+        );
+        assert!(
+            !line.contains("R-27"),
+            "the point is not to print them all: {line}"
+        );
+    }
+
     #[test]
     fn the_commit_guard_recognizes_a_commit_and_reads_its_message() {
         assert!(is_git_commit("git commit -m \"x\""));
