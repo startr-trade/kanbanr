@@ -1318,7 +1318,6 @@ fn run_retro(
         ("milestone", milestone.map(str::to_string)),
         ("since", since.clone()),
         ("label", label.map(str::to_string)),
-        ("rev", project_head_rev()),
     ] {
         if let Some(value) = value {
             query.push(format!("{key}={}", urlencode(&value)));

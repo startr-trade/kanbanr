@@ -674,12 +674,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                 since: query_param(query, "since"),
                 label: query_param(query, "label"),
             };
-            ser(&crate::retro::run(
-                store,
-                p,
-                &wave,
-                query_param(query, "rev").as_deref(),
-            )?)
+            ser(&crate::retro::run(store, p, &wave)?)
         }
         ("GET", ["projects", p, "retro", "due"]) => ser(&crate::retro::due(store, p)?),
 
