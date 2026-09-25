@@ -245,6 +245,28 @@ what it cannot yet show. `kanbanr tests` finds evidence that has rotted — a gr
 renamed or deleted — and `--write` returns it to `planned`. Mark a check a person performs as
 `kind: manual`; it is exempt from that sweep, so use it only when a person really did it.
 
+## Every change points back at the reason for it
+
+`kanbanr trace <G-2 | FEAT-046 | FEAT-046/R-2>` goes **down** — requirements, tests, documents,
+decisions — and ends with the gaps, which are the point of it. `kanbanr why <file>:<line>` goes
+**up**: the annotation on the line, else the trailer of the commit that wrote it, then requirement
+→ goal → charter purpose. A line nobody claimed is reported as exactly that.
+
+- **Annotate the unit that owns the behaviour**, not every line: `// … (FEAT-046 R-2)` on the
+  module, function or test. The trailer is the precise link; the annotation is the one that
+  survives the refactors that destroy `git blame`.
+- **Architecture decisions are documents, not items.** `kanbanr adr new "…" --affects FEAT-046
+  --driven-by FEAT-046/R-2 --quality Reliability` scaffolds Context, Decision, Alternatives,
+  Consequences and Compliance. Fill them in — `adr list` reports which are still unwritten, and
+  doctor warns about a missing Decision or Consequences.
+- The links live **on the decision** (`affects`, `driven_by`); the item's view is derived, so it
+  can never disagree. `kanbanr adr supersede ADR-0007 --replaces ADR-0003` writes both sides and
+  names the items now standing on an overturned decision. Deciding is *work*: it is a task on the
+  item that needed the decision, and the ADR is its output.
+- A commit may add `Docs: design/mirror.md` and `ADR: ADR-0003`; both are checked against the
+  board like any other reference.
+- `kanbanr trace <MS-006> --zachman` reports which of the six columns nothing in scope addresses.
+
 ## Read what this project already learned, before you start
 
 `kanbanr lessons --for FEAT-001` — run it before starting an item, not after something goes wrong.
@@ -471,6 +493,10 @@ kanbanr test FEAT-001 R-1 cart::retains green [--rev <sha>]   # normally the cap
 kanbanr report [--since 14d]      # throughput, cycle time, rework, escape rate, coverage
 kanbanr tests [--write]           # tracked tests that no longer exist; --write un-proves them
 kanbanr retro [MS-006] [--since 14d] [--label x] [--write] | --due
+kanbanr trace [G-2|FEAT-001|FEAT-001/R-2] [--zachman]   # down the chain, ending in the gaps
+kanbanr why src/cart.rs:42                      # up: annotation or trailer -> requirement -> goal
+kanbanr adr new "…" [--affects …] [--driven-by FEAT-001/R-2] [--quality Reliability] [--zachman How]
+kanbanr adr list [--for FEAT-001] | supersede ADR-0007 --replaces ADR-0003 | history ADR-0007
 kanbanr lessons [--for FEAT-001] [--all]        # read BEFORE starting work
 kanbanr lesson add "…" --kind pitfall --from FEAT-043 --evidence "…" [--tags a,b] [--goals G-1]
 kanbanr lesson affirm L-1 [--note "…"] | contradict L-1 [--note "…"]

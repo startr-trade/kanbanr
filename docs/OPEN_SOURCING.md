@@ -11,10 +11,11 @@
 > accounts/tokens, fill two placeholders, add screenshots, and cut the first tagged release. Checked
 > boxes below mark what's already in the repo.
 >
-> **Two placeholders to fill before publishing** (both are easy global find/replace):
-> - `startr-trade` → your GitHub username/org (appears in README, this file, templates, workflows, manifests).
-> - `the kanbanr authors` / `<your-...-email>` → your name (or keep "the kanbanr authors") and a contact
->   email in `LICENSE-*`, `CODE_OF_CONDUCT.md`, `SECURITY.md`.
+> **Placeholders: filled.** The GitHub owner is `startr-trade` (README, this file, templates,
+> workflows, manifests), and the contact address in `CODE_OF_CONDUCT.md` and `SECURITY.md` is
+> `kanbanr-oss-support@startr.trade`. The copyright line in `LICENSE-MIT` / `LICENSE-APACHE` and
+> the `authors` field in `api/Cargo.toml` deliberately read *the kanbanr authors* — change it only
+> if you want a personal name on the licence.
 >
 >   ```bash
 >   # from the repo root, once you've picked your GitHub owner slug:
@@ -163,7 +164,8 @@ content** and your **publish credentials**:
       contact method placeholder it ships with.)*
 - [x] **[`SECURITY.md`](../SECURITY.md)** — private reporting (GitHub advisory / email) and the
       actual security model: **no accounts/auth**, the `serve` daemon is read-only on 127.0.0.1, and
-      exposing it is the operator's job (reverse proxy + TLS). *(Set the `<your-security-email>` placeholder.)*
+      exposing it is the operator's job (reverse proxy + TLS). Reports go to a GitHub private
+      security advisory or **kanbanr-oss-support@startr.trade**.
 - [x] **Issue + PR templates** under [`../.github/`](../.github/) (`ISSUE_TEMPLATE/bug_report.yml`,
       `feature_request.yml`, `config.yml`, `PULL_REQUEST_TEMPLATE.md`).
 - [x] **Support promise** stated as "personal project, best-effort, no SLA" (in CONTRIBUTING/SECURITY).

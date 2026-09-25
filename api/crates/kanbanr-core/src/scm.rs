@@ -49,6 +49,56 @@ impl ItemRef {
 /// The marker that opens a reference anywhere in the message.
 const MARKER: &str = "kanbanr:";
 
+/// The other two things a commit can point at (FEAT-057): a document that explains it, and a
+/// decision it rests on. These are trailers proper — `Docs:` and `ADR:` at the start of a line —
+/// because unlike `kanbanr:` they have no distinctive marker, and matching a bare path anywhere
+/// in prose would fire on every sentence that mentions a file.
+const DOC_TRAILER: &str = "Docs:";
+const ADR_TRAILER: &str = "ADR:";
+
+/// Paths named by `Docs:` trailers.
+pub fn parse_doc_refs(message: &str) -> Vec<String> {
+    trailer_values(message, DOC_TRAILER)
+}
+
+/// Decision ids named by `ADR:` trailers.
+pub fn parse_adr_refs(message: &str) -> Vec<String> {
+    trailer_values(message, ADR_TRAILER)
+}
+
+/// Values of a trailer, comma- or space-separated, continuation lines included — a long list
+/// wraps, and a rule that ignored the wrapped part would teach people the check is unreliable.
+fn trailer_values(message: &str, trailer: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut in_trailer = false;
+    for line in message.lines() {
+        let body = match line.trim_start().strip_prefix(trailer) {
+            Some(rest) => {
+                in_trailer = true;
+                rest
+            }
+            // A continuation is an indented line directly under the trailer.
+            None if in_trailer
+                && line.starts_with(char::is_whitespace)
+                && !line.trim().is_empty() =>
+            {
+                line
+            }
+            None => {
+                in_trailer = false;
+                continue;
+            }
+        };
+        for value in body.split([',', ' ', '\t']) {
+            let value = value.trim().trim_end_matches(['.', ';']);
+            if !value.is_empty() && !out.iter().any(|v| v == value) {
+                out.push(value.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// Every reference in a commit message, in the order they appear, de-duplicated.
 ///
 /// References are collected from the whole message rather than only from a `Refs:` line, because a
@@ -245,6 +295,27 @@ fn code_prefix(rest: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_trailer_may_name_a_document_or_a_decision() {
+        let message = "feat(x): do the thing\n\n\
+                       Refs: kanbanr:FEAT-046/R-2\n\
+                       Docs: design/mirror.md, design/flow.md\n\
+                       \x20     design/third.md\n\
+                       ADR: ADR-0003\n";
+        assert_eq!(
+            parse_doc_refs(message),
+            vec!["design/mirror.md", "design/flow.md", "design/third.md"]
+        );
+        assert_eq!(parse_adr_refs(message), vec!["ADR-0003"]);
+
+        // Prose that merely mentions a path or a decision is not a reference: these are trailers,
+        // and a bare path matched anywhere would fire on every sentence naming a file.
+        let prose = "docs: explain the layout\n\n\
+                     See design/mirror.md and ADR-0003 for the reasoning.\n";
+        assert!(parse_doc_refs(prose).is_empty());
+        assert!(parse_adr_refs(prose).is_empty());
+    }
 
     #[test]
     fn references_are_read_at_whatever_level_the_author_wrote() {

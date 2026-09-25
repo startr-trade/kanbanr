@@ -1642,3 +1642,213 @@ fn cli_lessons_are_captured_matched_and_can_be_contradicted() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Traceability end to end (FEAT-057): down from a goal to its evidence, up from a line of code to
+/// the reason it exists, decisions joining the graph as documents, and the trailer levels that
+/// point at them being checked like any other reference.
+#[test]
+fn cli_trace_and_why_follow_the_chain_in_both_directions() {
+    let base = std::env::temp_dir().join(format!("kanbanr-trace-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let git = |args: &[&str]| -> Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .output()
+            .expect("run git")
+    };
+    let exec = |args: &[&str]| -> Output {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    };
+    let run = |args: &[&str]| -> String {
+        let o = exec(args);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    assert!(git(&["init", "--initial-branch=main"]).status.success());
+    // `kanbanr commit` runs the real git, which needs an identity in this scratch repo.
+    assert!(git(&["config", "user.name", "T"]).status.success());
+    assert!(git(&["config", "user.email", "t@x"]).status.success());
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+    let charter = base.join("charter.yaml");
+    std::fs::write(
+        &charter,
+        "purpose: A cart that survives a closed tab\ngoals:\n  - id: G-1\n    statement: A returning shopper resumes where they left off\n",
+    )
+    .unwrap();
+    run(&["charter", "set", "--file", charter.to_str().unwrap()]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Cart recovery",
+        "--milestone",
+        "MS-001",
+    ]);
+    let def = base.join("def.yaml");
+    std::fs::write(
+        &def,
+        "statement: Keep a cart for 7 days\ngoals: [G-1]\n\
+         requirements:\n  - kind: functional\n    text: \"WHEN a cart is abandoned, THE SYSTEM SHALL retain it for 7 days.\"\n\
+         \x20   tests:\n      - name: cart::retains\n        kind: unit\n        state: planned\n",
+    )
+    .unwrap();
+    run(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        def.to_str().unwrap(),
+    ]);
+
+    // Downward: the chain, and the gap in it.
+    let down = run(&["trace", "G-1"]);
+    assert!(down.contains("FEAT-001"), "{down}");
+    assert!(down.contains("cart::retains"), "{down}");
+    assert!(
+        down.contains("R-1 has tests but none is green"),
+        "the gap is the output: {down}"
+    );
+
+    // A decision joins the graph as a document, and shows up against the item it affects.
+    let adr = run(&[
+        "adr",
+        "new",
+        "Store carts server-side",
+        "--affects",
+        "FEAT-001",
+        "--status",
+        "accepted",
+        "--zachman",
+        "How",
+    ]);
+    assert!(adr.contains("ADR-0001"), "{adr}");
+    let listed = run(&["adr", "list", "--for", "FEAT-001"]);
+    assert!(listed.contains("Store carts server-side"), "{listed}");
+    assert!(
+        listed.contains("unwritten: Context"),
+        "a scaffold is not a written decision: {listed}"
+    );
+    assert!(run(&["trace", "FEAT-001"]).contains("ADR-0001"));
+
+    // Upward: a line of code, through the commit that wrote it, to the reason it exists.
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    std::fs::write(
+        work.join("src").join("cart.rs"),
+        "// Carts outlive the tab that made them (FEAT-001 R-1).\nfn retain() {}\n",
+    )
+    .unwrap();
+    // The gate is real: starting requires the definition to have been agreed.
+    let refused = exec(&["start", "FEAT-001"]);
+    assert!(!refused.status.success(), "unapproved work does not start");
+    run(&["approve", "FEAT-001"]);
+    run(&["start", "FEAT-001"]);
+    assert!(git(&["add", "-A"]).status.success());
+    run(&[
+        "commit",
+        "-m",
+        "feat(cart): keep the cart for a week",
+        "--ref",
+        "R-1",
+    ]);
+
+    let why = run(&["why", "src/cart.rs:2"]);
+    assert!(why.contains("FEAT-001/R-1"), "{why}");
+    assert!(
+        why.contains("THE SYSTEM SHALL retain it for 7 days"),
+        "{why}"
+    );
+    assert!(why.contains("G-1"), "{why}");
+    assert!(why.contains("A cart that survives a closed tab"), "{why}");
+    // The annotation is preferred over blame, and is what survives a refactor.
+    assert!(why.contains("from the annotation on the code"), "{why}");
+
+    // A line nobody claimed says so, rather than borrowing the file's other references.
+    std::fs::write(work.join("src").join("stray.rs"), "fn nobody_asked() {}\n").unwrap();
+    let orphan = run(&["why", "src/stray.rs:1"]);
+    assert!(orphan.contains("carries no reference"), "{orphan}");
+
+    // The new trailer levels are checked like any other reference.
+    let msg = base.join("msg.txt");
+    let check = |text: &str| -> Output {
+        std::fs::write(&msg, text).unwrap();
+        exec(&["git", "check-msg", msg.to_str().unwrap()])
+    };
+    assert!(
+        check("docs: write it up\n\nRefs: kanbanr:FEAT-001\nADR: ADR-0001\n")
+            .status
+            .success()
+    );
+    let bad_adr = check("docs: x\n\nRefs: kanbanr:FEAT-001\nADR: ADR-0404\n");
+    assert!(!bad_adr.status.success());
+    assert!(
+        String::from_utf8_lossy(&bad_adr.stderr).contains("ADR-0404 is not a decision"),
+        "{}",
+        String::from_utf8_lossy(&bad_adr.stderr)
+    );
+    let bad_doc = check("docs: x\n\nRefs: kanbanr:FEAT-001\nDocs: design/nope.md\n");
+    assert!(!bad_doc.status.success());
+    assert!(
+        String::from_utf8_lossy(&bad_doc.stderr).contains("design/nope.md is not a document"),
+        "{}",
+        String::from_utf8_lossy(&bad_doc.stderr)
+    );
+
+    // Superseding names what was resting on the old decision.
+    run(&[
+        "adr",
+        "new",
+        "Keep carts in the browser",
+        "--affects",
+        "FEAT-001",
+        "--status",
+        "accepted",
+    ]);
+    let out = run(&["adr", "supersede", "ADR-0002", "--replaces", "ADR-0001"]);
+    assert!(out.contains("now stand on an overturned decision"), "{out}");
+    assert!(out.contains("FEAT-001"), "{out}");
+    let history = run(&["adr", "history", "ADR-0002"]);
+    assert!(
+        history.contains("ADR-0001") && history.contains("ADR-0002"),
+        "{history}"
+    );
+    assert!(
+        run(&["trace", "FEAT-001"]).contains("ADR-0001 has been superseded"),
+        "work resting on an overturned decision is a gap"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
