@@ -314,6 +314,13 @@ impl Store {
     }
 
     /// Write a feature's metadata (yaml) and specification (md) under its current status folder.
+    /// Write a feature exactly as given. Test-only: it exists so a test can reproduce a board
+    /// written by an older version — an item finished before transitions were recorded, say.
+    #[cfg(test)]
+    pub fn persist_feature_for_test(&self, id: &str, f: &FeatureItem) -> Result<()> {
+        self.persist_feature(id, f)
+    }
+
     fn persist_feature(&self, id: &str, f: &FeatureItem) -> Result<()> {
         Self::write_yaml(&self.feature_path(id, &f.status, &f.code), &f.meta())?;
         let spec = self.spec_path(id, &f.status, &f.code);
