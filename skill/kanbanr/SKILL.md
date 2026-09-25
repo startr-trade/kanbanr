@@ -245,6 +245,21 @@ what it cannot yet show. `kanbanr tests` finds evidence that has rotted — a gr
 renamed or deleted — and `--write` returns it to `planned`. Mark a check a person performs as
 `kind: manual`; it is exempt from that sweep, so use it only when a person really did it.
 
+## Look back at a wave before starting the next one
+
+When a milestone finishes — or every couple of weeks — run `kanbanr retro <MS-00x> --write`. It
+reports what the board recorded (scope growth, defects and escapes, cycle time, rework, evidence
+at completion, estimate vs actual) and writes it to a document with an empty narrative section.
+
+- **Fill in the narrative from the numbers.** It may explain them; it may not contradict them. The
+  two sections stay separate so a reader always knows which part the board vouches for.
+- A wave grows for three reasons and the board can only tell them apart if items say so: a defect
+  records `--introduced-by`, and work sliced off an existing item records
+  `kanbanr split-from FEAT-new FEAT-parent`. Anything else lands in "added without a recorded
+  cause", which is the honest bucket, not a spare one — keep it small by recording as you go.
+- The Stop hook surfaces a finished wave whose retro is unwritten. Write it, or say in one line
+  why it is not worth one.
+
 ## What the work actually cost (measurement)
 
 Every status change is appended to the item's history, so flow numbers are derived rather than
@@ -439,6 +454,8 @@ kanbanr check [FEAT-001]          # what this item has not said and cannot yet s
 kanbanr test FEAT-001 R-1 cart::retains green [--rev <sha>]   # normally the capture hook does this
 kanbanr report [--since 14d]      # throughput, cycle time, rework, escape rate, coverage
 kanbanr tests [--write]           # tracked tests that no longer exist; --write un-proves them
+kanbanr retro [MS-006] [--since 14d] [--label x] [--write] | --due
+kanbanr split-from FEAT-060 FEAT-046   # this item was sliced out of that one
 kanbanr start FEAT-001 [--to STATUS] [--no-branch] [--unapproved "<reason>"]
 kanbanr commit -m "…" [--ref R-2] [--ref TL-001/T3] [-a]   # trailer filled from the branch
 kanbanr finish [FEAT-001]         # gated: tasks complete, requirements proven

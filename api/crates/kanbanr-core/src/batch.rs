@@ -52,6 +52,9 @@ pub enum BatchOp {
         /// What a defect cost and where it came from (FEAT-053).
         #[serde(default)]
         defect: Option<crate::models::Defect>,
+        /// The item this was sliced out of (FEAT-054).
+        #[serde(default)]
+        split_from: Option<String>,
     },
     /// Edit a feature item (title / spec / milestone / rename / attrs). Use `feature.move` for status.
     #[serde(rename = "feature.edit")]
@@ -91,6 +94,9 @@ pub enum BatchOp {
         /// What a defect cost and where it came from (FEAT-053).
         #[serde(default)]
         defect: Option<crate::models::Defect>,
+        /// The item this was sliced out of (FEAT-054).
+        #[serde(default)]
+        split_from: Option<String>,
     },
     /// Move a feature to a new status (validated against the workflow). Entering an active status
     /// also requires a current approval (FEAT-048); `unapproved` records an explicit reason to go

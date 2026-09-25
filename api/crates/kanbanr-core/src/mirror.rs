@@ -237,6 +237,7 @@ mod tests {
             issue: None,
             definition: None,
             defect: None,
+            split_from: None,
             history: Vec::new(),
             created_at: created_at.into(),
             updated_at: created_at.into(),

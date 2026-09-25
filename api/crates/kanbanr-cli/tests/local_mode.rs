@@ -1370,3 +1370,139 @@ fn cli_git_guardrails_in_a_scratch_repo() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A wave retrospective end to end (FEAT-054): the facts come out of the board, growth is
+/// attributed only to what items record, and the written document keeps the narrative separate.
+#[test]
+fn cli_retro_reports_facts_and_writes_a_document() {
+    let base = std::env::temp_dir().join(format!("kanbanr-retro-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let run = |args: &[&str]| -> String {
+        let o = Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI");
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    run(&["milestone", "add", "--name", "Wave", "--code", "MS-001"]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "The work",
+        "--milestone",
+        "MS-001",
+    ]);
+    run(&["move", "FEAT-001", "Scheduled"]);
+    // Three items join after the wave began, each for a different recorded reason.
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "It breaks",
+        "--milestone",
+        "MS-001",
+        "--kind",
+        "defect",
+    ]);
+    run(&[
+        "defect",
+        "FEAT-002",
+        "--introduced-by",
+        "FEAT-001",
+        "--found-in",
+        "review",
+    ]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Second half",
+        "--milestone",
+        "MS-001",
+    ]);
+    run(&["split-from", "FEAT-003", "FEAT-001"]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Something else",
+        "--milestone",
+        "MS-001",
+    ]);
+
+    let retro = run(&["retro", "MS-001"]);
+    assert!(
+        retro.contains("items: 4 (0 finished, 4 still open)"),
+        "{retro}"
+    );
+    assert!(
+        retro.contains("1 to begin with, 3 added (1 defect(s), 1 split, 1 unaccounted for)"),
+        "{retro}"
+    );
+    assert!(
+        retro.contains("caused by work in this same wave: FEAT-002 ← FEAT-001"),
+        "{retro}"
+    );
+    assert!(
+        retro.contains("cycle time: nothing finished with a recorded history"),
+        "no invented number when nothing has finished: {retro}"
+    );
+
+    // Nothing is due while the wave is open; finishing every item makes it due.
+    assert!(run(&["retro", "--due"]).contains("no retro is due"));
+    for code in ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"] {
+        if code != "FEAT-001" {
+            run(&["move", code, "Scheduled"]);
+        }
+        run(&["move", code, "Completed"]);
+    }
+    let due = run(&["retro", "--due"]);
+    assert!(due.contains("MS-001 is finished and has no retro"), "{due}");
+
+    let written = run(&["retro", "MS-001", "--write"]);
+    assert!(written.contains("written to retros/MS-001-"), "{written}");
+    let path = written
+        .lines()
+        .find_map(|l| l.strip_prefix("written to "))
+        .unwrap()
+        .trim()
+        .to_string();
+    let doc = run(&["doc", "show", &path]);
+    assert!(doc.contains("## What the board recorded"), "{doc}");
+    assert!(
+        doc.contains("## What we make of it"),
+        "the narrative has its own section, so a reader can tell them apart: {doc}"
+    );
+    assert!(doc.contains("cycle time (days):"), "{doc}");
+    // Written up, so no longer due.
+    assert!(run(&["retro", "--due"]).contains("no retro is due"));
+
+    let _ = std::fs::remove_dir_all(&base);
+}

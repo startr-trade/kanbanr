@@ -127,6 +127,30 @@ enum Command {
         #[arg(long)]
         rev: Option<String>,
     },
+    /// How a wave actually went (FEAT-054): scope growth by recorded cause, defects and escapes,
+    /// cycle time, rework, evidence at completion, estimate against actual. Facts only — the
+    /// narrative is yours to write, and `--write` leaves a section for it.
+    Retro {
+        /// A milestone code. Omit to use `--since` / `--label`, or neither for the whole board.
+        milestone: Option<String>,
+        /// Window, e.g. `14d` or an RFC3339 timestamp.
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        label: Option<String>,
+        /// Store the facts as a document in the board's retros/ folder.
+        #[arg(long)]
+        write: bool,
+        /// List finished milestones whose retro has not been written.
+        #[arg(long)]
+        due: bool,
+    },
+    /// Record that an item was sliced out of another, so a wave's growth can be accounted for.
+    SplitFrom {
+        code: String,
+        /// The item it came from; omit to clear.
+        parent: Option<String>,
+    },
     /// Record what a defect cost and where it came from (FEAT-053). Whether it *escaped* is
     /// derived — it escaped if the work that introduced it had already been called done.
     Defect {
@@ -1250,6 +1274,207 @@ fn run_sources(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// A wave's retrospective (FEAT-054). The printed form is deliberately plain: these are the
+/// numbers a narrative has to be consistent with, and a chart would invite reading a trend into
+/// five data points.
+fn run_retro(
+    cli: &Cli,
+    client: &Backend,
+    milestone: Option<&str>,
+    since: Option<&str>,
+    label: Option<&str>,
+    write: bool,
+    due: bool,
+) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    if due {
+        let resp = client.get(&format!("/projects/{p}/retro/due"))?;
+        if cli.json {
+            println!("{}", pretty(&resp));
+            return Ok(());
+        }
+        let waves: Vec<String> = serde_json::from_str(&resp)?;
+        if waves.is_empty() {
+            println!("no retro is due");
+        } else {
+            for wave in waves {
+                println!("{wave} is finished and has no retro — `kanbanr retro {wave} --write`");
+            }
+        }
+        return Ok(());
+    }
+
+    let since = since.map(|s| match s.strip_suffix('d') {
+        Some(days) => days
+            .parse::<i64>()
+            .map(kanbanr_core::report::days_ago)
+            .unwrap_or_else(|_| s.to_string()),
+        None => s.to_string(),
+    });
+    let mut query = Vec::new();
+    for (key, value) in [
+        ("milestone", milestone.map(str::to_string)),
+        ("since", since.clone()),
+        ("label", label.map(str::to_string)),
+        ("rev", project_head_rev()),
+    ] {
+        if let Some(value) = value {
+            query.push(format!("{key}={}", urlencode(&value)));
+        }
+    }
+    let path = format!(
+        "/projects/{p}/retro{}{}",
+        if query.is_empty() { "" } else { "?" },
+        query.join("&")
+    );
+    let resp = client.get(&path)?;
+    if cli.json {
+        println!("{}", pretty(&resp));
+        return Ok(());
+    }
+    let retro: kanbanr_core::retro::Retro = serde_json::from_str(&resp)?;
+    let facts = retro_markdown(&retro);
+    print!("{facts}");
+
+    if write {
+        let wave = kanbanr_core::retro::Wave {
+            milestone: milestone.map(str::to_string),
+            since,
+            label: label.map(str::to_string),
+        };
+        let doc = kanbanr_core::retro::document_path(&wave, milestone);
+        let body = format!(
+            "{facts}\n## What we make of it\n\n\
+             _Written by whoever writes it, from the numbers above. It may explain them, and it \
+             may disagree with what we expected — it may not contradict them._\n\n\
+             <!-- narrative goes here -->\n"
+        );
+        client.write(
+            Method::Put,
+            &format!("/projects/{p}/docs/content"),
+            Some(json!({ "path": doc, "content": body })),
+        )?;
+        println!("\nwritten to {doc}");
+    }
+    Ok(())
+}
+
+/// The facts section, as markdown — the same text the CLI prints and the document stores, so the
+/// two can never drift apart.
+fn retro_markdown(r: &kanbanr_core::retro::Retro) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(out, "# Retrospective — {}\n", r.wave);
+    let _ = writeln!(out, "## What the board recorded\n");
+    let _ = writeln!(
+        out,
+        "- items: {} ({} finished, {} still open)",
+        r.items, r.completed, r.still_open
+    );
+    if let Some(started) = &r.started {
+        let _ = writeln!(
+            out,
+            "- ran: {} → {}",
+            &started[..10.min(started.len())],
+            r.finished
+                .as_deref()
+                .map(|f| f[..10.min(f.len())].to_string())
+                .unwrap_or_else(|| "still running".into())
+        );
+    }
+    let growth = &r.scope_growth;
+    let _ = writeln!(
+        out,
+        "- scope: {} to begin with, {} added ({} defect(s), {} split, {} unaccounted for)",
+        growth.original,
+        growth.added(),
+        growth.defects.len(),
+        growth.split.len(),
+        growth.unclassified.len()
+    );
+    for (title, list) in [
+        ("added as defects", &growth.defects),
+        ("split out of other work", &growth.split),
+        ("added without a recorded cause", &growth.unclassified),
+    ] {
+        if !list.is_empty() {
+            let _ = writeln!(out, "  - {title}: {}", list.join(", "));
+        }
+    }
+    let _ = writeln!(
+        out,
+        "- defects: {} ({} escaped)",
+        r.defects.total, r.defects.escaped
+    );
+    if !r.defects.self_inflicted.is_empty() {
+        let _ = writeln!(
+            out,
+            "  - caused by work in this same wave: {}",
+            r.defects.self_inflicted.join(", ")
+        );
+    }
+    match &r.cycle_time_days {
+        Some(c) => {
+            let _ = writeln!(
+                out,
+                "- cycle time (days): p50 {:.1}, p90 {:.1}, max {:.1}",
+                c.p50, c.p90, c.max
+            );
+        }
+        None => {
+            let _ = writeln!(
+                out,
+                "- cycle time: nothing finished with a recorded history"
+            );
+        }
+    }
+    if !r.rework.is_empty() {
+        let _ = writeln!(
+            out,
+            "- rework (called done, then reopened): {}",
+            r.rework.join(", ")
+        );
+    }
+    let _ = writeln!(
+        out,
+        "- requirements proven by a green test: {}/{}",
+        r.evidence.proven, r.evidence.requirements
+    );
+    if !r.evidence.finished_unproven.is_empty() {
+        let _ = writeln!(
+            out,
+            "  - finished with unproven requirements: {}",
+            r.evidence.finished_unproven.join(", ")
+        );
+    }
+    if !r.estimates.is_empty() {
+        let _ = writeln!(out, "- estimate vs actual (days):");
+        for e in &r.estimates {
+            let _ = writeln!(
+                out,
+                "  - {}: estimated {:.1}, took {:.1} ({:.1}×)",
+                e.code,
+                e.estimate_days,
+                e.actual_days,
+                if e.estimate_days > 0.0 {
+                    e.actual_days / e.estimate_days
+                } else {
+                    0.0
+                }
+            );
+        }
+    }
+    if !r.no_history.is_empty() {
+        let _ = writeln!(
+            out,
+            "- no recorded moves, so no flow numbers: {}",
+            r.no_history.join(", ")
+        );
+    }
+    out.push('\n');
+    out
 }
 
 /// The board, the repo and the branch, resolved together (FEAT-056). Every SCM command needs the
@@ -2667,6 +2892,36 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 &resp,
                 format!("{code}/{requirement} · {test} -> {state}"),
             );
+            Ok(())
+        }
+        Command::Retro {
+            milestone,
+            since,
+            label,
+            write,
+            due,
+        } => run_retro(
+            cli,
+            &client,
+            milestone.as_deref(),
+            since.as_deref(),
+            label.as_deref(),
+            *write,
+            *due,
+        ),
+        Command::SplitFrom { code, parent } => {
+            let p = require_project(cli)?;
+            let body = json!({ "parent": parent.clone().unwrap_or_default() });
+            let resp = client.write(
+                Method::Put,
+                &format!("/projects/{p}/features/{code}/split-from"),
+                Some(body),
+            )?;
+            let line = match parent {
+                Some(parent) => format!("{code} is recorded as split out of {parent}"),
+                None => format!("{code} is no longer recorded as a split"),
+            };
+            print_write(cli, &resp, line);
             Ok(())
         }
         Command::Defect {

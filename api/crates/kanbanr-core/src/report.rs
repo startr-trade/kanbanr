@@ -40,7 +40,7 @@ pub struct Report {
     pub stale_evidence: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct Percentiles {
     pub p50: f64,
     pub p90: f64,
@@ -152,7 +152,7 @@ pub fn run(store: &Store, id: &str, window: &Window, head_rev: Option<&str>) -> 
 }
 
 /// When the item last reached a terminal status.
-fn finished_at(project: &Project, f: &FeatureItem) -> Option<String> {
+pub(crate) fn finished_at(project: &Project, f: &FeatureItem) -> Option<String> {
     f.history
         .iter()
         .rev()
@@ -162,7 +162,7 @@ fn finished_at(project: &Project, f: &FeatureItem) -> Option<String> {
 
 /// Days from the first move out of the backlog to the last move into a terminal status. Items with
 /// no recorded history (created before histories existed) contribute nothing rather than a guess.
-fn cycle_time_days(project: &Project, f: &FeatureItem) -> Option<f64> {
+pub(crate) fn cycle_time_days(project: &Project, f: &FeatureItem) -> Option<f64> {
     let started = f
         .history
         .iter()
@@ -179,7 +179,7 @@ fn cycle_time_days(project: &Project, f: &FeatureItem) -> Option<f64> {
 
 /// Seconds since the epoch for an RFC3339 timestamp, without pulling in a parser: the board writes
 /// a fixed `YYYY-MM-DDTHH:MM:SS(.fraction)Z` shape.
-fn parse_time(ts: &str) -> Option<f64> {
+pub(crate) fn parse_time(ts: &str) -> Option<f64> {
     let date = ts.get(..10)?;
     let mut parts = date.split('-');
     let y: i64 = parts.next()?.parse().ok()?;
@@ -202,7 +202,7 @@ fn parse_time(ts: &str) -> Option<f64> {
     Some(days as f64 * 86_400.0 + hh * 3600.0 + mm * 60.0 + ss)
 }
 
-fn within(at: Option<&str>, since: Option<&str>) -> bool {
+pub(crate) fn within(at: Option<&str>, since: Option<&str>) -> bool {
     match (at, since) {
         (_, None) => true,
         (Some(at), Some(since)) => at >= since,
@@ -212,7 +212,7 @@ fn within(at: Option<&str>, since: Option<&str>) -> bool {
 
 /// p50/p90 by nearest-rank. With a handful of items a percentile is a rough guide, not a
 /// statistic — which is why the raw count sits beside it in the output.
-fn percentiles(values: &mut [f64]) -> Option<Percentiles> {
+pub(crate) fn percentiles(values: &mut [f64]) -> Option<Percentiles> {
     if values.is_empty() {
         return None;
     }
