@@ -242,6 +242,127 @@ pub fn definition_brief(feature: &FeatureItem) -> String {
     out
 }
 
+/// The definition as markdown: why the item exists, the six dimensions with their gaps named, and
+/// each requirement with its evidence. This is what `kanbanr feature show` prints, which is the
+/// whole of what Claude sees about an item — a field rendered nowhere may as well not exist.
+fn definition_sections(def: &crate::models::FeatureDefinition) -> String {
+    let mut out = String::from("## Definition\n\n");
+    if def.statement.trim().is_empty() {
+        out.push_str("_[MISSING: statement]_\n");
+    } else {
+        out.push_str(&format!("> {}\n", def.statement.trim()));
+    }
+    out.push_str(&format!(
+        "\n- **Serves:** {}\n",
+        if def.goals.is_empty() {
+            "[MISSING: goal link]".to_string()
+        } else {
+            def.goals.join(", ")
+        }
+    ));
+    if !def.design_doc.trim().is_empty() {
+        out.push_str(&format!("- **Design:** `{}`\n", def.design_doc.trim()));
+    }
+    match def.approval_state() {
+        crate::models::ApprovalState::Current => {
+            if let Some(a) = &def.approval {
+                out.push_str(&format!(
+                    "- **Approved** by {} on {}\n",
+                    a.by,
+                    a.at.get(..10).unwrap_or(&a.at)
+                ));
+            }
+        }
+        crate::models::ApprovalState::Lapsed => {
+            out.push_str("- **Approval lapsed** — the definition changed after it was approved\n")
+        }
+        crate::models::ApprovalState::Missing => out.push_str("- **Not approved**\n"),
+    }
+    if !def.started_unapproved.trim().is_empty() {
+        out.push_str(&format!(
+            "- **Started without approval:** {}\n",
+            def.started_unapproved.trim()
+        ));
+    }
+    if !def.exempt.trim().is_empty() {
+        out.push_str(&format!(
+            "- **Exempt from gap reporting:** {}\n",
+            def.exempt.trim()
+        ));
+    }
+
+    out.push_str("\n| Dimension | Answer |\n|---|---|\n");
+    for (column, answer) in def.zachman.columns() {
+        let answer = if answer.trim().is_empty() {
+            format!("_[MISSING: {column}]_")
+        } else {
+            answer.trim().replace('|', "\\|")
+        };
+        out.push_str(&format!("| {column} | {answer} |\n"));
+    }
+
+    out.push_str("\n## Requirements\n\n");
+    if def.requirements.is_empty() {
+        out.push_str("_None yet — nothing states what must be true for this to be done._\n");
+    }
+    for r in &def.requirements {
+        let kind = match r.kind {
+            crate::models::RequirementKind::Functional => "functional",
+            crate::models::RequirementKind::Nfr => "nfr",
+        };
+        let pattern = crate::ears::classify(&r.text)
+            .map(|p| p.as_str().to_string())
+            .unwrap_or_else(|| "not EARS".to_string());
+        out.push_str(&format!(
+            "### {} · {kind} · _{pattern}_\n\n{}\n",
+            r.id,
+            r.text.trim()
+        ));
+        if !r.violates.trim().is_empty() {
+            out.push_str(&format!("\n- Violates `{}`\n", r.violates.trim()));
+        }
+        if !r.iso.is_empty() {
+            out.push_str(&format!("\n- Quality: {}\n", r.iso.join(", ")));
+        }
+        if let Some(sc) = &r.scenario {
+            out.push_str(&format!(
+                "- Scenario: {} / {} / {} — **{}**\n",
+                blank_as_gap(&sc.stimulus),
+                blank_as_gap(&sc.environment),
+                blank_as_gap(&sc.response),
+                blank_as_gap(&sc.measure),
+            ));
+        }
+        out.push('\n');
+        if r.tests.is_empty() {
+            out.push_str("- _[MISSING: test]_ — this requirement cannot be shown to be met\n");
+        }
+        for t in &r.tests {
+            let mark = match t.state {
+                crate::models::TestState::Planned => "[ ]",
+                crate::models::TestState::Red => "[~]",
+                crate::models::TestState::Green => "[x]",
+            };
+            let kind = if t.kind.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", t.kind.trim())
+            };
+            out.push_str(&format!("- {mark} `{}`{kind}\n", t.name));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn blank_as_gap(s: &str) -> String {
+    if s.trim().is_empty() {
+        "_[MISSING]_".to_string()
+    } else {
+        s.trim().to_string()
+    }
+}
+
 /// Render a feature as a self-contained markdown brief Claude can act on.
 pub fn to_markdown(feature: &FeatureItem, milestone: Option<&Milestone>) -> String {
     let mut out = String::new();
@@ -258,6 +379,12 @@ pub fn to_markdown(feature: &FeatureItem, milestone: Option<&Milestone>) -> Stri
         feature.task_count(),
         feature.todo_lists.len()
     ));
+
+    // The definition, when there is one. Rendered only if present, so every item written before
+    // the method keeps producing byte-identical markdown.
+    if let Some(def) = feature.definition.as_ref() {
+        out.push_str(&definition_sections(def));
+    }
 
     out.push_str("## Specification\n\n");
     if feature.specification.trim().is_empty() {

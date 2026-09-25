@@ -877,3 +877,116 @@ fn cli_feature_define_templates_writes_and_clears() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Surfacing and search (FEAT-050): the definition reaches `feature show`, and the gap filters
+/// answer the troubleshooting questions.
+#[test]
+fn cli_feature_show_renders_the_definition_and_query_finds_gaps() {
+    let base = std::env::temp_dir().join(format!("kanbanr-surface-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let run = |args: &[&str]| -> String {
+        let o = Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI");
+        assert!(
+            o.status.success(),
+            "cmd {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Cart recovery",
+        "--milestone",
+        "MS-001",
+    ]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Undefined work",
+        "--milestone",
+        "MS-001",
+    ]);
+
+    let def = base.join("def.yaml");
+    std::fs::write(
+        &def,
+        "statement: Keep a cart for 7 days\ngoals: [G-1]\n\
+         zachman: {what: persistence, how: server store, where: checkout, when: on mutation, who: shoppers, why: carts vanish}\n\
+         requirements:\n  - kind: functional\n    text: \"WHEN a cart is abandoned, THE SYSTEM SHALL retain it for 7 days.\"\n\
+         \x20   tests: [{name: cart::retains, kind: unit, state: green}]\n",
+    )
+    .unwrap();
+    run(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        def.to_str().unwrap(),
+    ]);
+
+    // `feature show` IS what Claude reads, so the definition must appear there.
+    let shown = run(&["feature", "show", "FEAT-001"]);
+    assert!(shown.contains("## Definition"), "{shown}");
+    assert!(shown.contains("**Serves:** G-1"), "{shown}");
+    assert!(shown.contains("| Where | checkout |"), "{shown}");
+    assert!(
+        shown.contains("### R-1 · functional · _event_"),
+        "derives the EARS pattern: {shown}"
+    );
+    assert!(shown.contains("- [x] `cart::retains` (unit)"), "{shown}");
+    assert!(shown.contains("**Not approved**"), "{shown}");
+
+    // An item with no definition renders exactly as before — no empty section.
+    let bare = run(&["feature", "show", "FEAT-002"]);
+    assert!(!bare.contains("## Definition"), "{bare}");
+
+    // Search: by goal, and by the kind of gap being chased.
+    let by_goal = run(&["query", "--goal", "G-1", "--json"]);
+    assert!(
+        by_goal.contains("FEAT-001") && !by_goal.contains("FEAT-002"),
+        "{by_goal}"
+    );
+    let why_gaps = run(&["query", "--gap", "why", "--json"]);
+    assert!(
+        why_gaps.contains("FEAT-002") && !why_gaps.contains("FEAT-001"),
+        "{why_gaps}"
+    );
+    let approval_gaps = run(&["query", "--gap", "approval", "--json"]);
+    assert!(
+        approval_gaps.contains("FEAT-001"),
+        "unapproved counts as a gap: {approval_gaps}"
+    );
+    // An unknown gap name matches nothing rather than everything.
+    assert_eq!(run(&["query", "--gap", "nonsense", "--json"]).trim(), "[]");
+    // Requirement text is searchable without reading spec files.
+    let hit = run(&["query", "--text", "abandoned", "--json"]);
+    assert!(hit.contains("definition"), "match field reported: {hit}");
+
+    let _ = std::fs::remove_dir_all(&base);
+}

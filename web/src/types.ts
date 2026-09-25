@@ -91,11 +91,90 @@ export interface Source {
   missing_since?: string | null;
 }
 
-/** The reasoning and evidence for a work item (FEAT-047). Grows as later items land. */
+/** The reasoning and evidence for a work item (FEAT-047/048/049). */
 export interface FeatureDefinition {
   statement?: string;
-  /** Charter goal ids this item serves. */
+  /** Charter goal ids this item serves — the link that makes "why" checkable. */
   goals?: string[];
+  zachman?: Zachman;
+  design_doc?: string;
+  requirements?: Requirement[];
+  approval?: Approval | null;
+  /** A recorded reason work started without approval. */
+  started_unapproved?: string;
+  /** A recorded reason this item is exempt from gap reporting. */
+  exempt?: string;
+}
+
+/** The six completeness dimensions, one line each. */
+export interface Zachman {
+  what?: string;
+  how?: string;
+  where?: string;
+  when?: string;
+  who?: string;
+  why?: string;
+}
+
+export interface Approval {
+  by: string;
+  at: string;
+  rev: string;
+}
+
+export interface Requirement {
+  id: string;
+  kind: "functional" | "nfr";
+  text: string;
+  iso25010?: string[];
+  scenario?: QualityScenario | null;
+  tests?: TestRef[];
+  /** For a defect: the requirement it violates. */
+  violates?: string;
+}
+
+export interface QualityScenario {
+  stimulus?: string;
+  environment?: string;
+  response?: string;
+  measure?: string;
+}
+
+export interface TestRef {
+  name: string;
+  kind?: string;
+  state: "planned" | "red" | "green";
+  checked_rev?: string;
+}
+
+/** The six dimensions in order, with blanks named — derived here exactly as the CLI derives it. */
+export function zachmanColumns(z?: Zachman): { column: string; answer: string }[] {
+  const source = z ?? {};
+  return [
+    ["What", source.what],
+    ["How", source.how],
+    ["Where", source.where],
+    ["When", source.when],
+    ["Who", source.who],
+    ["Why", source.why],
+  ].map(([column, answer]) => ({ column: column as string, answer: (answer as string) ?? "" }));
+}
+
+/** What an item has not said yet: the same rules doctor applies, for a chip on the board. */
+export function definitionGaps(feature: Feature): string[] {
+  const def = feature.definition;
+  if (!def) return ["no definition"];
+  if (def.exempt?.trim()) return [];
+  const gaps: string[] = [];
+  if (!def.statement?.trim()) gaps.push("statement");
+  for (const { column, answer } of zachmanColumns(def.zachman)) {
+    if (!answer.trim()) gaps.push(column);
+  }
+  if (!(def.goals ?? []).length) gaps.push("goal link");
+  const reqs = def.requirements ?? [];
+  if (!reqs.length) gaps.push("requirements");
+  if (reqs.some((r) => !(r.tests ?? []).length)) gaps.push("tests");
+  return gaps;
 }
 
 /** A mirrored external issue (e.g. a GitHub issue kept in step with this feature). */

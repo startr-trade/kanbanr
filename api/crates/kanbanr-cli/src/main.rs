@@ -623,6 +623,12 @@ struct QueryArgs {
     /// Also match --text against feature specification bodies (reads spec files).
     #[arg(long)]
     full_text: bool,
+    /// Only items serving this charter goal id (e.g. G-2) — "what is this work for?".
+    #[arg(long)]
+    goal: Option<String>,
+    /// Only items with this gap: why | test | approval. The troubleshooting filter.
+    #[arg(long)]
+    gap: Option<String>,
     /// Span every project (portfolio-wide) instead of just the current one.
     #[arg(long)]
     all_projects: bool,
@@ -1930,6 +1936,12 @@ fn run_query(cli: &Cli, client: &Backend, args: &QueryArgs) -> anyhow::Result<()
     }
     if let Some(s) = &args.priority {
         push(&mut params, "priority", s);
+    }
+    if let Some(s) = &args.goal {
+        push(&mut params, "goal", s);
+    }
+    if let Some(s) = &args.gap {
+        push(&mut params, "gap", s);
     }
     if let Some(labels) = &args.label
         && !labels.is_empty()
