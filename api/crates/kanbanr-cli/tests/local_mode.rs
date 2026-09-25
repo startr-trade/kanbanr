@@ -990,3 +990,199 @@ fn cli_feature_show_renders_the_definition_and_query_finds_gaps() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Measurement end to end (FEAT-053): a real test run flips the evidence through the capture hook,
+/// `report` derives the numbers from history rather than from anyone's claim, and a defect knows
+/// whether it escaped. Nothing here is typed in by hand except the test output itself.
+#[test]
+fn cli_capture_report_and_defect_escape() {
+    let base = std::env::temp_dir().join(format!("kanbanr-measure-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let exec = |args: &[&str], stdin: Option<&str>| -> Output {
+        let mut cmd = Command::new(cli());
+        cmd.args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT");
+        match stdin {
+            None => {
+                cmd.stdin(std::process::Stdio::null());
+                cmd.output().expect("run kanbanr CLI")
+            }
+            Some(text) => {
+                use std::io::Write;
+                cmd.stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                let mut child = cmd.spawn().expect("spawn kanbanr CLI");
+                child
+                    .stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(text.as_bytes())
+                    .unwrap();
+                child.wait_with_output().expect("run kanbanr CLI")
+            }
+        }
+    };
+    let run = |args: &[&str]| -> String {
+        let o = exec(args, None);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Cart recovery",
+        "--milestone",
+        "MS-001",
+    ]);
+    let def = base.join("def.yaml");
+    std::fs::write(
+        &def,
+        "statement: Keep a cart for 7 days so a returning shopper resumes\n\
+         requirements:\n  - kind: functional\n    text: \"WHEN a cart is abandoned, THE SYSTEM SHALL retain it for 7 days.\"\n\
+         \x20   tests:\n      - name: cart::retains_for_seven_days\n        kind: unit\n        state: planned\n",
+    )
+    .unwrap();
+    run(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        def.to_str().unwrap(),
+    ]);
+
+    // Nothing is proven yet: one requirement, no green.
+    let before = run(&["report"]);
+    assert!(
+        before.contains("requirements proven by a green test: 0/1"),
+        "{before}"
+    );
+
+    // A real run goes past: the hook reads the output, not a claim about it.
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": "cargo test"},
+        "tool_response": {"stdout": "test cart::retains_for_seven_days ... ok\n"},
+    })
+    .to_string();
+    let captured = exec(&["capture"], Some(&payload));
+    assert!(
+        captured.status.success(),
+        "capture failed: {}",
+        String::from_utf8_lossy(&captured.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&captured.stderr).contains("recorded 1 test result"),
+        "{}",
+        String::from_utf8_lossy(&captured.stderr)
+    );
+    let exported: serde_json::Value =
+        serde_json::from_str(&run(&["export", "FEAT-001", "--format", "json"])).unwrap();
+    assert_eq!(
+        exported["definition"]["requirements"][0]["tests"][0]["state"], "green",
+        "the run itself moved the evidence"
+    );
+    // A second identical run has nothing new to say.
+    let again = exec(&["capture"], Some(&payload));
+    assert!(
+        !String::from_utf8_lossy(&again.stderr).contains("recorded"),
+        "already recorded at this revision: {}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+
+    // Call the work done, then find a defect in it: that is an escape, and nobody had to say so.
+    run(&["move", "FEAT-001", "Scheduled"]);
+    run(&["move", "FEAT-001", "Completed"]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Cart empties on sign-out",
+        "--milestone",
+        "MS-001",
+        "--kind",
+        "defect",
+    ]);
+    let recorded = run(&[
+        "defect",
+        "FEAT-002",
+        "--severity",
+        "high",
+        "--introduced-by",
+        "FEAT-001",
+        "--found-in",
+        "production",
+    ]);
+    assert!(recorded.contains("escaped"), "{recorded}");
+
+    let after = run(&["report"]);
+    assert!(after.contains("completed: 1"), "{after}");
+    assert!(after.contains("defects: 1   escaped: 1"), "{after}");
+    assert!(
+        after.contains("requirements proven by a green test: 1/1 (100%)"),
+        "{after}"
+    );
+    // Cycle time comes from the transition history, so it exists at all only because moves are
+    // recorded; the same board with no history reports no number rather than a guess.
+    assert!(
+        after.contains("cycle time (days):"),
+        "history drives cycle time: {after}"
+    );
+
+    // While the test exists in the project, the recorded green stands.
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    let source = work.join("src").join("cart.rs");
+    std::fs::write(&source, "fn cart_retains_for_seven_days() {}\n").unwrap();
+    let tracked = run(&["tests"]);
+    assert!(tracked.contains("found"), "{tracked}");
+    assert!(!tracked.contains("NOT IN THE REPO"), "{tracked}");
+
+    // Delete the test and the evidence goes with it: a green nobody can re-run is not evidence.
+    std::fs::remove_file(&source).unwrap();
+    let gone = run(&["tests"]);
+    assert!(gone.contains("NOT IN THE REPO"), "{gone}");
+    assert!(gone.contains("`kanbanr tests --write`"), "{gone}");
+    let rewritten = run(&["tests", "--write"]);
+    assert!(
+        rewritten.contains("returned 1 result(s) to planned"),
+        "{rewritten}"
+    );
+    let exported: serde_json::Value =
+        serde_json::from_str(&run(&["export", "FEAT-001", "--format", "json"])).unwrap();
+    assert_eq!(
+        exported["definition"]["requirements"][0]["tests"][0]["state"],
+        "planned"
+    );
+    let unproven = run(&["report"]);
+    assert!(
+        unproven.contains("requirements proven by a green test: 0/1"),
+        "{unproven}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}

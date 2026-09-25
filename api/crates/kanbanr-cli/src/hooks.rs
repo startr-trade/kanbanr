@@ -13,6 +13,13 @@ use std::path::{Path, PathBuf};
 /// (Claude Code event, script base name).
 const HOOKS: [(&str, &str); 2] = [("SessionStart", "session-start"), ("Stop", "stop-check")];
 
+/// The test-capture hook (FEAT-053) is not a script in the skill folder: it runs the CLI itself,
+/// reading the command's output and recording which tracked tests actually passed. Registered on
+/// Bash, because that is where test runs happen.
+const CAPTURE_EVENT: &str = "PostToolUse";
+const CAPTURE_MATCHER: &str = "Bash";
+const CAPTURE_COMMAND: &str = "kanbanr capture";
+
 /// The Claude Code config dir: `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
 pub fn claude_dir() -> Option<PathBuf> {
     std::env::var_os("CLAUDE_CONFIG_DIR")
@@ -86,13 +93,18 @@ pub fn plugin_enabled(settings: &Value) -> bool {
 /// The events whose kanbanr hook is not registered (a registration whose script no longer
 /// exists counts as missing).
 pub fn missing(settings: &Value) -> Vec<&'static str> {
-    HOOKS
+    let mut missing: Vec<&'static str> = HOOKS
         .iter()
         .filter(|(event, name)| {
             !commands(settings, event).any(|c| is_kanbanr_hook(c, name) && script_of(c).is_file())
         })
         .map(|(event, _)| *event)
-        .collect()
+        .collect();
+    // The capture hook runs the CLI, so there is no script to check for — only the registration.
+    if !commands(settings, CAPTURE_EVENT).any(|c| c.trim() == CAPTURE_COMMAND) {
+        missing.push(CAPTURE_EVENT);
+    }
+    missing
 }
 
 /// Remove kanbanr's hook entries (all of them, or only those whose script is gone), dropping
@@ -102,6 +114,21 @@ fn remove(settings: &mut Value, only_stale: bool) -> usize {
     let Some(hooks) = settings.get_mut("hooks").and_then(Value::as_object_mut) else {
         return 0;
     };
+    // The capture hook is matched by its command, not by a script path, so it is never "stale".
+    if !only_stale && let Some(groups) = hooks.get_mut(CAPTURE_EVENT).and_then(Value::as_array_mut)
+    {
+        for group in groups.iter_mut() {
+            if let Some(entries) = group.get_mut("hooks").and_then(Value::as_array_mut) {
+                let before = entries.len();
+                entries.retain(|h| h["command"].as_str().unwrap_or("").trim() != CAPTURE_COMMAND);
+                removed += before - entries.len();
+            }
+        }
+        groups.retain(|g| g["hooks"].as_array().is_none_or(|e| !e.is_empty()));
+        if groups.is_empty() {
+            hooks.remove(CAPTURE_EVENT);
+        }
+    }
     for (event, name) in HOOKS {
         let Some(groups) = hooks.get_mut(event).and_then(Value::as_array_mut) else {
             continue;
@@ -140,6 +167,17 @@ pub fn add(settings: &mut Value, scripts: &Path) -> anyhow::Result<Vec<&'static 
         .or_insert_with(|| json!({}))
         .as_object_mut()
         .ok_or_else(|| anyhow!("\"hooks\" in settings.json is not an object"))?;
+    if added.contains(&CAPTURE_EVENT) {
+        hooks
+            .entry(CAPTURE_EVENT)
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or_else(|| anyhow!("\"hooks.{CAPTURE_EVENT}\" in settings.json is not a list"))?
+            .push(json!({
+                "matcher": CAPTURE_MATCHER,
+                "hooks": [{ "type": "command", "command": CAPTURE_COMMAND }],
+            }));
+    }
     for (event, name) in HOOKS.iter().filter(|(e, _)| added.contains(e)) {
         let mut hook = json!({"type": "command", "command": script_command(scripts, name)});
         if *event == "SessionStart" {
@@ -249,6 +287,17 @@ pub fn status(claude_dir: &Path) -> anyhow::Result<Status> {
                     "script_exists": command.map(|c| script_of(c).is_file()),
                 })
             })
+            // The capture hook runs the CLI, so "does its script exist" is not a question that
+            // applies: being registered is the whole of its health.
+            .chain(std::iter::once_with(|| {
+                let command =
+                    commands(&settings, CAPTURE_EVENT).find(|c| c.trim() == CAPTURE_COMMAND);
+                json!({
+                    "event": CAPTURE_EVENT,
+                    "command": command,
+                    "script_exists": command.map(|_| true),
+                })
+            }))
             .collect(),
     })
 }
@@ -291,7 +340,7 @@ mod tests {
 
         assert_eq!(
             install(&dir).unwrap(),
-            Installed::Added(vec!["SessionStart", "Stop"])
+            Installed::Added(vec!["SessionStart", "Stop", "PostToolUse"])
         );
         let text = std::fs::read_to_string(settings_path(&dir)).unwrap();
         let v: Value = serde_json::from_str(&text).unwrap();
@@ -317,13 +366,21 @@ mod tests {
                 .unwrap()
                 .contains("session-start")
         );
+        // The capture hook runs the CLI on Bash commands, so test runs record themselves.
+        let capture = &v["hooks"]["PostToolUse"][0];
+        assert_eq!(capture["matcher"], "Bash");
+        assert_eq!(capture["hooks"][0]["command"], "kanbanr capture");
 
         // Idempotent.
         assert_eq!(install(&dir).unwrap(), Installed::AlreadyPresent);
         assert_eq!(std::fs::read_to_string(settings_path(&dir)).unwrap(), text);
 
         // Uninstall removes only kanbanr's entries.
-        assert_eq!(uninstall(&dir).unwrap(), 2);
+        assert_eq!(
+            uninstall(&dir).unwrap(),
+            3,
+            "two script hooks plus the capture hook"
+        );
         let v: Value =
             serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap();
         assert!(v["hooks"].get("SessionStart").is_none());
@@ -346,7 +403,7 @@ mod tests {
         std::fs::write(settings_path(&dir), stale.to_string()).unwrap();
         assert_eq!(
             install(&dir).unwrap(),
-            Installed::Added(vec!["SessionStart", "Stop"])
+            Installed::Added(vec!["SessionStart", "Stop", "PostToolUse"])
         );
         let v: Value =
             serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap();

@@ -205,6 +205,39 @@ and `green` only when it actually passes. Flip states in the same bundle as the 
 as an afterthought. A requirement with no test is not ready, and an item is not done because its
 checkboxes are ticked — it is done when its requirements have passing tests.
 
+**A green is recorded by the run, not by you.** A PostToolUse hook reads the output of every test
+command you run and flips the tracked tests to match what actually happened, stamped with the
+project revision it was observed at. So:
+
+- Name the test entry exactly as the runner prints it (`cart::retains_for_seven_days`,
+  `src/cart.test.ts`), or the run cannot find it.
+- **Never** set a test `green` by hand to make `check` pass. If the hook did not record it, the
+  test did not pass — say so instead.
+- A green recorded at an older revision is reported as **stale evidence**: the code has changed
+  since anything proved that requirement. Re-run rather than re-assert.
+
+`kanbanr check FEAT-001` before calling anything done: it reports what the item has not said and
+what it cannot yet show. `kanbanr tests` finds evidence that has rotted — a green whose test was
+renamed or deleted — and `--write` returns it to `planned`. Mark a check a person performs as
+`kind: manual`; it is exempt from that sweep, so use it only when a person really did it.
+
+## What the work actually cost (measurement)
+
+Every status change is appended to the item's history, so flow numbers are derived rather than
+claimed. `kanbanr report --since 14d` gives throughput, cycle time (p50/p90), rework
+(done → reopened), the defect escape rate and how many requirements are proven by a green test.
+
+When a defect is found, record where it came from:
+
+```
+kanbanr defect FEAT-042 --severity high --introduced-by FEAT-031 --found-in production \
+  --root-cause "the cutoff was compared as text"
+```
+
+Whether it **escaped** is derived, not asked: it escaped if the work that introduced it had
+already been called done. Do not claim an escape rate anywhere else — quote the report or say the
+board cannot answer yet.
+
 ## The prime directive: one system of record
 
 **kanbanr is the single source of truth for everything about the project's activity.** The ONLY
@@ -378,6 +411,11 @@ kanbanr charter show | set --file charter.yaml     # the project's purpose, goal
 kanbanr feature define FEAT-001 --template --kind defect   # skeleton for that kind
 kanbanr feature define FEAT-001 --file def.yaml | --clear  # write / clear the definition
 kanbanr review FEAT-001           # the one-screen decision brief — show this BEFORE building
+kanbanr check [FEAT-001]          # what this item has not said and cannot yet show
+kanbanr test FEAT-001 R-1 cart::retains green [--rev <sha>]   # normally the capture hook does this
+kanbanr report [--since 14d]      # throughput, cycle time, rework, escape rate, coverage
+kanbanr tests [--write]           # tracked tests that no longer exist; --write un-proves them
+kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
 kanbanr approve FEAT-001          # the user records agreement (do not approve on their behalf)
 kanbanr move FEAT-001 Scheduled [--unapproved \"<reason>\"]   # gated; the override is recorded
 kanbanr batch --dry-run --file b.json   # preview a bundle (e.g. an import) without writing

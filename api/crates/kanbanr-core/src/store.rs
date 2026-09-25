@@ -478,6 +478,8 @@ impl Store {
             source: None,
             issue: None,
             definition: None,
+            defect: None,
+            history: Vec::new(),
             created_at: now.clone(),
             updated_at: now,
         };
@@ -685,6 +687,47 @@ impl Store {
         let f = Self::set_feature_definition_on(&mut project, &mut pending, code, definition)?;
         self.flush(id, &project, &pending)?;
         Ok(f)
+    }
+
+    /// Record what a defect cost and where it came from (FEAT-053). `None` clears the block.
+    pub fn set_defect(
+        &self,
+        id: &str,
+        code: &str,
+        defect: Option<crate::models::Defect>,
+    ) -> Result<FeatureItem> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let f = Self::set_defect_on(&mut project, &mut pending, code, defect)?;
+        self.flush(id, &project, &pending)?;
+        Ok(f)
+    }
+
+    fn set_defect_on(
+        project: &mut Project,
+        pending: &mut Pending,
+        code: &str,
+        defect: Option<crate::models::Defect>,
+    ) -> Result<FeatureItem> {
+        // Whether a defect escaped is a fact about the board, not an opinion: it escaped if the
+        // work that introduced it had already been called done when this was recorded. Deriving it
+        // keeps the one quality ratio the board publishes out of reach of wishful self-reporting;
+        // an explicit `true` still stands, for a defect whose origin is outside the board.
+        let defect = defect.map(|mut d| {
+            if !d.escaped
+                && !d.introduced_by.trim().is_empty()
+                && let Ok(origin) = project.feature(d.introduced_by.trim())
+            {
+                d.escaped = crate::graph::is_terminal_status(&project.config, &origin.status);
+            }
+            d
+        });
+        let feature = project.feature_mut(code)?;
+        feature.defect = defect;
+        feature.updated_at = now_rfc3339();
+        let updated = feature.clone();
+        pending.persist_features.insert(updated.code.clone());
+        Ok(updated)
     }
 
     fn set_feature_definition_on(
@@ -939,8 +982,16 @@ impl Store {
                 to: to.to_string(),
             });
         }
+        let at = now_rfc3339();
+        if from != to {
+            feature.history.push(crate::models::Transition {
+                at: at.clone(),
+                from: from.clone(),
+                to: to.to_string(),
+            });
+        }
         feature.status = to.to_string();
-        feature.updated_at = now_rfc3339();
+        feature.updated_at = at;
         let updated = feature.clone();
         pending.persist_features.insert(updated.code.clone());
         if from != to {
@@ -1281,6 +1332,7 @@ impl Store {
                     original,
                     issue,
                     definition,
+                    defect,
                 } => {
                     let source = source.map(|mut src| {
                         if src.key.trim().is_empty() {
@@ -1333,6 +1385,9 @@ impl Store {
                             definition,
                         )?;
                     }
+                    if defect.is_some() {
+                        Self::set_defect_on(&mut project, &mut pending, &f.code, defect)?;
+                    }
                     if let Some(a) = &alias {
                         aliases.insert(a.clone(), f.code.clone());
                     }
@@ -1384,6 +1439,7 @@ impl Store {
                     source,
                     issue,
                     definition,
+                    defect,
                 } => {
                     if skipped.contains(&code) {
                         return Ok(skip("feature.edit", &code));
@@ -1433,6 +1489,9 @@ impl Store {
                             &f.code,
                             definition,
                         )?;
+                    }
+                    if defect.is_some() {
+                        Self::set_defect_on(&mut project, &mut pending, &f.code, defect)?;
                     }
                     if source.is_some() || issue.is_some() {
                         let feature = project.feature_mut(&f.code)?;

@@ -49,6 +49,9 @@ pub enum BatchOp {
         /// Why this item exists, what must be true, and how it is verified (FEAT-047).
         #[serde(default)]
         definition: Option<FeatureDefinition>,
+        /// What a defect cost and where it came from (FEAT-053).
+        #[serde(default)]
+        defect: Option<crate::models::Defect>,
     },
     /// Edit a feature item (title / spec / milestone / rename / attrs). Use `feature.move` for status.
     #[serde(rename = "feature.edit")]
@@ -85,6 +88,9 @@ pub enum BatchOp {
         /// Replace the definition block (FEAT-047).
         #[serde(default)]
         definition: Option<FeatureDefinition>,
+        /// What a defect cost and where it came from (FEAT-053).
+        #[serde(default)]
+        defect: Option<crate::models::Defect>,
     },
     /// Move a feature to a new status (validated against the workflow). Entering an active status
     /// also requires a current approval (FEAT-048); `unapproved` records an explicit reason to go
