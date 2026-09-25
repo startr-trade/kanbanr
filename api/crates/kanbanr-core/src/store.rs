@@ -2,12 +2,12 @@
 //! The CLI calls the mutating methods; the server only reads.
 
 use crate::config::ProjectConfig;
-use crate::docs::{DocFile, DocFolder, FolderMeta, FOLDER_META};
+use crate::docs::{DocFile, DocFolder, FOLDER_META, FolderMeta};
 use crate::error::{CoreError, Result};
 use crate::models::{FeatureItem, IndexEntry, Milestone, Task, TaskState, TodoList};
 use crate::{docs, now_rfc3339, validate};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
 
 /// A fully-loaded project (config + all entities).
@@ -87,12 +87,11 @@ impl Store {
         }
         for entry in std::fs::read_dir(&dir)? {
             let entry = entry?;
-            if entry.path().is_dir() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if self.project_exists(name) {
-                        out.push(name.to_string());
-                    }
-                }
+            if entry.path().is_dir()
+                && let Some(name) = entry.file_name().to_str()
+                && self.project_exists(name)
+            {
+                out.push(name.to_string());
             }
         }
         out.sort();
@@ -782,12 +781,11 @@ impl Store {
         let mut pending = Pending::default();
         let charter = crate::charter::load(self, id)?;
         Self::check_start_gate(&project, &charter, code, to, unapproved)?;
-        if let Some(reason) = unapproved.filter(|r| !r.trim().is_empty()) {
-            if let Ok(feature) = project.feature_mut(code) {
-                if let Some(def) = feature.definition.as_mut() {
-                    def.started_unapproved = reason.trim().to_string();
-                }
-            }
+        if let Some(reason) = unapproved.filter(|r| !r.trim().is_empty())
+            && let Ok(feature) = project.feature_mut(code)
+            && let Some(def) = feature.definition.as_mut()
+        {
+            def.started_unapproved = reason.trim().to_string();
         }
         let f = Self::move_feature_on(&mut project, &mut pending, code, to)?;
         self.flush(id, &project, &pending)?;
@@ -1020,16 +1018,15 @@ impl Store {
 
         // Auto-complete the feature when every task (across all lists) is done — but NOT when
         // the feature sits in a no-op state (those are functionally inert dispositions).
-        if f.all_tasks_completed() && !config.is_no_op(&f.status) {
-            if let Some(completed) = config
+        if f.all_tasks_completed()
+            && !config.is_no_op(&f.status)
+            && let Some(completed) = config
                 .statuses
                 .iter()
                 .find(|s| s.eq_ignore_ascii_case("Completed"))
-            {
-                if config.transition_allowed(&f.status, completed) {
-                    f.status = completed.clone();
-                }
-            }
+            && config.transition_allowed(&f.status, completed)
+        {
+            f.status = completed.clone();
         }
         f.updated_at = now_rfc3339();
         let updated = f.clone();
@@ -1400,12 +1397,11 @@ impl Store {
                         &to,
                         unapproved.as_deref(),
                     )?;
-                    if let Some(reason) = unapproved.as_deref().filter(|r| !r.trim().is_empty()) {
-                        if let Ok(feature) = project.feature_mut(&resolved) {
-                            if let Some(def) = feature.definition.as_mut() {
-                                def.started_unapproved = reason.trim().to_string();
-                            }
-                        }
+                    if let Some(reason) = unapproved.as_deref().filter(|r| !r.trim().is_empty())
+                        && let Ok(feature) = project.feature_mut(&resolved)
+                        && let Some(def) = feature.definition.as_mut()
+                    {
+                        def.started_unapproved = reason.trim().to_string();
                     }
                     let f = Self::move_feature_on(
                         &mut project,

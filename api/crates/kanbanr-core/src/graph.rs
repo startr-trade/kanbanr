@@ -286,10 +286,10 @@ impl DependencyView {
         let mut out: BTreeSet<String> = BTreeSet::new();
         let mut stack: Vec<&str> = dependents.get(id).cloned().unwrap_or_default();
         while let Some(cur) = stack.pop() {
-            if out.insert(cur.to_string()) {
-                if let Some(next) = dependents.get(cur) {
-                    stack.extend(next.iter().copied());
-                }
+            if out.insert(cur.to_string())
+                && let Some(next) = dependents.get(cur)
+            {
+                stack.extend(next.iter().copied());
             }
         }
         out.into_iter().collect()

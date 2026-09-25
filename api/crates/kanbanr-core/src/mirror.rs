@@ -5,10 +5,10 @@
 //! as an issue, a stable content hash for change detection, and the reconcile **plan** (which
 //! features need an issue created or updated). Talking to GitHub (via `gh`) lives in the CLI.
 
+use crate::Store;
 use crate::error::Result;
 use crate::models::FeatureItem;
 use crate::store::Project;
-use crate::Store;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -279,13 +279,15 @@ mod tests {
         }];
         let p = project(vec![f]);
         let doc = render_issue(&p, &p.features[0]);
-        assert!(doc
-            .body
-            .starts_with("> Tracked in kanbanr as `shop:FEAT-001`"));
+        assert!(
+            doc.body
+                .starts_with("> Tracked in kanbanr as `shop:FEAT-001`")
+        );
         assert!(doc.body.contains("# Spec\nDo it."));
-        assert!(doc
-            .body
-            .contains("### TL-001 — session 1\n\n- [x] cart UI\n- [ ] tests\n"));
+        assert!(
+            doc.body
+                .contains("### TL-001 — session 1\n\n- [x] cart UI\n- [ ] tests\n")
+        );
         assert!(!doc.open);
         assert_eq!(doc.state_reason.as_deref(), Some("completed"));
         assert_eq!(doc.labels, vec!["api", "ui"]);
@@ -364,8 +366,10 @@ mod tests {
         );
         // `all` backfills old open items, still never terminal ones.
         assert_eq!(summary(true).len(), 3);
-        assert!(summary(true)
-            .iter()
-            .all(|(c, _)| c != "FEAT-003" && c != "FEAT-004" && c != "FEAT-006"));
+        assert!(
+            summary(true)
+                .iter()
+                .all(|(c, _)| c != "FEAT-003" && c != "FEAT-004" && c != "FEAT-006")
+        );
     }
 }

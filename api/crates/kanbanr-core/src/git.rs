@@ -85,11 +85,11 @@ fn ensure_secret_ignored(repo: &Repository, dir: &Path) {
     if changed {
         let _ = std::fs::write(&gitignore, contents);
     }
-    if let Ok(mut index) = repo.index() {
-        if index.get_path(Path::new(SECRET_FILE), 0).is_some() {
-            let _ = index.remove_path(Path::new(SECRET_FILE));
-            let _ = index.write();
-        }
+    if let Ok(mut index) = repo.index()
+        && index.get_path(Path::new(SECRET_FILE), 0).is_some()
+    {
+        let _ = index.remove_path(Path::new(SECRET_FILE));
+        let _ = index.write();
     }
 }
 
@@ -160,10 +160,10 @@ fn do_commit(repo: &Repository, sig: &Signature, message: &str) -> Result<bool, 
     let tree = repo.find_tree(tree_oid)?;
     let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
     // Nothing to commit if the staged tree equals the current HEAD tree.
-    if let Some(p) = &parent {
-        if p.tree_id() == tree_oid {
-            return Ok(false);
-        }
+    if let Some(p) = &parent
+        && p.tree_id() == tree_oid
+    {
+        return Ok(false);
     }
     let parents: Vec<&git2::Commit> = parent.iter().collect();
     repo.commit(Some("HEAD"), sig, sig, message, &tree, &parents)?;

@@ -20,11 +20,11 @@ RUN npm run build      # -> /web/dist
 # kanbanr crates rebuild, cutting most image rebuilds from minutes to seconds.
 #
 # Pin the base to the SAME Debian suite as the runtime stage below (bookworm). The bare
-# `rust:1.95-slim` tag floats to the latest Debian (trixie, glibc 2.39); linking against that and
+# `rust:1.98-slim` tag floats to the latest Debian (trixie, glibc 2.39); linking against that and
 # running on bookworm (glibc 2.36) fails at startup with
 #   "libc.so.6: version `GLIBC_2.39' not found (required by kanbanr)".
 # Keeping both stages on bookworm makes the binary link glibc 2.36 and run on bookworm and newer.
-FROM rust:1.95-slim-bookworm AS chef
+FROM rust:1.98-slim-bookworm AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /api
 

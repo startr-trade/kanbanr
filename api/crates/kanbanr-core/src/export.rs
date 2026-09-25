@@ -196,10 +196,10 @@ pub fn definition_brief(feature: &FeatureItem) -> String {
         if !r.iso.is_empty() {
             out.push_str(&format!("  - quality: {}\n", r.iso.join(", ")));
         }
-        if let Some(s) = &r.scenario {
-            if !s.measure.trim().is_empty() {
-                out.push_str(&format!("  - measure: {}\n", s.measure.trim()));
-            }
+        if let Some(s) = &r.scenario
+            && !s.measure.trim().is_empty()
+        {
+            out.push_str(&format!("  - measure: {}\n", s.measure.trim()));
         }
         if r.tests.is_empty() {
             out.push_str("  - _[MISSING: test]_\n");

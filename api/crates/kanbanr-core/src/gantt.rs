@@ -13,9 +13,9 @@
 //!
 //! Critical-path tasks (longest chain) are marked `crit` so they stand out in the rendered chart.
 
+use crate::Store;
 use crate::error::Result;
 use crate::graph::{DependencyView, Schedule};
-use crate::Store;
 use std::collections::BTreeMap;
 
 /// Round a day count for display: whole numbers print without a fraction (`2d`, not `2.0d`).

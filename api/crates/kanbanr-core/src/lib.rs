@@ -33,8 +33,8 @@ pub use models::{
 };
 pub use store::{Project, Store};
 
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 /// Current UTC time as an RFC3339 string (used for created_at/updated_at).
 pub fn now_rfc3339() -> String {
@@ -218,11 +218,12 @@ mod tests {
         assert!(!planned_yaml.exists(), "old yaml removed after move");
         assert!(!planned_spec.exists(), "old spec removed after move");
         assert!(proj.join("Scheduled").join("FEAT-001.yaml").is_file());
-        assert!(proj
-            .join("Scheduled")
-            .join("features-spec")
-            .join("FEAT-001.md")
-            .is_file());
+        assert!(
+            proj.join("Scheduled")
+                .join("features-spec")
+                .join("FEAT-001.md")
+                .is_file()
+        );
 
         // The yaml metadata must NOT contain the specification (it lives in the .md).
         let yaml = std::fs::read_to_string(proj.join("Scheduled").join("FEAT-001.yaml")).unwrap();
@@ -504,9 +505,10 @@ mod tests {
         assert!(src.key.starts_with("file:"), "file keys hash the title");
         assert!(a.specification.starts_with("# Fix login"));
         assert!(a.specification.contains("## Imported from"));
-        assert!(a
-            .specification
-            .contains("`TODO.md:14` (file) at commit `a1b2c3d`"));
+        assert!(
+            a.specification
+                .contains("`TODO.md:14` (file) at commit `a1b2c3d`")
+        );
         assert!(
             a.specification
                 .contains("````text\n- [ ] Fix login (see ```notes```)\n````"),
@@ -681,13 +683,15 @@ requirements:
             Some(&saved_def)
         );
         store.set_feature_definition("demo", &f.code, None).unwrap();
-        assert!(store
-            .load("demo")
-            .unwrap()
-            .feature(&f.code)
-            .unwrap()
-            .definition
-            .is_none());
+        assert!(
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&f.code)
+                .unwrap()
+                .definition
+                .is_none()
+        );
     }
 
     #[test]
@@ -978,10 +982,12 @@ requirements:
         assert!(definition_issues[0].message.contains("no definition"));
 
         // A goal nobody is working on is worth saying once, at project level.
-        assert!(report
-            .issues
-            .iter()
-            .any(|i| i.code.is_none() && i.message.contains("has no work linked to it")));
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.code.is_none() && i.message.contains("has no work linked to it"))
+        );
     }
 
     #[test]
@@ -1274,13 +1280,15 @@ requirements:
             CoreError::DependencyCycle(_)
         ));
         // The rejected cyclic write did not persist.
-        assert!(store
-            .load("alpha")
-            .unwrap()
-            .feature(&a.code)
-            .unwrap()
-            .depends_on
-            .is_empty());
+        assert!(
+            store
+                .load("alpha")
+                .unwrap()
+                .feature(&a.code)
+                .unwrap()
+                .depends_on
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1313,9 +1321,11 @@ requirements:
             store.rename_status("demo", "Nope", "X").unwrap_err(),
             CoreError::UnknownStatus(_)
         ));
-        assert!(store
-            .rename_status("demo", "In Progress", "Completed")
-            .is_err());
+        assert!(
+            store
+                .rename_status("demo", "In Progress", "Completed")
+                .is_err()
+        );
     }
 
     #[test]
@@ -1419,7 +1429,7 @@ requirements:
 
     #[test]
     fn impact_is_transitive_downstream_closure() {
-        use crate::graph::{qualify, DependencyView};
+        use crate::graph::{DependencyView, qualify};
         let (store, _d) = temp_store();
         new_project(&store, "demo");
         let a = store.add_feature("demo", "A", "", "M", None).unwrap();
@@ -1467,13 +1477,13 @@ requirements:
 
     #[test]
     fn cross_project_readiness() {
-        use crate::graph::{qualify, DependencyView, Readiness};
+        use crate::graph::{DependencyView, Readiness, qualify};
         let (store, _d) = temp_store();
         new_project(&store, "alpha");
         new_project(&store, "beta");
         let a = store.add_feature("alpha", "A", "", "M", None).unwrap(); // alpha:FEAT-001
         let b = store.add_feature("beta", "B", "", "M", None).unwrap(); //  beta:FEAT-001
-                                                                        // beta:B depends on alpha:A (cross-project).
+        // beta:B depends on alpha:A (cross-project).
         store
             .set_feature_attrs(
                 "beta",
@@ -1544,9 +1554,11 @@ requirements:
         let dot = dispatch(&store, "GET", "/projects/demo/graph?format=dot", None).unwrap();
         assert!(dot.starts_with("digraph") && dot.contains("->"));
         // Portfolio-wide route works too.
-        assert!(dispatch(&store, "GET", "/ready", None)
-            .unwrap()
-            .contains("demo:FEAT-001"));
+        assert!(
+            dispatch(&store, "GET", "/ready", None)
+                .unwrap()
+                .contains("demo:FEAT-001")
+        );
         // Unknown project / feature -> error.
         assert!(matches!(
             dispatch(&store, "GET", "/projects/ghost/ready", None).unwrap_err(),
@@ -1866,7 +1878,7 @@ requirements:
 
     #[test]
     fn mermaid_parse_known_diagram() {
-        use crate::mermaid::{parse_state_diagram, WorkflowDef};
+        use crate::mermaid::{WorkflowDef, parse_state_diagram};
         let text = "stateDiagram-v2\n\
             state \"To Do\" as To_Do\n\
             [*] --> To_Do\n\
@@ -2138,7 +2150,7 @@ requirements:
 
     #[test]
     fn query_filters_by_attributes_and_labels() {
-        use crate::query::{run, Query};
+        use crate::query::{Query, run};
         let (store, _d) = temp_store();
         new_project(&store, "demo");
         let a = store.add_feature("demo", "Login", "", "M", None).unwrap(); // FEAT-001
@@ -2252,7 +2264,7 @@ requirements:
 
     #[test]
     fn query_dep_state_and_full_text() {
-        use crate::query::{run, MatchField, Query};
+        use crate::query::{MatchField, Query, run};
         let (store, _d) = temp_store();
         new_project(&store, "demo");
         let a = store
@@ -2348,7 +2360,7 @@ requirements:
     #[test]
     fn query_spans_projects_and_dispatch_route() {
         use crate::dispatch::dispatch;
-        use crate::query::{run, Query};
+        use crate::query::{Query, run};
         let (store, _d) = temp_store();
         new_project(&store, "alpha");
         new_project(&store, "beta");
@@ -2406,7 +2418,7 @@ requirements:
 
     #[test]
     fn critical_path_and_schedule_offsets() {
-        use crate::graph::{qualify, DependencyView};
+        use crate::graph::{DependencyView, qualify};
         let (store, _d) = temp_store();
         new_project(&store, "demo");
         // Chain A -> B -> C with estimates 2, 3, 1.
@@ -2602,12 +2614,16 @@ requirements:
         let cp = dispatch(&store, "GET", "/projects/demo/critical-path", None).unwrap();
         assert!(cp.contains("critical_path") && cp.contains("demo:FEAT-001"));
         // Portfolio-wide routes.
-        assert!(dispatch(&store, "GET", "/gantt", None)
-            .unwrap()
-            .starts_with("gantt"));
-        assert!(dispatch(&store, "GET", "/critical-path", None)
-            .unwrap()
-            .contains("critical_path"));
+        assert!(
+            dispatch(&store, "GET", "/gantt", None)
+                .unwrap()
+                .starts_with("gantt")
+        );
+        assert!(
+            dispatch(&store, "GET", "/critical-path", None)
+                .unwrap()
+                .contains("critical_path")
+        );
         // Unknown project 404s.
         assert!(matches!(
             dispatch(&store, "GET", "/projects/ghost/gantt", None).unwrap_err(),

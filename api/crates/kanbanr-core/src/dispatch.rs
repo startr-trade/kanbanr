@@ -11,9 +11,9 @@ use crate::config::ProjectConfig;
 use crate::error::{CoreError, Result};
 use crate::graph::DependencyView;
 use crate::models::TaskState;
-use crate::{export, Store};
+use crate::{Store, export};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 // ---- small helpers -------------------------------------------------------------------------
@@ -300,7 +300,7 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         (None, None) => {
             return Err(CoreError::Unsupported(
                 "provide statuses (or defaults)".into(),
-            ))
+            ));
         }
     };
     let transitions: BTreeMap<String, Vec<String>> = body

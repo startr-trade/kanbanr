@@ -10,9 +10,9 @@
 //! bodies are only read (via `Store::feature_spec`) when `full_text` is set AND a `text` term is
 //! given — so the common case stays cheap.
 
+use crate::Store;
 use crate::error::Result;
 use crate::graph::{self, DependencyView, Readiness};
-use crate::Store;
 use serde::Serialize;
 
 /// A feature query. All filters are AND-combined; `labels` is any-of (a feature matches if it

@@ -13,8 +13,8 @@
 //!
 //! Composite / parallel / history features (`state X {`, `--`, `[H]`) are rejected.
 
-use crate::error::{CoreError, Result};
 use crate::ProjectConfig;
+use crate::error::{CoreError, Result};
 use std::collections::BTreeMap;
 
 /// A workflow parsed out of a Mermaid state diagram. The CLI maps this onto `set_workflow`.

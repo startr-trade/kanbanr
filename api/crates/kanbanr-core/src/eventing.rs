@@ -18,10 +18,10 @@
 //! status, we recompute the dependency graph and emit one event per dependent that *became* ready —
 //! the cross-team handoff signal.
 
-use crate::graph::{self, DependencyView};
 use crate::Store;
+use crate::graph::{self, DependencyView};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 /// Keep the most recent N events per project (older history still lives in git).
@@ -137,11 +137,19 @@ impl WebhookConfig {
     /// `KANBANR_WEBHOOK_URL` env var (if set). Order: config-file URLs, then the env URL. Missing
     /// file / unset env / parse errors all yield no extra endpoints (delivery stays off).
     pub fn load(data_dir: &Path) -> WebhookConfig {
+        Self::load_with_env(data_dir, std::env::var(WEBHOOK_ENV).ok().as_deref())
+    }
+
+    /// The pure half of [`WebhookConfig::load`], taking the env value rather than reading it.
+    /// Tests use this: mutating the process environment races with every other thread (which is
+    /// why edition 2024 made `set_var`/`remove_var` unsafe), and a seam avoids the hazard instead
+    /// of asserting it away.
+    pub fn load_with_env(data_dir: &Path, env_url: Option<&str>) -> WebhookConfig {
         let mut cfg: WebhookConfig = std::fs::read_to_string(data_dir.join(CONFIG_FILE))
             .ok()
             .and_then(|s| serde_yaml::from_str(&s).ok())
             .unwrap_or_default();
-        if let Ok(url) = std::env::var(WEBHOOK_ENV) {
+        if let Some(url) = env_url {
             let url = url.trim();
             if !url.is_empty() && !cfg.webhooks.iter().any(|u| u == url) {
                 cfg.webhooks.push(url.to_string());
@@ -520,10 +528,12 @@ mod tests {
     #[test]
     fn webhook_config_is_off_without_file_or_env() {
         let dir = temp_dir();
-        // Ensure the env is not set for this assertion.
-        std::env::remove_var(WEBHOOK_ENV);
-        let cfg = WebhookConfig::load(&dir);
+        // No file and no env value: delivery stays off. Passing the env in explicitly keeps the
+        // test from mutating the process environment, which races with other tests.
+        let cfg = WebhookConfig::load_with_env(&dir, None);
         assert!(!cfg.is_enabled(), "no config + no env => delivery off");
+        let cfg = WebhookConfig::load_with_env(&dir, Some("https://example.test/hook"));
+        assert!(cfg.is_enabled(), "an env URL turns delivery on");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

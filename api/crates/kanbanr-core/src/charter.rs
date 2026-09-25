@@ -10,8 +10,8 @@
 //! deliberately **not** part of `Project`, so `GET /projects/{p}` and the project export are
 //! unchanged by its presence.
 
-use crate::error::Result;
 use crate::Store;
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::PathBuf;

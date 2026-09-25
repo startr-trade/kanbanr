@@ -10,10 +10,10 @@ pub fn next_code(prefix: &str, existing: &[String]) -> String {
     let mut max = 0u32;
     let needle = format!("{prefix}-");
     for code in existing {
-        if let Some(rest) = code.strip_prefix(&needle) {
-            if let Ok(n) = rest.parse::<u32>() {
-                max = max.max(n);
-            }
+        if let Some(rest) = code.strip_prefix(&needle)
+            && let Ok(n) = rest.parse::<u32>()
+        {
+            max = max.max(n);
         }
     }
     format!("{prefix}-{:03}", max + 1)
@@ -26,10 +26,10 @@ pub fn next_code(prefix: &str, existing: &[String]) -> String {
 pub fn next_key(prefix: &str, existing: &[String]) -> String {
     let mut max = 0u32;
     for key in existing {
-        if let Some(rest) = key.strip_prefix(prefix) {
-            if let Ok(n) = rest.parse::<u32>() {
-                max = max.max(n);
-            }
+        if let Some(rest) = key.strip_prefix(prefix)
+            && let Ok(n) = rest.parse::<u32>()
+        {
+            max = max.max(n);
         }
     }
     format!("{prefix}{}", max + 1)
@@ -117,10 +117,10 @@ fn validate_dag(nodes: &[(&str, &Vec<String>)], code: &str) -> Result<()> {
     }
 
     // Start the DFS from the changed node if present, else check all.
-    if codes.contains(code) {
-        if let Some((k, _)) = graph.get_key_value(code) {
-            visit(k, &graph, &mut marks, code)?;
-        }
+    if codes.contains(code)
+        && let Some((k, _)) = graph.get_key_value(code)
+    {
+        visit(k, &graph, &mut marks, code)?;
     }
     for (c, _) in nodes {
         if let Some((k, _)) = graph.get_key_value(*c) {
