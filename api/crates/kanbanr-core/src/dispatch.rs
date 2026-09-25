@@ -706,6 +706,36 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             )?)
         }
 
+        // ---- traceability and decisions (FEAT-057) ----
+        ("GET", ["projects", p, "trace"]) => {
+            let subject = query_param(query, "subject").unwrap_or_default();
+            let item = query_param(query, "item");
+            let subject =
+                crate::trace::parse_subject(&subject, item.as_deref()).ok_or_else(|| {
+                    CoreError::Unsupported(
+                    "trace what? a goal (G-2), an item (FEAT-046) or a requirement (FEAT-046/R-2)"
+                        .to_string(),
+                )
+                })?;
+            ser(&crate::trace::run(store, p, &subject)?)
+        }
+        ("GET", ["projects", p, "zachman"]) => ser(&crate::trace::zachman(
+            store,
+            p,
+            query_param(query, "scope").as_deref(),
+        )?),
+        ("GET", ["projects", p, "adrs"]) => ser(&crate::adr::list(store, p)?),
+        ("POST", ["projects", p, "adrs"]) => {
+            let title = str_field(b, "title").unwrap_or_default();
+            let adr: crate::adr::Adr = serde_json::from_value(b.clone())
+                .map_err(|e| CoreError::Unsupported(format!("invalid decision: {e}")))?;
+            ser(&crate::adr::create(store, p, &title, adr)?)
+        }
+        ("POST", ["projects", p, "adrs", id, "supersede"]) => {
+            let replaces = str_field(b, "replaces").unwrap_or_default();
+            ser(&crate::adr::supersede(store, p, id, &replaces)?)
+        }
+
         // ---- wave retrospective (FEAT-054) ----
         ("GET", ["projects", p, "retro"]) => {
             let wave = crate::retro::Wave {
@@ -806,6 +836,8 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "features", c, "definition"] => format!("define feature {c}"),
         ["projects", _p, "features", c, "defect"] => format!("record defect details for {c}"),
         ["projects", _p, "lessons"] => "record a lesson".into(),
+        ["projects", _p, "adrs"] => "record an architecture decision".into(),
+        ["projects", _p, "adrs", a, "supersede"] => format!("{a} supersedes an earlier decision"),
         ["projects", _p, "lessons", l, v] => format!("{v} lesson {l}"),
         ["projects", _p, "features", c, "split-from"] => format!("record what {c} was split from"),
         ["projects", _p, "mirror"] => "configure issue mirror".into(),

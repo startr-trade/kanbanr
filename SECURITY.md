@@ -34,7 +34,7 @@ Please reproduce issues against the newest tag (or `main`) before reporting.
 - Preferred: open a **private security advisory** via GitHub →
   `https://github.com/startr-trade/kanbanr/security/advisories/new`
   (Security tab → "Report a vulnerability").
-- Or email **<your-security-email>** with details and, if possible, a minimal reproduction.
+- Or email **kanbanr-oss-support@startr.trade** with details and, if possible, a minimal reproduction.
 
 Please include: affected version/commit, steps to reproduce, impact, and any suggested fix.
 

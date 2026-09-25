@@ -290,6 +290,15 @@ impl Zachman {
         ]
     }
 
+    /// One column by name, case-insensitively. Blank when the name is not a column.
+    pub fn column(&self, name: &str) -> &str {
+        self.columns()
+            .into_iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v)
+            .unwrap_or("")
+    }
+
     /// The columns left blank. Gaps are DERIVED here and rendered as `[MISSING: …]`; storing the
     /// marker would let the data disagree with the check.
     pub fn missing(&self) -> Vec<&'static str> {

@@ -127,6 +127,23 @@ enum Command {
         #[arg(long)]
         rev: Option<String>,
     },
+    /// What hangs off a goal, an item or a requirement — and what is missing from it. (FEAT-057)
+    Trace {
+        /// `G-2`, `FEAT-046`, `FEAT-046/R-2`, or `R-2` when the branch says which item.
+        subject: Option<String>,
+        /// Render the derived Zachman view for a milestone or item instead.
+        #[arg(long)]
+        zachman: bool,
+    },
+    /// Why does this code exist? Answers from the annotation on the line, else the trailer of the
+    /// commit that wrote it, printing requirement → goal → purpose. (FEAT-057)
+    Why {
+        /// `src/thing.rs` or `src/thing.rs:42`.
+        target: String,
+    },
+    /// Architecture decisions: documents that join the graph. (FEAT-057)
+    #[command(subcommand)]
+    Adr(AdrCmd),
     /// Record a lesson, or judge one that is already recorded (FEAT-055).
     #[command(subcommand)]
     Lesson(LessonCmd),
@@ -798,6 +815,49 @@ enum HooksCmd {
 }
 
 #[derive(Subcommand)]
+enum AdrCmd {
+    /// Scaffold a decision: front-matter plus the five sections it has to answer.
+    New {
+        title: String,
+        /// Items that will rest on it, comma-separated.
+        #[arg(long, value_delimiter = ',')]
+        affects: Vec<String>,
+        /// Requirements that force it (`FEAT-046/R-2`), usually quality ones.
+        #[arg(long, value_delimiter = ',')]
+        driven_by: Vec<String>,
+        /// ISO/IEC 25010 characteristics at stake.
+        #[arg(long, value_delimiter = ',')]
+        quality: Vec<String>,
+        /// Zachman columns it answers.
+        #[arg(long, value_delimiter = ',')]
+        zachman: Vec<String>,
+        /// conceptual | logical | physical.
+        #[arg(long)]
+        layer: Option<String>,
+        /// proposed | accepted | rejected.
+        #[arg(long, default_value = "proposed")]
+        status: String,
+        #[arg(long, value_delimiter = ',')]
+        deciders: Vec<String>,
+    },
+    /// Every decision, with what it affects and whether it still stands.
+    List {
+        /// Only those bearing on this item.
+        #[arg(long = "for")]
+        for_item: Option<String>,
+    },
+    /// Overturn a decision: writes both sides and lists what was resting on the old one.
+    Supersede {
+        /// The new decision.
+        id: String,
+        #[arg(long)]
+        replaces: String,
+    },
+    /// Walk the lineage: 0001 → 0003 → 0007.
+    History { id: String },
+}
+
+#[derive(Subcommand)]
 enum LessonCmd {
     /// Record what was learned. Recording one that already exists affirms it instead.
     Add {
@@ -1361,6 +1421,379 @@ fn stale_line(stale: &[String]) -> String {
     }
 }
 
+/// Trace (FEAT-057). The gaps print last and unindented, because they are what the command is
+/// for: a chain that only lists what exists lets a requirement with no test read as fine.
+fn run_trace(
+    cli: &Cli,
+    client: &Backend,
+    subject: Option<&str>,
+    zachman: bool,
+) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    // A bare `R-2` means the requirement of whatever item this branch belongs to.
+    let branch_code = scm_context(cli, client)
+        .ok()
+        .and_then(|ctx| branch_item(&ctx));
+
+    if zachman {
+        let scope = subject.map(str::to_string);
+        let resp = client.get(&format!(
+            "/projects/{p}/zachman{}",
+            scope
+                .map(|s| format!("?scope={}", urlencode(&s)))
+                .unwrap_or_default()
+        ))?;
+        if cli.json {
+            println!("{}", pretty(&resp));
+            return Ok(());
+        }
+        let view: kanbanr_core::trace::ZachmanView = serde_json::from_str(&resp)?;
+        println!("# Zachman view — {}\n", view.scope);
+        for cell in &view.cells {
+            println!(
+                "{:<6} {}/{} item(s){}",
+                cell.column,
+                cell.answered_by,
+                cell.items,
+                if cell.decisions.is_empty() {
+                    String::new()
+                } else {
+                    format!("   decisions: {}", cell.decisions.join(", "))
+                }
+            );
+        }
+        print_gaps(&view.gaps);
+        return Ok(());
+    }
+
+    let subject = subject
+        .map(str::to_string)
+        .or_else(|| branch_code.clone())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "trace what? a goal (G-2), an item (FEAT-046) or a requirement (FEAT-046/R-2)"
+            )
+        })?;
+    let mut query = format!("subject={}", urlencode(&subject));
+    if let Some(code) = &branch_code {
+        query.push_str(&format!("&item={}", urlencode(code)));
+    }
+    let resp = client.get(&format!("/projects/{p}/trace?{query}"))?;
+    if cli.json {
+        println!("{}", pretty(&resp));
+        return Ok(());
+    }
+    let t: kanbanr_core::trace::Trace = serde_json::from_str(&resp)?;
+    println!("# {}\n", t.heading);
+    if let Some(goal) = &t.goal {
+        println!("goal:    {goal}");
+    }
+    if let Some(purpose) = &t.purpose {
+        println!("purpose: {purpose}");
+    }
+    for item in &t.items {
+        println!("\n{} [{}] {}", item.code, item.status, item.title);
+        for r in &item.requirements {
+            println!("  {} ({}) {}", r.id, r.kind, r.text.trim());
+            for (name, green) in &r.tests {
+                println!("      {} {name}", if *green { "green" } else { "  —  " });
+            }
+        }
+    }
+    if !t.decisions.is_empty() {
+        println!("\ndecisions: {}", t.decisions.join(", "));
+    }
+    if !t.documents.is_empty() {
+        println!("documents: {}", t.documents.join(", "));
+    }
+    print_gaps(&t.gaps);
+    Ok(())
+}
+
+fn print_gaps(gaps: &[String]) {
+    if gaps.is_empty() {
+        println!("\nno gaps");
+        return;
+    }
+    println!("\ngaps ({}):", gaps.len());
+    for gap in gaps {
+        println!("  - {gap}");
+    }
+}
+
+/// `kanbanr why` (FEAT-057) — the direct answer to "why does this code exist?".
+///
+/// Three sources, in order of how much they can be trusted: an annotation on the line names the
+/// requirement outright; failing that, `git blame` finds the commit that wrote it and its trailer
+/// names one; failing that, the line has no reference and the command says so rather than
+/// guessing from the file's neighbours.
+fn run_why(cli: &Cli, client: &Backend, target: &str) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let (path, line) = match target.rsplit_once(':') {
+        Some((path, number)) if number.chars().all(|c| c.is_ascii_digit()) => {
+            (path, number.parse::<usize>().ok())
+        }
+        _ => (target, None),
+    };
+    let root = scm::repo_root().ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
+    let full = root.join(path);
+    if !full.exists() {
+        anyhow::bail!("{path} is not in this repository");
+    }
+
+    // 1) The annotation on the line, or the nearest one above it — `(FEAT-046 R-2)`.
+    let text = std::fs::read_to_string(&full).unwrap_or_default();
+    let annotated = annotation_for(&text, line);
+    // 2) The commit that last touched it, and what its trailer says.
+    let blamed = line.and_then(|n| blame_refs(&root, path, n));
+
+    let (source, refs) = match (&annotated, &blamed) {
+        (Some(refs), _) => ("the annotation on the code", refs.clone()),
+        (None, Some((sha, refs))) if !refs.is_empty() => (
+            Box::leak(format!("commit {sha}").into_boxed_str()) as &str,
+            refs.clone(),
+        ),
+        _ => {
+            println!(
+                "{target} carries no reference, and the commit that wrote it named none.\n\
+                 Nothing on the board explains this code — which is the finding, not an error."
+            );
+            return Ok(());
+        }
+    };
+
+    println!("{target} — from {source}: {}\n", refs.join(", "));
+    for reference in &refs {
+        let resp = client.get(&format!(
+            "/projects/{p}/trace?subject={}",
+            urlencode(reference)
+        ));
+        match resp {
+            Ok(resp) => {
+                let t: kanbanr_core::trace::Trace = serde_json::from_str(&resp)?;
+                for item in &t.items {
+                    for r in &item.requirements {
+                        println!("  requirement  {}/{}: {}", item.code, r.id, r.text.trim());
+                    }
+                    if item.requirements.is_empty() {
+                        println!("  item         {} — {}", item.code, item.title);
+                    }
+                }
+                if let Some(goal) = &t.goal {
+                    println!("  goal         {goal}");
+                }
+                if let Some(purpose) = &t.purpose {
+                    println!("  purpose      {purpose}");
+                }
+                if !t.decisions.is_empty() {
+                    println!("  decisions    {}", t.decisions.join(", "));
+                }
+            }
+            Err(e) => println!("  {reference}: {e}"),
+        }
+    }
+    Ok(())
+}
+
+/// A code annotation: `(FEAT-046 R-2)` or `(FEAT-046)` in a comment. Looks at the line itself,
+/// then upward — annotations sit on the unit that owns the behaviour, not on every line of it.
+fn annotation_for(text: &str, line: Option<usize>) -> Option<Vec<String>> {
+    let lines: Vec<&str> = text.lines().collect();
+    let start = line
+        .map(|n| n.min(lines.len()).saturating_sub(1))
+        .unwrap_or(0);
+    let search: Vec<&str> = match line {
+        // Upward from the line, but not the whole file: 40 lines is about a function.
+        Some(_) => lines[start.saturating_sub(40)..=start]
+            .iter()
+            .rev()
+            .copied()
+            .collect(),
+        None => lines.clone(),
+    };
+    for candidate in search {
+        if let Some(found) = parse_annotation(candidate) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn parse_annotation(line: &str) -> Option<Vec<String>> {
+    let open = line.find('(')?;
+    let close = line[open..].find(')')? + open;
+    let inside = line[open + 1..close].trim();
+    let mut parts = inside.split_whitespace();
+    let code = parts.next()?;
+    // A code is `PREFIX-123`; anything else in parentheses is ordinary prose.
+    let (prefix, number) = code.split_once('-')?;
+    if prefix.is_empty()
+        || !prefix.chars().all(|c| c.is_ascii_uppercase())
+        || !number.chars().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    match parts.next() {
+        Some(requirement) if requirement.starts_with("R-") => {
+            Some(vec![format!("{code}/{requirement}")])
+        }
+        _ => Some(vec![code.to_string()]),
+    }
+}
+
+/// The references in the trailer of the commit that last touched this line.
+fn blame_refs(root: &Path, path: &str, line: usize) -> Option<(String, Vec<String>)> {
+    // -C -M follow the line through moves and copies, which is what makes blame survive the
+    // refactors that would otherwise lose the link.
+    let range = format!("{line},{line}");
+    let out = scm::git(
+        root,
+        &["blame", "-C", "-M", "-L", &range, "--porcelain", "--", path],
+    )
+    .ok()?;
+    let sha = out.split_whitespace().next()?.to_string();
+    let message = scm::git(root, &["log", "-1", "--format=%B", &sha]).ok()?;
+    let refs: Vec<String> = kanbanr_core::scm::parse_refs(&message)
+        .into_iter()
+        .map(|r| r.as_token().trim_start_matches("kanbanr:").to_string())
+        .collect();
+    Some((sha.get(..8).unwrap_or(&sha).to_string(), refs))
+}
+
+/// Architecture decisions (FEAT-057).
+fn run_adr(cli: &Cli, client: &Backend, cmd: &AdrCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    match cmd {
+        AdrCmd::New {
+            title,
+            affects,
+            driven_by,
+            quality,
+            zachman,
+            layer,
+            status,
+            deciders,
+        } => {
+            let body = json!({
+                "title": title,
+                "status": status,
+                "affects": affects,
+                "driven_by": driven_by,
+                "quality": quality,
+                "zachman": zachman,
+                "layer": layer.clone().unwrap_or_default(),
+                "deciders": deciders,
+            });
+            let resp = client.write(Method::Post, &format!("/projects/{p}/adrs"), Some(body))?;
+            let adr: kanbanr_core::adr::Adr = serde_json::from_str(&resp)?;
+            print_write(
+                cli,
+                &resp,
+                format!(
+                    "{} scaffolded at {} — fill in Context, Decision, Alternatives, Consequences \
+                     and Compliance (`kanbanr doc show {}`)",
+                    adr.id, adr.path, adr.path
+                ),
+            );
+            Ok(())
+        }
+        AdrCmd::List { for_item } => {
+            let resp = client.get(&format!("/projects/{p}/adrs"))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let adrs: Vec<kanbanr_core::adr::Adr> = serde_json::from_str(&resp)?;
+            let shown: Vec<&kanbanr_core::adr::Adr> = adrs
+                .iter()
+                .filter(|a| {
+                    for_item.as_deref().is_none_or(|code| {
+                        a.affects.iter().any(|c| c == code)
+                            || a.driven_by
+                                .iter()
+                                .any(|d| d.split('/').next().is_some_and(|c| c == code))
+                    })
+                })
+                .collect();
+            if shown.is_empty() {
+                println!("(no decisions recorded)");
+            }
+            for adr in shown {
+                println!("{:<9} {:<11} {}", adr.id, adr.status, adr.title);
+                let mut detail = Vec::new();
+                if !adr.affects.is_empty() {
+                    detail.push(format!("affects {}", adr.affects.join(", ")));
+                }
+                if !adr.driven_by.is_empty() {
+                    detail.push(format!("driven by {}", adr.driven_by.join(", ")));
+                }
+                if !adr.superseded_by.is_empty() {
+                    detail.push(format!("superseded by {}", adr.superseded_by));
+                }
+                let missing = adr.missing_sections();
+                if !missing.is_empty() {
+                    detail.push(format!("unwritten: {}", missing.join(", ")));
+                }
+                if !detail.is_empty() {
+                    println!("          {}", detail.join(" · "));
+                }
+            }
+            Ok(())
+        }
+        AdrCmd::Supersede { id, replaces } => {
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/adrs/{id}/supersede"),
+                Some(json!({ "replaces": replaces })),
+            )?;
+            let out: Value = serde_json::from_str(&resp)?;
+            let affected = out["affected"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            print_write(
+                cli,
+                &resp,
+                format!(
+                    "{id} supersedes {replaces}{}",
+                    if affected.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "\nthese rested on {replaces} and now stand on an overturned \
+                             decision — review them: {affected}"
+                        )
+                    }
+                ),
+            );
+            Ok(())
+        }
+        AdrCmd::History { id } => {
+            let resp = client.get(&format!("/projects/{p}/adrs"))?;
+            let adrs: Vec<kanbanr_core::adr::Adr> = serde_json::from_str(&resp)?;
+            let chain = kanbanr_core::adr::lineage(&adrs, id);
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&chain)?);
+                return Ok(());
+            }
+            for (i, step) in chain.iter().enumerate() {
+                let title = adrs
+                    .iter()
+                    .find(|a| &a.id == step)
+                    .map(|a| a.title.clone())
+                    .unwrap_or_default();
+                println!("{}{step}  {title}", "  ".repeat(i));
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Lessons (FEAT-055). Confidence is printed as a percentage, with what it came from, because a
 /// lesson you cannot trace is advice — and advice with a number on it is worse than advice.
 fn lesson_line(l: &kanbanr_core::lessons::Lesson) -> String {
@@ -1893,7 +2326,8 @@ fn run_check_msg(cli: &Cli, client: &Backend, file: &Path) -> anyhow::Result<()>
              If it genuinely serves no item, say so on the record: `[no-ref] <why>`."
         );
     }
-    let problems = scm::validate_refs(&ctx.project, &refs);
+    let mut problems = scm::validate_refs(&ctx.project, &refs);
+    problems.extend(validate_doc_and_adr_refs(client, &message)?);
     if !problems.is_empty() {
         anyhow::bail!(
             "this commit references something that is not on the board:\n  {}",
@@ -1901,6 +2335,58 @@ fn run_check_msg(cli: &Cli, client: &Backend, file: &Path) -> anyhow::Result<()>
         );
     }
     Ok(())
+}
+
+/// `Docs:` and `ADR:` trailers resolve against the board too (FEAT-057). A stale document path or
+/// an invented decision id is a broken link, exactly like a dangling dependency — and the kind
+/// that is hardest to notice later, because it still reads as a reference.
+fn validate_doc_and_adr_refs(client: &Backend, message: &str) -> anyhow::Result<Vec<String>> {
+    let p = require_project_quiet();
+    let (docs, adrs) = (
+        kanbanr_core::scm::parse_doc_refs(message),
+        kanbanr_core::scm::parse_adr_refs(message),
+    );
+    if docs.is_empty() && adrs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(p) = p else { return Ok(Vec::new()) };
+    let mut problems = Vec::new();
+    if !docs.is_empty() {
+        let tree = client
+            .get(&format!("/projects/{p}/docs"))
+            .unwrap_or_default();
+        for path in docs {
+            if !tree.contains(&path) {
+                problems.push(format!("Docs: {path} is not a document on this board"));
+            }
+        }
+    }
+    if !adrs.is_empty() {
+        let listed: Vec<kanbanr_core::adr::Adr> = client
+            .get(&format!("/projects/{p}/adrs"))
+            .ok()
+            .and_then(|r| serde_json::from_str(&r).ok())
+            .unwrap_or_default();
+        for id in adrs {
+            match listed.iter().find(|a| a.id.eq_ignore_ascii_case(&id)) {
+                None => problems.push(format!("ADR: {id} is not a decision on this board")),
+                // Not a refusal: sometimes the commit IS the one replacing it. Saying so beats
+                // blocking, because a rule that blocks legitimate work gets bypassed wholesale.
+                Some(adr) if adr.is_superseded() => eprintln!(
+                    "kanbanr: {id} was superseded by {} — make sure this is deliberate",
+                    adr.superseded_by
+                ),
+                Some(_) => {}
+            }
+        }
+    }
+    Ok(problems)
+}
+
+/// The active project, or `None` — used where a missing project means "not our business" rather
+/// than an error the user should see.
+fn require_project_quiet() -> Option<String> {
+    kanbanr_core::project::resolve_project(None)
 }
 
 /// The pre-commit hook: work belongs on a branch that names the item it serves.
@@ -3069,6 +3555,11 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             );
             Ok(())
         }
+        Command::Trace { subject, zachman } => {
+            run_trace(cli, &client, subject.as_deref(), *zachman)
+        }
+        Command::Why { target } => run_why(cli, &client, target),
+        Command::Adr(cmd) => run_adr(cli, &client, cmd),
         Command::Lesson(cmd) => run_lesson(cli, &client, cmd),
         Command::Lessons { for_item, all } => {
             let p = require_project(cli)?;

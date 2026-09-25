@@ -2,6 +2,7 @@
 //! Shared by the CLI (the only writer) and the read-only server.
 
 pub mod activity;
+pub mod adr;
 pub mod batch;
 pub mod charter;
 pub mod config;
@@ -27,6 +28,7 @@ pub mod report;
 pub mod retro;
 pub mod scm;
 pub mod store;
+pub mod trace;
 pub mod validate;
 
 pub use charter::{Charter, Goal, Stakeholder};

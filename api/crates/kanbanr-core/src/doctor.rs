@@ -61,6 +61,7 @@ pub fn run(store: &Store) -> Result<Report> {
         let charter = crate::charter::load(store, &project.id)?;
         scan_charter(&charter, &project.id, &mut report);
         scan_definitions(project, &charter, &mut report);
+        scan_decisions(store, project, &mut report);
     }
     Ok(report)
 }
@@ -82,6 +83,7 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     let charter = crate::charter::load(store, id)?;
     scan_charter(&charter, id, &mut report);
     scan_definitions(&project, &charter, &mut report);
+    scan_decisions(store, &project, &mut report);
     Ok(report)
 }
 
@@ -201,6 +203,79 @@ fn scan_definitions(project: &Project, charter: &crate::Charter, report: &mut Re
             });
         }
     }
+}
+
+/// Architecture decisions in the graph (FEAT-057).
+///
+/// The severities follow the existing rule: a **broken reference** is an error, because someone
+/// can fix it by editing a name; everything else is a warning, because it is a judgement about
+/// whether the reasoning is complete, and a judgement that blocks a write gets worked around.
+fn scan_decisions(store: &Store, project: &Project, report: &mut Report) {
+    let adrs = crate::adr::list(store, &project.id).unwrap_or_default();
+    let mut warnings: Vec<String> = Vec::new();
+    let mut warn = |message: String| warnings.push(message);
+
+    for problem in crate::adr::dangling(&adrs, project) {
+        report.issues.push(Issue {
+            severity: Severity::Error,
+            project: project.id.clone(),
+            code: None,
+            message: problem,
+        });
+    }
+
+    for adr in &adrs {
+        let missing = adr.missing_sections();
+        // An ADR without its Decision or Consequences is a note about a meeting. Consequences is
+        // the section a later reader needs most, because it says what the decision cost.
+        for section in ["Decision", "Consequences"] {
+            if missing.contains(&section) {
+                warn(format!(
+                    "{} has no {} section — the part a later reader needs before overturning it",
+                    adr.id,
+                    section.to_lowercase()
+                ));
+            }
+        }
+        if adr.is_accepted() && adr.affects.is_empty() && !adr.is_superseded() {
+            warn(format!(
+                "{} is accepted but claims to affect nothing, so nothing rests on it",
+                adr.id
+            ));
+        }
+    }
+
+    // A quality a requirement measures, that no decision serves: the number is an aspiration.
+    let mut measured: BTreeSet<String> = BTreeSet::new();
+    for feature in &project.features {
+        for requirement in feature
+            .definition
+            .iter()
+            .flat_map(|d| d.requirements.iter())
+            .filter(|r| matches!(r.kind, crate::models::RequirementKind::Nfr))
+        {
+            measured.extend(requirement.iso.iter().cloned());
+        }
+    }
+    let served: BTreeSet<String> = adrs
+        .iter()
+        .filter(|a| !a.is_superseded())
+        .flat_map(|a| a.quality.iter().cloned())
+        .collect();
+    for quality in measured.difference(&served) {
+        warn(format!(
+            "{quality} is measured by a requirement but no decision claims to serve it"
+        ));
+    }
+
+    report
+        .issues
+        .extend(warnings.into_iter().map(|message| Issue {
+            severity: Severity::Warning,
+            project: project.id.clone(),
+            code: None,
+            message,
+        }));
 }
 
 fn push(
