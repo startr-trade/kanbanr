@@ -42,6 +42,18 @@ pub fn read(data_dir: &Path, project: &str, limit: usize) -> Vec<Activity> {
         .collect()
 }
 
+/// Replace the log outright. Test-only: it lets a test stand in a changelog from an older board.
+#[cfg(test)]
+pub fn write_for_test(data_dir: &Path, project: &str, entries: &[Activity]) {
+    let file = path(data_dir, project);
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(yaml) = serde_yaml::to_string(entries) {
+        let _ = std::fs::write(&file, yaml);
+    }
+}
+
 /// Append an entry (newest first), capping the file to the most recent `MAX`. `item` is the work
 /// item (feature code) the change touched, when applicable.
 pub fn append(data_dir: &Path, project: &str, actor: &str, message: &str, item: Option<&str>) {

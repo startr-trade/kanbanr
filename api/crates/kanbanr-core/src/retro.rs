@@ -73,6 +73,9 @@ pub struct Retro {
     /// When the wave's first item started, and when its last one finished.
     pub started: Option<String>,
     pub finished: Option<String>,
+    /// Every item is finished. Separate from `finished`, because a wave can be over without the
+    /// board knowing when — saying "still running" in that case is simply false.
+    pub all_done: bool,
     pub scope_growth: ScopeGrowth,
     pub defects: Defects,
     pub cycle_time_days: Option<crate::report::Percentiles>,
@@ -80,6 +83,10 @@ pub struct Retro {
     pub rework: Vec<String>,
     /// Items with no recorded moves at all — their flow numbers are absent, not zero.
     pub no_history: Vec<String>,
+    /// Items whose only timestamps come from the changelog. The activity log records when the
+    /// BOARD was written, not how long work took, so these are reported separately and never
+    /// mixed into the cycle time — a five-minute median for a month of work is worse than a gap.
+    pub approximate: Vec<String>,
     pub evidence: Evidence,
     pub estimates: Vec<Estimate>,
 }
@@ -138,11 +145,12 @@ pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
     // NOT the earliest creation. Items planned together are created seconds apart, so measuring
     // growth from a creation time makes every one of them after the first look like it crept in.
     let started = items.iter().filter_map(|f| first_move(f, &moves)).min();
+    let all_done = !items.is_empty() && items.iter().all(|f| is_done(&project, f));
     let finished = items
         .iter()
         .filter_map(|f| finished_at(&project, f))
         .max()
-        .filter(|_| items.iter().all(|f| is_done(&project, f)));
+        .filter(|_| all_done);
 
     let mut retro = Retro {
         project: id.to_string(),
@@ -152,11 +160,13 @@ pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
         still_open: 0,
         started: started.clone(),
         finished,
+        all_done,
         scope_growth: ScopeGrowth::default(),
         defects: Defects::default(),
         cycle_time_days: None,
         rework: Vec::new(),
         no_history: Vec::new(),
+        approximate: Vec::new(),
         evidence: Evidence::default(),
         estimates: Vec::new(),
     };
@@ -201,8 +211,9 @@ pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
             }
         }
 
-        // Flow. History is the source; the activity log is the fallback for items that predate it.
-        match cycle_time_days(&project, f).or_else(|| cycle_from_activity(&project, f, &moves)) {
+        // Flow, from recorded transitions only. An item that finished before histories existed
+        // gets an approximate span from the changelog, reported apart from the real numbers.
+        match cycle_time_days(&project, f) {
             Some(days) if done => {
                 cycle_times.push(days);
                 if let Some(estimate) = f.estimate_days.filter(|d| *d > 0.0) {
@@ -213,10 +224,11 @@ pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
                     });
                 }
             }
-            _ if f.history.is_empty() && first_move(f, &moves).is_none() => {
-                retro.no_history.push(f.code.clone())
+            _ if !f.history.is_empty() => {}
+            _ if cycle_from_activity(&project, f, &moves).is_some() => {
+                retro.approximate.push(f.code.clone())
             }
-            _ => {}
+            _ => retro.no_history.push(f.code.clone()),
         }
         for t in &f.history {
             if crate::graph::is_terminal_status(&project.config, &t.from)
@@ -316,7 +328,12 @@ pub fn due(store: &Store, id: &str) -> Result<Vec<String>> {
                 .iter()
                 .filter(|f| f.milestone == m.code)
                 .collect();
-            !items.is_empty() && items.iter().all(|f| is_done(&project, f))
+            // A wave the board never watched cannot be retrospected honestly: with no recorded
+            // transition on any item, every flow number is absent and the narrative would be
+            // invention. Asking for one anyway is how a prompt becomes noise to dismiss.
+            !items.is_empty()
+                && items.iter().all(|f| is_done(&project, f))
+                && items.iter().any(|f| !f.history.is_empty())
         })
         .filter(|m| !written.contains(&format!("retros/{}", m.code)))
         .map(|m| m.code.clone())
@@ -609,6 +626,91 @@ mod tests {
         assert_eq!(cycle_from_activity(&project, &bare, &moves), Some(3.0));
         // With neither source, the item is reported as having no history rather than as instant.
         assert_eq!(cycle_from_activity(&project, &bare, &[]), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FEAT-063: the Stop hook asked for retrospectives on three waves that finished months
+    /// before the method existed. A wave the board never watched has nothing to retrospect, and a
+    /// prompt with nothing behind it is a prompt people learn to dismiss.
+    #[test]
+    fn a_wave_the_board_never_watched_is_not_due() {
+        let (store, dir) = fixture();
+        let f = store
+            .add_feature("demo", "Old work", "", "MS-1", None)
+            .unwrap();
+        complete(&store, &f.code);
+        assert_eq!(due(&store, "demo").unwrap(), vec!["MS-1".to_string()]);
+
+        // Strip the history, as an item finished before transitions were recorded would have.
+        let mut project = store.load("demo").unwrap();
+        project.features.iter_mut().for_each(|x| x.history.clear());
+        for feature in &project.features {
+            store.persist_feature_for_test("demo", feature).unwrap();
+        }
+        assert!(
+            due(&store, "demo").unwrap().is_empty(),
+            "nothing was recorded, so there is nothing to write up"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn changelog_timestamps_are_reported_as_approximate() {
+        let (store, dir) = fixture();
+        let f = store
+            .add_feature("demo", "Old work", "", "MS-1", None)
+            .unwrap();
+        complete(&store, &f.code);
+        let mut project = store.load("demo").unwrap();
+        project.features.iter_mut().for_each(|x| x.history.clear());
+        for feature in &project.features {
+            store.persist_feature_for_test("demo", feature).unwrap();
+        }
+        // Two changelog entries a day apart: a span, but of board writes, not of work.
+        let moves: Vec<crate::activity::Activity> =
+            ["2026-09-20T09:00:00Z", "2026-09-21T09:00:00Z"]
+                .iter()
+                .map(|at| crate::activity::Activity {
+                    time: (*at).to_string(),
+                    actor: "t".into(),
+                    message: format!("move feature {} -> Completed", f.code),
+                    item: Some(f.code.clone()),
+                })
+                .collect();
+        crate::activity::write_for_test(store.data_dir(), "demo", &moves);
+
+        let r = run(&store, "demo", &Wave::default()).unwrap();
+        assert!(
+            r.cycle_time_days.is_none(),
+            "a changelog gap is not a cycle time: {:?}",
+            r.cycle_time_days
+        );
+        assert_eq!(r.approximate, vec![f.code.clone()]);
+        assert!(r.no_history.is_empty());
+        // And a wave that is over but undated says so rather than claiming to be running.
+        assert!(r.all_done);
+        assert!(r.finished.is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_finished_wave_without_a_timestamp_says_so() {
+        let (store, dir) = fixture();
+        let f = store.add_feature("demo", "Work", "", "MS-1", None).unwrap();
+        complete(&store, &f.code);
+        let done = run(&store, "demo", &Wave::default()).unwrap();
+        assert!(
+            done.all_done && done.finished.is_some(),
+            "recorded, so dated"
+        );
+
+        let open = store.add_feature("demo", "More", "", "MS-1", None).unwrap();
+        let r = run(&store, "demo", &Wave::default()).unwrap();
+        assert!(!r.all_done, "{} is still open", open.code);
+        assert!(
+            r.finished.is_none(),
+            "a wave is not over while an item is open"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

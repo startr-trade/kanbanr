@@ -1540,15 +1540,13 @@ fn retro_markdown(r: &kanbanr_core::retro::Retro) -> String {
         r.items, r.completed, r.still_open
     );
     if let Some(started) = &r.started {
-        let _ = writeln!(
-            out,
-            "- ran: {} → {}",
-            &started[..10.min(started.len())],
-            r.finished
-                .as_deref()
-                .map(|f| f[..10.min(f.len())].to_string())
-                .unwrap_or_else(|| "still running".into())
-        );
+        let end = match (&r.finished, r.all_done) {
+            (Some(f), _) => f[..10.min(f.len())].to_string(),
+            // Over, but the board never recorded when: saying "still running" would be false.
+            (None, true) => "finished (date not recorded)".into(),
+            (None, false) => "still running".into(),
+        };
+        let _ = writeln!(out, "- ran: {} → {end}", &started[..10.min(started.len())]);
     }
     let growth = &r.scope_growth;
     let _ = writeln!(
@@ -1633,6 +1631,15 @@ fn retro_markdown(r: &kanbanr_core::retro::Retro) -> String {
                 }
             );
         }
+    }
+    if !r.approximate.is_empty() {
+        let _ = writeln!(
+            out,
+            "- {} item(s) have only changelog timestamps, which record when the board was written \
+             rather than how long work took — too coarse for cycle time: {}",
+            r.approximate.len(),
+            r.approximate.join(", ")
+        );
     }
     if !r.no_history.is_empty() {
         let _ = writeln!(
