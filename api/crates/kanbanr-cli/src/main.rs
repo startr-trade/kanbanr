@@ -2082,6 +2082,38 @@ fn retro_markdown(r: &kanbanr_core::retro::Retro) -> String {
         );
     }
     out.push('\n');
+
+    // What the wave taught, as it stood when this was written. Still facts — each one carries the
+    // evidence it was recorded with — so it sits above the narrative, not inside it.
+    if !r.lessons.is_empty() {
+        let _ = writeln!(out, "## What this wave taught\n");
+        for l in &r.lessons {
+            let retired = l.status == kanbanr_core::lessons::LessonStatus::Retired;
+            let _ = writeln!(
+                out,
+                "- **{}** ({}%{}) {}",
+                l.id,
+                (l.confidence_now() * 100.0).round() as i64,
+                if retired { ", since retired" } else { "" },
+                l.lesson.trim()
+            );
+            let mut detail: Vec<String> = Vec::new();
+            if !l.from_item.is_empty() {
+                detail.push(format!("from {}", l.from_item));
+            }
+            if !l.evidence.trim().is_empty() {
+                detail.push(l.evidence.trim().to_string());
+            }
+            if !detail.is_empty() {
+                let _ = writeln!(out, "  - {}", detail.join(" · "));
+            }
+        }
+        let _ = writeln!(
+            out,
+            "\n_Live state is `kanbanr lessons`; confidence decays, so these are the figures as of \
+             this retrospective._\n"
+        );
+    }
     out
 }
 

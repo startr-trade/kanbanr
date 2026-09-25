@@ -1486,6 +1486,28 @@ fn cli_retro_reports_facts_and_writes_a_document() {
     let due = run(&["retro", "--due"]);
     assert!(due.contains("MS-001 is finished and has no retro"), "{due}");
 
+    // What the wave taught belongs in the wave's own write-up.
+    run(&[
+        "lesson",
+        "add",
+        "Record where an item came from while the wave runs, not afterwards",
+        "--kind",
+        "practice",
+        "--from",
+        "FEAT-003",
+        "--evidence",
+        "the unattributed item took longer to explain than to record",
+    ]);
+    let with_lesson = run(&["retro", "MS-001"]);
+    assert!(
+        with_lesson.contains("## What this wave taught"),
+        "{with_lesson}"
+    );
+    assert!(
+        with_lesson.contains("Record where an item came from"),
+        "{with_lesson}"
+    );
+
     let written = run(&["retro", "MS-001", "--write"]);
     assert!(written.contains("written to retros/MS-001-"), "{written}");
     let path = written
@@ -1501,6 +1523,9 @@ fn cli_retro_reports_facts_and_writes_a_document() {
         "the narrative has its own section, so a reader can tell them apart: {doc}"
     );
     assert!(doc.contains("cycle time: p50 "), "{doc}");
+    assert!(doc.contains("## What this wave taught"), "{doc}");
+    // The rows stay canonical; the document says so rather than pretending to be the record.
+    assert!(doc.contains("Live state is `kanbanr lessons`"), "{doc}");
     // Written up, so no longer due.
     assert!(run(&["retro", "--due"]).contains("no retro is due"));
 
