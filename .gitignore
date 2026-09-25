@@ -13,9 +13,10 @@
 # Local Claude Code tooling state (agent worktrees, etc.) — never part of the source repo.
 /.claude/
 
-# The data folder is its OWN git repository (the kanban board, written by the CLI), so it is not
-# tracked by the source repo — it would otherwise be embedded as a gitlink. Keep it separate; it can
-# be wired up as a submodule later if the dogfood board should ship with the source.
+# The board is its OWN git repository and now lives BESIDE this one (`../<repo>.kanbanr`), so
+# there is nothing here to ignore. The rule stays as a guard: if a `data/` folder is ever created
+# inside a checkout again, it must not be committed — it would be embedded as a gitlink, and a
+# board inside a checkout is one `git add -A` away from being published.
 /data
 
 # Defensive: kanbanr has no accounts/secrets, but if a security.yaml ever appears
