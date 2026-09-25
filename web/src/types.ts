@@ -65,6 +65,25 @@ export interface Charter {
   adopted_at?: string;
 }
 
+/**
+ * Something this project learned, and how much it still believes it (FEAT-055). Confidence decays
+ * with age unless reaffirmed, so this list stays short without anyone pruning it.
+ */
+export interface Lesson {
+  id: string;
+  lesson: string;
+  kind: "practice" | "pitfall" | "decision";
+  at: string;
+  from_item?: string;
+  from_retro?: string;
+  evidence?: string;
+  tags?: string[];
+  goals?: string[];
+  confidence: number;
+  last_affirmed?: string;
+  status: "candidate" | "active" | "retired";
+}
+
 /** An outcome the project commits to. Work items link these by id. */
 export interface Goal {
   id: string;

@@ -1621,6 +1621,40 @@ impl Store {
                         "test": test, "state": state,
                     }))
                 }
+                LessonAdd {
+                    lesson,
+                    kind,
+                    from_item,
+                    from_retro,
+                    evidence,
+                    tags,
+                    goals,
+                } => {
+                    // Lessons are a side file, so this writes immediately rather than through the
+                    // pending set — it is still one git commit, because the batch commits once.
+                    let kind = match kind.as_deref().map(str::to_lowercase).as_deref() {
+                        Some("practice") => crate::lessons::LessonKind::Practice,
+                        Some("decision") => crate::lessons::LessonKind::Decision,
+                        _ => crate::lessons::LessonKind::Pitfall,
+                    };
+                    let recorded = crate::lessons::add(
+                        self,
+                        id,
+                        crate::lessons::Lesson {
+                            lesson,
+                            kind,
+                            from_item: from_item.map(|f| resolve(&aliases, &f)).unwrap_or_default(),
+                            from_retro: from_retro.unwrap_or_default(),
+                            evidence: evidence.unwrap_or_default(),
+                            tags: tags.unwrap_or_default(),
+                            goals: goals.unwrap_or_default(),
+                            ..Default::default()
+                        },
+                    )?;
+                    Ok(serde_json::json!({
+                        "op": "lesson.add", "id": recorded.id, "confidence": recorded.confidence,
+                    }))
+                }
                 FeatureApprove { code, by } => {
                     let resolved = resolve(&aliases, &code);
                     let feature = project.feature_mut(&resolved)?;

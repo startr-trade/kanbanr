@@ -16,6 +16,7 @@ pub mod gantt;
 pub mod git;
 pub mod graph;
 pub mod hash;
+pub mod lessons;
 pub mod mermaid;
 pub mod mirror;
 pub mod models;

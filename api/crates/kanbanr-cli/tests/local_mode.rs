@@ -1506,3 +1506,139 @@ fn cli_retro_reports_facts_and_writes_a_document() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Lessons end to end (FEAT-055): recorded with where they came from, matched to the item about to
+/// be worked on, affirmed when they hold, and retired — not deleted — when they turn out wrong.
+#[test]
+fn cli_lessons_are_captured_matched_and_can_be_contradicted() {
+    let base = std::env::temp_dir().join(format!("kanbanr-lessons-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let run = |args: &[&str]| -> String {
+        let o = Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI");
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Mirror sync",
+        "--milestone",
+        "MS-001",
+        "--labels",
+        "mirror",
+    ]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Docs pass",
+        "--milestone",
+        "MS-001",
+        "--labels",
+        "docs",
+    ]);
+
+    assert!(run(&["lessons"]).contains("nothing learned here yet"));
+    let added = run(&[
+        "lesson",
+        "add",
+        "Auto-sync re-pushes every linked issue on any write",
+        "--kind",
+        "pitfall",
+        "--from",
+        "FEAT-001",
+        "--evidence",
+        "it re-notified 40 issues during an unrelated task update",
+        "--tags",
+        "mirror",
+    ]);
+    assert!(added.contains("L-1"), "{added}");
+    assert!(
+        added.contains("60%"),
+        "a new lesson is believed, not proven: {added}"
+    );
+
+    // Said again in different words: the same lesson, affirmed rather than duplicated.
+    let again = run(&[
+        "lesson",
+        "add",
+        "auto-sync RE-PUSHES every linked issue on any write!",
+    ]);
+    assert!(again.contains("L-1"), "{again}");
+    assert!(again.contains("75%"), "repetition is evidence: {again}");
+    assert_eq!(
+        run(&["lessons"]).matches("L-").count(),
+        1,
+        "one lesson, not two"
+    );
+
+    // Matched to the work about to start, and not offered to unrelated work.
+    let matched = run(&["lessons", "--for", "FEAT-001"]);
+    assert!(matched.contains("Auto-sync re-pushes"), "{matched}");
+    assert!(
+        run(&["lessons", "--for", "FEAT-002"]).contains("nothing learned here yet"),
+        "a docs item is not told about mirrors"
+    );
+
+    // Contradiction costs more than affirmation: one wipes out the gain and then some.
+    let out = run(&[
+        "lesson",
+        "contradict",
+        "L-1",
+        "--note",
+        "the re-push was a config error, not the sync",
+    ]);
+    assert!(
+        out.contains("30%"),
+        "75% affirmed, then contradicted: {out}"
+    );
+    assert!(
+        !out.contains("retired"),
+        "once is a doubt, not a refutation: {out}"
+    );
+    // Twice puts it below the threshold, and it stops being offered.
+    let out = run(&[
+        "lesson",
+        "contradict",
+        "L-1",
+        "--note",
+        "again, not the sync",
+    ]);
+    assert!(out.contains("retired"), "{out}");
+    assert!(run(&["lessons"]).contains("nothing learned here yet"));
+    // Kept as a record, not deleted: being wrong later is part of the history.
+    let all = run(&["lessons", "--all"]);
+    assert!(all.contains("L-1"), "{all}");
+
+    let _ = std::fs::remove_dir_all(&base);
+}

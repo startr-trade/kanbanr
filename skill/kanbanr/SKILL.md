@@ -245,6 +245,22 @@ what it cannot yet show. `kanbanr tests` finds evidence that has rotted — a gr
 renamed or deleted — and `--write` returns it to `planned`. Mark a check a person performs as
 `kind: manual`; it is exempt from that sweep, so use it only when a person really did it.
 
+## Read what this project already learned, before you start
+
+`kanbanr lessons --for FEAT-001` — run it before starting an item, not after something goes wrong.
+The SessionStart hook prints the most-believed ones for the project as a whole.
+
+- **Record one when you learn it**, not at the end:
+  `kanbanr lesson add "…" --kind pitfall --from FEAT-043 --evidence "what actually happened"
+  --tags mirror`. Without evidence it is an opinion; say what happened.
+- Recording the same lesson twice **affirms** it instead of duplicating it — repetition is evidence.
+- **Confidence decays.** A lesson nobody reaffirms fades and eventually retires, so the list stays
+  short without pruning. `kanbanr lesson affirm L-1 --note "held again on FEAT-050"` when it holds.
+- **Say so when one is wrong**: `kanbanr lesson contradict L-1 --note "…"`. Contradiction costs
+  more than affirmation gains, and a retired lesson is kept as a record rather than deleted. Being
+  wrong later is normal; leaving a stale lesson to mislead the next session is not.
+- A defect's `--root-cause` is usually a lesson waiting to be written. Write it there and then.
+
 ## Look back at a wave before starting the next one
 
 When a milestone finishes — or every couple of weeks — run `kanbanr retro <MS-00x> --write`. It
@@ -400,11 +416,11 @@ JSON
 ```
 Batch op types: `feature.add`, `feature.edit`, `feature.move` (accepts `unapproved`),
 `feature.approve`, `milestone.add`, `todo.add`,
-`task.add`, `task.state`, `doc.folder`, `doc.write`. Operations apply in order; on failure the
+`task.add`, `task.state`, `test.state`, `lesson.add`, `doc.folder`, `doc.write`. Operations apply in order; on failure the
 response names the failing operation index. The whole bundle is **one git commit** — pass
 `--message "…"` to title it (a default is framed if you omit it). `feature.add` also accepts
 `source`, `original` and `issue` (for imports; see above), plus `definition`; `feature.edit`
-accepts `source`, `issue` and `definition` (which replaces the block wholesale — it is authored
+accepts `source`, `issue`, `defect`, `split_from` and `definition` (which replaces the block wholesale — it is authored
 whole, not merged). `kanbanr batch --dry-run` validates a bundle and reports what it would do without
 writing anything.
 
@@ -455,6 +471,9 @@ kanbanr test FEAT-001 R-1 cart::retains green [--rev <sha>]   # normally the cap
 kanbanr report [--since 14d]      # throughput, cycle time, rework, escape rate, coverage
 kanbanr tests [--write]           # tracked tests that no longer exist; --write un-proves them
 kanbanr retro [MS-006] [--since 14d] [--label x] [--write] | --due
+kanbanr lessons [--for FEAT-001] [--all]        # read BEFORE starting work
+kanbanr lesson add "…" --kind pitfall --from FEAT-043 --evidence "…" [--tags a,b] [--goals G-1]
+kanbanr lesson affirm L-1 [--note "…"] | contradict L-1 [--note "…"]
 kanbanr split-from FEAT-060 FEAT-046   # this item was sliced out of that one
 kanbanr start FEAT-001 [--to STATUS] [--no-branch] [--unapproved "<reason>"]
 kanbanr commit -m "…" [--ref R-2] [--ref TL-001/T3] [-a]   # trailer filled from the branch
