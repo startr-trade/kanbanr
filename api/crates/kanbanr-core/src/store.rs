@@ -1169,6 +1169,7 @@ impl Store {
 
         // Auto-complete the feature when every task (across all lists) is done — but NOT when
         // the feature sits in a no-op state (those are functionally inert dispositions).
+        let at = now_rfc3339();
         if f.all_tasks_completed()
             && !config.is_no_op(&f.status)
             && let Some(completed) = config
@@ -1177,9 +1178,17 @@ impl Store {
                 .find(|s| s.eq_ignore_ascii_case("Completed"))
             && config.transition_allowed(&f.status, completed)
         {
+            // Auto-completion is how most items actually finish, so it has to leave the same
+            // record a manual move does — otherwise cycle time is blind to the normal path and
+            // reports numbers only for items someone moved by hand (FEAT-061).
+            f.history.push(crate::models::Transition {
+                at: at.clone(),
+                from: f.status.clone(),
+                to: completed.clone(),
+            });
             f.status = completed.clone();
         }
-        f.updated_at = now_rfc3339();
+        f.updated_at = at;
         let updated = f.clone();
         pending.persist_features.insert(updated.code.clone());
         if updated.status != from {

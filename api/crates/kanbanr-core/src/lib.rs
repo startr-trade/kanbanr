@@ -170,6 +170,50 @@ mod tests {
         assert_eq!(updated.status, "Completed");
     }
 
+    /// FEAT-061: auto-completion is how most items actually finish. When it left no transition
+    /// behind, every flow number was blind to the normal path and reported only on items someone
+    /// had moved by hand.
+    #[test]
+    fn auto_completion_records_the_move_like_any_other() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let f = store
+            .add_feature("demo", "Login", "spec", "M", None)
+            .unwrap();
+        store.move_feature("demo", &f.code, "Scheduled").unwrap();
+        let tl = store.add_todo_list("demo", &f.code, "s1", None).unwrap();
+        store
+            .add_task("demo", &f.code, &tl.code, "do a", None)
+            .unwrap();
+
+        let done = store
+            .set_task_state("demo", &f.code, &tl.code, "T1", TaskState::Completed)
+            .unwrap();
+        assert_eq!(done.status, "Completed");
+        let steps: Vec<(&str, &str)> = done
+            .history
+            .iter()
+            .map(|t| (t.from.as_str(), t.to.as_str()))
+            .collect();
+        assert_eq!(
+            steps,
+            vec![("Planned", "Scheduled"), ("Scheduled", "Completed")],
+            "the auto-completion is in the history beside the manual move"
+        );
+        assert!(!done.history[1].at.is_empty());
+
+        // Renaming a status is not a move: the item stayed where it was, the label changed.
+        store.rename_status("demo", "Completed", "Shipped").unwrap();
+        let after = store
+            .load("demo")
+            .unwrap()
+            .feature(&f.code)
+            .unwrap()
+            .clone();
+        assert_eq!(after.status, "Shipped");
+        assert_eq!(after.history.len(), 2, "no phantom transition for a rename");
+    }
+
     #[test]
     fn milestone_dependency_cycle_is_rejected() {
         let (store, _d) = temp_store();
