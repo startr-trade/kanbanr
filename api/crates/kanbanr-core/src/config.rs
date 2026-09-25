@@ -39,6 +39,10 @@ pub struct ProjectConfig {
     /// `graph::is_terminal_status` falls back to its built-in heuristic (Completed / no-op).
     #[serde(default)]
     pub terminal_states: Vec<String>,
+    /// How `kanbanr start` names a branch (FEAT-056): `{code}` and `{slug}`. Absent means the
+    /// default, and absent stays absent on disk so an existing config is not rewritten.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_pattern: Option<String>,
 }
 
 /// The default no-op (inert disposition) states.
@@ -86,6 +90,7 @@ pub fn togaf_preset(name: &str) -> ProjectConfig {
     }
 
     ProjectConfig {
+        branch_pattern: None,
         schema_version: CURRENT_SCHEMA_VERSION,
         name: name.to_string(),
         description: String::new(),
@@ -134,6 +139,7 @@ impl ProjectConfig {
         }
 
         ProjectConfig {
+            branch_pattern: None,
             schema_version: CURRENT_SCHEMA_VERSION,
             name: name.to_string(),
             description: String::new(),
@@ -154,6 +160,14 @@ impl ProjectConfig {
     /// Is this status an explicit terminal (end) state of the workflow?
     pub fn is_terminal(&self, status: &str) -> bool {
         self.terminal_states.iter().any(|s| s == status)
+    }
+
+    /// The branch pattern this project uses.
+    pub fn branch_pattern(&self) -> &str {
+        self.branch_pattern
+            .as_deref()
+            .filter(|p| !p.trim().is_empty())
+            .unwrap_or(crate::scm::DEFAULT_BRANCH_PATTERN)
     }
 
     pub fn has_status(&self, status: &str) -> bool {

@@ -1186,3 +1186,187 @@ fn cli_capture_report_and_defect_escape() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// The git guardrails end to end (FEAT-056), in a scratch repo: a commit with no reference is
+/// refused, one naming something that does not exist is refused, the recorded escape passes, the
+/// default branch is refused, and `kanbanr start` puts you where the rules expect you to be.
+#[test]
+fn cli_git_guardrails_in_a_scratch_repo() {
+    let base = std::env::temp_dir().join(format!("kanbanr-scm-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let git = |args: &[&str]| -> Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .output()
+            .expect("run git")
+    };
+    let exec = |args: &[&str]| -> Output {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    };
+    let run = |args: &[&str]| -> String {
+        let o = exec(args);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    assert!(git(&["init", "--initial-branch=main"]).status.success());
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Cart recovery",
+        "--milestone",
+        "MS-001",
+    ]);
+
+    // The message check is what the commit-msg hook runs.
+    let msg = base.join("msg.txt");
+    let check = |text: &str| -> Output {
+        std::fs::write(&msg, text).unwrap();
+        exec(&["git", "check-msg", msg.to_str().unwrap()])
+    };
+    let bare = check("feat: do a thing\n");
+    assert!(
+        !bare.status.success(),
+        "a commit with no reference is refused"
+    );
+    assert!(
+        String::from_utf8_lossy(&bare.stderr).contains("which item it serves"),
+        "{}",
+        String::from_utf8_lossy(&bare.stderr)
+    );
+    assert!(
+        check("feat: do a thing\n\nRefs: kanbanr:FEAT-001\n")
+            .status
+            .success()
+    );
+    let unknown = check("feat: do a thing\n\nRefs: kanbanr:FEAT-999\n");
+    assert!(!unknown.status.success());
+    assert!(
+        String::from_utf8_lossy(&unknown.stderr).contains("not an item on this board"),
+        "{}",
+        String::from_utf8_lossy(&unknown.stderr)
+    );
+    // A requirement that the item does not have is just as broken as a missing item.
+    let bad_req = check("feat: x\n\nRefs: kanbanr:FEAT-001/R-9\n");
+    assert!(!bad_req.status.success());
+    assert!(
+        String::from_utf8_lossy(&bad_req.stderr).contains("not a requirement"),
+        "{}",
+        String::from_utf8_lossy(&bad_req.stderr)
+    );
+    // Merges, and escapes that say why, pass. An escape with no reason does not.
+    assert!(
+        check("Merge branch 'feat/FEAT-001-cart'\n")
+            .status
+            .success()
+    );
+    assert!(
+        check("chore: rotate a key\n\n[no-ref] incident response, item filed after\n")
+            .status
+            .success()
+    );
+    assert!(!check("chore: rotate a key\n\n[no-ref]\n").status.success());
+    // Explaining the escape is not taking it: this commit has a reference and keeps it.
+    assert!(
+        check("docs: describe `[no-ref] <why>`\n\nRefs: kanbanr:FEAT-001\n")
+            .status
+            .success(),
+        "a referenced commit that mentions the escape is still a referenced commit"
+    );
+    assert!(
+        !check("docs: describe `[no-ref] <why>` in the guide\n")
+            .status
+            .success(),
+        "...and mentioning it does not excuse having no reference"
+    );
+
+    // The branch check refuses the default branch, and `start` moves you off it.
+    let on_main = exec(&["git", "check-branch"]);
+    assert!(!on_main.status.success());
+    assert!(
+        String::from_utf8_lossy(&on_main.stderr).contains("default branch"),
+        "{}",
+        String::from_utf8_lossy(&on_main.stderr)
+    );
+    let started = run(&["start", "FEAT-001"]);
+    assert!(started.contains("feat/FEAT-001-cart-recovery"), "{started}");
+    assert!(
+        exec(&["git", "check-branch"]).status.success(),
+        "a branch that names an item is fine"
+    );
+    let status = run(&["git", "status"]);
+    assert!(status.contains("item:    FEAT-001"), "{status}");
+
+    // A branch that belongs to nothing is refused; a spike is allowed to exist.
+    assert!(
+        git(&["checkout", "-q", "-b", "random-work"])
+            .status
+            .success()
+    );
+    assert!(!exec(&["git", "check-branch"]).status.success());
+    assert!(
+        git(&["checkout", "-q", "-b", "spike/try-it"])
+            .status
+            .success()
+    );
+    assert!(exec(&["git", "check-branch"]).status.success());
+    // ...but a spike cannot be finished: its output is a definition change, not merged code.
+    let spike = exec(&["finish"]);
+    assert!(!spike.status.success());
+    assert!(
+        String::from_utf8_lossy(&spike.stderr).contains("definition"),
+        "{}",
+        String::from_utf8_lossy(&spike.stderr)
+    );
+
+    // Installing hooks is idempotent and keeps a hook that was already there.
+    let hooks = work.join(".git").join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\nexit 0\n").unwrap();
+    let refused = exec(&["git", "install-hooks"]);
+    assert!(
+        !refused.status.success(),
+        "someone else's hook is not clobbered"
+    );
+    assert!(run(&["git", "install-hooks", "--force"]).contains("commit-msg"));
+    assert!(hooks.join("pre-commit.pre-kanbanr").exists());
+    assert!(run(&["git", "install-hooks"]).contains("installed"));
+    assert!(run(&["git", "uninstall-hooks"]).contains("removed 2"));
+
+    let _ = std::fs::remove_dir_all(&base);
+}
