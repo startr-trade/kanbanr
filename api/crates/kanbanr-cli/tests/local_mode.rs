@@ -1150,7 +1150,7 @@ fn cli_capture_report_and_defect_escape() {
     // Cycle time comes from the transition history, so it exists at all only because moves are
     // recorded; the same board with no history reports no number rather than a guess.
     assert!(
-        after.contains("cycle time (days):"),
+        after.contains("cycle time: p50 "),
         "history drives cycle time: {after}"
     );
 
@@ -1500,7 +1500,7 @@ fn cli_retro_reports_facts_and_writes_a_document() {
         doc.contains("## What we make of it"),
         "the narrative has its own section, so a reader can tell them apart: {doc}"
     );
-    assert!(doc.contains("cycle time (days):"), "{doc}");
+    assert!(doc.contains("cycle time: p50 "), "{doc}");
     // Written up, so no longer due.
     assert!(run(&["retro", "--due"]).contains("no retro is due"));
 
