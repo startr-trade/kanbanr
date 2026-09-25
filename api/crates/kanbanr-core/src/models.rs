@@ -111,6 +111,11 @@ pub struct FeatureItem {
     /// For a defect: what it cost and where it came from (FEAT-053).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub defect: Option<Defect>,
+    /// The item this was sliced out of (FEAT-054). A wave grows for three reasons — a defect, a
+    /// split, or newly discovered work — and only this one leaves no other trace, so a retro that
+    /// tried to infer it would be guessing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split_from: Option<String>,
     /// Every status change, appended (FEAT-053). Cycle time, time-in-status, WIP aging and rework
     /// are all derived from this; without it the board records where work IS but never how it got
     /// there.
@@ -500,6 +505,7 @@ impl FeatureItem {
             issue: self.issue.clone(),
             definition: self.definition.clone(),
             defect: self.defect.clone(),
+            split_from: self.split_from.clone(),
             history: self.history.clone(),
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
@@ -528,6 +534,7 @@ impl FeatureItem {
             issue: meta.issue,
             definition: meta.definition,
             defect: meta.defect,
+            split_from: meta.split_from,
             history: meta.history,
             created_at: meta.created_at,
             updated_at: meta.updated_at,
@@ -572,6 +579,8 @@ pub struct FeatureMeta {
     pub definition: Option<FeatureDefinition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub defect: Option<Defect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split_from: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<Transition>,
     pub created_at: String,

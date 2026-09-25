@@ -61,6 +61,15 @@ if [ -z "${KANBANR_PROJECT:-}" ] && [ ! -f ".kanbanr" ]; then
   exit 0
 fi
 
+# --- A wave that ended without a retro (FEAT-054). ---------------------------
+# This is time-sensitive in a way the staleness check is not: the moment a wave
+# ends is the only moment its lessons are still fresh. Checked before the
+# staleness rules, and subject to the same once-per-session-window guard below.
+RETRO_DUE=""
+if command -v kanbanr >/dev/null 2>&1; then
+  RETRO_DUE="$(kanbanr retro --due 2>/dev/null | grep -F 'has no retro' | head -n 3 || true)"
+fi
+
 # --- Locate the board (the kanbanr data repo). -------------------------------
 # `kanbanr where` applies the full resolution ($KANBANR_DATA_DIR, the nearest
 # `.kanbanr` marker's data_dir, else ./data). Without the CLI, fall back to
@@ -77,6 +86,18 @@ BOARD_EPOCH="$(git -C "$DATA_DIR" log -1 --format=%ct 2>/dev/null || true)"
 case "$BOARD_EPOCH" in ''|*[!0-9]*) exit 0 ;; esac
 NOW="$(date +%s 2>/dev/null || true)"
 case "$NOW" in ''|*[!0-9]*) exit 0 ;; esac
+
+# A finished wave with no retro is worth one reminder regardless of staleness.
+if [ -n "$RETRO_DUE" ]; then
+  SESSION="$(printf '%s' "$INPUT" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 | tr -cd 'A-Za-z0-9_-')"
+  STAMP="${TMPDIR:-/tmp}/kanbanr-retro-${SESSION:-nosession}"
+  if [ ! -f "$STAMP" ]; then
+    printf '%s' "$NOW" > "$STAMP" 2>/dev/null || true
+    WAVES="$(printf '%s' "$RETRO_DUE" | tr '\n' ' ' | sed 's/"/\\"/g')"
+    printf '{"decision":"block","reason":"kanbanr: a wave has finished and its retrospective is not written: %s Write it now, while it is fresh: run `kanbanr retro <MILESTONE> --write`, read the facts it recorded, and fill in the narrative section from them (it may explain the numbers, it may not contradict them). If it is genuinely not worth one, say so in one line and stop."}\n' "$WAVES"
+    exit 0
+  fi
+fi
 
 # Rule 1: the board was updated within the window -> nothing to do.
 AGE_SEC=$(( NOW - BOARD_EPOCH ))

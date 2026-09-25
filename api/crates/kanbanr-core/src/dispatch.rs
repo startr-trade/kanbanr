@@ -667,6 +667,28 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             ser(&store.set_defect(p, code, defect)?)
         }
 
+        // ---- wave retrospective (FEAT-054) ----
+        ("GET", ["projects", p, "retro"]) => {
+            let wave = crate::retro::Wave {
+                milestone: query_param(query, "milestone"),
+                since: query_param(query, "since"),
+                label: query_param(query, "label"),
+            };
+            ser(&crate::retro::run(
+                store,
+                p,
+                &wave,
+                query_param(query, "rev").as_deref(),
+            )?)
+        }
+        ("GET", ["projects", p, "retro", "due"]) => ser(&crate::retro::due(store, p)?),
+
+        // ---- an item sliced out of another (FEAT-054) ----
+        ("PUT", ["projects", p, "features", code, "split-from"]) => {
+            let parent = str_field(b, "parent");
+            ser(&store.set_split_from(p, code, parent)?)
+        }
+
         // ---- flow and quality report (FEAT-053) ----
         ("GET", ["projects", p, "report"]) => {
             let window = crate::report::Window {
@@ -749,6 +771,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "charter"] => "update project charter".into(),
         ["projects", _p, "features", c, "definition"] => format!("define feature {c}"),
         ["projects", _p, "features", c, "defect"] => format!("record defect details for {c}"),
+        ["projects", _p, "features", c, "split-from"] => format!("record what {c} was split from"),
         ["projects", _p, "mirror"] => "configure issue mirror".into(),
         ["projects", _p, "features"] => "add feature item".into(),
         ["projects", _p, "features", c] => format!("edit feature {c}"),

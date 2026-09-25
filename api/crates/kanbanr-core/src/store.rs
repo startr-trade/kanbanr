@@ -63,6 +63,12 @@ impl Store {
         Store { root: root.into() }
     }
 
+    /// The data folder this store owns. The activity and events logs live beside the projects
+    /// rather than inside them, so callers that read those need it.
+    pub fn data_dir(&self) -> &Path {
+        &self.root
+    }
+
     pub fn projects_dir(&self) -> PathBuf {
         self.root.join("projects")
     }
@@ -479,6 +485,7 @@ impl Store {
             issue: None,
             definition: None,
             defect: None,
+            split_from: None,
             history: Vec::new(),
             created_at: now.clone(),
             updated_at: now,
@@ -701,6 +708,28 @@ impl Store {
         let f = Self::set_defect_on(&mut project, &mut pending, code, defect)?;
         self.flush(id, &project, &pending)?;
         Ok(f)
+    }
+
+    /// Record that an item was sliced out of another (FEAT-054). `None` clears it.
+    pub fn set_split_from(
+        &self,
+        id: &str,
+        code: &str,
+        parent: Option<String>,
+    ) -> Result<FeatureItem> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        // A parent that does not exist would make the wave's scope-growth account fiction.
+        if let Some(parent) = parent.as_deref().filter(|p| !p.trim().is_empty()) {
+            project.feature(parent)?;
+        }
+        let feature = project.feature_mut(code)?;
+        feature.split_from = parent.filter(|p| !p.trim().is_empty());
+        feature.updated_at = now_rfc3339();
+        let updated = feature.clone();
+        pending.persist_features.insert(updated.code.clone());
+        self.flush(id, &project, &pending)?;
+        Ok(updated)
     }
 
     fn set_defect_on(
@@ -1333,6 +1362,7 @@ impl Store {
                     issue,
                     definition,
                     defect,
+                    split_from,
                 } => {
                     let source = source.map(|mut src| {
                         if src.key.trim().is_empty() {
@@ -1388,6 +1418,13 @@ impl Store {
                     if defect.is_some() {
                         Self::set_defect_on(&mut project, &mut pending, &f.code, defect)?;
                     }
+                    if let Some(parent) = split_from {
+                        let parent = resolve(&aliases, &parent);
+                        project.feature(&parent)?; // a parent that does not exist is fiction
+                        let feature = project.feature_mut(&f.code)?;
+                        feature.split_from = (!parent.trim().is_empty()).then_some(parent);
+                        pending.persist_features.insert(f.code.clone());
+                    }
                     if let Some(a) = &alias {
                         aliases.insert(a.clone(), f.code.clone());
                     }
@@ -1440,6 +1477,7 @@ impl Store {
                     issue,
                     definition,
                     defect,
+                    split_from,
                 } => {
                     if skipped.contains(&code) {
                         return Ok(skip("feature.edit", &code));
@@ -1492,6 +1530,13 @@ impl Store {
                     }
                     if defect.is_some() {
                         Self::set_defect_on(&mut project, &mut pending, &f.code, defect)?;
+                    }
+                    if let Some(parent) = split_from {
+                        let parent = resolve(&aliases, &parent);
+                        project.feature(&parent)?; // a parent that does not exist is fiction
+                        let feature = project.feature_mut(&f.code)?;
+                        feature.split_from = (!parent.trim().is_empty()).then_some(parent);
+                        pending.persist_features.insert(f.code.clone());
                     }
                     if source.is_some() || issue.is_some() {
                         let feature = project.feature_mut(&f.code)?;

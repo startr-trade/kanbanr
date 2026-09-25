@@ -49,6 +49,9 @@ pub enum EventKind {
     /// A dependent feature became ready because one of its dependencies completed. The
     /// cross-team handoff signal — `feature` is the now-ready dependent.
     DependentReady,
+    /// The last open item of a milestone reached a terminal status (FEAT-054). The moment a wave
+    /// ends is the only moment its lessons are still fresh, so this is what prompts the retro.
+    MilestoneCompleted,
 }
 
 /// A single notification event. Mirrors the shape of an activity entry, plus structured detail.
@@ -330,6 +333,35 @@ fn push_move_events(
         json!({ "status": status, "terminal": terminal }),
     ));
 
+    // A wave that just ended: every item of this feature's milestone is now terminal.
+    if terminal
+        && let Ok(loaded) = store.load_meta(project)
+        && let Some(milestone) = loaded
+            .features
+            .iter()
+            .find(|f| f.code == code)
+            .map(|f| f.milestone.clone())
+    {
+        let items: Vec<&crate::FeatureItem> = loaded
+            .features
+            .iter()
+            .filter(|f| f.milestone == milestone)
+            .collect();
+        if !items.is_empty()
+            && items
+                .iter()
+                .all(|f| graph::is_terminal_status(&loaded.config, &f.status))
+        {
+            events.push(Event::new(
+                project,
+                EventKind::MilestoneCompleted,
+                Some(code.to_string()),
+                format!("milestone {milestone} is complete — write the retro while it is fresh"),
+                json!({ "milestone": milestone, "items": items.len() }),
+            ));
+        }
+    }
+
     if !terminal {
         return;
     }
@@ -465,6 +497,49 @@ mod tests {
             dep.detail.get("unblocked_by").and_then(|v| v.as_str()),
             Some(graph::qualify("demo", &a.code).as_str())
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn finishing_the_last_item_completes_the_milestone() {
+        let dir = temp_dir();
+        let store = Store::new(dir.clone());
+        new_project(&store, "demo");
+        let a = store.add_feature("demo", "A", "", "M", None).unwrap();
+        let b = store.add_feature("demo", "B", "", "M", None).unwrap();
+
+        let finish = |code: &str| {
+            store.move_feature("demo", code, "Scheduled").unwrap();
+            let moved = store.move_feature("demo", code, "Completed").unwrap();
+            compute_events(
+                &store,
+                "POST",
+                &format!("/projects/demo/features/{code}/move"),
+                &serde_json::to_string(&moved).unwrap(),
+            )
+        };
+
+        // One item done, one still open: the wave has not ended.
+        let events = finish(&a.code);
+        assert!(
+            !events
+                .iter()
+                .any(|e| e.kind == EventKind::MilestoneCompleted),
+            "B is still open: {events:?}"
+        );
+
+        // The last one closes the wave, and the event says which milestone and how big it was.
+        let events = finish(&b.code);
+        let done = events
+            .iter()
+            .find(|e| e.kind == EventKind::MilestoneCompleted)
+            .expect("the wave ended");
+        assert_eq!(
+            done.detail.get("milestone").and_then(|v| v.as_str()),
+            Some("M")
+        );
+        assert_eq!(done.detail.get("items").and_then(|v| v.as_u64()), Some(2));
+        assert!(done.message.contains("retro"), "{}", done.message);
         std::fs::remove_dir_all(&dir).ok();
     }
 
