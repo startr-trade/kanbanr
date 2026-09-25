@@ -746,6 +746,77 @@ impl Store {
         Ok(updated)
     }
 
+    /// Move one test along the TDD lifecycle: planned → red → green (FEAT-051).
+    ///
+    /// Small and targeted on purpose: flipping a state must not require re-sending the whole
+    /// definition, or the prose gets rewritten (and garbled) on every red-to-green cycle.
+    /// `checked_rev` records the project revision the result was observed at, so a green that has
+    /// since gone stale can be told from one that still holds.
+    pub fn set_test_state(
+        &self,
+        id: &str,
+        code: &str,
+        requirement: &str,
+        test: &str,
+        state: crate::models::TestState,
+        checked_rev: Option<&str>,
+    ) -> Result<FeatureItem> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let f = Self::set_test_state_on(
+            &mut project,
+            &mut pending,
+            code,
+            requirement,
+            test,
+            state,
+            checked_rev,
+        )?;
+        self.flush(id, &project, &pending)?;
+        Ok(f)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn set_test_state_on(
+        project: &mut Project,
+        pending: &mut Pending,
+        code: &str,
+        requirement: &str,
+        test: &str,
+        state: crate::models::TestState,
+        checked_rev: Option<&str>,
+    ) -> Result<FeatureItem> {
+        let feature = project.feature_mut(code)?;
+        let definition = feature
+            .definition
+            .as_mut()
+            .ok_or_else(|| CoreError::Unsupported(format!("{code} has no definition")))?;
+        let requirement_entry = definition
+            .requirements
+            .iter_mut()
+            .find(|r| r.id == requirement)
+            .ok_or_else(|| {
+                CoreError::Unsupported(format!("{code} has no requirement '{requirement}'"))
+            })?;
+        let test_entry = requirement_entry
+            .tests
+            .iter_mut()
+            .find(|t| t.name == test)
+            .ok_or_else(|| {
+                CoreError::Unsupported(format!(
+                    "requirement {requirement} of {code} has no test '{test}'"
+                ))
+            })?;
+        test_entry.state = state;
+        if let Some(rev) = checked_rev {
+            test_entry.checked_rev = rev.trim().to_string();
+        }
+        feature.updated_at = now_rfc3339();
+        let updated = feature.clone();
+        pending.persist_features.insert(updated.code.clone());
+        Ok(updated)
+    }
+
     /// Record agreement to an item's definition as it currently stands (FEAT-048).
     pub fn approve_feature(&self, id: &str, code: &str, by: &str) -> Result<FeatureItem> {
         let mut project = self.load(id)?;
@@ -1410,6 +1481,32 @@ impl Store {
                         &to,
                     )?;
                     Ok(serde_json::json!({"op":"feature.move","code":f.code,"status":f.status}))
+                }
+                TestState {
+                    feature,
+                    requirement,
+                    test,
+                    state,
+                    checked_rev,
+                } => {
+                    if skipped.contains(&feature) {
+                        return Ok(skip("test.state", &feature));
+                    }
+                    let parsed = crate::models::TestState::parse(&state)
+                        .ok_or_else(|| CoreError::InvalidTaskState(state.clone()))?;
+                    let f = Self::set_test_state_on(
+                        &mut project,
+                        &mut pending,
+                        &resolve(&aliases, &feature),
+                        &requirement,
+                        &test,
+                        parsed,
+                        checked_rev.as_deref(),
+                    )?;
+                    Ok(serde_json::json!({
+                        "op": "test.state", "code": f.code, "requirement": requirement,
+                        "test": test, "state": state,
+                    }))
                 }
                 FeatureApprove { code, by } => {
                     let resolved = resolve(&aliases, &code);

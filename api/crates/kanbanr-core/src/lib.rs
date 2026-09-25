@@ -1082,6 +1082,87 @@ requirements:
     }
 
     #[test]
+    fn a_test_moves_planned_to_red_to_green_without_rewriting_the_definition() {
+        use crate::models::TestState;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition("demo", &f.code, Some(full_definition("Keep carts")))
+            .unwrap();
+        let statement_before = store
+            .load("demo")
+            .unwrap()
+            .feature(&f.code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap()
+            .statement;
+
+        for (state, rev) in [(TestState::Red, None), (TestState::Green, Some("abc1234"))] {
+            store
+                .set_test_state("demo", &f.code, "R-1", "core::does_the_thing", state, rev)
+                .unwrap();
+            let def = store
+                .load("demo")
+                .unwrap()
+                .feature(&f.code)
+                .unwrap()
+                .definition
+                .clone()
+                .unwrap();
+            assert_eq!(def.requirements[0].tests[0].state, state);
+            // Flipping evidence must not disturb the prose — that is the whole point of a
+            // targeted op rather than re-sending the block.
+            assert_eq!(def.statement, statement_before);
+        }
+        let def = store
+            .load("demo")
+            .unwrap()
+            .feature(&f.code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        assert_eq!(def.requirements[0].tests[0].checked_rev, "abc1234");
+
+        // Naming something that does not exist fails loudly rather than silently doing nothing.
+        assert!(
+            store
+                .set_test_state(
+                    "demo",
+                    &f.code,
+                    "R-9",
+                    "core::does_the_thing",
+                    TestState::Green,
+                    None
+                )
+                .is_err()
+        );
+        assert!(
+            store
+                .set_test_state("demo", &f.code, "R-1", "core::typo", TestState::Green, None)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn the_togaf_preset_is_a_phase_workflow_not_a_second_field() {
+        let config = crate::config::togaf_preset("arch");
+        assert_eq!(config.default_state, "Vision");
+        assert_eq!(config.terminal_states, vec!["Operations".to_string()]);
+        assert_eq!(config.displayed_states.len(), 6);
+        // Forward one phase and back one phase — rework is normal — but not a leap to the end.
+        assert!(config.transition_allowed("Vision", "Business Arch"));
+        assert!(config.transition_allowed("System Design", "Business Arch"));
+        assert!(!config.transition_allowed("Vision", "Operations"));
+        // Any phase can be dispositioned, and a no-op state reopens at the start.
+        assert!(config.transition_allowed("Implementation", "Out-of-Scope"));
+        assert!(config.transition_allowed("Out-of-Scope", "Vision"));
+    }
+
+    #[test]
     fn feature_requires_existing_milestone() {
         let (store, _d) = temp_store();
         new_project(&store, "demo");

@@ -96,6 +96,16 @@ pub enum BatchOp {
         #[serde(default)]
         unapproved: Option<String>,
     },
+    /// Move one test along the TDD lifecycle (FEAT-051): planned | red | green.
+    #[serde(rename = "test.state")]
+    TestState {
+        feature: String,
+        requirement: String,
+        test: String,
+        state: String,
+        #[serde(default)]
+        checked_rev: Option<String>,
+    },
     /// Record agreement to an item's definition as it stands (FEAT-048).
     #[serde(rename = "feature.approve")]
     FeatureApprove {

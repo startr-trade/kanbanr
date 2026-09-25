@@ -243,6 +243,14 @@ fn list_summaries(store: &Store) -> Result<Vec<ProjectSummary>> {
 // ---- config builders shared with the server's create-project / workflow routes --------------
 
 fn build_project_config(name: &str, body: &Value) -> ProjectConfig {
+    // An opt-in phase model, chosen at creation: `"workflow": "togaf"`.
+    if str_field(body, "workflow").as_deref() == Some("togaf") {
+        let mut config = crate::config::togaf_preset(name);
+        if let Some(d) = str_field(body, "description") {
+            config.description = d;
+        }
+        return config;
+    }
     let statuses = vec_field(body, "statuses");
     let displayed = vec_field(body, "displayed_states");
     let default_state = str_field(body, "default_state");
@@ -291,7 +299,9 @@ fn build_project_config(name: &str, body: &Value) -> ProjectConfig {
 }
 
 fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
-    let base = if bool_field(body, "defaults").unwrap_or(false) {
+    let base = if bool_field(body, "togaf").unwrap_or(false) {
+        Some(crate::config::togaf_preset(p))
+    } else if bool_field(body, "defaults").unwrap_or(false) {
         Some(ProjectConfig::default_for(p))
     } else {
         None
@@ -504,6 +514,23 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                 str_field(b, "unapproved").as_deref(),
             )?)
         }
+        ("PUT", ["projects", p, "features", code, "tests", requirement, test]) => {
+            // Path segments arrive percent-encoded: a test name is free text and routinely holds
+            // `::`, spaces or `/`, none of which survive a raw path match.
+            let (requirement, test) = (&percent_decode(requirement), &percent_decode(test));
+            let state = crate::models::TestState::parse(&str_field(b, "state").unwrap_or_default())
+                .ok_or_else(|| {
+                    CoreError::Unsupported("state must be planned, red or green".into())
+                })?;
+            ser(&store.set_test_state(
+                p,
+                code,
+                requirement.as_str(),
+                test.as_str(),
+                state,
+                str_field(b, "checked_rev").as_deref(),
+            )?)
+        }
         ("POST", ["projects", p, "features", code, "approve"]) => ser(&store.approve_feature(
             p,
             code,
@@ -699,6 +726,12 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "features", c] => format!("edit feature {c}"),
         ["projects", _p, "features", c, "move"] => format!("move feature {c}"),
         ["projects", _p, "features", c, "approve"] => format!("approve definition of {c}"),
+        ["projects", _p, "features", c, "tests", r, t] => {
+            format!(
+                "test {t} of {c}/{r} is now {}",
+                str_field(body.unwrap_or(&Value::Null), "state").unwrap_or_default()
+            )
+        }
         ["projects", _p, "features", c, "todos"] => format!("add todo-list to {c}"),
         ["projects", _p, "features", c, "todos", t, "tasks"] => format!("add task to {c}/{t}"),
         ["projects", _p, "features", c, "todos", t, "tasks", k] => {
