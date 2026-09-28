@@ -178,6 +178,65 @@ mod tests {
     /// FEAT-061: auto-completion is how most items actually finish. When it left no transition
     /// behind, every flow number was blind to the normal path and reported only on items someone
     /// had moved by hand.
+    /// FEAT-071: a board written before the status folders moved under `features/` must keep
+    /// working, and must come up to date on its next write without any file existing in neither
+    /// place along the way.
+    #[test]
+    fn a_board_with_status_folders_at_the_root_is_migrated_on_the_next_write() {
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        let f = store
+            .add_feature("demo", "Old", "# Old", "M", None)
+            .unwrap();
+        let project_dir = d.path.join("projects/demo");
+
+        // Put the board back into the old shape: status folders at the project root.
+        let from = project_dir.join("features").join("Planned");
+        let to = project_dir.join("Planned");
+        std::fs::rename(&from, &to).unwrap();
+        std::fs::remove_dir_all(project_dir.join("features")).unwrap();
+        assert!(to.join(format!("{}.yaml", f.code)).is_file());
+
+        // Readable as it stands — an old board keeps working untouched.
+        let loaded = store.load("demo").unwrap();
+        assert_eq!(loaded.features.len(), 1);
+        assert_eq!(loaded.feature(&f.code).unwrap().specification, "# Old");
+
+        // The next write brings it up to date, and the item is in exactly one place.
+        store
+            .set_feature_attrs(
+                "demo",
+                &f.code,
+                Some("chore".into()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert!(
+            project_dir
+                .join("features/Planned")
+                .join(format!("{}.yaml", f.code))
+                .is_file(),
+            "moved under features/"
+        );
+        assert!(
+            !to.exists(),
+            "and the root folder is gone, not left as a duplicate"
+        );
+        // The spec moved with it, and nothing was lost.
+        let loaded = store.load("demo").unwrap();
+        assert_eq!(loaded.features.len(), 1);
+        assert_eq!(loaded.feature(&f.code).unwrap().specification, "# Old");
+        assert_eq!(
+            loaded.feature(&f.code).unwrap().kind.as_deref(),
+            Some("chore")
+        );
+    }
+
     /// FEAT-069: an approval recorded in error had no remedy. Found the direct way — Claude
     /// approved an item on the user's behalf, which the method forbids, and nothing could undo it.
     #[test]
@@ -321,8 +380,9 @@ mod tests {
             .unwrap();
         let proj = d.path.join("projects").join("demo");
         // Default state is "Planned", so the files start in Planned/.
-        let planned_yaml = proj.join("Planned").join("FEAT-001.yaml");
+        let planned_yaml = proj.join("features").join("Planned").join("FEAT-001.yaml");
         let planned_spec = proj
+            .join("features")
             .join("Planned")
             .join("features-spec")
             .join("FEAT-001.md");
@@ -335,16 +395,27 @@ mod tests {
         store.move_feature("demo", &f.code, "Scheduled").unwrap();
         assert!(!planned_yaml.exists(), "old yaml removed after move");
         assert!(!planned_spec.exists(), "old spec removed after move");
-        assert!(proj.join("Scheduled").join("FEAT-001.yaml").is_file());
         assert!(
-            proj.join("Scheduled")
+            proj.join("features")
+                .join("Scheduled")
+                .join("FEAT-001.yaml")
+                .is_file()
+        );
+        assert!(
+            proj.join("features")
+                .join("Scheduled")
                 .join("features-spec")
                 .join("FEAT-001.md")
                 .is_file()
         );
 
         // The yaml metadata must NOT contain the specification (it lives in the .md).
-        let yaml = std::fs::read_to_string(proj.join("Scheduled").join("FEAT-001.yaml")).unwrap();
+        let yaml = std::fs::read_to_string(
+            proj.join("features")
+                .join("Scheduled")
+                .join("FEAT-001.yaml"),
+        )
+        .unwrap();
         assert!(
             !yaml.contains("specification"),
             "spec must not be in the yaml"
@@ -823,7 +894,7 @@ requirements:
             .unwrap();
         let path = d
             .path
-            .join("projects/demo/Planned")
+            .join("projects/demo/features/Planned")
             .join(format!("{}.yaml", f.code));
         let before = std::fs::read_to_string(&path).unwrap();
         assert!(!before.contains("definition"), "not written when absent");
@@ -1518,7 +1589,12 @@ requirements:
             .unwrap();
         store.move_feature("demo", &f.code, "Scheduled").unwrap();
         let proj = d.path.join("projects").join("demo");
-        assert!(proj.join("Scheduled").join("FEAT-001.yaml").is_file());
+        assert!(
+            proj.join("features")
+                .join("Scheduled")
+                .join("FEAT-001.yaml")
+                .is_file()
+        );
 
         // Rename the status the feature is in.
         store
@@ -1531,8 +1607,13 @@ requirements:
         assert!(p.config.displayed_states.iter().any(|s| s == "In Progress"));
         // Feature migrated: status field + on-disk folder moved, old folder gone.
         assert_eq!(p.feature(&f.code).unwrap().status, "In Progress");
-        assert!(proj.join("In Progress").join("FEAT-001.yaml").is_file());
-        assert!(!proj.join("Scheduled").exists());
+        assert!(
+            proj.join("features")
+                .join("In Progress")
+                .join("FEAT-001.yaml")
+                .is_file()
+        );
+        assert!(!proj.join("features").join("Scheduled").exists());
 
         // Renaming an unknown status errors; renaming onto an existing one is rejected.
         assert!(matches!(
@@ -1804,6 +1885,7 @@ requirements:
             .path
             .join("projects")
             .join("demo")
+            .join("features")
             .join("Planned")
             .join(format!("{}.yaml", f.code));
         let yaml = std::fs::read_to_string(&feat_yaml).unwrap();
@@ -1856,6 +1938,7 @@ requirements:
             .path
             .join("projects")
             .join("demo")
+            .join("features")
             .join("Planned")
             .join(format!("{}.yaml", f.code));
         let yaml = std::fs::read_to_string(&feat_yaml).unwrap();

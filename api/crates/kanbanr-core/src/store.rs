@@ -279,9 +279,10 @@ impl Store {
             }
         }
         std::fs::create_dir_all(self.milestones_dir(id))?;
-        // A folder per status so the on-disk layout mirrors the kanban columns from the start.
+        // A folder per status under `features/`, so the on-disk layout mirrors the kanban columns
+        // without those columns crowding the project root (FEAT-071).
         for status in &config.statuses {
-            std::fs::create_dir_all(self.project_dir(id).join(status))?;
+            std::fs::create_dir_all(self.features_dir(id).join(status))?;
         }
         self.save_config(id, &config)?;
         self.load(id)
@@ -295,19 +296,71 @@ impl Store {
         Self::write_yaml(&self.project_dir(id).join("config.yaml"), &config)
     }
 
-    /// Feature metadata yaml lives under `<status>/<code>.yaml` (status folder at project root).
-    fn feature_path(&self, id: &str, status: &str, code: &str) -> PathBuf {
-        self.project_dir(id)
-            .join(status)
-            .join(format!("{code}.yaml"))
+    /// Where the status folders live: `projects/<id>/features/` (FEAT-071).
+    ///
+    /// They used to sit at the project root, which put nine states of one entity beside entirely
+    /// different entities (`milestones/`, `docs/`, the log folders) and grew the root with the
+    /// workflow rather than with the model.
+    pub fn features_dir(&self, id: &str) -> PathBuf {
+        self.project_dir(id).join("features")
     }
-    /// Feature specification markdown lives under `<status>/features-spec/<code>.md`,
+
+    /// The status folder, wherever it currently is: under `features/`, or at the project root on a
+    /// board written before FEAT-071 and not yet written to since.
+    fn status_dir(&self, id: &str, status: &str) -> PathBuf {
+        let current = self.features_dir(id).join(status);
+        if current.is_dir() {
+            return current;
+        }
+        let legacy = self.project_dir(id).join(status);
+        if legacy.is_dir() {
+            return legacy;
+        }
+        current
+    }
+
+    /// Feature metadata yaml lives under `features/<status>/<code>.yaml`.
+    fn feature_path(&self, id: &str, status: &str, code: &str) -> PathBuf {
+        self.status_dir(id, status).join(format!("{code}.yaml"))
+    }
+    /// Feature specification markdown lives under `features/<status>/features-spec/<code>.md`,
     /// co-located within the status folder so it moves together with the metadata.
     fn spec_path(&self, id: &str, status: &str, code: &str) -> PathBuf {
-        self.project_dir(id)
-            .join(status)
+        self.status_dir(id, status)
             .join("features-spec")
             .join(format!("{code}.md"))
+    }
+
+    /// Move status folders from the project root into `features/` (FEAT-071). Runs before a write,
+    /// once: a folder is moved only after its destination is created, and a failure leaves the old
+    /// one in place, so no item file exists in neither location.
+    fn migrate_layout(&self, id: &str, statuses: &[String]) {
+        let root = self.project_dir(id);
+        let features = self.features_dir(id);
+        for status in statuses {
+            let legacy = root.join(status);
+            if !legacy.is_dir() {
+                continue;
+            }
+            let target = features.join(status);
+            if target.is_dir() {
+                // Both exist: merge the legacy files in rather than clobbering either side.
+                if let Ok(entries) = std::fs::read_dir(&legacy) {
+                    for entry in entries.flatten() {
+                        let to = target.join(entry.file_name());
+                        if !to.exists() {
+                            let _ = std::fs::rename(entry.path(), to);
+                        }
+                    }
+                }
+                let _ = std::fs::remove_dir_all(&legacy);
+                continue;
+            }
+            if std::fs::create_dir_all(&features).is_err() {
+                return;
+            }
+            let _ = std::fs::rename(&legacy, &target);
+        }
     }
     fn milestone_path(&self, id: &str, code: &str) -> PathBuf {
         self.milestones_dir(id).join(format!("{code}.yaml"))
@@ -348,7 +401,7 @@ impl Store {
     ) -> Result<Vec<(String, crate::models::FeatureMeta)>> {
         let mut out = Vec::new();
         for status in statuses {
-            let sdir = self.project_dir(id).join(status);
+            let sdir = self.status_dir(id, status);
             if !sdir.is_dir() {
                 continue;
             }
@@ -387,6 +440,9 @@ impl Store {
     /// move/rename left behind. Writes happen **before** removals so a status/code change never
     /// deletes the file it just wrote, and a stale location still occupied by a feature is skipped.
     fn flush(&self, id: &str, project: &Project, pending: &Pending) -> Result<()> {
+        // Bring an older board's layout up to date before writing into it (FEAT-071), so the two
+        // shapes never have to coexist in a single write.
+        self.migrate_layout(id, &project.config.statuses);
         for code in &pending.persist_features {
             if let Some(f) = project.features.iter().find(|f| &f.code == code) {
                 self.persist_feature(id, f)?;
@@ -2106,7 +2162,7 @@ impl Store {
             self.remove_feature_files(id, old, &f.code);
         }
         // Drop the now-emptied old status folder (only its migrated feature files lived there).
-        let _ = std::fs::remove_dir_all(self.project_dir(id).join(old));
+        let _ = std::fs::remove_dir_all(self.status_dir(id, old));
 
         // Migrated feature statuses changed on disk; refresh the index cache from the in-memory
         // (post-rename) project so it doesn't go stale (this op bypasses `flush`) (FEAT-033).
