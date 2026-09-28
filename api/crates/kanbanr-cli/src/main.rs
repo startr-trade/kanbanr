@@ -2753,9 +2753,39 @@ fn inline_message(command: &str) -> Option<String> {
     if quote != '"' && quote != '\'' {
         return Some(rest.split_whitespace().next()?.to_string());
     }
-    let body = &rest[1..];
-    let end = body.find(quote)?;
-    Some(body[..end].replace("\\n", "\n"))
+    closing_quoted(&rest[1..], quote).map(|m| m.replace("\\n", "\n"))
+}
+
+/// The text of a shell-quoted value up to its closing quote, or `None` when it never closes.
+///
+/// Inside double quotes the shell treats `\"` and `\\` as escapes, so an escaped quote is part of the
+/// text, not its end (FEAT-098). Stopping at the first quote character cut a message short at
+/// `\"Not started\"` and dropped the `Refs:` trailer after it, refusing a correct commit. Single
+/// quotes have no escapes in sh, so for them the next `'` is the end.
+///
+/// `None` is the safe answer: with no message the guard defers to the `commit-msg` hook, which reads
+/// the real one. It never decides on a message it could only read part of.
+fn closing_quoted(body: &str, quote: char) -> Option<String> {
+    if quote == '\'' {
+        return body.find('\'').map(|end| body[..end].to_string());
+    }
+    let mut out = String::new();
+    let mut chars = body.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some(next @ ('"' | '\\')) => out.push(next),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => return None,
+            },
+            '"' => return Some(out),
+            other => out.push(other),
+        }
+    }
+    None
 }
 
 /// The commit-msg hook. Every exit here is a decision about whether a commit happens, so each
@@ -5968,6 +5998,40 @@ Refs: kanbanr:FEAT-082/R-1""#;
         assert!(!skips(r#"git commit -m "we never use --no-verify here""#));
         // And a flag belonging to another command in the chain is not the commit's.
         assert!(!skips(r#"echo -n hi && git commit -m "x""#));
+    }
+
+    /// FEAT-098: a message quoting a phrase was cut at the escaped quote, losing its trailer.
+    #[test]
+    fn an_escaped_quote_does_not_end_the_message() {
+        let q = '"';
+        let cmd = format!(
+            "git commit -q -m {q}fix: shown under \\{q}Not started\\{q}, wrongly\n\nRefs: kanbanr:FEAT-097/R-1{q}"
+        );
+        let got = inline_message(&cmd).expect("the message must be found");
+        assert!(
+            got.contains("Refs: kanbanr:FEAT-097/R-1"),
+            "trailer lost: {got:?}"
+        );
+        assert!(
+            got.contains("under \"Not started\","),
+            "escape not unescaped: {got:?}"
+        );
+
+        // An escaped backslash before the closing quote does not escape the quote.
+        let cmd = format!("git commit -m {q}path C:\\\\{q}");
+        assert_eq!(inline_message(&cmd).as_deref(), Some("path C:\\"));
+
+        // Single quotes have no escapes in sh: the next quote ends it.
+        assert_eq!(
+            inline_message("git commit -m 'it\\'s'").as_deref(),
+            Some("it\\")
+        );
+
+        // A quote that never closes yields nothing rather than a guess.
+        assert_eq!(
+            inline_message(&format!("git commit -m {q}never closes")),
+            None
+        );
     }
 
     /// FEAT-079: a test named after the file that runs it could not be flipped green. The name is
