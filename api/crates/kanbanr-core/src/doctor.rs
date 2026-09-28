@@ -62,6 +62,7 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_charter(&charter, &project.id, &mut report);
         scan_definitions(project, &charter, &mut report);
         scan_decisions(store, project, &mut report);
+        scan_stray_folders(store, project, &mut report);
     }
     Ok(report)
 }
@@ -84,6 +85,7 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_charter(&charter, id, &mut report);
     scan_definitions(&project, &charter, &mut report);
     scan_decisions(store, &project, &mut report);
+    scan_stray_folders(store, &project, &mut report);
     Ok(report)
 }
 
@@ -398,6 +400,42 @@ fn scan_charter(charter: &crate::Charter, project: &str, report: &mut Report) {
 
 /// Run the three checks against one loaded project, given the universe of existing qualified
 /// feature ids (`existing`) for cross-project dependency resolution.
+/// A folder that looks like a status but is not one any more (FEAT-071). Renaming a status used to
+/// leave its directory behind, and an empty orphan can sit in a board for months — this one did.
+/// Reported, never removed: deleting a directory the tool does not understand is not doctor's job.
+fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
+    let known: BTreeSet<&str> = project.config.statuses.iter().map(String::as_str).collect();
+    const EXPECTED: [&str; 5] = ["features", "milestones", "docs", "activity", "events"];
+    let Ok(entries) = std::fs::read_dir(store.project_dir(&project.id)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if EXPECTED.contains(&name.as_str()) || name.starts_with('.') {
+            continue;
+        }
+        let items = std::fs::read_dir(entry.path())
+            .map(|d| d.flatten().count())
+            .unwrap_or(0);
+        let note = if known.contains(name.as_str()) {
+            "a status folder at the project root — it belongs under features/ and will move on the              next write"
+        } else if items == 0 {
+            "an empty folder matching no status and no part of the layout — most likely left by a              status rename"
+        } else {
+            "a folder matching no status and no part of the layout, and it is not empty"
+        };
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.id.clone(),
+            code: None,
+            message: format!("{name}/ is {note}"),
+        });
+    }
+}
+
 fn scan_project(project: &Project, existing: &BTreeSet<String>, report: &mut Report) {
     let pid = &project.id;
 
