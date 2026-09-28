@@ -157,6 +157,16 @@ jobs:
       # shellcheck catches the class of bug that has cost installers real debugging: a helper
       # whose `[ -n "$x" ] && printf …` returns 1 when the value is empty, aborting the caller
       # under `set -e` while `|| true` hides it.
+      # The binary must be able to make an HTTPS request (FEAT-088/R-6). `ureq` was declared with
+      # default-features = false and no tls feature, leaving it with no backend at all — every
+      # https:// call failed, and nothing noticed because no test used one.
+      - name: The CLI links a TLS backend
+        working-directory: api
+        run: |
+          set -eu
+          cargo tree -p kanbanr-cli -e normal -i rustls \
+            || { echo "::error::kanbanr-cli has no TLS backend — self-update and https webhooks cannot work" >&2; exit 1; }
+
       - name: shellcheck install.sh
         run: |
           sudo apt-get update && sudo apt-get install -y shellcheck

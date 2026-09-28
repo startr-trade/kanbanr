@@ -75,8 +75,37 @@ jobs:
         working-directory: web
         run: npm ci && npm run build
 
+      # Stamp the commit this release was built from, so `kanbanr --version` names the same SHA
+      # the GitHub release page shows (FEAT-088). Passed explicitly rather than left to build.rs's
+      # `git rev-parse`, because a shallow or exported checkout can leave that answering "unknown"
+      # and a provenance string that silently degrades is worse than none.
       - name: Build CLI
+        env:
+          KANBANR_GIT_SHA: ${{ github.sha }}
         run: cargo build --release -p kanbanr-cli --target ${{ matrix.target }}
+
+      # The binary must be able to say which build it is. A release whose binaries report "unknown"
+      # cannot be matched against the release page, which is the whole point of stamping it.
+      - name: The binary names the commit it was built from
+        shell: bash
+        run: |
+          set -eu
+          bin="target/${{ matrix.target }}/release/kanbanr"
+          [ -f "$bin" ] || bin="$bin.exe"
+          # Cross-built targets may not run here; only check when the host can execute it.
+          if "$bin" --version >/dev/null 2>&1; then
+            v="$("$bin" --version)"
+            echo "$v"
+            echo "$v" | grep -q "${GITHUB_SHA:0:12}" \
+              || { echo "::error::--version does not name this commit: $v" >&2; exit 1; }
+            case "$v" in
+              *dirty*|*unknown*)
+                echo "::error::a release binary must not report a dirty or unknown build: $v" >&2
+                exit 1 ;;
+            esac
+          else
+            echo "not executable on this runner (cross-build) — skipped"
+          fi
 
       # An assertion, not a note: a binary this small did not embed the monitor. FEAT-084/R-5 caps
       # it the other way, so the two together pin the size to "the SPA is in there, compressed".
@@ -112,6 +141,24 @@ jobs:
       # Staged as an artifact rather than pushed straight to the release, so ONE later job can see
       # every asset at once and checksum them together. SHA256SUMS computed per-leg would be five
       # files that each cover a fifth of the release, which is not what a verifier expects.
+      # `SHA256SUMS` covers the ARCHIVES, so it cannot answer "is the binary I am running the
+      # current one?" — the running binary is the extracted file, not the tarball. Publishing the
+      # binary's own hash keeps `self-update --check` cheap: two small files instead of a
+      # multi-megabyte download to answer a question (FEAT-088).
+      - name: Publish the binary's own checksum
+        shell: bash
+        run: |
+          set -eu
+          bin="target/${{ matrix.target }}/release/kanbanr"
+          [ -f "$bin" ] || bin="$bin.exe"
+          out="kanbanr-${{ github.ref_name }}-${{ matrix.target }}.bin.sha256"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$bin" | awk '{print $1}' > "$out"
+          else
+            shasum -a 256 "$bin" | awk '{print $1}' > "$out"
+          fi
+          cat "$out"
+
       - name: Stage the archive
         uses: actions/upload-artifact@v4
         with:
@@ -119,6 +166,7 @@ jobs:
           path: |
             api/kanbanr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
             api/kanbanr-${{ github.ref_name }}-${{ matrix.target }}.zip
+            api/kanbanr-${{ github.ref_name }}-${{ matrix.target }}.bin.sha256
           if-no-files-found: ignore
 
   # ---- 1b. The release itself: archives + installers + SHA256SUMS -----------
@@ -195,11 +243,16 @@ jobs:
           curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/install.sh" \
             | sh -s -- --version "${GITHUB_REF_NAME}" --dir /usr/local/bin
 
-      - name: It installed, and it is the version we just released
+      - name: It installed, and it names both the version and the commit
         run: |
           set -eu
-          kanbanr --version
-          kanbanr --version | grep -q "$(echo "${GITHUB_REF_NAME}" | sed 's/^v//')"
+          v="$(kanbanr --version)"
+          echo "$v"
+          echo "$v" | grep -q "$(echo "${GITHUB_REF_NAME}" | sed 's/^v//')" \
+            || { echo "::error::--version does not name the released version: $v" >&2; exit 1; }
+          # The same SHA the release page shows, so an installed binary can be matched against it.
+          echo "$v" | grep -q "${GITHUB_SHA:0:12}" \
+            || { echo "::error::--version does not name the released commit: $v" >&2; exit 1; }
 
       - name: The monitor is served with no --ui-dir and no build step
         run: |
