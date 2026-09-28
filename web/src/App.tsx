@@ -23,9 +23,12 @@ export default function App() {
             Portfolio
           </NavLink>
         </nav>
+        {/* Which project you are in — not a breadcrumb (FEAT-083). It used to lead with a
+            "Projects" link, which duplicated the one in the global nav two elements to its left:
+            the same word, twice, pointing at the same place. The global nav is the persistent way
+            up, so this says where you are and nothing more. */}
         {project && (
-          <nav className="crumbs">
-            <Link to="/">Projects</Link>
+          <nav className="crumbs" aria-label="Current project">
             <span className="sep">/</span>
             <Link to={`/p/${encodeURIComponent(project)}`} className="crumb-project">
               {project}

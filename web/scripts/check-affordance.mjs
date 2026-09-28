@@ -72,9 +72,73 @@ if (chip == null || btn == null) {
   }
 }
 
+/**
+ * Each destination is offered once (FEAT-083).
+ *
+ * The header grew two navigations at different times — a global nav and a breadcrumb — and both
+ * rendered a `Projects` link to `/`. Each was correct alone; nothing looked at the shell as one
+ * thing. Two identical labels pointing at one place ask the reader to find a difference that is not
+ * there.
+ */
+const shell = readFileSync(new URL("../src/App.tsx", import.meta.url).pathname, "utf8");
+
+/**
+ * Pull `{to, label}` out of every <Link>/<NavLink> in the shell.
+ *
+ * Deliberately a scanner rather than a regex: a JSX attribute routinely contains `>` inside a brace
+ * expression (`className={({ isActive }) => …}`), so the obvious `<Link[^>]*>` stops in the middle
+ * of the tag and matches nothing. The first version of this check did exactly that and passed
+ * happily against the very duplicate it was written for — caught only because ADR-0008 requires a
+ * check to be observed failing before it counts.
+ */
+function shellLinks(src) {
+  const found = [];
+  const tag = /<(Link|NavLink)\b/g;
+  let m;
+  while ((m = tag.exec(src)) !== null) {
+    // Walk to this tag's closing `>`, ignoring any inside braces, brackets or strings.
+    let i = m.index + m[0].length;
+    let depth = 0;
+    let quote = null;
+    for (; i < src.length; i++) {
+      const c = src[i];
+      if (quote) {
+        if (c === quote && src[i - 1] !== "\\") quote = null;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") quote = c;
+      else if (c === "{" || c === "[") depth++;
+      else if (c === "}" || c === "]") depth--;
+      else if (c === ">" && depth === 0) break;
+    }
+    const attrs = src.slice(m.index, i);
+    if (/\/\s*$/.test(attrs)) continue; // self-closing: no label
+    const to = attrs.match(/\bto=(?:"([^"]*)"|\{`([^`]*)`\}|\{"([^"]*)"\})/);
+    if (!to) continue;
+    const label = src.slice(i + 1, src.indexOf("<", i + 1)).replace(/\s+/g, " ").trim();
+    if (label) found.push({ to: (to[1] ?? to[2] ?? to[3]).trim(), label });
+  }
+  return found;
+}
+
+const seen = new Map();
+for (const { to, label } of shellLinks(shell)) {
+  const key = `${to}\u0000${label}`;
+  seen.set(key, (seen.get(key) ?? 0) + 1);
+}
+for (const [key, count] of seen) {
+  if (count > 1) {
+    const [to, label] = key.split("\u0000");
+    failures.push(
+      `App.tsx: "${label}" -> ${to} appears ${count} times in the app shell\n` +
+        `    Offer each destination once; two identical links invite a choice that does not exist (FEAT-083).`,
+    );
+  }
+}
+
 if (failures.length > 0) {
-  console.error(`check:ui — ${failures.length} element(s) that act but do not look like it:\n`);
+  console.error(`check:ui — ${failures.length} problem(s) with how the monitor presents itself:\n`);
   for (const f of failures) console.error(f + "\n");
   process.exit(1);
 }
-console.log(`check:ui — every action in ${root.split("/").slice(-2).join("/")} uses the control style.`);
+console.log(`check:ui — every action looks like a control, and every destination is offered once.`);
