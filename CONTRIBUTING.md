@@ -64,14 +64,79 @@ make serve          # builds the SPA + serves the read-only monitor on http://lo
 - Update the relevant docs ([docs/USER_GUIDE.md](docs/USER_GUIDE.md), [docs/DESIGN.md](docs/DESIGN.md),
   the [skill](skill/kanbanr/SKILL.md)) when you change a contract.
 
+## The bar: say why, and show it works
+
+kanbanr asks the same thing of a contribution that it asks of its own maintainer, because this
+project's board is the demonstration that the method works — a change that skipped it would break
+the demonstration. The bar is one sentence long:
+
+> **State why the change exists, and prove each requirement with a test that actually passed.**
+
+In practice, the PR template has a `Definition` block. Fill it in:
+
+- **A statement** — what the change gives whom, and why. One sentence.
+- **The six dimensions** — what / how / where / when / who / why, a line each.
+- **Requirements** in [EARS](https://alistairmavin.com/ears/) form (`WHEN … THE SYSTEM SHALL …`),
+  each with the test that proves it, named **exactly as your test runner prints it**.
+- **Leave what you don't know blank.** A blank is reported and can be filled; an invented answer
+  reads like rigour and is worse than nothing. If something is genuinely ambiguous, ask in the issue
+  rather than guessing.
+
+You do **not** need the board to do this. `kanbanr check --file definition.yaml` validates a
+definition on its own, which is what CI runs on your PR — no board access required.
+
+### A worked example
+
+A real change from this project's own history, end to end. The defect: ticking an item's last task
+auto-completed it without recording the status change, so cycle time was blind to the normal way
+items finish.
+
+```yaml
+statement: "A recorded transition for every status change, however it happened, so that flow numbers
+  describe the items that finished normally rather than only the ones moved by hand"
+goals: [G-2]
+zachman:
+  what: "The history entry an auto-completion did not write"
+  how: "The auto-complete branch appends the same Transition a manual move does"
+  where: "kanbanr-core/src/store.rs, set_task_state_on"
+  when: "Whenever the last open task of an item is completed"
+  who: "Anyone reading cycle time, which was blind to the normal path"
+  why: "Auto-completion is how most items reach a terminal status, so the measurement was missing
+    precisely where it mattered"
+requirements:
+  - kind: functional
+    text: "WHEN completing a task auto-completes its item, THE SYSTEM SHALL append the same
+      transition a manual move records."
+    tests:
+      - name: tests::auto_completion_records_the_move_like_any_other
+        kind: unit
+        state: green
+  - kind: functional
+    text: "WHEN a status is renamed, THE SYSTEM SHALL leave the items' histories unchanged."
+    tests:
+      - name: tests::auto_completion_records_the_move_like_any_other
+        kind: unit
+        state: green
+```
+
+The commit that followed carried `Refs: kanbanr:FEAT-061/R-1` in its trailer, and the test named
+above is the one that ran. That is the whole shape: a reason, a requirement, a test, a reference.
+
+> **A note on this project's own board.** Items created before the method was adopted have no
+> definition, and `kanbanr doctor` deliberately does not report them. The board reads as *adopted*,
+> not abandoned — everything from that point on meets the bar above.
+
 ## Commits & pull requests
 
 1. Fork, branch off `main` (`feature/short-name` or `fix/short-name`).
 2. Keep commits focused; write clear messages (imperative mood: "Add …", "Fix …").
-3. Optionally sign off your commits (`git commit -s`) to certify the
+3. Reference what the change serves in the commit trailer: `Refs: kanbanr:FEAT-046/R-2` if you know
+   the item, or describe it in the PR if you don't have the board.
+4. Optionally sign off your commits (`git commit -s`) to certify the
    [Developer Certificate of Origin](https://developercertificate.org/).
-4. Make sure `fmt` / `clippy` / `test` / web build are green.
-5. Open a PR; fill in the template; link any issue. Describe what changed and how you verified it.
+5. Make sure `fmt` / `clippy` / `test` / web build are green, and that every requirement in your
+   definition has a **green** test.
+6. Open a PR; fill in the template, definition included; link any issue.
 
 ## Licensing of contributions
 

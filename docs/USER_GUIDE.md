@@ -549,6 +549,25 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr mirror enable / disable / status / sync / link / pull` | one-way mirror of items to GitHub issues |
 | `kanbanr batch [--dry-run] [--file …]` | many changes in one call and one commit |
 
+## Housekeeping on the board repository
+
+The board is a git repository and every write is a commit, so an active project accumulates objects.
+Nothing breaks if you ignore this — git is designed for it — but two things are worth knowing.
+
+```bash
+cd "$(kanbanr where)"
+git count-objects -vH      # loose objects and pack size
+git gc                     # pack them; safe, and never touches your data
+```
+
+A board with a few hundred commits and no pack can hold a few thousand loose objects. `git gc`
+collapses that. It compacts storage and changes nothing about content — and it is **not** a way to
+reclaim anything: the logs keep every entry deliberately (one file per day under `activity/` and
+`events/`), because raw data is never discarded. What is bounded is what a *report* shows you.
+
+If you have a remote configured, an occasional `kanbanr sync` keeps the board pushed; `kanbanr
+where --json` tells you which folder is in use and why.
+
 ## 10. Troubleshooting
 
 - **`monitor not reachable` from `kanbanr open`** — start the view daemon first:

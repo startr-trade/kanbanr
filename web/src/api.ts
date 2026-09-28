@@ -52,6 +52,11 @@ export const api = {
     verdict(id, code, "approve", { by }, "approve"),
   unapprove: (id: string, code: string, by: string, reason: string) =>
     verdict(id, code, "unapprove", { by, reason }, "withdraw"),
+  /** The lessons that bear on one item — matched by the daemon on its labels, kind and goals. */
+  getLessonsFor: (id: string, code: string) =>
+    getJson<Lesson[]>(
+      `/api/projects/${encodeURIComponent(id)}/lessons?for=${encodeURIComponent(code)}`,
+    ),
   getLessons: (id: string) =>
     getJson<Lesson[]>(`/api/projects/${encodeURIComponent(id)}/lessons`),
   getGantt: (id: string) => getText(`/api/projects/${encodeURIComponent(id)}/gantt`),
