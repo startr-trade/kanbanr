@@ -2867,11 +2867,18 @@ fn run_check_branch(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     let Some(branch) = ctx.branch.clone() else {
         return Ok(()); // detached head: a rebase or a bisect, not a place for a policy argument
     };
+    // A commit completing a merge is how an item's branch is SUPPOSED to arrive (FEAT-094), and
+    // every branch rule below is about where new work is written — none of them applies to it.
+    // The first fix exempted only the default-branch check, and the very next check then refused
+    // the same commit because `master` names no item; running the recovery for real caught that.
+    if scm::merge_in_progress(&ctx.root) {
+        return Ok(());
+    }
     if branch.starts_with(kanbanr_core::scm::SPIKE_PREFIX) {
         return Ok(()); // a spike is allowed to exist; `finish` is where it is refused
     }
     // The commit completing a merge is how an item's branch is SUPPOSED to arrive here (FEAT-094).
-    if branch == scm::default_branch(&ctx.root) && !scm::merge_in_progress(&ctx.root) {
+    if branch == scm::default_branch(&ctx.root) {
         anyhow::bail!(
             "this is {branch}, the default branch. Work belongs on a branch for its item:\n\n    \
              kanbanr start <CODE>\n\n\
