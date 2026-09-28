@@ -29,11 +29,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Built on the OLDEST supported runner on purpose. A gnu target links the runner's
+          # glibc, and a binary linked against 2.39 (ubuntu-latest, 24.04) dies on Debian bookworm
+          # (2.36) with `libc.so.6: version GLIBC_2.39 not found`. 22.04 gives glibc 2.35, which
+          # runs on bookworm and everything newer. docker/Dockerfile learned this the hard way and
+          # says so in a comment; the release matrix walked straight into it anyway.
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
           # The installer maps Linux/aarch64 to this target, so it must exist or the one-liner
           # dies on every ARM box — and ARM Linux is no longer a corner (Pi, ARM cloud, WSL).
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
           - os: macos-latest
             target: aarch64-apple-darwin
@@ -169,8 +174,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Two distros because the script's dependencies differ: one with curl, one where it must
-        # fall back or install it. Both are glibc, matching the published linux target.
+        # Two distros, chosen to bracket the glibc range the gnu target has to satisfy:
+        # bookworm is 2.36 (the oldest we claim) and ubuntu 24.04 is 2.39 (current). A binary
+        # built on too new a runner passes the second and fails the first, which is the whole
+        # reason this job exists rather than trusting that a build implies a working install.
         image: ["debian:bookworm-slim", "ubuntu:24.04"]
     container: ${{ matrix.image }}
     steps:
