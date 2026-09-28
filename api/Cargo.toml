@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
+    # Standalone and published on its own: EARS classification and the ISO 25010 vocabulary have
+    # no kanbanr in them and are useful to anyone writing requirements down.
+    "crates/ears-classifier",
     "crates/kanbanr-core",
     "crates/kanbanr-cli",
     "crates/kanbanr-server",

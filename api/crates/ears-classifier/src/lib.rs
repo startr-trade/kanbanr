@@ -185,3 +185,25 @@ mod tests {
         assert_eq!(normalize_iso("Fastness"), None);
     }
 }
+
+/// The README's example is the crate's whole surface, so it is compiled and run rather than
+/// trusted — a README that does not work is worse than none, because it is believed.
+#[cfg(test)]
+mod readme {
+    use super::*;
+
+    #[test]
+    fn the_readme_example_is_true() {
+        assert_eq!(
+            classify("WHEN the archive is downloaded, THE SYSTEM SHALL verify its checksum"),
+            Some(Pattern::Event)
+        );
+        assert_eq!(classify("it should probably be fast"), None);
+        assert_eq!(
+            normalize_iso("performance-efficiency"),
+            Some("Performance Efficiency")
+        );
+        assert_eq!(normalize_iso("Speed"), None);
+        assert_eq!(ISO25010.len(), 9);
+    }
+}

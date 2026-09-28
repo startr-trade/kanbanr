@@ -7,6 +7,8 @@ repository.workspace = true
 description = "Engine for kanbanr: YAML/markdown store, dispatch router, git-backed commits, validation"
 
 [dependencies]
+# Extracted and published separately (FEAT-092): the EARS/ISO vocabulary is not kanbanr-specific.
+ears-classifier = { path = "../ears-classifier", version = "0.1.0" }
 serde.workspace = true
 serde_yaml.workspace = true
 serde_json.workspace = true

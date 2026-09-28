@@ -1,0 +1,17 @@
+[package]
+name = "ears-classifier"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Classify requirements by EARS pattern, and canonicalise ISO/IEC 25010 quality characteristics"
+repository = "https://github.com/startr-trade/kanbanr"
+documentation = "https://docs.rs/ears-classifier"
+readme = "README.md"
+keywords = ["requirements", "ears", "iso25010", "specification", "quality"]
+categories = ["development-tools", "text-processing"]
+
+[dependencies]
+# Only so `Pattern` can be serialised by a caller that reports classifications as JSON. Nothing
+# else is pulled in: this crate is text in, enum out.
+serde = { version = "1", features = ["derive"] }

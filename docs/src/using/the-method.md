@@ -24,7 +24,7 @@ kanbanr feature define FEAT-001 --file def.yaml            # write it
 kanbanr check FEAT-001                                     # what it has not said, and cannot show
 ```
 
-A definition states the item in one sentence, links a goal, answers the six Zachman dimensions
+A definition states the item in one sentence, links a goal, answers the six interrogatives — what, how, where, when, who, why —
 (what / how / where / when / who / why) in a line each, and carries **requirements** in
 [EARS](https://alistairmavin.com/ears/) form with the tests that will prove them. Quality
 requirements additionally carry an ISO/IEC 25010 characteristic and a measured scenario whose
@@ -90,3 +90,28 @@ stamped with the project revision it saw. Name a test exactly as your runner pri
 an older revision is reported as **stale evidence**, not as proof; re-running the suite refreshes
 it. Mark a check a person performs as `kind: manual` — it is exempt from the rot sweep, so use it
 only when a person really did it.
+
+## On Zachman and TOGAF
+
+kanbanr borrows from both without adopting either, and it is worth being precise about which half.
+
+**Zachman: the columns, not the rows.** The six dimensions an item answers — what, how, where,
+when, who, why — are Zachman's six interrogatives, and `kanbanr trace <CODE> --zachman` reports
+which of them nothing in scope addresses. Zachman's *rows* — the perspective layers from Executive
+down to Technician — are **not** modelled. There is a `layer` on an ADR (`conceptual` / `logical` /
+`physical`) which gestures at the same idea, but it is three values on a decision record, not the
+framework's six perspectives. So: a completeness checklist taken from Zachman, not an
+implementation of the Zachman Framework, and nothing here obliges you to think in one.
+
+**TOGAF: an optional workflow, and nothing else.** `kanbanr project init <name> --workflow togaf`
+gives a board whose columns are the phases — Vision → Business Arch → System Design →
+Implementation → Migration → Operations — with forward and backward transitions, because rework is
+normal. **The phase is the status**; there is no second field to keep in step with it, which is the
+whole reason it is a workflow preset rather than an attribute.
+
+It is opt-in because a phase model is a real commitment. The default workflow stays a plain
+backlog → scheduled → done, and a project that never asks for TOGAF never sees it.
+
+Neither is recommended. The bar kanbanr actually holds you to is the one above: state why, link a
+goal, carry requirements, show evidence. The two frameworks supply a vocabulary for the *why* and
+an optional shape for the *when*, and a project that uses neither passes every check.

@@ -149,7 +149,9 @@ and then rejected.
 
 1. a **statement** — one sentence: what, for whom, why;
 2. a **goal link** — the charter goal id this serves (`kanbanr charter show`);
-3. the **six dimensions** — what / how / where / when / who / why, one line each;
+3. the **six dimensions** — what / how / where / when / who / why, one line each
+   (Zachman's interrogatives, used as a completeness check; its perspective rows are not
+   modelled, so nothing here asks you to think in the framework);
 4. at least one **requirement**;
 5. **test evidence** for every requirement.
 
@@ -549,6 +551,13 @@ kanbanr config displayed-states Planned,Scheduled,Completed
 kanbanr config default-state Planned
 kanbanr config no-op-states "No Action,Not Applicable,Out-of-Scope"   # inert dispositions
 kanbanr config workflow --defaults | (--statuses … --transitions "A>B" --default-state … --displayed-states … --no-op-states …)
+
+An optional **TOGAF phase workflow** exists for projects that want architecture phases as board
+columns — `kanbanr project init <name> --workflow togaf` gives Vision → Business Arch → System
+Design → Implementation → Migration → Operations, forward and back. The phase IS the status; there
+is no second field. Offer it only if the user asks for phases: it is a real commitment, the default
+backlog → scheduled → done suits most work, and it cannot be changed casually once items are in
+flight.
 ```
 
 Feature items (a milestone is REQUIRED; code auto-generates):
