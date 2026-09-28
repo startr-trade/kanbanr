@@ -268,6 +268,39 @@ fn review_and_approve_through_the_daemon() {
     .send_string(r#"{"by": "reviewed in the monitor"}"#)
     .expect("approve through the daemon");
 
+    // FEAT-059 applies to this path too: the event is in the commit, and the board repo is clean
+    // after the write. The daemon used to leave the log for some later write to sweep up.
+    let board_git = |args: &[&str]| -> String {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&data)
+            .output()
+            .expect("run git");
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+    assert_eq!(
+        board_git(&["status", "--porcelain"]).trim(),
+        "",
+        "the daemon leaves the board repo clean, like the CLI does"
+    );
+    // An approval produces no event — only adds and moves do — so the ordering is exercised with a
+    // move, which is the operation that writes the log.
+    ureq::post(&format!(
+        "{url}/api/write/projects/demo/features/FEAT-001/move"
+    ))
+    .set("content-type", "application/json")
+    .send_string(r#"{"to": "Scheduled"}"#)
+    .expect("move through the daemon");
+    assert_eq!(
+        board_git(&["status", "--porcelain"]).trim(),
+        "",
+        "still clean after a write that does produce an event"
+    );
+    assert!(
+        board_git(&["show", "--name-only", "--format=", "HEAD"]).contains("projects/demo/events/"),
+        "the event is part of the commit the daemon made, not left for a later one"
+    );
+
     // Gone from the queue, and the CLI agrees it is approved.
     assert_eq!(get(&format!("{url}/api/projects/demo/review")).trim(), "[]");
     let check = Command::new(cli())
