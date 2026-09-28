@@ -24,6 +24,10 @@ fn core_err(e: kanbanr_core::CoreError) -> (StatusCode, String) {
         | TaskNotFound(_, _)
         | TodoListNotFound(_, _)
         | DocNotFound(_) => StatusCode::NOT_FOUND,
+        // The board is newer than this binary: the daemon cannot serve it correctly and says so
+        // rather than returning an empty board (FEAT-072). 409 is the honest code — the request is
+        // fine, the server's state is what conflicts.
+        SchemaTooNew { .. } => StatusCode::CONFLICT,
         ProjectExists(_)
         | FeatureExists(_)
         | MilestoneExists(_)

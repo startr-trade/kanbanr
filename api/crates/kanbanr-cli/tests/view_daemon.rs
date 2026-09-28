@@ -135,6 +135,7 @@ fn view_daemon_serves_local_data_without_auth() {
 /// Reviewing and approving through the daemon (FEAT-067). The approval gate's premise is that
 /// agreeing must be cheap, so the monitor needs the same action the CLI has — through the same
 /// route, with the same meaning, and only when the daemon was told to accept writes.
+/// Reviewing and approving through the daemon (FEAT-067).
 #[test]
 fn review_and_approve_through_the_daemon() {
     let base =
@@ -395,6 +396,57 @@ fn a_rebuilt_ui_is_served_without_restarting_the_daemon() {
     assert!(
         during.contains("second.js"),
         "expected the last good copy: {during}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-072: the daemon reports the schema it understands, so a monitor that receives an empty board
+/// can compare it with the board's own version and say "upgrade" — rather than leaving the reader to
+/// conclude their data is gone, which is what happened.
+#[test]
+fn daemon_reports_the_schema_version_it_understands() {
+    let base =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("schema-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let data = base.join("data");
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+
+    let port = free_port();
+    let child = Command::new(cli())
+        .args(["serve", "--bind", &format!("127.0.0.1:{port}")])
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &data)
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let _daemon = Daemon(child);
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if Instant::now() > deadline {
+            panic!("daemon did not become ready");
+        }
+        match ureq::get(&format!("{url}/api/meta")).call() {
+            Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+
+    let meta = ureq::get(&format!("{url}/api/meta"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&meta).unwrap();
+    let reported = parsed["schema_version"].as_u64().expect("a schema version");
+    assert!(reported >= 2, "the layout changes bumped it past 1: {meta}");
+    // It must be what this build actually understands, not a literal that can drift from it.
+    assert_eq!(
+        reported,
+        u64::from(kanbanr_core::config::CURRENT_SCHEMA_VERSION),
+        "the daemon reports the constant, so the two cannot disagree"
     );
 
     let _ = std::fs::remove_dir_all(&base);

@@ -150,7 +150,7 @@ impl Store {
         if !self.project_exists(id) {
             return Err(CoreError::ProjectNotFound(id.to_string()));
         }
-        let config: ProjectConfig = Self::read_yaml(&self.project_dir(id).join("config.yaml"))?;
+        let config = self.read_config(id)?;
         let features = self.read_features(id, &config.statuses)?;
         let milestones = Self::read_dir_yaml(&self.milestones_dir(id))?;
         Ok(Project {
@@ -159,6 +159,23 @@ impl Store {
             features,
             milestones,
         })
+    }
+
+    /// Read a project's config, refusing a board written by a newer kanbanr (FEAT-072).
+    ///
+    /// The refusal is the feature. An older reader cannot find files a newer layout has moved, so
+    /// it reports an empty board — and an empty board reads as lost data, which is how this was
+    /// found. Failing by name beats failing silently. The other direction stays permissive: an
+    /// older board is read as it is and brought up to date on its next write.
+    fn read_config(&self, id: &str) -> Result<ProjectConfig> {
+        let config: ProjectConfig = Self::read_yaml(&self.project_dir(id).join("config.yaml"))?;
+        if config.schema_version > crate::config::CURRENT_SCHEMA_VERSION {
+            return Err(CoreError::SchemaTooNew {
+                found: config.schema_version,
+                understood: crate::config::CURRENT_SCHEMA_VERSION,
+            });
+        }
+        Ok(config)
     }
 
     /// Load a project's **metadata only**: every feature has `specification: String::new()` and no
@@ -170,7 +187,7 @@ impl Store {
         if !self.project_exists(id) {
             return Err(CoreError::ProjectNotFound(id.to_string()));
         }
-        let config: ProjectConfig = Self::read_yaml(&self.project_dir(id).join("config.yaml"))?;
+        let config = self.read_config(id)?;
         let features = self
             .read_feature_metas(id, &config.statuses)?
             .into_iter()
@@ -192,7 +209,7 @@ impl Store {
         if !self.project_exists(id) {
             return Err(CoreError::ProjectNotFound(id.to_string()));
         }
-        let config: ProjectConfig = Self::read_yaml(&self.project_dir(id).join("config.yaml"))?;
+        let config = self.read_config(id)?;
         for (status, meta) in self.read_feature_metas(id, &config.statuses)? {
             if meta.code == code {
                 let spec_path = self.spec_path(id, &status, code);

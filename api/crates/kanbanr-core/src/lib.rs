@@ -178,6 +178,64 @@ mod tests {
     /// FEAT-061: auto-completion is how most items actually finish. When it left no transition
     /// behind, every flow number was blind to the normal path and reported only on items someone
     /// had moved by hand.
+    /// FEAT-072: an older binary reading a newer board found no files and reported an empty board.
+    /// The user saw a dashboard with nothing on it — including no Completed items — and reasonably
+    /// read it as data loss. Refusing by name is the whole point.
+    #[test]
+    fn a_board_newer_than_the_reader_is_refused_by_name() {
+        use crate::config::CURRENT_SCHEMA_VERSION;
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        store
+            .add_feature("demo", "Work", "# Work", "M", None)
+            .unwrap();
+        let config_path = d.path.join("projects/demo/config.yaml");
+
+        // A board this build wrote: readable, and stamped with the current version.
+        let config = store.load("demo").unwrap().config;
+        assert_eq!(config.schema_version, CURRENT_SCHEMA_VERSION);
+
+        // A board from the future: refused, naming both versions and the remedy.
+        let raw = std::fs::read_to_string(&config_path).unwrap();
+        std::fs::write(
+            &config_path,
+            raw.replace(
+                &format!("schema_version: {CURRENT_SCHEMA_VERSION}"),
+                &format!("schema_version: {}", CURRENT_SCHEMA_VERSION + 7),
+            ),
+        )
+        .unwrap();
+        let err = store.load("demo").unwrap_err();
+        assert!(
+            matches!(err, CoreError::SchemaTooNew { found, understood }
+                if found == CURRENT_SCHEMA_VERSION + 7 && understood == CURRENT_SCHEMA_VERSION),
+            "{err:?}"
+        );
+        let message = err.to_string();
+        assert!(message.contains("newer kanbanr"), "{message}");
+        assert!(
+            message.contains("restart anything long-running"),
+            "{message}"
+        );
+        // Every loader shares the guard — a metadata-only read must not slip past it.
+        assert!(store.load_meta("demo").is_err());
+        assert!(store.feature_spec("demo", "FEAT-001").is_err());
+
+        // A board from the past is read as it stands: that direction is handled by reading both
+        // shapes, and refusing it would break every upgrade.
+        std::fs::write(
+            &config_path,
+            std::fs::read_to_string(&config_path).unwrap().replace(
+                &format!("schema_version: {}", CURRENT_SCHEMA_VERSION + 7),
+                "schema_version: 0",
+            ),
+        )
+        .unwrap();
+        let old = store.load("demo").unwrap();
+        assert_eq!(old.features.len(), 1, "an older board still reads");
+        assert_eq!(old.config.schema_version, 0);
+    }
+
     /// FEAT-071: a board written before the status folders moved under `features/` must keep
     /// working, and must come up to date on its next write without any file existing in neither
     /// place along the way.

@@ -7,7 +7,17 @@ use std::collections::BTreeMap;
 /// The schema version stamped onto freshly-written project configs. A legacy config that predates
 /// the field deserializes to `schema_version = 0` (via `#[serde(default)]`), letting `doctor` flag
 /// it as outdated. Bump this when the on-disk config shape changes in a way worth surfacing.
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+/// The on-disk schema this binary writes and understands.
+///
+/// **Bump this whenever the storage layout changes** — not when a field is added. A new optional
+/// field is readable by an older binary, which simply ignores it; a moved file is not, and an older
+/// reader that cannot find it reports an empty board rather than an error. That happened: FEAT-071
+/// moved the status folders under `features/` and FEAT-066 split the logs into day files, and a
+/// daemon started before those changes served a board with zero items, which reads as data loss.
+///
+/// History: 1 — status folders at the project root, single-file logs. 2 — status folders under
+/// `features/`, one log file per day.
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {

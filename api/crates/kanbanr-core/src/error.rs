@@ -4,6 +4,16 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
+    /// The board was written by a newer kanbanr than this one (FEAT-072). Refusing is the point:
+    /// a reader that cannot find the files reports an empty board, and an empty board reads as lost
+    /// data. Saying so names the remedy instead.
+    #[error(
+        "this board was written by a newer kanbanr (schema {found}; this build understands \
+         {understood}) — upgrade the binary (`cargo install --path api/crates/kanbanr-cli`) and \
+         restart anything long-running, such as `kanbanr serve`"
+    )]
+    SchemaTooNew { found: u32, understood: u32 },
+
     #[error("project '{0}' not found")]
     ProjectNotFound(String),
     #[error("project '{0}' already exists")]
