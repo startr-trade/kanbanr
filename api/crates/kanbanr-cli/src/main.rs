@@ -62,6 +62,10 @@ enum Command {
         /// settings once, and act only in kanbanr-tracked folders).
         #[arg(long)]
         no_hooks: bool,
+        /// Repoint a folder that already names a different board. Without it, init refuses rather
+        /// than overwriting the only pointer this project has to its board (FEAT-085).
+        #[arg(long)]
+        force: bool,
     },
     /// Set the commit identity (name + email) on this data repo.
     Identity {
@@ -1082,6 +1086,7 @@ fn run_init(
     author: Option<String>,
     email: Option<String>,
     no_hooks: bool,
+    force: bool,
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
     let (dir, record) = choose_init_data_dir(cli, &cwd)?;
@@ -1128,13 +1133,49 @@ fn run_init(
         }
         Err(e) => return Err(e),
     }
-    project::write_marker(
-        &cwd,
-        &Marker {
-            project: Some(proj.clone()),
-            data_dir: record.then(|| marker_path(&dir, &cwd)),
-        },
-    )?;
+    // The marker is the ONLY pointer from this folder to its board, so it is data, not scratch
+    // state (FEAT-085). Overwriting it makes a full board read as empty — the failure that cost
+    // this repository its own pointer, recoverable only because FEAT-073 had made the file tracked.
+    let wanted = Marker {
+        project: Some(proj.clone()),
+        data_dir: record.then(|| marker_path(&dir, &cwd)),
+    };
+    let existing = std::fs::read_to_string(cwd.join(project::MARKER_FILE))
+        .ok()
+        .map(|c| Marker::parse(&c));
+    if let Some(current) = &existing
+        && !force
+        && (current.project != wanted.project || current.data_dir != wanted.data_dir)
+    {
+        let shown = |m: &Marker| {
+            format!(
+                "project {}, board {}",
+                m.project.clone().unwrap_or_else(|| "<none>".into()),
+                m.data_dir
+                    .clone()
+                    .unwrap_or_else(|| "<not recorded>".into())
+            )
+        };
+        anyhow::bail!(
+            "this folder already names a board, and init would replace it:\n  \
+             now:      {}\n  \
+             would be: {}\n\
+             Nothing was changed. To switch project within the SAME board, use \
+             `kanbanr project use <name>`; to repoint deliberately, re-run with `--force`.",
+            shown(current),
+            shown(&wanted)
+        );
+    }
+    let replaced =
+        existing.filter(|c| c.project != wanted.project || c.data_dir != wanted.data_dir);
+    project::write_marker(&cwd, &wanted)?;
+    if let Some(old) = replaced {
+        println!(
+            "! replaced this folder's previous pointer (project {}, board {})",
+            old.project.unwrap_or_else(|| "<none>".into()),
+            old.data_dir.unwrap_or_else(|| "<not recorded>".into())
+        );
+    }
     println!("✓ selected '{proj}' here (.kanbanr)");
     if !no_hooks {
         report_hooks_install();
@@ -2482,7 +2523,11 @@ fn run_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
             }})
         );
     };
-    if command.contains("--no-verify") || command.contains(" -n ") {
+    // Tokens of the commit invocation, not substrings of the whole line (FEAT-082, again). The
+    // first fix scoped `inline_message` and left this check beside it still scanning `command`, so
+    // a message *explaining* the shell idiom was read as passing the flag and the commit was
+    // refused. One instance of a bug fixed, its twin two lines above left standing.
+    if skips_hooks(command) {
         deny(
             "This skips the commit hooks, which is how a reference gets lost. If the commit \
              genuinely serves no board item, say so on the record instead: put `[no-ref] <why>` \
@@ -2572,6 +2617,62 @@ fn commit_invocation(command: &str) -> Option<&str> {
         }
         false
     })
+}
+
+/// Does this command line ask git to skip the commit hooks?
+///
+/// Named rather than inline so the test exercises **this** and not a copy of it: the first version
+/// of that test carried its own reimplementation, passed against the production code being wrong,
+/// and proved nothing (ADR-0008, and L-24 for the second time).
+fn skips_hooks(command: &str) -> bool {
+    commit_invocation(command).is_some_and(|part| {
+        unquoted_tokens(part)
+            .iter()
+            .any(|t| t == "--no-verify" || t == "-n")
+    })
+}
+
+/// The tokens of a command line that sit **outside** any quoted span.
+///
+/// Whitespace-splitting alone is not enough (FEAT-082): a commit whose MESSAGE explains a shell
+/// idiom puts that idiom's text in the token stream, so a message about `[ -n "$x" ]` looked
+/// exactly like passing the flag. Flags live outside quotes; message text lives inside them. This
+/// is a heuristic, not a shell parser — and it only ever decides whether to *inspect* a command,
+/// which is the direction where being wrong is cheap.
+fn unquoted_tokens(part: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut prev = '\0';
+    for c in part.chars() {
+        match quote {
+            Some(q) => {
+                if c == q && prev != '\\' {
+                    quote = None;
+                }
+            }
+            None => {
+                if c == '"' || c == '\'' {
+                    quote = Some(c);
+                    // A quoted value ends the token it was attached to (`-m"x"`, `--message=…`).
+                    if !current.is_empty() {
+                        tokens.push(std::mem::take(&mut current));
+                    }
+                } else if c.is_whitespace() {
+                    if !current.is_empty() {
+                        tokens.push(std::mem::take(&mut current));
+                    }
+                } else {
+                    current.push(c);
+                }
+            }
+        }
+        prev = c;
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
 }
 
 /// The message of a `git commit -m "…"`, when it is written inline.
@@ -3890,6 +3991,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             author,
             email,
             no_hooks,
+            force,
         } => {
             return run_init(
                 cli,
@@ -3898,6 +4000,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 author.clone(),
                 email.clone(),
                 *no_hooks,
+                *force,
             );
         }
         Command::Hooks(cmd) => return run_hooks(cli, cmd),
@@ -5751,6 +5854,25 @@ Refs: kanbanr:FEAT-082/R-1""#;
             inline_message(r#"echo -m "not this" && git commit -m "but this""#).as_deref(),
             Some("but this")
         );
+    }
+
+    /// FEAT-082, second half. The first fix scoped `inline_message` and left the hook-skipping
+    /// check beside it scanning the whole command line, so a commit message *explaining* the shell
+    /// idiom `[ -n "$x" ]` was read as passing that flag, and the commit was refused. Fixing one
+    /// instance of a bug while its twin sits two lines above is its own lesson.
+    #[test]
+    fn skipping_hooks_is_detected_as_a_flag_not_as_prose() {
+        let skips = skips_hooks;
+        // Actually skipping them.
+        assert!(skips("git commit --no-verify -m 'x'"));
+        assert!(skips("git commit -n -m 'x'"));
+        // Merely talking about them.
+        assert!(!skips(
+            r#"git commit -m "because [ -n \"$x\" ] returns 1 when the value is empty""#
+        ));
+        assert!(!skips(r#"git commit -m "we never use --no-verify here""#));
+        // And a flag belonging to another command in the chain is not the commit's.
+        assert!(!skips(r#"echo -n hi && git commit -m "x""#));
     }
 
     /// FEAT-079: a test named after the file that runs it could not be flipped green. The name is

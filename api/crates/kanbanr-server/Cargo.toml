@@ -24,8 +24,14 @@ notify = "6"
 # advisory write lock the CLI uses, so concurrent writers (CLI + daemon) never interleave a
 # mutate→commit sequence on the same data dir. git itself stays in kanbanr-core (commit + push).
 fs2 = "0.4"
+# The monitor is baked into the binary (FEAT-084): gzipped at build time, decompressed once at
+# startup. flate2 is the only new runtime dependency and is already in the tree via git2's zlib.
+flate2 = "1"
 # Auth/JWT remains absent: the daemon binds localhost and has no accounts, consistent with the
 # read-only monitor. git2 is NOT a direct dep — commit/push go through kanbanr-core::git.
+
+[build-dependencies]
+flate2 = "1"
 
 [dev-dependencies]
 # FEAT-034 write-path tests inspect the data repo's commit log directly (matches kanbanr-core).

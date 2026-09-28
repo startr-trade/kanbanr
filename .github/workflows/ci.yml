@@ -139,3 +139,57 @@ jobs:
       # the monitor renders them with.
       - name: Docs diagrams parse
         run: npm run check:docs
+
+      # A control has to look like a control, and a destination is offered once. Both are
+      # greppable rules that decay silently in review (L-21) — see ADR-0008.
+      - name: The monitor presents itself correctly
+        run: npm run check:ui
+
+  # The installers are the first thing a stranger runs, and they run as root on a machine we will
+  # never see. Static checks are cheap; the end-to-end run against a real release lives in
+  # release.yml's verify-install job, because it needs a release to install.
+  installers:
+    name: installers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # shellcheck catches the class of bug that has cost installers real debugging: a helper
+      # whose `[ -n "$x" ] && printf …` returns 1 when the value is empty, aborting the caller
+      # under `set -e` while `|| true` hides it.
+      - name: shellcheck install.sh
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck --shell=sh --severity=warning scripts/install.sh
+
+      # pwsh is preinstalled on GitHub's ubuntu runners. Parsing is not running, but it catches
+      # the unbalanced-quote and bad-cmdlet mistakes that would otherwise only surface on a
+      # Windows machine we are not testing on.
+      - name: install.ps1 parses
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "scripts/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+          Write-Host "install.ps1 parses clean"
+
+      # Every platform the shell installer claims to support must be one the release workflow
+      # actually builds. They drifted apart once already, in the other direction — the script
+      # promised linux/aarch64 that release.yml did not produce.
+      - name: The installer's targets are the targets we publish
+        run: |
+          set -eu
+          published=$(grep -oE 'target: [a-z0-9_-]+' .github/workflows/release.yml | awk '{print $2}' | sort -u)
+          # Match the triple itself rather than the assignment: the two scripts spell it
+          # differently (`TARGET="…"` in sh, `$target = '…'` in PowerShell), and a pattern tied to
+          # one spelling silently checks only that file — which is how a check passes while
+          # covering half of what it claims.
+          claimed=$(grep -ohE '(x86_64|aarch64)-[a-z0-9]+-[a-z0-9]+(-[a-z0-9]+)?' \
+            scripts/install.sh scripts/install.ps1 | sort -u)
+          echo "published:"; echo "$published"
+          echo "claimed:";   echo "$claimed"
+          for t in $claimed; do
+            echo "$published" | grep -qx "$t" \
+              || { echo "::error::install script offers $t, which release.yml does not build" >&2; exit 1; }
+          done

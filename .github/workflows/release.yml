@@ -31,6 +31,10 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+          # The installer maps Linux/aarch64 to this target, so it must exist or the one-liner
+          # dies on every ARM box — and ARM Linux is no longer a corner (Pi, ARM cloud, WSL).
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
           - os: macos-latest
             target: aarch64-apple-darwin
           - os: macos-13
@@ -59,8 +63,34 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install cmake
 
+      # The monitor is baked into the binary (FEAT-084), so the web build comes FIRST — otherwise
+      # `build.rs` finds no web/dist, embeds nothing, and the release ships an executable whose
+      # only symptom is a blank page. The size check below is what stops that shipping silently.
+      - name: Build the web monitor
+        working-directory: web
+        run: npm ci && npm run build
+
       - name: Build CLI
         run: cargo build --release -p kanbanr-cli --target ${{ matrix.target }}
+
+      # An assertion, not a note: a binary this small did not embed the monitor. FEAT-084/R-5 caps
+      # it the other way, so the two together pin the size to "the SPA is in there, compressed".
+      - name: Check the monitor is embedded, and compressed
+        shell: bash
+        run: |
+          set -eu
+          bin="target/${{ matrix.target }}/release/kanbanr"
+          [ -f "$bin" ] || bin="$bin.exe"
+          size=$(wc -c < "$bin")
+          echo "binary: $size bytes"
+          if [ "$size" -lt 12000000 ]; then
+            echo "::error::$bin is ${size}B — too small to contain the web monitor." >&2
+            exit 1
+          fi
+          if [ "$size" -gt 20000000 ]; then
+            echo "::error::$bin is ${size}B — the assets look uncompressed (FEAT-084/R-5)." >&2
+            exit 1
+          fi
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -74,14 +104,115 @@ jobs:
           $bin = "target/${{ matrix.target }}/release/kanbanr.exe"
           Compress-Archive -Path $bin -DestinationPath "kanbanr-${{ github.ref_name }}-${{ matrix.target }}.zip"
 
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
+      # Staged as an artifact rather than pushed straight to the release, so ONE later job can see
+      # every asset at once and checksum them together. SHA256SUMS computed per-leg would be five
+      # files that each cover a fifth of the release, which is not what a verifier expects.
+      - name: Stage the archive
+        uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: dist-${{ matrix.target }}
+          path: |
             api/kanbanr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
             api/kanbanr-${{ github.ref_name }}-${{ matrix.target }}.zip
+          if-no-files-found: ignore
+
+  # ---- 1b. The release itself: archives + installers + SHA256SUMS -----------
+  # The INSTALLERS ship as release assets, so the documented one-liner is served from the
+  # release-download host rather than raw.githubusercontent.com — which rate-limits, and which,
+  # being a CDN of the default branch, would hand out an installer that may not match the release
+  # it is installing. From here the script and the binaries it fetches are one artifact set,
+  # versioned together.
+  release:
+    name: publish the release
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: staged
+          pattern: dist-*
+          merge-multiple: true
+
+      - name: Stage the installers beside the binaries
+        run: cp scripts/install.sh scripts/install.ps1 staged/
+
+      # Bare filenames — no `./` prefix, no directories — so a consumer can run
+      # `sha256sum --ignore-missing -c SHA256SUMS` from the directory it downloaded into, which is
+      # exactly what scripts/install.sh does.
+      - name: Compute SHA256SUMS
+        working-directory: staged
+        run: |
+          set -eu
+          rm -f SHA256SUMS
+          sha256sum -- * > ../SHA256SUMS
+          mv ../SHA256SUMS .
+          cat SHA256SUMS
+
+      - name: Create the release and upload every asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: staged/*
           fail_on_unmatched_files: false
           generate_release_notes: true
+
+  # ---- 1c. Prove the one-liner actually works --------------------------------
+  # Staging the installer as an asset makes it *available*; it does not make it *work*. This runs
+  # the published script exactly as the README tells a stranger to, in a container with nothing
+  # preinstalled, and then asserts the thing the install is FOR: that `kanbanr serve` shows the
+  # monitor with no --ui-dir and no build step. A release that fails here is worse than no release,
+  # because the failure lands on whoever tried it first.
+  verify-install:
+    name: verify the installer (${{ matrix.image }})
+    needs: release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Two distros because the script's dependencies differ: one with curl, one where it must
+        # fall back or install it. Both are glibc, matching the published linux target.
+        image: ["debian:bookworm-slim", "ubuntu:24.04"]
+    container: ${{ matrix.image }}
+    steps:
+      - name: Minimal prerequisites (as a stranger would have)
+        run: |
+          set -eu
+          apt-get update
+          apt-get install -y --no-install-recommends curl ca-certificates
+
+      - name: Run the published installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/install.sh" \
+            | sh -s -- --version "${GITHUB_REF_NAME}" --dir /usr/local/bin
+
+      - name: It installed, and it is the version we just released
+        run: |
+          set -eu
+          kanbanr --version
+          kanbanr --version | grep -q "$(echo "${GITHUB_REF_NAME}" | sed 's/^v//')"
+
+      - name: The monitor is served with no --ui-dir and no build step
+        run: |
+          set -eu
+          # --data-dir given, so it does not ask; --no-hooks because there is no Claude Code here.
+          kanbanr init ci-check --data-dir /tmp/board --no-hooks \
+            --author "CI" --email "ci@kanbanr.local"
+          kanbanr serve --data-dir /tmp/board --bind 127.0.0.1:8080 &
+          for _ in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:8080/healthz 2>/dev/null && break
+            sleep 1
+          done
+          body="$(curl -fsS http://127.0.0.1:8080/)"
+          echo "$body" | grep -q "/assets/" \
+            || { echo "::error::the installed binary served no monitor — the embed did not ship" >&2; exit 1; }
+          asset="$(echo "$body" | sed -n 's|.*src="/assets/\([^"]*\)".*|\1|p' | head -n1)"
+          [ -n "$asset" ] || { echo "::error::index.html names no bundle" >&2; exit 1; }
+          curl -fsS -o /dev/null "http://127.0.0.1:8080/assets/${asset}" \
+            || { echo "::error::the bundle the index names is not served" >&2; exit 1; }
+          echo "installed from a one-liner, monitor served, bundle intact."
 
   # ---- 2. Docker image to GHCR ----------------------------------------------
   image:

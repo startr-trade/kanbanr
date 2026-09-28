@@ -56,7 +56,9 @@ web:
 check-docs:
 	cd web && npm install && npm run check:docs
 
-install-cli:
+# Depends on `web`, because the monitor is compiled INTO the binary (FEAT-084): without the built
+# SPA present, build.rs embeds nothing and `kanbanr serve` would quietly have no web view.
+install-cli: web
 	cd api && cargo install --path crates/kanbanr-cli
 	@echo "Installed 'kanbanr'. Set your commit identity once:"
 	@echo "  kanbanr identity --name \"You\" --email you@example.com"
@@ -69,6 +71,8 @@ install-skill:
 install: install-cli install-skill
 
 # Local (no Docker) monitor: build the SPA then serve it read-only from the one binary.
+# KANBANR_UI_DIR is passed deliberately even though the binary now embeds the monitor: during
+# development you want the dist you just built, not whatever was baked in at compile time.
 serve: web cli
 	KANBANR_DATA_DIR="$(DATA_DIR)" \
 	KANBANR_UI_DIR="$(CURDIR)/web/dist" \

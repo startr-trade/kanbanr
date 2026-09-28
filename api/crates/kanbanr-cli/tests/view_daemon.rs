@@ -451,3 +451,98 @@ fn daemon_reports_the_schema_version_it_understands() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-084 R-1/R-2: the monitor is in the binary, and an explicit `--ui-dir` still wins.
+///
+/// The constraint says one binary installable without a toolchain, and it was only ever true of the
+/// CLI: a downloaded release binary served an API with no web view, because `web/dist` had to exist
+/// beside it. These two assertions are what "built in" means — the SPA comes back with no
+/// `--ui-dir` at all, and pointing at a directory still overrides it so developing is unchanged.
+#[test]
+fn the_monitor_is_served_from_the_binary_with_no_ui_dir() {
+    let base =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("embed-{}", std::process::id()));
+    let data = base.join("data");
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    Command::new(cli())
+        .args(["--project", "demo", "project", "init", "demo"])
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &data)
+        .output()
+        .expect("init");
+
+    let serve = |ui: Option<&std::path::Path>| {
+        let port = free_port();
+        let mut cmd = Command::new(cli());
+        cmd.args(["serve", "--bind", &format!("127.0.0.1:{port}")]);
+        if let Some(dir) = ui {
+            cmd.args(["--ui-dir", dir.to_str().unwrap()]);
+        }
+        let child = cmd
+            .env("HOME", &home)
+            .env("KANBANR_DATA_DIR", &data)
+            .spawn()
+            .expect("spawn serve");
+        let url = format!("http://127.0.0.1:{port}");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if Instant::now() > deadline {
+                panic!("daemon did not become ready");
+            }
+            match ureq::get(&format!("{url}/api/projects")).call() {
+                Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+                Err(_) => std::thread::sleep(Duration::from_millis(100)),
+            }
+        }
+        (Daemon(child), url)
+    };
+
+    // R-1: no --ui-dir anywhere, and the monitor is still served.
+    let (_d, url) = serve(None);
+    let index = ureq::get(&url).call().unwrap().into_string().unwrap();
+    assert!(
+        index.contains("<!doctype html") || index.contains("<!DOCTYPE html"),
+        "expected the SPA's index, got: {}",
+        &index[..index.len().min(200)]
+    );
+    assert!(
+        index.contains("/assets/"),
+        "the index must reference its hashed bundle: {index}"
+    );
+    // The bundle it names is served too — an index alone is a blank page.
+    let asset = index
+        .split("/assets/")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("a hashed asset in the index");
+    let resp = ureq::get(&format!("{url}/assets/{asset}")).call().unwrap();
+    assert_eq!(resp.status(), 200, "the hashed bundle must be served");
+    assert!(
+        resp.header("content-type")
+            .unwrap_or("")
+            .contains("javascript"),
+        "served as the wrong type: {:?}",
+        resp.header("content-type")
+    );
+    // A client-side route is the app's to interpret, so it gets the index rather than a 404.
+    let route = ureq::get(&format!("{url}/p/demo/review"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(route.contains("/assets/"), "a deep link must load the app");
+    drop(_d);
+
+    // R-2: an explicit --ui-dir overrides the embedded copy, so a live build still wins.
+    let dir = base.join("custom-ui");
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    std::fs::write(dir.join("index.html"), "<!doctype html>OVERRIDDEN").unwrap();
+    let (_d2, url2) = serve(Some(&dir));
+    let served = ureq::get(&url2).call().unwrap().into_string().unwrap();
+    assert!(
+        served.contains("OVERRIDDEN"),
+        "--ui-dir must win over the embedded monitor, got: {served}"
+    );
+}

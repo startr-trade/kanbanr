@@ -47,6 +47,12 @@ COPY --from=planner /api/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 # Now the real source; with deps already compiled in ./target, only the kanbanr crates rebuild.
 COPY api/ ./
+# The monitor is baked INTO the binary (FEAT-084), so the built SPA has to be present for this
+# build rather than copied beside the binary afterwards. One mechanism everywhere: the image then
+# exercises the same embedded path a downloaded release binary takes, instead of being the one
+# deployment where a stale --ui-dir could still work and hide a broken embed.
+COPY --from=web /web/dist /web/dist
+ENV KANBANR_UI_DIST=/web/dist
 RUN cargo build --release -p kanbanr-cli
 
 # ---- Stage 3: slim runtime — the one binary, in serve mode ----
@@ -55,11 +61,10 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+# Just the binary: the monitor is inside it.
 COPY --from=api /api/target/release/kanbanr /usr/local/bin/kanbanr
-COPY --from=web /web/dist /app/web
 
 ENV KANBANR_DATA_DIR=/data \
-    KANBANR_UI_DIR=/app/web \
     KANBANR_BIND=0.0.0.0:8080
 EXPOSE 8080
 VOLUME ["/data"]
