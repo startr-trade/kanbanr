@@ -3951,8 +3951,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 Method::Put,
                 &format!(
                     "/projects/{p}/features/{code}/tests/{}/{}",
-                    urlencode(requirement),
-                    urlencode(test)
+                    urlencode_segment(requirement),
+                    urlencode_segment(test)
                 ),
                 Some(body),
             )?;
@@ -5613,6 +5613,18 @@ fn urlencode(s: &str) -> String {
         .collect()
 }
 
+/// Encode a free-text value that is **one path segment** — so `/` is escaped too (FEAT-079).
+///
+/// `urlencode` above leaves `/` alone, which is right for a whole path (a document path's slashes
+/// are part of the value) and wrong for a segment. A test name routinely *is* a path —
+/// `scripts/check-affordance.mjs` — and passing its slashes through split the route into more
+/// segments than the dispatcher matches, so the write came back "unsupported operation" and the
+/// test's state silently stayed `planned`. `kanbanr check` then called a passing test unproven,
+/// which reads as the evidence rule being broken rather than the transport.
+fn urlencode_segment(s: &str) -> String {
+    urlencode(s).replace('/', "%2F")
+}
+
 fn print_doc_tree(folder: &DocFolder, depth: usize) {
     let indent = "  ".repeat(depth);
     if depth == 0 {
@@ -5663,6 +5675,35 @@ fn print_board(project: &Project) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FEAT-079: a test named after the file that runs it could not be flipped green. The name is
+    /// one path segment, and the whole-path encoder leaves `/` alone — so the route grew a segment,
+    /// the write was refused as unsupported, and `kanbanr check` then called a passing test unproven.
+    #[test]
+    fn a_path_segment_encodes_its_slashes() {
+        // R-1: a free-text value used as ONE segment has its slashes escaped.
+        assert_eq!(
+            urlencode_segment("web: npm run check:ui (scripts/check-affordance.mjs)"),
+            "web%3A%20npm%20run%20check%3Aui%20%28scripts%2Fcheck-affordance.mjs%29"
+        );
+        // The route it goes into keeps the segment count the dispatcher matches on.
+        let path = format!(
+            "/projects/p/features/FEAT-1/tests/{}/{}",
+            urlencode_segment("R-2"),
+            urlencode_segment("a/b/c")
+        );
+        assert_eq!(path.split('/').filter(|s| !s.is_empty()).count(), 7);
+        // Everything else a test name holds still round-trips.
+        assert_eq!(
+            urlencode_segment("eventing::tests::x y"),
+            "eventing%3A%3Atests%3A%3Ax%20y"
+        );
+
+        // R-2: the whole-path encoder is unchanged — a document path's slashes are part of the
+        // value, so escaping them there would address a different document.
+        assert_eq!(urlencode("design/mirror.md"), "design/mirror.md");
+        assert_eq!(urlencode("a b/c.md"), "a%20b/c.md");
+    }
 
     /// The capture hook is only as good as this parser: a name it misreads is evidence recorded
     /// against the wrong test, which is worse than no evidence at all.

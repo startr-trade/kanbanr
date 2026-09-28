@@ -755,9 +755,14 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             // Whether an approval is current or has lapsed depends on a hash of the definition's
             // content, so it is decided here rather than in each caller: the CLI, the monitor and
             // any future client all get the same answer to "is this agreed?".
-            let pending: Vec<Value> = project
+            let mut pending: Vec<Value> = project
                 .features
                 .iter()
+                // Only where agreement can still change what happens (FEAT-078). Approving a
+                // Completed item records a signature, pinned to a definition hash, for work already
+                // merged; a deliberately Deferred one is not going to start. The same gate the
+                // doctor applies, so the two surfaces cannot give different answers to one question.
+                .filter(|f| crate::graph::is_live_work(&project.config, &f.status))
                 .filter_map(|f| {
                     let definition = f.definition.as_ref()?;
                     let state = match definition.approval_state() {
@@ -772,9 +777,19 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                         "approval": state,
                         "started_unapproved": definition.started_unapproved,
                         "definition": definition,
+                        // What the ordering below keys on, and useful to a client besides.
+                        "in_progress": f.status != project.config.default_state,
                     }))
                 })
                 .collect();
+            // Work already being built without agreement is more urgent than work that has not
+            // started, so it is asked about first (FEAT-078 R-2).
+            pending.sort_by_key(|v| {
+                (
+                    !v["in_progress"].as_bool().unwrap_or(false),
+                    v["code"].as_str().unwrap_or_default().to_string(),
+                )
+            });
             ser(&pending)
         }
         ("GET", ["projects", p, "adrs"]) => ser(&crate::adr::list(store, p)?),
