@@ -12,6 +12,7 @@
 //! directly. This is purely additive and OFF by default: the read-only monitor is unchanged, and
 //! the CLI-writes-directly default is fully preserved.
 
+mod embedded;
 mod routes;
 mod watcher;
 mod write;
@@ -20,6 +21,7 @@ pub use write::PushPolicy;
 
 use axum::Router;
 use axum::extract::Request;
+use axum::http::header::CONTENT_TYPE;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -175,6 +177,37 @@ pub async fn run(
                 }
             });
         eprintln!("serving SPA from {dir}");
+    } else if !embedded::is_empty() {
+        // The monitor baked into this binary (FEAT-084). An explicit --ui-dir still wins above, so
+        // developing against a live `npm run build` is unchanged; this is the path a downloaded
+        // binary takes, where there is no dist folder to point at and never was.
+        let files = embedded::assets();
+        let index = files
+            .get("index.html")
+            .cloned()
+            .unwrap_or_else(|| b"<!doctype html><title>kanbanr</title>".to_vec());
+        app = app.fallback(move |uri: axum::http::Uri| {
+            let index = index.clone();
+            async move {
+                let path = uri.path().trim_start_matches('/');
+                match files.get(path) {
+                    // A hashed asset: served as itself.
+                    Some(body) => ([(CONTENT_TYPE, embedded::content_type(path))], body.clone()),
+                    // Anything else is a client-side route, so the app decides what it means.
+                    None => ([(CONTENT_TYPE, "text/html; charset=utf-8")], index),
+                }
+            }
+        });
+        eprintln!("serving the built-in monitor ({} files)", files.len());
+    } else {
+        // Saying nothing here would be this project's own recurring failure: an absence reported as
+        // silence (FEAT-084 R-3). A binary built without the monitor serves a working API, and the
+        // only symptom is a blank page.
+        eprintln!(
+            "note: this build has no built-in monitor, so only /api is served.\n      \
+             Point at a built SPA with `--ui-dir <dir>` (build it with `npm --prefix web run build`),\n      \
+             or use a release binary, which has it baked in."
+        );
     }
 
     // Keep the watcher alive for the lifetime of the server.

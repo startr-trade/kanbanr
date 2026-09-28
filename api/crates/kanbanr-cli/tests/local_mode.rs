@@ -2239,3 +2239,99 @@ requirements:
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-085: `kanbanr init` overwrote an existing `.kanbanr` marker without a word, repointing a
+/// folder from its real board to an empty one. The board survived on disk and the tool simply
+/// stopped being able to find it — reported, as ever, as "nothing here". It happened to this
+/// repository, and nothing was lost only because FEAT-073 had made the marker a tracked file.
+///
+/// The property under test is the one that matters: init does not repoint a folder that already
+/// names a board. Asserted against the real binary, because the defect was the call site writing
+/// unconditionally, not a helper returning the wrong answer.
+#[test]
+fn init_refuses_to_repoint_a_folder_that_already_has_a_board() {
+    let base =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("repoint-{}", std::process::id()));
+    let home = base.join("home");
+    let work = base.join("work");
+    let first = base.join("first-board");
+    let second = base.join("second-board");
+    for d in [&home, &work] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+
+    let run = |args: &[&str]| -> Output {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_SERVER_URL")
+            .output()
+            .expect("run cli")
+    };
+
+    let init = |name: &str, dir: &std::path::Path, extra: &[&str]| -> Output {
+        let mut args = vec![
+            "init",
+            name,
+            "--data-dir",
+            dir.to_str().unwrap(),
+            "--no-hooks",
+            "--author",
+            "CI",
+            "--email",
+            "ci@kanbanr.local",
+        ];
+        args.extend_from_slice(extra);
+        run(&args)
+    };
+
+    // A folder with a board.
+    assert!(init("alpha", &first, &[]).status.success(), "first init");
+    let marker = work.join(".kanbanr");
+    let original = std::fs::read_to_string(&marker).unwrap();
+    assert!(original.contains("alpha"), "marker: {original}");
+
+    // R-1: initialising a DIFFERENT board here is refused, and says what both pointers are.
+    let out = init("beta", &second, &[]);
+    assert!(
+        !out.status.success(),
+        "init must refuse to repoint: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("already names a board"), "unhelpful: {err}");
+    assert!(
+        err.contains("alpha"),
+        "must name the current pointer: {err}"
+    );
+    assert!(err.contains("beta"), "must name the proposed one: {err}");
+    assert!(
+        err.contains("--force"),
+        "a refusal must name the way through: {err}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&marker).unwrap(),
+        original,
+        "the marker must be byte-identical after a refusal"
+    );
+
+    // R-2: re-running the SAME init is idempotent, not an error.
+    assert!(
+        init("alpha", &first, &[]).status.success(),
+        "re-initialising the same board must still work"
+    );
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), original);
+
+    // R-3: --force repoints, and says what it replaced rather than leaving it to be inferred.
+    let out = init("beta", &second, &["--force"]);
+    assert!(out.status.success(), "--force must repoint");
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        said.contains("replaced") && said.contains("alpha"),
+        "--force must report what it replaced: {said}"
+    );
+    assert!(std::fs::read_to_string(&marker).unwrap().contains("beta"));
+}

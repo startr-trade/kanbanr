@@ -126,10 +126,25 @@ kanbanr/
 └── data/     The data git repo: projects/<name>/… (YAML/markdown). No accounts/secrets.
 ```
 
+## Install
+
+```bash
+# macOS / Linux
+curl -fsSL https://github.com/startr-trade/kanbanr/releases/latest/download/install.sh | sh
+
+# Windows (PowerShell)
+irm https://github.com/startr-trade/kanbanr/releases/latest/download/install.ps1 | iex
+```
+
+The installer fetches the binary for your platform, checks it against the release's own
+`SHA256SUMS`, and stops there — no shell profile edited, no package manager invoked, no daemon
+started. **The web monitor is inside the binary**, so there is no second step and nothing to build.
+
+Or, from source: `make install` (needs Rust and Node), or `docker compose -f docker/docker-compose.yml up`.
+
 ## Quick start (60 seconds)
 
 ```bash
-make install                                   # build/install the one `kanbanr` binary + skill
 kanbanr init my-app --author "You" --email you@example.com   # data dir + git + identity + project
 kanbanr milestone add --name Foundations --code MS-001
 kanbanr feature add --title "Login flow" --milestone MS-001 --spec "# Login\nEmail + password."
@@ -139,12 +154,14 @@ kanbanr board                                  # you now have a populated board
 That's it — the CLI writes the data folder directly (each change is a git commit). Then develop
 with Claude in VS Code: say **"start using kanbanr for this project"** and it takes over the board.
 
-### Add the live monitor (optional)
+### The live monitor
 
 ```bash
-kanbanr serve --ui-dir web/dist     # the same binary, no Docker (or: make docker-up)
-kanbanr open                        # opens http://localhost:8080 — no login, just the board
+kanbanr serve     # the same binary — no --ui-dir, no Docker, no Node
+kanbanr open      # opens http://localhost:8080 — no login, just the board
 ```
+
+`--ui-dir` still overrides the built-in copy, which is what you want while developing the SPA.
 
 The monitor is a localhost read-only view; expose it beyond your machine only behind a reverse
 proxy you control. See **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**.

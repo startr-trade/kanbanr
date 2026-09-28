@@ -1,0 +1,241 @@
+#!/bin/sh
+# kanbanr installer.
+#
+#   curl -fsSL https://github.com/startr-trade/kanbanr/releases/latest/download/install.sh | sh
+#
+# Downloads the `kanbanr` binary for this platform from a GitHub release, VERIFIES its SHA-256
+# against the release's own SHA256SUMS, and installs it. Nothing else: no shell profile is edited,
+# no package manager is invoked, no daemon is started.
+#
+# The binary carries the web monitor inside it (FEAT-084), so this is the whole install — there is
+# no second step to build a UI and no folder to point `serve` at.
+#
+# Knobs (env or flag):
+#   KANBANR_VERSION=v0.1.0        --version <tag>   pin a release (default: latest, incl. pre-release)
+#   KANBANR_INSTALL_DIR=~/.local/bin  --dir <path>  install location (default: see below)
+#   KANBANR_NO_VERIFY=1                             skip checksum verification (discouraged)
+#
+# Default install dir: $KANBANR_INSTALL_DIR, else /usr/local/bin when writable (or sudo is
+# available and we are interactive), else ~/.local/bin.
+#
+# Exit codes: 0 ok · 1 usage/args · 2 unsupported platform · 3 download/network · 4 checksum.
+#
+# Structure and most of the hard-won details here follow an installer that has already been
+# through the failures this kind of script hits: absent
+# timeouts hanging forever, `/releases/latest` 404ing while every release is a pre-release, and a
+# helper that reported "no token" as a failure under `set -e`. Copying the shape of something that
+# has survived contact is cheaper than rediscovering each one.
+
+set -eu
+
+REPO="startr-trade/kanbanr"
+API="https://api.github.com/repos/${REPO}"
+DL="https://github.com/${REPO}/releases/download"
+
+VERSION="${KANBANR_VERSION:-}"
+INSTALL_DIR="${KANBANR_INSTALL_DIR:-}"
+NO_VERIFY="${KANBANR_NO_VERIFY:-}"
+
+die() { printf 'kanbanr-install: %s\n' "$1" >&2; exit "${2:-1}"; }
+info() { printf '  %s\n' "$1" >&2; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --version) VERSION="${2:?--version needs a tag}"; shift 2 ;;
+        --dir)     INSTALL_DIR="${2:?--dir needs a path}"; shift 2 ;;
+        --no-verify) NO_VERIFY=1; shift ;;
+        -h|--help)
+            sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0 ;;
+        *) die "unknown argument: $1" ;;
+    esac
+done
+
+# ---- platform ---------------------------------------------------------------------------
+# These four targets are what .github/workflows/release.yml publishes. Anything else must build
+# from source rather than receive a silently wrong binary.
+os="$(uname -s)"
+arch="$(uname -m)"
+case "${os}/${arch}" in
+    Linux/x86_64|Linux/amd64)   TARGET="x86_64-unknown-linux-gnu" ;;
+    Linux/aarch64|Linux/arm64)  TARGET="aarch64-unknown-linux-gnu" ;;
+    Darwin/arm64)               TARGET="aarch64-apple-darwin" ;;
+    Darwin/x86_64)              TARGET="x86_64-apple-darwin" ;;
+    *) die "unsupported platform: ${os}/${arch}
+Published targets: linux x86_64/aarch64, macOS arm64/x86_64, windows x86_64 (see install.ps1).
+Build from source instead:
+    git clone https://github.com/${REPO}.git && cd kanbanr
+    make install" 2 ;;
+esac
+
+# ---- fetching ---------------------------------------------------------------------------
+# Timeouts and retries are not garnish: without them a stalled connection hangs with no output at
+# all, and GitHub's hosts do throttle, which a couple of spaced retries usually rides out.
+#
+# A token, when the environment has one, moves api.github.com from 60 requests an hour to 5000. It
+# is sent ONLY to api.github.com — the download host needs no credential and must not receive one.
+GH_AUTH="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+auth_header() {
+    case "$1" in
+        https://api.github.com/*)
+            if [ -n "$GH_AUTH" ]; then
+                printf 'Authorization: Bearer %s' "$GH_AUTH"
+            fi
+            ;;
+    esac
+    # ALWAYS 0. Written as `[ -n "$GH_AUTH" ] && printf …` this returns 1 when no token is set,
+    # and under `set -e` that aborts the CALLER at `h="$(auth_header "$1")"`. A helper whose job is
+    # to produce optional output must not report absence as failure.
+    return 0
+}
+
+if have curl; then
+    fetch() {
+        h="$(auth_header "$1")"
+        if [ -n "$h" ]; then
+            curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 -H "$h" "$1"
+        else
+            curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 "$1"
+        fi
+    }
+    fetch_to() {
+        h="$(auth_header "$1")"
+        if [ -n "$h" ]; then
+            curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 -H "$h" "$1" -o "$2"
+        else
+            curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 "$1" -o "$2"
+        fi
+    }
+elif have wget; then
+    fetch() {
+        h="$(auth_header "$1")"
+        if [ -n "$h" ]; then wget -qO- --timeout=30 --tries=3 --header="$h" "$1"
+        else wget -qO- --timeout=30 --tries=3 "$1"; fi
+    }
+    fetch_to() {
+        h="$(auth_header "$1")"
+        if [ -n "$h" ]; then wget -qO "$2" --timeout=30 --tries=3 --header="$h" "$1"
+        else wget -qO "$2" --timeout=30 --tries=3 "$1"; fi
+    }
+else
+    die "need curl or wget on PATH" 3
+fi
+
+# The first `"tag_name": "…"` of a release payload.
+tag_from_json() {
+    tr ',' '\n' | grep '"tag_name"' | head -n 1 | sed 's/.*"tag_name": *"//; s/".*//'
+}
+
+# `sort -V` is GNU; fall back to a plain reverse sort where it is absent (macOS).
+if printf '1\n' | sort -V >/dev/null 2>&1; then SORT_DESC="sort -Vr"; else SORT_DESC="sort -r"; fi
+
+# ---- resolve the release ----------------------------------------------------------------
+# THREE sources, tried in order, because each has a failure mode the next covers:
+#   1. /releases/latest — right once a STABLE release exists, 404 while every release is a
+#      pre-release (as every 0.x is), so it cannot be the only source;
+#   2. the release LIST — includes pre-releases, but has been observed returning an empty array
+#      while the release was fetchable by tag. A miss here is not authoritative;
+#   3. git TAGS — a different endpoint, which answered when the list did not.
+# If all three come up empty, the message names the escape hatch instead of guessing.
+if [ -z "$VERSION" ]; then
+    info "resolving the latest release…"
+    VERSION="$(fetch "${API}/releases/latest" 2>/dev/null | tag_from_json)" || true
+    [ -n "$VERSION" ] || VERSION="$(fetch "${API}/releases?per_page=1" 2>/dev/null | tag_from_json)" || true
+    if [ -z "$VERSION" ]; then
+        info "release list empty — falling back to tags"
+        for candidate in $(fetch "${API}/tags?per_page=100" 2>/dev/null \
+            | tr ',' '\n' | grep '"name"' | sed 's/.*"name": *"//; s/".*//' \
+            | grep '^v' | $SORT_DESC); do
+            if fetch "${API}/releases/tags/${candidate}" >/dev/null 2>&1; then
+                VERSION="$candidate"
+                break
+            fi
+        done
+    fi
+    [ -n "$VERSION" ] || die "could not resolve a release tag from ${API}
+(rate-limited, or nothing published yet). Pin one explicitly:
+    ... | sh -s -- --version v0.1.0
+and set GH_TOKEN to lift the API rate limit if you are retrying." 3
+fi
+info "version: ${VERSION}"
+
+ASSET="kanbanr-${VERSION}-${TARGET}.tar.gz"
+
+# ---- install dir ------------------------------------------------------------------------
+SUDO=""
+if [ -z "$INSTALL_DIR" ]; then
+    if [ -w /usr/local/bin ] 2>/dev/null; then
+        INSTALL_DIR=/usr/local/bin
+    elif [ -t 0 ] && have sudo && [ -d /usr/local/bin ]; then
+        INSTALL_DIR=/usr/local/bin
+        SUDO="sudo"
+    else
+        INSTALL_DIR="${HOME}/.local/bin"
+    fi
+fi
+mkdir -p "$INSTALL_DIR" 2>/dev/null || $SUDO mkdir -p "$INSTALL_DIR"
+
+# ---- download + verify ------------------------------------------------------------------
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/kanbanr-install.XXXXXX")"
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+info "downloading ${ASSET}…"
+fetch_to "${DL}/${VERSION}/${ASSET}" "${tmp}/${ASSET}" \
+    || die "download failed: ${DL}/${VERSION}/${ASSET}
+(check the tag exists and this platform has an asset)" 3
+
+if [ -n "$NO_VERIFY" ]; then
+    info "checksum verification SKIPPED (KANBANR_NO_VERIFY)"
+elif have sha256sum || have shasum; then
+    fetch_to "${DL}/${VERSION}/SHA256SUMS" "${tmp}/SHA256SUMS" \
+        || die "could not download SHA256SUMS (set KANBANR_NO_VERIFY=1 to bypass)" 3
+    want="$(grep " ${ASSET}\$" "${tmp}/SHA256SUMS" | awk '{print $1}' | head -n 1)"
+    [ -n "$want" ] || die "SHA256SUMS carries no entry for ${ASSET}" 4
+    if have sha256sum; then
+        got="$(sha256sum "${tmp}/${ASSET}" | awk '{print $1}')"
+    else
+        got="$(shasum -a 256 "${tmp}/${ASSET}" | awk '{print $1}')"
+    fi
+    [ "$want" = "$got" ] || die "CHECKSUM MISMATCH for ${ASSET}
+  expected ${want}
+  got      ${got}
+Do not use this download." 4
+    info "checksum ok"
+else
+    info "no sha256sum/shasum on PATH — checksum NOT verified"
+fi
+
+# ---- install ----------------------------------------------------------------------------
+tar -xzf "${tmp}/${ASSET}" -C "$tmp" || die "could not extract ${ASSET}" 3
+bin="${tmp}/kanbanr"
+[ -f "$bin" ] || bin="$(find "$tmp" -type f -name kanbanr -perm -u+x | head -n 1)"
+[ -f "$bin" ] || die "the archive did not contain a 'kanbanr' binary" 3
+
+chmod +x "$bin"
+$SUDO mv "$bin" "${INSTALL_DIR}/kanbanr" || die "could not install into ${INSTALL_DIR}" 1
+info "installed ${INSTALL_DIR}/kanbanr"
+
+# ---- report -----------------------------------------------------------------------------
+printf '\n'
+"${INSTALL_DIR}/kanbanr" --version 2>/dev/null || true
+case ":${PATH}:" in
+    *":${INSTALL_DIR}:"*) ;;
+    *) printf '\n%s is not on your PATH. Add it:\n    export PATH="%s:$PATH"\n' \
+           "$INSTALL_DIR" "$INSTALL_DIR" ;;
+esac
+
+# The monitor is inside the binary, so "next" really is two commands and no build step.
+cat <<'NEXT'
+
+Next — from inside a git repository you want to track:
+
+    kanbanr init                   # asks where to keep the board, suggesting <repo>.kanbanr
+                                   #   beside it, and records the choice in a .kanbanr marker
+    kanbanr serve                  # the monitor on http://127.0.0.1:8080
+
+`serve` needs no --ui-dir: the web monitor is built into this binary. It finds the board from the
+.kanbanr marker; to point it elsewhere use `kanbanr serve --data-dir <path>` or KANBANR_DATA_DIR.
+
+Docs: https://github.com/startr-trade/kanbanr#readme
+NEXT
