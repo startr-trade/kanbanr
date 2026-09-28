@@ -499,6 +499,33 @@ mod tests {
         );
     }
 
+    /// FEAT-102 R-2: the scripts the skill ships are the real ones. The tests' own fake scripts are
+    /// `exit 0` stubs, and one was committed over the shipped scripts once: every session lost its
+    /// board recovery while `hooks status` still reported them healthy, because the files existed.
+    #[test]
+    fn shipped_scripts_are_not_stubs() {
+        let shipped = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../skill/kanbanr/hooks");
+        let names = CORE_HOOKS
+            .iter()
+            .chain(SUMMARY_HOOKS.iter())
+            .map(|(_, n)| *n);
+        for name in names {
+            let file = shipped.join(format!("{name}.sh"));
+            let text = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("{} is missing: {e}", file.display()));
+            let code: Vec<&str> = text
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .collect();
+            assert!(
+                code.len() > 5 && code != ["exit 0"],
+                "{} is a stub, not the shipped hook",
+                file.display()
+            );
+        }
+    }
+
     #[test]
     fn install_merges_into_existing_settings_keeping_order_and_other_hooks() {
         let dir = temp_claude_dir(true);
