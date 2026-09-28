@@ -221,7 +221,13 @@ pub struct FeatureDefinition {
 pub struct ApprovalEvent {
     pub at: String,
     pub by: String,
-    /// `approved` | `withdrawn`.
+    /// `approved` | `ratified` | `withdrawn`.
+    ///
+    /// `ratified` is agreement given **after** the work was built, under a recorded
+    /// `--unapproved` start (FEAT-080). It is a separate verdict from `approved` because the
+    /// whole point of the gate is to distinguish "we agreed, then built" from "we built, then
+    /// agreed" — and with one verdict the record could not tell them apart. Twenty-nine items on
+    /// this board were reconciled that way before the distinction existed.
     pub verdict: String,
     /// Why it was withdrawn. An agreement needs no reason; taking one back does.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -248,6 +254,10 @@ pub enum ApprovalState {
     Current,
     /// Approved once, but the definition changed afterwards.
     Lapsed,
+    /// Agreed to **after** the work was built. The gate was bypassed with a recorded reason and
+    /// the question was answered later — which is a real resolution, and not the same thing as
+    /// prior agreement, so it reads differently wherever it is shown.
+    Ratified,
 }
 
 impl FeatureDefinition {
@@ -276,9 +286,21 @@ impl FeatureDefinition {
     pub fn approval_state(&self) -> ApprovalState {
         match &self.approval {
             None => ApprovalState::Missing,
-            Some(a) if a.rev == self.content_rev() => ApprovalState::Current,
-            Some(_) => ApprovalState::Lapsed,
+            Some(a) if a.rev != self.content_rev() => ApprovalState::Lapsed,
+            // Current, but say WHICH kind of current: the last verdict decides.
+            Some(_) if self.was_ratified() => ApprovalState::Ratified,
+            Some(_) => ApprovalState::Current,
         }
+    }
+
+    /// Was the standing agreement given after the fact? Read from the log's last verdict rather
+    /// than stored on the approval, so the two can never disagree.
+    pub fn was_ratified(&self) -> bool {
+        self.approvals
+            .iter()
+            .rev()
+            .find(|e| e.verdict != "withdrawn")
+            .is_some_and(|e| e.verdict == "ratified")
     }
 }
 

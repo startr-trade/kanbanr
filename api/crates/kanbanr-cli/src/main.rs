@@ -277,6 +277,20 @@ enum Command {
         #[arg(long)]
         ui: bool,
     },
+    /// Agree to an item that was built under a recorded `--unapproved` start (FEAT-080).
+    ///
+    /// Recorded as its own verdict, not as an ordinary approval: the gate exists to tell "we
+    /// agreed, then built" from "we built, then agreed", and one verdict cannot. Only for items
+    /// that actually took the bypass — it is not a shortcut around review.
+    Ratify {
+        code: String,
+        /// Anything worth saying about agreeing after the fact.
+        #[arg(long, default_value = "")]
+        reason: String,
+        /// Who is agreeing (default: this data folder's commit identity).
+        #[arg(long)]
+        by: Option<String>,
+    },
     /// Take back an approval (FEAT-069). The agreement goes; the record of having given it stays,
     /// and the item returns to what is awaiting review.
     Unapprove {
@@ -3578,6 +3592,35 @@ fn open_in_browser(url: &str) {
     };
 }
 
+/// Who a verdict is attributed to when `--by` is not given (FEAT-077, completed in FEAT-080).
+///
+/// The data folder's commit identity — the same source the flag's help promises and the monitor
+/// reads from `/api/meta`, so a verdict reads identically whichever surface recorded it.
+///
+/// This used to fall through `/auth/whoami` to the literal string `"unknown"`, which in local mode
+/// is every time: there is no server to ask. FEAT-077 fixed the monitor and left this, so the CLI
+/// went on writing `by: unknown` while the flag's own help said otherwise. Six ratifications were
+/// recorded that way before it was noticed.
+///
+/// `None` means no identity is configured, and the caller must refuse rather than invent one: an
+/// approval that cannot say who gave it is not evidence of agreement.
+fn verdict_author(cli: &Cli, given: Option<&String>) -> anyhow::Result<String> {
+    if let Some(name) = given.filter(|n| !n.trim().is_empty()) {
+        return Ok(name.trim().to_string());
+    }
+    let dir = project::resolve_data_dir(cli.data_dir.as_deref());
+    kanbanr_core::git::identity(&dir)
+        .map(|(name, _)| name)
+        .filter(|n| !n.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "this board has no commit identity, so a verdict could not say who gave it.\n\
+                 Set one once:  kanbanr identity --name \"You\" --email you@example.com\n\
+                 or pass it explicitly with --by."
+            )
+        })
+}
+
 fn require_project(cli: &Cli) -> anyhow::Result<String> {
     project::resolve_project(cli.project.as_deref()).ok_or_else(|| {
         anyhow::anyhow!("could not determine project; pass --project or set KANBANR_PROJECT")
@@ -3963,15 +4006,19 @@ fn check_report(f: &kanbanr_core::FeatureItem) -> Value {
                 gaps.push("no goal link — nothing says what this is for".into());
             }
             match def.approval_state() {
-                ApprovalState::Current => {}
+                ApprovalState::Current | ApprovalState::Ratified => {}
                 ApprovalState::Missing => gaps.push("not approved".into()),
                 ApprovalState::Lapsed => gaps
                     .push("approval lapsed — the definition changed after it was approved".into()),
             }
-            // Reported only while unanswered: approving the definition is what the warning asks
-            // for, so it stops once that has happened (FEAT-068).
+            // Reported only while unanswered: agreeing to the definition is what the warning asks
+            // for, so it stops once that has happened — whether the agreement came before the work
+            // (`approved`) or after it (`ratified`). FEAT-068, FEAT-080.
             if !def.started_unapproved.trim().is_empty()
-                && !matches!(def.approval_state(), ApprovalState::Current)
+                && !matches!(
+                    def.approval_state(),
+                    ApprovalState::Current | ApprovalState::Ratified
+                )
             {
                 gaps.push(format!(
                     "started without approval: {}",
@@ -4479,13 +4526,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         Command::Unapprove { code, reason, by } => {
             let p = require_project(cli)?;
-            let who = match by {
-                Some(name) => name.clone(),
-                None => serde_json::from_str::<Value>(&client.get("/auth/whoami")?)
-                    .ok()
-                    .and_then(|v| v["name"].as_str().map(str::to_string))
-                    .unwrap_or_else(|| "unknown".to_string()),
-            };
+            let who = verdict_author(cli, by.as_ref())?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/features/{code}/unapprove"),
@@ -4500,15 +4541,26 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             );
             Ok(())
         }
+        Command::Ratify { code, reason, by } => {
+            let p = require_project(cli)?;
+            let who = verdict_author(cli, by.as_ref())?;
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/features/{code}/ratify"),
+                Some(json!({ "by": who, "reason": reason })),
+            )?;
+            print_write(
+                cli,
+                &resp,
+                format!(
+                    "{code} ratified by {who} — built under a recorded bypass, agreed to after the fact"
+                ),
+            );
+            Ok(())
+        }
         Command::Approve { code, by } => {
             let p = require_project(cli)?;
-            let who = match by {
-                Some(name) => name.clone(),
-                None => serde_json::from_str::<Value>(&client.get("/auth/whoami")?)
-                    .ok()
-                    .and_then(|v| v["name"].as_str().map(str::to_string))
-                    .unwrap_or_else(|| "unknown".to_string()),
-            };
+            let who = verdict_author(cli, by.as_ref())?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/features/{code}/approve"),

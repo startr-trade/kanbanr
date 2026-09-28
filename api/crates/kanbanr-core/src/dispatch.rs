@@ -558,6 +558,12 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             &approver(b)?,
             &str_field(b, "reason").unwrap_or_default(),
         )?),
+        ("POST", ["projects", p, "features", code, "ratify"]) => ser(&store.ratify_feature(
+            p,
+            code,
+            &approver(b)?,
+            &str_field(b, "reason").unwrap_or_default(),
+        )?),
         ("POST", ["projects", p, "features", code, "approve"]) => {
             ser(&store.approve_feature(p, code, &approver(b)?)?)
         }
@@ -766,7 +772,9 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                 .filter_map(|f| {
                     let definition = f.definition.as_ref()?;
                     let state = match definition.approval_state() {
-                        ApprovalState::Current => return None,
+                        // Agreed is agreed, however late — a ratified item is not still a
+                        // decision waiting to be made, so it leaves the queue (FEAT-080).
+                        ApprovalState::Current | ApprovalState::Ratified => return None,
                         ApprovalState::Missing => "missing",
                         ApprovalState::Lapsed => "lapsed",
                     };
@@ -914,6 +922,9 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "features", c] => format!("edit feature {c}"),
         ["projects", _p, "features", c, "move"] => format!("move feature {c}"),
         ["projects", _p, "features", c, "approve"] => format!("approve definition of {c}"),
+        ["projects", _p, "features", c, "ratify"] => {
+            format!("ratify {c} — built under a recorded bypass, agreed to after the fact")
+        }
         ["projects", _p, "features", c, "unapprove"] => {
             format!("withdraw the approval of {c}")
         }

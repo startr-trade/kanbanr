@@ -525,6 +525,130 @@ mod tests {
         );
     }
 
+    /// FEAT-080: agreement given AFTER the work is a different claim from agreement given before
+    /// it, and the record has to be able to say which. Twenty-nine items on this board were
+    /// reconciled by approving them late, each indistinguishable from prior agreement — which
+    /// erases the one distinction the whole gate exists to draw.
+    #[test]
+    fn agreement_after_the_work_is_recorded_as_a_different_verdict() {
+        use crate::models::{ApprovalState, FeatureDefinition};
+        use serde_json::{Value, json};
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+
+        let define = |code: &str| {
+            store
+                .set_feature_definition(
+                    "demo",
+                    code,
+                    Some(FeatureDefinition {
+                        statement: "Keep a cart for 7 days".into(),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        };
+
+        // An item that never took the bypass cannot be ratified — that would make ratification a
+        // shortcut around review rather than an answer to a question that was actually asked.
+        let plain = store
+            .add_feature("demo", "Plain", "spec", "M", None)
+            .unwrap();
+        define(&plain.code);
+        let err = store
+            .ratify_feature("demo", &plain.code, "Ada L", "")
+            .expect_err("ratifying an item that never bypassed must be refused");
+        assert!(err.to_string().contains("nothing to ratify"), "{err}");
+        assert!(
+            err.to_string().contains("kanbanr approve"),
+            "it must name the right command: {err}"
+        );
+
+        // An item that DID start under a recorded bypass.
+        let f = store
+            .add_feature("demo", "Cart", "spec", "M", None)
+            .unwrap();
+        define(&f.code);
+        store
+            .move_feature_approved("demo", &f.code, "Scheduled", Some("urgent"))
+            .unwrap();
+        let project = store.load("demo").unwrap();
+        let def = project
+            .feature(&f.code)
+            .unwrap()
+            .definition
+            .as_ref()
+            .unwrap();
+        assert_eq!(def.approval_state(), ApprovalState::Missing);
+        assert!(
+            !def.started_unapproved.trim().is_empty(),
+            "the bypass is on the record"
+        );
+
+        // Ratifying answers it, and says so as its own verdict.
+        crate::dispatch::dispatch(
+            &store,
+            "POST",
+            &format!("/projects/demo/features/{}/ratify", f.code),
+            Some(&json!({ "by": "Ada L", "reason": "reviewed after the fact" })),
+        )
+        .unwrap();
+        let project = store.load("demo").unwrap();
+        let def = project
+            .feature(&f.code)
+            .unwrap()
+            .definition
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            def.approval_state(),
+            ApprovalState::Ratified,
+            "ratified is NOT the same state as approved"
+        );
+        assert!(def.was_ratified());
+        assert_eq!(def.approvals.last().unwrap().verdict, "ratified");
+        assert_eq!(
+            def.approvals.last().unwrap().reason,
+            "reviewed after the fact"
+        );
+        // The bypass reason survives: it is history, and the charter says raw data is not discarded.
+        assert!(!def.started_unapproved.trim().is_empty());
+
+        // It satisfies the gate — agreed is agreed, however late.
+        store
+            .move_feature_approved("demo", &f.code, "Completed", None)
+            .unwrap();
+
+        // And it leaves the review queue, because it is no longer a decision waiting to be made.
+        let out = crate::dispatch::dispatch(&store, "GET", "/projects/demo/review", None).unwrap();
+        let queue: Vec<Value> = serde_json::from_str(&out).unwrap();
+        assert!(
+            !queue.iter().any(|v| v["code"] == f.code.as_str()),
+            "a ratified item is not still awaiting review: {queue:?}"
+        );
+
+        // Editing the definition afterwards lapses it, exactly as an ordinary approval lapses —
+        // the agreement no longer covers what was built.
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart for 30 days".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let project = store.load("demo").unwrap();
+        let def = project
+            .feature(&f.code)
+            .unwrap()
+            .definition
+            .as_ref()
+            .unwrap();
+        assert_eq!(def.approval_state(), ApprovalState::Lapsed);
+    }
+
     /// FEAT-069: an approval recorded in error had no remedy. Found the direct way — Claude
     /// approved an item on the user's behalf, which the method forbids, and nothing could undo it.
     #[test]

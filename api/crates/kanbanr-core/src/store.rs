@@ -1000,6 +1000,58 @@ impl Store {
         Ok(updated)
     }
 
+    /// Agree to a definition **after** the work was built (FEAT-080).
+    ///
+    /// Recorded as its own verdict rather than as an ordinary approval, because the gate exists to
+    /// tell "we agreed, then built" from "we built, then agreed". With one verdict the record
+    /// could not: twenty-nine items on this board were reconciled that way before the distinction
+    /// existed, and each looks exactly like prior agreement.
+    ///
+    /// It refuses an item that never took the bypass — ratification answers a question that was
+    /// actually asked, and offering it as a general shortcut around review would make the gate
+    /// optional rather than explicit.
+    pub fn ratify_feature(
+        &self,
+        id: &str,
+        code: &str,
+        by: &str,
+        reason: &str,
+    ) -> Result<FeatureItem> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let feature = project.feature_mut(code)?;
+        let definition = feature.definition.as_mut().ok_or_else(|| {
+            CoreError::Unsupported(format!(
+                "{code} has no definition to ratify — write one with `kanbanr feature define`"
+            ))
+        })?;
+        if definition.started_unapproved.trim().is_empty() {
+            return Err(CoreError::Unsupported(format!(
+                "{code} did not start under a recorded bypass, so there is nothing to ratify. \
+                 Use `kanbanr approve {code}` to agree to it."
+            )));
+        }
+        let at = now_rfc3339();
+        let rev = definition.content_rev();
+        definition.approval = Some(crate::models::Approval {
+            by: by.to_string(),
+            at: at.clone(),
+            rev: rev.clone(),
+        });
+        definition.approvals.push(crate::models::ApprovalEvent {
+            at: at.clone(),
+            by: by.to_string(),
+            verdict: "ratified".to_string(),
+            reason: reason.trim().to_string(),
+            rev,
+        });
+        feature.updated_at = at;
+        let updated = feature.clone();
+        pending.persist_features.insert(updated.code.clone());
+        self.flush(id, &project, &pending)?;
+        Ok(updated)
+    }
+
     /// Take back an approval (FEAT-069). The agreement goes; the record of it does not — an
     /// approval given and later withdrawn says more than no approval ever having existed, and the
     /// item returns to what is awaiting review, start gate and all.
@@ -1104,7 +1156,10 @@ impl Store {
         let missing = match feature.definition.as_ref() {
             None => "it has no definition (run `kanbanr feature define`)".to_string(),
             Some(def) => match def.approval_state() {
-                crate::models::ApprovalState::Current => return Ok(()),
+                // An item agreed to after the fact is agreed to; the gate has nothing left to ask.
+                crate::models::ApprovalState::Current | crate::models::ApprovalState::Ratified => {
+                    return Ok(());
+                }
                 crate::models::ApprovalState::Missing => {
                     "its definition is not approved (review it, then `kanbanr approve`)".to_string()
                 }
