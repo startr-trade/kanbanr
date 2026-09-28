@@ -3,8 +3,9 @@ name: kanbanr
 description: >-
   The project management system of record for Claude-driven development. Use it whenever doing
   ANY work on a project that is tracked with kanbanr — and adopt it for the whole project the
-  moment the user says "start using kanbanr for this project", then keep using it for the rest of
-  the project's life with no further instruction. Use to: scope work as feature
+  moment the user says "start using kanbanr for this project" (or asks to set up / init kanbanr —
+  which runs a plan-mode setup interview first), then keep using it for the rest of the project's
+  life with no further instruction. Use to: scope work as feature
   items with specs; group them into milestones; plan via the workflow (statuses, allowed
   transitions, displayed/no-op states); create persistent todo-lists with items on a feature and
   mark them Not started / In progress / Completed; move feature items between states; record
@@ -22,45 +23,90 @@ kanbanr tracks development work as **feature items** (epics with a spec + persis
 grouped into **milestones** (a dependency DAG). The data is durable, git-backed YAML/markdown in a
 local folder; a read-only web monitor renders it live.
 
-## Activation (one phrase, whole project)
+## Activation: a setup interview in plan mode, then one approved setup
 
-When the user says **"start using kanbanr for this project"** (or anything equivalent):
-0. **Write the charter first.** A project with no stated purpose cannot have its work judged
-   against anything. Ask the user for the purpose, the goals (an outcome plus how you would know it
-   happened), what is explicitly **not** in scope, and who it is for; then
-   `kanbanr charter set --file charter.yaml`. Goals get ids (`G-1`) that every item links.
-   Read it back at the start of a session with `kanbanr charter show`, alongside `kanbanr board`.
+When the user asks to **set up kanbanr**, **init kanbanr**, or **"start using kanbanr for this
+project"** (or anything equivalent):
+
 1. **Check whether it's already set up.** Run `kanbanr where --json`. If `source` is `marker` and
-   `exists` is true, the project is already tracked: skip to step 4.
-2. **Ask the user where to keep the board.** The board is its own git repo and should live
-   **outside** the project folder, so it never nests inside the project's git repo. Ask one
-   question (e.g. with AskUserQuestion). Options, taken from `kanbanr where --json`:
-   - `suggested_data_dir`: a new folder next to the project's git repo, named `<repo>.kanbanr`
-     (recommended, list it first);
-   - each of `existing_data_dirs`: an existing kanbanr folder, shared with its other projects
-     (one data folder is needed for portfolio views, cross-project dependencies and the
-     cross-project Gantt);
-   - or a path the user types.
-   Never pick for the user silently. If the chosen folder is inside a git repo (warned by
-   `init`, or `suggested_inside_git_repo` is set), say so and confirm before continuing.
-3. **Set up in one command:**
-   `kanbanr init <name> --data-dir <chosen folder> --author "Name" --email you@x`.
-   It creates the data folder + git repo, sets the commit identity, scaffolds the project, and
-   writes a `.kanbanr` marker in the project folder recording the project and the board's
-   location (e.g. `data_dir: ../app.kanbanr`). Every `kanbanr` command run anywhere inside the
-   project then finds the board: no env vars needed.
-   `init` also registers kanbanr's Claude Code hooks (session-start board recovery, stop-time
-   reminder) in the global Claude Code settings, once per machine; relay what it printed. If it
-   says the skill isn't installed where the hooks expect it, pass that on to the user.
-   If the Claude Code sandbox is on, writes outside the project folder can be blocked: tell the
-   user to allow the board folder (e.g. `sandbox.filesystem.allowWrite`).
-4. **Offer to import existing tasks** (see "Importing existing task trackers" below).
-5. From that point on, treat kanbanr as the **system of record for the entire project** — no
-   further prompting required.
+   `exists` is true, the project is already tracked: skip the interview, recover the board (see
+   "Recover & resume") and carry on. Everything below is for a folder that is not yet tracked.
+2. **Enter plan mode before anything writes** (the `EnterPlanMode` tool). Setting up is the first
+   decision of the project, and the rule for every other decision applies to it too: nothing gets
+   built before its reasoning is agreed. Set the user's original request aside until setup is
+   done — it is picked up again at step 5.
+3. **Run the interview.** Read what you can first (`kanbanr where --json`, `git config user.name`,
+   `git config user.email`, `git remote -v`, the README and manifests, any tracker files), then ask
+   only what that cannot answer, a few questions at a time with AskUserQuestion. Collect three
+   groups:
 
-If a `.kanbanr` marker (or `$KANBANR_PROJECT`) is already present, the project is already tracked —
-behave as if activated. Every change you make is committed to the data repo **authored by the
-configured identity** (`kanbanr identity`); sharing/centralization is via git remotes.
+   **a. Board and identity**
+   - *Where the board lives.* It is its own git repo and should sit **outside** the project folder,
+     so it never nests inside the project's repo. Options from `kanbanr where --json`:
+     `suggested_data_dir` (a new `<repo>.kanbanr` beside the repo; recommended, list it first),
+     each of `existing_data_dirs` (share a board with other projects: needed for portfolio views,
+     cross-project dependencies and the cross-project Gantt), or a path the user types. Never pick
+     silently; if the folder is inside a git repo (`suggested_inside_git_repo`), say so.
+   - *Project name and one-line description* (default name: the folder's).
+   - *Commit identity*: name and email, defaulted from `git config`. Every board change is
+     committed as this identity.
+
+   **b. Charter**: why the project exists, which every item will link to.
+   - Draft it from what the repository already says (the README, manifests, existing docs):
+     `purpose`, an optional one-line `vision`, `goals` (each an outcome plus the `measure` that
+     shows it happened), `non_goals`, `stakeholders` (`name`, `role`, `interest`) and
+     `constraints`. Mark the draft **as a draft** in the plan so the user reads it as a proposal.
+   - Leave anything the repository cannot answer **blank** and ask. Don't invent it. A plausible
+     goal nobody agreed to is worse than a missing one, because it looks settled.
+   - Suggest a standing `G-0: the system stays operable and maintainable` for maintenance work,
+     so chores link to something honest.
+
+   **c. Process**
+   - *Workflow*: the default kanban (Deferred → Planned → Scheduled → Completed), **TOGAF**
+     phases as the columns (Vision → Business Arch → System Design → Implementation → Migration →
+     Operations), or custom statuses and transitions the user describes.
+   - *Definitions*: every item carries the Zachman six-dimension definition, EARS requirements
+     and tests. That is the method, not an option. Say so, so the user is not surprised by it.
+   - *Git hooks* in the code repo (`kanbanr git install-hooks`): every commit names its board
+     item, and commits on the default branch are refused. Offer them **defaulting to yes**.
+   - *Optional*: a git remote to back the board up to, the GitHub issue mirror (see below; a
+     public repo needs an explicit OK), and importing an existing tracker (see "Importing existing
+     task trackers": list what you found and ask which to bring in).
+4. **Write the setup plan and exit plan mode.** The plan states every answer and the exact
+   commands, in order, so approving it approves precisely what will run:
+
+   ```bash
+   kanbanr init <name> --data-dir <board> --author "<name>" --email <email> --description "<…>"
+   kanbanr config workflow --togaf                 # or --statuses … --transitions …; omit for default
+   kanbanr charter set --file <scratch>/charter.yaml
+   kanbanr hooks status                            # init registered them; install if it did not
+   kanbanr git install-hooks                       # if chosen
+   kanbanr claude sync                             # CLAUDE.md block pointing at the charter
+   kanbanr remote add <name> <url>                 # if chosen
+   kanbanr mirror enable --repo <owner/repo>       # if chosen
+   # import: one `kanbanr batch` of the chosen tracker items, if chosen
+   kanbanr doc add setup/<YYYY-MM-DD>-setup.md --file <scratch>/setup-plan.md
+   kanbanr doctor && kanbanr board
+   ```
+
+   **Exiting plan mode is the approval.** If the user sends changes back instead, revise the plan
+   and exit again. Do not start setting up on a partial yes.
+5. **Run the approved setup, all of it, before anything else.** Run the commands in the plan's
+   order and stop at the first failure: report it, fix it, and rerun from there, rather than
+   leaving a half-configured project. Relay what `init` printed. If the Claude Code sandbox blocks
+   writes to the board folder, tell the user to allow it (e.g. `sandbox.filesystem.allowWrite`).
+   Save the approved plan as the board doc named in it, so the reasons for the setup outlive the
+   session. Finish by checking `kanbanr hooks status`, `kanbanr git status` (if the hooks were
+   chosen) and `kanbanr doctor`, then show the board. On a new board, doctor's only expected
+   warnings are the goals that no item links to yet. Anything else is a setup fault to fix now. **Only then** go back to what the
+   user originally asked for.
+6. From that point on, treat kanbanr as the **system of record for the entire project**, with no
+   further prompting.
+
+The charter is read back at the start of every session with `kanbanr charter show`, alongside
+`kanbanr board`. If a `.kanbanr` marker (or `$KANBANR_PROJECT`) is already present, the project is
+already tracked, so behave as if activated. Every change is committed to the data repo **authored
+by the configured identity** (`kanbanr identity`), and sharing happens through git remotes.
 
 ## Importing existing task trackers
 
