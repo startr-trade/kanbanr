@@ -1,13 +1,39 @@
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import type { BoardLane, Counts, Disposition } from "../types";
 
+/** The same page sizes the project board offers, and the same remembered choice. */
+const PAGE_SIZES = [10, 25, 50, 100];
+
 /** Portfolio overview (FEAT-030): cross-project rollups (milestone → project → program →
  * portfolio %) plus a cross-project board grouping every feature into normalized lanes. */
 export default function PortfolioPage() {
   const tick = useLiveTick(api.allEvents());
+  // A portfolio lane holds EVERY project's work in that disposition, so it is the longest column
+  // in the product — a "Not started" lane across several boards runs to hundreds of cards, and
+  // the page became a scroll with no shape (FEAT-091). Paginated per lane, exactly as the project
+  // board's columns are, down to the remembered page size.
+  const [pageSize, setPageSize] = useState<number | "all">(() => {
+    const saved = localStorage.getItem("kanbanr-board-page-size");
+    if (saved === "all") return "all";
+    const n = Number(saved);
+    return PAGE_SIZES.includes(n) ? n : 25;
+  });
+  const [pages, setPages] = useState<Record<string, number>>({});
+  useEffect(() => {
+    // Shared with the project board on purpose: it is one reader's preference, not one page's.
+    try {
+      localStorage.setItem("kanbanr-board-page-size", String(pageSize));
+    } catch {
+      /* private window, blocked storage — the choice just does not persist */
+    }
+  }, [pageSize]);
+  useEffect(() => {
+    setPages({});
+  }, [pageSize]);
   const rollups = useAsync(() => api.getPortfolioRollups(), [tick]);
   const board = useAsync(() => api.getPortfolioBoard(), [tick]);
 
@@ -20,6 +46,21 @@ export default function PortfolioPage() {
       <div className="page-head">
         <h1>{report?.portfolio ?? "Portfolio"}</h1>
         <LiveDot />
+        <span className="spacer" />
+        <label className="per-page">
+          Per page
+          <select
+            value={String(pageSize)}
+            onChange={(e) => setPageSize(e.target.value === "all" ? "all" : Number(e.target.value))}
+          >
+            {PAGE_SIZES.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+            <option value="all">All</option>
+          </select>
+        </label>
       </div>
 
       {report && (
@@ -63,7 +104,13 @@ export default function PortfolioPage() {
         {board.data && (
           <div className="board-lanes">
             {board.data.lanes.map((lane) => (
-              <Lane key={lane.disposition} lane={lane} />
+              <Lane
+                key={lane.disposition}
+                lane={lane}
+                pageSize={pageSize}
+                page={pages[lane.disposition] ?? 1}
+                onPage={(p) => setPages((prev) => ({ ...prev, [lane.disposition]: p }))}
+              />
             ))}
           </div>
         )}
@@ -78,15 +125,32 @@ const LANE_LABEL: Record<Disposition, string> = {
   done: "Done",
 };
 
-function Lane({ lane }: { lane: BoardLane }) {
+function Lane({
+  lane,
+  pageSize,
+  page,
+  onPage,
+}: {
+  lane: BoardLane;
+  pageSize: number | "all";
+  page: number;
+  onPage: (p: number) => void;
+}) {
+  const total = lane.cards.length;
+  const size = pageSize === "all" ? Math.max(total, 1) : pageSize;
+  const pageCount = Math.max(1, Math.ceil(total / size));
+  const current = Math.min(Math.max(1, page), pageCount);
+  const shown = pageSize === "all" ? lane.cards : lane.cards.slice((current - 1) * size, current * size);
   return (
     <div className={`board-lane lane-${lane.disposition}`}>
       <div className="lane-head">
         <span>{LANE_LABEL[lane.disposition]}</span>
-        <b>{lane.cards.length}</b>
+        {/* The count is the WHOLE lane, not the page — a header that counted the page would make
+            a paginated lane look smaller than it is. */}
+        <b>{total}</b>
       </div>
       <div className="lane-cards">
-        {lane.cards.map((c) => (
+        {shown.map((c) => (
           <Link
             key={`${c.project}:${c.code}`}
             to={`/p/${encodeURIComponent(c.project)}/feature/${encodeURIComponent(c.code)}`}
@@ -108,8 +172,31 @@ function Lane({ lane }: { lane: BoardLane }) {
             </div>
           </Link>
         ))}
-        {lane.cards.length === 0 && <p className="muted small">—</p>}
+        {total === 0 && <p className="muted small">—</p>}
       </div>
+      {pageCount > 1 && (
+        <div className="pager">
+          <button
+            type="button"
+            disabled={current <= 1}
+            onClick={() => onPage(current - 1)}
+            aria-label={`Previous page of ${LANE_LABEL[lane.disposition]}`}
+          >
+            ‹
+          </button>
+          <span className="muted small">
+            {current} / {pageCount}
+          </span>
+          <button
+            type="button"
+            disabled={current >= pageCount}
+            onClick={() => onPage(current + 1)}
+            aria-label={`Next page of ${LANE_LABEL[lane.disposition]}`}
+          >
+            ›
+          </button>
+        </div>
+      )}
     </div>
   );
 }

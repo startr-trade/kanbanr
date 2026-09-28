@@ -47,5 +47,15 @@ for (const file of files) {
     }
   }
 }
+// A glob the shell did not expand leaves this checking nothing and reporting success, which is the
+// same "silence read as absence" failure the rest of this project keeps finding. The docs have
+// diagrams; zero means the paths are wrong, not that the docs are clean.
+if (checked === 0) {
+  console.error(
+    `check:docs — no diagrams found in ${process.argv.length - 2} path argument(s).\n` +
+      "      That means the paths did not match, not that the docs are clean. Check the glob.",
+  );
+  process.exit(1);
+}
 console.log(`${checked} diagram(s) checked, ${failed} broken`);
 process.exit(failed ? 1 : 0);

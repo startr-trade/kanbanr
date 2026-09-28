@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "check:docs": "node scripts/check-mermaid.mjs ../docs/*.md ../README.md ../skill/kanbanr/SKILL.md",
+    "check:docs": "node scripts/check-mermaid.mjs ../docs/src/**/*.md ../docs/src/*.md ../README.md ../skill/kanbanr/SKILL.md",
     "check:ui": "node scripts/check-affordance.mjs"
   },
   "dependencies": {

@@ -17,7 +17,8 @@ ROOT="$(cd ../.. && pwd)"
 KANBANR_URL="${KANBANR_URL:-http://localhost:8080}"
 SELENIUM_IMAGE="${SELENIUM_IMAGE:-selenium/standalone-chromium:latest}"
 CONTAINER="kanbanr-selenium"
-OUT_DIR="${OUT_DIR:-$ROOT/docs/images}"
+# The docs are an mdBook now, so the images live under its src tree (FEAT-090).
+OUT_DIR="${OUT_DIR:-$ROOT/docs/src/images}"
 
 # `capture.sh --down` (or `down`/`stop`) tears the persistent grid down — the only thing that does.
 case "${1:-}" in

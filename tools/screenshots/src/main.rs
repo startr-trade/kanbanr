@@ -39,7 +39,11 @@ async fn main() -> anyhow::Result<()> {
     let project = env("KANBANR_PROJECT", "kanbanr");
     let feature = env("KANBANR_FEATURE", "FEAT-001");
     let milestone = env("KANBANR_MILESTONE", "MS-001");
-    let out = env("OUT_DIR", "docs/images");
+    let out = env("OUT_DIR", "docs/src/images");
+    // A portfolio only means anything across several projects, and kanbanr's own board is one — so
+    // these pages are shot against the demo board `tools/demo/portfolio.sh` builds, by pointing
+    // KANBANR_URL at a daemon serving it and setting PORTFOLIO_ONLY=1.
+    let portfolio_only = std::env::var("PORTFOLIO_ONLY").is_ok();
     let fw: u32 = env("FRAME_W", "900").parse().unwrap_or(900);
     let fh: u32 = env("FRAME_H", "1440").parse().unwrap_or(1440);
     let board_w: u32 = env("BOARD_W", "1440").parse().unwrap_or(1440);
@@ -57,11 +61,28 @@ async fn main() -> anyhow::Result<()> {
         (format!("/p/{p}/milestones"), "milestones.png"),
         (format!("/p/{p}/milestone/{}", urlencode(&milestone)), "milestone.png"),
         (format!("/p/{p}/schedule"), "schedule.png"),
+        // Added with the method (MS-006): the charter that says why the project exists, the
+        // lessons beside its goals, and the queue where a definition is agreed to before work
+        // starts. These are the pages the method is actually practised on, so a docs set without
+        // them shows the tool as it was two milestones ago.
+        (format!("/p/{p}/review"), "review.png"),
+        (format!("/p/{p}/gantt"), "gantt.png"),
+        (format!("/p/{p}/workflow"), "workflow.png"),
         (format!("/p/{p}/docs"), "docs.png"),
         (format!("/p/{p}/docs/folder/design"), "docs-folder.png"),
         (format!("/p/{p}/docs/file/design/overview.md"), "doc-file.png"),
         (format!("/p/{p}/docs/file/design/data-flow.md"), "doc-mermaid.png"),
     ];
+
+    // Cross-project rollups and the cross-project board, from the demo portfolio.
+    let pages: Vec<(String, &str)> = if portfolio_only {
+        vec![
+            ("/portfolio".to_string(), "portfolio.png"),
+            ("/".to_string(), "portfolio-home.png"),
+        ]
+    } else {
+        pages
+    };
 
     let mut caps = DesiredCapabilities::chrome();
     caps.add_arg("--no-sandbox")?;
@@ -74,6 +95,17 @@ async fn main() -> anyhow::Result<()> {
     for (route, file) in &pages {
         capture(&driver, &format!("{base}{route}"), &format!("{out}/{file}"), Some("light"), portrait).await?;
     }
+
+    if portfolio_only {
+        driver.quit().await?;
+        println!("done — portfolio screenshots in {out}/");
+        return Ok(());
+    }
+
+    // The charter runs past a portrait frame, and what gets cropped is the lessons — the half a
+    // reader most wants. Full content height, like the board.
+    let charter = format!("{base}/p/{p}/charter");
+    capture(&driver, &charter, &format!("{out}/charter.png"), Some("light"), Frame::Fit(fw)).await?;
 
     // Dashboard: full content height, light theme.
     let board = format!("{base}/p/{p}");
