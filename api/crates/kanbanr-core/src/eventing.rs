@@ -22,11 +22,11 @@ use crate::Store;
 use crate::graph::{self, DependencyView};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Keep the most recent N events per project (older history still lives in git).
-const MAX: usize = 200;
-const LOG_FILE: &str = "events.yaml";
+/// The folder holding one file per day (FEAT-066). Nothing is trimmed; see [`crate::daylog`].
+const LOG: &str = "events";
 
 /// The opt-in webhook config file at the data-dir root. May contain endpoint URLs, so it is
 /// gitignored (see `git.rs`) and never pushed.
@@ -93,38 +93,21 @@ impl Event {
     }
 }
 
-fn log_path(data_dir: &Path, project: &str) -> PathBuf {
-    data_dir.join("projects").join(project).join(LOG_FILE)
-}
-
-fn load(file: &Path) -> Vec<Event> {
-    std::fs::read_to_string(file)
-        .ok()
-        .and_then(|s| serde_yaml::from_str(&s).ok())
-        .unwrap_or_default()
+impl crate::daylog::Dated for Event {
+    fn at(&self) -> &str {
+        &self.time
+    }
 }
 
 /// The most recent `limit` events for a project, newest first.
 pub fn read(data_dir: &Path, project: &str, limit: usize) -> Vec<Event> {
-    load(&log_path(data_dir, project))
-        .into_iter()
-        .take(limit)
-        .collect()
+    crate::daylog::read(data_dir, project, LOG, limit)
 }
 
-/// Append an event to the project's events log (newest first), capped to the most recent `MAX`.
-/// Best-effort: I/O errors are ignored so eventing never disturbs the write path.
+/// Append an event to today's file. Nothing is trimmed (FEAT-066). Best-effort: I/O errors are
+/// ignored so eventing never disturbs the write path.
 pub fn append(data_dir: &Path, project: &str, event: &Event) {
-    let file = log_path(data_dir, project);
-    let mut list = load(&file);
-    list.insert(0, event.clone());
-    list.truncate(MAX);
-    if let Some(dir) = file.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if let Ok(yaml) = serde_yaml::to_string(&list) {
-        let _ = std::fs::write(&file, yaml);
-    }
+    crate::daylog::append(data_dir, project, LOG, event.clone());
 }
 
 /// Webhook delivery configuration: zero or more endpoint URLs. Empty means delivery is off.
@@ -416,6 +399,7 @@ fn push_move_events(
 mod tests {
     use super::*;
     use crate::config::ProjectConfig;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);

@@ -7,6 +7,7 @@ pub mod batch;
 pub mod charter;
 pub mod claude;
 pub mod config;
+pub mod daylog;
 pub mod dispatch;
 pub mod docs;
 pub mod doctor;
