@@ -2330,6 +2330,13 @@ fn retro_markdown(r: &kanbanr_core::retro::Retro) -> String {
             r.no_history.join(", ")
         );
     }
+    if let Some(starts) = &r.log_starts {
+        let _ = writeln!(
+            out,
+            "- this wave began before the activity log, which starts {starts} — anything earlier \
+             is not recorded here rather than absent"
+        );
+    }
     out.push('\n');
 
     // What the wave taught, as it stood when this was written. Still facts — each one carries the

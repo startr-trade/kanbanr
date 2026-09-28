@@ -2137,12 +2137,16 @@ fn cli_event_log_is_committed_with_the_change() {
     // And the event landed in the commit for that very move, not a later one.
     let files = git(&["show", "--name-only", "--format=", "HEAD"]);
     assert!(
-        files.contains("events.yaml"),
+        files.contains("projects/shop/events/"),
         "the event log is part of the commit that caused it: {files}"
     );
-    let events =
-        std::fs::read_to_string(std::path::Path::new(&board).join("projects/shop/events.yaml"))
-            .unwrap();
+    // One file per day (FEAT-066), so read whichever day the write landed on.
+    let events: String =
+        std::fs::read_dir(std::path::Path::new(&board).join("projects/shop/events"))
+            .unwrap()
+            .flatten()
+            .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+            .collect();
     assert!(events.contains("FEAT-001"), "{events}");
 
     let _ = std::fs::remove_dir_all(&base);

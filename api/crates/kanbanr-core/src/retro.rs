@@ -83,6 +83,10 @@ pub struct Retro {
     pub rework: Vec<String>,
     /// Items with no recorded moves at all — their flow numbers are absent, not zero.
     pub no_history: Vec<String>,
+    /// The oldest day the activity log reaches, when the wave began before it. Silence about an
+    /// earlier period means "not recorded here", which is a different claim from "nothing happened"
+    /// (FEAT-066).
+    pub log_starts: Option<String>,
     /// Items whose only timestamps come from the changelog. The activity log records when the
     /// BOARD was written, not how long work took, so these are reported separately and never
     /// mixed into the cycle time — a five-minute median for a month of work is worse than a gap.
@@ -142,7 +146,9 @@ pub struct Estimate {
 /// Build the retro for one wave.
 pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
     let project = store.load_meta(id)?;
-    let moves = crate::activity::read(store.data_dir(), id, 1000);
+    // The whole log, not a window: this is the fallback for items that finished before transitions
+    // were recorded, and asking for a bounded slice is what made it silently useless (FEAT-066).
+    let moves = crate::activity::read_all(store.data_dir(), id);
     let items: Vec<&FeatureItem> = project.features.iter().filter(|f| wave.covers(f)).collect();
 
     // The wave begins when work on it begins — the first recorded transition across its items,
@@ -170,6 +176,7 @@ pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
         cycle_time_days: None,
         rework: Vec::new(),
         no_history: Vec::new(),
+        log_starts: None,
         approximate: Vec::new(),
         evidence: Evidence::default(),
         estimates: Vec::new(),
@@ -271,6 +278,15 @@ pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
     }
 
     retro.cycle_time_days = percentiles(&mut cycle_times);
+    // Only worth saying when the wave actually predates the log: otherwise it is noise about a
+    // boundary nobody is near.
+    retro.log_starts = crate::activity::oldest_day(store.data_dir(), id).filter(|oldest| {
+        retro
+            .started
+            .as_deref()
+            .or(items.first().map(|f| f.created_at.as_str()))
+            .is_some_and(|began| &began[..10.min(began.len())] < oldest.as_str())
+    });
     // A lesson belongs to the wave whose work taught it, or to the retrospective that promoted it.
     // Retired ones are included: a retrospective is a historical account, and the wave did learn
     // it — what changed afterwards is a fact about the lesson, not about the wave.
@@ -658,6 +674,44 @@ mod tests {
     /// FEAT-063: the Stop hook asked for retrospectives on three waves that finished months
     /// before the method existed. A wave the board never watched has nothing to retrospect, and a
     /// prompt with nothing behind it is a prompt people learn to dismiss.
+    /// FEAT-066: a wave that began before the log reaches is told so. Silence about an earlier
+    /// period means "not recorded here", which is a different claim from "nothing happened" — and
+    /// reporting the second when you mean the first is what made every pre-method wave look empty.
+    #[test]
+    fn a_period_older_than_the_log_is_named_as_such() {
+        let (store, dir) = fixture();
+        let f = store
+            .add_feature("demo", "Old work", "", "MS-1", None)
+            .unwrap();
+        complete(&store, &f.code);
+
+        // No log at all: nothing to claim about a boundary.
+        let r = run(&store, "demo", &Wave::default()).unwrap();
+        assert!(r.log_starts.is_none());
+
+        // A log that starts well after this wave began.
+        let folder = store.data_dir().join("projects/demo/activity");
+        std::fs::create_dir_all(&folder).unwrap();
+        let later: Vec<crate::activity::Activity> = vec![crate::activity::Activity {
+            time: "2099-01-01T00:00:00Z".into(),
+            actor: "t".into(),
+            message: "much later".into(),
+            item: None,
+        }];
+        std::fs::write(
+            folder.join("2099-01-01.yaml"),
+            serde_yaml::to_string(&later).unwrap(),
+        )
+        .unwrap();
+        let r = run(&store, "demo", &Wave::default()).unwrap();
+        assert_eq!(
+            r.log_starts.as_deref(),
+            Some("2099-01-01"),
+            "the wave predates the log, and the report says where the log begins"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn a_wave_the_board_never_watched_is_not_due() {
         let (store, dir) = fixture();
@@ -703,7 +757,7 @@ mod tests {
                     item: Some(f.code.clone()),
                 })
                 .collect();
-        crate::activity::write_for_test(store.data_dir(), "demo", &moves);
+        crate::activity::write_legacy_for_test(store.data_dir(), "demo", &moves);
 
         let r = run(&store, "demo", &Wave::default()).unwrap();
         assert!(
