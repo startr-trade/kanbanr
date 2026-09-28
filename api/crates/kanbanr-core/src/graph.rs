@@ -188,6 +188,20 @@ pub fn is_terminal_status(config: &crate::ProjectConfig, status: &str) -> bool {
         || config.is_no_op(status)
 }
 
+/// Is this a status where the method still has something to say — work that can be started, or is
+/// underway? Not finished, and on the board rather than parked beside it (FEAT-078).
+///
+/// One rule, because more than one surface asks it. `doctor` had this gate from FEAT-049 and the
+/// review queue did not, so the two disagreed about the same question: the doctor named two items
+/// needing agreement while the queue offered six, four of them Completed or deliberately Deferred.
+/// Asking for a signature on work already merged cannot change anything, and a queue padded with
+/// signatures that mean nothing is how a gate becomes theatre — which is the failure the gate
+/// exists to prevent. Callers add their own further narrowing (`doctor` also applies the charter's
+/// adoption cutoff); what must not diverge is what counts as live.
+pub fn is_live_work(config: &crate::ProjectConfig, status: &str) -> bool {
+    !is_terminal_status(config, status) && config.displayed_states.iter().any(|s| s == status)
+}
+
 impl DependencyView {
     /// Build the status-aware view across every project in the store. `overlay`, when given,
     /// substitutes the in-memory state of one project for its on-disk state (matches

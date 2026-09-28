@@ -302,14 +302,11 @@ fn push(
     });
 }
 
-/// Live work under the method: not finished, on the board, and created since adoption.
+/// Live work under the method: not finished, on the board, and created since adoption. The first two
+/// are `graph::is_live_work`, shared with the review queue so the two cannot drift (FEAT-078); the
+/// adoption cutoff is the doctor's own, keeping pre-method items out of the report.
 fn in_scope(project: &Project, charter: &crate::Charter, feature: &crate::FeatureItem) -> bool {
-    !crate::graph::is_terminal_status(&project.config, &feature.status)
-        && project
-            .config
-            .displayed_states
-            .iter()
-            .any(|s| s == &feature.status)
+    crate::graph::is_live_work(&project.config, &feature.status)
         && feature.created_at.as_str() >= charter.adopted_at.as_str()
 }
 

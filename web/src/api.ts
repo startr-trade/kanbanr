@@ -41,8 +41,12 @@ export const api = {
   /** Items whose definition is not currently agreed — computed by the daemon (FEAT-067). */
   getPendingReviews: (id: string) =>
     getJson<PendingReview[]>(`/api/projects/${encodeURIComponent(id)}/review`),
-  /** What this daemon can do (FEAT-067). A read-only monitor answers `writes: false`. */
-  getMeta: () => getJson<{ writes: boolean }>(`/api/meta`),
+  /**
+   * What this daemon can do (FEAT-067) and who it would attribute a verdict to (FEAT-077). A
+   * read-only monitor answers `writes: false`; a board with no commit identity answers
+   * `identity: null`, and the pages then refuse to offer an approval nobody can be named for.
+   */
+  getMeta: () => getJson<Meta>(`/api/meta`),
   /**
    * Record agreement to a definition, or withdraw it (FEAT-067, FEAT-069) — through the same
    * routes and the same content hash the CLI uses. Only reachable on a write-enabled daemon, which
@@ -52,6 +56,13 @@ export const api = {
     verdict(id, code, "approve", { by }, "approve"),
   unapprove: (id: string, code: string, by: string, reason: string) =>
     verdict(id, code, "unapprove", { by, reason }, "withdraw"),
+  /**
+   * The name a verdict recorded from this monitor is attributed to. The board's commit identity is
+   * the same source `kanbanr approve` defaults to, so a verdict reads identically whichever surface
+   * gave it. Null when the board has no identity configured — the caller must then not offer the
+   * action at all rather than invent one.
+   */
+  approver: (meta: Meta | null) => meta?.identity?.name?.trim() || null,
   /** The lessons that bear on one item — matched by the daemon on its labels, kind and goals. */
   getLessonsFor: (id: string, code: string) =>
     getJson<Lesson[]>(
@@ -73,6 +84,13 @@ export const api = {
     `/api/projects/${encodeURIComponent(id)}/features/${encodeURIComponent(code)}/export?format=${format}`,
   projectEvents: (id: string) => `/api/projects/${encodeURIComponent(id)}/events`,
   allEvents: () => "/api/events",
+};
+
+/** What `/api/meta` answers: this daemon's capabilities and the identity it would record. */
+export type Meta = {
+  writes: boolean;
+  schema_version?: number;
+  identity: { name: string; email: string } | null;
 };
 
 /**

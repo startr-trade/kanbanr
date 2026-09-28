@@ -52,6 +52,11 @@ pub enum EventKind {
     /// The last open item of a milestone reached a terminal status (FEAT-054). The moment a wave
     /// ends is the only moment its lessons are still fresh, so this is what prompts the retro.
     MilestoneCompleted,
+    /// A definition was agreed to (FEAT-077). The gate opened — the moment work is allowed to start.
+    ApprovalRecorded,
+    /// An approval was taken back (FEAT-077). The one that matters: work already in flight has just
+    /// lost its mandate, and until this existed the only trace was inside the item's own file.
+    ApprovalWithdrawn,
 }
 
 /// A single notification event. Mirrors the shape of an activity entry, plus structured detail.
@@ -286,6 +291,51 @@ pub fn compute_events(store: &Store, method: &str, path: &str, result: &str) -> 
                 ));
             }
         }
+        // A verdict on a definition (FEAT-077): POST /projects/<id>/features/<code>/(un)approve.
+        // Approving opens the start gate and withdrawing closes it again, so both change whether
+        // work on the item is sanctioned — the kind of thing the rest of the board learns about
+        // from the event stream rather than by re-reading each item.
+        ["features", code, verb @ ("approve" | "unapprove")] if m == "POST" => {
+            let withdrawn = *verb == "unapprove";
+            // The verdict just written is the last entry of the item's approval log, which is where
+            // the who and the why live — read back from the result rather than from the request, so
+            // the event cannot describe something the board did not record.
+            let last = parsed
+                .get("definition")
+                .and_then(|d| d.get("approvals"))
+                .and_then(|a| a.as_array())
+                .and_then(|a| a.last());
+            let by = last
+                .and_then(|e| e.get("by").and_then(|v| v.as_str()))
+                .unwrap_or("someone");
+            let reason = last
+                .and_then(|e| e.get("reason").and_then(|v| v.as_str()))
+                .unwrap_or_default();
+            let status = parsed
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            events.push(Event::new(
+                &project,
+                if withdrawn {
+                    EventKind::ApprovalWithdrawn
+                } else {
+                    EventKind::ApprovalRecorded
+                },
+                Some(code.to_string()),
+                if withdrawn {
+                    let tail = if reason.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" — {reason}")
+                    };
+                    format!("{by} withdrew the approval of {code}{tail}")
+                } else {
+                    format!("{by} approved {code}")
+                },
+                json!({ "by": by, "reason": reason, "status": status }),
+            ));
+        }
         // Move a feature: POST /projects/<id>/features/<code>/move
         ["features", code, "move"] if m == "POST" => {
             let status = parsed
@@ -422,6 +472,54 @@ mod tests {
         store
             .add_milestone(id, "M", "", vec![], Some("M".into()))
             .unwrap();
+    }
+
+    /// FEAT-077 R-2: agreeing and taking it back were invisible outside the item's own file. The
+    /// withdrawal is the one that matters — it means work already in flight lost its mandate.
+    #[test]
+    fn a_withdrawn_approval_is_an_event() {
+        use crate::models::FeatureDefinition;
+        let dir = temp_dir();
+        let store = Store::new(dir.clone());
+        new_project(&store, "demo");
+        let f = store
+            .add_feature("demo", "Cart", "spec", "M", None)
+            .unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart for 7 days".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+
+        // Approving is an event, attributed to whoever gave the verdict.
+        let approved = store.approve_feature("demo", &f.code, "Ada L").unwrap();
+        let path = format!("/projects/demo/features/{}/approve", f.code);
+        let out = serde_json::to_string(&approved).unwrap();
+        let events = compute_events(&store, "POST", &path, &out);
+        assert_eq!(events.len(), 1, "expected one event, got {events:?}");
+        assert_eq!(events[0].kind, EventKind::ApprovalRecorded);
+        assert_eq!(events[0].message, format!("Ada L approved {}", f.code));
+
+        // Withdrawing is a different kind, and carries the reason — the part a reader needs.
+        let withdrawn = store
+            .unapprove_feature("demo", &f.code, "Ada L", "the requirements changed")
+            .unwrap();
+        let path = format!("/projects/demo/features/{}/unapprove", f.code);
+        let out = serde_json::to_string(&withdrawn).unwrap();
+        let events = compute_events(&store, "POST", &path, &out);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, EventKind::ApprovalWithdrawn);
+        assert!(
+            events[0].message.contains("the requirements changed"),
+            "the reason is the point of the event: {}",
+            events[0].message
+        );
+        assert_eq!(events[0].detail["by"], "Ada L");
     }
 
     #[test]

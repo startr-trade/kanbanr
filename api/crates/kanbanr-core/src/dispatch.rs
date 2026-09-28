@@ -22,6 +22,26 @@ fn ser<T: Serialize>(v: &T) -> Result<String> {
     serde_json::to_string(v).map_err(|e| CoreError::Unsupported(format!("serialize: {e}")))
 }
 
+/// Who is recording this verdict — required, never defaulted (FEAT-077).
+///
+/// This used to fall back to the string "unknown", and the monitor sent "reviewed in the monitor":
+/// a place, not a person. Twenty-eight approvals on this project's own board carry it. An approval
+/// is the one human step the whole gate exists to obtain, so a record that cannot say who gave it
+/// is worse than no record — it reads as accountability while carrying none. Refusing here means no
+/// caller can produce one by omission; the CLI resolves `--by` from the commit identity and the
+/// monitor from `/api/meta`, and a caller with neither is told to set one rather than quietly
+/// attributed to nobody.
+fn approver(b: &Value) -> Result<String> {
+    match str_field(b, "by") {
+        Some(who) if !who.trim().is_empty() => Ok(who),
+        _ => Err(CoreError::Unsupported(
+            "an approval must name who gave it: pass `by` (the CLI defaults it to the data \
+             folder's commit identity — set one with `kanbanr identity --name … --email …`)"
+                .into(),
+        )),
+    }
+}
+
 fn str_field(body: &Value, k: &str) -> Option<String> {
     body.get(k).and_then(|v| v.as_str()).map(String::from)
 }
@@ -535,14 +555,12 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("POST", ["projects", p, "features", code, "unapprove"]) => ser(&store.unapprove_feature(
             p,
             code,
-            &str_field(b, "by").unwrap_or_else(|| "unknown".to_string()),
+            &approver(b)?,
             &str_field(b, "reason").unwrap_or_default(),
         )?),
-        ("POST", ["projects", p, "features", code, "approve"]) => ser(&store.approve_feature(
-            p,
-            code,
-            &str_field(b, "by").unwrap_or_else(|| "unknown".to_string()),
-        )?),
+        ("POST", ["projects", p, "features", code, "approve"]) => {
+            ser(&store.approve_feature(p, code, &approver(b)?)?)
+        }
         ("POST", ["projects", p, "features", code, "todos"]) => ser(&store.add_todo_list(
             p,
             code,
@@ -737,9 +755,14 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             // Whether an approval is current or has lapsed depends on a hash of the definition's
             // content, so it is decided here rather than in each caller: the CLI, the monitor and
             // any future client all get the same answer to "is this agreed?".
-            let pending: Vec<Value> = project
+            let mut pending: Vec<Value> = project
                 .features
                 .iter()
+                // Only where agreement can still change what happens (FEAT-078). Approving a
+                // Completed item records a signature, pinned to a definition hash, for work already
+                // merged; a deliberately Deferred one is not going to start. The same gate the
+                // doctor applies, so the two surfaces cannot give different answers to one question.
+                .filter(|f| crate::graph::is_live_work(&project.config, &f.status))
                 .filter_map(|f| {
                     let definition = f.definition.as_ref()?;
                     let state = match definition.approval_state() {
@@ -754,9 +777,19 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                         "approval": state,
                         "started_unapproved": definition.started_unapproved,
                         "definition": definition,
+                        // What the ordering below keys on, and useful to a client besides.
+                        "in_progress": f.status != project.config.default_state,
                     }))
                 })
                 .collect();
+            // Work already being built without agreement is more urgent than work that has not
+            // started, so it is asked about first (FEAT-078 R-2).
+            pending.sort_by_key(|v| {
+                (
+                    !v["in_progress"].as_bool().unwrap_or(false),
+                    v["code"].as_str().unwrap_or_default().to_string(),
+                )
+            });
             ser(&pending)
         }
         ("GET", ["projects", p, "adrs"]) => ser(&crate::adr::list(store, p)?),

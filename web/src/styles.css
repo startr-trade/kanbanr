@@ -221,6 +221,39 @@ input:focus-visible,
   font-family: inherit; cursor: pointer;
 }
 .btn:hover { border-color: var(--accent); text-decoration: none; }
+/* The primary action on a page. A control has to look like one: the review queue's approve button
+   was styled as a `.chip` — the label vocabulary — so it read as a tag and had no pointer cursor
+   (FEAT-076). */
+.btn-primary {
+  background: var(--accent); border-color: var(--accent);
+  color: var(--bg); font-weight: 600;
+}
+.btn-primary:hover { filter: brightness(1.12); }
+.btn:disabled, .btn-primary:disabled { opacity: 0.6; cursor: progress; }
+
+/* ---- review queue (FEAT-067, separated in FEAT-076) ---- */
+/* One card per item, collapsed by default: a queue of twelve briefs read as one column of prose
+   with nothing marking where one ended and the next began. */
+.review-item {
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); margin: 12px 0;
+}
+.review-item > summary {
+  cursor: pointer; padding: 12px 14px; display: flex; gap: 10px;
+  align-items: center; flex-wrap: wrap; list-style: none;
+}
+.review-item > summary::-webkit-details-marker { display: none; }
+/* A caret that turns, so the card's state is legible without relying on the browser's marker. */
+.review-item > summary::before {
+  content: "▸"; color: var(--muted); transition: transform 0.15s ease;
+}
+.review-item[open] > summary::before { transform: rotate(90deg); }
+.review-item > summary:hover { background: var(--panel-2); border-radius: 10px; }
+.review-item[open] { border-color: var(--accent); }
+.review-item[open] > summary { border-bottom: 1px solid var(--border); border-radius: 10px 10px 0 0; }
+.review-item .review-body { padding: 4px 14px 14px; }
+.review-item .review-title { font-weight: 600; }
+.review-actions { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
 
 /* ---- status page / tasks ---- */
 .status-name, .status-group-head b, .mono { font-family: ui-monospace, monospace; }
@@ -450,4 +483,23 @@ input:focus-visible,
 @media (max-width: 720px) {
   .board-lanes { grid-template-columns: 1fr; }
   .rollup-name { flex-basis: 140px; }
+}
+
+/* The reason a withdrawal must give (FEAT-077). It sits in the page rather than in a
+   `window.prompt` so the reviewer can see the item they are writing about — and so the browser
+   cannot suppress the one field that makes the withdrawal accountable. */
+.reason {
+  width: 100%;
+  max-width: 48rem;
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  resize: vertical;
+}
+.reason:focus {
+  outline: none;
+  border-color: var(--accent);
 }

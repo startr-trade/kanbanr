@@ -374,6 +374,154 @@ mod tests {
         );
     }
 
+    /// FEAT-078: the review queue and `doctor` answered "what still needs agreement?" differently —
+    /// the doctor named two items on the real board while the queue offered six, four of them
+    /// Completed or deliberately Deferred. A signature on merged work changes nothing, and a queue
+    /// padded with signatures that mean nothing is how the gate becomes theatre.
+    #[test]
+    fn the_review_queue_asks_only_where_agreement_still_matters() {
+        use crate::models::FeatureDefinition;
+        use serde_json::{Value, json};
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+
+        // One item per interesting status, each defined and none approved.
+        let mut codes = Vec::new();
+        for (title, status) in [
+            ("Being built", "Scheduled"),
+            ("Not started", "Planned"),
+            ("Already done", "Completed"),
+            ("Parked", "Deferred"),
+            ("Dropped", "Out-of-Scope"),
+        ] {
+            let f = store.add_feature("demo", title, "spec", "M", None).unwrap();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &f.code,
+                    Some(FeatureDefinition {
+                        statement: format!("{title} matters"),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+            // Route through legal transitions: the default workflow has no Planned -> Completed.
+            let route: &[&str] = match status {
+                "Planned" => &[],
+                "Completed" => &["Scheduled", "Completed"],
+                other => &[other],
+            };
+            for step in route {
+                store.move_feature("demo", &f.code, step).unwrap();
+            }
+            codes.push((f.code, status));
+        }
+
+        let out = crate::dispatch::dispatch(&store, "GET", "/projects/demo/review", None).unwrap();
+        let queue: Vec<Value> = serde_json::from_str(&out).unwrap();
+        let listed: Vec<&str> = queue.iter().map(|v| v["code"].as_str().unwrap()).collect();
+
+        // Completed, Deferred and the no-op disposition are not decisions anyone can still make.
+        let expected: Vec<&str> = codes
+            .iter()
+            .filter(|(_, s)| *s == "Scheduled" || *s == "Planned")
+            .map(|(c, _)| c.as_str())
+            .collect();
+        assert_eq!(listed, expected, "queue: {listed:?}");
+
+        // R-2: work already being built without agreement is asked about first.
+        assert_eq!(
+            queue[0]["code"].as_str().unwrap(),
+            codes[0].0,
+            "the item already being worked on must come first"
+        );
+
+        // R-3: the queue's membership is the doctor's scope gate, not a second opinion on it.
+        let project = store.load("demo").unwrap();
+        for (code, status) in &codes {
+            let live = crate::graph::is_live_work(&project.config, status);
+            assert_eq!(
+                live,
+                listed.contains(&code.as_str()),
+                "{code} ({status}): queue and scope gate disagree"
+            );
+        }
+
+        // And an approved item drops out regardless of status.
+        crate::dispatch::dispatch(
+            &store,
+            "POST",
+            &format!("/projects/demo/features/{}/approve", codes[0].0),
+            Some(&json!({ "by": "Ada L" })),
+        )
+        .unwrap();
+        let out = crate::dispatch::dispatch(&store, "GET", "/projects/demo/review", None).unwrap();
+        let queue: Vec<Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(queue.len(), expected.len() - 1);
+    }
+
+    /// FEAT-077 R-1: a verdict must name who gave it. Dispatch used to default `by` to "unknown",
+    /// so any caller that forgot the field produced an approval attributable to nobody — which is
+    /// how the monitor came to record twenty-eight of them as "reviewed in the monitor", a place.
+    #[test]
+    fn a_verdict_with_no_named_approver_is_refused() {
+        use crate::models::FeatureDefinition;
+        use serde_json::json;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let f = store
+            .add_feature("demo", "Cart", "spec", "M", None)
+            .unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart for 7 days".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+
+        let approve = format!("/projects/demo/features/{}/approve", f.code);
+        for body in [json!({}), json!({ "by": "" }), json!({ "by": "   " })] {
+            let err = crate::dispatch::dispatch(&store, "POST", &approve, Some(&body))
+                .expect_err("an unattributable approval must be refused");
+            assert!(
+                err.to_string().contains("must name who gave it"),
+                "unhelpful refusal: {err}"
+            );
+        }
+        // And it left nothing behind: the item is still waiting for agreement.
+        let project = store.load("demo").unwrap();
+        let untouched = project.feature(&f.code).unwrap();
+        assert!(untouched.definition.as_ref().unwrap().approval.is_none());
+
+        // A named approver is accepted, and the name is what gets recorded.
+        crate::dispatch::dispatch(&store, "POST", &approve, Some(&json!({ "by": "Ada L" })))
+            .unwrap();
+        let project = store.load("demo").unwrap();
+        let approved = project.feature(&f.code).unwrap();
+        assert_eq!(
+            approved
+                .definition
+                .as_ref()
+                .unwrap()
+                .approval
+                .as_ref()
+                .unwrap()
+                .by,
+            "Ada L"
+        );
+
+        // Withdrawing carries the same requirement — the record of who took it back matters more.
+        let un = format!("/projects/demo/features/{}/unapprove", f.code);
+        assert!(
+            crate::dispatch::dispatch(&store, "POST", &un, Some(&json!({ "reason": "changed" })))
+                .is_err()
+        );
+    }
+
     /// FEAT-069: an approval recorded in error had no remedy. Found the direct way — Claude
     /// approved an item on the user's behalf, which the method forbids, and nothing could undo it.
     #[test]

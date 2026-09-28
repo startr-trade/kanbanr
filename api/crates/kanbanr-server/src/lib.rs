@@ -112,6 +112,7 @@ pub async fn run(
     // fell through to the SPA index.html — which broke the web Gantt page.)
     let api = api.fallback(routes::read_passthrough).with_state(state);
 
+    let meta_dir = data_dir.clone();
     let mut app = Router::new()
         .route("/healthz", get(healthz))
         // What this daemon can do (FEAT-067). The monitor asks before offering an action: a button
@@ -122,6 +123,14 @@ pub async fn run(
             get(move || async move {
                 axum::Json(serde_json::json!({
                     "writes": allow_writes,
+                    // Who an approval recorded here would be attributed to (FEAT-077). The CLI
+                    // defaults `--by` to this same identity; the monitor was instead recording the
+                    // string "reviewed in the monitor", which names the place rather than the
+                    // person — twenty-eight times on this project's own board before anyone
+                    // noticed. An approval that cannot say who agreed is not evidence of
+                    // agreement, so when this is null the monitor refuses to offer the action.
+                    "identity": kanbanr_core::git::identity(&meta_dir)
+                        .map(|(name, email)| serde_json::json!({ "name": name, "email": email })),
                     // The schema this build understands (FEAT-072). A monitor that receives an
                     // empty board can compare it with the board's own version and say "upgrade"
                     // rather than leaving the reader to conclude their data is gone.
