@@ -13,6 +13,7 @@ import MilestonePage from "./pages/MilestonePage";
 import SchedulePage from "./pages/SchedulePage";
 import GanttPage from "./pages/GanttPage";
 import CharterPage from "./pages/CharterPage";
+import ReviewPage from "./pages/ReviewPage";
 import WorkflowPage from "./pages/WorkflowPage";
 import DocsPage from "./pages/DocsPage";
 import DocPage from "./pages/DocPage";
@@ -32,6 +33,7 @@ const router = createBrowserRouter([
       { path: "p/:project/schedule", element: <SchedulePage /> },
       { path: "p/:project/gantt", element: <GanttPage /> },
       { path: "p/:project/charter", element: <CharterPage /> },
+      { path: "p/:project/review", element: <ReviewPage /> },
       { path: "p/:project/workflow", element: <WorkflowPage /> },
       { path: "p/:project/docs", element: <DocsPage /> },
       { path: "p/:project/docs/folder/*", element: <DocsPage /> },

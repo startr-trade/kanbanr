@@ -235,6 +235,10 @@ enum Command {
         /// theatre, and eleven invocations is not cheap.
         #[arg(long)]
         pending: bool,
+        /// Review in the browser instead: starts the monitor with writes enabled and opens the
+        /// review page, where the brief is rendered and the approve button is beside it.
+        #[arg(long)]
+        ui: bool,
     },
     /// Record agreement to an item's definition as it currently stands. Editing the definition
     /// afterwards lapses the approval. (FEAT-048)
@@ -1725,6 +1729,25 @@ fn blame_refs(root: &Path, path: &str, line: usize) -> Option<(String, Vec<Strin
         .map(|r| r.as_token().trim_start_matches("kanbanr:").to_string())
         .collect();
     Some((sha.get(..8).unwrap_or(&sha).to_string(), refs))
+}
+
+/// Where the built monitor lives, for `review --ui`. `$KANBANR_UI_DIR` wins; otherwise the copy
+/// installed beside the binary, or a `web/dist` in the current checkout.
+fn ui_dir_for_review() -> Option<String> {
+    if let Ok(dir) = std::env::var("KANBANR_UI_DIR") {
+        return Some(dir);
+    }
+    let candidates = [
+        std::env::current_dir().ok().map(|d| d.join("web/dist")),
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|p| p.join("../share/kanbanr/web"))),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|d| d.join("index.html").is_file())
+        .map(|d| d.display().to_string())
 }
 
 /// The board's reasoning, placed where the agent reads its instructions (FEAT-065).
@@ -3649,7 +3672,11 @@ fn check_report(f: &kanbanr_core::FeatureItem) -> Value {
                 ApprovalState::Lapsed => gaps
                     .push("approval lapsed — the definition changed after it was approved".into()),
             }
-            if !def.started_unapproved.trim().is_empty() {
+            // Reported only while unanswered: approving the definition is what the warning asks
+            // for, so it stops once that has happened (FEAT-068).
+            if !def.started_unapproved.trim().is_empty()
+                && !matches!(def.approval_state(), ApprovalState::Current)
+            {
                 gaps.push(format!(
                     "started without approval: {}",
                     def.started_unapproved.trim()
@@ -4061,9 +4088,24 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             println!("\n{ready}/{} ready", reports.len());
             Ok(())
         }
-        Command::Review { code, pending } => {
+        Command::Review { code, pending, ui } => {
             use kanbanr_core::models::ApprovalState;
             let p = require_project(cli)?;
+            if *ui {
+                // Reading a page of prose belongs in something that renders prose. The daemon runs
+                // with writes enabled so the button works, and stays on localhost.
+                let bind =
+                    std::env::var("KANBANR_BIND").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+                let url = format!("http://{bind}/p/{}/review", urlencode(&p));
+                println!("opening {url} — approve there, or Ctrl-C to stop the daemon");
+                let opened = url.clone();
+                std::thread::spawn(move || {
+                    // The daemon needs a moment to bind before the browser asks for the page.
+                    std::thread::sleep(std::time::Duration::from_millis(600));
+                    open_in_browser(&opened);
+                });
+                return run_serve(cli, Some(bind), ui_dir_for_review(), true);
+            }
             let features: Vec<kanbanr_core::FeatureItem> = match (code, pending) {
                 (Some(code), _) => vec![get_feature(&client, &p, code)?],
                 (None, true) => get_project(&client, &p)?

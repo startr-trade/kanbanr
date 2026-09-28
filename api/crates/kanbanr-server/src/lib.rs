@@ -114,6 +114,13 @@ pub async fn run(
 
     let mut app = Router::new()
         .route("/healthz", get(healthz))
+        // What this daemon can do (FEAT-067). The monitor asks before offering an action: a button
+        // that fails on click is worse than no button, and the answer is not guessable from the
+        // read routes.
+        .route(
+            "/api/meta",
+            get(move || async move { axum::Json(serde_json::json!({ "writes": allow_writes })) }),
+        )
         .nest("/api", api)
         .layer(axum::middleware::from_fn(log_requests))
         .layer(CorsLayer::permissive());
