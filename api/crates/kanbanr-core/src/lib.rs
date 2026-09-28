@@ -2890,6 +2890,59 @@ requirements:
         assert_eq!(report.counts.percent, 100, "portfolio rolls up to 100%");
     }
 
+    /// FEAT-097: the cross-project board showed `Deferred` FEAT-074 as "Not started", although its
+    /// own project board hides Deferred. A view across boards must show what the boards show.
+    #[test]
+    fn the_cross_project_board_shows_only_what_each_board_shows() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let shown = store
+            .add_feature("demo", "On the board", "", "M", None)
+            .unwrap();
+        let parked = store.add_feature("demo", "Parked", "", "M", None).unwrap();
+        let dropped = store.add_feature("demo", "Dropped", "", "M", None).unwrap();
+
+        let mut config = store.load("demo").unwrap().config;
+        for s in ["Deferred", "Out-of-Scope"] {
+            if !config.statuses.iter().any(|x| x == s) {
+                config.statuses.push(s.into());
+            }
+        }
+        config.displayed_states = vec!["Planned".into(), "Scheduled".into(), "Completed".into()];
+        config.no_op_states = vec!["Out-of-Scope".into()];
+        config
+            .transitions
+            .entry("Planned".into())
+            .or_default()
+            .extend(["Deferred".into(), "Out-of-Scope".into()]);
+        store.save_config("demo", &config).unwrap();
+        store
+            .move_feature("demo", &parked.code, "Deferred")
+            .unwrap();
+        store
+            .move_feature("demo", &dropped.code, "Out-of-Scope")
+            .unwrap();
+
+        let board = crate::portfolio::cross_project_board(&store).unwrap();
+        let codes: Vec<&str> = board
+            .lanes
+            .iter()
+            .flat_map(|l| l.cards.iter().map(|c| c.code.as_str()))
+            .collect();
+        assert!(
+            codes.contains(&shown.code.as_str()),
+            "a displayed item stays: {codes:?}"
+        );
+        assert!(
+            !codes.contains(&parked.code.as_str()),
+            "Deferred is off its own board, so it is off this one — not 'Not started': {codes:?}"
+        );
+        assert!(
+            !codes.contains(&dropped.code.as_str()),
+            "a dismissed item is not 'Done' — it was never delivered: {codes:?}"
+        );
+    }
+
     #[test]
     fn cross_project_board_groups_by_disposition() {
         use crate::portfolio::Disposition;
