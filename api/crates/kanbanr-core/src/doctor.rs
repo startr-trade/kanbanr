@@ -108,7 +108,30 @@ fn scan_definitions(project: &Project, charter: &crate::Charter, report: &mut Re
         if let Some(def) = &feature.definition {
             goals_served.extend(def.goals.iter().cloned());
         }
+        // An unreconciled bypass outlives the terminal gate (FEAT-080). Every other gap check
+        // rightly stops caring once work is finished — you cannot fix a missing requirement on a
+        // shipped item. But "built without agreement, and still never agreed to" is a question
+        // that finishing does not answer; letting it age out silently meant a clean report read as
+        // "nothing needs attention" when it meant "the things that did, completed first".
         if !in_scope(project, charter, feature) {
+            if let Some(def) = &feature.definition
+                && unreconciled_bypass(def)
+                && feature.created_at.as_str() >= charter.adopted_at.as_str()
+                && def.exempt.trim().is_empty()
+            {
+                push(
+                    report,
+                    project,
+                    feature,
+                    Severity::Warning,
+                    format!(
+                        "finished without agreement: {} — `kanbanr ratify {}` to agree to it \
+                         after the fact, or record why it does not need one",
+                        def.started_unapproved.trim(),
+                        feature.code
+                    ),
+                );
+            }
             continue;
         }
 
@@ -159,9 +182,7 @@ fn scan_definitions(project: &Project, charter: &crate::Charter, report: &mut Re
         // is history, and the charter says raw data is never discarded. If the definition changes
         // later the approval lapses, and this warning comes back with it, because the agreement no
         // longer covers what was built.
-        if !def.started_unapproved.trim().is_empty()
-            && !matches!(def.approval_state(), crate::models::ApprovalState::Current)
-        {
+        if unreconciled_bypass(def) {
             push(
                 report,
                 project,
@@ -300,6 +321,16 @@ fn push(
         code: Some(feature.code.clone()),
         message,
     });
+}
+
+/// Did this item start under a recorded bypass that nobody has answered yet?
+///
+/// Answered means agreed to — before the work (`approved`) or after it (`ratified`). A lapsed
+/// approval is not an answer: the definition changed, so the agreement no longer covers what was
+/// built, and the question is open again.
+fn unreconciled_bypass(def: &crate::models::FeatureDefinition) -> bool {
+    use crate::models::ApprovalState::{Current, Ratified};
+    !def.started_unapproved.trim().is_empty() && !matches!(def.approval_state(), Current | Ratified)
 }
 
 /// Live work under the method: not finished, on the board, and created since adoption. The first two
@@ -531,6 +562,73 @@ mod tests {
         )
         .unwrap();
         (store, dir)
+    }
+
+    /// FEAT-080: every other gap check rightly stops caring once work is finished — you cannot fix
+    /// a missing requirement on a shipped item. "Built without agreement, and still never agreed
+    /// to" is different: finishing does not answer it. Six items on this project's own board had
+    /// aged out of every report, and producing the list took a script.
+    #[test]
+    fn an_unreconciled_bypass_outlives_the_terminal_gate() {
+        let (store, _dir) = fixture();
+        let item = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &item.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart for 7 days".into(),
+                    goals: vec!["G-1".into()],
+                    started_unapproved: "shipped under a deadline".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+
+        let bypass = |store: &Store| -> Vec<String> {
+            run_project(store, "demo")
+                .unwrap()
+                .issues
+                .into_iter()
+                .map(|i| i.message)
+                .filter(|m| m.contains("without approval") || m.contains("without agreement"))
+                .collect()
+        };
+
+        store.move_feature("demo", &item.code, "Scheduled").unwrap();
+        assert_eq!(
+            bypass(&store).len(),
+            1,
+            "in flight and unanswered: it warns"
+        );
+
+        // Finishing it used to be how the question stopped being asked.
+        store.move_feature("demo", &item.code, "Completed").unwrap();
+        let after = bypass(&store);
+        assert_eq!(
+            after.len(),
+            1,
+            "a finished item with an unanswered bypass must STILL be reported: {after:?}"
+        );
+        assert!(
+            after[0].contains("finished without agreement"),
+            "and it should read as the question it is: {}",
+            after[0]
+        );
+        assert!(
+            after[0].contains("kanbanr ratify"),
+            "a warning that names no remedy is wallpaper: {}",
+            after[0]
+        );
+
+        // Ratifying answers it, and the report goes quiet — for the right reason this time.
+        store
+            .ratify_feature("demo", &item.code, "the user", "reviewed as a set")
+            .unwrap();
+        assert!(
+            bypass(&store).is_empty(),
+            "answered after the fact is still answered"
+        );
     }
 
     /// FEAT-068: the warning asked the reader to "review and approve what was actually built". The

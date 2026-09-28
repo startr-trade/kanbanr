@@ -216,6 +216,11 @@ pub fn definition_brief(feature: &FeatureItem) -> String {
     }
 
     let approval = match def.approval_state() {
+        crate::models::ApprovalState::Ratified => def
+            .approval
+            .as_ref()
+            .map(|a| format!("Ratified after the work, by {}", a.by))
+            .unwrap_or_else(|| "ratified".into()),
         crate::models::ApprovalState::Current => def
             .approval
             .as_ref()
@@ -264,6 +269,18 @@ fn definition_sections(def: &crate::models::FeatureDefinition) -> String {
         out.push_str(&format!("- **Design:** `{}`\n", def.design_doc.trim()));
     }
     match def.approval_state() {
+        // Said differently on purpose: agreement after the fact is a real resolution and not the
+        // same claim as agreement before the work (FEAT-080).
+        crate::models::ApprovalState::Ratified => {
+            if let Some(a) = &def.approval {
+                out.push_str(&format!(
+                    "- **Ratified after the work** by {} on {} — it was built under a recorded \
+                     bypass and agreed to afterwards\n",
+                    a.by,
+                    a.at.get(..10).unwrap_or(&a.at)
+                ));
+            }
+        }
         crate::models::ApprovalState::Current => {
             if let Some(a) = &def.approval {
                 out.push_str(&format!(
