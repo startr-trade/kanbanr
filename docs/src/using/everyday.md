@@ -19,8 +19,10 @@
 
 ## How Claude uses kanbanr (the contract)
 
-Say **"start using kanbanr for this project"** once. After that, for the rest of the project you
-don't have to say anything about kanbanr — Claude treats it as the **single system of record**:
+Say **"start using kanbanr for this project"** once. In a folder that isn't tracked yet, Claude
+first runs a short setup interview in plan mode: the board, the charter and the workflow. Once you
+approve it, the setup runs. See [the quickstart](../getting-started/quickstart.md). After that, for
+the rest of the project you don't have to say anything about kanbanr — Claude treats it as the **single system of record**:
 
 - **Everything about the project's activity lives in kanbanr** — scope, specs, progress, task
   status, decisions, docs. The *only* thing kept outside it is your conversation transcript.

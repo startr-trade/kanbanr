@@ -27,6 +27,27 @@ Claude to record its work. It's done once per machine and merged with your exist
 hooks only act in folders kanbanr tracks. Skip it with `kanbanr init --no-hooks`, and manage it
 later with `kanbanr hooks install | status | uninstall`.
 
+### Setting up through Claude: a setup interview first
+
+You can also skip the terminal and ask Claude to **"set up kanbanr for this project"**. It
+doesn't start running commands. It switches to **plan mode** and interviews you:
+
+1. **Board and identity**: where the board lives (the choices below), the project name, and the
+   commit name and email, which default to your `git config`.
+2. **Charter**: purpose, goals with measures, non-goals, stakeholders and constraints. Claude
+   drafts these from your README and manifests, labels them as a draft, and leaves blank anything
+   the repository doesn't answer so it can ask you.
+3. **Process**: the workflow (the default kanban, TOGAF phases as the columns, or your own
+   statuses), the git commit hooks (offered, defaulting to yes), and optionally a backup remote,
+   the GitHub issue mirror and importing an existing tracker.
+
+The plan lists every answer and the exact commands it will run. **Approving the plan (exiting plan
+mode) is the go-ahead.** Claude then runs the whole setup: `init`, the workflow, `charter set`,
+the Claude Code and git hooks, `claude sync`, and the optional steps. It saves the approved plan
+as a board doc (`setup/<date>-setup.md`) and checks the result with `kanbanr doctor`. Only after
+that does it get back to whatever you originally asked for. A folder that's already tracked skips
+the interview.
+
 ### Where the board lives
 
 The board is its own git repo, so it belongs **next to** your project, not inside it. A board
