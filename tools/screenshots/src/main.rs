@@ -97,6 +97,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if portfolio_only {
+        // Dark too: the lanes were unreadable in dark mode for as long as the page existed,
+        // because nobody had looked at it that way (FEAT-096).
+        let portfolio = format!("{base}/portfolio");
+        capture(&driver, &portfolio, &format!("{out}/portfolio-dark.png"), Some("dark"), portrait).await?;
         driver.quit().await?;
         println!("done — portfolio screenshots in {out}/");
         return Ok(());
