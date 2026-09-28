@@ -25,8 +25,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use kanbanr_core::Store;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
@@ -129,12 +129,33 @@ pub async fn run(
         // Serve hashed assets, and fall back to index.html for any other non-/api path so
         // client-side routes work on direct load / refresh.
         let base = PathBuf::from(&dir);
-        let index_html = std::fs::read_to_string(base.join("index.html")).unwrap_or_default();
+        let index_path = base.join("index.html");
+        // Read per request, not once at startup (FEAT-070). Vite writes hashed asset names on every
+        // build, so a cached index points at a bundle that has been deleted — the app then fails in
+        // a way that reads as a broken feature rather than as a stale process. The file is small and
+        // the daemon already touches the disk for every asset, so correctness is the cheaper trade.
+        // The last copy read is kept only as a fallback for a request that lands mid-rebuild.
+        let last_good: Arc<Mutex<String>> = Arc::new(Mutex::new(
+            std::fs::read_to_string(&index_path).unwrap_or_default(),
+        ));
         app = app
             .nest_service("/assets", ServeDir::new(base.join("assets")))
             .fallback(move || {
-                let html = index_html.clone();
-                async move { axum::response::Html(html) }
+                let path = index_path.clone();
+                let last_good = Arc::clone(&last_good);
+                async move {
+                    let html = match std::fs::read_to_string(&path) {
+                        Ok(fresh) if !fresh.trim().is_empty() => {
+                            if let Ok(mut cached) = last_good.lock() {
+                                *cached = fresh.clone();
+                            }
+                            fresh
+                        }
+                        // Missing or half-written: serve what worked last rather than a blank page.
+                        _ => last_good.lock().map(|c| c.clone()).unwrap_or_default(),
+                    };
+                    axum::response::Html(html)
+                }
             });
         eprintln!("serving SPA from {dir}");
     }
