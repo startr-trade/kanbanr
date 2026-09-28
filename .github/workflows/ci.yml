@@ -83,6 +83,31 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  # A contribution states why it exists and proves each requirement with a green test
+  # (CONTRIBUTING.md). The definition travels in the PR body, because a contributor has no board
+  # access, and `kanbanr check --file` validates it on its own.
+  definition:
+    name: definition
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract the definition from the PR body
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$BODY" | awk '/^```yaml/{flag=1;next}/^```/{flag=0}flag' > definition.yaml
+          if [ ! -s definition.yaml ]; then
+            echo "No definition block found in the PR body."
+            echo "Fill in the Definition section of the template — see CONTRIBUTING.md."
+            exit 1
+          fi
+          cat definition.yaml
+      - name: Build the CLI
+        run: cd api && cargo build --release -p kanbanr-cli
+      - name: Check it against the bar
+        run: ./api/target/release/kanbanr check --file definition.yaml
+
   web:
     name: web
     runs-on: ubuntu-latest

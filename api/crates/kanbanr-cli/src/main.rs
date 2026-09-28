@@ -225,6 +225,10 @@ enum Command {
     Check {
         /// One item; omit for every item currently in scope.
         code: Option<String>,
+        /// Check a definition in a file instead of on the board — what CI runs on a contribution
+        /// from someone who has no board access. `-` reads stdin.
+        #[arg(long)]
+        file: Option<String>,
     },
     /// Print the one-screen decision brief for an item: what is proposed, why, and how it will be
     /// verified. Read this BEFORE the work, not after. (FEAT-048)
@@ -3664,6 +3668,118 @@ fn parse_test_results(text: &str) -> std::collections::BTreeMap<String, bool> {
     out
 }
 
+/// Check a definition that is not on a board (FEAT-052).
+///
+/// A contributor has no board access — the data folder is a separate repository — so the definition
+/// travels with the pull request and CI validates it here. The rules are the same ones `check`
+/// applies to an item: the goal link is the only thing that cannot be verified without a charter,
+/// and it is reported as unverifiable rather than as absent.
+fn check_definition_file(cli: &Cli, file: &str) -> anyhow::Result<()> {
+    use kanbanr_core::models::{FeatureDefinition, RequirementKind, TestState};
+    let raw = if file == "-" {
+        use std::io::Read;
+        let mut s = String::new();
+        std::io::stdin().read_to_string(&mut s)?;
+        s
+    } else {
+        std::fs::read_to_string(file).map_err(|e| anyhow::anyhow!("could not read {file}: {e}"))?
+    };
+    let definition: FeatureDefinition = serde_yaml::from_str(&raw)
+        .map_err(|e| anyhow::anyhow!("invalid definition (YAML or JSON expected): {e}"))?;
+
+    let mut gaps: Vec<String> = Vec::new();
+    if definition.statement.trim().is_empty() {
+        gaps.push("[MISSING: statement] — one sentence: what this gives whom, and why".into());
+    }
+    for column in definition.zachman.missing() {
+        gaps.push(format!("[MISSING: {column}]"));
+    }
+    if definition.goals.is_empty() {
+        // Not a gap that can be judged here: without the charter there is nothing to resolve an id
+        // against. Reported so a maintainer knows to check it, not counted against the contributor.
+        println!("note: no goal link — the maintainer will check this against the charter");
+    }
+    if definition.requirements.is_empty() {
+        gaps.push("no requirements — nothing states what must be true for this to be done".into());
+    }
+    for r in &definition.requirements {
+        let id = if r.id.trim().is_empty() {
+            format!("\"{}\"", r.text.chars().take(40).collect::<String>())
+        } else {
+            r.id.clone()
+        };
+        if kanbanr_core::ears::classify(&r.text).is_none() {
+            gaps.push(format!(
+                "{id} is not in EARS form (THE SYSTEM SHALL … / WHEN … / WHILE … / WHERE … / IF …)"
+            ));
+        }
+        if r.tests.is_empty() {
+            gaps.push(format!("{id} has no test — it cannot be shown to be met"));
+        } else if !r.tests.iter().any(|t| t.state == TestState::Green) {
+            gaps.push(format!(
+                "{id} has tests but none is green — evidence, not intent"
+            ));
+        }
+        for tag in &r.iso {
+            if kanbanr_core::ears::normalize_iso(tag).is_none() {
+                gaps.push(format!(
+                    "{id} is tagged '{tag}', which is not an ISO/IEC 25010 characteristic"
+                ));
+            }
+        }
+        if matches!(r.kind, RequirementKind::Nfr) {
+            if r.iso.is_empty() {
+                gaps.push(format!(
+                    "{id} is a quality requirement with no ISO 25010 tag"
+                ));
+            }
+            match r.scenario.as_ref() {
+                None => gaps.push(format!(
+                    "{id} is a quality requirement with no scenario (stimulus, environment, response, measure)"
+                )),
+                Some(s) if s.measure.trim().is_empty() => gaps.push(format!(
+                    "{id} has a scenario with no measure — an unmeasured quality is an opinion"
+                )),
+                Some(s) => {
+                    let measure = s.measure.to_lowercase();
+                    let named = r.tests.iter().any(|t| {
+                        !t.name.trim().is_empty() && measure.contains(&t.name.to_lowercase())
+                    });
+                    if !named {
+                        gaps.push(format!(
+                            "{id}: the measure names no test that checks it (unsupported claim)"
+                        ));
+                    }
+                }
+            }
+        } else if !r.iso.is_empty() {
+            gaps.push(format!(
+                "{id} carries a quality tag but is not a quality requirement (kind: nfr)"
+            ));
+        }
+    }
+
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "ok": gaps.is_empty(), "gaps": gaps }))?
+        );
+    } else if gaps.is_empty() {
+        println!("✓ the definition meets the bar: a reason, requirements, and green evidence");
+    } else {
+        println!("✗ {} thing(s) to fix:", gaps.len());
+        for gap in &gaps {
+            println!("    {gap}");
+        }
+    }
+    if gaps.is_empty() {
+        Ok(())
+    } else {
+        // A non-zero exit is what makes this useful in CI.
+        std::process::exit(1);
+    }
+}
+
 /// What an item has not said, and what it cannot yet show (FEAT-051). The same rules `doctor`
 /// applies, focused on one item and phrased as work left to do rather than as a complaint.
 fn check_report(f: &kanbanr_core::FeatureItem) -> Value {
@@ -4050,7 +4166,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Capture => run_capture(cli, &client),
-        Command::Check { code } => {
+        Command::Check { code, file } => {
+            // A definition in a file is checked on its own: no board, no project, no network. That
+            // is what lets CI hold a contributor to the same bar as the maintainer (FEAT-052).
+            if let Some(file) = file {
+                return check_definition_file(cli, file);
+            }
             let p = require_project(cli)?;
             let project = get_project(&client, &p)?;
             let features: Vec<&kanbanr_core::FeatureItem> = match code {

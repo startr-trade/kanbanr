@@ -82,6 +82,7 @@ export default function FeaturePage() {
 
       <Provenance feature={feature} />
       <Definition feature={feature} project={project} />
+      <LessonsFor project={project} code={feature.code} />
 
       <section className="section">
         <h2>Specification</h2>
@@ -143,6 +144,33 @@ const day = (ts?: string | null) => (ts ?? "").slice(0, 10);
  * Blanks are shown as gaps rather than hidden: an unanswered dimension is information, and
  * hiding it is how a board ends up looking complete while saying nothing.
  */
+/**
+ * What this project already learned that bears on this item (FEAT-055). The Charter tab lists every
+ * lesson, which is the wrong moment — the useful moment is beside the work you are about to start,
+ * which is where `kanbanr lessons --for <CODE>` puts it on the command line.
+ */
+function LessonsFor({ project, code }: { project: string; code: string }) {
+  const lessons = useAsync(() => api.getLessonsFor(project, code), [project, code]);
+  const matched = lessons.data ?? [];
+  if (matched.length === 0) return null;
+  return (
+    <section className="section">
+      <h2>
+        Lessons that bear on this{" "}
+        <span className="muted small">(read before starting; confidence decays)</span>
+      </h2>
+      <ul className="dep-list">
+        {matched.map((l) => (
+          <li key={l.id}>
+            <code className="taskkey">{l.id}</code> {l.lesson}
+            {l.evidence ? <div className="muted small">{l.evidence}</div> : null}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function Definition({ feature, project }: { feature: Feature; project: string }) {
   const def = feature.definition;
   const [outcome, setOutcome] = useState<string | null>(null);

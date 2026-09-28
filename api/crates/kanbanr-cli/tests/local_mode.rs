@@ -2151,3 +2151,91 @@ fn cli_event_log_is_committed_with_the_change() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// The bar applied without a board (FEAT-052): a contributor has no board access, so their
+/// definition travels with the pull request and CI checks it on its own. Same rules, no project.
+#[test]
+fn cli_check_file_holds_a_contribution_to_the_same_bar() {
+    let base = std::env::temp_dir().join(format!("kanbanr-checkfile-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+
+    // Deliberately NOT a kanbanr project: no board, no marker, no data dir.
+    let check = |body: &str| -> Output {
+        let file = base.join("definition.yaml");
+        std::fs::write(&file, body).unwrap();
+        Command::new(cli())
+            .args(["check", "--file", file.to_str().unwrap()])
+            .current_dir(&base)
+            .env("HOME", base.join("home"))
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    };
+
+    let good = "\
+statement: Keep a cart for 7 days so a returning shopper resumes
+zachman:
+  what: cart persistence
+  how: server-side, keyed by session
+  where: the checkout service
+  when: on every cart mutation
+  who: returning shoppers
+  why: carts vanish overnight and the sale is lost
+requirements:
+  - kind: functional
+    text: \"WHEN a cart is abandoned, THE SYSTEM SHALL retain it for 7 days.\"
+    tests:
+      - name: cart::retains_for_seven_days
+        kind: unit
+        state: green
+";
+    let out = check(good);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("meets the bar"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    // The failures a reviewer would otherwise have to catch by reading.
+    let bad = "\
+statement: \"\"
+requirements:
+  - kind: nfr
+    text: It should be fast.
+    iso25010: [Speediness]
+";
+    let out = check(bad);
+    assert!(
+        !out.status.success(),
+        "a non-zero exit is what makes this useful in CI"
+    );
+    let shown = String::from_utf8_lossy(&out.stdout);
+    assert!(shown.contains("[MISSING: statement]"), "{shown}");
+    assert!(shown.contains("not in EARS form"), "{shown}");
+    assert!(shown.contains("has no test"), "{shown}");
+    assert!(
+        shown.contains("not an ISO/IEC 25010 characteristic"),
+        "{shown}"
+    );
+    assert!(shown.contains("no scenario"), "{shown}");
+
+    // A green test is the requirement: intent alone does not pass.
+    let planned = good.replace("state: green", "state: planned");
+    let out = check(&planned);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("none is green"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
