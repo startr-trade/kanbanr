@@ -6,8 +6,13 @@
 # same folder — localhost, no auth, no accounts. Sharing is via git remotes. Docker is optional.
 
 # The board lives BESIDE the repo, not inside it (FEAT-041): a data folder inside a checkout is
-# one `git add -A` away from being committed, and a sibling cannot be. Override for another board.
-DATA_DIR ?= $(CURDIR)/../$(notdir $(CURDIR)).kanbanr
+# one `git add -A` away from being committed, and a sibling cannot be.
+#
+# ASK the CLI where it is rather than guessing the folder name. The `.kanbanr` marker is the
+# authority, and a board may be named for its owner rather than for the repo — deriving
+# `<repo>.kanbanr` was a guess that broke the moment one was renamed. The derivation stays only as
+# a fallback for a fresh clone that has no CLI installed yet.
+DATA_DIR ?= $(shell kanbanr where 2>/dev/null || echo $(CURDIR)/../$(notdir $(CURDIR)).kanbanr)
 SKILLS_DIR ?= $(HOME)/.claude/skills
 IMAGE ?= kanbanr:latest
 
@@ -73,12 +78,14 @@ serve: web cli
 docker-build:
 	docker build -f docker/Dockerfile -t $(IMAGE) .
 
+# Compose cannot run a command to find the board, so pass it in from the same source everything
+# else uses — the `.kanbanr` marker, read by the CLI.
 docker-up:
-	docker compose -f docker/docker-compose.yml up --build -d
-	@echo "kanbanr monitor at http://localhost:18080"
+	KANBANR_DATA_DIR="$(DATA_DIR)" docker compose -f docker/docker-compose.yml up --build -d
+	@echo "kanbanr monitor at http://localhost:18080  (board: $(DATA_DIR))"
 
 docker-down:
-	docker compose -f docker/docker-compose.yml down
+	KANBANR_DATA_DIR="$(DATA_DIR)" docker compose -f docker/docker-compose.yml down
 
 # Regenerate docs/images/*.png by driving the live monitor through a Selenium Grid (Docker).
 # Needs Docker; starts a temporary `kanbanr serve` if one isn't already running. See

@@ -113,7 +113,7 @@ see [DESIGN.md](DESIGN.md)), so there are no app secrets to leak. The real risks
 content** and your **publish credentials**:
 
 - [x] **Nothing of the board ships with the source.** kanbanr's own board lives in a sibling
-      repository (`../kanbanr.kanbanr`), which is the layout the tool recommends to everyone
+      repository beside this one (`../<name>.kanbanr`), which is the layout the tool recommends to everyone
       (FEAT-041): a board inside a checkout is one `git add -A` away from being committed, and a
       sibling cannot be. Publishing it, if you ever want to, is a separate `git remote add` on that
       repository — not a decision about this one.
