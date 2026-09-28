@@ -1498,8 +1498,8 @@ impl Store {
     /// The whole project is **loaded once**; every op mutates that single in-memory `Project`
     /// (chaining the `*_on` cores) and the resulting changes are flushed to disk at the end —
     /// instead of the old reload-and-persist-per-op cost (FEAT-028). On the first failing op the
-    /// batch stops and returns `BatchOpFailed(index, msg)`; the ops already applied before it are
-    /// still flushed (persisted), preserving the prior contract.
+    /// batch stops and returns `BatchOpFailed(index, msg)` and **nothing is written** — a bundle
+    /// either commits whole or changes nothing (FEAT-093).
     ///
     /// Imports (FEAT-042): a `feature.add` whose source key already exists in the project is
     /// skipped (its `ref` resolves to the existing feature), and so is every later op that targets
@@ -1541,6 +1541,7 @@ impl Store {
         // `ref` aliases of skipped (already imported) features, and of todo-lists under them.
         let mut skipped: HashSet<String> = HashSet::new();
         let mut out = Vec::new();
+        let mut deferred: Vec<DeferredDoc> = Vec::new();
 
         for (i, op) in ops.into_iter().enumerate() {
             let result: Result<serde_json::Value> = (|| match op {
@@ -1968,6 +1969,9 @@ impl Store {
                 }
                 // Doc ops write to disk directly (they don't touch the in-memory project); a dry
                 // run only validates the path.
+                // Documents are the only ops that touch disk directly, so they are validated here
+                // and QUEUED, then written only once every op has succeeded (FEAT-093). Writing
+                // them in place meant a later failure left them on disk and uncommitted.
                 DocFolder {
                     path,
                     name,
@@ -1976,7 +1980,12 @@ impl Store {
                     if dry_run {
                         self.doc_path(id, &path)?;
                     } else {
-                        self.write_folder_meta(id, &path, name, description)?;
+                        self.folder_path(id, &path)?;
+                        deferred.push(DeferredDoc::Folder {
+                            path: path.clone(),
+                            name,
+                            description,
+                        });
                     }
                     Ok(serde_json::json!({"op":"doc.folder","path":path}))
                 }
@@ -1985,7 +1994,12 @@ impl Store {
                         self.doc_path(id, &path)?;
                         path
                     } else {
-                        self.write_doc(id, &path, &content)?
+                        let resolved = self.doc_path(id, &path)?;
+                        deferred.push(DeferredDoc::Write {
+                            path: path.clone(),
+                            content,
+                        });
+                        Self::doc_rel_display(&self.docs_dir(id), &resolved)
                     };
                     Ok(serde_json::json!({"op":"doc.write","path":saved}))
                 }
@@ -1993,19 +2007,86 @@ impl Store {
 
             match result {
                 Ok(v) => out.push(v),
-                Err(e) => {
-                    // Persist the ops applied before the failure (prior contract), then report it.
-                    if !dry_run {
-                        let _ = self.flush(id, &project, &pending);
-                    }
-                    return Err(CoreError::BatchOpFailed(i, e.to_string()));
-                }
+                // All or nothing (FEAT-093). Every op so far mutated only the in-memory project
+                // and the doc queue, so returning here leaves the data folder exactly as it was.
+                // This used to flush the ops applied before the failure — and the caller commits
+                // only on success, so those writes landed on disk OUTSIDE git, invisible to the
+                // history and swept into whatever unrelated commit came next.
+                Err(e) => return Err(CoreError::BatchOpFailed(i, e.to_string())),
             }
         }
         if !dry_run {
-            self.flush(id, &project, &pending)?;
+            let written = self.write_deferred_docs(id, deferred)?;
+            if let Err(e) = self.flush(id, &project, &pending) {
+                return Err(Self::restore_docs(written, e));
+            }
         }
         Ok(out)
+    }
+
+    /// Write the documents a batch queued, snapshotting each target first. If any write fails,
+    /// the ones already made are put back, so documents are all-or-nothing too.
+    fn write_deferred_docs(&self, id: &str, docs: Vec<DeferredDoc>) -> Result<Vec<DocSnapshot>> {
+        let mut written: Vec<DocSnapshot> = Vec::new();
+        for doc in docs {
+            let attempt = match doc {
+                DeferredDoc::Write { path, content } => {
+                    let target = self.doc_path(id, &path)?;
+                    let before = std::fs::read(&target).ok();
+                    written.push(DocSnapshot {
+                        path: target,
+                        before,
+                    });
+                    self.write_doc(id, &path, &content).map(|_| ())
+                }
+                DeferredDoc::Folder {
+                    path,
+                    name,
+                    description,
+                } => {
+                    let target = self.folder_path(id, &path)?.join(FOLDER_META);
+                    let before = std::fs::read(&target).ok();
+                    written.push(DocSnapshot {
+                        path: target,
+                        before,
+                    });
+                    self.write_folder_meta(id, &path, name, description)
+                }
+            };
+            if let Err(e) = attempt {
+                return Err(Self::restore_docs(written, e));
+            }
+        }
+        Ok(written)
+    }
+
+    /// Put documents back as they were before a failed batch, and turn the failure into an error
+    /// that says whether that worked. A restore that cannot complete is named file by file rather
+    /// than hidden behind the original error (FEAT-093/R-2): the caller needs to know the data
+    /// folder is not in the state the error implies.
+    fn restore_docs(written: Vec<DocSnapshot>, cause: CoreError) -> CoreError {
+        let mut stuck: Vec<String> = Vec::new();
+        for snap in written.into_iter().rev() {
+            let restored = match &snap.before {
+                Some(bytes) => std::fs::write(&snap.path, bytes),
+                None => match std::fs::remove_file(&snap.path) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    other => other,
+                },
+            };
+            if restored.is_err() {
+                stuck.push(snap.path.display().to_string());
+            }
+        }
+        if stuck.is_empty() {
+            cause
+        } else {
+            CoreError::Unsupported(format!(
+                "{cause}; and these files could not be put back, so they are changed on disk but \
+                 NOT committed: {}",
+                stuck.join(", ")
+            ))
+        }
     }
 
     /// Delete a project — only allowed when it has no features and no milestones.
@@ -2549,4 +2630,24 @@ fn assign_requirement_ids(definition: &mut crate::models::FeatureDefinition) {
             requirement.id = requirement.id.trim().to_string();
         }
     }
+}
+
+/// A document write a batch has validated but not yet made (FEAT-093).
+enum DeferredDoc {
+    Write {
+        path: String,
+        content: String,
+    },
+    Folder {
+        path: String,
+        name: Option<String>,
+        description: Option<String>,
+    },
+}
+
+/// What a document held before a batch wrote it, so a failure can put it back. `None` means it did
+/// not exist, and restoring means removing it.
+struct DocSnapshot {
+    path: std::path::PathBuf,
+    before: Option<Vec<u8>>,
 }
