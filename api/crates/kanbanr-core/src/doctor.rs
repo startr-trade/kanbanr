@@ -439,6 +439,22 @@ fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
 fn scan_project(project: &Project, existing: &BTreeSet<String>, report: &mut Report) {
     let pid = &project.id;
 
+    // A board newer than this binary cannot be read correctly at all — but `run` only gets here
+    // when the load succeeded, so this is the belt to the load guard's braces: it catches a project
+    // whose config was stamped forward while the process was running (FEAT-072).
+    if project.config.schema_version > CURRENT_SCHEMA_VERSION {
+        report.issues.push(Issue {
+            severity: Severity::Error,
+            project: pid.clone(),
+            code: None,
+            message: format!(
+                "config schema_version {} is NEWER than this build understands ({}) — upgrade the \
+                 binary and restart anything long-running, such as `kanbanr serve`",
+                project.config.schema_version, CURRENT_SCHEMA_VERSION
+            ),
+        });
+    }
+
     // Outdated schema_version (warning).
     if project.config.schema_version < CURRENT_SCHEMA_VERSION {
         report.issues.push(Issue {

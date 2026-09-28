@@ -119,7 +119,15 @@ pub async fn run(
         // read routes.
         .route(
             "/api/meta",
-            get(move || async move { axum::Json(serde_json::json!({ "writes": allow_writes })) }),
+            get(move || async move {
+                axum::Json(serde_json::json!({
+                    "writes": allow_writes,
+                    // The schema this build understands (FEAT-072). A monitor that receives an
+                    // empty board can compare it with the board's own version and say "upgrade"
+                    // rather than leaving the reader to conclude their data is gone.
+                    "schema_version": kanbanr_core::config::CURRENT_SCHEMA_VERSION,
+                }))
+            }),
         )
         .nest("/api", api)
         .layer(axum::middleware::from_fn(log_requests))
