@@ -284,3 +284,85 @@ fn review_and_approve_through_the_daemon() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A rebuilt UI must be visible to a running monitor (FEAT-070). The daemon used to read
+/// `index.html` once at startup, so after a rebuild it served an index pointing at a bundle that
+/// had been deleted — which looks like a broken feature, not a stale process. That is exactly how
+/// it was reported: "the diagrams are not rendering".
+#[test]
+fn a_rebuilt_ui_is_served_without_restarting_the_daemon() {
+    let base =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let data = base.join("data");
+    let home = base.join("home");
+    let ui = base.join("dist");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::create_dir_all(ui.join("assets")).unwrap();
+    let index = ui.join("index.html");
+    std::fs::write(
+        &index,
+        "<html><script src=/assets/first.js></script></html>",
+    )
+    .unwrap();
+
+    let out = Command::new(cli())
+        .args(["identity", "--name", "T", "--email", "t@x"])
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &data)
+        .output()
+        .expect("identity");
+    assert!(out.status.success());
+
+    let port = free_port();
+    let child = Command::new(cli())
+        .args([
+            "serve",
+            "--bind",
+            &format!("127.0.0.1:{port}"),
+            "--ui-dir",
+            ui.to_str().unwrap(),
+        ])
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &data)
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let _daemon = Daemon(child);
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if Instant::now() > deadline {
+            panic!("daemon did not become ready");
+        }
+        match ureq::get(&format!("{url}/api/projects")).call() {
+            Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    let page = |url: &str| ureq::get(url).call().unwrap().into_string().unwrap();
+    assert!(page(&format!("{url}/p/demo")).contains("first.js"));
+
+    // Rebuild under the running daemon: a new hashed bundle, as vite would write.
+    std::fs::write(
+        &index,
+        "<html><script src=/assets/second.js></script></html>",
+    )
+    .unwrap();
+    let served = page(&format!("{url}/p/demo"));
+    assert!(
+        served.contains("second.js"),
+        "a rebuilt index must be served, not the one read at startup: {served}"
+    );
+
+    // Mid-rebuild, with the index momentarily gone, the last good copy is served rather than a
+    // blank page — an empty document is a worse answer than a slightly old one.
+    std::fs::remove_file(&index).unwrap();
+    let during = page(&format!("{url}/p/demo"));
+    assert!(
+        during.contains("second.js"),
+        "expected the last good copy: {during}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
