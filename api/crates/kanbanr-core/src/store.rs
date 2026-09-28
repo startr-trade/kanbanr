@@ -1085,8 +1085,16 @@ impl Store {
         {
             return Ok(());
         }
+        // What counts as *starting work* is what the board displays as work in flight — not
+        // everything that is merely non-terminal (FEAT-075). Deferring an item used to be gated,
+        // and demanding agreement to reasoning for work nobody intends to start teaches that the
+        // escape is routine, which is the failure this gate exists to prevent.
+        //
+        // `displayed_states` already carries the meaning: the columns the kanban shows. A parking
+        // state is deliberately not among them, so it is deliberately not a start.
         let config = &project.config;
-        let gated = to != config.default_state
+        let gated = config.displayed_states.iter().any(|s| s == to)
+            && to != config.default_state
             && !crate::graph::is_terminal_status(config, to)
             && !config.is_no_op(to);
         if !gated || unapproved.is_some_and(|r| !r.trim().is_empty()) {

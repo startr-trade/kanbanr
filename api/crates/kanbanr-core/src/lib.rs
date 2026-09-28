@@ -178,6 +178,85 @@ mod tests {
     /// FEAT-061: auto-completion is how most items actually finish. When it left no transition
     /// behind, every flow number was blind to the normal path and reported only on items someone
     /// had moved by hand.
+    /// FEAT-075: the gate treated everything non-terminal as starting work, so parking an item in
+    /// `Deferred` was refused for want of an approval. The only ways past were to approve work
+    /// nobody intended to start, or to record an escape for a non-event — both of which teach that
+    /// the escape is routine, which is what the gate exists to prevent.
+    #[test]
+    fn the_start_gate_fires_on_starting_work_and_not_on_parking() {
+        use crate::models::FeatureDefinition;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        // The gate is dormant without a charter, so adopt one.
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::Charter {
+                purpose: "Agree the reasoning before building.".into(),
+                goals: vec![crate::charter::Goal {
+                    id: "G-1".into(),
+                    statement: "Nothing is built on reasoning nobody agreed to".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let f = store
+            .add_feature("demo", "Work", "spec", "M", None)
+            .unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    statement: "Something worth agreeing to".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+
+        // Parking it is not starting it: `Deferred` is not a column the board displays.
+        assert!(
+            !store
+                .load("demo")
+                .unwrap()
+                .config
+                .displayed_states
+                .contains(&"Deferred".to_string()),
+            "this test's premise: Deferred is not displayed"
+        );
+        let parked = store
+            .move_feature_approved("demo", &f.code, "Deferred", None)
+            .unwrap();
+        assert_eq!(parked.status, "Deferred", "parking needs no approval");
+
+        // Starting it still does.
+        store.move_feature("demo", &f.code, "Planned").unwrap();
+        let refused = store
+            .move_feature_approved("demo", &f.code, "Scheduled", None)
+            .unwrap_err();
+        assert!(
+            refused.to_string().contains("not approved"),
+            "starting work is still gated: {refused}"
+        );
+
+        // And the recorded escape still works, for the case it was built for.
+        let started = store
+            .move_feature_approved(
+                "demo",
+                &f.code,
+                "Scheduled",
+                Some("shipping under a deadline"),
+            )
+            .unwrap();
+        assert_eq!(started.status, "Scheduled");
+        assert_eq!(
+            started.definition.unwrap().started_unapproved,
+            "shipping under a deadline"
+        );
+    }
+
     /// FEAT-072: an older binary reading a newer board found no files and reported an empty board.
     /// The user saw a dashboard with nothing on it — including no Completed items — and reasonably
     /// read it as data loss. Refusing by name is the whole point.
