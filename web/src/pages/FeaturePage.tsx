@@ -252,7 +252,7 @@ function Definition({ feature, project }: { feature: Feature; project: string })
                 />
                 <div className="review-actions">
                   <button
-                    className="btn btn-primary"
+                    className="btn btn-danger"
                     onClick={withdraw}
                     disabled={busy || !reason.trim()}
                   >
@@ -264,7 +264,7 @@ function Definition({ feature, project }: { feature: Feature; project: string })
                 </div>
               </>
             ) : (
-              <button className="btn" onClick={() => setAsking(true)} disabled={!who}>
+              <button className="btn btn-danger" onClick={() => setAsking(true)} disabled={!who}>
                 Withdraw approval
               </button>
             )}
