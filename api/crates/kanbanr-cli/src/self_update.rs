@@ -408,7 +408,8 @@ fn resolve_latest() -> Result<String> {
             .filter_map(|t| t.get("name")?.as_str().map(str::to_string))
             .filter(|n| n.starts_with('v'))
             .collect();
-        tags.sort_by(|a, b| version_key(b).cmp(&version_key(a)));
+        // Newest first, so the first tag that actually carries a release wins.
+        tags.sort_by_key(|t| std::cmp::Reverse(version_key(t)));
         if let Some(t) = tags.into_iter().next() {
             return Ok(t);
         }
