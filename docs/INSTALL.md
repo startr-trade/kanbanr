@@ -152,6 +152,21 @@ matched against what is published without running anything. CI fails a release w
 A release published before the per-binary checksum existed cannot answer the question, and
 `--check` says exactly that rather than claiming you are current.
 
+### Everything is fetched over HTTPS
+
+Both the updater and the installers refuse a non-`https` URL before sending, and they follow
+redirects **themselves** rather than letting the HTTP client do it, checking each hop's scheme —
+because a release download *is* a redirect (`github.com` answers a 302 to
+`objects.githubusercontent.com`), and both `ureq` and `curl -L` will happily follow one that
+downgrades to plaintext.
+
+A checksum does not make plaintext acceptable here: `SHA256SUMS` arrives over the same channel as
+the archive it vouches for, so anyone able to rewrite one can rewrite the other. Verification only
+holds when the thing doing the vouching arrived over a channel that was authenticated.
+
+The GitHub token, when you supply one, goes only to `api.github.com` and is **never carried across a
+redirect** — not even to another GitHub host.
+
 ### How an update is installed
 
 The archive is verified against the release's `SHA256SUMS`, the binary extracted from it is verified

@@ -90,33 +90,65 @@ auth_header() {
     return 0
 }
 
+# https ONLY, on the request AND on any redirect (FEAT-089). `-L` follows redirects, and a release
+# download IS one — github.com answers a 302 to objects.githubusercontent.com — so without
+# --proto-redir a server could send this script to a plaintext host and it would fetch the binary
+# from there. A checksum does not rescue that: SHA256SUMS arrives over the same channel, so anyone
+# who can rewrite one can rewrite the other. Verification only holds over an authenticated channel.
+CURL_SAFE="--proto =https --proto-redir =https"
+# wget's equivalent. Older wget has no --https-only, so it is probed rather than assumed: a flag
+# that makes wget exit with a usage error would break every install on those systems.
+if have wget && wget --https-only --help >/dev/null 2>&1; then
+    WGET_SAFE="--https-only"
+else
+    WGET_SAFE=""
+fi
+
+# Refuse before sending, so a bad URL is a clear message rather than a transport error.
+require_https() {
+    case "$1" in
+        https://*) ;;
+        *) die "refusing to fetch $1 — this installer uses https only" 3 ;;
+    esac
+}
+
 if have curl; then
     fetch() {
+        require_https "$1"
         h="$(auth_header "$1")"
         if [ -n "$h" ]; then
-            curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 -H "$h" "$1"
+            # shellcheck disable=SC2086
+            curl -fsSL $CURL_SAFE --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 -H "$h" "$1"
         else
-            curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 "$1"
+            # shellcheck disable=SC2086
+            curl -fsSL $CURL_SAFE --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 "$1"
         fi
     }
     fetch_to() {
+        require_https "$1"
         h="$(auth_header "$1")"
         if [ -n "$h" ]; then
-            curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 -H "$h" "$1" -o "$2"
+            # shellcheck disable=SC2086
+            curl -fsSL $CURL_SAFE --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 -H "$h" "$1" -o "$2"
         else
-            curl -fsSL --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 "$1" -o "$2"
+            # shellcheck disable=SC2086
+            curl -fsSL $CURL_SAFE --connect-timeout 10 --max-time 300 --retry 3 --retry-delay 2 "$1" -o "$2"
         fi
     }
 elif have wget; then
     fetch() {
+        require_https "$1"
         h="$(auth_header "$1")"
-        if [ -n "$h" ]; then wget -qO- --timeout=30 --tries=3 --header="$h" "$1"
-        else wget -qO- --timeout=30 --tries=3 "$1"; fi
+        # shellcheck disable=SC2086
+        if [ -n "$h" ]; then wget -qO- $WGET_SAFE --timeout=30 --tries=3 --header="$h" "$1"
+        else wget -qO- $WGET_SAFE --timeout=30 --tries=3 "$1"; fi
     }
     fetch_to() {
+        require_https "$1"
         h="$(auth_header "$1")"
-        if [ -n "$h" ]; then wget -qO "$2" --timeout=30 --tries=3 --header="$h" "$1"
-        else wget -qO "$2" --timeout=30 --tries=3 "$1"; fi
+        # shellcheck disable=SC2086
+        if [ -n "$h" ]; then wget -qO "$2" $WGET_SAFE --timeout=30 --tries=3 --header="$h" "$1"
+        else wget -qO "$2" $WGET_SAFE --timeout=30 --tries=3 "$1"; fi
     }
 else
     die "need curl or wget on PATH" 3
