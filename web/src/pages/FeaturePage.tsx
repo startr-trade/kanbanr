@@ -173,8 +173,13 @@ function LessonsFor({ project, code }: { project: string; code: string }) {
 
 function Definition({ feature, project }: { feature: Feature; project: string }) {
   const def = feature.definition;
-  const [outcome, setOutcome] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const meta = useAsync(() => api.getMeta(), []);
+  const who = api.approver(meta.data ?? null);
   if (!def) return null;
   const approval =
     def.approval == null
@@ -183,14 +188,21 @@ function Definition({ feature, project }: { feature: Feature; project: string })
 
   /// Withdrawing is the other half of agreeing (FEAT-069): an approval recorded by the wrong hand,
   /// or a mind since changed, needs a remedy that is not editing yaml.
+  ///
+  /// The reason is collected in the page rather than by `window.prompt` (FEAT-077). A prompt cannot
+  /// show what withdrawing does, is suppressible by the browser, and gave the reviewer no way to
+  /// see the item while writing about it — so the one field that makes a withdrawal accountable was
+  /// being typed blind into a modal that some browsers never draw.
   const withdraw = async () => {
-    const reason = window.prompt("Why is this approval being withdrawn?");
-    if (!reason?.trim()) return;
+    if (!who) return;
+    setBusy(true);
     try {
-      await api.unapprove(project, feature.code, "withdrawn in the monitor", reason.trim());
-      setOutcome("withdrawn — it is waiting for review again");
+      await api.unapprove(project, feature.code, who, reason.trim());
+      setDone(true);
     } catch (e) {
-      setOutcome(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -213,19 +225,66 @@ function Definition({ feature, project }: { feature: Feature; project: string })
           ) : (
             <span className="chip warn">no goal link</span>
           )}
-          <span className={approval.cls}>{approval.label}</span>
-          {def.approval != null && meta.data?.writes === true && !outcome ? (
-            <button className="chip" onClick={withdraw}>
-              Withdraw approval
-            </button>
-          ) : null}
-          {outcome ? <span className="chip warn">{outcome}</span> : null}
+          <span className={done ? "chip warn" : approval.cls}>
+            {done ? "not approved — withdrawn" : approval.label}
+          </span>
           {def.started_unapproved?.trim() ? (
             <span className="chip warn">started unapproved: {def.started_unapproved}</span>
           ) : null}
           {def.exempt?.trim() ? <span className="chip">exempt: {def.exempt}</span> : null}
         </div>
-        {(def.approvals ?? []).length > 1 ? (
+        {def.approval != null && meta.data?.writes === true && !done ? (
+          <div className="review-actions">
+            {asking ? (
+              <>
+                <label className="muted small" htmlFor="withdraw-reason">
+                  Why is this approval being withdrawn? It returns to the review queue, and starting
+                  work on it is gated again until someone agrees to it afresh.
+                </label>
+                <textarea
+                  id="withdraw-reason"
+                  className="reason"
+                  rows={2}
+                  autoFocus
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="e.g. the requirements changed after the walkthrough"
+                />
+                <div className="review-actions">
+                  <button
+                    className="btn btn-primary"
+                    onClick={withdraw}
+                    disabled={busy || !reason.trim()}
+                  >
+                    {busy ? "recording…" : `Withdraw, recorded as ${who}`}
+                  </button>
+                  <button className="btn" onClick={() => setAsking(false)} disabled={busy}>
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : (
+              <button className="btn" onClick={() => setAsking(true)} disabled={!who}>
+                Withdraw approval
+              </button>
+            )}
+            {/* An approval that cannot name who gave it is not evidence of agreement (FEAT-077). */}
+            {who == null ? (
+              <span className="muted small">
+                This board has no commit identity, so no verdict can be attributed. Set one with{" "}
+                <code>kanbanr identity --name "You" --email you@example.com</code>.
+              </span>
+            ) : null}
+            {error ? <span className="chip warn">{error}</span> : null}
+          </div>
+        ) : null}
+        {done ? (
+          <p className="muted small">
+            Withdrawn. It is waiting for review again —{" "}
+            <Link to={`/p/${encodeURIComponent(project)}/review`}>see the review queue</Link>.
+          </p>
+        ) : null}
+        {(def.approvals ?? []).length > 0 ? (
           <ul className="dep-list">
             {(def.approvals ?? []).map((event, i) => (
               <li key={i} className="muted small">

@@ -374,6 +374,68 @@ mod tests {
         );
     }
 
+    /// FEAT-077 R-1: a verdict must name who gave it. Dispatch used to default `by` to "unknown",
+    /// so any caller that forgot the field produced an approval attributable to nobody — which is
+    /// how the monitor came to record twenty-eight of them as "reviewed in the monitor", a place.
+    #[test]
+    fn a_verdict_with_no_named_approver_is_refused() {
+        use crate::models::FeatureDefinition;
+        use serde_json::json;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let f = store
+            .add_feature("demo", "Cart", "spec", "M", None)
+            .unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart for 7 days".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+
+        let approve = format!("/projects/demo/features/{}/approve", f.code);
+        for body in [json!({}), json!({ "by": "" }), json!({ "by": "   " })] {
+            let err = crate::dispatch::dispatch(&store, "POST", &approve, Some(&body))
+                .expect_err("an unattributable approval must be refused");
+            assert!(
+                err.to_string().contains("must name who gave it"),
+                "unhelpful refusal: {err}"
+            );
+        }
+        // And it left nothing behind: the item is still waiting for agreement.
+        let project = store.load("demo").unwrap();
+        let untouched = project.feature(&f.code).unwrap();
+        assert!(untouched.definition.as_ref().unwrap().approval.is_none());
+
+        // A named approver is accepted, and the name is what gets recorded.
+        crate::dispatch::dispatch(&store, "POST", &approve, Some(&json!({ "by": "Ada L" })))
+            .unwrap();
+        let project = store.load("demo").unwrap();
+        let approved = project.feature(&f.code).unwrap();
+        assert_eq!(
+            approved
+                .definition
+                .as_ref()
+                .unwrap()
+                .approval
+                .as_ref()
+                .unwrap()
+                .by,
+            "Ada L"
+        );
+
+        // Withdrawing carries the same requirement — the record of who took it back matters more.
+        let un = format!("/projects/demo/features/{}/unapprove", f.code);
+        assert!(
+            crate::dispatch::dispatch(&store, "POST", &un, Some(&json!({ "reason": "changed" })))
+                .is_err()
+        );
+    }
+
     /// FEAT-069: an approval recorded in error had no remedy. Found the direct way — Claude
     /// approved an item on the user's behalf, which the method forbids, and nothing could undo it.
     #[test]

@@ -31,12 +31,17 @@ export default function ReviewPage() {
   if (pending.loading && !pending.data) return <Loading />;
   if (pending.error) return <ErrorBox error={pending.error} />;
   const items = pending.data ?? [];
-  const writable = meta.data?.writes === true;
+  // Who a yes here is recorded as (FEAT-077). The board's commit identity, exactly as
+  // `kanbanr approve` defaults it — not the string "reviewed in the monitor", which named the place
+  // the click happened and left twenty-eight approvals on this board attributable to nobody.
+  const who = api.approver(meta.data ?? null);
+  const writable = meta.data?.writes === true && who != null;
 
   const approve = async (code: string) => {
+    if (!who) return;
     setBusy(code);
     try {
-      await api.approve(project, code, "reviewed in the monitor");
+      await api.approve(project, code, who);
       setDone((d) => ({ ...d, [code]: "approved" }));
     } catch (e) {
       setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
@@ -62,18 +67,30 @@ export default function ReviewPage() {
         <p className="muted">
           {items.length} item{items.length === 1 ? "" : "s"} waiting. Approving records agreement
           pinned to the definition below: change it afterwards and the approval lapses.
-          {!writable && (
+          {meta.data?.writes !== true ? (
             <>
               {" "}
               This monitor is <strong>read-only</strong> — restart it with{" "}
               <code>kanbanr review --ui</code> to approve from here, or run{" "}
               <code>kanbanr approve &lt;CODE&gt;</code>.
             </>
+          ) : who == null ? (
+            <>
+              {" "}
+              This board has <strong>no commit identity</strong>, so an approval could not say who
+              gave it — and one that cannot is not evidence of agreement. Set one with{" "}
+              <code>kanbanr identity --name "You" --email you@example.com</code>, then reload.
+            </>
+          ) : (
+            <>
+              {" "}
+              A yes is recorded as <strong>{who}</strong>.
+            </>
           )}
         </p>
       )}
 
-      {items.map((item) => (
+      {items.map((item, i) => (
         <Brief
           key={item.code}
           project={project}
@@ -81,6 +98,9 @@ export default function ReviewPage() {
           writable={writable}
           busy={busy === item.code}
           outcome={done[item.code]}
+          // The first is open so the page shows what a brief looks like; the rest are collapsed,
+          // because a queue of twelve read as one unbroken column (FEAT-076).
+          defaultOpen={i === 0}
           onApprove={() => approve(item.code)}
         />
       ))}
@@ -94,6 +114,7 @@ function Brief({
   writable,
   busy,
   outcome,
+  defaultOpen,
   onApprove,
 }: {
   project: string;
@@ -101,6 +122,7 @@ function Brief({
   writable: boolean;
   busy: boolean;
   outcome?: string;
+  defaultOpen: boolean;
   onApprove: () => void;
 }) {
   const def = item.definition ?? {};
@@ -109,16 +131,26 @@ function Brief({
   const approved = outcome === "approved";
 
   return (
-    <section className="section" id={item.code}>
-      <h2>
-        <Link to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(item.code)}`}>
-          <code className="taskkey">{item.code}</code>
-        </Link>{" "}
-        {item.title}
-        <span className={`chip ${item.approval === "lapsed" ? "warn" : ""}`} style={{ marginLeft: 8 }}>
-          {item.approval === "lapsed" ? "approval lapsed — the definition changed" : "never approved"}
+    <details className="review-item" id={item.code} open={defaultOpen}>
+      {/* The summary is the row you scan; the brief is what you expand to read. */}
+      <summary>
+        <code className="taskkey">{item.code}</code>
+        <span className="review-title">{item.title}</span>
+        <span className={`chip ${item.approval === "lapsed" ? "warn" : ""}`}>
+          {item.approval === "lapsed" ? "approval lapsed" : "never approved"}
         </span>
-      </h2>
+        {approved ? <span className="chip done">approved</span> : null}
+      </summary>
+
+      <div className="review-body">
+      <p className="muted small">
+        <Link to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(item.code)}`}>
+          open {item.code}
+        </Link>
+        {item.approval === "lapsed"
+          ? " · approved once, then the definition changed — agreeing again covers what it says now"
+          : null}
+      </p>
 
       {def.statement ? <Markdown source={`> ${def.statement}`} /> : null}
       {(def.goals ?? []).length > 0 && (
@@ -175,11 +207,12 @@ function Brief({
         </div>
       )}
 
-      <div className="tile-states" style={{ marginTop: 12 }}>
+      {/* The action lives in the body, not the summary: approving should follow reading. */}
+      <div className="review-actions">
         {approved ? (
-          <span className="chip tasks">approved — it will leave this list on the next refresh</span>
+          <span className="chip done">approved — it leaves this list on the next refresh</span>
         ) : writable ? (
-          <button className="chip" onClick={onApprove} disabled={busy}>
+          <button className="btn btn-primary" onClick={onApprove} disabled={busy}>
             {busy ? "recording…" : `Approve ${item.code}`}
           </button>
         ) : (
@@ -187,6 +220,7 @@ function Brief({
         )}
         {outcome && !approved ? <span className="chip warn">{outcome}</span> : null}
       </div>
-    </section>
+      </div>
+    </details>
   );
 }

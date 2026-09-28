@@ -22,6 +22,26 @@ fn ser<T: Serialize>(v: &T) -> Result<String> {
     serde_json::to_string(v).map_err(|e| CoreError::Unsupported(format!("serialize: {e}")))
 }
 
+/// Who is recording this verdict — required, never defaulted (FEAT-077).
+///
+/// This used to fall back to the string "unknown", and the monitor sent "reviewed in the monitor":
+/// a place, not a person. Twenty-eight approvals on this project's own board carry it. An approval
+/// is the one human step the whole gate exists to obtain, so a record that cannot say who gave it
+/// is worse than no record — it reads as accountability while carrying none. Refusing here means no
+/// caller can produce one by omission; the CLI resolves `--by` from the commit identity and the
+/// monitor from `/api/meta`, and a caller with neither is told to set one rather than quietly
+/// attributed to nobody.
+fn approver(b: &Value) -> Result<String> {
+    match str_field(b, "by") {
+        Some(who) if !who.trim().is_empty() => Ok(who),
+        _ => Err(CoreError::Unsupported(
+            "an approval must name who gave it: pass `by` (the CLI defaults it to the data \
+             folder's commit identity — set one with `kanbanr identity --name … --email …`)"
+                .into(),
+        )),
+    }
+}
+
 fn str_field(body: &Value, k: &str) -> Option<String> {
     body.get(k).and_then(|v| v.as_str()).map(String::from)
 }
@@ -535,14 +555,12 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("POST", ["projects", p, "features", code, "unapprove"]) => ser(&store.unapprove_feature(
             p,
             code,
-            &str_field(b, "by").unwrap_or_else(|| "unknown".to_string()),
+            &approver(b)?,
             &str_field(b, "reason").unwrap_or_default(),
         )?),
-        ("POST", ["projects", p, "features", code, "approve"]) => ser(&store.approve_feature(
-            p,
-            code,
-            &str_field(b, "by").unwrap_or_else(|| "unknown".to_string()),
-        )?),
+        ("POST", ["projects", p, "features", code, "approve"]) => {
+            ser(&store.approve_feature(p, code, &approver(b)?)?)
+        }
         ("POST", ["projects", p, "features", code, "todos"]) => ser(&store.add_todo_list(
             p,
             code,
