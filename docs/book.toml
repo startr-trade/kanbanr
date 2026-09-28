@@ -1,0 +1,33 @@
+[book]
+title = "kanbanr"
+description = "A git-backed board that is the system of record for Claude-driven development"
+authors = ["The kanbanr Authors"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "rust"
+# A diagram in the content column is bounded by that column. `diagram-open.js` opens a click on one
+# in its own tab at full size, where the browser's own zoom, scroll, save and print already work —
+# no bespoke pan/zoom code to keep alive. `mermaid-fix.css` stops the SVG being clipped by the
+# column, and marks it clickable.
+additional-css = ["mermaid-fix.css"]
+additional-js = ["mermaid.min.js", "mermaid-init.js", "diagram-open.js"]
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/startr-trade/kanbanr"
+edit-url-template = "https://github.com/startr-trade/kanbanr/edit/main/docs/{path}"
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+
+[preprocessor]
+
+# The docs' diagrams are ```mermaid blocks. Without this preprocessor they render as unreadable
+# code listings rather than failing loudly, which is the worst of both — so the docs workflow
+# installs it alongside mdbook and pins both together.
+[preprocessor.mermaid]
+command = "mdbook-mermaid"

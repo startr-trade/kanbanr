@@ -23,3 +23,8 @@
 # (legacy data, an experiment), never let it into the source repo.
 security.yaml
 /web/tsconfig.tsbuildinfo
+docs/book
+/tools/screenshots/target
+/tools/screenshots/docs
+
+

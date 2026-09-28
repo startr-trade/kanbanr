@@ -9,16 +9,16 @@ happening live as you work in VS Code.
 The web monitor is a **read-only** live view of your local data folder — the board updates over SSE
 as the CLI (driven by Claude) changes things. No refresh, no login.
 
-<p align="center"><img src="docs/images/board.png" alt="kanbanr board" width="860"></p>
+<p align="center"><img src="docs/src/images/board.png" alt="kanbanr board" width="860"></p>
 
 A page per view — feature items (spec + persistent todo-lists), milestones, the derived schedule,
 status pages, the off-board "Ongoing" stream, and per-project docs:
 
 <table>
   <tr>
-    <td><img src="docs/images/feature.png" alt="Feature item" width="260"></td>
-    <td><img src="docs/images/milestones.png" alt="Milestones" width="260"></td>
-    <td><img src="docs/images/schedule.png" alt="Schedule" width="260"></td>
+    <td><img src="docs/src/images/feature.png" alt="Feature item" width="260"></td>
+    <td><img src="docs/src/images/milestones.png" alt="Milestones" width="260"></td>
+    <td><img src="docs/src/images/schedule.png" alt="Schedule" width="260"></td>
   </tr>
   <tr>
     <td align="center"><sub>Feature item — spec + todo-lists</sub></td>
@@ -26,9 +26,9 @@ status pages, the off-board "Ongoing" stream, and per-project docs:
     <td align="center"><sub>Schedule (derived)</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/images/status.png" alt="Status page" width="260"></td>
-    <td><img src="docs/images/ongoing.png" alt="Ongoing stream" width="260"></td>
-    <td><img src="docs/images/home.png" alt="Project tiles" width="260"></td>
+    <td><img src="docs/src/images/status.png" alt="Status page" width="260"></td>
+    <td><img src="docs/src/images/ongoing.png" alt="Ongoing stream" width="260"></td>
+    <td><img src="docs/src/images/home.png" alt="Project tiles" width="260"></td>
   </tr>
   <tr>
     <td align="center"><sub>Status page (grouped by feature)</sub></td>
@@ -36,9 +36,9 @@ status pages, the off-board "Ongoing" stream, and per-project docs:
     <td align="center"><sub>Home — project tiles</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/images/docs.png" alt="Docs tree" width="260"></td>
-    <td><img src="docs/images/doc-file.png" alt="Doc with embedded image" width="260"></td>
-    <td><img src="docs/images/doc-mermaid.png" alt="Doc with a Mermaid diagram" width="260"></td>
+    <td><img src="docs/src/images/docs.png" alt="Docs tree" width="260"></td>
+    <td><img src="docs/src/images/doc-file.png" alt="Doc with embedded image" width="260"></td>
+    <td><img src="docs/src/images/doc-mermaid.png" alt="Doc with a Mermaid diagram" width="260"></td>
   </tr>
   <tr>
     <td align="center"><sub>Per-project docs (folder tree)</sub></td>
@@ -53,7 +53,7 @@ draw.io — works too: export to PNG/SVG and embed it like any image.
 
 Light theme is the default; one toggle flips the whole UI to dark:
 
-<p align="center"><img src="docs/images/board-dark.png" alt="kanbanr board — dark theme" width="860"></p>
+<p align="center"><img src="docs/src/images/board-dark.png" alt="kanbanr board — dark theme" width="860"></p>
 
 <sub>Screenshots are generated reproducibly via a Selenium Grid in Docker — see
 <a href="tools/screenshots/">tools/screenshots/</a> (<code>make screenshots</code>).</sub>
@@ -110,7 +110,7 @@ multiple changes into a single **`kanbanr batch`** call. The contract lives in
 
 The skill and its enforcement hooks are also packaged as a **Claude Code plugin** — install both in
 one step with `claude plugin marketplace add startr-trade/kanbanr` then `claude plugin install kanbanr`
-(the `kanbanr` binary ships separately; see [docs/OPEN_SOURCING.md](docs/OPEN_SOURCING.md)).
+(the `kanbanr` binary ships separately; see the [open-sourcing guide](docs/src/project/open-sourcing.md)).
 
 ## Repository layout (monorepo)
 
@@ -142,7 +142,7 @@ started. **The web monitor is inside the binary**, so there is no second step an
 
 Or, from source: `make install` (needs Rust and Node), or `docker compose -f docker/docker-compose.yml up`.
 Rate limits, pinning a version, checksums, published targets and the glibc floor:
-**[docs/INSTALL.md](docs/INSTALL.md)**.
+**[the installation chapter](docs/src/getting-started/installation.md)**.
 
 ## Quick start (60 seconds)
 
@@ -166,7 +166,7 @@ kanbanr open      # opens http://localhost:8080 — no login, just the board
 `--ui-dir` still overrides the built-in copy, which is what you want while developing the SPA.
 
 The monitor is a localhost read-only view; expose it beyond your machine only behind a reverse
-proxy you control. See **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**.
+proxy you control. See **[the monitor chapter](docs/src/using/the-monitor.md)**.
 
 ## Tests
 
@@ -176,7 +176,20 @@ make test     # unit tests + Docker-less integration: the real `kanbanr` CLI dri
 make itest    # packaging smoke (testcontainers): the image boots and serves the view (no auth).
 ```
 
-See **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**, **[docs/DESIGN.md](docs/DESIGN.md)**,
-and **[docs/ROADMAP.md](docs/ROADMAP.md)**. The project's own assessment, decisions and proposals
-live on its board (`kanbanr adr list`, `kanbanr doc tree`) rather than in this repository — they are
-reasoning about the work, not part of the shipped artifact.
+## Documentation
+
+The full documentation is an mdBook — searchable, with every page in one table of contents:
+
+**<https://startr-trade.github.io/kanbanr>**
+
+Or read it from this repository under [`docs/src/`](docs/src/SUMMARY.md), or build it locally with
+`mdbook serve docs`.
+
+- [Installation](docs/src/getting-started/installation.md) · [Set up in 60 seconds](docs/src/getting-started/quickstart.md)
+- [The method](docs/src/using/the-method.md) — why an item exists, and what proves it done
+- [Command reference](docs/src/reference/cli.md) · [Architecture](docs/src/architecture/overview.md)
+- [Contributing](docs/src/project/contributing.md) · [Roadmap](docs/src/project/roadmap.md)
+
+The project's own assessment, decisions and proposals live on its **board**
+(`kanbanr adr list`, `kanbanr doc tree`) rather than in this repository — they are reasoning about
+the work, not part of the shipped artifact, and the board is where they stay current.

@@ -1,0 +1,125 @@
+name: Docs
+
+# Builds the mdBook under docs/ and publishes it to GitHub Pages.
+#
+# One-time repo setup before the first successful deploy:
+#   Settings → Pages → Build and deployment → Source = "GitHub Actions".
+# Without that, actions/deploy-pages fails with "Pages site not found".
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One Pages deployment at a time, and never cancel one in flight.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  # Pinned so a book that builds locally builds identically here. mdbook-mermaid 0.17 is built
+  # against the mdbook 0.5 line and the preprocessor protocol differs across that boundary, so the
+  # two versions move together or not at all.
+  MDBOOK_VERSION: "0.5.4"
+  # The book's diagrams are ```mermaid blocks. A build WITHOUT this renders them as unreadable code
+  # listings rather than failing, which is the worst of both.
+  MDBOOK_MERMAID_VERSION: "0.17.0"
+
+jobs:
+  build:
+    name: mdBook build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mdBook + mermaid preprocessor
+        run: |
+          set -eu
+          mkdir -p "$HOME/.local/bin"
+          base="https://github.com/rust-lang/mdBook/releases/download"
+          curl -fsSL --proto '=https' --proto-redir '=https' \
+            "${base}/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C "$HOME/.local/bin"
+          mbase="https://github.com/badboy/mdbook-mermaid/releases/download"
+          curl -fsSL --proto '=https' --proto-redir '=https' \
+            "${mbase}/v${MDBOOK_MERMAID_VERSION}/mdbook-mermaid-v${MDBOOK_MERMAID_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # Every page must be reachable from the table of contents, and every entry must exist
+      # (FEAT-090/R-1). mdbook itself only warns about an unlisted file, and a page nobody can
+      # navigate to is a page that rots unseen.
+      - name: Every page is in the table of contents
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import os, re, sys
+          src = "docs/src"
+          listed = set(re.findall(r"\]\(([^)#]+\.md)", open(f"{src}/SUMMARY.md").read()))
+          on_disk = {
+              os.path.relpath(os.path.join(r, f), src)
+              for r, _, fs in os.walk(src) for f in fs
+              if f.endswith(".md") and f != "SUMMARY.md"
+          }
+          problems = []
+          for p in sorted(listed - on_disk):
+              problems.append(f"SUMMARY lists {p}, which does not exist")
+          for p in sorted(on_disk - listed):
+              problems.append(f"{p} exists but is in no chapter — nothing links to it")
+          for p in problems:
+              print(f"::error::{p}")
+          sys.exit(1 if problems else 0)
+          PY
+
+      # The changelog chapter is a copy of the root CHANGELOG.md. Running the same sync and
+      # checking for a diff means the chapter cannot go stale behind the file it mirrors.
+      - name: The mirrored chapters are in sync
+        run: |
+          set -eu
+          tools/docs/sync.sh
+          git diff --exit-code -- docs/src/project/changelog.md \
+            || { echo "::error::docs/src/project/changelog.md is stale — run tools/docs/sync.sh" >&2; exit 1; }
+
+      - name: Build
+        run: mdbook build docs
+
+      - name: Configure Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+
+      # `build-dir` defaults to `book` relative to book.toml → docs/book.
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/book
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    # A pull request builds the book — so a broken book fails the PR — but never deploys.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
