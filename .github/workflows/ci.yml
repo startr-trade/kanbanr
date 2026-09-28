@@ -184,6 +184,30 @@ jobs:
           if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
           Write-Host "install.ps1 parses clean"
 
+      # Updates over plaintext are not made safe by a checksum — SHA256SUMS arrives over the same
+      # channel (FEAT-089). curl's -L follows redirects and a release download IS one, so the
+      # protocol has to be pinned on the redirect as well as the request.
+      - name: The installers pin https on request and redirect
+        run: |
+          set -eu
+          grep -q -- "--proto =https" scripts/install.sh \
+            || { echo "::error::install.sh does not pin https on the request" >&2; exit 1; }
+          grep -q -- "--proto-redir =https" scripts/install.sh \
+            || { echo "::error::install.sh does not pin https on redirects" >&2; exit 1; }
+          grep -q "require_https" scripts/install.sh \
+            || { echo "::error::install.sh does not refuse a non-https URL" >&2; exit 1; }
+          grep -q "Assert-Https" scripts/install.ps1 \
+            || { echo "::error::install.ps1 does not refuse a non-https URL" >&2; exit 1; }
+          # Every fetch must go through the checked helper, not straight to the cmdlet.
+          if grep -n "Invoke-WebRequest -Uri" scripts/install.ps1; then
+            echo "::error::install.ps1 fetches without checking the scheme" >&2; exit 1
+          fi
+          # And no http:// URL anywhere in either script.
+          if grep -nE "http://[a-z]" scripts/install.sh scripts/install.ps1; then
+            echo "::error::a plaintext URL in an installer" >&2; exit 1
+          fi
+          echo "installers pin https on request and redirect."
+
       # Every platform the shell installer claims to support must be one the release workflow
       # actually builds. They drifted apart once already, in the other direction — the script
       # promised linux/aarch64 that release.yml did not produce.

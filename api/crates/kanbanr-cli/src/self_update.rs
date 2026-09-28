@@ -266,30 +266,114 @@ pub fn running_binary() -> Result<PathBuf> {
     Ok(std::fs::canonicalize(&exe).unwrap_or(exe))
 }
 
-/// One HTTP GET, with the timeouts and the token rule the installer uses.
+/// How many redirects the updater will follow before giving up.
+const MAX_HOPS: usize = 5;
+
+/// Is this a URL the updater may fetch? (FEAT-089/R-1)
 ///
-/// The token goes ONLY to `api.github.com`, which is the endpoint that rate-limits (60 requests an
-/// hour anonymous, 5000 with one). The download host needs no credential and must not receive one:
-/// an updater that forwards your token to every host it touches is a worse trade than a slow retry.
+/// Only `https`. Checksum verification does **not** make plaintext acceptable here: the checksum
+/// file arrives over the same channel as the archive it vouches for, so anyone able to rewrite one
+/// can rewrite the other. Verification only holds when the thing doing the vouching arrived over a
+/// channel that was authenticated.
+pub fn is_https(url: &str) -> bool {
+    url.len() > 8 && url[..8].eq_ignore_ascii_case("https://")
+}
+
+/// Should this request carry the GitHub token?
+///
+/// Only `api.github.com`, which is the endpoint that rate-limits (60 requests an hour anonymous,
+/// 5000 with one). The download host needs no credential and must not receive one, and neither does
+/// a redirect target — an updater that forwards your token to every host it touches is a worse
+/// trade than a slow retry. (R-3)
+pub fn takes_token(url: &str) -> bool {
+    url.starts_with("https://api.github.com/")
+}
+
+/// One HTTPS GET, following redirects **in this code** rather than in the HTTP client.
+///
+/// `ureq` follows five redirects on its own with no restriction on the scheme it redirects *to*,
+/// and a release download IS a redirect by design — `github.com/.../releases/download/…` answers a
+/// 302 to `objects.githubusercontent.com`. So the bytes that become the binary on your PATH used to
+/// arrive from a hop nothing had looked at, and a redirect to `http://` would have been followed in
+/// silence. Automatic following is off; every hop is checked here (R-2).
 fn fetch(url: &str) -> Result<Vec<u8>> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(300))
+        // Off, so a redirect cannot silently change the scheme underneath us.
+        .redirects(0)
         .build();
-    let mut req = agent.get(url);
-    if url.starts_with("https://api.github.com/")
-        && let Ok(token) = std::env::var("GH_TOKEN").or_else(|_| std::env::var("GITHUB_TOKEN"))
-        && !token.trim().is_empty()
-    {
-        req = req.set("Authorization", &format!("Bearer {}", token.trim()));
+
+    let mut current = url.to_string();
+    // Only the first request may carry the token; a redirect never does, whatever it points at.
+    let mut first = true;
+    for _ in 0..=MAX_HOPS {
+        if !is_https(&current) {
+            bail!(
+                "refusing to fetch {current} — updates are fetched over https only.\n\
+                 An update downloaded over plaintext is not made safe by a checksum, because the \
+                 checksum arrives the same way."
+            );
+        }
+        let mut req = agent.get(&current).set("User-Agent", "kanbanr-self-update");
+        if first
+            && takes_token(&current)
+            && let Ok(token) = std::env::var("GH_TOKEN").or_else(|_| std::env::var("GITHUB_TOKEN"))
+            && !token.trim().is_empty()
+        {
+            req = req.set("Authorization", &format!("Bearer {}", token.trim()));
+        }
+        first = false;
+
+        let resp = req
+            .call()
+            .with_context(|| format!("could not fetch {current}"))?;
+        if let Some(next) = redirect_target(&resp, &current) {
+            current = next;
+            continue;
+        }
+        let mut bytes = Vec::new();
+        std::io::copy(&mut resp.into_reader(), &mut bytes)
+            .context("could not read the response")?;
+        return Ok(bytes);
     }
-    let resp = req
-        .set("User-Agent", "kanbanr-self-update")
-        .call()
-        .with_context(|| format!("could not fetch {url}"))?;
-    let mut bytes = Vec::new();
-    std::io::copy(&mut resp.into_reader(), &mut bytes).context("could not read the response")?;
-    Ok(bytes)
+    bail!("gave up after {MAX_HOPS} redirects starting at {url}")
+}
+
+/// The absolute URL a redirect response points at, if it is one.
+///
+/// Relative `Location` values are resolved against the current URL, because a server is entitled to
+/// send one and treating it as an unknown scheme would refuse a perfectly good redirect.
+fn redirect_target(resp: &ureq::Response, current: &str) -> Option<String> {
+    if !(300..400).contains(&resp.status()) {
+        return None;
+    }
+    resolve_location(resp.header("location")?, current)
+}
+
+/// Resolve a `Location` value against the URL it came from. Split out from [`redirect_target`] so
+/// the interesting part — what a redirect can turn into — is testable without an HTTP response.
+///
+/// An absolute target passes through unchanged, so the scheme check in [`fetch`] sees exactly what
+/// the server asked for rather than something this function normalised.
+pub fn resolve_location(location: &str, current: &str) -> Option<String> {
+    let location = location.trim();
+    if location.is_empty() {
+        return None;
+    }
+    if location.contains("://") {
+        return Some(location.to_string());
+    }
+    let origin_end = current.find("://").map(|i| i + 3)?;
+    let origin = match current[origin_end..].find('/') {
+        Some(i) => &current[..origin_end + i],
+        None => current,
+    };
+    Some(if location.starts_with('/') {
+        format!("{origin}{location}")
+    } else {
+        format!("{origin}/{location}")
+    })
 }
 
 /// The newest release tag, from three endpoints in order.
@@ -681,6 +765,72 @@ mod tests {
             assert_eq!(mode & 0o111, 0o111, "the new binary must be executable");
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// FEAT-089: every hop must be https, not just the URL we typed.
+    ///
+    /// `ureq` follows five redirects on its own with no scheme restriction, and a release download
+    /// IS a redirect — so the bytes that become the binary arrived from a hop nothing had checked.
+    /// A checksum does not rescue that: the checksum file comes over the same channel.
+    #[test]
+    fn only_https_is_fetched_and_a_downgrade_redirect_is_refused() {
+        // R-1: what may be fetched at all.
+        assert!(is_https("https://github.com/x"));
+        assert!(
+            is_https("HTTPS://github.com/x"),
+            "the scheme is case-insensitive"
+        );
+        assert!(!is_https("http://github.com/x"));
+        assert!(
+            !is_https("http://github.com/x?u=https://y"),
+            "not a prefix match on 'https'"
+        );
+        assert!(!is_https("ftp://github.com/x"));
+        assert!(!is_https("https://"), "a scheme with no host is not a URL");
+        // A URL that merely CONTAINS https is not an https URL.
+        assert!(!is_https("//evil/?https://github.com"));
+
+        // R-3: the token's blast radius. api.github.com only — never the download host, never a
+        // redirect target, even one still on a github.com domain.
+        assert!(takes_token(
+            "https://api.github.com/repos/x/y/releases/latest"
+        ));
+        assert!(!takes_token(
+            "https://github.com/x/y/releases/download/v1/a.tar.gz"
+        ));
+        assert!(!takes_token(
+            "https://objects.githubusercontent.com/whatever"
+        ));
+        assert!(!takes_token("https://api.github.com.evil.test/repos"));
+        assert!(!takes_token("http://api.github.com/repos"));
+
+        // R-2: where a redirect is allowed to send us. Absolute targets pass through as-is so the
+        // scheme check above sees exactly what the server asked for.
+        let abs = |loc: &str| {
+            let origin = "https://github.com/o/r/releases/download/v1/a.tar.gz";
+            resolve_location(loc, origin)
+        };
+        assert_eq!(
+            abs("https://objects.githubusercontent.com/a"),
+            Some("https://objects.githubusercontent.com/a".into())
+        );
+        // The dangerous one: a downgrade is resolved, then refused by is_https.
+        let downgrade = abs("http://objects.githubusercontent.com/a").unwrap();
+        assert!(
+            !is_https(&downgrade),
+            "a downgrade must not pass the scheme check"
+        );
+
+        // Relative targets keep the current origin, which is https by construction.
+        assert_eq!(
+            abs("/o/r/other.tar.gz"),
+            Some("https://github.com/o/r/other.tar.gz".into())
+        );
+        assert_eq!(
+            abs("other.tar.gz"),
+            Some("https://github.com/other.tar.gz".into())
+        );
+        assert_eq!(abs(""), None, "an empty Location is not a redirect");
     }
 
     /// R-5: nothing checks for updates unless asked. A tool that phones home as a side effect of

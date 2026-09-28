@@ -55,8 +55,57 @@ $ghHeaders = @{ 'User-Agent' = 'kanbanr-install' }
 $ghToken = if ($env:GH_TOKEN) { $env:GH_TOKEN } else { $env:GITHUB_TOKEN }
 if ($ghToken) { $ghHeaders['Authorization'] = "Bearer $ghToken" }
 
+# https ONLY, on the request AND on any redirect (FEAT-089). Invoke-WebRequest follows redirects
+# itself and .NET will follow an https -> http one, and a release download IS a redirect — so
+# without this the binary could be fetched from a plaintext host. A checksum does not rescue that:
+# SHA256SUMS arrives over the same channel, so whoever can rewrite one can rewrite the other.
+$script:MaxHops = 5
+
+function Assert-Https($uri) {
+    if ($uri -notmatch '^(?i)https://.') {
+        throw "kanbanr-install: refusing to fetch $uri - this installer uses https only"
+    }
+}
+
+# One GET, following redirects HERE so each hop's scheme is checked. Returns the response.
+function Invoke-HttpsGet($uri, $headers, $outFile) {
+    $current = $uri
+    $sendHeaders = $headers
+    for ($hop = 0; $hop -le $script:MaxHops; $hop++) {
+        Assert-Https $current
+        $args = @{
+            Uri                = $current
+            Headers            = $sendHeaders
+            TimeoutSec         = 300
+            MaximumRedirection = 0
+            UseBasicParsing    = $true
+            ErrorAction        = 'Stop'
+        }
+        if ($outFile) { $args['OutFile'] = $outFile }
+        try {
+            return Invoke-WebRequest @args
+        } catch {
+            $resp = $_.Exception.Response
+            if ($null -eq $resp) { throw }
+            $code = [int]$resp.StatusCode
+            if ($code -lt 300 -or $code -ge 400) { throw }
+            $location = $resp.Headers.Location
+            if (-not $location) { throw }
+            # Relative targets keep the current origin, which is https by the check above.
+            if ($location -notmatch '://') {
+                $origin = ([uri]$current).GetLeftPart([System.UriPartial]::Authority)
+                $location = if ($location.StartsWith('/')) { "$origin$location" } else { "$origin/$location" }
+            }
+            # A redirect never carries the token, whatever host it points at.
+            $sendHeaders = @{ 'User-Agent' = 'kanbanr-install' }
+            $current = [string]$location
+        }
+    }
+    throw "kanbanr-install: gave up after $script:MaxHops redirects starting at $uri"
+}
+
 function Get-Json($uri) {
-    try { Invoke-RestMethod -Uri $uri -Headers $ghHeaders -TimeoutSec 60 } catch { $null }
+    try { (Invoke-HttpsGet $uri $ghHeaders $null).Content | ConvertFrom-Json } catch { $null }
 }
 
 if (-not $Version) {
@@ -91,13 +140,13 @@ New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 try {
     Write-Host "  downloading $asset..."
     $archive = Join-Path $tmp $asset
-    Invoke-WebRequest -Uri "$dl/$Version/$asset" -OutFile $archive -UseBasicParsing -TimeoutSec 300
+    Invoke-HttpsGet "$dl/$Version/$asset" @{ 'User-Agent' = 'kanbanr-install' } $archive | Out-Null
 
     if ($NoVerify) {
         Write-Host '  checksum verification SKIPPED (-NoVerify)'
     } else {
         $sumsPath = Join-Path $tmp 'SHA256SUMS'
-        Invoke-WebRequest -Uri "$dl/$Version/SHA256SUMS" -OutFile $sumsPath -UseBasicParsing -TimeoutSec 300
+        Invoke-HttpsGet "$dl/$Version/SHA256SUMS" @{ 'User-Agent' = 'kanbanr-install' } $sumsPath | Out-Null
         $want = (Select-String -Path $sumsPath -Pattern ([regex]::Escape($asset)) |
                  Select-Object -First 1).Line -split '\s+' | Select-Object -First 1
         if (-not $want) { throw "kanbanr-install: SHA256SUMS carries no entry for $asset" }
