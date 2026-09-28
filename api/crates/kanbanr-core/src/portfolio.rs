@@ -145,6 +145,18 @@ fn is_terminal(project: &Project, status: &str) -> bool {
     status.eq_ignore_ascii_case("Completed") || project.config.is_no_op(status)
 }
 
+/// Would this status appear on the project's own board? (FEAT-097)
+///
+/// The cross-project board is a view ACROSS project boards, so it shows what they show: the
+/// statuses in `displayed_states`, or every status when that list is empty (the web board's rule).
+/// It used to take every feature, so an item a project had deliberately parked off its board —
+/// `Deferred` — reappeared here as "Not started", and anything in a no-op disposition (`Out-of-
+/// Scope`, `No Action`) was counted as "Done", which reads as delivered.
+fn on_board(project: &Project, status: &str) -> bool {
+    let shown = &project.config.displayed_states;
+    shown.is_empty() || shown.iter().any(|s| s == status)
+}
+
 /// Classify a feature into a normalized cross-project lane.
 fn disposition(project: &Project, f: &crate::FeatureItem) -> Disposition {
     if is_terminal(project, &f.status) {
@@ -371,7 +383,11 @@ pub fn cross_project_board(store: &Store) -> Result<BoardReport> {
             let Ok(project) = store.load(pid) else {
                 continue;
             };
-            for f in &project.features {
+            for f in project
+                .features
+                .iter()
+                .filter(|f| on_board(&project, &f.status))
+            {
                 let disp = disposition(&project, f);
                 let card = BoardCard {
                     project: project.id.clone(),
