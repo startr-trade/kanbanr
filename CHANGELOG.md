@@ -143,6 +143,31 @@ reported against it.
 
 ### Fixed
 
+- **An approval named a place, not a person** (FEAT-077): the monitor recorded verdicts as
+  `by: "reviewed in the monitor"`, naming the surface the click happened on. FEAT-069 already
+  required the record to carry *who*. `/api/meta` now reports the board's commit identity and the
+  monitor attributes a verdict to the same name `kanbanr approve` would; a verdict with no named
+  approver is refused rather than attributed to `"unknown"`. Approving and withdrawing also emit
+  events now — a withdrawal means work already in flight lost its mandate, and the only trace used
+  to be inside the item's own file.
+- **The review queue asked for agreement on finished work** (FEAT-078): `doctor` and the queue
+  answered the same question differently — 2 items against 6, the extras Completed or deliberately
+  Deferred. Approving merged work records a signature that changes nothing, and a gate that asks
+  for those gets rubber-stamped. Both now read one `graph::is_live_work` gate, and in-flight work
+  is asked about first.
+- **A test named after a file could not be recorded** (FEAT-079): a test name is one path segment,
+  and the CLI's encoder leaves `/` alone — right for a whole path, wrong for a segment. The write
+  was refused and the state silently stayed `planned`, so `kanbanr check` called a passing test
+  unproven, which reads as the evidence rule being broken rather than the transport.
+- **A control that did not look like one** (FEAT-076, FEAT-081): the review queue ran its briefs
+  together as one column and its approve action used the label style. Briefs are now collapsible
+  cards, and `.btn` has its own raised surface — it had been declared with the *same* background as
+  `.chip`, so changing the class satisfied the requirement while the button still read as a tag.
+  `npm run check:ui` asserts both the class rule and that the two surfaces differ. See ADR-0008.
+- **A published snippet carried a local path** (FEAT-024): `skill/kanbanr/hooks/settings.snippet.json`
+  registered its hooks by an absolute path into the author's home directory — one that had not
+  existed since the repository moved, so anyone following it registered two hooks that silently did
+  nothing. Now a placeholder, leading with `kanbanr hooks install`, which resolves the paths itself.
 - **Auto-completion left no transition behind** (FEAT-061): ticking an item's last task completed it
   by assigning the status directly, so cycle time was blind to the normal way items finish and
   reported only on hand-moved ones.
