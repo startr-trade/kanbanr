@@ -50,6 +50,18 @@ pub fn current_branch(root: &Path) -> Option<String> {
     git(root, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok()
 }
 
+/// Is a merge waiting to be committed? (FEAT-094)
+///
+/// A merge into the default branch is the normal, intended end of every item's branch, so the
+/// "no commits on the default branch" rule must not apply to the commit that completes one. It
+/// already didn't for a one-command `git merge -m …`, which makes its own commit without calling
+/// `git commit` — only the recovery path, finishing a merge whose message a hook rejected, was
+/// refused, which is the worst arrangement of the two. Asked of git rather than by looking for a
+/// `MERGE_HEAD` file, so it holds in a linked worktree too.
+pub fn merge_in_progress(root: &Path) -> bool {
+    git(root, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_ok()
+}
+
 /// The branch work is *not* supposed to land on directly: the remote's head, else the configured
 /// default, else whichever of main/master exists.
 pub fn default_branch(root: &Path) -> String {
@@ -233,6 +245,41 @@ mod tests {
                 .contains("echo mine")
         );
         assert!(!dir.join("pre-commit").exists());
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FEAT-094: finishing an interrupted merge was refused as "a commit straight to main".
+    #[test]
+    fn the_guard_lets_a_merge_be_completed() {
+        let repo = scratch_repo("merge");
+        for args in [
+            &["config", "user.email", "t@example.com"][..],
+            &["config", "user.name", "T"],
+            &["commit", "-q", "--allow-empty", "-m", "base"],
+            &["checkout", "-q", "-b", "feat/FEAT-001-thing"],
+            &["commit", "-q", "--allow-empty", "-m", "work"],
+            &["checkout", "-q", "main"],
+        ] {
+            git(&repo, args).unwrap();
+        }
+        // An ordinary state on the default branch: no merge, so the rule applies.
+        assert!(!merge_in_progress(&repo));
+
+        // A merge staged but not committed — exactly what a rejected merge message leaves behind.
+        git(
+            &repo,
+            &["merge", "--no-ff", "--no-commit", "feat/FEAT-001-thing"],
+        )
+        .unwrap();
+        assert!(
+            merge_in_progress(&repo),
+            "a staged merge must be recognised"
+        );
+        assert_eq!(current_branch(&repo).as_deref(), Some("main"));
+
+        // Aborting it returns to the ordinary state, where the rule applies again.
+        git(&repo, &["merge", "--abort"]).unwrap();
+        assert!(!merge_in_progress(&repo));
         let _ = std::fs::remove_dir_all(&repo);
     }
 
