@@ -108,14 +108,63 @@ unauthenticated: expose it beyond localhost only behind a reverse proxy you cont
 
 ## Staying current
 
-There is no `self-update` yet — re-run the installer, which replaces the binary in place:
-
 ```bash
-curl -fsSL https://github.com/startr-trade/kanbanr/releases/latest/download/install.sh | sh
+kanbanr self-update --check          # is this binary current? changes nothing
+kanbanr self-update                  # replace it with what the release publishes
+kanbanr self-update --version v0.1.0 # pin, or roll back
 ```
 
-Your board is untouched by this: it is a separate git repository beside your code, and the binary
-holds no state.
+Updates are **never automatic** — nothing runs on a timer or as a side effect of another command.
+
+### What "current" means here
+
+`--check` reports **two different** reasons a binary can be out of date:
+
+1. **A newer version** — the latest release tag differs from yours.
+2. **The same version, rebuilt** — the tag matches, but the binary the release publishes is not the
+   one you are running.
+
+The second is the one most tools miss. An asset re-uploaded under the same tag — an interim fix, a
+corrected packaging step, a re-run workflow — changes nothing a version comparison can see. So the
+check is made on the **SHA-256 of the binary**, against a per-target checksum the release publishes
+beside the archives.
+
+The commit hash cannot do that job, which is why both exist:
+
+| | Answers | Decides? |
+|---|---|---|
+| **SHA-256 of the binary** | *is the binary I am running the one this release publishes?* | **yes** — it identifies the artifact, so it catches a rebuild, a re-upload, a corrupted install, or a locally built binary that merely shares a version |
+| **commit hash** (in `--version`, and on the release page) | *what source was it built from?* | no — two different binaries routinely share one commit (a re-run workflow, a toolchain bump). But when the checksums differ it is the only thing that says **why** |
+
+So a rebuild is reported as *"same version, same commit, different binary"*, and a tag moved onto
+other source as *"now points at a different commit"* — which is unusual enough to be worth saying
+out loud rather than folding into "an update is available".
+
+```console
+$ kanbanr --version
+kanbanr 0.1.0 (a1b2c3d4e5f6, built 2026-09-28)
+```
+
+That commit is the one the GitHub release page shows for the tag, so an installed binary can be
+matched against what is published without running anything. CI fails a release whose binaries report
+`unknown` or `dirty`.
+
+A release published before the per-binary checksum existed cannot answer the question, and
+`--check` says exactly that rather than claiming you are current.
+
+### How an update is installed
+
+The archive is verified against the release's `SHA256SUMS`, the binary extracted from it is verified
+against its own published checksum, and only then is it moved into place by an **atomic rename** —
+so an interrupted update cannot leave a half-written executable on your `PATH`. A checksum mismatch
+aborts, and there is no flag to get past it: anyone who genuinely wants an unverified binary can
+download it by hand and see what they are doing.
+
+Re-running the installer works too, and is the path on Windows, where a running `.exe` cannot be
+replaced from inside itself.
+
+Your board is untouched by any of this: it is a separate git repository beside your code, and the
+binary holds no state.
 
 ## Build from source
 

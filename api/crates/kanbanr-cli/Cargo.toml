@@ -26,7 +26,19 @@ anyhow.workspace = true
 # `serve` needs an async runtime to host the view daemon.
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # Used by `kanbanr open` to check whether the view daemon is already running.
-ureq = { version = "2", default-features = false }
+# TLS is not optional for this binary any more (FEAT-088). `default-features = false` with no tls
+# feature left ureq with no backend at all — base64, log, once_cell, url — so every https:// call
+# failed, self-update included, and the webhook sender could never have reached an https endpoint.
+# rustls rather than native-tls: reusing the OpenSSL git2 vendors would couple this client's TLS to
+# libgit2's build configuration on three platforms, to save about a megabyte against the 20 MB
+# ceiling ADR-0009 set.
+ureq = { version = "2", default-features = false, features = ["tls", "json", "gzip"] }
+# The running binary's own checksum, compared against what the release publishes (FEAT-088/R-1).
+sha2 = "0.10"
+# Unpack a release archive in memory during self-update (FEAT-088); flate2 is already in the
+# tree via the server crate, which gzips the embedded monitor.
+tar = "0.4"
+flate2 = "1"
 # Cross-process advisory file lock so two concurrent writers can't interleave a mutate→commit
 # sequence on the same data dir (FEAT-029).
 fs2 = "0.4"

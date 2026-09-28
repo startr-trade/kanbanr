@@ -6,6 +6,7 @@ mod backend;
 mod hooks;
 mod mirror;
 mod scm;
+mod self_update;
 
 use backend::{Backend, Method};
 use clap::{Args, Parser, Subcommand};
@@ -17,10 +18,24 @@ use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+/// What `--version` prints: the release, and the build that release was made from (FEAT-088).
+///
+/// The tag alone cannot distinguish two builds of the same release, which is precisely what happens
+/// when an asset is re-uploaded under one tag. `self-update` answers that by checksum; a person
+/// reading `--version` answers it by this.
+const VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (",
+    env!("KANBANR_GIT_SHA"),
+    ", built ",
+    env!("KANBANR_BUILD_DATE"),
+    ")"
+);
+
 #[derive(Parser)]
 #[command(
     name = "kanbanr",
-    version,
+    version = VERSION,
     about = "Kanban task manager for Claude development (HTTP client)"
 )]
 struct Cli {
@@ -66,6 +81,20 @@ enum Command {
         /// than overwriting the only pointer this project has to its board (FEAT-085).
         #[arg(long)]
         force: bool,
+    },
+    /// Replace this binary with the one the release publishes.
+    ///
+    /// Notices two different things: a newer version, and the SAME version rebuilt after this copy
+    /// was installed — the second is invisible to a version comparison and is how an interim fix
+    /// ships. Never runs on its own; every download is checksum-verified before anything is
+    /// replaced. (FEAT-088)
+    SelfUpdate {
+        /// Report whether an update is available and exit — download nothing, change nothing.
+        #[arg(long)]
+        check: bool,
+        /// Install this tag instead of the newest release. Also how you roll back.
+        #[arg(long = "version", value_name = "TAG")]
+        tag: Option<String>,
     },
     /// Set the commit identity (name + email) on this data repo.
     Identity {
@@ -4003,6 +4032,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 *force,
             );
         }
+        Command::SelfUpdate { check, tag } => {
+            return self_update::run(*check, tag.as_deref(), cli.json);
+        }
         Command::Hooks(cmd) => return run_hooks(cli, cmd),
         Command::Serve {
             bind,
@@ -4021,6 +4053,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         | Command::Serve { .. }
         | Command::Open
         | Command::Where
+        | Command::SelfUpdate { .. }
         | Command::Hooks(_) => {
             unreachable!()
         }
