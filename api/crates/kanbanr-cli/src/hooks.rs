@@ -18,10 +18,21 @@ const HOOKS: [(&str, &str); 2] = [("SessionStart", "session-start"), ("Stop", "s
 /// output of a run to record which tracked tests actually passed (FEAT-053), the other checks a
 /// `git commit` before it is attempted, so the feedback arrives with a suggestion rather than as a
 /// failure after the fact (FEAT-056).
-const CLI_HOOKS: [(&str, &str, &str); 2] = [
+const CLI_HOOKS: [(&str, &str, &str); 3] = [
     ("PostToolUse", "Bash", "kanbanr capture"),
     ("PreToolUse", "Bash", "kanbanr git guard"),
+    // Documentation belongs on the board (FEAT-040). The rule lived only in the skill's prose
+    // until this hook; it decides from the path alone and stays silent where no board is active.
+    ("PreToolUse", "Write|Edit", "kanbanr claude guard"),
 ];
+
+/// Where a project's own hooks are registered: `<root>/.claude`, which Claude Code reads for that
+/// project alone. This is the default scope, because kanbanr's hooks exist to serve a board — a
+/// repository nobody tracks with kanbanr should carry none of them, and a machine should not answer
+/// for every checkout on it. `--global` is the opt-in for someone who wants them everywhere.
+pub fn project_config_dir(project_root: &Path) -> PathBuf {
+    project_root.join(".claude")
+}
 
 /// The Claude Code config dir: `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
 pub fn claude_dir() -> Option<PathBuf> {
@@ -35,9 +46,12 @@ pub fn settings_path(claude_dir: &Path) -> PathBuf {
     claude_dir.join("settings.json")
 }
 
-/// Where `make install-skill` puts the hook scripts.
-pub fn scripts_dir(claude_dir: &Path) -> PathBuf {
-    claude_dir.join("skills").join("kanbanr").join("hooks")
+/// Where `make install-skill` puts the hook scripts, given the dir that holds the skill. The skill
+/// is installed once per machine, so callers pass the HOME config dir here even when the settings
+/// they are writing belong to one project — the project's settings then point at those same
+/// scripts, rather than carrying copies that would drift.
+pub fn scripts_dir(skill_home: &Path) -> PathBuf {
+    skill_home.join("skills").join("kanbanr").join("hooks")
 }
 
 fn script_file(name: &str) -> String {
@@ -103,9 +117,11 @@ pub fn missing(settings: &Value) -> Vec<&'static str> {
         })
         .map(|(event, _)| *event)
         .collect();
-    // These run the CLI, so there is no script to check for — only the registration.
+    // These run the CLI, so there is no script to check for — only the registration. Two share an
+    // event, so the list is deduplicated: it is reported to a person, and "PreToolUse, PreToolUse"
+    // reads like a bug.
     for (event, _, command) in CLI_HOOKS {
-        if !commands(settings, event).any(|c| c.trim() == command) {
+        if !commands(settings, event).any(|c| c.trim() == command) && !missing.contains(&event) {
             missing.push(event);
         }
     }
@@ -172,13 +188,20 @@ pub fn add(settings: &mut Value, scripts: &Path) -> anyhow::Result<Vec<&'static 
     }
     remove(settings, true);
     let added = missing(settings);
+    // Which CLI hooks are absent has to be decided BEFORE the settings are borrowed mutably — and
+    // by command, not by event: two of them share PreToolUse, so matching on the event alone would
+    // re-register one that is already there.
+    let wanted: Vec<(&str, &str, &str)> = CLI_HOOKS
+        .into_iter()
+        .filter(|(event, _, command)| !commands(settings, event).any(|c| c.trim() == *command))
+        .collect();
     let root = settings.as_object_mut().expect("checked above");
     let hooks = root
         .entry("hooks")
         .or_insert_with(|| json!({}))
         .as_object_mut()
         .ok_or_else(|| anyhow!("\"hooks\" in settings.json is not an object"))?;
-    for (event, matcher, command) in CLI_HOOKS.iter().filter(|(e, _, _)| added.contains(e)) {
+    for (event, matcher, command) in &wanted {
         hooks
             .entry(*event)
             .or_insert_with(|| json!([]))
@@ -237,8 +260,11 @@ pub enum Installed {
     SkillMissing(PathBuf),
 }
 
-pub fn install(claude_dir: &Path) -> anyhow::Result<Installed> {
-    let path = settings_path(claude_dir);
+/// Register the hooks in `settings_dir`, pointing at the scripts in `scripts`. The two are
+/// separate because the settings may belong to one project while the scripts are installed once
+/// per machine (FEAT-065).
+pub fn install_in(settings_dir: &Path, scripts: &Path) -> anyhow::Result<Installed> {
+    let path = settings_path(settings_dir);
     let mut settings = read(&path)?;
     if plugin_enabled(&settings) {
         return Ok(Installed::ProvidedByPlugin);
@@ -246,16 +272,22 @@ pub fn install(claude_dir: &Path) -> anyhow::Result<Installed> {
     if missing(&settings).is_empty() {
         return Ok(Installed::AlreadyPresent);
     }
-    let scripts = scripts_dir(claude_dir);
     if !HOOKS
         .iter()
         .all(|(_, name)| scripts.join(script_file(name)).is_file())
     {
-        return Ok(Installed::SkillMissing(scripts));
+        return Ok(Installed::SkillMissing(scripts.to_path_buf()));
     }
-    let added = add(&mut settings, &scripts)?;
+    let added = add(&mut settings, scripts)?;
     write(&path, &settings)?;
     Ok(Installed::Added(added))
+}
+
+/// Settings and scripts in the same place. Used by the tests, where one temp dir stands in for
+/// both; the CLI always passes them separately.
+#[cfg(test)]
+pub fn install(claude_dir: &Path) -> anyhow::Result<Installed> {
+    install_in(claude_dir, &scripts_dir(claude_dir))
 }
 
 /// Remove kanbanr's hooks; returns how many entries were removed.
@@ -278,10 +310,11 @@ pub struct Status {
     pub hooks: Vec<Value>,
 }
 
-pub fn status(claude_dir: &Path) -> anyhow::Result<Status> {
-    let path = settings_path(claude_dir);
+/// What is registered in `settings_dir`, checked against the scripts in `scripts`.
+pub fn status_in(settings_dir: &Path, scripts: &Path) -> anyhow::Result<Status> {
+    let path = settings_path(settings_dir);
     let settings = read(&path)?;
-    let scripts = scripts_dir(claude_dir);
+    let scripts = scripts.to_path_buf();
     Ok(Status {
         settings: path.display().to_string(),
         plugin: plugin_enabled(&settings),
@@ -380,14 +413,26 @@ mod tests {
         let capture = &v["hooks"]["PostToolUse"][0];
         assert_eq!(capture["matcher"], "Bash");
         assert_eq!(capture["hooks"][0]["command"], "kanbanr capture");
-        // The commit guard sits on PreToolUse, beside whatever else was already watching Bash.
-        let guard = v["hooks"]["PreToolUse"]
-            .as_array()
-            .unwrap()
+        // Two guards sit on PreToolUse, beside whatever else was already watching Bash: the commit
+        // check on Bash, and the documentation-location check on file writes.
+        let pre = v["hooks"]["PreToolUse"].as_array().unwrap();
+        let commit = pre
             .iter()
             .find(|g| g["hooks"][0]["command"] == "kanbanr git guard")
-            .expect("the guard is registered");
-        assert_eq!(guard["matcher"], "Bash");
+            .expect("the commit guard is registered");
+        assert_eq!(commit["matcher"], "Bash");
+        let docs = pre
+            .iter()
+            .find(|g| g["hooks"][0]["command"] == "kanbanr claude guard")
+            .expect("the docs guard is registered");
+        assert_eq!(docs["matcher"], "Write|Edit");
+        // Registering again adds neither of them a second time — they share an event, and matching
+        // on the event alone used to re-add whichever was already there.
+        let before = pre.len();
+        assert_eq!(install(&dir).unwrap(), Installed::AlreadyPresent);
+        let v2: Value =
+            serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap();
+        assert_eq!(v2["hooks"]["PreToolUse"].as_array().unwrap().len(), before);
 
         // Idempotent.
         assert_eq!(install(&dir).unwrap(), Installed::AlreadyPresent);
@@ -396,8 +441,8 @@ mod tests {
         // Uninstall removes only kanbanr's entries.
         assert_eq!(
             uninstall(&dir).unwrap(),
-            4,
-            "two script hooks plus the two that run the CLI"
+            5,
+            "two script hooks plus the three that run the CLI"
         );
         let v: Value =
             serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap();
