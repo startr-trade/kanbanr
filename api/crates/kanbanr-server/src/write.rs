@@ -127,14 +127,16 @@ pub fn write(
                     .unwrap_or_else(|| "kanbanr".into());
                 activity::append(data_dir, &project, &actor, &msg, item_of(path).as_deref());
             }
+            // Eventing (FEAT-036): additive and best-effort. The LOG is written before the commit
+            // so the entry lands in the same commit as the change it describes (FEAT-059) — the CLI
+            // path does the same, and the daemon must not be the one that leaves the board dirty.
+            // The daemon has no HTTP client, so it records only; webhook *delivery* stays the CLI's
+            // responsibility for now, and a daemon-side sender slots in after the commit.
+            let events = eventing::record(store, data_dir, method, path, &out);
             if git::commit_local(data_dir, &msg) {
                 warnings = after_commit(data_dir, policy, pending);
             }
-            // Eventing (FEAT-036): additive best-effort tail step, after the mutation is durable.
-            // The daemon has no HTTP client, so it appends to the per-project events log only
-            // (NullSender). Webhook *delivery* is the CLI write path's responsibility for now;
-            // a daemon-side sender can be slotted in here later without touching this call site.
-            eventing::emit(store, data_dir, method, path, &out, &eventing::NullSender);
+            eventing::deliver_all(data_dir, &events, &eventing::NullSender);
         }
         Ok(WriteOutcome {
             body: out,
