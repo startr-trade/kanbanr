@@ -906,12 +906,60 @@ impl Store {
                 "{code} has no definition to approve — write one with `kanbanr feature define`"
             ))
         })?;
+        let at = now_rfc3339();
+        let rev = definition.content_rev();
         definition.approval = Some(crate::models::Approval {
             by: by.to_string(),
-            at: now_rfc3339(),
-            rev: definition.content_rev(),
+            at: at.clone(),
+            rev: rev.clone(),
         });
-        feature.updated_at = now_rfc3339();
+        definition.approvals.push(crate::models::ApprovalEvent {
+            at: at.clone(),
+            by: by.to_string(),
+            verdict: "approved".to_string(),
+            reason: String::new(),
+            rev,
+        });
+        feature.updated_at = at;
+        let updated = feature.clone();
+        pending.persist_features.insert(updated.code.clone());
+        self.flush(id, &project, &pending)?;
+        Ok(updated)
+    }
+
+    /// Take back an approval (FEAT-069). The agreement goes; the record of it does not — an
+    /// approval given and later withdrawn says more than no approval ever having existed, and the
+    /// item returns to what is awaiting review, start gate and all.
+    pub fn unapprove_feature(
+        &self,
+        id: &str,
+        code: &str,
+        by: &str,
+        reason: &str,
+    ) -> Result<FeatureItem> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let feature = project.feature_mut(code)?;
+        let definition = feature
+            .definition
+            .as_mut()
+            .ok_or_else(|| CoreError::Unsupported(format!("{code} has no definition")))?;
+        if definition.approval.is_none() {
+            return Err(CoreError::Unsupported(format!(
+                "{code} is not approved, so there is nothing to withdraw"
+            )));
+        }
+        let at = now_rfc3339();
+        let rev = definition.content_rev();
+        definition.approval = None;
+        definition.approvals.push(crate::models::ApprovalEvent {
+            at: at.clone(),
+            by: by.to_string(),
+            verdict: "withdrawn".to_string(),
+            reason: reason.trim().to_string(),
+            rev,
+        });
+        feature.updated_at = at;
         let updated = feature.clone();
         pending.persist_features.insert(updated.code.clone());
         self.flush(id, &project, &pending)?;

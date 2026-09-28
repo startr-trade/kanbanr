@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync, useLiveTick } from "../live";
@@ -144,11 +145,26 @@ const day = (ts?: string | null) => (ts ?? "").slice(0, 10);
  */
 function Definition({ feature, project }: { feature: Feature; project: string }) {
   const def = feature.definition;
+  const [outcome, setOutcome] = useState<string | null>(null);
+  const meta = useAsync(() => api.getMeta(), []);
   if (!def) return null;
   const approval =
     def.approval == null
       ? { label: "not approved", cls: "chip warn" }
       : { label: `approved by ${def.approval.by} · ${day(def.approval.at)}`, cls: "chip" };
+
+  /// Withdrawing is the other half of agreeing (FEAT-069): an approval recorded by the wrong hand,
+  /// or a mind since changed, needs a remedy that is not editing yaml.
+  const withdraw = async () => {
+    const reason = window.prompt("Why is this approval being withdrawn?");
+    if (!reason?.trim()) return;
+    try {
+      await api.unapprove(project, feature.code, "withdrawn in the monitor", reason.trim());
+      setOutcome("withdrawn — it is waiting for review again");
+    } catch (e) {
+      setOutcome(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   return (
     <>
@@ -170,11 +186,27 @@ function Definition({ feature, project }: { feature: Feature; project: string })
             <span className="chip warn">no goal link</span>
           )}
           <span className={approval.cls}>{approval.label}</span>
+          {def.approval != null && meta.data?.writes === true && !outcome ? (
+            <button className="chip" onClick={withdraw}>
+              Withdraw approval
+            </button>
+          ) : null}
+          {outcome ? <span className="chip warn">{outcome}</span> : null}
           {def.started_unapproved?.trim() ? (
             <span className="chip warn">started unapproved: {def.started_unapproved}</span>
           ) : null}
           {def.exempt?.trim() ? <span className="chip">exempt: {def.exempt}</span> : null}
         </div>
+        {(def.approvals ?? []).length > 1 ? (
+          <ul className="dep-list">
+            {(def.approvals ?? []).map((event, i) => (
+              <li key={i} className="muted small">
+                {day(event.at)} — {event.verdict} by {event.by}
+                {event.reason ? `: ${event.reason}` : ""}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <div className="tiles">
           {zachmanColumns(def.zachman).map(({ column, answer }) => (
             <div className="tile" key={column}>

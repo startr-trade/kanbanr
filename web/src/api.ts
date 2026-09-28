@@ -44,27 +44,14 @@ export const api = {
   /** What this daemon can do (FEAT-067). A read-only monitor answers `writes: false`. */
   getMeta: () => getJson<{ writes: boolean }>(`/api/meta`),
   /**
-   * Record agreement to a definition, through the same route and the same content hash the CLI
-   * uses. Only reachable when the daemon was started with `--allow-writes`.
+   * Record agreement to a definition, or withdraw it (FEAT-067, FEAT-069) — through the same
+   * routes and the same content hash the CLI uses. Only reachable on a write-enabled daemon, which
+   * is why the pages ask `getMeta` before offering either action.
    */
-  approve: async (id: string, code: string, by: string) => {
-    const res = await fetch(
-      `/api/write/projects/${encodeURIComponent(id)}/features/${encodeURIComponent(code)}/approve`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ by }),
-      },
-    );
-    if (!res.ok) {
-      throw new Error(
-        res.status === 404
-          ? "This monitor is read-only. Start it with `kanbanr review --ui` to approve from here."
-          : `approve failed: ${res.status} ${await res.text()}`,
-      );
-    }
-    return res.json();
-  },
+  approve: (id: string, code: string, by: string) =>
+    verdict(id, code, "approve", { by }, "approve"),
+  unapprove: (id: string, code: string, by: string, reason: string) =>
+    verdict(id, code, "unapprove", { by, reason }, "withdraw"),
   getLessons: (id: string) =>
     getJson<Lesson[]>(`/api/projects/${encodeURIComponent(id)}/lessons`),
   getGantt: (id: string) => getText(`/api/projects/${encodeURIComponent(id)}/gantt`),
@@ -82,3 +69,32 @@ export const api = {
   projectEvents: (id: string) => `/api/projects/${encodeURIComponent(id)}/events`,
   allEvents: () => "/api/events",
 };
+
+/**
+ * Post an approval verdict. A read-only daemon has no write route at all, so a 404 or 405 means
+ * "this monitor cannot do that" rather than "something went wrong" — and says which command can.
+ */
+async function verdict(
+  id: string,
+  code: string,
+  action: "approve" | "unapprove",
+  body: Record<string, string>,
+  verb: string,
+) {
+  const res = await fetch(
+    `/api/write/projects/${encodeURIComponent(id)}/features/${encodeURIComponent(code)}/${action}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      res.status === 404 || res.status === 405
+        ? `This monitor is read-only. Start it with \`kanbanr review --ui\` to ${verb} from here.`
+        : `${verb} failed: ${res.status} ${await res.text()}`,
+    );
+  }
+  return res.json();
+}
