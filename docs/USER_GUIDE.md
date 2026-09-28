@@ -24,12 +24,21 @@ You talk to Claude → Claude runs `kanbanr` commands → the CLI writes the fil
 ## 2. Set up (60 seconds, no server)
 
 ```bash
-make install                                              # build/install the one `kanbanr` binary + skill
+# Install (macOS/Linux) — one binary, monitor included, nothing else to build
+curl -fsSL https://github.com/startr-trade/kanbanr/releases/latest/download/install.sh | sh
+
 kanbanr init my-app --author "You" --email you@example.com  # data dir + git repo + identity + project
 ```
 
+From source instead: `make install`, which builds the SPA, installs the binary and links the skill.
+Version pinning, checksums, rate limits, published targets and the glibc floor are in
+**[INSTALL.md](INSTALL.md)**.
+
 `init` creates the data dir (a git repo), sets your commit identity, scaffolds a project, and
-selects it here (a `.kanbanr` marker). That's everything — there is **no server to run, no login,
+selects it here (a `.kanbanr` marker). If this folder **already** names a board, `init` refuses
+rather than repointing it — the marker is the only link between a project and its board, and
+overwriting it makes a full board read as empty. It prints both pointers; `--force` repoints
+deliberately, and `kanbanr project use <name>` switches project within the same board. That's everything — there is **no server to run, no login,
 no accounts**. Each change you make is a git commit authored by your identity. (libgit2 is linked
 in — no external `git` needed.)
 

@@ -141,6 +141,8 @@ The installer fetches the binary for your platform, checks it against the releas
 started. **The web monitor is inside the binary**, so there is no second step and nothing to build.
 
 Or, from source: `make install` (needs Rust and Node), or `docker compose -f docker/docker-compose.yml up`.
+Rate limits, pinning a version, checksums, published targets and the glibc floor:
+**[docs/INSTALL.md](docs/INSTALL.md)**.
 
 ## Quick start (60 seconds)
 

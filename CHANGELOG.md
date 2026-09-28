@@ -8,6 +8,25 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+#### One binary, installed in one line (FEAT-084)
+
+The web monitor is now **compiled into the binary**, gzipped and decompressed once at startup, so
+`kanbanr serve` shows it with no `--ui-dir` and nothing to build. An explicit `--ui-dir` still wins
+for SPA development, and a build without `web/dist` embeds nothing, succeeds, and **says so** at
+startup rather than serving a blank page. The binary grows 12 MB → 13 MB: the assets' compressed
+size, asserted from both sides in CI.
+
+`scripts/install.sh` and `install.ps1` install it in one line, verifying the download against the
+release's own `SHA256SUMS`. They ship **as release assets**, so the documented one-liner comes from
+the release host rather than a CDN of the default branch that could serve a mismatched script.
+`GH_TOKEN` lifts the API rate limit, and is sent only to `api.github.com`. `release.yml` then proves
+the whole thing: `verify-install` runs the published one-liner in clean Debian and Ubuntu containers
+and asserts the monitor is actually served. See `docs/INSTALL.md` and `ADR-0009`.
+
+kanbanr is **not** published to crates.io with the UI: a published crate cannot carry built assets
+without committing generated files, so the archive and the installer are the supported way to get a
+complete binary.
+
 #### Reasoning, evidence and traceability (MS-006)
 
 A board records *what* is being built; this milestone adds **why it exists, what must be true, and
@@ -143,6 +162,13 @@ reported against it.
 
 ### Fixed
 
+- **The released Linux binary would not have run on Debian stable** (FEAT-087): a `-gnu` target
+  links the build runner's glibc, and the release matrix built on the newest one — so the binaries
+  required glibc 2.39 and would have died on bookworm (2.36) with `libc.so.6: version GLIBC_2.39
+  not found`. `docker/Dockerfile` already carried a comment describing this exact failure from when
+  it bit the image; nothing carried that note to the workflow that makes what people download. The
+  Linux legs now build on Ubuntu 22.04 (glibc 2.35), `verify-install` brackets the claimed range,
+  and `docs/INSTALL.md` states the floor and quotes the error.
 - **An approval named a place, not a person** (FEAT-077): the monitor recorded verdicts as
   `by: "reviewed in the monitor"`, naming the surface the click happened on. FEAT-069 already
   required the record to carry *who*. `/api/meta` now reports the board's commit identity and the
