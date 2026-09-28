@@ -586,7 +586,7 @@ fn cli_init_registers_claude_code_hooks_once_and_respects_no_hooks() {
     let home = base.join("home");
     let scripts = home.join(".claude/skills/kanbanr/hooks");
     std::fs::create_dir_all(&scripts).unwrap();
-    for name in ["session-start", "stop-check"] {
+    for name in ["session-start", "stop-check", "session-summary"] {
         std::fs::write(scripts.join(format!("{name}.sh")), "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::write(scripts.join(format!("{name}.ps1")), "exit 0\n").unwrap();
     }
@@ -1953,7 +1953,7 @@ fn cli_claude_sync_and_the_docs_guard() {
     // The skill is installed once per machine; a project's settings point at these scripts.
     let scripts = home.join(".claude/skills/kanbanr/hooks");
     std::fs::create_dir_all(&scripts).unwrap();
-    for name in ["session-start", "stop-check"] {
+    for name in ["session-start", "stop-check", "session-summary"] {
         for ext in ["sh", "ps1"] {
             std::fs::write(scripts.join(format!("{name}.{ext}")), "#!/bin/sh\nexit 0\n").unwrap();
         }

@@ -8,6 +8,24 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+#### Setup is a plan-mode interview, then one approved setup (FEAT-100)
+
+Asking Claude to set up kanbanr in an untracked folder now starts in **plan mode**: board folder
+and commit identity, a charter drafted from the repository and marked as a draft, and the process
+(default kanban, TOGAF phases or custom, git hooks, remote, mirror, import). Exiting plan mode is
+the approval; the whole setup then runs, is saved as a board doc and checked with `doctor` before
+any other work starts.
+
+#### Session summaries ship with kanbanr (FEAT-101)
+
+The session-summary hooks (a compaction's summary, the end of a session, and a sweep at the next
+start) moved from one checkout's ignored `.claude/` into `skill/kanbanr/hooks/`, and
+`kanbanr hooks install` registers them for PostCompact, SessionEnd and SessionStart, as does the
+plugin. They act only in folders with a `.kanbanr` marker, need `bash`, `jq` and `python3`, and
+are not offered on Windows. A project's own `.claude/commands/create-summary.md` sets the
+summary's shape when it has one. `.gitignore` now ignores only the machine-local parts of
+`.claude/`.
+
 #### One binary, installed in one line (FEAT-084)
 
 The web monitor is now **compiled into the binary**, gzipped and decompressed once at startup, so
