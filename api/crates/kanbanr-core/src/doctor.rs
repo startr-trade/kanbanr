@@ -152,7 +152,14 @@ fn scan_definitions(project: &Project, charter: &crate::Charter, report: &mut Re
                 );
             }
         }
-        if !def.started_unapproved.trim().is_empty() {
+        // An escape is worth warning about until it is answered — and approving the definition is
+        // the answer the warning asks for (FEAT-068). The record stays on the item either way; it
+        // is history, and the charter says raw data is never discarded. If the definition changes
+        // later the approval lapses, and this warning comes back with it, because the agreement no
+        // longer covers what was built.
+        if !def.started_unapproved.trim().is_empty()
+            && !matches!(def.approval_state(), crate::models::ApprovalState::Current)
+        {
             push(
                 report,
                 project,
@@ -434,5 +441,123 @@ fn scan_project(project: &Project, existing: &BTreeSet<String>, report: &mut Rep
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ProjectConfig;
+    use crate::models::{FeatureDefinition, Requirement, TestRef, Zachman};
+
+    fn fixture() -> (Store, std::path::PathBuf) {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "kanbanr-doctor-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::Charter {
+                purpose: "Keep the reasoning with the work.".into(),
+                goals: vec![crate::charter::Goal {
+                    id: "G-1".into(),
+                    statement: "Nothing is built on reasoning nobody agreed to".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        (store, dir)
+    }
+
+    /// FEAT-068: the warning asked the reader to "review and approve what was actually built". The
+    /// user did, for twelve items, and it kept asking — which is how a warning becomes wallpaper.
+    #[test]
+    fn an_answered_escape_stops_warning() {
+        let (store, dir) = fixture();
+        let item = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        let definition = FeatureDefinition {
+            statement: "Keep a cart for 7 days".into(),
+            goals: vec!["G-1".into()],
+            zachman: Zachman {
+                what: "cart persistence".into(),
+                how: "server-side".into(),
+                where_: "checkout".into(),
+                when: "on mutation".into(),
+                who: "returning shoppers".into(),
+                why: "carts vanish".into(),
+            },
+            requirements: vec![Requirement {
+                id: "R-1".into(),
+                text: "THE SYSTEM SHALL retain the cart.".into(),
+                tests: vec![TestRef {
+                    name: "cart::retains".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            started_unapproved: "shipped under a deadline".into(),
+            ..Default::default()
+        };
+        store
+            .set_feature_definition("demo", &item.code, Some(definition.clone()))
+            .unwrap();
+        store.move_feature("demo", &item.code, "Scheduled").unwrap();
+
+        let unapproved = |store: &Store| -> Vec<String> {
+            run_project(store, "demo")
+                .unwrap()
+                .issues
+                .into_iter()
+                .filter(|i| i.message.contains("started without approval"))
+                .map(|i| i.message)
+                .collect()
+        };
+        assert_eq!(unapproved(&store).len(), 1, "unanswered, so it warns");
+
+        // Approving is the answer the warning asked for.
+        store
+            .approve_feature("demo", &item.code, "the user")
+            .unwrap();
+        assert!(
+            unapproved(&store).is_empty(),
+            "answered, so it stops: a warning that cannot be resolved is wallpaper"
+        );
+
+        // The record is kept — work did start before agreement, and that is history.
+        let after = store.load("demo").unwrap();
+        let after = after.feature(&item.code).unwrap();
+        assert_eq!(
+            after.definition.as_ref().unwrap().started_unapproved,
+            "shipped under a deadline"
+        );
+
+        // Changing the definition lapses the approval, and the warning returns with it: the
+        // agreement no longer covers what was built.
+        let widened = FeatureDefinition {
+            statement: "Keep a cart for 30 days".into(),
+            ..definition
+        };
+        store
+            .set_feature_definition("demo", &item.code, Some(widened))
+            .unwrap();
+        assert_eq!(
+            unapproved(&store).len(),
+            1,
+            "scope changed after the yes, so the escape is unanswered again"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -724,6 +724,35 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             p,
             query_param(query, "scope").as_deref(),
         )?),
+        // ---- what is waiting for agreement (FEAT-067) ----
+        ("GET", ["projects", p, "review"]) => {
+            use crate::models::ApprovalState;
+            let project = store.load_meta(p)?;
+            // Whether an approval is current or has lapsed depends on a hash of the definition's
+            // content, so it is decided here rather than in each caller: the CLI, the monitor and
+            // any future client all get the same answer to "is this agreed?".
+            let pending: Vec<Value> = project
+                .features
+                .iter()
+                .filter_map(|f| {
+                    let definition = f.definition.as_ref()?;
+                    let state = match definition.approval_state() {
+                        ApprovalState::Current => return None,
+                        ApprovalState::Missing => "missing",
+                        ApprovalState::Lapsed => "lapsed",
+                    };
+                    Some(json!({
+                        "code": f.code,
+                        "title": f.title,
+                        "status": f.status,
+                        "approval": state,
+                        "started_unapproved": definition.started_unapproved,
+                        "definition": definition,
+                    }))
+                })
+                .collect();
+            ser(&pending)
+        }
         ("GET", ["projects", p, "adrs"]) => ser(&crate::adr::list(store, p)?),
         ("GET", ["projects", p, "claude-block"]) => ser(&crate::claude::block(store, p)?),
         ("POST", ["projects", p, "adrs"]) => {

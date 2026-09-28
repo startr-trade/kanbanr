@@ -180,6 +180,20 @@ export function zachmanColumns(z?: Zachman): { column: string; answer: string }[
 }
 
 /** What an item has not said yet: the same rules doctor applies, for a chip on the board. */
+/**
+ * An item waiting for agreement (FEAT-067). Whether an approval is *current* or has *lapsed*
+ * depends on a content hash computed in core, so the daemon decides and sends the answer — the
+ * rule lives in one place rather than being reimplemented here where it could drift.
+ */
+export interface PendingReview {
+  code: string;
+  title: string;
+  status: string;
+  approval: "missing" | "lapsed";
+  started_unapproved?: string;
+  definition: FeatureDefinition;
+}
+
 export function definitionGaps(feature: Feature): string[] {
   const def = feature.definition;
   if (!def) return ["no definition"];
