@@ -267,6 +267,24 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
   board like any other reference.
 - `kanbanr trace <MS-006> --zachman` reports which of the six columns nothing in scope addresses.
 
+## Where the rules live
+
+The board is the system of record for the project's **reasoning**; `CLAUDE.md` is a pointer at it;
+this skill is the method; the hooks are enforcement. Each fact lives in exactly one of those — a
+fact in two places drifts.
+
+- `kanbanr claude sync` writes a marked block into the project's `CLAUDE.md` with its purpose,
+  goals, non-goals and constraints, and regenerates that block whenever the charter changes.
+  Everything outside the markers belongs to the author. **Never hand-copy the charter into
+  instructions** — reference it.
+- `kanbanr hooks install` registers the hooks for **this project** (`<project>/.claude/settings.json`),
+  not the machine; `--global` is the opt-in. A checkout with no board carries none of them.
+- Prose is surfaced, never enforced. Non-goals appear as context so you do not propose against
+  them; nothing blocks on them, because a guard that has to interpret is a guard that misfires.
+- Documentation written loose in a code repository is **denied** by a hook, with the
+  `kanbanr doc add` equivalent named. What the repository ships (README, CHANGELOG, `docs/`,
+  CONTRIBUTING, a doc-site source) is allowed.
+
 ## Read what this project already learned, before you start
 
 `kanbanr lessons --for FEAT-001` — run it before starting an item, not after something goes wrong.
@@ -493,6 +511,9 @@ kanbanr test FEAT-001 R-1 cart::retains green [--rev <sha>]   # normally the cap
 kanbanr report [--since 14d]      # throughput, cycle time, rework, escape rate, coverage
 kanbanr tests [--write]           # tracked tests that no longer exist; --write un-proves them
 kanbanr retro [MS-006] [--since 14d] [--label x] [--write] | --due
+kanbanr claude sync [--show]                    # refresh the generated block in CLAUDE.md
+kanbanr hooks install [--global] | status | uninstall   # per project unless --global
+kanbanr review --pending                        # every item awaiting agreement, in one pass
 kanbanr trace [G-2|FEAT-001|FEAT-001/R-2] [--zachman]   # down the chain, ending in the gaps
 kanbanr why src/cart.rs:42                      # up: annotation or trailer -> requirement -> goal
 kanbanr adr new "…" [--affects …] [--driven-by FEAT-001/R-2] [--quality Reliability] [--zachman How]

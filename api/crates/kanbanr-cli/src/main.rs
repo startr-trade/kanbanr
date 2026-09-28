@@ -141,6 +141,10 @@ enum Command {
         /// `src/thing.rs` or `src/thing.rs:42`.
         target: String,
     },
+    /// Put the board's reasoning in front of the agent working on this project (FEAT-065):
+    /// writes a generated, regenerable block into the project's CLAUDE.md.
+    #[command(subcommand)]
+    Claude(ClaudeCmd),
     /// Architecture decisions: documents that join the graph. (FEAT-057)
     #[command(subcommand)]
     Adr(AdrCmd),
@@ -224,7 +228,14 @@ enum Command {
     },
     /// Print the one-screen decision brief for an item: what is proposed, why, and how it will be
     /// verified. Read this BEFORE the work, not after. (FEAT-048)
-    Review { code: String },
+    Review {
+        /// One item; omit with `--pending` for every item whose definition is not yet agreed.
+        code: Option<String>,
+        /// Every item awaiting agreement, in one pass. Approval has to be cheap or it becomes
+        /// theatre, and eleven invocations is not cheap.
+        #[arg(long)]
+        pending: bool,
+    },
     /// Record agreement to an item's definition as it currently stands. Editing the definition
     /// afterwards lapses the approval. (FEAT-048)
     Approve {
@@ -806,12 +817,39 @@ enum CharterCmd {
 
 #[derive(Subcommand)]
 enum HooksCmd {
-    /// Add the hooks (skipped if already there or provided by the kanbanr plugin).
-    Install,
+    /// Add the hooks to this project (skipped if already there or provided by the kanbanr plugin).
+    Install {
+        /// Register them for every project on this machine instead of just this one.
+        #[arg(long)]
+        global: bool,
+    },
     /// Show whether the hooks are registered and their scripts exist.
-    Status,
+    Status {
+        /// Look at the machine-wide settings instead of this project's.
+        #[arg(long)]
+        global: bool,
+    },
     /// Remove kanbanr's hooks (other hooks are left alone).
-    Uninstall,
+    Uninstall {
+        /// Remove them from the machine-wide settings instead of this project's.
+        #[arg(long)]
+        global: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ClaudeCmd {
+    /// Write (or refresh) the generated block in this project's CLAUDE.md.
+    Sync {
+        /// Where to write it (default: CLAUDE.md beside the project root).
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// Print the block instead of writing it.
+        #[arg(long)]
+        show: bool,
+    },
+    /// Decide whether a file write belongs on the board (run by the Claude Code hook).
+    Guard,
 }
 
 #[derive(Subcommand)]
@@ -1091,16 +1129,35 @@ fn run_init(
     Ok(())
 }
 
+/// Which settings file `kanbanr hooks` acts on. Project scope is the default: the hooks exist to
+/// serve a board, so a checkout with no board should carry none of them.
+fn hooks_dir_for(global: bool) -> anyhow::Result<PathBuf> {
+    if global {
+        return hooks::claude_dir()
+            .ok_or_else(|| anyhow::anyhow!("no home directory: set CLAUDE_CONFIG_DIR"));
+    }
+    let cwd = std::env::current_dir()?;
+    let root = project::project_root(&cwd, project::home_dir().as_deref());
+    Ok(hooks::project_config_dir(&root))
+}
+
 /// Register the Claude Code hooks during `init`; never fails `init`. (FEAT-044)
 fn report_hooks_install() {
-    let Some(dir) = hooks::claude_dir() else {
-        println!("• Claude Code hooks not installed: no home directory found");
+    let Ok(dir) = hooks_dir_for(false) else {
+        println!("• Claude Code hooks not installed: could not resolve this project's .claude dir");
         return;
     };
     let settings = hooks::settings_path(&dir);
-    match hooks::install(&dir) {
+    let scripts = match hooks::claude_dir() {
+        Some(home) => hooks::scripts_dir(&home),
+        None => {
+            println!("• Claude Code hooks not installed: no home directory found");
+            return;
+        }
+    };
+    match hooks::install_in(&dir, &scripts) {
         Ok(hooks::Installed::Added(events)) => println!(
-            "✓ Claude Code hooks added to {} ({}); they act only in kanbanr-tracked folders",
+            "✓ Claude Code hooks added to {} ({}) — this project only; `--global` for all of them",
             settings.display(),
             events.join(", ")
         ),
@@ -1117,12 +1174,22 @@ fn report_hooks_install() {
     }
 }
 
-/// `kanbanr hooks …` (FEAT-044).
+/// `kanbanr hooks …` (FEAT-044, scoped per project by FEAT-065).
 fn run_hooks(cli: &Cli, cmd: &HooksCmd) -> anyhow::Result<()> {
-    let dir = hooks::claude_dir()
-        .ok_or_else(|| anyhow::anyhow!("no home directory: set CLAUDE_CONFIG_DIR"))?;
+    let global = matches!(
+        cmd,
+        HooksCmd::Install { global: true }
+            | HooksCmd::Status { global: true }
+            | HooksCmd::Uninstall { global: true }
+    );
+    let dir = hooks_dir_for(global)?;
+    // The scripts are installed once per machine even when the settings belong to one project.
+    let scripts = hooks::scripts_dir(
+        &hooks::claude_dir()
+            .ok_or_else(|| anyhow::anyhow!("no home directory: set CLAUDE_CONFIG_DIR"))?,
+    );
     match cmd {
-        HooksCmd::Install => match hooks::install(&dir)? {
+        HooksCmd::Install { .. } => match hooks::install_in(&dir, &scripts)? {
             hooks::Installed::Added(events) => println!(
                 "added kanbanr hooks ({}) to {}. They take effect in new Claude Code sessions.",
                 events.join(", "),
@@ -1137,15 +1204,15 @@ fn run_hooks(cli: &Cli, cmd: &HooksCmd) -> anyhow::Result<()> {
                 scripts.display()
             ),
         },
-        HooksCmd::Uninstall => {
+        HooksCmd::Uninstall { .. } => {
             let n = hooks::uninstall(&dir)?;
             println!(
                 "removed {n} kanbanr hook entr{}",
                 if n == 1 { "y" } else { "ies" }
             );
         }
-        HooksCmd::Status => {
-            let st = hooks::status(&dir)?;
+        HooksCmd::Status { .. } => {
+            let st = hooks::status_in(&dir, &scripts)?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&st)?);
                 return Ok(());
@@ -1658,6 +1725,154 @@ fn blame_refs(root: &Path, path: &str, line: usize) -> Option<(String, Vec<Strin
         .map(|r| r.as_token().trim_start_matches("kanbanr:").to_string())
         .collect();
     Some((sha.get(..8).unwrap_or(&sha).to_string(), refs))
+}
+
+/// The board's reasoning, placed where the agent reads its instructions (FEAT-065).
+fn run_claude(cli: &Cli, client: &Backend, cmd: &ClaudeCmd) -> anyhow::Result<()> {
+    match cmd {
+        ClaudeCmd::Sync { file, show } => {
+            let p = require_project(cli)?;
+            let resp = client.get(&format!("/projects/{p}/claude-block"))?;
+            let block: Option<String> = serde_json::from_str(&resp)?;
+            let Some(block) = block else {
+                anyhow::bail!(
+                    "this project has no charter, so there is nothing to put in front of anyone. \
+                     Write one first: `kanbanr charter set --file charter.yaml`."
+                );
+            };
+            if *show {
+                print!("{block}");
+                return Ok(());
+            }
+            let path = match file {
+                Some(path) => path.clone(),
+                None => {
+                    let cwd = std::env::current_dir()?;
+                    project::project_root(&cwd, project::home_dir().as_deref()).join("CLAUDE.md")
+                }
+            };
+            let existing = std::fs::read_to_string(&path).unwrap_or_default();
+            let merged = kanbanr_core::claude::merge(&existing, &block);
+            if merged == existing {
+                println!("{} is already current", path.display());
+                return Ok(());
+            }
+            std::fs::write(&path, &merged)?;
+            println!(
+                "{} {} — regenerate it with `kanbanr claude sync` whenever the charter changes",
+                if existing.trim().is_empty() {
+                    "wrote"
+                } else {
+                    "refreshed the kanbanr block in"
+                },
+                path.display()
+            );
+            Ok(())
+        }
+        ClaudeCmd::Guard => run_docs_guard(cli, client),
+    }
+}
+
+/// The documentation rule, enforced rather than requested (FEAT-040, FEAT-065).
+///
+/// Every document a project produces belongs on its board unless it is part of what the repository
+/// ships. That rule lived only in the skill's prose — which is to say, in good intentions — and an
+/// agent that forgets it leaves the project's reasoning scattered through a codebase where nothing
+/// can find it.
+///
+/// The decision is **mechanical**: a path, and whether a board is active. It never reads the file
+/// and never weighs the charter's prose. A guard that has to interpret is a guard that misfires,
+/// and one that misfires gets turned off (ADR-0004).
+fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
+    use std::io::Read;
+    let mut raw = String::new();
+    std::io::stdin().read_to_string(&mut raw)?;
+    let payload: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+    let path = payload["tool_input"]["file_path"]
+        .as_str()
+        .unwrap_or_default();
+    if path.is_empty() {
+        return Ok(());
+    }
+    // Only a project that actually keeps a board has an alternative to offer.
+    let Ok(p) = require_project(cli) else {
+        return Ok(());
+    };
+    if client.get(&format!("/projects/{p}")).is_err() {
+        return Ok(());
+    }
+    let root = std::env::current_dir()
+        .ok()
+        .map(|cwd| project::project_root(&cwd, project::home_dir().as_deref()));
+    let relative = root
+        .as_ref()
+        .and_then(|r| Path::new(path).strip_prefix(r).ok())
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string());
+
+    if !belongs_on_the_board(&relative) {
+        return Ok(());
+    }
+    let suggestion = relative
+        .trim_start_matches("./")
+        .trim_end_matches(".md")
+        .replace(' ', "-")
+        .to_lowercase();
+    println!(
+        "{}",
+        json!({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": format!(
+                "Documentation for this project belongs on its board, not in the code repository \
+                 — the board is where it can be found, searched, and linked to the work it \
+                 explains.\n\nWrite it there instead:\n    kanbanr doc add notes/{suggestion}.md \
+                 --file <path>\n\nIf this file is part of what the repository ships (README, \
+                 CHANGELOG, docs/, CONTRIBUTING, LICENSE, a doc-site source or a fixture), say so \
+                 and write it: those are deliverables, not project reasoning."
+            ),
+        }})
+    );
+    Ok(())
+}
+
+/// Is this markdown file project *reasoning* (board) rather than a shipped *deliverable* (repo)?
+///
+/// The allow-list is what a repository publishes. Everything else that is markdown, written loose
+/// in a checkout, is the kind of note that should have gone on the board.
+fn belongs_on_the_board(relative: &str) -> bool {
+    let lower = relative.to_lowercase();
+    if !lower.ends_with(".md") && !lower.ends_with(".markdown") {
+        return false;
+    }
+    const SHIPPED_DIRS: [&str; 8] = [
+        "docs/", "doc/", "book/", "site/", "web/", "skill/", ".github/", "editor/",
+    ];
+    const SHIPPED_FILES: [&str; 9] = [
+        "readme.md",
+        "changelog.md",
+        "contributing.md",
+        "security.md",
+        "code_of_conduct.md",
+        "license.md",
+        "third_party.md",
+        "claude.md",
+        "agents.md",
+    ];
+    if SHIPPED_DIRS.iter().any(|d| lower.starts_with(d)) {
+        return false;
+    }
+    if SHIPPED_FILES.contains(&lower.as_str()) {
+        return false;
+    }
+    // A test fixture or a vendored file is not project reasoning either.
+    if ["target/", "node_modules/", "tests/", "fixtures/", "vendor/"]
+        .iter()
+        .any(|d| lower.contains(d))
+    {
+        return false;
+    }
+    true
 }
 
 /// Architecture decisions (FEAT-057).
@@ -3591,6 +3806,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             run_trace(cli, &client, subject.as_deref(), *zachman)
         }
         Command::Why { target } => run_why(cli, &client, target),
+        Command::Claude(cmd) => run_claude(cli, &client, cmd),
         Command::Adr(cmd) => run_adr(cli, &client, cmd),
         Command::Lesson(cmd) => run_lesson(cli, &client, cmd),
         Command::Lessons { for_item, all } => {
@@ -3845,20 +4061,70 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             println!("\n{ready}/{} ready", reports.len());
             Ok(())
         }
-        Command::Review { code } => {
+        Command::Review { code, pending } => {
+            use kanbanr_core::models::ApprovalState;
             let p = require_project(cli)?;
-            let feature = get_feature(&client, &p, code)?;
+            let features: Vec<kanbanr_core::FeatureItem> = match (code, pending) {
+                (Some(code), _) => vec![get_feature(&client, &p, code)?],
+                (None, true) => get_project(&client, &p)?
+                    .features
+                    .into_iter()
+                    // Anything defined but not currently agreed: never approved, or lapsed because
+                    // the definition changed after a yes.
+                    .filter(|f| {
+                        f.definition
+                            .as_ref()
+                            .is_some_and(|d| !matches!(d.approval_state(), ApprovalState::Current))
+                    })
+                    .collect(),
+                (None, false) => anyhow::bail!(
+                    "review what? an item code, or `--pending` for everything awaiting agreement"
+                ),
+            };
             if cli.json {
+                let briefs: Vec<Value> = features
+                    .iter()
+                    .map(|f| {
+                        json!({
+                            "code": f.code,
+                            "approval": f.definition.as_ref().map(|d| d.approval_state()),
+                            "definition": f.definition,
+                        })
+                    })
+                    .collect();
+                // One item asked for, one object back: a caller that asked about FEAT-053 should
+                // not have to unwrap a list of one.
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&json!({
-                        "code": feature.code,
-                        "approval": feature.definition.as_ref().map(|d| d.approval_state()),
-                        "definition": feature.definition,
-                    }))?
+                    serde_json::to_string_pretty(&if code.is_some() {
+                        briefs.into_iter().next().unwrap_or(Value::Null)
+                    } else {
+                        Value::Array(briefs)
+                    })?
                 );
-            } else {
-                print!("{}", kanbanr_core::export::definition_brief(&feature));
+                return Ok(());
+            }
+            if features.is_empty() {
+                println!("nothing is waiting for agreement");
+                return Ok(());
+            }
+            for feature in &features {
+                print!("{}", kanbanr_core::export::definition_brief(feature));
+                println!();
+            }
+            if *pending {
+                println!(
+                    "{} item(s) awaiting agreement. Approve the ones you accept:\n\n    {}\n\n\
+                     Leaving one unapproved is an answer. To change a definition first: \
+                     `kanbanr feature define <CODE> --file …` — the approval stays off until you \
+                     agree to the new version.",
+                    features.len(),
+                    features
+                        .iter()
+                        .map(|f| format!("kanbanr approve {}", f.code))
+                        .collect::<Vec<_>>()
+                        .join("\n    ")
+                );
             }
             Ok(())
         }
@@ -5226,6 +5492,48 @@ mod tests {
             !line.contains("R-27"),
             "the point is not to print them all: {line}"
         );
+    }
+
+    /// FEAT-065: the guard decides from a path and nothing else. Every judgement it gets wrong is
+    /// either a note scattered into a codebase or a legitimate write refused — and a guard that
+    /// refuses legitimate writes gets turned off.
+    #[test]
+    fn the_docs_guard_allows_deliverables_and_stops_the_rest() {
+        // Project reasoning written loose in a checkout: this is what belongs on the board.
+        for path in [
+            "NOTES.md",
+            "design-thoughts.md",
+            "api/PLAN.md",
+            "some/deep/folder/retrospective.md",
+        ] {
+            assert!(belongs_on_the_board(path), "{path} should go to the board");
+        }
+
+        // What the repository ships, and what is not prose at all.
+        for path in [
+            "README.md",
+            "CHANGELOG.md",
+            "CONTRIBUTING.md",
+            "SECURITY.md",
+            "CLAUDE.md",
+            "docs/USER_GUIDE.md",
+            "skill/kanbanr/SKILL.md",
+            ".github/PULL_REQUEST_TEMPLATE.md",
+            "web/README.md",
+            "api/crates/kanbanr-cli/tests/fixtures/board.md",
+            "api/target/doc/index.md",
+            "src/main.rs",
+            "Cargo.toml",
+        ] {
+            assert!(
+                !belongs_on_the_board(path),
+                "{path} should be allowed through"
+            );
+        }
+
+        // Case is not identity: a repository's README is a README however it is spelled.
+        assert!(!belongs_on_the_board("readme.md"));
+        assert!(!belongs_on_the_board("Docs/design.md"));
     }
 
     #[test]

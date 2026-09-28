@@ -590,8 +590,10 @@ fn cli_init_registers_claude_code_hooks_once_and_respects_no_hooks() {
         std::fs::write(scripts.join(format!("{name}.sh")), "#!/bin/sh\nexit 0\n").unwrap();
         std::fs::write(scripts.join(format!("{name}.ps1")), "exit 0\n").unwrap();
     }
-    let settings = home.join(".claude/settings.json");
-    std::fs::write(&settings, r#"{"theme": "dark"}"#).unwrap();
+    // The machine's settings exist and must stay untouched: hooks belong to the project that has
+    // a board, so a checkout nobody tracks with kanbanr carries none of them (FEAT-065).
+    let machine = home.join(".claude/settings.json");
+    std::fs::write(&machine, r#"{"theme": "dark"}"#).unwrap();
 
     let run = |dir: &std::path::Path, args: &[&str]| -> String {
         std::fs::create_dir_all(dir).unwrap();
@@ -619,14 +621,16 @@ fn cli_init_registers_claude_code_hooks_once_and_respects_no_hooks() {
         &["init", "app", "--author", "A", "--email", "a@x"],
     );
     assert!(out.contains("Claude Code hooks added"), "{out}");
+    // Written to THIS project, pointing at the machine's scripts.
+    let project_settings = base.join("code/app/.claude/settings.json");
     let v: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
-    assert_eq!(v["theme"], "dark");
+        serde_json::from_str(&std::fs::read_to_string(&project_settings).unwrap()).unwrap();
     assert!(
         v["hooks"]["SessionStart"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap()
-            .contains("session-start")
+            .starts_with(home.to_str().unwrap()),
+        "the project's settings point at the machine's scripts, not copies"
     );
     assert!(
         v["hooks"]["Stop"][0]["hooks"][0]["command"]
@@ -634,20 +638,37 @@ fn cli_init_registers_claude_code_hooks_once_and_respects_no_hooks() {
             .unwrap()
             .contains("stop-check")
     );
+    // The machine's settings are untouched.
+    assert_eq!(
+        std::fs::read_to_string(&machine).unwrap(),
+        r#"{"theme": "dark"}"#
+    );
 
-    // A second project: already installed, nothing duplicated.
-    let before = std::fs::read_to_string(&settings).unwrap();
+    // A second project gets its own registration rather than inheriting the first one's.
     let out = run(
         &base.join("code/web"),
         &["init", "web", "--author", "A", "--email", "a@x"],
     );
-    assert!(out.contains("hooks already installed"), "{out}");
-    assert_eq!(std::fs::read_to_string(&settings).unwrap(), before);
+    assert!(out.contains("Claude Code hooks added"), "{out}");
+    assert!(base.join("code/web/.claude/settings.json").exists());
     assert!(run(&base.join("code/web"), &["hooks", "status"]).contains("SessionStart: ✓"));
+    // ...and it is idempotent within that project.
+    assert!(
+        run(&base.join("code/web"), &["hooks", "install"]).contains("already installed"),
+        "installing twice in one project changes nothing"
+    );
 
-    // --no-hooks leaves the settings alone even when hooks are missing.
-    run(&base.join("code/web"), &["hooks", "uninstall"]);
-    let before = std::fs::read_to_string(&settings).unwrap();
+    // --global is the opt-in for someone who wants them everywhere.
+    run(&base.join("code/web"), &["hooks", "install", "--global"]);
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&machine).unwrap()).unwrap();
+    assert_eq!(v["theme"], "dark", "other keys survive");
+    assert!(
+        v["hooks"]["SessionStart"].is_array(),
+        "now registered machine-wide too"
+    );
+
+    // --no-hooks writes no project settings at all.
     let out = run(
         &base.join("code/api"),
         &[
@@ -661,7 +682,7 @@ fn cli_init_registers_claude_code_hooks_once_and_respects_no_hooks() {
         ],
     );
     assert!(!out.contains("Claude Code hooks"), "{out}");
-    assert_eq!(std::fs::read_to_string(&settings).unwrap(), before);
+    assert!(!base.join("code/api/.claude/settings.json").exists());
 
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -1874,6 +1895,180 @@ fn cli_trace_and_why_follow_the_chain_in_both_directions() {
         run(&["trace", "FEAT-001"]).contains("ADR-0001 has been superseded"),
         "work resting on an overturned decision is a gap"
     );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The board governing the agent, end to end (FEAT-065): the generated CLAUDE.md block refreshes
+/// without touching what the author wrote, the hooks register for this project rather than the
+/// machine, and the docs guard denies a loose note while letting a deliverable through.
+#[test]
+fn cli_claude_sync_and_the_docs_guard() {
+    let base = std::env::temp_dir().join(format!("kanbanr-claude-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let exec = |args: &[&str], stdin: Option<&str>| -> Output {
+        let mut cmd = Command::new(cli());
+        cmd.args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT");
+        match stdin {
+            None => {
+                cmd.stdin(std::process::Stdio::null());
+                cmd.output().expect("run kanbanr CLI")
+            }
+            Some(text) => {
+                use std::io::Write;
+                cmd.stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+                let mut child = cmd.spawn().expect("spawn kanbanr CLI");
+                child
+                    .stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(text.as_bytes())
+                    .unwrap();
+                child.wait_with_output().expect("run kanbanr CLI")
+            }
+        }
+    };
+    let run = |args: &[&str]| -> String {
+        let o = exec(args, None);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    // The skill is installed once per machine; a project's settings point at these scripts.
+    let scripts = home.join(".claude/skills/kanbanr/hooks");
+    std::fs::create_dir_all(&scripts).unwrap();
+    for name in ["session-start", "stop-check"] {
+        for ext in ["sh", "ps1"] {
+            std::fs::write(scripts.join(format!("{name}.{ext}")), "#!/bin/sh\nexit 0\n").unwrap();
+        }
+    }
+
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+
+    // No charter: nothing to put in front of anyone, and it says so rather than writing a husk.
+    let refused = exec(&["claude", "sync"], None);
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("no charter"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let charter = base.join("charter.yaml");
+    std::fs::write(
+        &charter,
+        "purpose: A cart that survives a closed tab\n\
+         goals:\n  - id: G-1\n    statement: A returning shopper resumes\n\
+         non_goals:\n  - A checkout redesign\n\
+         constraints:\n  - One developer, one machine\n",
+    )
+    .unwrap();
+    run(&["charter", "set", "--file", charter.to_str().unwrap()]);
+
+    // The author's own instructions come first and survive; the block is appended.
+    let claude_md = work.join("CLAUDE.md");
+    std::fs::write(&claude_md, "# shop\n\nRun the linter before committing.\n").unwrap();
+    let out = run(&["claude", "sync"]);
+    assert!(out.contains("CLAUDE.md"), "{out}");
+    let written = std::fs::read_to_string(&claude_md).unwrap();
+    assert!(written.starts_with("# shop"), "{written}");
+    assert!(written.contains("Run the linter before committing."));
+    assert!(written.contains("A cart that survives a closed tab"));
+    assert!(written.contains("`G-1` A returning shopper resumes"));
+    assert!(
+        written.contains("A checkout redesign"),
+        "non-goals are the point"
+    );
+    assert!(written.contains("One developer, one machine"));
+    // Running it again changes nothing.
+    assert!(run(&["claude", "sync"]).contains("already current"));
+
+    // A changed charter refreshes the block in place, leaving one copy and the author's text.
+    std::fs::write(
+        &charter,
+        "purpose: A cart that survives a closed tab\n\
+         goals:\n  - id: G-1\n    statement: A returning shopper resumes in one click\n",
+    )
+    .unwrap();
+    run(&["charter", "set", "--file", charter.to_str().unwrap()]);
+    run(&["claude", "sync"]);
+    let refreshed = std::fs::read_to_string(&claude_md).unwrap();
+    assert!(refreshed.contains("resumes in one click"), "{refreshed}");
+    assert!(
+        !refreshed.contains("A returning shopper resumes\n"),
+        "the stale copy is gone"
+    );
+    assert!(refreshed.contains("Run the linter before committing."));
+    assert_eq!(
+        refreshed.matches("kanbanr:begin").count(),
+        1,
+        "exactly one block"
+    );
+
+    // Hooks register for THIS project, not the machine.
+    let installed = run(&["hooks", "install"]);
+    assert!(installed.contains(".claude/settings.json"), "{installed}");
+    assert!(
+        work.join(".claude").join("settings.json").exists(),
+        "the project's settings file is the one that was written"
+    );
+    assert!(
+        !home.join(".claude").join("settings.json").exists(),
+        "nothing was written to the machine's settings"
+    );
+
+    // The docs guard: a loose note goes to the board, a deliverable does not.
+    let guard = |path: &str| -> String {
+        let payload = serde_json::json!({
+            "tool_name": "Write",
+            "tool_input": {"file_path": work.join(path).to_string_lossy()},
+        })
+        .to_string();
+        let o = exec(&["claude", "guard"], Some(&payload));
+        assert!(o.status.success(), "the guard must never fail a write");
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    let denied = guard("RETROSPECTIVE-NOTES.md");
+    assert!(
+        denied.contains("\"permissionDecision\":\"deny\""),
+        "{denied}"
+    );
+    assert!(denied.contains("kanbanr doc add"), "{denied}");
+    for allowed in [
+        "README.md",
+        "CHANGELOG.md",
+        "docs/USER_GUIDE.md",
+        "src/cart.rs",
+    ] {
+        assert!(
+            guard(allowed).trim().is_empty(),
+            "{allowed} is a deliverable and must pass silently"
+        );
+    }
 
     let _ = std::fs::remove_dir_all(&base);
 }

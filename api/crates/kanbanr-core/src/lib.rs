@@ -5,6 +5,7 @@ pub mod activity;
 pub mod adr;
 pub mod batch;
 pub mod charter;
+pub mod claude;
 pub mod config;
 pub mod dispatch;
 pub mod docs;

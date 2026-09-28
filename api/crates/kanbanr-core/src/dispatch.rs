@@ -725,6 +725,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             query_param(query, "scope").as_deref(),
         )?),
         ("GET", ["projects", p, "adrs"]) => ser(&crate::adr::list(store, p)?),
+        ("GET", ["projects", p, "claude-block"]) => ser(&crate::claude::block(store, p)?),
         ("POST", ["projects", p, "adrs"]) => {
             let title = str_field(b, "title").unwrap_or_default();
             let adr: crate::adr::Adr = serde_json::from_value(b.clone())
