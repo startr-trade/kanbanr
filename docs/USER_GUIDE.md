@@ -280,6 +280,8 @@ report an invented answer.
 
 ```bash
 kanbanr review FEAT-001      # the one-screen decision brief — read this BEFORE building
+kanbanr review --pending     # every item waiting, in one pass
+kanbanr review --ui          # read and approve in the browser instead (see below)
 kanbanr approve FEAT-001     # records agreement, pinned to the definition's content
 kanbanr start FEAT-001       # refuses without a current approval
 ```
@@ -288,6 +290,33 @@ Approval is pinned to a hash of the definition, so editing the definition afterw
 approval rather than silently keeping it. The escape is explicit and recorded:
 `kanbanr start FEAT-001 --unapproved "why you are going ahead anyway"`, which stays on the item and
 is reported by `doctor` until it is reviewed.
+
+**Reviewing in the browser.** Reading a page of markdown in a terminal is a poor way to decide
+anything, so `kanbanr review --ui` starts the monitor with writes enabled and opens the review queue:
+one collapsible card per item, with the approve button inside the brief it belongs to. The ordinary
+`kanbanr serve` monitor stays read-only and says so rather than offering a button that would fail.
+
+The queue holds only items where agreement can still change something — not work that is finished, and
+not a status parked off the board. Approving merged work records a signature that changes nothing, and
+a gate that asks for those gets rubber-stamped, which is the failure it exists to prevent.
+
+**A verdict names who gave it.** `--by` defaults to the board's commit identity, and the monitor uses
+the same one, so a verdict reads identically whichever surface recorded it. A verdict with no named
+approver is **refused** rather than attributed to nobody — set an identity once with
+`kanbanr identity --name "You" --email you@example.com`. An approval that cannot say who agreed is
+not evidence of agreement.
+
+**Taking one back.**
+
+```bash
+kanbanr unapprove FEAT-001 --reason "the requirements changed after the walkthrough"
+```
+
+The agreement goes and the item returns to the queue, start gate and all; the record of having given
+it stays, because an approval given and later withdrawn says more than none ever having existed. A
+reason is required — an agreement needs no explanation, taking one back does. The monitor offers the
+same action on the item's page, collecting the reason in the page. Both verdicts emit an event
+(`ApprovalRecorded`, `ApprovalWithdrawn`) and appear in the activity log.
 
 ### Evidence, not intentions
 
@@ -536,6 +565,9 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 |---|---|
 | `kanbanr doctor` | every broken reference and every gap, across the board |
 | `kanbanr check [CODE]` | what one item has not said, and what it cannot yet show |
+| `kanbanr review [CODE] [--pending] [--ui]` | the decision brief — one item, all of them, or in the browser |
+| `kanbanr approve <CODE> [--by …]` | records agreement, attributed to the board's commit identity |
+| `kanbanr unapprove <CODE> --reason "…"` | takes an agreement back; the record of having given it stays |
 | `kanbanr capture` | reads a test run's output (run by the hook; you never call it) |
 | `kanbanr split-from <CODE> <PARENT>` | records that an item was sliced out of another |
 | `kanbanr sources [--write]` | imported items whose source file has gone |

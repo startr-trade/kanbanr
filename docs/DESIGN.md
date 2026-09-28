@@ -62,7 +62,7 @@ sequenceDiagram
   B->>D: GET /api/projects/:p   (no auth)
   B->>D: open SSE /api/projects/:p/events
   C->>K: edit (add feature / move / task …)
-  K->>R: dispatch → write YAML/md, append activity.yaml, git commit
+  K->>R: dispatch → write YAML/md, append today's activity file, git commit
   K->>R: pull + push remotes — best-effort, conflicts left for normal git
   R-->>D: file change event (notify)
   D-->>B: SSE changed event → refetch live
@@ -165,16 +165,19 @@ sibling cannot be.
 └── projects/
     └── <project>/
         ├── config.yaml                 # statuses, default_state, transitions, displayed/no-op/terminal states, branch_pattern
-        ├── activity.yaml               # the activity changelog (newest-first {time, actor, message, item})
-        ├── events.yaml                 # the notification event log (FEAT-036)
+        ├── activity/                   # the activity changelog, one file per day (FEAT-066)
+        │   └── 2026-09-28.yaml          # {time, actor, message, item}, appended in order
+        ├── events/                     # the notification event log, one file per day (FEAT-036, FEAT-066)
+        │   └── 2026-09-28.yaml
         ├── charter.yaml                # purpose, goals, non-goals, stakeholders, adopted_at (FEAT-046)
         ├── lessons.yaml                # what was learned, with decaying confidence (FEAT-055)
         ├── mirror.yaml                 # GitHub issue mirror config, when enabled (FEAT-043)
         ├── index.yaml                  # derived cache of item metadata, rebuildable (FEAT-033)
-        ├── <Status>/                   # e.g. Planned/  In Progress/  Completed/
-        │   ├── FEAT-001.yaml            # item METADATA only — including definition, defect, history
-        │   └── features-spec/
-        │       └── FEAT-001.md          # the specification markdown
+        ├── features/                   # every item, filed under its status (FEAT-071)
+        │   └── <Status>/                # e.g. Planned/  In Progress/  Completed/
+        │       ├── FEAT-001.yaml         # item METADATA only — including definition, defect, history
+        │       └── features-spec/
+        │           └── FEAT-001.md       # the specification markdown
         ├── milestones/MS-001.yaml       # code, name, description, depends_on[]
         └── docs/                        # documentation tree (markdown)
             ├── decisions/               # ADRs: front-matter + prose (FEAT-057)
@@ -203,11 +206,20 @@ items actually finish. All writes are done by the CLI (the single writer). There
 
 ## 6. Activity changelog
 
-Each write appends an entry to `projects/<id>/activity.yaml` — a capped, newest-first list of
-`{time, actor, message}` (actor = the commit identity; message = a short description of the
-change). The view daemon serves it at `GET /api/projects/:p/activity`, and the monitor renders a
-"Recent activity" panel. It is plain data in the folder (no git plumbing needed to read it) and
-works the same with or without a remote. (The full audit trail still lives in git history.)
+Each write appends an entry to `projects/<id>/activity/<YYYY-MM-DD>.yaml` — `{time, actor, message,
+item}`, where actor is the commit identity and message a short description of the change. Events
+(FEAT-036) are stored the same way under `events/`.
+
+**Nothing is ever trimmed** (FEAT-066). An earlier version kept one capped file, which meant the log
+quietly discarded its own oldest entries — and a retrospective reading a wave that had aged out
+reported "no recorded moves", which reads as *nothing happened* rather than *the evidence was
+deleted*. One file per day instead: a read walks the days newest-first and stops once it has enough,
+so bounding the read costs nothing while the raw record stays complete. Summaries are derived from
+it; it is never derived from them.
+
+The view daemon serves it at `GET /api/projects/:p/activity`, and the monitor renders a "Recent
+activity" panel. It is plain data in the folder (no git plumbing needed to read it) and works the
+same with or without a remote. (The full audit trail still lives in git history.)
 
 ## 7. Web navigation map
 

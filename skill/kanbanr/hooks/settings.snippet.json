@@ -11,9 +11,15 @@
     "`_comment*` keys here are explanatory only. They are ignored by Claude Code",
     "but to be safe you may strip every `_comment*` key before saving.",
     "",
-    "Replace the ABSOLUTE paths below with where these scripts actually live on",
-    "your machine (the hooks/ dir inside this repo's skill/kanbanr/). Make the",
-    "scripts executable first:  chmod +x session-start.sh stop-check.sh"
+    "YOU PROBABLY DO NOT NEED THIS FILE. `kanbanr hooks install` registers both",
+    "hooks for the current project, resolving the script paths itself, and",
+    "`kanbanr init` runs it for you. This snippet is the manual fallback for a",
+    "setup those cannot reach.",
+    "",
+    "Replace <PATH-TO-KANBANR> below with where this repository is checked out",
+    "on your machine — the placeholder is deliberate, since an absolute path is",
+    "only ever correct on one machine. Make the scripts executable first:",
+    "  chmod +x session-start.sh stop-check.sh"
   ],
 
   "hooks": {
@@ -29,7 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/path/to/kanbanr/skill/kanbanr/hooks/session-start.sh"
+            "command": "<PATH-TO-KANBANR>/skill/kanbanr/hooks/session-start.sh"
           }
         ]
       }
@@ -47,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/path/to/kanbanr/skill/kanbanr/hooks/stop-check.sh"
+            "command": "<PATH-TO-KANBANR>/skill/kanbanr/hooks/stop-check.sh"
           }
         ]
       }

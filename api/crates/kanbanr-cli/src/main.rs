@@ -2539,7 +2539,17 @@ fn run_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
 /// Is this shell command a `git commit`? Deliberately narrow: `git -C x commit`, `git commit`, and
 /// the same after a `&&`. Anything cleverer risks guessing wrong about someone's shell.
 fn is_git_commit(command: &str) -> bool {
-    command.split("&&").any(|part| {
+    commit_invocation(command).is_some()
+}
+
+/// The `&&`-separated part of a command line that invokes `git commit`, if any.
+///
+/// Split out from `is_git_commit` so the message can be read from **that part alone** (FEAT-082).
+/// Scanning the whole command line for `-m` matched those two characters wherever they occurred —
+/// in prose, in another flag, in a heredoc the guard was never given — and refused commits whose
+/// message was perfectly correct.
+fn commit_invocation(command: &str) -> Option<&str> {
+    command.split("&&").find(|part| {
         let mut words = part.split_whitespace().skip_while(|w| *w == "sudo");
         if words.next().is_none_or(|w| !w.ends_with("git")) {
             return false;
@@ -2565,12 +2575,34 @@ fn is_git_commit(command: &str) -> bool {
 }
 
 /// The message of a `git commit -m "…"`, when it is written inline.
+///
+/// The flag is matched as a **shell token** of the commit invocation, never as a substring
+/// (FEAT-082): `-m`, `--message`, and the attached forms `-m"…"` / `--message=…`. A commit that
+/// supplies its message by file or editor has no inline message, so this returns `None` and the
+/// guard defers to the `commit-msg` hook, which reads the real thing.
 fn inline_message(command: &str) -> Option<String> {
-    let at = command
-        .find("-m")
-        .map(|i| i + 2)
-        .or_else(|| command.find("--message").map(|i| i + "--message".len()))?;
-    let rest = command[at..].trim_start_matches(['=', ' ']);
+    let part = commit_invocation(command)?;
+    // Byte offset just past the flag, wherever the value begins (detached or attached).
+    let mut at = None;
+    let mut cursor = 0usize;
+    for token in part.split_whitespace() {
+        let start = part[cursor..].find(token).map(|i| cursor + i)?;
+        cursor = start + token.len();
+        if token == "-m" || token == "--message" {
+            at = Some(cursor); // detached: the value is the next token
+            break;
+        }
+        if let Some(rest) = token.strip_prefix("--message=") {
+            at = Some(cursor - rest.len());
+            break;
+        }
+        // `-mMESSAGE` — but not `--mixed` or any other long flag that merely starts with `-m`.
+        if token.len() > 2 && token.starts_with("-m") && !token.starts_with("--") {
+            at = Some(start + 2);
+            break;
+        }
+    }
+    let rest = part[at?..].trim_start_matches(['=', ' ']);
     let quote = rest.chars().next()?;
     if quote != '"' && quote != '\'' {
         return Some(rest.split_whitespace().next()?.to_string());
@@ -5675,6 +5707,51 @@ fn print_board(project: &Project) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FEAT-082: the guard located the message with `find("-m")` — two characters, anywhere in the
+    /// command line. A commit passing its message by file was refused because the match landed in
+    /// prose, and a Python script that merely mentioned the flag was blocked as if it were a commit.
+    /// Third instance of a token recognised without its boundary (see L-23).
+    #[test]
+    fn the_guard_reads_only_a_real_message_flag() {
+        // R-1: the two characters occurring in prose are not the flag.
+        let by_file = "git add -A && git commit -q -F msg.txt";
+        assert_eq!(inline_message(by_file), None);
+        assert!(is_git_commit(by_file), "it is still recognised as a commit");
+
+        // The original failure: a heredoc body mentioning the flag, piped to something else.
+        let prose = "python3 - <<'PY'\nprint(\"use --message or -m\")\nPY";
+        assert_eq!(inline_message(prose), None);
+
+        // A real message whose TEXT mentions the flag must still be read as the message, in full.
+        let tricky = r#"git commit -m "fix: the commit-msg hook and -m parsing
+
+Refs: kanbanr:FEAT-082/R-1""#;
+        let got = inline_message(tricky).expect("a real -m must be found");
+        assert!(got.starts_with("fix: the commit-msg hook"), "got: {got}");
+        assert!(got.contains("Refs: kanbanr:FEAT-082/R-1"), "got: {got}");
+
+        // R-2: an editor commit supplies nothing inline.
+        assert_eq!(inline_message("git commit --amend"), None);
+
+        // R-3: the attached spellings are the same flag and must not slip past.
+        assert_eq!(
+            inline_message(r#"git commit --message="chore: x""#).as_deref(),
+            Some("chore: x")
+        );
+        assert_eq!(
+            inline_message(r#"git commit -m"chore: y""#).as_deref(),
+            Some("chore: y")
+        );
+        // ...while a different long flag that merely begins with -m is not.
+        assert_eq!(inline_message("git commit --amend --no-edit"), None);
+
+        // Only the commit part is read: an earlier command's -m is not the commit's message.
+        assert_eq!(
+            inline_message(r#"echo -m "not this" && git commit -m "but this""#).as_deref(),
+            Some("but this")
+        );
+    }
 
     /// FEAT-079: a test named after the file that runs it could not be flipped green. The name is
     /// one path segment, and the whole-path encoder leaves `/` alone — so the route grew a segment,

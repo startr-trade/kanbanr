@@ -187,6 +187,15 @@ Write the definition with the batch path (`definition` on `feature.add`/`feature
   **stop**. Do not start implementing while the answer is still outstanding.
 - The user approves with `kanbanr approve <CODE>`; ask them to, rather than approving on their
   behalf — an agent approving its own brief is the failure this exists to prevent.
+- When several items are waiting, offer `kanbanr review --ui`: it opens the review queue in the
+  browser with the approve button beside each brief. Reading a page of markdown in a terminal to
+  make a decision is poor, and an expensive gate gets rubber-stamped, which is the same failure
+  with extra steps. `kanbanr review --pending` is the terminal equivalent.
+- A verdict records **who** gave it, defaulting to the board's commit identity. One with no named
+  approver is refused, so never invent a value for `--by`: if it fails, the board has no identity
+  and the user sets one with `kanbanr identity`.
+- An approval recorded in error is withdrawn with `kanbanr unapprove <CODE> --reason "…"`. If you
+  ever approve something on the user's behalf, say so and withdraw it.
 - kanbanr enforces it: moving an item into an active status is refused unless its definition is
   approved. If the definition changes after approval, the approval **lapses** and must be renewed —
   so scope cannot drift silently past a yes.
