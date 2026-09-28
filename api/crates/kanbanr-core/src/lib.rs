@@ -177,6 +177,72 @@ mod tests {
     /// FEAT-061: auto-completion is how most items actually finish. When it left no transition
     /// behind, every flow number was blind to the normal path and reported only on items someone
     /// had moved by hand.
+    /// FEAT-069: an approval recorded in error had no remedy. Found the direct way — Claude
+    /// approved an item on the user's behalf, which the method forbids, and nothing could undo it.
+    #[test]
+    fn an_approval_can_be_withdrawn_and_the_record_survives() {
+        use crate::models::{ApprovalState, FeatureDefinition};
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let f = store
+            .add_feature("demo", "Cart", "spec", "M", None)
+            .unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart for 7 days".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+
+        // Nothing to withdraw before anything was agreed.
+        assert!(
+            store
+                .unapprove_feature("demo", &f.code, "me", "why")
+                .is_err()
+        );
+
+        let approved = store.approve_feature("demo", &f.code, "the user").unwrap();
+        let definition = approved.definition.as_ref().unwrap();
+        let rev_when_approved = definition.content_rev();
+        assert_eq!(definition.approval_state(), ApprovalState::Current);
+        assert_eq!(definition.approvals.len(), 1);
+        assert_eq!(definition.approvals[0].verdict, "approved");
+
+        let withdrawn = store
+            .unapprove_feature("demo", &f.code, "the user", "approved by the wrong hand")
+            .unwrap();
+        let definition = withdrawn.definition.as_ref().unwrap();
+        // The agreement is gone…
+        assert!(definition.approval.is_none());
+        assert_eq!(definition.approval_state(), ApprovalState::Missing);
+        // …and both verdicts are kept, with the reason the withdrawal needed.
+        assert_eq!(definition.approvals.len(), 2);
+        assert_eq!(definition.approvals[1].verdict, "withdrawn");
+        assert_eq!(definition.approvals[1].reason, "approved by the wrong hand");
+        assert_eq!(
+            definition.approvals[0].verdict, "approved",
+            "nothing was removed"
+        );
+
+        // Recording either verdict must never itself change what was agreed to.
+        assert_eq!(
+            definition.content_rev(),
+            rev_when_approved,
+            "the record of who agreed is not part of the scope they agreed to"
+        );
+
+        // Approving again is a third entry, not an edit of the first.
+        let again = store.approve_feature("demo", &f.code, "the user").unwrap();
+        let definition = again.definition.as_ref().unwrap();
+        assert_eq!(definition.approvals.len(), 3);
+        assert_eq!(definition.approval_state(), ApprovalState::Current);
+        assert_eq!(definition.content_rev(), rev_when_approved);
+    }
+
     #[test]
     fn auto_completion_records_the_move_like_any_other() {
         let (store, _d) = temp_store();

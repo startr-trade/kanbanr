@@ -532,6 +532,12 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                 str_field(b, "checked_rev").as_deref(),
             )?)
         }
+        ("POST", ["projects", p, "features", code, "unapprove"]) => ser(&store.unapprove_feature(
+            p,
+            code,
+            &str_field(b, "by").unwrap_or_else(|| "unknown".to_string()),
+            &str_field(b, "reason").unwrap_or_default(),
+        )?),
         ("POST", ["projects", p, "features", code, "approve"]) => ser(&store.approve_feature(
             p,
             code,
@@ -875,6 +881,9 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "features", c] => format!("edit feature {c}"),
         ["projects", _p, "features", c, "move"] => format!("move feature {c}"),
         ["projects", _p, "features", c, "approve"] => format!("approve definition of {c}"),
+        ["projects", _p, "features", c, "unapprove"] => {
+            format!("withdraw the approval of {c}")
+        }
         ["projects", _p, "features", c, "tests", r, t] => {
             format!(
                 "test {t} of {c}/{r} is now {}",

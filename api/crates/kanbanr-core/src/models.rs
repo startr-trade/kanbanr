@@ -195,6 +195,10 @@ pub struct FeatureDefinition {
     /// Who agreed to this definition, when, and what exactly they agreed to (FEAT-048).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<Approval>,
+    /// Every agreement and withdrawal, oldest first (FEAT-069). `approval` is the current one, or
+    /// absent when the last verdict was a withdrawal.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approvals: Vec<ApprovalEvent>,
     /// A recorded reason work started without approval. An escape hatch that leaves a trace beats
     /// one that is silent — an unrecorded bypass just teaches itself.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -210,6 +214,23 @@ pub struct FeatureDefinition {
 /// `rev` is a hash of the definition as approved. If the definition changes afterwards the hash no
 /// longer matches and the approval has **lapsed** — so scope cannot drift silently past a "yes",
 /// which is exactly how work gets built and then rejected.
+/// One agreement, or one withdrawal of it (FEAT-069). Append-only: an approval that was given and
+/// later taken back is more informative than no record at all, and the charter constraint says raw
+/// data is never discarded.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalEvent {
+    pub at: String,
+    pub by: String,
+    /// `approved` | `withdrawn`.
+    pub verdict: String,
+    /// Why it was withdrawn. An agreement needs no reason; taking one back does.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+    /// The definition content this verdict was about.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rev: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Approval {
     pub by: String,
@@ -240,6 +261,7 @@ impl FeatureDefinition {
     pub fn content_rev(&self) -> String {
         let mut bare = self.clone();
         bare.approval = None;
+        bare.approvals = Vec::new();
         bare.started_unapproved = String::new();
         for requirement in &mut bare.requirements {
             for test in &mut requirement.tests {

@@ -111,6 +111,15 @@ export interface Source {
 }
 
 /** The reasoning and evidence for a work item (FEAT-047/048/049). */
+/** One agreement, or one withdrawal of it (FEAT-069). */
+export interface ApprovalEvent {
+  at: string;
+  by: string;
+  verdict: "approved" | "withdrawn";
+  reason?: string;
+  rev?: string;
+}
+
 export interface FeatureDefinition {
   statement?: string;
   /** Charter goal ids this item serves — the link that makes "why" checkable. */
@@ -119,6 +128,8 @@ export interface FeatureDefinition {
   design_doc?: string;
   requirements?: Requirement[];
   approval?: Approval | null;
+  /** Every agreement and withdrawal, oldest first (FEAT-069). Nothing is ever removed. */
+  approvals?: ApprovalEvent[];
   /** A recorded reason work started without approval. */
   started_unapproved?: string;
   /** A recorded reason this item is exempt from gap reporting. */

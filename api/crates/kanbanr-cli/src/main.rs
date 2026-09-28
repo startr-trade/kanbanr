@@ -240,6 +240,17 @@ enum Command {
         #[arg(long)]
         ui: bool,
     },
+    /// Take back an approval (FEAT-069). The agreement goes; the record of having given it stays,
+    /// and the item returns to what is awaiting review.
+    Unapprove {
+        code: String,
+        /// Why it is being withdrawn. An agreement needs no reason; taking one back does.
+        #[arg(long)]
+        reason: String,
+        /// Who is withdrawing it (default: this data folder's commit identity).
+        #[arg(long)]
+        by: Option<String>,
+    },
     /// Record agreement to an item's definition as it currently stands. Editing the definition
     /// afterwards lapses the approval. (FEAT-048)
     Approve {
@@ -4168,6 +4179,29 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                         .join("\n    ")
                 );
             }
+            Ok(())
+        }
+        Command::Unapprove { code, reason, by } => {
+            let p = require_project(cli)?;
+            let who = match by {
+                Some(name) => name.clone(),
+                None => serde_json::from_str::<Value>(&client.get("/auth/whoami")?)
+                    .ok()
+                    .and_then(|v| v["name"].as_str().map(str::to_string))
+                    .unwrap_or_else(|| "unknown".to_string()),
+            };
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/features/{code}/unapprove"),
+                Some(json!({ "by": who, "reason": reason })),
+            )?;
+            print_write(
+                cli,
+                &resp,
+                format!(
+                    "{code}: approval withdrawn by {who} — it is waiting for review again                      (`kanbanr review {code}`)"
+                ),
+            );
             Ok(())
         }
         Command::Approve { code, by } => {
