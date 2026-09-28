@@ -136,9 +136,31 @@ for (const [key, count] of seen) {
   }
 }
 
+/**
+ * Every token the stylesheet uses is one the theme defines (FEAT-096).
+ *
+ * The portfolio used `var(--surface, #fff)` and `var(--surface-2, #f2f2f6)`. Neither token exists,
+ * so the fallback applied in BOTH themes and dark mode rendered white cards carrying the dark
+ * theme's light text. A fallback makes a missing token invisible in exactly the theme the author
+ * was looking at — which is why this is checked rather than eyeballed.
+ */
+{
+  const css = readFileSync(new URL("../src/styles.css", import.meta.url).pathname, "utf8");
+  const defined = new Set([...css.matchAll(/^\s*(--[a-z0-9-]+)\s*:/gm)].map((m) => m[1]));
+  const used = new Set([...css.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]));
+  for (const token of [...used].sort()) {
+    if (!defined.has(token)) {
+      failures.push(
+        `styles.css: var(${token}) is used but no theme defines it\n` +
+          `    A fallback would then apply in every theme — define it for light AND dark, or use an existing token.`,
+      );
+    }
+  }
+}
+
 if (failures.length > 0) {
   console.error(`check:ui — ${failures.length} problem(s) with how the monitor presents itself:\n`);
   for (const f of failures) console.error(f + "\n");
   process.exit(1);
 }
-console.log(`check:ui — every action looks like a control, and every destination is offered once.`);
+console.log(`check:ui — every action looks like a control, every destination is offered once, and every colour token exists.`);
