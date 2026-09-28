@@ -929,8 +929,14 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
             format!("withdraw the approval of {c}")
         }
         ["projects", _p, "features", c, "tests", r, t] => {
+            // Decoded, because these arrive percent-encoded (a test name is free text and holds
+            // `::`, spaces and `/`). Without this, `git log` carried lines like
+            // `test doctor%3A%3Atests%3A%3Aan_unreconciled_bypass...` — the history of a tool whose
+            // point is a readable record, written in an encoding meant for a URL.
             format!(
-                "test {t} of {c}/{r} is now {}",
+                "test {} of {c}/{} is now {}",
+                percent_decode(t),
+                percent_decode(r),
                 str_field(body.unwrap_or(&Value::Null), "state").unwrap_or_default()
             )
         }
