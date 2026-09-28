@@ -2582,8 +2582,10 @@ fn run_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     let Ok(ctx) = scm_context(cli, client) else {
         return Ok(()); // not a kanbanr project: not this guard's business
     };
+    // Completing a merge is the intended way work reaches the default branch (FEAT-094).
     if let Some(branch) = &ctx.branch
         && branch == &scm::default_branch(&ctx.root)
+        && !scm::merge_in_progress(&ctx.root)
     {
         deny(format!(
             "This would commit straight to {branch}. Work belongs on a branch for its item: run \
@@ -2868,7 +2870,8 @@ fn run_check_branch(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     if branch.starts_with(kanbanr_core::scm::SPIKE_PREFIX) {
         return Ok(()); // a spike is allowed to exist; `finish` is where it is refused
     }
-    if branch == scm::default_branch(&ctx.root) {
+    // The commit completing a merge is how an item's branch is SUPPOSED to arrive here (FEAT-094).
+    if branch == scm::default_branch(&ctx.root) && !scm::merge_in_progress(&ctx.root) {
         anyhow::bail!(
             "this is {branch}, the default branch. Work belongs on a branch for its item:\n\n    \
              kanbanr start <CODE>\n\n\
