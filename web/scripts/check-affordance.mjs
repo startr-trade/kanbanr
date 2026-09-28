@@ -39,6 +39,39 @@ for (const file of walk(root)) {
   });
 }
 
+/**
+ * The class name was never the requirement (FEAT-081).
+ *
+ * The check above passed while "Withdraw approval" still looked exactly like a tag, because `.btn`
+ * and `.chip` were declared with the *same* background and border — a button was a chip with
+ * squarer corners. Verifying the class and not the appearance is verifying the letter of the rule,
+ * so this asserts the two vocabularies do not share a surface. It is the one visual property that
+ * is mechanically checkable from the stylesheet, and it is the one that failed.
+ */
+const css = readFileSync(new URL("../src/styles.css", import.meta.url).pathname, "utf8");
+const ruleFor = (selector) => {
+  const m = css.match(new RegExp(`\\n\\${selector}\\s*\\{([^}]*)\\}`));
+  return m ? m[1] : null;
+};
+const declared = (block, prop) => {
+  const m = block?.match(new RegExp(`(?:^|;|\\s)${prop}\\s*:\\s*([^;]+)`));
+  return m ? m[1].trim() : null;
+};
+const chip = ruleFor(".chip");
+const btn = ruleFor(".btn");
+if (chip == null || btn == null) {
+  failures.push("styles.css: cannot find the .chip and .btn rules — this check has gone stale");
+} else {
+  const chipBg = declared(chip, "background");
+  const btnBg = declared(btn, "background");
+  if (chipBg && btnBg && chipBg === btnBg) {
+    failures.push(
+      `styles.css: .btn and .chip share a background (${btnBg}), so a control looks like a label\n` +
+        `    A button must be distinguishable from a tag beside it without hovering (FEAT-081).`,
+    );
+  }
+}
+
 if (failures.length > 0) {
   console.error(`check:ui — ${failures.length} element(s) that act but do not look like it:\n`);
   for (const f of failures) console.error(f + "\n");
