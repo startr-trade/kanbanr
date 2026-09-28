@@ -2072,3 +2072,78 @@ fn cli_claude_sync_and_the_docs_guard() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// The event log belongs in the commit that caused it (FEAT-059). Eventing used to run entirely
+/// after the commit, so a session's last events stayed uncommitted until some later write swept
+/// them up — and the board repo was dirty after every session's final operation.
+#[test]
+fn cli_event_log_is_committed_with_the_change() {
+    let base = std::env::temp_dir().join(format!("kanbanr-events-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let run = |args: &[&str]| -> String {
+        let o = Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI");
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    let board = run(&["where"]).trim().to_string();
+    run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+    run(&["feature", "add", "--title", "Cart", "--milestone", "MS-001"]);
+    // A status move is the op that produces an event.
+    run(&["move", "FEAT-001", "Scheduled"]);
+
+    let git = |args: &[&str]| -> String {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(&board)
+            .output()
+            .expect("run git");
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    // The whole point: nothing is left over for the next write to sweep up.
+    assert_eq!(
+        git(&["status", "--porcelain"]).trim(),
+        "",
+        "the board repo is clean after the last write"
+    );
+    // And the event landed in the commit for that very move, not a later one.
+    let files = git(&["show", "--name-only", "--format=", "HEAD"]);
+    assert!(
+        files.contains("events.yaml"),
+        "the event log is part of the commit that caused it: {files}"
+    );
+    let events =
+        std::fs::read_to_string(std::path::Path::new(&board).join("projects/shop/events.yaml"))
+            .unwrap();
+    assert!(events.contains("FEAT-001"), "{events}");
+
+    let _ = std::fs::remove_dir_all(&base);
+}

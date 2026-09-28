@@ -287,13 +287,17 @@ impl Backend {
                     item_of(path).as_deref(),
                 );
             }
+            // Eventing (FEAT-036): an additive, best-effort, opt-in tail step that never returns
+            // an error into the write path. The LOG is written before the commit so the entry lands
+            // in the same commit as the change it describes (FEAT-059) — otherwise a session's last
+            // events stay uncommitted until some later write sweeps them up, leaving the board repo
+            // dirty. DELIVERY stays after the commit, because it touches the network and must not
+            // delay or fail a durable write.
+            let events = eventing::record(&self.store, &self.data_dir, m, path, &out);
             if git::commit_local(&self.data_dir, &msg) {
                 self.after_commit();
             }
-            // Eventing (FEAT-036): an additive, best-effort, opt-in tail step. Runs only after the
-            // mutation is already durable, never returns an error into the write path, and does
-            // nothing observable (beyond the local events log) unless a webhook is configured.
-            eventing::emit(&self.store, &self.data_dir, m, path, &out, &UreqSender);
+            eventing::deliver_all(&self.data_dir, &events, &UreqSender);
         }
         Ok(out)
     }

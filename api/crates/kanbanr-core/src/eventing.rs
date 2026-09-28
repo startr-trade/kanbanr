@@ -213,13 +213,39 @@ pub fn emit(
     result: &str,
     sender: &dyn WebhookSender,
 ) {
+    let events = record(store, data_dir, method, path, result);
+    deliver_all(data_dir, &events, sender);
+}
+
+/// Write the events for a mutation to the log, and return them. Called **before** the commit
+/// (FEAT-059), so the log entry is part of the same commit as the change it describes — otherwise
+/// the last events of a session sit uncommitted until some later write sweeps them up, and the
+/// board repo is left dirty after every session's final operation.
+///
+/// Appending is local file I/O and cannot fail the write: errors are swallowed as they always were.
+pub fn record(
+    store: &Store,
+    data_dir: &Path,
+    method: &str,
+    path: &str,
+    result: &str,
+) -> Vec<Event> {
     let events = compute_events(store, method, path, result);
+    for event in &events {
+        append(data_dir, &event.project, event);
+    }
+    events
+}
+
+/// Deliver events to a configured webhook. Called **after** the commit, because delivery talks to
+/// the network: it must never delay or fail a durable write, which is why it is separated from
+/// recording rather than done in the same step.
+pub fn deliver_all(data_dir: &Path, events: &[Event], sender: &dyn WebhookSender) {
     if events.is_empty() {
         return;
     }
     let config = WebhookConfig::load(data_dir);
-    for event in &events {
-        append(data_dir, &event.project, event);
+    for event in events {
         deliver(&config, sender, event);
     }
 }
