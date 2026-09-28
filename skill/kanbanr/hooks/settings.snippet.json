@@ -21,7 +21,6 @@
     "only ever correct on one machine. Make the scripts executable first:",
     "  chmod +x session-start.sh stop-check.sh"
   ],
-
   "hooks": {
     "_comment_SessionStart": [
       "Runs once when a Claude Code session begins. Our script prints the",
@@ -38,9 +37,17 @@
             "command": "<PATH-TO-KANBANR>/skill/kanbanr/hooks/session-start.sh"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<PATH-TO-KANBANR>/skill/kanbanr/hooks/session-summary.sh",
+            "timeout": 60
+          }
+        ]
       }
     ],
-
     "_comment_Stop": [
       "Runs when Claude finishes responding. Our script checks whether the",
       "kanbanr data git repo has a recent commit; if not, it prints an ADVISORY",
@@ -54,6 +61,34 @@
           {
             "type": "command",
             "command": "<PATH-TO-KANBANR>/skill/kanbanr/hooks/stop-check.sh"
+          }
+        ]
+      }
+    ],
+    "_comment_SessionSummary": [
+      "Session summaries saved to the board as sessions/<date>-<time>-<sid8>.md",
+      "(FEAT-101). PostCompact saves the compaction's own summary; SessionEnd and a",
+      "SessionStart sweep summarise transcripts with `claude -p` in the background.",
+      "Needs bash, jq and python3; not available on Windows."
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<PATH-TO-KANBANR>/skill/kanbanr/hooks/session-summary.sh",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<PATH-TO-KANBANR>/skill/kanbanr/hooks/session-summary.sh",
+            "timeout": 60
           }
         ]
       }

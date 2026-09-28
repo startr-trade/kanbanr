@@ -77,6 +77,24 @@ A reminder is due only when **all** of these hold:
 > tells Claude to stop without changes when everything is already recorded. The rules are
 > documented at the top of `stop-check.sh`.
 
+### `session-summary.sh`: session history on the board (PostCompact, SessionEnd, SessionStart)
+Keeps a record of every session as a board doc named `sessions/<YYYY-MM-DD-HHMMSS>-<sid8>.md`, so
+a later session, or a person, can see what earlier ones did without the transcript.
+
+- **PostCompact** saves the summary Claude Code has just written for the compaction (suffix
+  `-compact`). It's one board write, done before the hook returns.
+- **SessionEnd** summarises the transcript with `claude -p` (Sonnet) in the background.
+- **SessionStart** sweeps the project's recent transcripts for sessions that ended without a
+  summary, at most three per start and none older than 14 days, again in the background.
+
+The summary's shape comes from the project's own `.claude/commands/create-summary.md` when it has
+one, and otherwise from `session-summary.prompt.md` beside the script. Its bookkeeping
+lives next to the transcripts in `~/.claude/projects/<project>/.session-summaries/`, so nothing is
+summarised twice. It acts only where a `.kanbanr` marker is found, walking up from the project
+folder. It needs `bash`, `jq` and `python3`: without them, or without a board, it exits 0 and
+writes nothing. It isn't registered on Windows. The summariser's own `claude -p` runs with
+`KANBANR_SESSION_SUMMARY` set, so it never triggers a summary of itself.
+
 ## Install
 
 **Automatic (recommended).** With the skill installed (`make install-skill`, which links it to

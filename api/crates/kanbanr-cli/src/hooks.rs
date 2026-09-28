@@ -1,5 +1,6 @@
-//! Claude Code hook registration (FEAT-044). kanbanr's skill ships two hooks: SessionStart (print
-//! the board so Claude resumes from it) and Stop (nudge to record work). They are registered
+//! Claude Code hook registration (FEAT-044). kanbanr's skill ships its hook scripts: SessionStart
+//! (print the board so Claude resumes from it), Stop (nudge to record work), and session summaries
+//! saved to the board (FEAT-101). They are registered
 //! **once per machine** in the user's global Claude Code settings; the scripts themselves only act
 //! in folders kanbanr tracks, so nothing is written into project folders.
 //!
@@ -11,7 +12,26 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 /// (Claude Code event, script base name).
-const HOOKS: [(&str, &str); 2] = [("SessionStart", "session-start"), ("Stop", "stop-check")];
+const CORE_HOOKS: [(&str, &str); 2] = [("SessionStart", "session-start"), ("Stop", "stop-check")];
+
+/// Session summaries saved to the board (FEAT-099, shipped with the skill by FEAT-101): one script
+/// for three events — a compaction's own summary, the end of a session, and a sweep at the next
+/// start for sessions that ended without one. It is a bash + python script, so it is not offered
+/// on Windows, where there is no equivalent yet.
+const SUMMARY_HOOKS: [(&str, &str); 3] = [
+    ("PostCompact", "session-summary"),
+    ("SessionEnd", "session-summary"),
+    ("SessionStart", "session-summary"),
+];
+
+/// Every script hook this platform registers.
+fn script_hooks() -> Vec<(&'static str, &'static str)> {
+    let mut hooks = CORE_HOOKS.to_vec();
+    if !cfg!(windows) {
+        hooks.extend(SUMMARY_HOOKS);
+    }
+    hooks
+}
 
 /// Hooks that run the CLI itself rather than a script in the skill folder: `(event, matcher,
 /// command)`. Both watch Bash, because that is where test runs and commits happen — one reads the
@@ -107,16 +127,26 @@ pub fn plugin_enabled(settings: &Value) -> bool {
         })
 }
 
-/// The events whose kanbanr hook is not registered (a registration whose script no longer
-/// exists counts as missing).
-pub fn missing(settings: &Value) -> Vec<&'static str> {
-    let mut missing: Vec<&'static str> = HOOKS
-        .iter()
+/// The script hooks not registered, as `(event, script)`: one event can carry two of them, so the
+/// event alone cannot say which is missing. A registration whose script is gone counts as missing.
+fn missing_scripts(settings: &Value) -> Vec<(&'static str, &'static str)> {
+    script_hooks()
+        .into_iter()
         .filter(|(event, name)| {
             !commands(settings, event).any(|c| is_kanbanr_hook(c, name) && script_of(c).is_file())
         })
-        .map(|(event, _)| *event)
-        .collect();
+        .collect()
+}
+
+/// The events whose kanbanr hook is not registered (a registration whose script no longer
+/// exists counts as missing).
+pub fn missing(settings: &Value) -> Vec<&'static str> {
+    let mut missing: Vec<&'static str> = Vec::new();
+    for (event, _) in missing_scripts(settings) {
+        if !missing.contains(&event) {
+            missing.push(event);
+        }
+    }
     // These run the CLI, so there is no script to check for — only the registration. Two share an
     // event, so the list is deduplicated: it is reported to a person, and "PreToolUse, PreToolUse"
     // reads like a bug.
@@ -156,7 +186,7 @@ fn remove(settings: &mut Value, only_stale: bool) -> usize {
             hooks.remove(event);
         }
     }
-    for (event, name) in HOOKS {
+    for (event, name) in script_hooks() {
         let Some(groups) = hooks.get_mut(event).and_then(Value::as_array_mut) else {
             continue;
         };
@@ -188,6 +218,7 @@ pub fn add(settings: &mut Value, scripts: &Path) -> anyhow::Result<Vec<&'static 
     }
     remove(settings, true);
     let added = missing(settings);
+    let scripts_wanted = missing_scripts(settings);
     // Which CLI hooks are absent has to be decided BEFORE the settings are borrowed mutably — and
     // by command, not by event: two of them share PreToolUse, so matching on the event alone would
     // re-register one that is already there.
@@ -212,10 +243,13 @@ pub fn add(settings: &mut Value, scripts: &Path) -> anyhow::Result<Vec<&'static 
                 "hooks": [{ "type": "command", "command": command }],
             }));
     }
-    for (event, name) in HOOKS.iter().filter(|(e, _)| added.contains(e)) {
+    for (event, name) in &scripts_wanted {
         let mut hook = json!({"type": "command", "command": script_command(scripts, name)});
-        if *event == "SessionStart" {
-            hook["statusMessage"] = json!("Recovering kanbanr board");
+        match *name {
+            "session-start" => hook["statusMessage"] = json!("Recovering kanbanr board"),
+            // It returns at once and detaches anything slow; the timeout only bounds a stuck write.
+            "session-summary" => hook["timeout"] = json!(60),
+            _ => {}
         }
         hooks
             .entry(*event)
@@ -272,7 +306,7 @@ pub fn install_in(settings_dir: &Path, scripts: &Path) -> anyhow::Result<Install
     if missing(&settings).is_empty() {
         return Ok(Installed::AlreadyPresent);
     }
-    if !HOOKS
+    if !script_hooks()
         .iter()
         .all(|(_, name)| scripts.join(script_file(name)).is_file())
     {
@@ -318,10 +352,10 @@ pub fn status_in(settings_dir: &Path, scripts: &Path) -> anyhow::Result<Status> 
     Ok(Status {
         settings: path.display().to_string(),
         plugin: plugin_enabled(&settings),
-        skill_installed: HOOKS
+        skill_installed: script_hooks()
             .iter()
             .all(|(_, name)| scripts.join(script_file(name)).is_file()),
-        hooks: HOOKS
+        hooks: script_hooks()
             .iter()
             .map(|(event, name)| {
                 let command = commands(&settings, event).find(|c| is_kanbanr_hook(c, name));
@@ -361,11 +395,108 @@ mod tests {
         if with_skill {
             let scripts = scripts_dir(&dir);
             std::fs::create_dir_all(&scripts).unwrap();
-            for (_, name) in HOOKS {
+            for (_, name) in script_hooks() {
                 std::fs::write(scripts.join(script_file(name)), "#!/bin/sh\nexit 0\n").unwrap();
             }
         }
         dir
+    }
+
+    /// Every event install adds to empty settings, in the order it reports them.
+    fn all_events() -> Vec<&'static str> {
+        let mut events = Vec::new();
+        for event in script_hooks()
+            .into_iter()
+            .map(|(e, _)| e)
+            .chain(CLI_HOOKS.iter().map(|(e, _, _)| *e))
+        {
+            if !events.contains(&event) {
+                events.push(event);
+            }
+        }
+        events
+    }
+
+    /// The summary script's registrations, as `(event, command)`.
+    fn summary_commands(v: &Value) -> Vec<(String, String)> {
+        ["PostCompact", "SessionEnd", "SessionStart"]
+            .iter()
+            .flat_map(|event| {
+                commands(v, event)
+                    .filter(|c| is_kanbanr_hook(c, "session-summary"))
+                    .map(|c| (event.to_string(), c.to_string()))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// FEAT-101 R-1: the summary hooks come with the install, pointing at the skill's own script,
+    /// beside the session-start hook on the event they share — and a second install adds nothing.
+    #[cfg(not(windows))]
+    #[test]
+    fn install_registers_session_summary() {
+        let dir = temp_claude_dir(true);
+        assert!(matches!(install(&dir).unwrap(), Installed::Added(_)));
+        let v: Value =
+            serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap();
+        let script = scripts_dir(&dir).join("session-summary.sh");
+        let registered = summary_commands(&v);
+        assert_eq!(
+            registered
+                .iter()
+                .map(|(e, _)| e.as_str())
+                .collect::<Vec<_>>(),
+            ["PostCompact", "SessionEnd", "SessionStart"]
+        );
+        assert!(registered.iter().all(|(_, c)| script_of(c) == script));
+        assert!(
+            commands(&v, "SessionStart").any(|c| is_kanbanr_hook(c, "session-start")),
+            "the board-recovery hook keeps its place beside it"
+        );
+        let summary = v["hooks"]["PostCompact"][0]["hooks"][0].clone();
+        assert_eq!(summary["timeout"], 60);
+
+        // With only the summary hook missing on SessionStart, only it is added back — the
+        // event-level view would have re-added the recovery hook too.
+        let mut partial = v.clone();
+        partial["hooks"]["SessionStart"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|g| {
+                !g["hooks"][0]["command"]
+                    .as_str()
+                    .unwrap()
+                    .contains("session-summary")
+            });
+        assert_eq!(
+            add(&mut partial, &scripts_dir(&dir)).unwrap(),
+            ["SessionStart"]
+        );
+        assert_eq!(partial, v);
+
+        assert_eq!(install(&dir).unwrap(), Installed::AlreadyPresent);
+    }
+
+    /// FEAT-101 R-2: uninstall takes the summary hooks away with the rest, and nobody else's.
+    #[cfg(not(windows))]
+    #[test]
+    fn uninstall_removes_session_summary() {
+        let dir = temp_claude_dir(true);
+        std::fs::write(
+            settings_path(&dir),
+            r#"{"hooks": {"SessionEnd": [{"hooks": [{"type": "command", "command": "notify-send bye"}]}]}}"#,
+        )
+        .unwrap();
+        install(&dir).unwrap();
+        uninstall(&dir).unwrap();
+        let v: Value =
+            serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap();
+        assert!(summary_commands(&v).is_empty(), "{v}");
+        assert!(v["hooks"].get("PostCompact").is_none());
+        assert_eq!(
+            v["hooks"]["SessionEnd"][0]["hooks"][0]["command"],
+            "notify-send bye"
+        );
     }
 
     #[test]
@@ -381,10 +512,7 @@ mod tests {
 }"#;
         std::fs::write(settings_path(&dir), original).unwrap();
 
-        assert_eq!(
-            install(&dir).unwrap(),
-            Installed::Added(vec!["SessionStart", "Stop", "PostToolUse", "PreToolUse"])
-        );
+        assert_eq!(install(&dir).unwrap(), Installed::Added(all_events()));
         let text = std::fs::read_to_string(settings_path(&dir)).unwrap();
         let v: Value = serde_json::from_str(&text).unwrap();
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
@@ -441,8 +569,8 @@ mod tests {
         // Uninstall removes only kanbanr's entries.
         assert_eq!(
             uninstall(&dir).unwrap(),
-            5,
-            "two script hooks plus the three that run the CLI"
+            script_hooks().len() + CLI_HOOKS.len(),
+            "every script hook plus the three that run the CLI"
         );
         let v: Value =
             serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap();
@@ -464,20 +592,14 @@ mod tests {
             {"type": "command", "command": "/old/place/kanbanr/hooks/session-start.sh"}
         ]}]}});
         std::fs::write(settings_path(&dir), stale.to_string()).unwrap();
-        assert_eq!(
-            install(&dir).unwrap(),
-            Installed::Added(vec!["SessionStart", "Stop", "PostToolUse", "PreToolUse"])
-        );
+        assert_eq!(install(&dir).unwrap(), Installed::Added(all_events()));
         let v: Value =
             serde_json::from_str(&std::fs::read_to_string(settings_path(&dir)).unwrap()).unwrap();
-        let starts = v["hooks"]["SessionStart"].as_array().unwrap();
+        let starts: Vec<&str> = commands(&v, "SessionStart")
+            .filter(|c| is_kanbanr_hook(c, "session-start"))
+            .collect();
         assert_eq!(starts.len(), 1, "stale entry replaced, not kept: {v}");
-        assert!(
-            !starts[0]["hooks"][0]["command"]
-                .as_str()
-                .unwrap()
-                .starts_with("/old/place")
-        );
+        assert!(!starts[0].starts_with("/old/place"));
     }
 
     #[test]
