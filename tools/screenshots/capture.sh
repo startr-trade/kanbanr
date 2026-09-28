@@ -36,7 +36,12 @@ if ! curl -fsS -o /dev/null "$KANBANR_URL/healthz" 2>/dev/null; then
   echo "kanbanr serve not reachable at $KANBANR_URL — starting a temporary one…"
   ( cd "$ROOT/api" && cargo build --release -p kanbanr-cli )
   ( cd "$ROOT/web" && npm install && npm run build )
-  KANBANR_DATA_DIR="${KANBANR_DATA_DIR:-$ROOT/../$(basename "$ROOT").kanbanr}" \
+  # Ask the binary where the board is — the `.kanbanr` marker is the authority, and a board may be
+  # named for its owner rather than for the repo. Guessing `<repo>.kanbanr` broke when one was
+  # renamed; the guess survives only as a fallback.
+  BOARD="${KANBANR_DATA_DIR:-$("$ROOT/api/target/release/kanbanr" where 2>/dev/null)}"
+  BOARD="${BOARD:-$ROOT/../$(basename "$ROOT").kanbanr}"
+  KANBANR_DATA_DIR="$BOARD" \
       "$ROOT/api/target/release/kanbanr" serve \
       --bind 127.0.0.1:8080 --ui-dir "$ROOT/web/dist" &
   TEMP_SERVE_PID=$!
