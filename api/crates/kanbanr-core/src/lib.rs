@@ -1068,6 +1068,88 @@ mod tests {
         ));
     }
 
+    /// FEAT-093: a batch whose sixth op failed left five applied — an item auto-completed, the
+    /// index rewritten — on disk and uncommitted, because the failure path flushed what had run and
+    /// the caller commits only on success. The contract is all or nothing, and that is asserted on
+    /// the FILES, not on a reload that could share the same in-memory mistake.
+    #[test]
+    fn a_failed_batch_leaves_the_board_untouched() {
+        let (store, dir) = temp_store();
+        new_project(&store, "demo");
+        let f = store
+            .add_feature("demo", "Cart", "spec", "M", None)
+            .unwrap();
+        store
+            .apply_batch(
+                "demo",
+                ops(serde_json::json!([
+                    {"op":"todo.add","ref":"t","feature":f.code,"description":"work"},
+                    {"op":"task.add","feature":f.code,"todo":"t","text":"one"},
+                    {"op":"doc.write","path":"notes/keep.md","content":"original"},
+                ])),
+            )
+            .unwrap();
+
+        // Every file under the project, with its bytes, before the failing bundle.
+        let snapshot = |root: &std::path::Path| {
+            let mut all = std::collections::BTreeMap::new();
+            let mut stack = vec![root.to_path_buf()];
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d).unwrap().flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        if p.file_name().is_some_and(|n| n == ".git") {
+                            continue;
+                        }
+                        stack.push(p);
+                    } else {
+                        all.insert(p.clone(), std::fs::read(&p).unwrap());
+                    }
+                }
+            }
+            all
+        };
+        let before = snapshot(&dir.path);
+
+        // The shape of the real failure: ops that move state and write docs, then one that fails.
+        let err = store
+            .apply_batch(
+                "demo",
+                ops(serde_json::json!([
+                    {"op":"feature.move","code":f.code,"to":"Scheduled"},
+                    {"op":"task.state","feature":f.code,"todo":"TL-001","key":"T1","state":"Completed"},
+                    {"op":"doc.write","path":"notes/keep.md","content":"OVERWRITTEN"},
+                    {"op":"doc.write","path":"notes/new.md","content":"should never exist"},
+                    {"op":"task.state","feature":f.code,"todo":"TL-001","key":"T9","state":"Completed"},
+                ])),
+            )
+            .expect_err("the last op names a task that does not exist");
+        assert!(matches!(err, CoreError::BatchOpFailed(4, _)), "{err}");
+
+        let after = snapshot(&dir.path);
+        let changed: Vec<_> = after
+            .iter()
+            .filter(|(p, b)| before.get(*p) != Some(*b))
+            .map(|(p, _)| p.display().to_string())
+            .chain(
+                before
+                    .keys()
+                    .filter(|p| !after.contains_key(*p))
+                    .map(|p| p.display().to_string()),
+            )
+            .collect();
+        assert!(
+            changed.is_empty(),
+            "a failed batch must change nothing on disk, but these changed: {changed:?}"
+        );
+        assert_eq!(
+            store.load("demo").unwrap().feature(&f.code).unwrap().status,
+            "Planned"
+        );
+        assert_eq!(store.read_doc("demo", "notes/keep.md").unwrap(), "original");
+        assert!(store.read_doc("demo", "notes/new.md").is_err());
+    }
+
     fn ops(v: serde_json::Value) -> Vec<crate::batch::BatchOp> {
         serde_json::from_value(v).unwrap()
     }
