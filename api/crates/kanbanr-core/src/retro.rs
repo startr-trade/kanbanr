@@ -26,6 +26,8 @@ pub struct Wave {
     /// RFC3339 lower bound: items that finished, or joined, on or after this.
     pub since: Option<String>,
     pub label: Option<String>,
+    /// One sprint's items, including those it carried out unfinished (FEAT-119).
+    pub sprint: Option<String>,
 }
 
 impl Wave {
@@ -37,6 +39,9 @@ impl Wave {
         }
         if let Some(l) = &self.label {
             parts.push(format!("label {l}"));
+        }
+        if let Some(s) = &self.sprint {
+            parts.push(format!("sprint {s}"));
         }
         if let Some(s) = &self.since {
             parts.push(format!("since {}", s.get(..10).unwrap_or(s)));
@@ -97,6 +102,9 @@ pub struct Retro {
     /// lessons rows rather than copied into the document, so the scored record stays canonical —
     /// but a reader looking for "what did we learn" finds it where they look for it.
     pub lessons: Vec<crate::lessons::Lesson>,
+    /// The sprint's own report — committed, done, and its burndown — for a sprint retro.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprint: Option<serde_json::Value>,
 }
 
 /// Why the wave is bigger than it started. Each bucket is something an item *says* about itself.
@@ -149,7 +157,27 @@ pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
     // The whole log, not a window: this is the fallback for items that finished before transitions
     // were recorded, and asking for a bounded slice is what made it silently useless (FEAT-066).
     let moves = crate::activity::read_all(store.data_dir(), id);
-    let items: Vec<&FeatureItem> = project.features.iter().filter(|f| wave.covers(f)).collect();
+    // A sprint retro reads the sprint's own record: what it holds, and what it carried out
+    // unfinished, which it was committed to all the same (FEAT-119).
+    let sprint_report = match &wave.sprint {
+        Some(code) => Some(crate::sprints::report(
+            store,
+            id,
+            code,
+            crate::sprints::today(),
+        )?),
+        None => None,
+    };
+    let items: Vec<&FeatureItem> = project
+        .features
+        .iter()
+        .filter(|f| wave.covers(f))
+        .filter(|f| {
+            sprint_report
+                .as_ref()
+                .is_none_or(|r| r.items.contains(&f.code))
+        })
+        .collect();
 
     // The wave begins when work on it begins — the first recorded transition across its items,
     // NOT the earliest creation. Items planned together are created seconds apart, so measuring
@@ -181,6 +209,7 @@ pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
         evidence: Evidence::default(),
         estimates: Vec::new(),
         lessons: Vec::new(),
+        sprint: sprint_report.and_then(|r| serde_json::to_value(r).ok()),
     };
     let wave_codes: Vec<&str> = items.iter().map(|f| f.code.as_str()).collect();
     let mut cycle_times: Vec<f64> = Vec::new();

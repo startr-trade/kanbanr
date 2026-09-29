@@ -49,6 +49,8 @@ pub enum Check {
     /// Estimated in the project's unit — story points or days (FEAT-121). A Definition of Ready
     /// usually asks for it.
     Estimated,
+    /// Planned into the project's active sprint (FEAT-119).
+    InSprint,
     /// A named sign-off is recorded against the current definition. Asked for through a gate's
     /// `signoffs: [name]`, never listed on its own — it needs the name.
     Signoff,
@@ -122,11 +124,36 @@ pub fn signoff_gaps(feature: &FeatureItem, names: &[String]) -> Vec<Gap> {
 }
 
 /// The gaps of an item against a gate's conditions.
+/// What some checks need to know about the project beyond the item: the unit it estimates in, and
+/// its cadence (FEAT-121, FEAT-119).
+#[derive(Debug, Clone, Default)]
+pub struct Context {
+    pub unit: crate::config::EstimateUnit,
+    /// The sprint currently active, if the project uses sprints and one is.
+    pub active_sprint: Option<String>,
+}
+
+impl Context {
+    /// The context of a project, read from its config and side files.
+    pub fn load(store: &crate::Store, id: &str, config: &crate::ProjectConfig) -> Context {
+        Context {
+            unit: config.estimate_unit,
+            active_sprint: if config.cadence.sprints {
+                crate::sprints::load(store, id)
+                    .ok()
+                    .and_then(|s| crate::sprints::active(&s).map(|a| a.code.clone()))
+            } else {
+                None
+            },
+        }
+    }
+}
+
 pub fn evaluate_conditions(
     feature: &FeatureItem,
     goal_ids: Option<&std::collections::BTreeSet<String>>,
     conditions: &[Condition],
-    unit: crate::config::EstimateUnit,
+    ctx: &Context,
 ) -> Vec<Gap> {
     let checks: Vec<Check> = conditions
         .iter()
@@ -135,7 +162,7 @@ pub fn evaluate_conditions(
             Condition::Zachman { .. } => None,
         })
         .collect();
-    let mut gaps = evaluate_in_unit(feature, goal_ids, &checks, unit);
+    let mut gaps = evaluate_in(feature, goal_ids, &checks, ctx);
     let columns: Vec<String> = conditions
         .iter()
         .flat_map(|c| match c {
@@ -184,6 +211,7 @@ pub fn next_gates(
     project: &crate::store::Project,
     charter: Option<&crate::Charter>,
     feature: &FeatureItem,
+    ctx: &Context,
 ) -> Vec<NextGate> {
     let config = &project.config;
     let gates = config.effective_gates();
@@ -205,8 +233,7 @@ pub fn next_gates(
             if !gate.applies_to(feature.kind.as_deref()) {
                 return None;
             }
-            let unit = config.estimate_unit;
-            let mut gaps = evaluate_conditions(feature, goal_ids.as_ref(), &gate.requires, unit);
+            let mut gaps = evaluate_conditions(feature, goal_ids.as_ref(), &gate.requires, ctx);
             let signoffs = signoff_gaps(feature, &gate.signoffs);
             let signoffs_needed = gate
                 .signoffs
@@ -226,7 +253,7 @@ pub fn next_gates(
                 purpose: gate.purpose.clone(),
                 enforce: gate.enforce,
                 gaps,
-                warnings: evaluate_conditions(feature, goal_ids.as_ref(), &gate.warns, unit),
+                warnings: evaluate_conditions(feature, goal_ids.as_ref(), &gate.warns, ctx),
                 signoffs_needed,
             })
         })
@@ -334,15 +361,16 @@ pub fn evaluate(
     goal_ids: Option<&std::collections::BTreeSet<String>>,
     checks: &[Check],
 ) -> Vec<Gap> {
-    evaluate_in_unit(feature, goal_ids, checks, crate::config::EstimateUnit::Days)
+    evaluate_in(feature, goal_ids, checks, &Context::default())
 }
 
-/// As [`evaluate`], judging [`Check::Estimated`] in the project's unit.
-pub fn evaluate_in_unit(
+/// As [`evaluate`], judging the project-dependent checks ([`Check::Estimated`],
+/// [`Check::InSprint`]) against `ctx`.
+pub fn evaluate_in(
     feature: &FeatureItem,
     goal_ids: Option<&std::collections::BTreeSet<String>>,
     checks: &[Check],
-    unit: crate::config::EstimateUnit,
+    ctx: &Context,
 ) -> Vec<Gap> {
     let mut gaps = evaluate_definition(
         feature.definition.as_ref(),
@@ -355,7 +383,7 @@ pub fn evaluate_in_unit(
         .as_ref()
         .is_some_and(|d| !d.exempt.trim().is_empty());
     if checks.contains(&Check::Estimated) && !exempt {
-        let (has, what) = match unit {
+        let (has, what) = match ctx.unit {
             crate::config::EstimateUnit::Points => (feature.points.is_some(), "story points"),
             crate::config::EstimateUnit::Days => (feature.estimate_days.is_some(), "days"),
         };
@@ -366,6 +394,26 @@ pub fn evaluate_in_unit(
                 "not estimated",
                 format!("not estimated — this project estimates in {what}"),
             ));
+        }
+    }
+    if checks.contains(&Check::InSprint) && !exempt {
+        match ctx.active_sprint.as_deref() {
+            Some(active) if feature.sprint.as_deref() == Some(active) => {}
+            Some(active) => gaps.push(gap(
+                Check::InSprint,
+                None,
+                "not in the sprint",
+                format!(
+                    "not in the active sprint {active} — `kanbanr sprint plan {active} {}`",
+                    feature.code
+                ),
+            )),
+            None => gaps.push(gap(
+                Check::InSprint,
+                None,
+                "no active sprint",
+                "no sprint is active — `kanbanr sprint start <SP-…>`".to_string(),
+            )),
         }
     }
     gaps
@@ -531,6 +579,7 @@ fn item_level(
         | Check::Quality
         | Check::Small
         | Check::Estimated
+        | Check::InSprint
         | Check::Signoff => {}
     }
 }

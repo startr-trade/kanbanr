@@ -88,6 +88,9 @@ pub struct FeatureItem {
     /// `estimate_unit`; absent stays absent on disk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub points: Option<f64>,
+    /// The sprint this item is planned into (FEAT-119), for projects that use sprints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprint: Option<String>,
     /// Optional assignee (the person/agent owning this feature); free text.
     #[serde(default)]
     pub assignee: Option<String>,
@@ -599,6 +602,7 @@ impl FeatureItem {
             due: self.due.clone(),
             estimate_days: self.estimate_days,
             points: self.points,
+            sprint: self.sprint.clone(),
             assignee: self.assignee.clone(),
             team: self.team.clone(),
             labels: self.labels.clone(),
@@ -629,6 +633,7 @@ impl FeatureItem {
             due: meta.due,
             estimate_days: meta.estimate_days,
             points: meta.points,
+            sprint: meta.sprint,
             assignee: meta.assignee,
             team: meta.team,
             labels: meta.labels,
@@ -667,6 +672,8 @@ pub struct FeatureMeta {
     pub estimate_days: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub points: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprint: Option<String>,
     #[serde(default)]
     pub assignee: Option<String>,
     #[serde(default)]

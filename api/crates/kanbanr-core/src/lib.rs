@@ -33,6 +33,7 @@ pub mod readiness;
 pub mod report;
 pub mod retro;
 pub mod scm;
+pub mod sprints;
 pub mod store;
 pub mod trace;
 pub mod validate;
@@ -1847,6 +1848,172 @@ requirements:
         );
     }
 
+    /// A project with sprints and points switched on, and three estimated items.
+    fn sprint_board() -> (Store, tempdir::TempDirLike, Vec<String>) {
+        use serde_json::json;
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&json!({"sprints": true, "estimate_unit": "points"})),
+        )
+        .unwrap();
+        let mut codes = Vec::new();
+        for (title, points) in [("A", 3.0), ("B", 5.0), ("C", 8.0)] {
+            let f = store.add_feature("demo", title, "", "M", None).unwrap();
+            store.set_feature_points("demo", &f.code, points).unwrap();
+            codes.push(f.code);
+        }
+        (store, d, codes)
+    }
+
+    /// FEAT-119 R-3: planning past capacity is said, not refused — the capacity is a guess.
+    #[test]
+    fn sprint_planning_warns_over_capacity() {
+        let (store, _d, codes) = sprint_board();
+        let sp = crate::sprints::add(
+            &store,
+            "demo",
+            "2026-10-05",
+            Some(14),
+            "Ship cart",
+            Some(10.0),
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            (sp.code.as_str(), sp.end.as_str()),
+            ("SP-001", "2026-10-18")
+        );
+        let under = crate::sprints::plan(&store, "demo", &sp.code, &codes[..2]).unwrap();
+        assert_eq!(under.committed, 8.0);
+        assert!(under.over_capacity.is_none());
+        let over = crate::sprints::plan(&store, "demo", &sp.code, &codes[2..]).unwrap();
+        assert_eq!(over.committed, 16.0);
+        assert!(
+            over.over_capacity
+                .unwrap()
+                .contains("16 points against a capacity of 10")
+        );
+        assert_eq!(
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&codes[2])
+                .unwrap()
+                .sprint
+                .as_deref(),
+            Some("SP-001"),
+            "it was planned all the same"
+        );
+    }
+
+    /// FEAT-119 R-1: closing a sprint moves what it did not finish on, and says so on the sprint.
+    #[test]
+    fn closing_a_sprint_carries_unfinished_work() {
+        let (store, _d, codes) = sprint_board();
+        let one = crate::sprints::add(&store, "demo", "2026-10-05", None, "", None, "").unwrap();
+        let two = crate::sprints::add(&store, "demo", "2026-10-19", None, "", None, "").unwrap();
+        crate::sprints::plan(&store, "demo", &one.code, &codes).unwrap();
+        crate::sprints::start(&store, "demo", &one.code).unwrap();
+        // Only one sprint runs at a time.
+        assert!(crate::sprints::start(&store, "demo", &two.code).is_err());
+        store.move_feature("demo", &codes[0], "Scheduled").unwrap();
+        store.move_feature("demo", &codes[0], "Completed").unwrap();
+
+        let closed = crate::sprints::close(&store, "demo", &one.code, Some(&two.code)).unwrap();
+        assert_eq!(closed.state, crate::sprints::SprintState::Closed);
+        let carried: Vec<&str> = closed.carried.iter().map(|c| c.code.as_str()).collect();
+        assert_eq!(carried, [codes[1].as_str(), codes[2].as_str()]);
+        assert!(closed.carried.iter().all(|c| c.to == two.code));
+        let project = store.load("demo").unwrap();
+        assert_eq!(
+            project.feature(&codes[0]).unwrap().sprint.as_deref(),
+            Some("SP-001"),
+            "done stays"
+        );
+        assert_eq!(
+            project.feature(&codes[1]).unwrap().sprint.as_deref(),
+            Some("SP-002")
+        );
+        // Planning into a closed sprint is refused; the next one can start now.
+        assert!(crate::sprints::plan(&store, "demo", &one.code, &codes[..1]).is_err());
+        crate::sprints::start(&store, "demo", &two.code).unwrap();
+        // Carrying to the backlog clears the sprint.
+        let back = crate::sprints::close(&store, "demo", &two.code, Some("backlog")).unwrap();
+        assert!(back.carried.iter().all(|c| c.to == "backlog"));
+        assert_eq!(
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&codes[1])
+                .unwrap()
+                .sprint,
+            None
+        );
+    }
+
+    /// FEAT-119 R-2: the burndown is read off the moves the items recorded — nothing is stored.
+    #[test]
+    fn burndown_is_derived_from_history() {
+        let (store, _d, codes) = sprint_board();
+        let sp = crate::sprints::add(&store, "demo", "2026-10-05", Some(5), "", None, "").unwrap();
+        crate::sprints::plan(&store, "demo", &sp.code, &codes).unwrap();
+        crate::sprints::start(&store, "demo", &sp.code).unwrap();
+        // Record two finishes on known days, as the move history would.
+        for (code, day) in [
+            (&codes[0], "2026-10-06T10:00:00Z"),
+            (&codes[1], "2026-10-08T16:00:00Z"),
+        ] {
+            store.move_feature("demo", code, "Scheduled").unwrap();
+            store.move_feature("demo", code, "Completed").unwrap();
+            let mut f = store.load("demo").unwrap().feature(code).unwrap().clone();
+            f.history.last_mut().unwrap().at = day.to_string();
+            store.persist_feature_for_test("demo", &f).unwrap();
+        }
+        let date = |s: &str| crate::gantt::parse_ymd(s).unwrap();
+        let r = crate::sprints::report(&store, "demo", &sp.code, date("2026-10-09")).unwrap();
+        assert_eq!(r.committed, 16.0);
+        let remaining: Vec<f64> = r.burndown.iter().map(|d| d.remaining).collect();
+        assert_eq!(
+            remaining,
+            [16.0, 13.0, 13.0, 8.0, 8.0],
+            "day by day, from the recorded moves"
+        );
+        assert_eq!(r.done, 8.0);
+        assert_eq!(r.days_left, 1, "the ninth is the last day");
+        assert!(r.unestimated.is_empty());
+    }
+
+    /// FEAT-119 R-4: velocity appears in the report only where the project uses sprints.
+    #[test]
+    fn burn_rate_reports_only_where_sprints_are_on() {
+        let (store, _d) = temp_store();
+        new_project(&store, "plain");
+        let window = crate::report::Window::default();
+        let plain = crate::report::run(&store, "plain", &window, None).unwrap();
+        assert!(plain.velocity.is_none());
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("velocity"), "{json}");
+        // And a sprint of any kind is refused there, with the switch named.
+        let err = crate::sprints::add(&store, "plain", "2026-10-05", None, "", None, "")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--sprints on"), "{err}");
+
+        let (store, _d, codes) = sprint_board();
+        let sp = crate::sprints::add(&store, "demo", "2026-10-05", None, "", None, "").unwrap();
+        crate::sprints::plan(&store, "demo", &sp.code, &codes[..1]).unwrap();
+        store.move_feature("demo", &codes[0], "Scheduled").unwrap();
+        store.move_feature("demo", &codes[0], "Completed").unwrap();
+        crate::sprints::start(&store, "demo", &sp.code).unwrap();
+        crate::sprints::close(&store, "demo", &sp.code, None).unwrap();
+        let with = crate::report::run(&store, "demo", &window, None).unwrap();
+        assert_eq!(with.velocity, Some(vec![("SP-001".to_string(), 3.0)]));
+    }
+
     /// FEAT-121 R-1: "estimated" means estimated in the unit the project plans in — story points
     /// for a points project, days otherwise.
     #[test]
@@ -1869,7 +2036,11 @@ requirements:
                 .clone()
         };
         let lacks = |unit| {
-            !crate::readiness::evaluate_conditions(&item(&store), None, &estimated, unit).is_empty()
+            let ctx = crate::readiness::Context {
+                unit,
+                ..Default::default()
+            };
+            !crate::readiness::evaluate_conditions(&item(&store), None, &estimated, &ctx).is_empty()
         };
         use crate::config::EstimateUnit::{Days, Points};
         assert!(!lacks(Days), "two days is an estimate in days");

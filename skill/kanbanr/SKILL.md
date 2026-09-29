@@ -646,6 +646,10 @@ kanbanr config workflow --preset <name> | --from-file process.yaml | (--statuses
 kanbanr config workflow --preset list             # what each preset is
 kanbanr config cadence --sprints on --releases on --unit points   # only for projects that work in sprints
 kanbanr feature edit FEAT-001 --points 5          # a story-point estimate (--estimate is days)
+kanbanr sprint add --start 2026-10-05 --length 2w --goal "…" [--capacity 20]
+kanbanr sprint plan SP-001 FEAT-001 FEAT-002      # warns over capacity
+kanbanr sprint start SP-001 | show [SP-001] | list | close SP-001 --carry-to SP-002|backlog
+kanbanr retro --sprint SP-001                     # the sprint's items, what it carried, its burndown
 kanbanr config workflow --export > process.yaml   # this project's workflow, gates included
 
 A phased process (togaf, pdca, design-control) or the organisation's own is **a workflow with

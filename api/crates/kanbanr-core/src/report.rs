@@ -38,6 +38,10 @@ pub struct Report {
     pub requirement_coverage: Coverage,
     /// Items whose green test evidence predates the current project revision.
     pub stale_evidence: Vec<String>,
+    /// What each closed sprint finished, in the project's unit (FEAT-119). Absent where the project
+    /// does not use sprints: a burn rate for a project with no sprints is a number about nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub velocity: Option<Vec<(String, f64)>>,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -148,6 +152,7 @@ pub fn run(store: &Store, id: &str, window: &Window, head_rev: Option<&str>) -> 
         escaped_defects: escaped,
         requirement_coverage: coverage,
         stale_evidence,
+        velocity: crate::sprints::velocity(store, id)?,
     })
 }
 
