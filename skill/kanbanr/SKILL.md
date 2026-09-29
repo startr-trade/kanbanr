@@ -650,6 +650,16 @@ A phased process (togaf, pdca, design-control) or the organisation's own is **a 
 gates**. The phase IS the status; there is no second field. Offer one only if the user asks for
 phases: it is a real commitment, the default suits most work, and it cannot be changed casually
 once items are in flight.
+
+Under a phased process, grow an item's definition stage by stage.
+- **Before each move,** run `kanbanr check <CODE>`. It names what the next stage needs: fill in
+  that, and not everything at once.
+- **Approval is renewed as the definition grows.** Each change lapses the approval, so ask the
+  user to approve again before the move.
+- **A sign-off (`kanbanr signoff`) is the user's**, like an approval: ask for it, never record it
+  yourself.
+- **Overrides:** `--override "<reason>"` gets past a gate on the record. Use it only when the
+  user says so.
 ```
 
 Feature items (a milestone is REQUIRED; code auto-generates):
