@@ -2335,3 +2335,103 @@ fn init_refuses_to_repoint_a_folder_that_already_has_a_board() {
     );
     assert!(std::fs::read_to_string(&marker).unwrap().contains("beta"));
 }
+
+/// FEAT-105 R-2/R-3: a repository with no commits. `git init` made `master`; the rules must call
+/// that the default (not an assumed `main`), let the root commit land there, and have `start`
+/// refuse to branch from nothing — then behave exactly as usual once the first commit exists.
+#[test]
+fn cli_the_first_commit_of_a_new_repo_is_allowed() {
+    let base = std::env::temp_dir().join(format!("kanbanr-unborn-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("fresh");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let git = |args: &[&str]| -> Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .output()
+            .expect("run git")
+    };
+    let exec = |args: &[&str]| -> Output {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    };
+    let run = |args: &[&str]| -> String {
+        let o = exec(args);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    assert!(git(&["init", "--initial-branch=master"]).status.success());
+    run(&[
+        "init",
+        "fresh",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "First",
+        "--milestone",
+        "MS-001",
+    ]);
+
+    let status = run(&["git", "status"]);
+    assert!(status.contains("default: master"), "{status}");
+
+    // R-3: nothing to branch from yet, so start says what to do instead of making an orphan.
+    let early = exec(&["start", "FEAT-001", "--unapproved", "test"]);
+    assert!(!early.status.success());
+    let why = String::from_utf8_lossy(&early.stderr);
+    assert!(
+        why.contains("no commits yet") && why.contains("master"),
+        "{why}"
+    );
+
+    // R-2: the root commit may land on the default branch.
+    assert!(exec(&["git", "check-branch"]).status.success());
+    assert!(
+        git(&[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit"
+        ])
+        .status
+        .success()
+    );
+
+    // With a commit in place the ordinary rules are back: the default branch is refused again,
+    // and start branches from it.
+    assert!(!exec(&["git", "check-branch"]).status.success());
+    let started = run(&["start", "FEAT-001", "--unapproved", "test"]);
+    assert!(started.contains("from master"), "{started}");
+    let _ = std::fs::remove_dir_all(&base);
+}
