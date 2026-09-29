@@ -2248,6 +2248,17 @@ requirements:
                 }),
             )
             .unwrap();
+        // An item with no definition at all is not Ready either — the gate never names
+        // `definition`, and that must not let it through.
+        let bare = store
+            .add_feature("team", "Undefined", "", "M", None)
+            .unwrap();
+        store.set_feature_points("team", &bare.code, 1.0).unwrap();
+        let err = store
+            .move_feature_approved("team", &bare.code, "Ready", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no definition"), "{err}");
         // The Definition of Ready asks for an estimate in points.
         let err = store
             .move_feature_approved("team", &f.code, "Ready", None)
