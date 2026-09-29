@@ -197,6 +197,12 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **Work finished under a recorded bypass couldn't be ratified from the monitor (FEAT-109).**
+  `doctor` was the only place it appeared, and `kanbanr ratify` the only way to agree to it. It now
+  heads the Review page with a **Ratify** button, chosen with the same rule `doctor` uses.
+- **The commit guard read heredoc bodies as commands (FEAT-108).** A script that only *mentioned*
+  `git commit` was refused. Heredoc bodies are now skipped. A real commit on the same line is
+  still checked.
 - **Setup interview gaps from its first real run (FEAT-106).** The skill now gives the charter's
   exact fields (`statement`, not `outcome`), checks that non-goals are non-goals, plans
   `git init` plus an initial commit for a folder that isn't a repository, and ends by saying how

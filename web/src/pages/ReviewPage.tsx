@@ -37,12 +37,21 @@ export default function ReviewPage() {
   const who = api.approver(meta.data ?? null);
   const writable = meta.data?.writes === true && who != null;
 
-  const approve = async (code: string) => {
+  // One verdict per item, and which one follows from how it got here: work built under a recorded
+  // bypass is ratified — agreed after the fact, and recorded as such (FEAT-109) — anything else is
+  // approved before the work.
+  const agree = async (item: PendingReview) => {
     if (!who) return;
+    const code = item.code;
     setBusy(code);
     try {
-      await api.approve(project, code, who);
-      setDone((d) => ({ ...d, [code]: "approved" }));
+      if (item.approval === "unratified") {
+        await api.ratify(project, code, who);
+        setDone((d) => ({ ...d, [code]: "ratified" }));
+      } else {
+        await api.approve(project, code, who);
+        setDone((d) => ({ ...d, [code]: "approved" }));
+      }
     } catch (e) {
       setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
     } finally {
@@ -67,6 +76,9 @@ export default function ReviewPage() {
         <p className="muted">
           {items.length} item{items.length === 1 ? "" : "s"} waiting. Approving records agreement
           pinned to the definition below: change it afterwards and the approval lapses.
+          {items.some((i) => i.approval === "unratified")
+            ? " Work already finished under a recorded bypass is listed first, to ratify."
+            : null}
           {meta.data?.writes !== true ? (
             <>
               {" "}
@@ -101,7 +113,7 @@ export default function ReviewPage() {
           // The first is open so the page shows what a brief looks like; the rest are collapsed,
           // because a queue of twelve read as one unbroken column (FEAT-076).
           defaultOpen={i === 0}
-          onApprove={() => approve(item.code)}
+          onApprove={() => agree(item)}
         />
       ))}
     </div>
@@ -128,7 +140,9 @@ function Brief({
   const def = item.definition ?? {};
   const requirements = def.requirements ?? [];
   const dimensions = zachmanColumns(def.zachman).filter((d) => d.answer.trim());
-  const approved = outcome === "approved";
+  const ratify = item.approval === "unratified";
+  const verb = ratify ? "Ratify" : "Approve";
+  const approved = outcome === "approved" || outcome === "ratified";
 
   return (
     <details className="review-item" id={item.code} open={defaultOpen}>
@@ -136,10 +150,14 @@ function Brief({
       <summary>
         <code className="taskkey">{item.code}</code>
         <span className="review-title">{item.title}</span>
-        <span className={`chip ${item.approval === "lapsed" ? "warn" : ""}`}>
-          {item.approval === "lapsed" ? "approval lapsed" : "never approved"}
+        <span className={`chip ${item.approval === "missing" ? "" : "warn"}`}>
+          {ratify
+            ? `${item.status} without agreement`
+            : item.approval === "lapsed"
+              ? "approval lapsed"
+              : "never approved"}
         </span>
-        {approved ? <span className="chip done">approved</span> : null}
+        {approved ? <span className="chip done">{outcome}</span> : null}
       </summary>
 
       <div className="review-body">
@@ -149,7 +167,9 @@ function Brief({
         </Link>
         {item.approval === "lapsed"
           ? " · approved once, then the definition changed — agreeing again covers what it says now"
-          : null}
+          : ratify
+            ? " · built under a recorded bypass — ratifying agrees to it after the fact, and the record says so"
+            : null}
       </p>
 
       {def.statement ? <Markdown source={`> ${def.statement}`} /> : null}
@@ -210,13 +230,15 @@ function Brief({
       {/* The action lives in the body, not the summary: approving should follow reading. */}
       <div className="review-actions">
         {approved ? (
-          <span className="chip done">approved — it leaves this list on the next refresh</span>
+          <span className="chip done">{outcome} — it leaves this list on the next refresh</span>
         ) : writable ? (
           <button className="btn btn-primary" onClick={onApprove} disabled={busy}>
-            {busy ? "recording…" : `Approve ${item.code}`}
+            {busy ? "recording…" : `${verb} ${item.code}`}
           </button>
         ) : (
-          <code>kanbanr approve {item.code}</code>
+          <code>
+            kanbanr {verb.toLowerCase()} {item.code}
+          </code>
         )}
         {outcome && !approved ? <span className="chip warn">{outcome}</span> : null}
       </div>

@@ -328,7 +328,7 @@ fn push(
 /// Answered means agreed to — before the work (`approved`) or after it (`ratified`). A lapsed
 /// approval is not an answer: the definition changed, so the agreement no longer covers what was
 /// built, and the question is open again.
-fn unreconciled_bypass(def: &crate::models::FeatureDefinition) -> bool {
+pub(crate) fn unreconciled_bypass(def: &crate::models::FeatureDefinition) -> bool {
     use crate::models::ApprovalState::{Current, Ratified};
     !def.started_unapproved.trim().is_empty() && !matches!(def.approval_state(), Current | Ratified)
 }

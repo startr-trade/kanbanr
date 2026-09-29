@@ -54,6 +54,8 @@ export const api = {
    */
   approve: (id: string, code: string, by: string) =>
     verdict(id, code, "approve", { by }, "approve"),
+  /** Agree after the fact to work built under a recorded bypass (FEAT-109). */
+  ratify: (id: string, code: string, by: string) => verdict(id, code, "ratify", { by }, "ratify"),
   unapprove: (id: string, code: string, by: string, reason: string) =>
     verdict(id, code, "unapprove", { by, reason }, "withdraw"),
   /**
@@ -100,7 +102,7 @@ export type Meta = {
 async function verdict(
   id: string,
   code: string,
-  action: "approve" | "unapprove",
+  action: "approve" | "unapprove" | "ratify",
   body: Record<string, string>,
   verb: string,
 ) {
