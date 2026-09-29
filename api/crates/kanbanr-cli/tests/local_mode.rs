@@ -2459,3 +2459,96 @@ fn cli_the_first_commit_of_a_new_repo_is_allowed() {
     assert!(started.contains("from master"), "{started}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-103: in a folder nothing has set up, looking must not create a board. Every read used to
+/// leave `./data/projects` behind — one did so in a project during its read-only setup interview.
+/// Hook commands stay silent there, and an existing legacy `./data` board keeps working.
+#[test]
+fn cli_reads_in_an_untracked_folder_create_nothing() {
+    let base = std::env::temp_dir().join(format!("kanbanr-noboard-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("plain");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let exec = |args: &[&str], stdin: &str| -> Output {
+        use std::io::Write;
+        let mut child = Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("run kanbanr CLI");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let listing = || -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(&work)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+
+    // R-1: reads refuse, say how to get a board, and leave the folder as they found it.
+    for args in [
+        &["whoami"][..],
+        &["board"],
+        &["feature", "list"],
+        &["charter", "show"],
+        &["doctor"],
+    ] {
+        let out = exec(args, "");
+        assert!(!out.status.success(), "{args:?} should report no board");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("no kanbanr board here") && err.contains("kanbanr init"),
+            "{args:?}: {err}"
+        );
+        assert!(listing().is_empty(), "{args:?} created {:?}", listing());
+    }
+    // Hooks run in every folder: silent, successful, and still writing nothing.
+    for args in [&["capture"][..], &["git", "guard"], &["claude", "guard"]] {
+        let out = exec(args, "{}");
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(listing().is_empty(), "{args:?} created {:?}", listing());
+    }
+
+    // R-2: a legacy ./data board that already exists is still read.
+    let legacy = Command::new(cli())
+        .args(["--data-dir", "data", "project", "init", "plain"])
+        .current_dir(&work)
+        .env("HOME", &home)
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .output()
+        .unwrap();
+    assert!(
+        legacy.status.success(),
+        "{}",
+        String::from_utf8_lossy(&legacy.stderr)
+    );
+    let out = exec(&["board"], "");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
