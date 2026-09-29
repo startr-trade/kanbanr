@@ -614,6 +614,9 @@ enum FeatureCmd {
         /// Estimated effort in days (used as the Gantt/scheduling duration; default 1).
         #[arg(long)]
         estimate: Option<f64>,
+        /// Estimated size in story points (FEAT-121; a value <= 0 clears it).
+        #[arg(long)]
+        points: Option<f64>,
         /// Assignee (the person/agent owning this feature).
         #[arg(long)]
         assignee: Option<String>,
@@ -671,6 +674,9 @@ enum FeatureCmd {
         /// Estimated effort in days (a value <= 0 clears it).
         #[arg(long)]
         estimate: Option<f64>,
+        /// Estimated size in story points (FEAT-121; a value <= 0 clears it).
+        #[arg(long)]
+        points: Option<f64>,
         /// Assignee (empty string clears).
         #[arg(long)]
         assignee: Option<String>,
@@ -756,6 +762,25 @@ enum MilestoneCmd {
 #[derive(Subcommand)]
 enum ConfigCmd {
     Show,
+    /// Whether this project works in sprints and releases, and what it estimates in (FEAT-121).
+    /// Both are off unless switched on — most projects follow a different rhythm.
+    Cadence {
+        /// Use sprints (and burndown and velocity): on | off.
+        #[arg(long, value_parser = ["on", "off"])]
+        sprints: Option<String>,
+        /// Use releases: on | off.
+        #[arg(long, value_parser = ["on", "off"])]
+        releases: Option<String>,
+        /// Estimate in `days` or `points`.
+        #[arg(long, value_parser = ["days", "points"])]
+        unit: Option<String>,
+        /// The sprint length `sprint add` uses by default, in days.
+        #[arg(long)]
+        sprint_length: Option<u32>,
+        /// How often a release is cut: per_sprint | every_n | on_demand.
+        #[arg(long)]
+        release: Option<String>,
+    },
     SetTransition(SetTransitionArgs),
     DisplayedStates {
         #[arg(value_delimiter = ',')]
@@ -5517,6 +5542,7 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             start,
             due,
             estimate,
+            points,
             assignee,
             team,
             labels,
@@ -5533,6 +5559,7 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                 ("start", start.clone().map(|s| json!(s))),
                 ("due", due.clone().map(|d| json!(d))),
                 ("estimate_days", estimate.map(|e| json!(e))),
+                ("points", points.map(|e| json!(e))),
                 ("assignee", assignee.clone().map(|a| json!(a))),
                 ("team", team.clone().map(|t| json!(t))),
                 ("labels", labels.clone().map(|l| json!(l))),
@@ -5676,6 +5703,7 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             start,
             due,
             estimate,
+            points,
             assignee,
             team,
             labels,
@@ -5692,6 +5720,7 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                 ("start", start.clone().map(|s| json!(s))),
                 ("due", due.clone().map(|d| json!(d))),
                 ("estimate_days", estimate.map(|e| json!(e))),
+                ("points", points.map(|e| json!(e))),
                 ("assignee", assignee.clone().map(|a| json!(a))),
                 ("team", team.clone().map(|t| json!(t))),
                 ("labels", labels.clone().map(|l| json!(l))),
@@ -5912,6 +5941,47 @@ fn run_milestone(cli: &Cli, client: &Backend, cmd: &MilestoneCmd) -> anyhow::Res
 fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     match cmd {
+        ConfigCmd::Cadence {
+            sprints,
+            releases,
+            unit,
+            sprint_length,
+            release,
+        } => {
+            let body = obj(vec![
+                ("sprints", sprints.as_deref().map(|v| json!(v == "on"))),
+                ("releases", releases.as_deref().map(|v| json!(v == "on"))),
+                ("estimate_unit", unit.clone().map(|u| json!(u))),
+                ("sprint_length_days", sprint_length.map(|d| json!(d))),
+                ("release", release.clone().map(|r| json!(r))),
+            ]);
+            let resp = client.write(
+                Method::Put,
+                &format!("/projects/{p}/config/cadence"),
+                Some(body),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            let c = &v["cadence"];
+            print_write(
+                cli,
+                &resp,
+                format!(
+                    "sprints {}, releases {}, estimates in {}",
+                    if c["sprints"].as_bool().unwrap_or(false) {
+                        "on"
+                    } else {
+                        "off"
+                    },
+                    if c["releases"].as_bool().unwrap_or(false) {
+                        "on"
+                    } else {
+                        "off"
+                    },
+                    v["estimate_unit"].as_str().unwrap_or("days")
+                ),
+            );
+            Ok(())
+        }
         ConfigCmd::Show => {
             let project = get_project(client, &p)?;
             let c = &project.config;

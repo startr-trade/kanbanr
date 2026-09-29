@@ -46,6 +46,9 @@ pub enum Check {
     Quality,
     /// INVEST "Small": not estimated above three days.
     Small,
+    /// Estimated in the project's unit — story points or days (FEAT-121). A Definition of Ready
+    /// usually asks for it.
+    Estimated,
     /// A named sign-off is recorded against the current definition. Asked for through a gate's
     /// `signoffs: [name]`, never listed on its own — it needs the name.
     Signoff,
@@ -123,6 +126,7 @@ pub fn evaluate_conditions(
     feature: &FeatureItem,
     goal_ids: Option<&std::collections::BTreeSet<String>>,
     conditions: &[Condition],
+    unit: crate::config::EstimateUnit,
 ) -> Vec<Gap> {
     let checks: Vec<Check> = conditions
         .iter()
@@ -131,7 +135,7 @@ pub fn evaluate_conditions(
             Condition::Zachman { .. } => None,
         })
         .collect();
-    let mut gaps = evaluate(feature, goal_ids, &checks);
+    let mut gaps = evaluate_in_unit(feature, goal_ids, &checks, unit);
     let columns: Vec<String> = conditions
         .iter()
         .flat_map(|c| match c {
@@ -201,7 +205,8 @@ pub fn next_gates(
             if !gate.applies_to(feature.kind.as_deref()) {
                 return None;
             }
-            let mut gaps = evaluate_conditions(feature, goal_ids.as_ref(), &gate.requires);
+            let unit = config.estimate_unit;
+            let mut gaps = evaluate_conditions(feature, goal_ids.as_ref(), &gate.requires, unit);
             let signoffs = signoff_gaps(feature, &gate.signoffs);
             let signoffs_needed = gate
                 .signoffs
@@ -221,7 +226,7 @@ pub fn next_gates(
                 purpose: gate.purpose.clone(),
                 enforce: gate.enforce,
                 gaps,
-                warnings: evaluate_conditions(feature, goal_ids.as_ref(), &gate.warns),
+                warnings: evaluate_conditions(feature, goal_ids.as_ref(), &gate.warns, unit),
                 signoffs_needed,
             })
         })
@@ -329,12 +334,41 @@ pub fn evaluate(
     goal_ids: Option<&std::collections::BTreeSet<String>>,
     checks: &[Check],
 ) -> Vec<Gap> {
-    evaluate_definition(
+    evaluate_in_unit(feature, goal_ids, checks, crate::config::EstimateUnit::Days)
+}
+
+/// As [`evaluate`], judging [`Check::Estimated`] in the project's unit.
+pub fn evaluate_in_unit(
+    feature: &FeatureItem,
+    goal_ids: Option<&std::collections::BTreeSet<String>>,
+    checks: &[Check],
+    unit: crate::config::EstimateUnit,
+) -> Vec<Gap> {
+    let mut gaps = evaluate_definition(
         feature.definition.as_ref(),
         feature.estimate_days,
         goal_ids,
         checks,
-    )
+    );
+    let exempt = feature
+        .definition
+        .as_ref()
+        .is_some_and(|d| !d.exempt.trim().is_empty());
+    if checks.contains(&Check::Estimated) && !exempt {
+        let (has, what) = match unit {
+            crate::config::EstimateUnit::Points => (feature.points.is_some(), "story points"),
+            crate::config::EstimateUnit::Days => (feature.estimate_days.is_some(), "days"),
+        };
+        if !has {
+            gaps.push(gap(
+                Check::Estimated,
+                None,
+                "not estimated",
+                format!("not estimated — this project estimates in {what}"),
+            ));
+        }
+    }
+    gaps
 }
 
 /// The gaps of a definition on its own, as `check --file` has it.
@@ -496,6 +530,7 @@ fn item_level(
         | Check::TestsGreen
         | Check::Quality
         | Check::Small
+        | Check::Estimated
         | Check::Signoff => {}
     }
 }

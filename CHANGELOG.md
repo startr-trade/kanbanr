@@ -197,6 +197,14 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **Story points and cadence switches (FEAT-121).**
+  - Items can carry `points` beside `estimate_days` (`--points` on `feature add` and `feature
+    edit`).
+  - A project chooses its unit with `kanbanr config cadence --unit points`. A new `estimated`
+    check judges estimates in that unit, and a Definition of Ready can require it.
+  - Sprints and releases are **off unless switched on** (`kanbanr config cadence --sprints on
+    --releases on`), because most projects follow a different rhythm. A project that never
+    switches them on carries no cadence at all on disk.
 - **Processes are documented, and the decision recorded (FEAT-118).** A new book chapter,
   *Processes: presets, gates and sign-offs*, covers the presets, the gate fields, every check, how
   sign-offs work, how a definition grows stage by stage, a worked PDCA example, and how to write

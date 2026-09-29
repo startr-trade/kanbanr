@@ -558,6 +558,7 @@ impl Store {
             start: None,
             due: None,
             estimate_days: None,
+            points: None,
             assignee: None,
             team: None,
             labels: Vec::new(),
@@ -1242,11 +1243,12 @@ impl Store {
             return Ok(pass);
         }
         let goal_ids = charter.goal_ids();
+        let unit = project.config.estimate_unit;
         let mut failing =
-            crate::readiness::evaluate_conditions(feature, Some(&goal_ids), &gate.requires);
+            crate::readiness::evaluate_conditions(feature, Some(&goal_ids), &gate.requires, unit);
         failing.extend(crate::readiness::signoff_gaps(feature, &gate.signoffs));
         let mut warnings =
-            crate::readiness::evaluate_conditions(feature, Some(&goal_ids), &gate.warns);
+            crate::readiness::evaluate_conditions(feature, Some(&goal_ids), &gate.warns, unit);
         if failing.is_empty() {
             return Ok(GateOutcome { warnings });
         }
@@ -2424,6 +2426,63 @@ impl Store {
         Ok(())
     }
 
+    /// Set an item's story-point estimate (FEAT-121); `0` or less clears it.
+    pub fn set_feature_points(&self, id: &str, code: &str, points: f64) -> Result<FeatureItem> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let feature = project.feature_mut(code)?;
+        feature.points = (points > 0.0).then_some(points);
+        feature.updated_at = now_rfc3339();
+        let updated = feature.clone();
+        pending.persist_features.insert(updated.code.clone());
+        self.flush(id, &project, &pending)?;
+        Ok(updated)
+    }
+
+    /// Set what a project estimates in and whether it has sprints and releases (FEAT-121).
+    pub fn set_cadence(
+        &self,
+        id: &str,
+        unit: Option<crate::config::EstimateUnit>,
+        cadence: crate::config::Cadence,
+    ) -> Result<ProjectConfig> {
+        let mut project = self.load(id)?;
+        if let Some(release) = cadence.release.as_deref()
+            && !["per_sprint", "every_n", "on_demand"].contains(&release)
+        {
+            return Err(CoreError::Unsupported(format!(
+                "release cadence '{release}' is not one of per_sprint, every_n, on_demand"
+            )));
+        }
+        if let Some(unit) = unit {
+            project.config.estimate_unit = unit;
+        }
+        project.config.cadence = cadence;
+        self.save_config(id, &project.config)?;
+        Ok(project.config)
+    }
+
+    /// Refuse sprint or release work on a project that has not switched it on (FEAT-121). Most
+    /// projects follow a different rhythm; the refusal names the one line that turns it on.
+    pub fn require_cadence(project: &Project, what: Capability) -> Result<()> {
+        let on = match what {
+            Capability::Sprints => project.config.cadence.sprints,
+            Capability::Releases => project.config.cadence.releases,
+        };
+        if on {
+            return Ok(());
+        }
+        let (name, flag) = match what {
+            Capability::Sprints => ("sprints", "--sprints on"),
+            Capability::Releases => ("releases", "--releases on"),
+        };
+        Err(CoreError::Unsupported(format!(
+            "{} does not use {name}. Switch them on with `kanbanr config cadence {flag}` \
+             (the scrum and agile presets do this for you).",
+            project.id
+        )))
+    }
+
     pub fn set_default_state(&self, id: &str, state: &str) -> Result<ProjectConfig> {
         let mut project = self.load(id)?;
         if !project.config.has_status(state) {
@@ -2868,4 +2927,11 @@ struct DocSnapshot {
 struct GateOutcome {
     /// Reported, not enforced: the gate's `warns`, a `warn` gate's gaps, or what an override passed.
     warnings: Vec<crate::readiness::Gap>,
+}
+
+/// A part of the cadence a project can switch on (FEAT-121).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capability {
+    Sprints,
+    Releases,
 }

@@ -644,6 +644,8 @@ kanbanr config default-state Planned
 kanbanr config no-op-states "No Action,Not Applicable,Out-of-Scope"   # inert dispositions
 kanbanr config workflow --preset <name> | --from-file process.yaml | (--statuses … --transitions "A>B" --default-state … --displayed-states … --no-op-states …)
 kanbanr config workflow --preset list             # what each preset is
+kanbanr config cadence --sprints on --releases on --unit points   # only for projects that work in sprints
+kanbanr feature edit FEAT-001 --points 5          # a story-point estimate (--estimate is days)
 kanbanr config workflow --export > process.yaml   # this project's workflow, gates included
 
 A phased process (togaf, pdca, design-control) or the organisation's own is **a workflow with

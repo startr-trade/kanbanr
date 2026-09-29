@@ -84,6 +84,7 @@ board.
 | `bypass` | a recorded override has been answered |
 | `goals_known` | every linked goal exists in the charter |
 | `small` | not estimated above three days |
+| `estimated` | estimated in the project's unit: story points or days (`kanbanr config cadence --unit points`) |
 
 An unknown check, an unknown status or an unknown Zachman column is refused when the workflow is
 saved. A gate that could never match is a guardrail that silently isn't there.
