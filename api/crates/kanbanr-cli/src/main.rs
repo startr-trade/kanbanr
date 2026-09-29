@@ -1073,6 +1073,25 @@ fn main() -> ExitCode {
     }
 }
 
+/// The legacy `./data` path, when that fallback is all that resolved and nothing is there — the
+/// one case where opening the board would *create* it. An explicit `--data-dir` or
+/// `$KANBANR_DATA_DIR` is a request for that folder, so it is created as before.
+fn no_board_here(cli: &Cli) -> Option<PathBuf> {
+    let resolved = project::resolve_data_dir_detailed(cli.data_dir.as_deref());
+    (resolved.source == project::DataDirSource::Default && !resolved.path.exists())
+        .then_some(resolved.path)
+}
+
+/// The commands Claude Code and git hooks run on every tool call or commit, in any folder.
+fn runs_from_a_hook(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Capture
+            | Command::Git(GitCmd::Guard | GitCmd::CheckMsg { .. } | GitCmd::CheckBranch)
+            | Command::Claude(ClaudeCmd::Guard)
+    )
+}
+
 /// The CLI is local-only: operate on the data folder directly (store + dispatch + git).
 fn make_backend(cli: &Cli) -> Backend {
     Backend::new(project::resolve_data_dir(cli.data_dir.as_deref()))
@@ -4155,9 +4174,30 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         } => return run_serve(cli, bind.clone(), ui_dir.clone(), *allow_writes),
         Command::Open => return run_open(cli),
         Command::Where => return run_where(cli),
+        // A definition in a file is checked on its own: no board, no project, no network. That is
+        // what lets CI hold a contributor to the same bar as the maintainer (FEAT-052) — so it runs
+        // before any board is opened, and never creates one (FEAT-103).
+        Command::Check {
+            file: Some(file), ..
+        } => return check_definition_file(cli, file),
         _ => {}
     }
 
+    // Nothing configured a board here and there is no legacy ./data: say so, rather than creating
+    // one as a side effect of looking (FEAT-103). A read that made `./data/projects` left a stray
+    // board in a project during a read-only setup interview. Hooks stay silent instead — they run
+    // in every folder, and one without a board is simply not their business.
+    if let Some(dir) = no_board_here(cli) {
+        if runs_from_a_hook(&cli.command) {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "no kanbanr board here: this folder has no .kanbanr marker, $KANBANR_DATA_DIR is not \
+             set, and there is no {}.\nSet one up with `kanbanr init`, or point at an existing \
+             board with --data-dir.",
+            dir.display()
+        );
+    }
     let client = make_backend(cli);
     match &cli.command {
         Command::Identity { .. }
@@ -4447,10 +4487,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         Command::Capture => run_capture(cli, &client),
         Command::Check { code, file } => {
-            // A definition in a file is checked on its own: no board, no project, no network. That
-            // is what lets CI hold a contributor to the same bar as the maintainer (FEAT-052).
             if let Some(file) = file {
-                return check_definition_file(cli, file);
+                return check_definition_file(cli, file); // handled before the board opens
             }
             let p = require_project(cli)?;
             let project = get_project(&client, &p)?;
