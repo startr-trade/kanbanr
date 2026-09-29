@@ -768,10 +768,19 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                 // Completed item records a signature, pinned to a definition hash, for work already
                 // merged; a deliberately Deferred one is not going to start. The same gate the
                 // doctor applies, so the two surfaces cannot give different answers to one question.
-                .filter(|f| crate::graph::is_live_work(&project.config, &f.status))
                 .filter_map(|f| {
                     let definition = f.definition.as_ref()?;
+                    let live = crate::graph::is_live_work(&project.config, &f.status);
+                    // Work finished under a recorded bypass and never agreed to is still a
+                    // question for a person, however done it is — the one the doctor reports.
+                    // It is asked here too (FEAT-109), with the predicate the doctor uses, so the
+                    // two surfaces cannot disagree about which items need a ratification.
+                    let unratified = !live && crate::doctor::unreconciled_bypass(definition);
+                    if !live && !unratified {
+                        return None;
+                    }
                     let state = match definition.approval_state() {
+                        _ if unratified => "unratified",
                         // Agreed is agreed, however late — a ratified item is not still a
                         // decision waiting to be made, so it leaves the queue (FEAT-080).
                         ApprovalState::Current | ApprovalState::Ratified => return None,
@@ -790,10 +799,11 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                     }))
                 })
                 .collect();
-            // Work already being built without agreement is more urgent than work that has not
-            // started, so it is asked about first (FEAT-078 R-2).
+            // Work already built without agreement comes first (FEAT-109), then work being built
+            // without it, then work that has not started (FEAT-078 R-2).
             pending.sort_by_key(|v| {
                 (
+                    v["approval"] != "unratified",
                     !v["in_progress"].as_bool().unwrap_or(false),
                     v["code"].as_str().unwrap_or_default().to_string(),
                 )

@@ -272,7 +272,9 @@ Write the definition with the batch path (`definition` on `feature.add`/`feature
   approved. If the definition changes after approval, the approval **lapses** and must be renewed —
   so scope cannot drift silently past a yes.
 - Genuinely urgent work can proceed with `kanbanr move <CODE> <status> --unapproved "<reason>"`.
-  The reason is recorded on the item. Use it for real emergencies, not to avoid asking.
+  The reason is recorded on the item. Use it for real emergencies, not to avoid asking. Work
+  finished that way still needs agreement afterwards: it heads the monitor's Review page with a
+  **Ratify** button (or `kanbanr ratify <CODE>`). Never ratify on the user's behalf.
 - **Subagents inherit, never invent.** A coordinator passes the approved definition to each
   subagent as its brief. A subagent that finds work outside it returns a **proposed change to the
   definition**, not merged code.

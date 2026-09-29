@@ -59,6 +59,12 @@ The queue holds only items where agreement can still change something — not wo
 not a status parked off the board. Approving merged work records a signature that changes nothing, and
 a gate that asks for those gets rubber-stamped, which is the failure it exists to prevent.
 
+The one exception is work **finished under a recorded bypass** and never agreed to. That is still a
+question for a person, so it heads the queue with a **Ratify** button instead of Approve.
+Ratifying agrees to the work after the fact and is recorded as its own verdict, never passed off
+as prior approval. It's the same list `doctor` reports, and `kanbanr ratify <CODE>` does the same
+from the terminal.
+
 **A verdict names who gave it.** `--by` defaults to the board's commit identity, and the monitor uses
 the same one, so a verdict reads identically whichever surface recorded it. A verdict with no named
 approver is **refused** rather than attributed to nobody — set an identity once with

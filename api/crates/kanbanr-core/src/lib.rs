@@ -525,6 +525,79 @@ mod tests {
         );
     }
 
+    /// FEAT-109 R-1: work finished under a recorded bypass is still a question for a person. It
+    /// used to reach only the doctor, and ratifying it only the CLI; the review queue now asks it,
+    /// first, and stops asking once it is ratified. An item finished WITHOUT a bypass stays out.
+    #[test]
+    fn the_review_queue_lists_work_finished_without_agreement() {
+        use crate::models::FeatureDefinition;
+        use serde_json::{Value, json};
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let define = |code: &str| {
+            store
+                .set_feature_definition(
+                    "demo",
+                    code,
+                    Some(FeatureDefinition {
+                        statement: "Keep a cart for 7 days".into(),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        };
+        let queue = || -> Vec<Value> {
+            let out =
+                crate::dispatch::dispatch(&store, "GET", "/projects/demo/review", None).unwrap();
+            serde_json::from_str(&out).unwrap()
+        };
+
+        let waiting = store
+            .add_feature("demo", "Waiting", "spec", "M", None)
+            .unwrap();
+        define(&waiting.code);
+        let bypassed = store
+            .add_feature("demo", "Bypassed", "spec", "M", None)
+            .unwrap();
+        define(&bypassed.code);
+        store
+            .move_feature_approved("demo", &bypassed.code, "Scheduled", Some("urgent"))
+            .unwrap();
+        store
+            .move_feature("demo", &bypassed.code, "Completed")
+            .unwrap();
+        // Finished without ever having been asked: not a bypass, so not a ratification question.
+        let done = store
+            .add_feature("demo", "Done", "spec", "M", None)
+            .unwrap();
+        define(&done.code);
+        store.move_feature("demo", &done.code, "Scheduled").unwrap();
+        store.move_feature("demo", &done.code, "Completed").unwrap();
+
+        let q = queue();
+        let codes: Vec<&str> = q.iter().filter_map(|v| v["code"].as_str()).collect();
+        assert_eq!(
+            codes,
+            [bypassed.code.as_str(), waiting.code.as_str()],
+            "{q:?}"
+        );
+        assert_eq!(q[0]["approval"], "unratified");
+        assert_eq!(q[0]["started_unapproved"], "urgent");
+        assert_eq!(q[1]["approval"], "missing");
+
+        crate::dispatch::dispatch(
+            &store,
+            "POST",
+            &format!("/projects/demo/features/{}/ratify", bypassed.code),
+            Some(&json!({ "by": "Ada L" })),
+        )
+        .unwrap();
+        assert!(
+            !queue().iter().any(|v| v["code"] == bypassed.code.as_str()),
+            "a ratified item leaves the queue"
+        );
+    }
+
     /// FEAT-080: agreement given AFTER the work is a different claim from agreement given before
     /// it, and the record has to be able to say which. Twenty-nine items on this board were
     /// reconciled by approving them late, each indistinguishable from prior agreement — which

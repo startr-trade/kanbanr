@@ -200,7 +200,8 @@ export interface PendingReview {
   code: string;
   title: string;
   status: string;
-  approval: "missing" | "lapsed";
+  /** `unratified`: finished under a recorded bypass and never agreed to (FEAT-109). */
+  approval: "missing" | "lapsed" | "unratified";
   started_unapproved?: string;
   definition: FeatureDefinition;
 }
