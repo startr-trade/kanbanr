@@ -112,6 +112,10 @@ input:focus-visible,
 }
 
 .content { padding: 22px; max-width: 1200px; margin: 0 auto; }
+/* The 1200px measure is for reading. A board is not read line by line; it needs every column in
+   view, and a six-status workflow (TOGAF) needs ~1,550px — so the board takes the window (FEAT-107).
+   A browser without :has() keeps the capped page, which still works, with a scrollbar. */
+.content:has(> .board-page) { max-width: none; }
 
 .page-head { display: flex; align-items: center; gap: 12px; }
 .page-head h1 { font-size: 22px; margin: 0 0 4px; }
