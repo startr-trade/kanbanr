@@ -309,7 +309,9 @@ impl Store {
         // Forward-stamp the schema version on every write (minimal, non-destructive migration): a
         // config that loaded as a legacy version (0) is brought up to current on its next save.
         let mut config = config.clone();
-        config.schema_version = crate::config::CURRENT_SCHEMA_VERSION;
+        // A board with gates is stamped with the version that knows them, so an older reader refuses
+        // it rather than silently ignoring its guardrails; one without stays readable (FEAT-113).
+        config.schema_version = config.required_schema_version();
         Self::write_yaml(&self.project_dir(id).join("config.yaml"), &config)
     }
 
@@ -1091,89 +1093,116 @@ impl Store {
         Ok(updated)
     }
 
-    /// Move a feature, refusing to start work whose reasoning nobody agreed to (FEAT-048).
-    /// `unapproved` records an explicit reason to go ahead anyway.
+    /// Move a feature through its target status's gate (FEAT-048, FEAT-113). `reason` overrides a
+    /// blocking gate, and is recorded.
     pub fn move_feature_approved(
         &self,
         id: &str,
         code: &str,
         to: &str,
-        unapproved: Option<&str>,
+        reason: Option<&str>,
     ) -> Result<FeatureItem> {
+        self.move_feature_gated(id, code, to, reason)
+            .map(|(f, _)| f)
+    }
+
+    /// As [`Store::move_feature_approved`], also returning what a gate reported without blocking:
+    /// its `warns`, a `warn`-enforced gate's gaps, or the gaps an override passed over.
+    pub fn move_feature_gated(
+        &self,
+        id: &str,
+        code: &str,
+        to: &str,
+        reason: Option<&str>,
+    ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let charter = crate::charter::load(self, id)?;
-        Self::check_start_gate(&project, &charter, code, to, unapproved)?;
-        if let Some(reason) = unapproved.filter(|r| !r.trim().is_empty())
+        let (f, warnings) =
+            Self::gated_move_on(&mut project, &mut pending, &charter, code, to, reason)?;
+        self.flush(id, &project, &pending)?;
+        Ok((f, warnings))
+    }
+
+    /// The one gated move, shared by the route and the batch path — the batch is the primary way
+    /// work is started, so exempting it would make every gate decorative.
+    fn gated_move_on(
+        project: &mut Project,
+        pending: &mut Pending,
+        charter: &crate::Charter,
+        code: &str,
+        to: &str,
+        reason: Option<&str>,
+    ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
+        let reason = reason.map(str::trim).filter(|r| !r.is_empty());
+        let outcome = Self::check_gate(project, charter, code, to, reason)?;
+        // A move made with a stated reason to override is a bypass, and stays one until someone
+        // approves or ratifies what was built (FEAT-048, FEAT-080) — recorded whether or not a gate
+        // happened to need it, exactly as before gates were declarable.
+        if let Some(reason) = reason
             && let Ok(feature) = project.feature_mut(code)
             && let Some(def) = feature.definition.as_mut()
         {
-            def.started_unapproved = reason.trim().to_string();
+            def.started_unapproved = reason.to_string();
         }
-        let f = Self::move_feature_on(&mut project, &mut pending, code, to)?;
-        self.flush(id, &project, &pending)?;
-        Ok(f)
+        let f = Self::move_feature_on(project, pending, code, to)?;
+        let f = match reason {
+            Some(reason) => {
+                let feature = project.feature_mut(code)?;
+                if let Some(last) = feature.history.last_mut().filter(|t| t.to == to) {
+                    last.override_reason = Some(reason.to_string());
+                }
+                feature.clone()
+            }
+            None => f,
+        };
+        Ok((f, outcome.warnings))
     }
 
-    /// The start gate: entering an **active** status — one that is neither the default backlog
-    /// state, nor terminal, nor a no-op disposition — requires a current approval. Closing or
-    /// dispositioning an item is never gated: you can always stop work.
-    fn check_start_gate(
+    /// Evaluate the gate of `to` for `code` (FEAT-113). Adoption is never retroactive: a project with
+    /// no charter has not taken up the method, and items created before the charter was adopted
+    /// predate it — gating either would make upgrading kanbanr break every board in existence.
+    fn check_gate(
         project: &Project,
         charter: &crate::Charter,
         code: &str,
         to: &str,
-        unapproved: Option<&str>,
-    ) -> Result<()> {
-        // Adoption is never retroactive. A project with no charter has not taken up the method, and
-        // items created before the charter was adopted predate it — gating either would make
-        // upgrading kanbanr break every board in existence, which no amount of rigour justifies.
+        reason: Option<&str>,
+    ) -> Result<GateOutcome> {
+        let pass = GateOutcome::default();
         if charter.adopted_at.trim().is_empty() {
-            return Ok(());
-        }
-        if project
-            .feature(code)
-            .is_ok_and(|f| f.created_at.as_str() < charter.adopted_at.as_str())
-        {
-            return Ok(());
-        }
-        // What counts as *starting work* is what the board displays as work in flight — not
-        // everything that is merely non-terminal (FEAT-075). Deferring an item used to be gated,
-        // and demanding agreement to reasoning for work nobody intends to start teaches that the
-        // escape is routine, which is the failure this gate exists to prevent.
-        //
-        // `displayed_states` already carries the meaning: the columns the kanban shows. A parking
-        // state is deliberately not among them, so it is deliberately not a start.
-        let config = &project.config;
-        let gated = config.displayed_states.iter().any(|s| s == to)
-            && to != config.default_state
-            && !crate::graph::is_terminal_status(config, to)
-            && !config.is_no_op(to);
-        if !gated || unapproved.is_some_and(|r| !r.trim().is_empty()) {
-            return Ok(());
+            return Ok(pass);
         }
         let feature = project.feature(code)?;
-        let missing = match feature.definition.as_ref() {
-            None => "it has no definition (run `kanbanr feature define`)".to_string(),
-            Some(def) => match def.approval_state() {
-                // An item agreed to after the fact is agreed to; the gate has nothing left to ask.
-                crate::models::ApprovalState::Current | crate::models::ApprovalState::Ratified => {
-                    return Ok(());
-                }
-                crate::models::ApprovalState::Missing => {
-                    "its definition is not approved (review it, then `kanbanr approve`)".to_string()
-                }
-                crate::models::ApprovalState::Lapsed => {
-                    "its approval lapsed — the definition changed after it was approved, so \
-                     re-approve what is now proposed"
-                        .to_string()
-                }
-            },
+        if feature.created_at.as_str() < charter.adopted_at.as_str() {
+            return Ok(pass);
+        }
+        let gates = project.config.effective_gates();
+        let Some(gate) = gates.get(to) else {
+            return Ok(pass);
         };
-        Err(CoreError::Unsupported(format!(
-            "cannot move {code} to '{to}': {missing}. To proceed anyway, record why with \
-             --unapproved \"<reason>\""
-        )))
+        if !gate.applies_to(feature.kind.as_deref()) {
+            return Ok(pass);
+        }
+        let goal_ids = charter.goal_ids();
+        let failing =
+            crate::readiness::evaluate_conditions(feature, Some(&goal_ids), &gate.requires);
+        let mut warnings =
+            crate::readiness::evaluate_conditions(feature, Some(&goal_ids), &gate.warns);
+        if failing.is_empty() {
+            return Ok(GateOutcome { warnings });
+        }
+        let blocks = gate.enforce == crate::config::Enforce::Block;
+        if blocks && reason.is_none() {
+            let missing: Vec<&str> = failing.iter().map(|g| g.message.as_str()).collect();
+            return Err(CoreError::Unsupported(format!(
+                "cannot move {code} to '{to}': {}. To proceed anyway, record why with \
+                 --override \"<reason>\"",
+                missing.join("; ")
+            )));
+        }
+        warnings.extend(failing);
+        Ok(GateOutcome { warnings })
     }
 
     pub fn move_feature(&self, id: &str, code: &str, to: &str) -> Result<FeatureItem> {
@@ -1208,6 +1237,7 @@ impl Store {
                 at: at.clone(),
                 from: from.clone(),
                 to: to.to_string(),
+                override_reason: None,
             });
         }
         feature.status = to.to_string();
@@ -1376,6 +1406,7 @@ impl Store {
                 at: at.clone(),
                 from: f.status.clone(),
                 to: completed.clone(),
+                override_reason: None,
             });
             f.status = completed.clone();
         }
@@ -1763,28 +1794,20 @@ impl Store {
                     if skipped.contains(&code) {
                         return Ok(skip("feature.move", &code));
                     }
-                    // The gate applies on the batch path too — it is the primary way work is
-                    // started, so exempting it would make the gate decorative.
-                    let resolved = resolve(&aliases, &code);
-                    Self::check_start_gate(
-                        &project,
+                    let (f, warnings) = Self::gated_move_on(
+                        &mut project,
+                        &mut pending,
                         &charter,
-                        &resolved,
+                        &resolve(&aliases, &code),
                         &to,
                         unapproved.as_deref(),
                     )?;
-                    if let Some(reason) = unapproved.as_deref().filter(|r| !r.trim().is_empty())
-                        && let Ok(feature) = project.feature_mut(&resolved)
-                        && let Some(def) = feature.definition.as_mut()
-                    {
-                        def.started_unapproved = reason.trim().to_string();
+                    if !warnings.is_empty() {
+                        return Ok(serde_json::json!({
+                            "op":"feature.move","code":f.code,"status":f.status,
+                            "warnings": warnings.iter().map(|g| g.message.clone()).collect::<Vec<_>>(),
+                        }));
                     }
-                    let f = Self::move_feature_on(
-                        &mut project,
-                        &mut pending,
-                        &resolve(&aliases, &code),
-                        &to,
-                    )?;
                     Ok(serde_json::json!({"op":"feature.move","code":f.code,"status":f.status}))
                 }
                 TestState {
@@ -2203,6 +2226,8 @@ impl Store {
                 }
             }
         }
+        // Gates already declared must still name real statuses once the workflow changes.
+        Self::validate_gates(&statuses, &project.config.gates)?;
         project.config.statuses = statuses;
         project.config.transitions = transitions;
         project.config.default_state = default_state;
@@ -2211,6 +2236,41 @@ impl Store {
         project.config.terminal_states = terminals;
         self.save_config(id, &project.config)?;
         Ok(project.config)
+    }
+
+    /// Replace a project's gates (FEAT-113). An empty map removes them, returning the board to the
+    /// synthesised rules. Every gate must name a status of the workflow, and a Zachman condition
+    /// only real columns — a gate that can never match is a guardrail that silently isn't there.
+    pub fn set_gates(
+        &self,
+        id: &str,
+        gates: std::collections::BTreeMap<String, crate::config::Gate>,
+    ) -> Result<ProjectConfig> {
+        let mut project = self.load(id)?;
+        Self::validate_gates(&project.config.statuses, &gates)?;
+        project.config.gates = gates;
+        self.save_config(id, &project.config)?;
+        Ok(project.config)
+    }
+
+    fn validate_gates(
+        statuses: &[String],
+        gates: &std::collections::BTreeMap<String, crate::config::Gate>,
+    ) -> Result<()> {
+        for (status, gate) in gates {
+            if !statuses.iter().any(|s| s == status) {
+                return Err(CoreError::UnknownStatus(status.clone()));
+            }
+            for condition in gate.requires.iter().chain(&gate.warns) {
+                if let Some(column) = condition.invalid_column() {
+                    return Err(CoreError::Unsupported(format!(
+                        "the gate on '{status}' names '{column}', which is not a Zachman column \
+                         (what, how, where, when, who, why)"
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn set_default_state(&self, id: &str, state: &str) -> Result<ProjectConfig> {
@@ -2650,4 +2710,11 @@ enum DeferredDoc {
 struct DocSnapshot {
     path: std::path::PathBuf,
     before: Option<Vec<u8>>,
+}
+
+/// What a gate decided about a move that it lets through (FEAT-113).
+#[derive(Debug, Default)]
+struct GateOutcome {
+    /// Reported, not enforced: the gate's `warns`, a `warn` gate's gaps, or what an override passed.
+    warnings: Vec<crate::readiness::Gap>,
 }

@@ -459,6 +459,9 @@ pub struct Transition {
     pub at: String,
     pub from: String,
     pub to: String,
+    /// Why a gate was passed over, when it was (FEAT-113). Absent on an ordinary move.
+    #[serde(default, rename = "override", skip_serializing_if = "Option::is_none")]
+    pub override_reason: Option<String>,
 }
 
 /// What a defect cost and where it came from (FEAT-053).

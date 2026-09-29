@@ -197,6 +197,18 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **Declarable gates (FEAT-113).** A workflow can say, per status, what an item must show before
+  it enters that status. The config's `gates` map takes `purpose`, `requires`, `warns`,
+  `enforce: block|warn`, `kinds` and `on_enter`, and a Zachman condition can name only the columns
+  a stage needs. Unknown statuses, checks or columns are refused when the workflow is saved.
+  - **No existing board changes.** With no gates declared, today's rule is synthesised exactly:
+    entering a status that means "working on it" needs a definition and a current approval.
+  - **Overrides are recorded.** `--override "<reason>"` (formerly `--unapproved`, which still
+    works) passes a blocking gate, and the reason is kept in the move's history.
+  - **Schema 3, only when needed.** A board that declares gates is stamped `schema_version: 3`, so
+    an older kanbanr refuses it instead of ignoring its guardrails. Boards without gates stay at 2.
+  - **Terminal statuses.** A status named "Completed" counts as terminal only where the workflow
+    declares no terminal states.
 - **"What is this item missing?" has one answer (FEAT-112).** `check`, `finish`, `doctor`,
   `check --file`, `query --gap` and the monitor's board cards now share one readiness engine,
   instead of five copies that had drifted apart. Each surface still asks its own set of checks,

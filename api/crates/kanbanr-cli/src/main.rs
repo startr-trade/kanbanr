@@ -144,9 +144,10 @@ enum Command {
     Move {
         code: String,
         status: String,
-        /// Start work whose definition is not approved, recording why. The reason is stored on the
-        /// item — a bypass that leaves a trace beats one that is silent.
-        #[arg(long)]
+        /// Pass a status's gate that is not met, recording why (FEAT-113). The reason is stored in
+        /// the item's history — a bypass that leaves a trace beats one that is silent.
+        /// `--unapproved` is the older name.
+        #[arg(long = "override", alias = "unapproved", value_name = "REASON")]
         unapproved: Option<String>,
     },
     /// Move one test along the TDD lifecycle: planned | red | green. Flip it when the test
@@ -362,8 +363,9 @@ enum Command {
         /// Move the item without creating or switching a branch.
         #[arg(long)]
         no_branch: bool,
-        /// Start without an approved definition, recording why. The reason stays on the item.
-        #[arg(long)]
+        /// Start past a gate that is not met, recording why. The reason stays on the item.
+        /// `--unapproved` is the older name.
+        #[arg(long = "override", alias = "unapproved", value_name = "REASON")]
         unapproved: Option<String>,
     },
     /// Finish an item: refuse while tasks are open or requirements are unproven, then move it to
@@ -3172,7 +3174,24 @@ fn run_start(
         Some(body),
     )?;
     print_write(cli, &resp, format!("{code} -> {status}"));
+    print_gate_warnings(cli, &resp);
     Ok(())
+}
+
+/// What a gate let through but reported (FEAT-113): its `warns`, a `warn` gate's gaps, or what an
+/// override passed over. Said on stderr so a script reading the move's output is unaffected.
+fn print_gate_warnings(cli: &Cli, resp: &str) {
+    if cli.json {
+        return; // the warnings are in the JSON already
+    }
+    let Ok(v) = serde_json::from_str::<Value>(resp) else {
+        return;
+    };
+    for warning in v["gate_warnings"].as_array().into_iter().flatten() {
+        if let Some(w) = warning.as_str() {
+            eprintln!("  gate: {w}");
+        }
+    }
 }
 
 /// The first status that means "being worked on": displayed, not the default, not terminal.
@@ -4308,6 +4327,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 Some(body),
             )?;
             print_write(cli, &resp, format!("{code} -> {}", field(&resp, "status")));
+            print_gate_warnings(cli, &resp);
             Ok(())
         }
         Command::Test {

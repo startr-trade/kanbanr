@@ -368,14 +368,15 @@ fn scan_project(project: &Project, existing: &BTreeSet<String>, report: &mut Rep
     }
 
     // Outdated schema_version (warning).
-    if project.config.schema_version < CURRENT_SCHEMA_VERSION {
+    if project.config.schema_version < project.config.required_schema_version() {
         report.issues.push(Issue {
             severity: Severity::Warning,
             project: pid.clone(),
             code: None,
             message: format!(
                 "config schema_version {} is older than current {} (re-save to migrate)",
-                project.config.schema_version, CURRENT_SCHEMA_VERSION
+                project.config.schema_version,
+                project.config.required_schema_version()
             ),
         });
     }
