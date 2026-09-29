@@ -976,6 +976,7 @@ impl Store {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let feature = project.feature_mut(code)?;
+        let status = feature.status.clone();
         let definition = feature.definition.as_mut().ok_or_else(|| {
             CoreError::Unsupported(format!(
                 "{code} has no definition to approve — write one with `kanbanr feature define`"
@@ -994,6 +995,7 @@ impl Store {
             verdict: "approved".to_string(),
             reason: String::new(),
             rev,
+            status,
         });
         feature.updated_at = at;
         let updated = feature.clone();
@@ -1022,6 +1024,7 @@ impl Store {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let feature = project.feature_mut(code)?;
+        let status = feature.status.clone();
         let definition = feature.definition.as_mut().ok_or_else(|| {
             CoreError::Unsupported(format!(
                 "{code} has no definition to ratify — write one with `kanbanr feature define`"
@@ -1046,6 +1049,7 @@ impl Store {
             verdict: "ratified".to_string(),
             reason: reason.trim().to_string(),
             rev,
+            status,
         });
         feature.updated_at = at;
         let updated = feature.clone();
@@ -1067,6 +1071,7 @@ impl Store {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let feature = project.feature_mut(code)?;
+        let status = feature.status.clone();
         let definition = feature
             .definition
             .as_mut()
@@ -1085,6 +1090,58 @@ impl Store {
             verdict: "withdrawn".to_string(),
             reason: reason.trim().to_string(),
             rev,
+            status,
+        });
+        feature.updated_at = at;
+        let updated = feature.clone();
+        pending.persist_features.insert(updated.code.clone());
+        self.flush(id, &project, &pending)?;
+        Ok(updated)
+    }
+
+    /// Record sign-off `signoff` on an item (FEAT-114): who gave it, when, and the definition it
+    /// covered. Appended, never overwritten; a later one with the same name supersedes it for gates.
+    pub fn signoff_feature(
+        &self,
+        id: &str,
+        code: &str,
+        signoff: &str,
+        by: &str,
+        note: &str,
+        doc: &str,
+    ) -> Result<FeatureItem> {
+        let signoff = signoff.trim();
+        if signoff.is_empty() {
+            return Err(CoreError::Unsupported(
+                "a sign-off needs a name (e.g. design-review)".into(),
+            ));
+        }
+        if by.trim().is_empty() {
+            return Err(CoreError::Unsupported(
+                "a sign-off must say who gave it — set a commit identity with `kanbanr identity`"
+                    .into(),
+            ));
+        }
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let feature = project.feature_mut(code)?;
+        let status = feature.status.clone();
+        let definition = feature.definition.as_mut().ok_or_else(|| {
+            CoreError::Unsupported(format!(
+                "{code} has no definition to sign off — a sign-off covers a definition, so write one \
+                 with `kanbanr feature define`"
+            ))
+        })?;
+        let at = now_rfc3339();
+        let rev = definition.content_rev();
+        definition.signoffs.push(crate::models::Signoff {
+            id: signoff.to_string(),
+            by: by.trim().to_string(),
+            at: at.clone(),
+            rev,
+            note: note.trim().to_string(),
+            doc: doc.trim().to_string(),
+            status,
         });
         feature.updated_at = at;
         let updated = feature.clone();
@@ -1185,8 +1242,9 @@ impl Store {
             return Ok(pass);
         }
         let goal_ids = charter.goal_ids();
-        let failing =
+        let mut failing =
             crate::readiness::evaluate_conditions(feature, Some(&goal_ids), &gate.requires);
+        failing.extend(crate::readiness::signoff_gaps(feature, &gate.signoffs));
         let mut warnings =
             crate::readiness::evaluate_conditions(feature, Some(&goal_ids), &gate.warns);
         if failing.is_empty() {
@@ -2261,7 +2319,20 @@ impl Store {
             if !statuses.iter().any(|s| s == status) {
                 return Err(CoreError::UnknownStatus(status.clone()));
             }
+            if gate.signoffs.iter().any(|s| s.trim().is_empty()) {
+                return Err(CoreError::Unsupported(format!(
+                    "the gate on '{status}' has a sign-off with no name"
+                )));
+            }
             for condition in gate.requires.iter().chain(&gate.warns) {
+                if *condition
+                    == crate::readiness::Condition::Check(crate::readiness::Check::Signoff)
+                {
+                    return Err(CoreError::Unsupported(format!(
+                        "the gate on '{status}' lists `signoff` as a check; name it instead: \
+                         `signoffs: [design-review]`"
+                    )));
+                }
                 if let Some(column) = condition.invalid_column() {
                     return Err(CoreError::Unsupported(format!(
                         "the gate on '{status}' names '{column}', which is not a Zachman column \

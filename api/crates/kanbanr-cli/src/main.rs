@@ -311,6 +311,22 @@ enum Command {
         #[arg(long)]
         by: Option<String>,
     },
+    /// Record a named sign-off a stage can require — "design-review", "release" (FEAT-114). It covers
+    /// the definition as it stands: change the definition and the sign-off lapses.
+    Signoff {
+        code: String,
+        /// The sign-off's name, as the workflow's gate asks for it.
+        name: String,
+        /// What was agreed, or where it was agreed.
+        #[arg(long)]
+        note: Option<String>,
+        /// A board doc holding the record (minutes, a checklist).
+        #[arg(long)]
+        doc: Option<String>,
+        /// Who is signing off (defaults to the data repo's commit identity).
+        #[arg(long)]
+        by: Option<String>,
+    },
     /// Manage a feature's persistent todo-lists (an epic can hold many).
     #[command(subcommand)]
     Todo(TodoCmd),
@@ -4745,6 +4761,30 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 Some(json!({ "by": who })),
             )?;
             print_write(cli, &resp, format!("{code} approved by {who}"));
+            Ok(())
+        }
+        Command::Signoff {
+            code,
+            name,
+            note,
+            doc,
+            by,
+        } => {
+            let p = require_project(cli)?;
+            let who = verdict_author(cli, by.as_ref())?;
+            let resp = client.write(
+                Method::Post,
+                &format!(
+                    "/projects/{p}/features/{code}/signoff/{}",
+                    urlencode_segment(name)
+                ),
+                Some(json!({ "by": who, "note": note, "doc": doc })),
+            )?;
+            print_write(
+                cli,
+                &resp,
+                format!("{code}: sign-off '{name}' recorded by {who}"),
+            );
             Ok(())
         }
         Command::Todo(cmd) => run_todo(cli, &client, cmd),

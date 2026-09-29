@@ -615,6 +615,7 @@ kanbanr finish [FEAT-001]         # gated: tasks complete, requirements proven
 kanbanr git install-hooks [--force] | uninstall-hooks | status
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
 kanbanr approve FEAT-001          # the user records agreement (do not approve on their behalf)
+kanbanr signoff FEAT-001 design-review [--note …] [--doc path]   # a named sign-off a stage asks for — the user's, never Claude's
 kanbanr move FEAT-001 Scheduled [--override \"<reason>\"]     # gated; the override is recorded
 kanbanr batch --dry-run --file b.json   # preview a bundle (e.g. an import) without writing
 kanbanr sources [--write]         # imported items' sources; --write records ones that are gone
