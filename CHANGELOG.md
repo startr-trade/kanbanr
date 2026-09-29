@@ -197,6 +197,9 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **The docs guard refused files outside the repository (FEAT-111).** It blocked Claude Code's
+  own plan file in `~/.claude/plans` and suggested an unusable `notes//home/…` board path. It now
+  judges only files inside the tracked repository, and suggests a path relative to it.
 - **Piping output into `head` printed a panic (FEAT-110).** `kanbanr git status | head -1` ended
   with a stack trace after a command that had succeeded. A closed pipe now ends the command
   quietly with status 141, as it does for `git`.
