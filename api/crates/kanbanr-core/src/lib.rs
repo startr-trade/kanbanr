@@ -1847,6 +1847,74 @@ requirements:
         );
     }
 
+    /// FEAT-117 R-2: where the workflow declares its gates, doctor reports what the item's NEXT stage
+    /// needs — not everything a later stage will ask. A definition built stage by stage is not
+    /// incomplete for lacking what it is not yet expected to say.
+    #[test]
+    fn doctor_is_phase_aware() {
+        use crate::models::FeatureDefinition;
+        use serde_json::json;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/workflow",
+            Some(&json!({"preset": "togaf"})),
+        )
+        .unwrap();
+        adopt_charter(&store, "demo");
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart for 7 days".into(),
+                    goals: vec!["G-1".into()],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let report = crate::doctor::run_project(&store, "demo").unwrap();
+        let said: Vec<&str> = report
+            .issues
+            .iter()
+            .filter(|i| i.code.as_deref() == Some(f.code.as_str()))
+            .map(|i| i.message.as_str())
+            .collect();
+        let all = said.join(" | ");
+        // Business Arch asks who, what and why, and requirements…
+        for asked in [
+            "[MISSING: Who]",
+            "[MISSING: What]",
+            "[MISSING: Why]",
+            "no requirements",
+        ] {
+            assert!(all.contains(asked), "{asked} not reported: {all}");
+        }
+        // …and not how or where, which System Design asks later.
+        for later in ["[MISSING: How]", "[MISSING: Where]"] {
+            assert!(!all.contains(later), "{later} reported too early: {all}");
+        }
+        // The next-stage answer is on the readiness endpoint too, with what the stage is for.
+        let out = crate::dispatch::dispatch(
+            &store,
+            "GET",
+            &format!("/projects/demo/features/{}/readiness", f.code),
+            None,
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["next"][0]["status"], "Business Arch");
+        assert!(
+            v["next"][0]["purpose"]
+                .as_str()
+                .unwrap()
+                .contains("Who it is for")
+        );
+    }
+
     /// FEAT-115 R-3: finishing the last task does not carry an item past its end status's gate —
     /// it stays, and says why; once the gate is met, the next task write advances it.
     #[test]

@@ -4710,7 +4710,23 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             if features.is_empty() {
                 anyhow::bail!("no such item, or nothing in scope");
             }
-            let reports: Vec<Value> = features.iter().map(|f| check_report(f)).collect();
+            // What each item's next stage asks, from the same engine (FEAT-117).
+            let charter: Option<kanbanr_core::Charter> = client
+                .get(&format!("/projects/{p}/charter"))
+                .ok()
+                .and_then(|c| serde_json::from_str(&c).ok());
+            let reports: Vec<Value> = features
+                .iter()
+                .map(|f| {
+                    let mut report = check_report(f);
+                    report["next"] = json!(kanbanr_core::readiness::next_gates(
+                        &project,
+                        charter.as_ref(),
+                        f
+                    ));
+                    report
+                })
+                .collect();
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&reports)?);
                 return Ok(());
@@ -4733,6 +4749,30 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     );
                     for gap in gaps {
                         println!("    {}", gap.as_str().unwrap_or(""));
+                    }
+                }
+                // The next stage: what it is for, and what moving on still needs.
+                for next in r["next"].as_array().into_iter().flatten() {
+                    let status = next["status"].as_str().unwrap_or("");
+                    let lacks: Vec<&str> = next["gaps"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|g| g["message"].as_str())
+                        .collect();
+                    let purpose = next["purpose"].as_str().unwrap_or("");
+                    let about = if purpose.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({purpose})")
+                    };
+                    if lacks.is_empty() {
+                        println!("    → {status}{about}: ready to move on");
+                    } else {
+                        println!("    → to move to {status}{about}, still needed:");
+                        for lack in lacks {
+                            println!("        {lack}");
+                        }
                     }
                 }
             }

@@ -197,6 +197,17 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **Every surface says what the next stage needs (FEAT-117).**
+  - `kanbanr check` lists, for each stage an item can move on to, what that stage is for and what
+    is still missing.
+  - `doctor` is stage-aware on workflows that declare gates. It reports what the next stage asks,
+    not what a later stage will ask.
+  - The Review page offers **Sign off** buttons for sign-offs a next stage is waiting on.
+  - Board cards show the next stage and how much it still lacks.
+  - The Workflow page draws the daemon's diagram, gates included, instead of a hand-kept copy of
+    the exporter, and lists each stage's requirements.
+  - `kanbanr claude sync` writes each stage's purpose into CLAUDE.md, so the agent grows a
+    definition one stage at a time.
 - **Workflow presets are data, and a project can load its own process (FEAT-116).**
   - Presets are YAML files shipped in the binary:
     - `default`: this board's shape, Planned → In Progress → Completed plus Deferred and Ongoing.

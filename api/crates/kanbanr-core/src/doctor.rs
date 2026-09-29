@@ -135,8 +135,32 @@ fn scan_definitions(project: &Project, charter: &crate::Charter, report: &mut Re
             continue;
         }
 
-        // The same rules every surface uses (FEAT-112); which of them doctor asks is its own list.
-        let gaps = crate::readiness::evaluate(feature, Some(&goal_ids), crate::readiness::DOCTOR);
+        // The same rules every surface uses (FEAT-112). Where the workflow declares its gates,
+        // doctor asks only what the item's NEXT stage needs, plus that stage's warnings — a
+        // definition built stage by stage is not incomplete for lacking what a later stage asks
+        // (FEAT-117). Agreement and sign-offs are the review queue's questions, not doctor's.
+        let gaps = if project.config.gates.is_empty() {
+            crate::readiness::evaluate(feature, Some(&goal_ids), crate::readiness::DOCTOR)
+        } else {
+            use crate::readiness::Check;
+            let mut gaps = crate::readiness::evaluate(
+                feature,
+                Some(&goal_ids),
+                &[Check::Definition, Check::GoalsKnown, Check::Bypass],
+            );
+            for next in crate::readiness::next_gates(project, Some(charter), feature) {
+                for gap in next.gaps.into_iter().chain(next.warnings) {
+                    if !matches!(
+                        gap.check,
+                        Check::Approved | Check::Signoff | Check::Definition
+                    ) && !gaps.contains(&gap)
+                    {
+                        gaps.push(gap);
+                    }
+                }
+            }
+            gaps
+        };
         // One combined message for what the definition has not said: a separate issue per column
         // would bury the report.
         use crate::readiness::Check;

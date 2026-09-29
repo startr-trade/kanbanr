@@ -201,7 +201,9 @@ export interface PendingReview {
   title: string;
   status: string;
   /** `unratified`: finished under a recorded bypass and never agreed to (FEAT-109). */
-  approval: "missing" | "lapsed" | "unratified";
+  approval: "missing" | "lapsed" | "unratified" | "signoff";
+  /** Sign-offs the item's next stage is waiting on (FEAT-117). */
+  signoffs_needed?: string[];
   started_unapproved?: string;
   definition: FeatureDefinition;
 }
@@ -216,8 +218,8 @@ export interface Gap {
   message: string;
 }
 
-/** Gaps per live item, keyed by code, for a board's cards. */
-export type Readiness = Record<string, Gap[]>;
+/** Per live item, keyed by code: what its card counts, and the next stage with how much it lacks. */
+export type Readiness = Record<string, { gaps: Gap[]; next: { status: string; missing: number }[] }>;
 
 /** A mirrored external issue (e.g. a GitHub issue kept in step with this feature). */
 export interface IssueLink {
@@ -286,6 +288,27 @@ export interface ProjectConfig {
   no_op_states: string[];
   /** Explicit terminal (end) states — a feature here is "done" (FEAT-039). */
   terminal_states?: string[];
+  /** Entry criteria per status (FEAT-113). Absent: kanbanr's built-in rule applies. */
+  gates?: Record<string, Gate>;
+}
+
+/** A check a gate names, or the Zachman check narrowed to some columns. */
+export type Condition = string | { zachman: string[] };
+
+/** What entering a status asks for (FEAT-113, FEAT-114). */
+export interface Gate {
+  purpose?: string;
+  requires?: Condition[];
+  warns?: Condition[];
+  signoffs?: string[];
+  enforce?: "block" | "warn";
+  kinds?: string[];
+  on_enter?: string[];
+}
+
+/** Readable text for a gate condition. */
+export function conditionText(c: Condition): string {
+  return typeof c === "string" ? c.replace(/_/g, " ") : `zachman ${c.zachman.join("/")}`;
 }
 
 export interface Project {
