@@ -1255,6 +1255,18 @@ fn cli_git_guardrails_in_a_scratch_repo() {
     };
 
     assert!(git(&["init", "--initial-branch=main"]).status.success());
+    // An established repository: a fresh one's first commit is a separate case (FEAT-105).
+    assert!(
+        git(&[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit"
+        ])
+        .status
+        .success()
+    );
     run(&[
         "init",
         "shop",
@@ -1736,6 +1748,18 @@ fn cli_trace_and_why_follow_the_chain_in_both_directions() {
     };
 
     assert!(git(&["init", "--initial-branch=main"]).status.success());
+    // An established repository: a fresh one's first commit is a separate case (FEAT-105).
+    assert!(
+        git(&[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit"
+        ])
+        .status
+        .success()
+    );
     // `kanbanr commit` runs the real git, which needs an identity in this scratch repo.
     assert!(git(&["config", "user.name", "T"]).status.success());
     assert!(git(&["config", "user.email", "t@x"]).status.success());
