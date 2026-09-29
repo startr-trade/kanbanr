@@ -109,14 +109,16 @@ down to Technician — are **not** modelled. There is a `layer` on an ADR (`conc
 framework's six perspectives. So: a completeness checklist taken from Zachman, not an
 implementation of the Zachman Framework, and nothing here obliges you to think in one.
 
-**TOGAF: an optional workflow, and nothing else.** `kanbanr project init <name> --workflow togaf`
-gives a board whose columns are the phases — Vision → Business Arch → System Design →
-Implementation → Migration → Operations — with forward and backward transitions, because rework is
-normal. **The phase is the status**; there is no second field to keep in step with it, which is the
-whole reason it is a workflow preset rather than an attribute.
+**TOGAF: a preset, and nothing else.** `kanbanr config workflow --preset togaf` gives a board
+whose columns are the phases, Vision → Business Arch → System Design → Implementation → Migration
+→ Operations, with forward and backward transitions, because rework is normal. **The phase is the
+status**; there is no second field to keep in step with it. Its gates grow the definition phase by
+phase: Business Arch asks who, what and why; System Design asks how and where; Implementation asks
+for a named test per requirement and makes the branch.
 
-It is opt-in because a phase model is a real commitment. The default workflow stays a plain
-backlog → scheduled → done, and a project that never asks for TOGAF never sees it.
+It is opt-in because a phase model is a real commitment. TOGAF is one preset among several (PDCA,
+a design-control flow, or your organisation's own), and a project that never asks for one never
+sees it. See [Processes](processes.md).
 
 Neither is recommended. The bar kanbanr actually holds you to is the one above: state why, link a
 goal, carry requirements, show evidence. The two frameworks supply a vocabulary for the *why* and

@@ -197,6 +197,12 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **Processes are documented, and the decision recorded (FEAT-118).** A new book chapter,
+  *Processes: presets, gates and sign-offs*, covers the presets, the gate fields, every check, how
+  sign-offs work, how a definition grows stage by stage, a worked PDCA example, and how to write
+  your own process file. ADR-0010, *Process is configuration: kanbanr owns the checks, the project
+  owns the process*, is on the board. The skill teaches stage-by-stage definitions, and that
+  sign-offs belong to the user.
 - **Every surface says what the next stage needs (FEAT-117).**
   - `kanbanr check` lists, for each stage an item can move on to, what that stage is for and what
     is still missing.
