@@ -135,87 +135,30 @@ fn scan_definitions(project: &Project, charter: &crate::Charter, report: &mut Re
             continue;
         }
 
-        let Some(def) = &feature.definition else {
-            push(report, project, feature, Severity::Warning,
-                "has no definition — why it exists, what must be true, how it is verified (`kanbanr feature define`)".to_string());
-            continue;
-        };
-        if !def.exempt.trim().is_empty() {
-            continue; // exempt for a recorded reason; the escape hatch stays visible
-        }
-
-        // One combined message per item: a separate issue per column would bury the report.
-        let mut gaps: Vec<String> = def
-            .zachman
-            .missing()
-            .iter()
-            .map(|c| format!("[MISSING: {c}]"))
-            .collect();
-        if def.statement.trim().is_empty() {
-            gaps.insert(0, "[MISSING: statement]".to_string());
-        }
-        if def.goals.is_empty() {
-            gaps.push("no goal link".to_string());
-        }
-        if !gaps.is_empty() {
+        // The same rules every surface uses (FEAT-112); which of them doctor asks is its own list.
+        let gaps = crate::readiness::evaluate(feature, Some(&goal_ids), crate::readiness::DOCTOR);
+        // One combined message for what the definition has not said: a separate issue per column
+        // would bury the report.
+        use crate::readiness::Check;
+        let (unsaid, rest): (Vec<_>, Vec<_>) = gaps
+            .into_iter()
+            .partition(|g| matches!(g.check, Check::Statement | Check::Zachman | Check::Goals));
+        if !unsaid.is_empty() {
+            let labels: Vec<&str> = unsaid.iter().map(|g| g.label.as_str()).collect();
             push(
                 report,
                 project,
                 feature,
                 Severity::Warning,
-                format!("definition gaps: {}", gaps.join(" ")),
+                format!("definition gaps: {}", labels.join(" ")),
             );
         }
-        for goal in &def.goals {
-            if !goal_ids.contains(goal.as_str()) {
-                push(
-                    report,
-                    project,
-                    feature,
-                    Severity::Error,
-                    format!("links goal '{goal}', which is not in the project charter"),
-                );
-            }
-        }
-        // An escape is worth warning about until it is answered — and approving the definition is
-        // the answer the warning asks for (FEAT-068). The record stays on the item either way; it
-        // is history, and the charter says raw data is never discarded. If the definition changes
-        // later the approval lapses, and this warning comes back with it, because the agreement no
-        // longer covers what was built.
-        if unreconciled_bypass(def) {
-            push(
-                report,
-                project,
-                feature,
-                Severity::Warning,
-                format!(
-                    "started without approval: {} — review and approve what was actually built",
-                    def.started_unapproved.trim()
-                ),
-            );
-        }
-        if def.requirements.is_empty() {
-            push(
-                report,
-                project,
-                feature,
-                Severity::Warning,
-                "has no requirements — nothing states what must be true for this to be done"
-                    .to_string(),
-            );
-        }
-        for r in &def.requirements {
-            scan_requirement(project, feature, r, report);
-        }
-        // INVEST, reduced to what is mechanically checkable: Small, and Testable (above).
-        if let Some(days) = feature.estimate_days.filter(|d| *d > 3.0) {
-            push(
-                report,
-                project,
-                feature,
-                Severity::Warning,
-                format!("estimated at {days} days — slice it smaller (INVEST: Small)"),
-            );
+        for gap in rest {
+            let severity = match gap.level {
+                crate::readiness::Level::Error => Severity::Error,
+                crate::readiness::Level::Warning => Severity::Warning,
+            };
+            push(report, project, feature, severity, gap.message);
         }
     }
 
@@ -339,65 +282,6 @@ pub(crate) fn unreconciled_bypass(def: &crate::models::FeatureDefinition) -> boo
 fn in_scope(project: &Project, charter: &crate::Charter, feature: &crate::FeatureItem) -> bool {
     crate::graph::is_live_work(&project.config, &feature.status)
         && feature.created_at.as_str() >= charter.adopted_at.as_str()
-}
-
-/// Per-requirement checks. The unsupported-claim ones matter most: a quality tag or a measured
-/// number that nothing verifies reads as rigour while being decoration.
-fn scan_requirement(
-    project: &Project,
-    feature: &crate::FeatureItem,
-    r: &crate::models::Requirement,
-    report: &mut Report,
-) {
-    let id = &r.id;
-    let mut warn = |message: String| push(report, project, feature, Severity::Warning, message);
-    if crate::ears::classify(&r.text).is_none() {
-        warn(format!(
-            "{id} is not in EARS form (THE SYSTEM SHALL … / WHEN … / WHILE … / WHERE … / IF …)"
-        ));
-    }
-    if r.tests.is_empty() {
-        warn(format!("{id} has no test — it cannot be shown to be met"));
-    }
-    for tag in &r.iso {
-        if crate::ears::normalize_iso(tag).is_none() {
-            warn(format!(
-                "{id} is tagged '{tag}', which is not an ISO/IEC 25010 characteristic"
-            ));
-        }
-    }
-    if matches!(r.kind, crate::models::RequirementKind::Nfr) {
-        if r.iso.is_empty() {
-            warn(format!(
-                "{id} is a quality requirement with no ISO 25010 tag"
-            ));
-        }
-        match r.scenario.as_ref() {
-            None => warn(format!(
-                "{id} is a quality requirement with no scenario (stimulus, environment, response, measure)"
-            )),
-            Some(s) if s.measure.trim().is_empty() => warn(format!(
-                "{id} has a quality scenario with no measure — an unmeasured quality is an opinion"
-            )),
-            Some(s) => {
-                // The measure must name what checks it; a number nothing verifies is a claim.
-                let measure = s.measure.to_lowercase();
-                let named = r
-                    .tests
-                    .iter()
-                    .any(|t| !t.name.trim().is_empty() && measure.contains(&t.name.to_lowercase()));
-                if !named {
-                    warn(format!(
-                        "{id}: the measure names no test or benchmark that checks it (unsupported claim)"
-                    ));
-                }
-            }
-        }
-    } else if !r.iso.is_empty() {
-        warn(format!(
-            "{id} carries a quality tag but is not a quality requirement (kind: nfr)"
-        ));
-    }
 }
 
 /// Check a project's charter — the root of its reasoning (FEAT-046). Without a purpose there is

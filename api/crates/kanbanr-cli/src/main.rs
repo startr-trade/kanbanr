@@ -4121,7 +4121,7 @@ fn parse_test_results(text: &str) -> std::collections::BTreeMap<String, bool> {
 /// applies to an item: the goal link is the only thing that cannot be verified without a charter,
 /// and it is reported as unverifiable rather than as absent.
 fn check_definition_file(cli: &Cli, file: &str) -> anyhow::Result<()> {
-    use kanbanr_core::models::{FeatureDefinition, RequirementKind, TestState};
+    use kanbanr_core::models::FeatureDefinition;
     let raw = if file == "-" {
         use std::io::Read;
         let mut s = String::new();
@@ -4133,77 +4133,21 @@ fn check_definition_file(cli: &Cli, file: &str) -> anyhow::Result<()> {
     let definition: FeatureDefinition = serde_yaml::from_str(&raw)
         .map_err(|e| anyhow::anyhow!("invalid definition (YAML or JSON expected): {e}"))?;
 
-    let mut gaps: Vec<String> = Vec::new();
-    if definition.statement.trim().is_empty() {
-        gaps.push("[MISSING: statement] — one sentence: what this gives whom, and why".into());
-    }
-    for column in definition.zachman.missing() {
-        gaps.push(format!("[MISSING: {column}]"));
-    }
     if definition.goals.is_empty() {
         // Not a gap that can be judged here: without the charter there is nothing to resolve an id
         // against. Reported so a maintainer knows to check it, not counted against the contributor.
         println!("note: no goal link — the maintainer will check this against the charter");
     }
-    if definition.requirements.is_empty() {
-        gaps.push("no requirements — nothing states what must be true for this to be done".into());
-    }
-    for r in &definition.requirements {
-        let id = if r.id.trim().is_empty() {
-            format!("\"{}\"", r.text.chars().take(40).collect::<String>())
-        } else {
-            r.id.clone()
-        };
-        if kanbanr_core::ears::classify(&r.text).is_none() {
-            gaps.push(format!(
-                "{id} is not in EARS form (THE SYSTEM SHALL … / WHEN … / WHILE … / WHERE … / IF …)"
-            ));
-        }
-        if r.tests.is_empty() {
-            gaps.push(format!("{id} has no test — it cannot be shown to be met"));
-        } else if !r.tests.iter().any(|t| t.state == TestState::Green) {
-            gaps.push(format!(
-                "{id} has tests but none is green — evidence, not intent"
-            ));
-        }
-        for tag in &r.iso {
-            if kanbanr_core::ears::normalize_iso(tag).is_none() {
-                gaps.push(format!(
-                    "{id} is tagged '{tag}', which is not an ISO/IEC 25010 characteristic"
-                ));
-            }
-        }
-        if matches!(r.kind, RequirementKind::Nfr) {
-            if r.iso.is_empty() {
-                gaps.push(format!(
-                    "{id} is a quality requirement with no ISO 25010 tag"
-                ));
-            }
-            match r.scenario.as_ref() {
-                None => gaps.push(format!(
-                    "{id} is a quality requirement with no scenario (stimulus, environment, response, measure)"
-                )),
-                Some(s) if s.measure.trim().is_empty() => gaps.push(format!(
-                    "{id} has a scenario with no measure — an unmeasured quality is an opinion"
-                )),
-                Some(s) => {
-                    let measure = s.measure.to_lowercase();
-                    let named = r.tests.iter().any(|t| {
-                        !t.name.trim().is_empty() && measure.contains(&t.name.to_lowercase())
-                    });
-                    if !named {
-                        gaps.push(format!(
-                            "{id}: the measure names no test that checks it (unsupported claim)"
-                        ));
-                    }
-                }
-            }
-        } else if !r.iso.is_empty() {
-            gaps.push(format!(
-                "{id} carries a quality tag but is not a quality requirement (kind: nfr)"
-            ));
-        }
-    }
+    // The same rules the board applies (FEAT-112), minus what needs a board to judge.
+    let gaps: Vec<String> = kanbanr_core::readiness::evaluate_definition(
+        Some(&definition),
+        None,
+        None,
+        kanbanr_core::readiness::FILE,
+    )
+    .into_iter()
+    .map(|g| g.message)
+    .collect();
 
     if cli.json {
         println!(
@@ -4229,58 +4173,12 @@ fn check_definition_file(cli: &Cli, file: &str) -> anyhow::Result<()> {
 /// What an item has not said, and what it cannot yet show (FEAT-051). The same rules `doctor`
 /// applies, focused on one item and phrased as work left to do rather than as a complaint.
 fn check_report(f: &kanbanr_core::FeatureItem) -> Value {
-    use kanbanr_core::models::{ApprovalState, TestState};
-    let mut gaps: Vec<String> = Vec::new();
-    match f.definition.as_ref() {
-        None => {
-            gaps.push("no definition — why it exists, what must be true, how it is verified".into())
-        }
-        Some(def) if !def.exempt.trim().is_empty() => {}
-        Some(def) => {
-            if def.statement.trim().is_empty() {
-                gaps.push("[MISSING: statement]".into());
-            }
-            for column in def.zachman.missing() {
-                gaps.push(format!("[MISSING: {column}]"));
-            }
-            if def.goals.is_empty() {
-                gaps.push("no goal link — nothing says what this is for".into());
-            }
-            match def.approval_state() {
-                ApprovalState::Current | ApprovalState::Ratified => {}
-                ApprovalState::Missing => gaps.push("not approved".into()),
-                ApprovalState::Lapsed => gaps
-                    .push("approval lapsed — the definition changed after it was approved".into()),
-            }
-            // Reported only while unanswered: agreeing to the definition is what the warning asks
-            // for, so it stops once that has happened — whether the agreement came before the work
-            // (`approved`) or after it (`ratified`). FEAT-068, FEAT-080.
-            if !def.started_unapproved.trim().is_empty()
-                && !matches!(
-                    def.approval_state(),
-                    ApprovalState::Current | ApprovalState::Ratified
-                )
-            {
-                gaps.push(format!(
-                    "started without approval: {}",
-                    def.started_unapproved.trim()
-                ));
-            }
-            if def.requirements.is_empty() {
-                gaps.push("no requirements".into());
-            }
-            for r in &def.requirements {
-                if kanbanr_core::ears::classify(&r.text).is_none() {
-                    gaps.push(format!("{} is not in EARS form", r.id));
-                }
-                if r.tests.is_empty() {
-                    gaps.push(format!("{} has no test", r.id));
-                } else if !r.tests.iter().any(|t| t.state == TestState::Green) {
-                    gaps.push(format!("{} is not yet proven — no test is green", r.id));
-                }
-            }
-        }
-    }
+    // The engine every surface shares (FEAT-112); `check` and `finish` ask its CHECK list.
+    let gaps: Vec<String> =
+        kanbanr_core::readiness::evaluate(f, None, kanbanr_core::readiness::CHECK)
+            .into_iter()
+            .map(|g| g.message)
+            .collect();
     json!({ "code": f.code, "title": f.title, "status": f.status, "gaps": gaps })
 }
 

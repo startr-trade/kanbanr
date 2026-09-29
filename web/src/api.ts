@@ -1,15 +1,4 @@
-import type {
-  Activity,
-  BoardReport,
-  Charter,
-  DocFolder,
-  Lesson,
-  PendingReview,
-  PortfolioView,
-  Project,
-  ProjectSummary,
-  RollupReport,
-} from "./types";
+import type { Activity, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -39,6 +28,9 @@ export const api = {
   // Scheduling Gantt (FEAT-035): the daemon returns Mermaid `gantt` text.
   getCharter: (id: string) => getJson<Charter>(`/api/projects/${encodeURIComponent(id)}/charter`),
   /** Items whose definition is not currently agreed — computed by the daemon (FEAT-067). */
+  /** What each live item is missing, from the one engine every surface uses (FEAT-112). */
+  getReadiness: (id: string) =>
+    getJson<Readiness>(`/api/projects/${encodeURIComponent(id)}/readiness`),
   getPendingReviews: (id: string) =>
     getJson<PendingReview[]>(`/api/projects/${encodeURIComponent(id)}/review`),
   /**

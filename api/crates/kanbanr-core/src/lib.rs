@@ -29,6 +29,7 @@ pub mod models;
 pub mod portfolio;
 pub mod project;
 pub mod query;
+pub mod readiness;
 pub mod report;
 pub mod retro;
 pub mod scm;
@@ -1724,6 +1725,116 @@ requirements:
             .clone()
             .unwrap();
         assert_eq!(def.approval_state(), crate::models::ApprovalState::Current);
+    }
+
+    /// FEAT-112 R-1: one item, asked through every surface, gets one answer. The endpoint (what
+    /// the monitor reads and `check` prints), doctor and `query --gap` used to carry separate copies
+    /// of the rules, and they disagreed — doctor never asked for a green test, the query counted a
+    /// ratified item as unapproved.
+    #[test]
+    fn readiness_is_one_answer_across_surfaces() {
+        use crate::models::{FeatureDefinition, Requirement, TestRef, TestState};
+        use serde_json::Value;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart for 7 days".into(),
+                    goals: vec!["G-9".into()], // not in the charter
+                    requirements: vec![
+                        Requirement {
+                            id: "R-1".into(),
+                            text: "carts are kept".into(), // not EARS
+                            tests: vec![TestRef {
+                                name: "t1".into(),
+                                state: TestState::Red,
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        },
+                        Requirement {
+                            id: "R-2".into(),
+                            text: "WHEN a cart is idle, THE SYSTEM SHALL keep it.".into(),
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+
+        let out = crate::dispatch::dispatch(
+            &store,
+            "GET",
+            &format!("/projects/demo/features/{}/readiness", f.code),
+            None,
+        )
+        .unwrap();
+        let endpoint: Value = serde_json::from_str(&out).unwrap();
+        let said: Vec<String> = endpoint["gaps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| g["message"].as_str().unwrap().to_string())
+            .collect();
+        let project = store.load("demo").unwrap();
+        let item = project.feature(&f.code).unwrap();
+        let engine: Vec<String> = crate::readiness::evaluate(item, None, crate::readiness::CHECK)
+            .into_iter()
+            .map(|g| g.message)
+            .collect();
+        assert_eq!(said, engine, "the endpoint is the engine's CHECK list");
+
+        // Every rule doctor shares with check says exactly the same thing in both.
+        let doctor = crate::doctor::run_project(&store, "demo").unwrap();
+        let doctor_said: Vec<&str> = doctor
+            .issues
+            .iter()
+            .filter(|i| i.code.as_deref() == Some(f.code.as_str()))
+            .map(|i| i.message.as_str())
+            .collect();
+        for shared in ["R-1 is not in EARS form", "R-2 has no test"] {
+            let from_check = said.iter().find(|m| m.starts_with(shared)).unwrap();
+            assert!(
+                doctor_said.contains(&from_check.as_str()),
+                "doctor must say {from_check:?} word for word: {doctor_said:?}"
+            );
+        }
+        // Doctor's own extra: the goal the charter does not have, reported as an error.
+        assert!(
+            doctor.issues.iter().any(
+                |i| i.severity == crate::doctor::Severity::Error && i.message.contains("'G-9'")
+            )
+        );
+
+        // The query's groups agree with the gaps above.
+        // why: Zachman is unanswered; test: nothing is green; approval: never approved.
+        for (group, expect) in [("why", true), ("test", true), ("approval", true)] {
+            assert_eq!(
+                !crate::readiness::evaluate(
+                    item,
+                    None,
+                    crate::readiness::query_group(group).unwrap()
+                )
+                .is_empty(),
+                expect
+            );
+            let out = crate::dispatch::dispatch(
+                &store,
+                "GET",
+                &format!("/projects/demo/query?gap={group}"),
+                None,
+            )
+            .unwrap();
+            let hits: Value = serde_json::from_str(&out).unwrap();
+            let found = hits.to_string().contains(&f.code);
+            assert_eq!(found, expect, "query --gap {group}: {hits}");
+        }
     }
 
     #[test]

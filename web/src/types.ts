@@ -206,21 +206,18 @@ export interface PendingReview {
   definition: FeatureDefinition;
 }
 
-export function definitionGaps(feature: Feature): string[] {
-  const def = feature.definition;
-  if (!def) return ["no definition"];
-  if (def.exempt?.trim()) return [];
-  const gaps: string[] = [];
-  if (!def.statement?.trim()) gaps.push("statement");
-  for (const { column, answer } of zachmanColumns(def.zachman)) {
-    if (!answer.trim()) gaps.push(column);
-  }
-  if (!(def.goals ?? []).length) gaps.push("goal link");
-  const reqs = def.requirements ?? [];
-  if (!reqs.length) gaps.push("requirements");
-  if (reqs.some((r) => !(r.tests ?? []).length)) gaps.push("tests");
-  return gaps;
+/** One thing an item is missing, as the daemon's readiness engine reports it (FEAT-112). The rules
+ * live in the engine only; the monitor used to carry its own copy, and it drifted. */
+export interface Gap {
+  check: string;
+  requirement?: string;
+  level: "warning" | "error";
+  label: string;
+  message: string;
 }
+
+/** Gaps per live item, keyed by code, for a board's cards. */
+export type Readiness = Record<string, Gap[]>;
 
 /** A mirrored external issue (e.g. a GitHub issue kept in step with this feature). */
 export interface IssueLink {
