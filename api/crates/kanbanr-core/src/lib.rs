@@ -1751,6 +1751,139 @@ requirements:
         (store, d, f.code)
     }
 
+    /// FEAT-114 R-1: a sign-off records who gave it, when, in which status, and the definition it
+    /// covered — and a gate that asks for it passes only once it is there.
+    #[test]
+    fn signoffs_are_recorded_with_identity_and_revision() {
+        let (store, _d, code) = gated_board(crate::config::Gate {
+            signoffs: vec!["design-review".into()],
+            ..Default::default()
+        });
+        let err = store
+            .move_feature_approved("demo", &code, "Scheduled", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no sign-off 'design-review'"), "{err}");
+
+        let f = store
+            .signoff_feature("demo", &code, "design-review", "Ada L", "held 29 Sep", "")
+            .unwrap();
+        let def = f.definition.as_ref().unwrap();
+        let s = def.signoffs.last().unwrap();
+        assert_eq!(
+            (s.id.as_str(), s.by.as_str(), s.status.as_str()),
+            ("design-review", "Ada L", "Planned")
+        );
+        assert_eq!(
+            s.rev,
+            def.content_rev(),
+            "pinned to the definition it covered"
+        );
+        assert!(!s.at.is_empty());
+        // Recording it does not change what the approval covers: a sign-off is a verdict, not content.
+        store
+            .move_feature_approved("demo", &code, "Scheduled", None)
+            .expect("the gate passes once the sign-off is there");
+    }
+
+    /// FEAT-114 R-2: change the definition and the sign-off no longer covers it.
+    #[test]
+    fn a_signoff_lapses_when_the_definition_changes() {
+        use crate::models::FeatureDefinition;
+        let (store, _d, code) = gated_board(crate::config::Gate {
+            signoffs: vec!["design-review".into()],
+            ..Default::default()
+        });
+        store
+            .signoff_feature("demo", &code, "design-review", "Ada L", "", "")
+            .unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart for 30 days".into(),
+                    ..store
+                        .load("demo")
+                        .unwrap()
+                        .feature(&code)
+                        .unwrap()
+                        .definition
+                        .clone()
+                        .unwrap()
+                }),
+            )
+            .unwrap();
+        let err = store
+            .move_feature_approved("demo", &code, "Scheduled", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("sign-off 'design-review' lapsed"), "{err}");
+        // The old one is kept — raw data is not discarded — and a new one covers the new text.
+        store
+            .signoff_feature("demo", &code, "design-review", "Ada L", "re-reviewed", "")
+            .unwrap();
+        let f = store.load("demo").unwrap();
+        assert_eq!(
+            f.feature(&code)
+                .unwrap()
+                .definition
+                .as_ref()
+                .unwrap()
+                .signoffs
+                .len(),
+            2
+        );
+        store
+            .move_feature_approved("demo", &code, "Scheduled", None)
+            .unwrap();
+    }
+
+    /// FEAT-114 R-3: a sign-off that cannot say who gave it is not evidence of anything.
+    #[test]
+    fn a_signoff_needs_an_identity() {
+        use serde_json::json;
+        let (store, _d, code) = gated_board(crate::config::Gate::default());
+        assert!(
+            store
+                .signoff_feature("demo", &code, "design-review", " ", "", "")
+                .is_err()
+        );
+        let err = crate::dispatch::dispatch(
+            &store,
+            "POST",
+            &format!("/projects/demo/features/{code}/signoff/design-review"),
+            Some(&json!({})),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("who"), "{err}");
+        let ok = crate::dispatch::dispatch(
+            &store,
+            "POST",
+            &format!("/projects/demo/features/{code}/signoff/release%20approval"),
+            Some(&json!({"by": "Ada L", "note": "go"})),
+        );
+        assert!(ok.is_ok(), "{ok:?}");
+        let f = store.load("demo").unwrap();
+        let s = f
+            .feature(&code)
+            .unwrap()
+            .definition
+            .as_ref()
+            .unwrap()
+            .signoffs[0]
+            .clone();
+        assert_eq!(
+            s.id, "release approval",
+            "the name is decoded from the path"
+        );
+        // Approvals now say which status they were given in, too.
+        store.approve_feature("demo", &code, "Ada L").unwrap();
+        let f = store.load("demo").unwrap();
+        let def = f.feature(&code).unwrap().definition.clone().unwrap();
+        assert_eq!(def.approvals.last().unwrap().status, "Planned");
+    }
+
     /// FEAT-113 R-1: a blocking gate refuses the move and names every condition that fails.
     #[test]
     fn gates_block_and_list_what_is_missing() {

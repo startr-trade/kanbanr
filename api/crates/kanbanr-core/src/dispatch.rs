@@ -588,6 +588,15 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("POST", ["projects", p, "features", code, "approve"]) => {
             ser(&store.approve_feature(p, code, &approver(b)?)?)
         }
+        ("POST", ["projects", p, "features", code, "signoff", name]) => ser(&store
+            .signoff_feature(
+                p,
+                code,
+                &percent_decode(name),
+                &approver(b)?,
+                &str_field(b, "note").unwrap_or_default(),
+                &str_field(b, "doc").unwrap_or_default(),
+            )?),
         ("POST", ["projects", p, "features", code, "todos"]) => ser(&store.add_todo_list(
             p,
             code,
@@ -982,6 +991,9 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "features", c] => format!("edit feature {c}"),
         ["projects", _p, "features", c, "move"] => format!("move feature {c}"),
         ["projects", _p, "features", c, "approve"] => format!("approve definition of {c}"),
+        ["projects", _p, "features", c, "signoff", name] => {
+            format!("sign off {} on {c}", percent_decode(name))
+        }
         ["projects", _p, "features", c, "ratify"] => {
             format!("ratify {c} — built under a recorded bypass, agreed to after the fact")
         }

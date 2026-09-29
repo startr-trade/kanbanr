@@ -207,6 +207,32 @@ pub struct FeatureDefinition {
     /// beats one that is habitual (`--no-verify` teaches itself).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub exempt: String,
+    /// Named agreements a stage can require (FEAT-114): "design review held", "release approved".
+    /// Appended, never overwritten — each pinned to the definition it covered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signoffs: Vec<Signoff>,
+}
+
+/// A named agreement, recorded by a person against the definition as it stood (FEAT-114).
+///
+/// Like an approval it carries the definition's `rev`, so changing the definition afterwards lapses
+/// it: a design review of a different design is not a review of this one.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Signoff {
+    /// The name a gate asks for (`design-review`).
+    pub id: String,
+    pub by: String,
+    pub at: String,
+    /// The definition content it covered.
+    pub rev: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+    /// A board doc holding the record — minutes, a checklist.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub doc: String,
+    /// The status the item was in when it was given.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status: String,
 }
 
 /// Agreement to a definition, pinned to its content (FEAT-048).
@@ -235,6 +261,10 @@ pub struct ApprovalEvent {
     /// The definition content this verdict was about.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub rev: String,
+    /// The status the item was in when the verdict was given (FEAT-114), so a definition that grows
+    /// stage by stage leaves a readable trail: approved at Vision, again at System Design.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -273,6 +303,8 @@ impl FeatureDefinition {
         bare.approval = None;
         bare.approvals = Vec::new();
         bare.started_unapproved = String::new();
+        // Sign-offs are verdicts about the content, not part of it (FEAT-114).
+        bare.signoffs = Vec::new();
         for requirement in &mut bare.requirements {
             for test in &mut requirement.tests {
                 test.state = TestState::default();
@@ -291,6 +323,16 @@ impl FeatureDefinition {
             Some(_) if self.was_ratified() => ApprovalState::Ratified,
             Some(_) => ApprovalState::Current,
         }
+    }
+
+    /// Is sign-off `id` recorded against the definition as it now stands? The latest one counts.
+    pub fn signoff_current(&self, id: &str) -> Option<&Signoff> {
+        let rev = self.content_rev();
+        self.signoffs
+            .iter()
+            .rev()
+            .find(|s| s.id == id)
+            .filter(|s| s.rev == rev)
     }
 
     /// Was the standing agreement given after the fact? Read from the log's last verdict rather

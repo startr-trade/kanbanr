@@ -307,6 +307,36 @@ fn definition_sections(def: &crate::models::FeatureDefinition) -> String {
             def.exempt.trim()
         ));
     }
+    // Sign-offs, latest per name (FEAT-114): whether each still covers the definition as it stands.
+    let mut named: Vec<&str> = Vec::new();
+    for s in def.signoffs.iter().rev() {
+        if named.contains(&s.id.as_str()) {
+            continue;
+        }
+        named.push(&s.id);
+        let current = def.signoff_current(&s.id).is_some();
+        out.push_str(&format!(
+            "- **Signed off `{}`** by {} on {}{}{}{}\n",
+            s.id,
+            s.by,
+            s.at.get(..10).unwrap_or(&s.at),
+            if s.status.is_empty() {
+                String::new()
+            } else {
+                format!(" (at {})", s.status)
+            },
+            if s.note.is_empty() {
+                String::new()
+            } else {
+                format!(" — {}", s.note)
+            },
+            if current {
+                ""
+            } else {
+                " — **lapsed**: the definition changed since"
+            },
+        ));
+    }
 
     out.push_str("\n| Dimension | Answer |\n|---|---|\n");
     for (column, answer) in def.zachman.columns() {

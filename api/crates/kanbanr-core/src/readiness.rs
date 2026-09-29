@@ -46,6 +46,9 @@ pub enum Check {
     Quality,
     /// INVEST "Small": not estimated above three days.
     Small,
+    /// A named sign-off is recorded against the current definition. Asked for through a gate's
+    /// `signoffs: [name]`, never listed on its own — it needs the name.
+    Signoff,
 }
 
 impl Check {
@@ -80,6 +83,39 @@ impl Condition {
             Condition::Check(_) => None,
         }
     }
+}
+
+/// The sign-offs among `names` that are not recorded against the definition as it stands.
+pub fn signoff_gaps(feature: &FeatureItem, names: &[String]) -> Vec<Gap> {
+    let def = feature.definition.as_ref();
+    names
+        .iter()
+        .filter_map(|name| {
+            let latest = def.and_then(|d| d.signoffs.iter().rev().find(|s| &s.id == name));
+            let current = def.and_then(|d| d.signoff_current(name));
+            match (latest, current) {
+                (_, Some(_)) => None,
+                (Some(_), None) => Some(gap(
+                    Check::Signoff,
+                    None,
+                    &format!("sign-off '{name}' lapsed"),
+                    format!(
+                        "sign-off '{name}' lapsed — the definition changed after it was given, so \
+                         it no longer covers what is proposed"
+                    ),
+                )),
+                (None, None) => Some(gap(
+                    Check::Signoff,
+                    None,
+                    &format!("no sign-off '{name}'"),
+                    format!(
+                        "no sign-off '{name}' — `kanbanr signoff {} {name}`",
+                        feature.code
+                    ),
+                )),
+            }
+        })
+        .collect()
 }
 
 /// The gaps of an item against a gate's conditions.
@@ -385,7 +421,12 @@ fn item_level(
                 ));
             }
         }
-        Check::Ears | Check::TestsNamed | Check::TestsGreen | Check::Quality | Check::Small => {}
+        Check::Ears
+        | Check::TestsNamed
+        | Check::TestsGreen
+        | Check::Quality
+        | Check::Small
+        | Check::Signoff => {}
     }
 }
 

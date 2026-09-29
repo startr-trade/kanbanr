@@ -197,6 +197,13 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **Sign-offs (FEAT-114).** `kanbanr signoff <CODE> <name>` records a named agreement a stage can
+  require, such as a design review held or a release approved: who, when, in which status, with an
+  optional note and doc. A gate lists them as `signoffs: [design-review]`.
+  - A sign-off is tied to the definition it covered, so changing the definition lapses it and the
+    gate asks again. Earlier sign-offs are kept.
+  - Approvals now also record the status they were given in.
+  - `feature show` lists each sign-off and says whether it has lapsed.
 - **Declarable gates (FEAT-113).** A workflow can say, per status, what an item must show before
   it enters that status. The config's `gates` map takes `purpose`, `requires`, `warns`,
   `enforce: block|warn`, `kinds` and `on_enter`, and a Zachman condition can name only the columns

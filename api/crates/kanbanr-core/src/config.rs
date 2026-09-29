@@ -102,6 +102,9 @@ pub struct Gate {
     /// Conditions reported, never enforced.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warns: Vec<crate::readiness::Condition>,
+    /// Named sign-offs that must be recorded against the current definition (FEAT-114).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signoffs: Vec<String>,
     /// `block` (the default) refuses the move; `warn` allows it and reports what `requires` lacks.
     #[serde(default, skip_serializing_if = "Enforce::is_block")]
     pub enforce: Enforce,
