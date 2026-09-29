@@ -228,6 +228,7 @@ mod tests {
             start: None,
             due: None,
             estimate_days: None,
+            points: None,
             assignee: None,
             team: None,
             labels: vec!["ui".into(), "api".into(), "ui".into()],

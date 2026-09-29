@@ -71,7 +71,7 @@ fn maybe_apply_attrs(store: &Store, p: &str, code: &str, b: &Value) -> Result<Op
     ];
     // Scheduling attributes (FEAT-035) take a dedicated store path so the broad set_feature_attrs
     // signature is untouched.
-    let sched_keys = ["start", "estimate_days", "estimate"];
+    let sched_keys = ["start", "estimate_days", "estimate", "points"];
     let has_attrs = attr_keys.iter().any(|k| b.get(k).is_some());
     let has_sched = sched_keys.iter().any(|k| b.get(k).is_some());
     if !has_attrs && !has_sched {
@@ -110,8 +110,12 @@ fn maybe_apply_attrs(store: &Store, p: &str, code: &str, b: &Value) -> Result<Op
             .get("estimate_days")
             .or_else(|| b.get("estimate"))
             .map(|val| val.as_f64().unwrap_or(0.0));
-        let updated = store.set_feature_schedule(p, code, s("start"), estimate)?;
-        f = Some(updated);
+        if estimate.is_some() || b.get("start").is_some() {
+            f = Some(store.set_feature_schedule(p, code, s("start"), estimate)?);
+        }
+        if let Some(points) = b.get("points") {
+            f = Some(store.set_feature_points(p, code, points.as_f64().unwrap_or(0.0))?);
+        }
     }
     match f {
         Some(f) => Ok(Some(ser(&f)?)),
@@ -295,6 +299,8 @@ fn build_project_config(name: &str, body: &Value) -> Result<ProjectConfig> {
                 terminal_states: vec_field(body, "terminal_states").unwrap_or_default(),
                 statuses: s.clone(),
                 gates: Default::default(),
+                estimate_unit: Default::default(),
+                cadence: Default::default(),
             }
         }
         None => {
@@ -670,6 +676,30 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             &str_field(b, "new").unwrap_or_default(),
         )?),
         ("PUT", ["projects", p, "config", "workflow"]) => apply_workflow(store, p, b),
+        ("PUT", ["projects", p, "config", "cadence"]) => {
+            let unit = match str_field(b, "estimate_unit").as_deref() {
+                None => None,
+                Some("points") => Some(crate::config::EstimateUnit::Points),
+                Some("days") => Some(crate::config::EstimateUnit::Days),
+                Some(other) => {
+                    return Err(CoreError::Unsupported(format!(
+                        "estimate unit '{other}' is not days or points"
+                    )));
+                }
+            };
+            let current = store.load_meta(p)?.config.cadence;
+            let cadence = crate::config::Cadence {
+                sprints: bool_field(b, "sprints").unwrap_or(current.sprints),
+                releases: bool_field(b, "releases").unwrap_or(current.releases),
+                sprint_length_days: b
+                    .get("sprint_length_days")
+                    .and_then(Value::as_u64)
+                    .map(|d| d as u32)
+                    .or(current.sprint_length_days),
+                release: str_field(b, "release").or(current.release),
+            };
+            ser(&store.set_cadence(p, unit, cadence)?)
+        }
         // Workflow export (FEAT-039): the config rendered as a Mermaid state diagram.
         ("GET", ["projects", p, "workflow"]) => {
             let project = store.load(p)?;

@@ -84,6 +84,10 @@ pub struct FeatureItem {
     /// defaults to 1 day when absent). Kept as a float so half-days etc. are expressible.
     #[serde(default)]
     pub estimate_days: Option<f64>,
+    /// Optional estimate in story points (FEAT-121). Which of the two a project plans in is its
+    /// `estimate_unit`; absent stays absent on disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub points: Option<f64>,
     /// Optional assignee (the person/agent owning this feature); free text.
     #[serde(default)]
     pub assignee: Option<String>,
@@ -594,6 +598,7 @@ impl FeatureItem {
             start: self.start.clone(),
             due: self.due.clone(),
             estimate_days: self.estimate_days,
+            points: self.points,
             assignee: self.assignee.clone(),
             team: self.team.clone(),
             labels: self.labels.clone(),
@@ -623,6 +628,7 @@ impl FeatureItem {
             start: meta.start,
             due: meta.due,
             estimate_days: meta.estimate_days,
+            points: meta.points,
             assignee: meta.assignee,
             team: meta.team,
             labels: meta.labels,
@@ -659,6 +665,8 @@ pub struct FeatureMeta {
     pub due: Option<String>,
     #[serde(default)]
     pub estimate_days: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub points: Option<f64>,
     #[serde(default)]
     pub assignee: Option<String>,
     #[serde(default)]

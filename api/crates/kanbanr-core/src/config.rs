@@ -65,6 +65,49 @@ pub struct ProjectConfig {
     /// [`ProjectConfig::effective_gates`]; absent stays absent on disk.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub gates: BTreeMap<String, Gate>,
+    /// What this project estimates in (FEAT-121): days, or story points.
+    #[serde(default, skip_serializing_if = "EstimateUnit::is_days")]
+    pub estimate_unit: EstimateUnit,
+    /// Whether this project works in sprints and releases at all (FEAT-121). Off unless switched
+    /// on: many projects follow a different workflow, and data nobody asked for is clutter.
+    #[serde(default, skip_serializing_if = "Cadence::is_off")]
+    pub cadence: Cadence,
+}
+
+/// The unit a project estimates in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EstimateUnit {
+    #[default]
+    Days,
+    Points,
+}
+
+impl EstimateUnit {
+    fn is_days(&self) -> bool {
+        *self == EstimateUnit::Days
+    }
+}
+
+/// A project's rhythm (FEAT-121): whether it has sprints and releases, and their defaults.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cadence {
+    #[serde(default)]
+    pub sprints: bool,
+    #[serde(default)]
+    pub releases: bool,
+    /// The length `sprint add` uses when none is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprint_length_days: Option<u32>,
+    /// How often a release is cut: `per_sprint`, `every_n` sprints, or `on_demand`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
+}
+
+impl Cadence {
+    fn is_off(&self) -> bool {
+        *self == Cadence::default()
+    }
 }
 
 /// Whether a failed gate stops the move or only reports.
@@ -216,6 +259,8 @@ impl WorkflowFile {
             terminal_states: self.terminal_states,
             branch_pattern: None,
             gates: self.gates,
+            estimate_unit: EstimateUnit::default(),
+            cadence: Cadence::default(),
         };
         config.schema_version = config.required_schema_version();
         config

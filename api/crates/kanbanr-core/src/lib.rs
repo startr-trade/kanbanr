@@ -1847,6 +1847,109 @@ requirements:
         );
     }
 
+    /// FEAT-121 R-1: "estimated" means estimated in the unit the project plans in — story points
+    /// for a points project, days otherwise.
+    #[test]
+    fn the_estimate_unit_drives_capacity_and_checks() {
+        use crate::readiness::{Check, Condition};
+        use serde_json::json;
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_schedule("demo", &f.code, None, Some(2.0))
+            .unwrap();
+        let estimated = [Condition::Check(Check::Estimated)];
+        let item = |store: &Store| {
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&f.code)
+                .unwrap()
+                .clone()
+        };
+        let lacks = |unit| {
+            !crate::readiness::evaluate_conditions(&item(&store), None, &estimated, unit).is_empty()
+        };
+        use crate::config::EstimateUnit::{Days, Points};
+        assert!(!lacks(Days), "two days is an estimate in days");
+        assert!(lacks(Points), "but not in points");
+        store.set_feature_points("demo", &f.code, 5.0).unwrap();
+        assert!(!lacks(Points));
+        assert_eq!(item(&store).points, Some(5.0));
+        // The unit is the project's, set with the cadence, and the API takes points like any attr.
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&json!({"estimate_unit": "points"})),
+        )
+        .unwrap();
+        assert_eq!(store.load("demo").unwrap().config.estimate_unit, Points);
+        crate::dispatch::dispatch(
+            &store,
+            "PATCH",
+            &format!("/projects/demo/features/{}", f.code),
+            Some(&json!({"points": 0})),
+        )
+        .unwrap();
+        assert_eq!(item(&store).points, None, "0 clears it");
+        // An item that never had points does not grow a `points:` line on disk.
+        let other = store.add_feature("demo", "Other", "", "M", None).unwrap();
+        let raw = std::fs::read_dir(d.path.join("projects/demo/features/Planned"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .find(|e| e.file_name().to_string_lossy().starts_with(&other.code))
+            .map(|e| std::fs::read_to_string(e.path()).unwrap())
+            .unwrap();
+        assert!(!raw.contains("points"), "{raw}");
+    }
+
+    /// FEAT-121 R-2: sprints and releases are off until a project switches them on, and a request
+    /// for them says how.
+    #[test]
+    fn cadence_capabilities_are_off_unless_switched_on() {
+        use crate::store::Capability;
+        use serde_json::json;
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        let project = store.load("demo").unwrap();
+        assert!(!project.config.cadence.sprints && !project.config.cadence.releases);
+        let err = Store::require_cadence(&project, Capability::Sprints)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("kanbanr config cadence --sprints on"), "{err}");
+        assert!(Store::require_cadence(&project, Capability::Releases).is_err());
+        // A project that never switched them on carries no cadence at all on disk.
+        let config = std::fs::read_to_string(d.path.join("projects/demo/config.yaml")).unwrap();
+        assert!(
+            !config.contains("cadence") && !config.contains("estimate_unit"),
+            "{config}"
+        );
+
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&json!({"sprints": true, "sprint_length_days": 14, "release": "per_sprint"})),
+        )
+        .unwrap();
+        let project = store.load("demo").unwrap();
+        assert!(Store::require_cadence(&project, Capability::Sprints).is_ok());
+        assert!(
+            Store::require_cadence(&project, Capability::Releases).is_err(),
+            "each on its own"
+        );
+        assert_eq!(project.config.cadence.sprint_length_days, Some(14));
+        let bad = crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&json!({"release": "whenever"})),
+        );
+        assert!(bad.is_err());
+    }
+
     /// FEAT-117 R-2: where the workflow declares its gates, doctor reports what the item's NEXT stage
     /// needs — not everything a later stage will ask. A definition built stage by stage is not
     /// incomplete for lacking what it is not yet expected to say.
