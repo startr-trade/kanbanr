@@ -71,6 +71,36 @@ def mark_saved(transcripts: Path, sid: str, summary: str) -> None:
         f.write(compaction_key(summary) + "\n")
 
 
+# Things the user has said must never reach the board (FEAT-124). The list lives OUTSIDE the
+# repository and the board — this code only knows where to look — one term per line, matched
+# case-insensitively; blank lines and `#` comments are ignored.
+EXCLUDE_FILE = Path(os.environ.get("KANBANR_SUMMARY_EXCLUDE")
+                    or Path.home() / ".claude" / "kanbanr-summary-exclude.txt")
+
+
+def excluded_terms() -> list:
+    """The private terms, or [] when there is no list. A list that exists but cannot be read raises:
+    silently summarising without it would be exactly the leak it exists to prevent."""
+    if not EXCLUDE_FILE.exists():
+        return []
+    lines = EXCLUDE_FILE.read_text().splitlines()
+    return [t.strip().lower() for t in lines if t.strip() and not t.strip().startswith("#")]
+
+
+def mentions_excluded(text: str, terms: list) -> bool:
+    """Whole-word match, so a short term does not catch every longer word that happens to hold it."""
+    lower = text.lower()
+    return any(re.search(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", lower) for t in terms)
+
+
+def redact(text: str, terms: list) -> str:
+    """Remove every line that mentions an excluded term. Lines, not words: a sentence with the word
+    cut out still says what it was about."""
+    if not terms:
+        return text
+    return "\n".join(l for l in text.splitlines() if not mentions_excluded(l, terms))
+
+
 def kanbanr() -> str:
     return shutil.which("kanbanr") or str(Path.home() / ".cargo" / "bin" / "kanbanr")
 
@@ -79,6 +109,8 @@ def save_to_board(name: str, body: str) -> str:
     """Write `body` as board doc `sessions/<name>.md`. The board path is resolved by kanbanr from the
     project directory's .kanbanr marker, so this must run there."""
     path = f"sessions/{name}.md"
+    # The one door to the board, so the one place the exclusion list is enforced on the way out.
+    body = redact(body, excluded_terms()) + "\n"
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as tmp:
         tmp.write(body)
     try:
@@ -115,15 +147,19 @@ def read(transcript: Path) -> list:
 
 
 def conversation(entries: list):
-    """(earlier-summary, [(role, text)] after it). Only what was said, not what tools returned."""
+    """(earlier-summary, [(role, text)] after it). Only what was said, not what tools returned.
+
+    A message that mentions an excluded term is dropped whole, before the model sees anything
+    (FEAT-124): what the summariser is never told, it cannot repeat."""
+    terms = excluded_terms()
     last = max((i for i, e in enumerate(entries) if e.get("isCompactSummary")), default=-1)
-    earlier = text_of(entries[last]) if last >= 0 else ""
+    earlier = redact(text_of(entries[last]), terms) if last >= 0 else ""
     messages = []
     for e in entries[last + 1:]:
         if e.get("type") not in ("user", "assistant") or e.get("isMeta") or e.get("isCompactSummary"):
             continue
         t = text_of(e)
-        if t:
+        if t and not mentions_excluded(t, terms):
             messages.append((e["type"], t))
     return earlier, messages
 
