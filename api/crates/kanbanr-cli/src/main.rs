@@ -1969,23 +1969,13 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     if client.get(&format!("/projects/{p}")).is_err() {
         return Ok(());
     }
-    let root = std::env::current_dir()
-        .ok()
-        .map(|cwd| project::project_root(&cwd, project::home_dir().as_deref()));
-    let relative = root
-        .as_ref()
-        .and_then(|r| Path::new(path).strip_prefix(r).ok())
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.to_string());
-
-    if !belongs_on_the_board(&relative) {
+    let Ok(cwd) = std::env::current_dir() else {
         return Ok(());
-    }
-    let suggestion = relative
-        .trim_start_matches("./")
-        .trim_end_matches(".md")
-        .replace(' ', "-")
-        .to_lowercase();
+    };
+    let root = project::project_root(&cwd, project::home_dir().as_deref());
+    let Some(suggestion) = board_path_for(path, &root, &cwd) else {
+        return Ok(());
+    };
     println!(
         "{}",
         json!({"hookSpecificOutput": {
@@ -2002,6 +1992,51 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         }})
     );
     Ok(())
+}
+
+/// The board path to suggest for a file the guard refuses, or `None` when the write is not the
+/// guard's business.
+///
+/// The guard judges only files **inside the tracked repository** (FEAT-111). A path outside it —
+/// Claude Code's own plan file in `~/.claude/plans`, a scratch file, anything reached through
+/// `..` — is none of the board's concern, and refusing it once blocked plan mode outright. The
+/// suggestion is built from the repo-relative path, never the absolute one, which used to come out
+/// as `notes//home/…`.
+fn board_path_for(path: &str, root: &Path, cwd: &Path) -> Option<String> {
+    let given = Path::new(path);
+    let absolute = if given.is_absolute() {
+        given.to_path_buf()
+    } else {
+        cwd.join(given)
+    };
+    // Resolve `.` and `..` by the text alone: the file may not exist yet, so it cannot be
+    // canonicalised, and an escape through `..` must not count as inside the repository.
+    let mut resolved = PathBuf::new();
+    for part in absolute.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            other => resolved.push(other),
+        }
+    }
+    let relative = resolved.strip_prefix(root).ok()?;
+    let relative: Vec<String> = relative
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let relative = relative.join("/");
+    if relative.is_empty() || !belongs_on_the_board(&relative) {
+        return None;
+    }
+    Some(
+        relative
+            .trim_end_matches(".md")
+            .trim_end_matches(".markdown")
+            .replace(' ', "-")
+            .to_lowercase(),
+    )
 }
 
 /// Is this markdown file project *reasoning* (board) rather than a shipped *deliverable* (repo)?
@@ -6331,6 +6366,39 @@ Refs: kanbanr:FEAT-082/R-1""#;
     /// FEAT-065: the guard decides from a path and nothing else. Every judgement it gets wrong is
     /// either a note scattered into a codebase or a legitimate write refused — and a guard that
     /// refuses legitimate writes gets turned off.
+    #[test]
+    fn the_docs_guard_ignores_paths_outside_the_repo() {
+        let root = Path::new("/work/shop");
+        // FEAT-111 R-1: Claude Code's plan file, a scratch file, and an escape through `..` are
+        // all outside the repository, so the guard has no opinion on them.
+        for path in [
+            "/home/someone/.claude/plans/a-plan.md",
+            "/tmp/scratch/NOTES.md",
+            "../elsewhere/PLAN.md",
+            "/work/shop/../shop-notes/PLAN.md",
+        ] {
+            assert_eq!(board_path_for(path, root, root), None, "{path}");
+        }
+        // Inside it, the rule is unchanged: loose notes are refused, deliverables are not.
+        assert!(board_path_for("/work/shop/NOTES.md", root, root).is_some());
+        assert_eq!(board_path_for("/work/shop/README.md", root, root), None);
+    }
+
+    /// FEAT-111 R-2: the suggestion is a board path someone can actually run — built from the
+    /// repo-relative path, never `notes//home/…`.
+    #[test]
+    fn the_docs_guard_suggests_a_usable_board_path() {
+        let root = Path::new("/work/shop");
+        assert_eq!(
+            board_path_for("/work/shop/api/Design Notes.md", root, root).as_deref(),
+            Some("api/design-notes")
+        );
+        assert_eq!(
+            board_path_for("./PLAN.md", root, &root.join("sub/..")).as_deref(),
+            Some("plan")
+        );
+    }
+
     #[test]
     fn the_docs_guard_allows_deliverables_and_stops_the_rest() {
         // Project reasoning written loose in a checkout: this is what belongs on the board.
