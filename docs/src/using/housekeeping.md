@@ -23,7 +23,7 @@ where --json` tells you which folder is in use and why.
 ## Troubleshooting
 
 - **`monitor not reachable` from `kanbanr open`** — start the view daemon first:
-  `kanbanr serve --ui-dir web/dist` (or `make docker-up`).
+  `kanbanr serve`. The monitor is built into the binary, so there is no `--ui-dir` to find.
 - **Commits authored as `kanbanr <kanbanr@local>`** — set your identity:
   `kanbanr identity --name "You" --email you@example.com`.
 - **`could not determine project`** — pass `--project`, set `$KANBANR_PROJECT`, or
