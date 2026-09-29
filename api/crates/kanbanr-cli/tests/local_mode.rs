@@ -2552,3 +2552,37 @@ fn cli_reads_in_an_untracked_folder_create_nothing() {
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-110: output cut short by its reader (`kanbanr … | head`) ends quietly, as git's does, not
+/// with a panic and a stack trace after a command that had succeeded. The read end is closed before
+/// the CLI starts, so its first write is guaranteed to meet a broken pipe — no timing involved.
+#[test]
+fn cli_a_closed_pipe_is_not_a_panic() {
+    let dir = std::env::temp_dir().join(format!("kanbanr-pipe-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let out = Command::new(cli())
+        .args(["where"])
+        .current_dir(&dir)
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .stdout(writer)
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .expect("run kanbanr CLI");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("panicked"), "{err}");
+    assert!(err.trim().is_empty(), "nothing on stderr either: {err}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        assert!(
+            out.status.code() == Some(141) || out.status.signal() == Some(13),
+            "the status a broken pipe gives: {:?}",
+            out.status
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

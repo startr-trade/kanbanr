@@ -1063,6 +1063,7 @@ struct SetTransitionArgs {
 }
 
 fn main() -> ExitCode {
+    quiet_on_a_closed_pipe();
     let cli = Cli::parse();
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
@@ -1071,6 +1072,32 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `kanbanr … | head` must end the way `git … | head` does: quietly (FEAT-110).
+///
+/// Rust ignores SIGPIPE, so a write to a pipe whose reader has gone fails with EPIPE, and
+/// `println!` turns that into a panic and a stack trace — after a command that had succeeded. In an
+/// agent's session the trace reads as the command failing. Restoring the default signal instead
+/// would also kill `serve` whenever a browser drops a connection, so only this one panic is
+/// recognised, and it becomes the exit status a SIGPIPE would have given (128 + 13).
+fn quiet_on_a_closed_pipe() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info.payload();
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        // "Broken pipe" on Unix; ERROR_NO_DATA (232) is what Windows says for the same thing.
+        if message.starts_with("failed printing to stdout")
+            && (message.contains("Broken pipe") || message.contains("os error 232"))
+        {
+            std::process::exit(141);
+        }
+        default(info);
+    }));
 }
 
 /// The legacy `./data` path, when that fallback is all that resolved and nothing is there — the
