@@ -1416,21 +1416,45 @@ impl Store {
         key: &str,
         state: TaskState,
     ) -> Result<FeatureItem> {
+        self.set_task_state_reported(id, feature, todo, key, state)
+            .map(|(f, _)| f)
+    }
+
+    /// As [`Store::set_task_state`], also saying why a finished item did NOT advance, when its end
+    /// status's gate held it back (FEAT-115).
+    pub fn set_task_state_reported(
+        &self,
+        id: &str,
+        feature: &str,
+        todo: &str,
+        key: &str,
+        state: TaskState,
+    ) -> Result<(FeatureItem, Option<String>)> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
-        let f = Self::set_task_state_on(&mut project, &mut pending, feature, todo, key, state)?;
+        let charter = crate::charter::load(self, id)?;
+        let out = Self::set_task_state_on(
+            &mut project,
+            &mut pending,
+            &charter,
+            feature,
+            todo,
+            key,
+            state,
+        )?;
         self.flush(id, &project, &pending)?;
-        Ok(f)
+        Ok(out)
     }
 
     fn set_task_state_on(
         project: &mut Project,
         pending: &mut Pending,
+        charter: &crate::Charter,
         feature: &str,
         todo: &str,
         key: &str,
         state: TaskState,
-    ) -> Result<FeatureItem> {
+    ) -> Result<(FeatureItem, Option<String>)> {
         let config = project.config.clone();
         let f = project.feature_mut(feature)?;
         let from = f.status.clone();
@@ -1445,28 +1469,49 @@ impl Store {
             .find(|t| t.key == key)
             .ok_or_else(|| CoreError::TaskNotFound(key.to_string(), todo.to_string()))?;
         task.state = state;
+        let done = f.all_tasks_completed();
 
         // Auto-complete the feature when every task (across all lists) is done — but NOT when
-        // the feature sits in a no-op state (those are functionally inert dispositions).
+        // the feature sits in a no-op state (those are functionally inert dispositions). The end is
+        // whatever terminal status the workflow allows next, not a status that happens to be named
+        // "Completed", and it goes through that status's gate like any other move (FEAT-115).
         let at = now_rfc3339();
-        if f.all_tasks_completed()
-            && !config.is_no_op(&f.status)
-            && let Some(completed) = config
+        let mut held = None;
+        let target = if done && !config.is_no_op(&from) {
+            config
                 .statuses
                 .iter()
-                .find(|s| s.eq_ignore_ascii_case("Completed"))
-            && config.transition_allowed(&f.status, completed)
-        {
+                .find(|s| {
+                    crate::graph::is_terminal_status(&config, s)
+                        && !config.is_no_op(s)
+                        && config.transition_allowed(&from, s)
+                })
+                .cloned()
+        } else {
+            None
+        };
+        let target = match target {
+            Some(to) => match Self::check_gate(project, charter, feature, &to, None) {
+                Ok(_) => Some(to),
+                Err(e) => {
+                    held = Some(format!("all tasks are done, but it stays in {from}: {e}"));
+                    None
+                }
+            },
+            None => None,
+        };
+        let f = project.feature_mut(feature)?;
+        if let Some(to) = target {
             // Auto-completion is how most items actually finish, so it has to leave the same
             // record a manual move does — otherwise cycle time is blind to the normal path and
             // reports numbers only for items someone moved by hand (FEAT-061).
             f.history.push(crate::models::Transition {
                 at: at.clone(),
                 from: f.status.clone(),
-                to: completed.clone(),
+                to: to.clone(),
                 override_reason: None,
             });
-            f.status = completed.clone();
+            f.status = to;
         }
         f.updated_at = at;
         let updated = f.clone();
@@ -1474,7 +1519,7 @@ impl Store {
         if updated.status != from {
             pending.remove_features.insert((from, feature.to_string()));
         }
-        Ok(updated)
+        Ok((updated, held))
     }
 
     // ---- milestone ops -------------------------------------------------------------------
@@ -2038,15 +2083,20 @@ impl Store {
                     }
                     let st = crate::models::TaskState::parse(&state)
                         .ok_or_else(|| CoreError::InvalidTaskState(state.clone()))?;
-                    let f = Self::set_task_state_on(
+                    let (f, held) = Self::set_task_state_on(
                         &mut project,
                         &mut pending,
+                        &charter,
                         &resolve(&aliases, &feature),
                         &resolve(&aliases, &todo),
                         &key,
                         st,
                     )?;
-                    Ok(serde_json::json!({"op":"task.state","status":f.status}))
+                    let mut out = serde_json::json!({"op":"task.state","status":f.status});
+                    if let Some(held) = held {
+                        out["held"] = serde_json::json!(held);
+                    }
+                    Ok(out)
                 }
                 // Doc ops write to disk directly (they don't touch the in-memory project); a dry
                 // run only validates the path.

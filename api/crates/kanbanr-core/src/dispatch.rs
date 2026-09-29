@@ -614,7 +614,13 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("PUT", ["projects", p, "features", code, "todos", todo, "tasks", key]) => {
             let raw = str_field(b, "state").unwrap_or_default();
             let state = TaskState::parse(&raw).ok_or(CoreError::InvalidTaskState(raw))?;
-            ser(&store.set_task_state(p, code, todo, key, state)?)
+            let (feature, held) = store.set_task_state_reported(p, code, todo, key, state)?;
+            let mut out = serde_json::to_value(&feature)
+                .map_err(|e| CoreError::Unsupported(e.to_string()))?;
+            if let Some(held) = held {
+                out["auto_advance_held"] = json!(held);
+            }
+            ser(&out)
         }
 
         // ---- milestones ----

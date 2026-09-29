@@ -1751,6 +1751,52 @@ requirements:
         (store, d, f.code)
     }
 
+    /// FEAT-115 R-3: finishing the last task does not carry an item past its end status's gate —
+    /// it stays, and says why; once the gate is met, the next task write advances it.
+    #[test]
+    fn auto_advance_respects_the_gate() {
+        let (store, _d, code) = gated_board(crate::config::Gate::default());
+        // Gate the end: Completed needs a release sign-off. (Scheduled's gate from the helper asks
+        // nothing.)
+        let mut gates = store.load("demo").unwrap().config.gates.clone();
+        gates.insert(
+            "Completed".to_string(),
+            crate::config::Gate {
+                signoffs: vec!["release".into()],
+                ..Default::default()
+            },
+        );
+        store.set_gates("demo", gates).unwrap();
+        store
+            .move_feature_approved("demo", &code, "Scheduled", None)
+            .unwrap();
+        let tl = store.add_todo_list("demo", &code, "work", None).unwrap();
+        store
+            .add_task("demo", &code, &tl.code, "do it", None)
+            .unwrap();
+
+        let (f, held) = store
+            .set_task_state_reported("demo", &code, &tl.code, "T1", TaskState::Completed)
+            .unwrap();
+        assert_eq!(f.status, "Scheduled", "the gate holds it");
+        let held = held.expect("and says why");
+        assert!(held.contains("no sign-off 'release'"), "{held}");
+
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        let (f, held) = store
+            .set_task_state_reported("demo", &code, &tl.code, "T1", TaskState::Completed)
+            .unwrap();
+        assert_eq!(f.status, "Completed");
+        assert!(held.is_none());
+        assert_eq!(
+            f.history.last().unwrap().to,
+            "Completed",
+            "the move is on the record"
+        );
+    }
+
     /// FEAT-114 R-1: a sign-off records who gave it, when, in which status, and the definition it
     /// covered — and a gate that asks for it passes only once it is there.
     #[test]

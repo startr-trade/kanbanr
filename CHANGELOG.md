@@ -197,6 +197,15 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **start, finish and auto-advance follow the workflow (FEAT-115).**
+  - `start` goes to the status whose gate makes the branch: Implementation under TOGAF, not the
+    phase after Vision. A jump the workflow doesn't allow is refused, naming the stages in between.
+    In a folder that isn't a git repository, the item moves without a branch.
+  - `finish` ends at a terminal status reachable from where the item is. It used to take the
+    first terminal regardless.
+  - When every task is done, the item advances to that terminal status only if its gate is met.
+    Otherwise it stays and `task state` says why. It no longer depends on a status literally named
+    "Completed".
 - **Sign-offs (FEAT-114).** `kanbanr signoff <CODE> <name>` records a named agreement a stage can
   require, such as a design review held or a release approved: who, when, in which status, with an
   optional note and doc. A gate lists them as `signoffs: [design-review]`.

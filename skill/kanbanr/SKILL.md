@@ -298,6 +298,14 @@ kanbanr commit -m "…" --ref R-2   # better: the requirement this change exists
 kanbanr finish                    # refuses while tasks are open or requirements unproven
 ```
 
+`start` moves the item to the status whose gate makes the branch (`on_enter: [branch]`). With
+the default workflow that is the first active status; under a phased workflow such as TOGAF it
+is Implementation. If the item is further back, `start` names the stages in between: move it
+through them with `kanbanr move`, since each has its own gate. In a folder that isn't a git
+repository, `start` moves the item without a branch. `finish` ends at a terminal status the
+workflow allows from where the item is, and when every task is done the item advances there by
+itself, unless that status's gate isn't met.
+
 - Reference the **requirement** (`kanbanr:FEAT-046/R-2`) or the **task**
   (`kanbanr:FEAT-046/TL-001/T3`) when you know which one the change serves; the item alone is the
   floor, not the goal. One commit may reference several items — a cross-cutting change needs no
