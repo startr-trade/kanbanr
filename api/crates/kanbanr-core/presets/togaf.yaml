@@ -1,0 +1,38 @@
+# The TOGAF phases as columns, with the definition growing phase by phase: each phase asks only for
+# what it needs, and agreement is renewed as the definition grows.
+statuses: [Vision, Business Arch, System Design, Implementation, Migration, Operations, No Action, Not Applicable, Out-of-Scope]
+default_state: Vision
+displayed_states: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+no_op_states: [No Action, Not Applicable, Out-of-Scope]
+terminal_states: [Operations]
+transitions:
+  Vision: [Business Arch, No Action, Not Applicable, Out-of-Scope]
+  Business Arch: [System Design, Vision, No Action, Not Applicable, Out-of-Scope]
+  System Design: [Implementation, Business Arch, No Action, Not Applicable, Out-of-Scope]
+  Implementation: [Migration, Operations, System Design, No Action, Not Applicable, Out-of-Scope]
+  Migration: [Operations, Implementation, No Action, Not Applicable, Out-of-Scope]
+  Operations: [Migration, No Action, Not Applicable, Out-of-Scope]
+  No Action: [Vision]
+  Not Applicable: [Vision]
+  Out-of-Scope: [Vision]
+gates:
+  Vision:
+    purpose: Say what this is and why it matters — a statement and the goal it serves.
+  Business Arch:
+    purpose: Who it is for, what it must do, and why — the behaviour, as requirements.
+    requires: [statement, goals, {zachman: [who, what, why]}, requirements, ears, approved]
+  System Design:
+    purpose: How and where it will be built, and the quality it must reach.
+    requires: [{zachman: [how, where]}, approved]
+    warns: [quality]
+  Implementation:
+    purpose: Build it, with a test named for every requirement.
+    requires: [tests_named, approved]
+    on_enter: [branch]
+  Migration:
+    purpose: Move it into use, with the evidence that it works.
+    requires: [tests_green]
+  Operations:
+    purpose: Released and running.
+    requires: [tests_green]
+    signoffs: [release]

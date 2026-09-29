@@ -136,109 +136,127 @@ pub fn default_no_op_states() -> Vec<String> {
     ]
 }
 
-/// An optional TOGAF-phase workflow (FEAT-051), for projects that want architecture phases as
-/// board columns: Vision → Business Arch → System Design → Implementation → Migration →
-/// Operations. Opt-in, because a phase model is a real commitment; the default workflow stays a
-/// plain backlog → scheduled → done. The phase IS the status — there is no second field to keep
-/// in step.
-pub fn togaf_preset(name: &str) -> ProjectConfig {
-    let phases = [
-        "Vision",
-        "Business Arch",
-        "System Design",
-        "Implementation",
-        "Migration",
-        "Operations",
-    ];
-    let no_ops = default_no_op_states();
-    let mut statuses: Vec<String> = phases.iter().map(|s| s.to_string()).collect();
-    statuses.extend(no_ops.iter().cloned());
-
-    // Forward one phase, back one phase (rework is normal), and out to any no-op disposition.
-    let mut transitions = BTreeMap::new();
-    for (i, phase) in phases.iter().enumerate() {
-        let mut next: Vec<String> = Vec::new();
-        if let Some(forward) = phases.get(i + 1) {
-            next.push(forward.to_string());
-        }
-        if i > 0 {
-            next.push(phases[i - 1].to_string());
-        }
-        next.extend(no_ops.iter().cloned());
-        transitions.insert(phase.to_string(), next);
-    }
-    for n in &no_ops {
-        transitions.insert(n.clone(), vec!["Vision".to_string()]);
-    }
-
-    ProjectConfig {
-        branch_pattern: None,
-        schema_version: BASE_SCHEMA_VERSION,
-        name: name.to_string(),
-        description: String::new(),
-        displayed_states: phases.iter().map(|s| s.to_string()).collect(),
-        default_state: "Vision".to_string(),
-        terminal_states: vec!["Operations".to_string()],
-        no_op_states: no_ops,
-        statuses,
-        transitions,
-        gates: BTreeMap::new(),
-    }
+/// A workflow as a file: what `--from-file` reads, `--export` writes, and every preset is
+/// (FEAT-116). The project-specific parts of a config (name, description, branch pattern) are not in
+/// it, so one process file serves any number of projects.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowFile {
+    pub statuses: Vec<String>,
+    #[serde(default)]
+    pub default_state: String,
+    #[serde(default)]
+    pub displayed_states: Vec<String>,
+    #[serde(default)]
+    pub no_op_states: Vec<String>,
+    #[serde(default)]
+    pub terminal_states: Vec<String>,
+    #[serde(default)]
+    pub transitions: BTreeMap<String, Vec<String>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub gates: BTreeMap<String, Gate>,
 }
 
-impl ProjectConfig {
-    /// Sensible defaults for a new project.
-    pub fn default_for(name: &str) -> ProjectConfig {
-        let no_ops = default_no_op_states();
-        let mut statuses = vec![
-            "Deferred".to_string(),
-            "Planned".to_string(),
-            "Scheduled".to_string(),
-            "Completed".to_string(),
-        ];
-        statuses.extend(no_ops.iter().cloned());
+/// The built-in processes, as data (FEAT-116). Each file's leading comment is its description.
+const PRESETS: &[(&str, &str)] = &[
+    ("default", include_str!("../presets/default.yaml")),
+    ("scheduled", include_str!("../presets/scheduled.yaml")),
+    ("togaf", include_str!("../presets/togaf.yaml")),
+    ("pdca", include_str!("../presets/pdca.yaml")),
+    (
+        "design-control",
+        include_str!("../presets/design-control.yaml"),
+    ),
+];
 
-        // Active states can be dispositioned to any no-op state; no-op states reopen to Planned.
-        let with_no_ops = |mut v: Vec<String>| {
-            v.extend(no_ops.iter().cloned());
-            v
-        };
-        let mut transitions = BTreeMap::new();
-        transitions.insert(
-            "Deferred".to_string(),
-            with_no_ops(vec!["Planned".to_string()]),
-        );
-        transitions.insert(
-            "Planned".to_string(),
-            with_no_ops(vec!["Scheduled".to_string(), "Deferred".to_string()]),
-        );
-        transitions.insert(
-            "Scheduled".to_string(),
-            with_no_ops(vec!["Completed".to_string(), "Planned".to_string()]),
-        );
-        transitions.insert("Completed".to_string(), vec!["Scheduled".to_string()]);
-        for n in &no_ops {
-            transitions.insert(n.clone(), vec!["Planned".to_string()]);
-        }
+/// Every preset: `(name, one-line description)`.
+pub fn presets() -> Vec<(&'static str, String)> {
+    PRESETS
+        .iter()
+        .map(|(name, text)| {
+            let about: Vec<&str> = text
+                .lines()
+                .take_while(|l| l.starts_with('#'))
+                .map(|l| l.trim_start_matches('#').trim())
+                .collect();
+            (*name, about.join(" "))
+        })
+        .collect()
+}
 
-        ProjectConfig {
-            branch_pattern: None,
+/// A preset by name, or an error that lists the ones there are.
+pub fn preset(name: &str) -> crate::Result<WorkflowFile> {
+    let key = name.trim().to_ascii_lowercase();
+    let text = PRESETS
+        .iter()
+        .find(|(n, _)| *n == key)
+        .map(|(_, t)| *t)
+        .ok_or_else(|| {
+            let known: Vec<&str> = PRESETS.iter().map(|(n, _)| *n).collect();
+            crate::CoreError::Unsupported(format!(
+                "no workflow preset named '{name}' — the presets are: {}",
+                known.join(", ")
+            ))
+        })?;
+    serde_yaml::from_str(text)
+        .map_err(|e| crate::CoreError::Unsupported(format!("the {key} preset does not parse: {e}")))
+}
+
+impl WorkflowFile {
+    /// This workflow as a project's config.
+    pub fn into_config(self, name: &str) -> ProjectConfig {
+        let mut config = ProjectConfig {
             schema_version: BASE_SCHEMA_VERSION,
             name: name.to_string(),
             description: String::new(),
-            // No-op states (and Deferred) are intentionally NOT displayed.
-            displayed_states: vec![
-                "Planned".to_string(),
-                "Scheduled".to_string(),
-                "Completed".to_string(),
-            ],
-            default_state: "Planned".to_string(),
-            terminal_states: vec!["Completed".to_string()],
-            no_op_states: no_ops,
-            statuses,
-            transitions,
-            gates: BTreeMap::new(),
+            statuses: self.statuses,
+            default_state: self.default_state,
+            transitions: self.transitions,
+            displayed_states: self.displayed_states,
+            no_op_states: self.no_op_states,
+            terminal_states: self.terminal_states,
+            branch_pattern: None,
+            gates: self.gates,
+        };
+        config.schema_version = config.required_schema_version();
+        config
+    }
+
+    /// The workflow part of a project's config, as a file.
+    pub fn from_config(config: &ProjectConfig) -> WorkflowFile {
+        WorkflowFile {
+            statuses: config.statuses.clone(),
+            default_state: config.default_state.clone(),
+            displayed_states: config.displayed_states.clone(),
+            no_op_states: config.no_op_states.clone(),
+            terminal_states: config.terminal_states.clone(),
+            transitions: config.transitions.clone(),
+            gates: config.gates.clone(),
         }
+    }
+}
+
+/// The TOGAF phases as board columns, with the definition growing phase by phase (the `togaf`
+/// preset).
+pub fn togaf_preset(name: &str) -> ProjectConfig {
+    preset("togaf")
+        .expect("the built-in togaf preset parses")
+        .into_config(name)
+}
+
+impl ProjectConfig {
+    /// The `scheduled` preset — kanbanr's original default (Planned → Scheduled → Completed). What
+    /// the tests build on; a new project gets [`ProjectConfig::for_new_project`] instead.
+    pub fn default_for(name: &str) -> ProjectConfig {
+        preset("scheduled")
+            .expect("the built-in scheduled preset parses")
+            .into_config(name)
+    }
+
+    /// The workflow a new project gets when it names none: the `default` preset (FEAT-116).
+    pub fn for_new_project(name: &str) -> ProjectConfig {
+        preset("default")
+            .expect("the built-in default preset parses")
+            .into_config(name)
     }
 
     /// Is this status an explicit terminal (end) state of the workflow?

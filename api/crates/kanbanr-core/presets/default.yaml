@@ -1,0 +1,17 @@
+# The default workflow: plan, work, finish — with a parking place for later and a home for work
+# that recurs and never completes. No gates are declared: kanbanr's built-in rule applies (entering
+# In Progress needs an approved definition, and `start` makes the branch there).
+statuses: [Deferred, Planned, In Progress, Completed, Ongoing, No Action, Not Applicable, Out-of-Scope]
+default_state: Planned
+displayed_states: [Planned, In Progress, Completed]
+no_op_states: [No Action, Not Applicable, Out-of-Scope]
+terminal_states: [Completed]
+transitions:
+  Deferred: [Planned, Ongoing, No Action, Not Applicable, Out-of-Scope]
+  Planned: [In Progress, Deferred, Ongoing, No Action, Not Applicable, Out-of-Scope]
+  In Progress: [Completed, Planned, Ongoing, No Action, Not Applicable, Out-of-Scope]
+  Completed: [In Progress]
+  Ongoing: [In Progress, Planned]
+  No Action: [Planned]
+  Not Applicable: [Planned]
+  Out-of-Scope: [Planned]

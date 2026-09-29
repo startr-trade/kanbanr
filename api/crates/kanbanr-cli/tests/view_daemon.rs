@@ -290,7 +290,7 @@ fn review_and_approve_through_the_daemon() {
         "{url}/api/write/projects/demo/features/FEAT-001/move"
     ))
     .set("content-type", "application/json")
-    .send_string(r#"{"to": "Scheduled"}"#)
+    .send_string(r#"{"to": "In Progress"}"#)
     .expect("move through the daemon");
     assert_eq!(
         board_git(&["status", "--porcelain"]).trim(),

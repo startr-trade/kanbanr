@@ -1,0 +1,28 @@
+# Plan-Do-Check-Act (the Deming cycle): plan the change, make it, check it against what was
+# planned, and act on what was learned — then plan the next cycle.
+statuses: [Plan, Do, Check, Act, No Action, Not Applicable, Out-of-Scope]
+default_state: Plan
+displayed_states: [Plan, Do, Check, Act]
+no_op_states: [No Action, Not Applicable, Out-of-Scope]
+terminal_states: [Act]
+transitions:
+  Plan: [Do, No Action, Not Applicable, Out-of-Scope]
+  Do: [Check, Plan, No Action, Not Applicable, Out-of-Scope]
+  Check: [Act, Do, No Action, Not Applicable, Out-of-Scope]
+  Act: [Plan]
+  No Action: [Plan]
+  Not Applicable: [Plan]
+  Out-of-Scope: [Plan]
+gates:
+  Plan:
+    purpose: State the change, why, and how you will know it worked.
+  Do:
+    purpose: Make the change as planned.
+    requires: [statement, goals, requirements, tests_named, approved]
+    on_enter: [branch]
+  Check:
+    purpose: Measure the result against the plan.
+    requires: [tests_green]
+  Act:
+    purpose: Keep what worked, and say what the next cycle should change.
+    signoffs: [review]

@@ -197,6 +197,23 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **Workflow presets are data, and a project can load its own process (FEAT-116).**
+  - Presets are YAML files shipped in the binary:
+    - `default`: this board's shape, Planned → In Progress → Completed plus Deferred and Ongoing.
+      This is now what a **new** project gets.
+    - `scheduled`: the old default, Planned → Scheduled → Completed.
+    - `togaf`: the definition grows phase by phase, with the branch at Implementation, a release
+      sign-off, and a direct Implementation → Operations edge.
+    - `pdca`.
+    - `design-control`: modelled on ISO 9001 §8.3, not claimed compliant.
+  - `kanbanr config workflow --preset <name>` applies one, and `--preset list` describes them.
+    `--from-file` loads an organisation's own process, and `--export` writes a project's workflow,
+    gates included.
+  - An unknown preset name is refused with the list of known ones. `project init --workflow` used
+    to fall back silently.
+  - A preset's statuses and gates are replaced in one write.
+  - The Mermaid export shows each declared gate as a note.
+  - Existing boards keep their own workflow.
 - **start, finish and auto-advance follow the workflow (FEAT-115).**
   - `start` goes to the status whose gate makes the branch: Implementation under TOGAF, not the
     phase after Vision. A jump the workflow doesn't allow is refused, naming the stages in between.

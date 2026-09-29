@@ -1,0 +1,44 @@
+# A design-and-development flow modelled on the controls of ISO 9001 clause 8.3: planning, inputs,
+# design, review, verification, validation and release, with recorded sign-offs at review and
+# validation. Modelled on, not a claim of compliance — that is a certification body's call.
+statuses: [Planning, Inputs, Design, Review, Verification, Validation, Released, No Action, Not Applicable, Out-of-Scope]
+default_state: Planning
+displayed_states: [Planning, Inputs, Design, Review, Verification, Validation, Released]
+no_op_states: [No Action, Not Applicable, Out-of-Scope]
+terminal_states: [Released]
+transitions:
+  Planning: [Inputs, No Action, Not Applicable, Out-of-Scope]
+  Inputs: [Design, Planning, No Action, Not Applicable, Out-of-Scope]
+  Design: [Review, Inputs, No Action, Not Applicable, Out-of-Scope]
+  Review: [Verification, Design, No Action, Not Applicable, Out-of-Scope]
+  Verification: [Validation, Design, No Action, Not Applicable, Out-of-Scope]
+  Validation: [Released, Design, No Action, Not Applicable, Out-of-Scope]
+  Released: [Design]
+  No Action: [Planning]
+  Not Applicable: [Planning]
+  Out-of-Scope: [Planning]
+gates:
+  Planning:
+    purpose: Plan the design work — its stages, reviews and responsibilities.
+  Inputs:
+    purpose: Record the design inputs — the requirements it must meet, and why.
+    requires: [statement, goals, requirements, ears]
+  Design:
+    purpose: Produce the design outputs against those inputs.
+    requires: [zachman, approved]
+    warns: [quality]
+    on_enter: [branch]
+  Review:
+    purpose: Review the design against its inputs.
+    requires: [tests_named]
+  Verification:
+    purpose: Verify the outputs meet the inputs — the review is recorded before this starts.
+    requires: [tests_named]
+    signoffs: [design-review]
+  Validation:
+    purpose: Validate that the result serves its intended use.
+    requires: [tests_green]
+  Released:
+    purpose: Released, with validation recorded.
+    requires: [tests_green]
+    signoffs: [validation]

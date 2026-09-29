@@ -77,9 +77,16 @@ project"** (or anything equivalent):
      so chores link to something honest.
 
    **c. Process**
-   - *Workflow*: the default kanban (Deferred → Planned → Scheduled → Completed), **TOGAF**
-     phases as the columns (Vision → Business Arch → System Design → Implementation → Migration →
-     Operations), or custom statuses and transitions the user describes.
+   - *Workflow*: a preset (`kanbanr config workflow --preset list` describes them):
+     - **default**: Planned → In Progress → Completed, plus Deferred and Ongoing.
+     - **scheduled**: Planned → Scheduled → Completed.
+     - **togaf**: architecture phases, where the definition grows phase by phase.
+     - **pdca**: Plan → Do → Check → Act.
+     - **design-control**: modelled on ISO 9001 §8.3, with sign-offs.
+
+     Alternatively, load the organisation's own process with `--from-file`, or use custom
+     statuses the user describes. The phased presets ask for part of the definition at each stage,
+     not all of it up front.
    - *Definitions*: every item carries the Zachman six-dimension definition, EARS requirements
      and tests. That is the method, not an option. Say so, so the user is not surprised by it.
    - *Git hooks* in the code repo (`kanbanr git install-hooks`): every commit names its board
@@ -99,7 +106,7 @@ project"** (or anything equivalent):
 
    ```bash
    kanbanr init <name> --data-dir <board> --author "<name>" --email <email> --description "<…>"
-   kanbanr config workflow --togaf                 # or --statuses … --transitions …; omit for default
+   kanbanr config workflow --preset <name>         # or --from-file process.yaml; omit for default
    kanbanr charter set --file <scratch>/charter.yaml
    kanbanr hooks status                            # init registered them; install if it did not
    kanbanr claude sync                             # CLAUDE.md block pointing at the charter
@@ -635,14 +642,14 @@ kanbanr config set-transition <from> <to> --allow      # or --deny
 kanbanr config displayed-states Planned,Scheduled,Completed
 kanbanr config default-state Planned
 kanbanr config no-op-states "No Action,Not Applicable,Out-of-Scope"   # inert dispositions
-kanbanr config workflow --defaults | (--statuses … --transitions "A>B" --default-state … --displayed-states … --no-op-states …)
+kanbanr config workflow --preset <name> | --from-file process.yaml | (--statuses … --transitions "A>B" --default-state … --displayed-states … --no-op-states …)
+kanbanr config workflow --preset list             # what each preset is
+kanbanr config workflow --export > process.yaml   # this project's workflow, gates included
 
-An optional **TOGAF phase workflow** exists for projects that want architecture phases as board
-columns — `kanbanr project init <name> --workflow togaf` gives Vision → Business Arch → System
-Design → Implementation → Migration → Operations, forward and back. The phase IS the status; there
-is no second field. Offer it only if the user asks for phases: it is a real commitment, the default
-backlog → scheduled → done suits most work, and it cannot be changed casually once items are in
-flight.
+A phased process (togaf, pdca, design-control) or the organisation's own is **a workflow with
+gates**. The phase IS the status; there is no second field. Offer one only if the user asks for
+phases: it is a real commitment, the default suits most work, and it cannot be changed casually
+once items are in flight.
 ```
 
 Feature items (a milestone is REQUIRED; code auto-generates):
