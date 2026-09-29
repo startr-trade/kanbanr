@@ -197,6 +197,9 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **Piping output into `head` printed a panic (FEAT-110).** `kanbanr git status | head -1` ended
+  with a stack trace after a command that had succeeded. A closed pipe now ends the command
+  quietly with status 141, as it does for `git`.
 - **Work finished under a recorded bypass couldn't be ratified from the monitor (FEAT-109).**
   `doctor` was the only place it appeared, and `kanbanr ratify` the only way to agree to it. It now
   heads the Review page with a **Ratify** button, chosen with the same rule `doctor` uses.
