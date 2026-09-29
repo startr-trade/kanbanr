@@ -17,7 +17,14 @@ use std::collections::BTreeMap;
 ///
 /// History: 1 — status folders at the project root, single-file logs. 2 — status folders under
 /// `features/`, one log file per day.
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+///
+/// 3 — the config may declare `gates` (FEAT-113). A board is stamped 3 only when it
+/// declares gates, so an older binary refuses it instead of silently ignoring its guardrails; a
+/// board without gates stays at [`BASE_SCHEMA_VERSION`] and remains readable by older binaries.
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+
+/// What a board with no gates is stamped with: the storage layout of FEAT-071/FEAT-066.
+pub const BASE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
@@ -53,6 +60,68 @@ pub struct ProjectConfig {
     /// default, and absent stays absent on disk so an existing config is not rewritten.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_pattern: Option<String>,
+    /// Entry criteria per status (FEAT-113): what an item must show before it may move into that
+    /// status, and what happens when it does. Absent means today's rules, synthesised by
+    /// [`ProjectConfig::effective_gates`]; absent stays absent on disk.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub gates: BTreeMap<String, Gate>,
+}
+
+/// Whether a failed gate stops the move or only reports.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Enforce {
+    #[default]
+    Block,
+    Warn,
+}
+
+impl Enforce {
+    fn is_block(&self) -> bool {
+        *self == Enforce::Block
+    }
+}
+
+/// Something that happens when an item enters a status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Action {
+    /// `kanbanr start` creates the item's branch here (where the project is a git repository).
+    Branch,
+}
+
+/// The entry criteria of one status. Every field is optional; an empty gate asks nothing.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Gate {
+    /// What this stage is for, in a sentence — shown to Claude and in the monitor.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub purpose: String,
+    /// Conditions that must hold to enter.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<crate::readiness::Condition>,
+    /// Conditions reported, never enforced.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warns: Vec<crate::readiness::Condition>,
+    /// `block` (the default) refuses the move; `warn` allows it and reports what `requires` lacks.
+    #[serde(default, skip_serializing_if = "Enforce::is_block")]
+    pub enforce: Enforce,
+    /// When set, the gate applies only to items of these kinds (an item with no kind is a
+    /// `feature`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kinds: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on_enter: Vec<Action>,
+}
+
+impl Gate {
+    /// Does this gate apply to an item of `kind`?
+    pub fn applies_to(&self, kind: Option<&str>) -> bool {
+        let kind = kind
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+            .unwrap_or("feature");
+        self.kinds.is_empty() || self.kinds.iter().any(|k| k.eq_ignore_ascii_case(kind))
+    }
 }
 
 /// The default no-op (inert disposition) states.
@@ -101,7 +170,7 @@ pub fn togaf_preset(name: &str) -> ProjectConfig {
 
     ProjectConfig {
         branch_pattern: None,
-        schema_version: CURRENT_SCHEMA_VERSION,
+        schema_version: BASE_SCHEMA_VERSION,
         name: name.to_string(),
         description: String::new(),
         displayed_states: phases.iter().map(|s| s.to_string()).collect(),
@@ -110,6 +179,7 @@ pub fn togaf_preset(name: &str) -> ProjectConfig {
         no_op_states: no_ops,
         statuses,
         transitions,
+        gates: BTreeMap::new(),
     }
 }
 
@@ -150,7 +220,7 @@ impl ProjectConfig {
 
         ProjectConfig {
             branch_pattern: None,
-            schema_version: CURRENT_SCHEMA_VERSION,
+            schema_version: BASE_SCHEMA_VERSION,
             name: name.to_string(),
             description: String::new(),
             // No-op states (and Deferred) are intentionally NOT displayed.
@@ -164,6 +234,7 @@ impl ProjectConfig {
             no_op_states: no_ops,
             statuses,
             transitions,
+            gates: BTreeMap::new(),
         }
     }
 
@@ -198,6 +269,50 @@ impl ProjectConfig {
             .get(from)
             .map(|tos| tos.iter().any(|t| t == to))
             .unwrap_or(false)
+    }
+
+    /// The schema a config is stamped with: gates need a reader that enforces them.
+    pub fn required_schema_version(&self) -> u32 {
+        if self.gates.is_empty() {
+            BASE_SCHEMA_VERSION
+        } else {
+            CURRENT_SCHEMA_VERSION
+        }
+    }
+
+    /// The gates this workflow enforces: the declared ones, or — when none are declared — today's
+    /// rules, synthesised so that no existing board changes behaviour (FEAT-113).
+    ///
+    /// The synthesis is exactly the old start gate: entering a status the board displays as work in
+    /// flight (displayed, not the default backlog, not terminal, not a no-op) needs a definition
+    /// and a current agreement. Parking, closing and dispositioning are never gated — you can
+    /// always stop work (L-19). The first such status is where `start` creates the branch.
+    pub fn effective_gates(&self) -> BTreeMap<String, Gate> {
+        if !self.gates.is_empty() {
+            return self.gates.clone();
+        }
+        use crate::readiness::{Check, Condition};
+        let mut gates = BTreeMap::new();
+        let mut first = true;
+        for status in self.displayed_states.iter().filter(|s| {
+            **s != self.default_state
+                && !crate::graph::is_terminal_status(self, s)
+                && !self.is_no_op(s)
+        }) {
+            gates.insert(
+                status.clone(),
+                Gate {
+                    requires: vec![
+                        Condition::Check(Check::Definition),
+                        Condition::Check(Check::Approved),
+                    ],
+                    on_enter: if first { vec![Action::Branch] } else { vec![] },
+                    ..Gate::default()
+                },
+            );
+            first = false;
+        }
+        gates
     }
 
     /// The declared default status for new feature items (falls back to the first status).

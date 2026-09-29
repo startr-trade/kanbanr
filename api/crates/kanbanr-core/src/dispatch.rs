@@ -280,7 +280,7 @@ fn build_project_config(name: &str, body: &Value) -> ProjectConfig {
             let no_ops = no_op.clone().unwrap_or_default();
             ProjectConfig {
                 branch_pattern: None,
-                schema_version: crate::config::CURRENT_SCHEMA_VERSION,
+                schema_version: crate::config::BASE_SCHEMA_VERSION,
                 name: name.to_string(),
                 description: String::new(),
                 displayed_states: displayed
@@ -293,6 +293,7 @@ fn build_project_config(name: &str, body: &Value) -> ProjectConfig {
                 no_op_states: no_ops,
                 terminal_states: vec_field(body, "terminal_states").unwrap_or_default(),
                 statuses: s.clone(),
+                gates: Default::default(),
             }
         }
         None => {
@@ -349,7 +350,14 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         vec_field(body, "no_op_states").or_else(|| base.as_ref().map(|x| x.no_op_states.clone()));
     let terminals = vec_field(body, "terminal_states")
         .or_else(|| base.as_ref().map(|x| x.terminal_states.clone()));
-    ser(&store.set_workflow(
+    let gates: Option<BTreeMap<String, crate::config::Gate>> = match body.get("gates") {
+        Some(v) => Some(
+            serde_json::from_value(v.clone())
+                .map_err(|e| CoreError::Unsupported(format!("invalid gates: {e}")))?,
+        ),
+        None => base.as_ref().map(|x| x.gates.clone()),
+    };
+    let config = store.set_workflow(
         p,
         statuses,
         transitions,
@@ -357,7 +365,11 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         displayed,
         no_ops,
         terminals,
-    )?)
+    )?;
+    match gates {
+        Some(gates) => ser(&store.set_gates(p, gates)?),
+        None => ser(&config),
+    }
 }
 
 // ---- the dispatcher ------------------------------------------------------------------------
@@ -528,12 +540,21 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("POST", ["projects", p, "features", code, "move"]) => {
             // Entering an active status needs a current approval (FEAT-048); an explicit
             // `unapproved` reason is recorded rather than silently allowed.
-            ser(&store.move_feature_approved(
+            // `override` is the name since gates became declarable (FEAT-113); `unapproved` stays.
+            let reason = str_field(b, "override").or_else(|| str_field(b, "unapproved"));
+            let (feature, warnings) = store.move_feature_gated(
                 p,
                 code,
                 &str_field(b, "to").unwrap_or_default(),
-                str_field(b, "unapproved").as_deref(),
-            )?)
+                reason.as_deref(),
+            )?;
+            let mut out = serde_json::to_value(&feature)
+                .map_err(|e| CoreError::Unsupported(e.to_string()))?;
+            if !warnings.is_empty() {
+                out["gate_warnings"] =
+                    json!(warnings.iter().map(|g| &g.message).collect::<Vec<_>>());
+            }
+            ser(&out)
         }
         ("PUT", ["projects", p, "features", code, "tests", requirement, test]) => {
             // Path segments arrive percent-encoded: a test name is free text and routinely holds

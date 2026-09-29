@@ -274,16 +274,17 @@ mod tests {
             .unwrap();
         let config_path = d.path.join("projects/demo/config.yaml");
 
-        // A board this build wrote: readable, and stamped with the current version.
+        // A board this build wrote: readable, and stamped with the version its content needs — the
+        // base layout, since it declares no gates (FEAT-113).
         let config = store.load("demo").unwrap().config;
-        assert_eq!(config.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(config.schema_version, crate::config::BASE_SCHEMA_VERSION);
 
         // A board from the future: refused, naming both versions and the remedy.
         let raw = std::fs::read_to_string(&config_path).unwrap();
         std::fs::write(
             &config_path,
             raw.replace(
-                &format!("schema_version: {CURRENT_SCHEMA_VERSION}"),
+                &format!("schema_version: {}", crate::config::BASE_SCHEMA_VERSION),
                 &format!("schema_version: {}", CURRENT_SCHEMA_VERSION + 7),
             ),
         )
@@ -1727,6 +1728,198 @@ requirements:
         assert_eq!(def.approval_state(), crate::models::ApprovalState::Current);
     }
 
+    /// A charter-adopted project with one defined but unapproved item, and gates on Scheduled.
+    fn gated_board(gate: crate::config::Gate) -> (Store, tempdir::TempDirLike, String) {
+        use crate::models::FeatureDefinition;
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart for 7 days".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Scheduled".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        (store, d, f.code)
+    }
+
+    /// FEAT-113 R-1: a blocking gate refuses the move and names every condition that fails.
+    #[test]
+    fn gates_block_and_list_what_is_missing() {
+        use crate::readiness::{Check, Condition};
+        let (store, _d, code) = gated_board(crate::config::Gate {
+            requires: vec![
+                Condition::Check(Check::Requirements),
+                Condition::Zachman {
+                    zachman: vec!["what".into(), "why".into()],
+                },
+            ],
+            ..Default::default()
+        });
+        let err = store
+            .move_feature_approved("demo", &code, "Scheduled", None)
+            .expect_err("the gate must block")
+            .to_string();
+        for missing in ["no requirements", "[MISSING: What]", "[MISSING: Why]"] {
+            assert!(err.contains(missing), "{missing} not named: {err}");
+        }
+        assert!(
+            !err.contains("[MISSING: How]"),
+            "only the columns asked for: {err}"
+        );
+        assert!(err.contains("--override"), "{err}");
+        assert_eq!(
+            store.load("demo").unwrap().feature(&code).unwrap().status,
+            "Planned"
+        );
+    }
+
+    /// FEAT-113 R-2: a warn gate lets the move through and says what it lacks.
+    #[test]
+    fn gates_warn_and_move() {
+        use crate::readiness::{Check, Condition};
+        let (store, _d, code) = gated_board(crate::config::Gate {
+            requires: vec![Condition::Check(Check::Requirements)],
+            warns: vec![Condition::Check(Check::Goals)],
+            enforce: crate::config::Enforce::Warn,
+            ..Default::default()
+        });
+        let (moved, warnings) = store
+            .move_feature_gated("demo", &code, "Scheduled", None)
+            .unwrap();
+        assert_eq!(moved.status, "Scheduled");
+        let said: Vec<&str> = warnings.iter().map(|g| g.label.as_str()).collect();
+        assert!(
+            said.contains(&"no requirements") && said.contains(&"no goal link"),
+            "{said:?}"
+        );
+        // No override was needed, so none is recorded.
+        assert_eq!(moved.history.last().unwrap().override_reason, None);
+    }
+
+    /// FEAT-113 R-3: an override passes a blocking gate, and the reason stays in the history.
+    #[test]
+    fn an_override_is_recorded_in_history() {
+        use crate::readiness::{Check, Condition};
+        let (store, _d, code) = gated_board(crate::config::Gate {
+            requires: vec![Condition::Check(Check::Requirements)],
+            ..Default::default()
+        });
+        let (moved, warnings) = store
+            .move_feature_gated("demo", &code, "Scheduled", Some("customer demo tomorrow"))
+            .unwrap();
+        assert_eq!(moved.status, "Scheduled");
+        assert_eq!(
+            moved.history.last().unwrap().override_reason.as_deref(),
+            Some("customer demo tomorrow")
+        );
+        assert!(
+            warnings.iter().any(|g| g.label == "no requirements"),
+            "what was passed over is said"
+        );
+        // It survives a reload: it is history, and raw data is not discarded.
+        let reloaded = store.load("demo").unwrap();
+        assert_eq!(
+            reloaded
+                .feature(&code)
+                .unwrap()
+                .history
+                .last()
+                .unwrap()
+                .override_reason
+                .as_deref(),
+            Some("customer demo tomorrow")
+        );
+    }
+
+    /// FEAT-113 R-4: with no gates declared, the synthesised ones make exactly the decisions the old
+    /// start gate made, for every status of both built-in workflows.
+    #[test]
+    fn effective_gates_reproduce_the_legacy_gate() {
+        use crate::config::{Action, ProjectConfig};
+        for config in [
+            ProjectConfig::default_for("d"),
+            crate::config::togaf_preset("t"),
+        ] {
+            let gates = config.effective_gates();
+            let first_active = config.displayed_states.iter().find(|s| {
+                **s != config.default_state
+                    && !crate::graph::is_terminal_status(&config, s)
+                    && !config.is_no_op(s)
+            });
+            for status in &config.statuses {
+                // The old rule, restated: displayed, not the default, not terminal, not a no-op.
+                let old_gated = config.displayed_states.contains(status)
+                    && *status != config.default_state
+                    && !crate::graph::is_terminal_status(&config, status)
+                    && !config.is_no_op(status);
+                let gate = gates.get(status);
+                assert_eq!(gate.is_some(), old_gated, "{status}");
+                if let Some(gate) = gate {
+                    assert_eq!(gate.enforce, crate::config::Enforce::Block);
+                    assert_eq!(gate.requires.len(), 2, "definition and approval");
+                    assert_eq!(
+                        gate.on_enter.contains(&Action::Branch),
+                        Some(status) == first_active,
+                        "the branch is made where work starts: {status}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// FEAT-113 R-5: a gate that could never match is refused when the workflow is saved.
+    #[test]
+    fn unknown_gate_names_are_rejected() {
+        use serde_json::json;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let put = |gates: serde_json::Value| {
+            crate::dispatch::dispatch(
+                &store,
+                "PUT",
+                "/projects/demo/config/workflow",
+                Some(&json!({"defaults": true, "gates": gates})),
+            )
+        };
+        assert!(
+            put(json!({"Nowhere": {"requires": ["statement"]}})).is_err(),
+            "unknown status"
+        );
+        assert!(
+            put(json!({"Scheduled": {"requires": ["telepathy"]}})).is_err(),
+            "unknown check"
+        );
+        let err = put(json!({"Scheduled": {"requires": [{"zachman": ["what", "whence"]}]}}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("whence"), "{err}");
+        // A good one is accepted, and removing a status a gate names is refused.
+        assert!(
+            put(json!({"Scheduled": {"requires": ["statement", {"zachman": ["what"]}]}})).is_ok()
+        );
+        let err = store
+            .set_workflow(
+                "demo",
+                vec!["Planned".into(), "Completed".into()],
+                Default::default(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("Scheduled"), "{err}");
+    }
+
     /// FEAT-112 R-1: one item, asked through every surface, gets one answer. The endpoint (what
     /// the monitor reads and `check` prints), doctor and `query --gap` used to carry separate copies
     /// of the rules, and they disagreed — doctor never asked for a green test, the query counted a
@@ -2375,11 +2568,12 @@ requirements:
     fn config_schema_version_defaults_and_stamps() {
         use crate::config::CURRENT_SCHEMA_VERSION;
         let (store, d) = temp_store();
-        // A freshly-init project carries the current schema version (stamped on save).
+        // A freshly-init project carries the schema its content needs (stamped on save): the base
+        // layout, as it declares no gates.
         new_project(&store, "demo");
         assert_eq!(
             store.load("demo").unwrap().config.schema_version,
-            CURRENT_SCHEMA_VERSION
+            crate::config::BASE_SCHEMA_VERSION
         );
 
         // A legacy config (no schema_version key) loads as 0.
@@ -2394,13 +2588,27 @@ requirements:
         std::fs::write(&cfg_path, legacy).unwrap();
         assert_eq!(store.load("demo").unwrap().config.schema_version, 0);
 
-        // Re-saving forward-stamps it back to current (non-destructive migration).
+        // Re-saving forward-stamps it back to what its content needs (non-destructive migration).
         store
             .set_project_meta("demo", Some("Demo".into()), None)
             .unwrap();
         assert_eq!(
             store.load("demo").unwrap().config.schema_version,
+            crate::config::BASE_SCHEMA_VERSION
+        );
+        // Declaring gates stamps the version that knows them, so an older reader refuses the board
+        // instead of silently ignoring its guardrails (FEAT-113).
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Scheduled".to_string(), crate::config::Gate::default());
+        store.set_gates("demo", gates).unwrap();
+        assert_eq!(
+            store.load("demo").unwrap().config.schema_version,
             CURRENT_SCHEMA_VERSION
+        );
+        store.set_gates("demo", Default::default()).unwrap();
+        assert_eq!(
+            store.load("demo").unwrap().config.schema_version,
+            crate::config::BASE_SCHEMA_VERSION
         );
     }
 
@@ -2545,7 +2753,6 @@ requirements:
 
     #[test]
     fn doctor_detects_integrity_problems() {
-        use crate::config::CURRENT_SCHEMA_VERSION;
         use crate::doctor::{self, Severity};
         let (store, d) = temp_store();
         new_project(&store, "demo"); // seeds milestone "M", current schema
@@ -2574,7 +2781,7 @@ requirements:
         let cfg_path = d.path.join("projects").join("demo").join("config.yaml");
         let cfg = std::fs::read_to_string(&cfg_path).unwrap();
         let cfg = cfg.replace(
-            &format!("schema_version: {CURRENT_SCHEMA_VERSION}"),
+            &format!("schema_version: {}", crate::config::BASE_SCHEMA_VERSION),
             "schema_version: 0",
         );
         std::fs::write(&cfg_path, cfg).unwrap();

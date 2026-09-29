@@ -142,7 +142,8 @@ impl Disposition {
 /// Is a status terminal for rollup/board purposes? A "Completed"-named status (case-insensitive) or
 /// any configured no-op (inert disposition) state counts as terminal.
 fn is_terminal(project: &Project, status: &str) -> bool {
-    status.eq_ignore_ascii_case("Completed") || project.config.is_no_op(status)
+    // The one definition every surface uses (FEAT-113); this used to ignore `terminal_states`.
+    crate::graph::is_terminal_status(&project.config, status)
 }
 
 /// Would this status appear on the project's own board? (FEAT-097)

@@ -58,6 +58,70 @@ impl Check {
     }
 }
 
+/// One condition a gate can name: a check, or the Zachman check narrowed to some columns
+/// (`{zachman: [what, who, why]}`), which is how a process asks for the six dimensions a stage at a
+/// time rather than all at once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Condition {
+    Check(Check),
+    Zachman { zachman: Vec<String> },
+}
+
+impl Condition {
+    /// A column list names only real Zachman columns (checked when a workflow is saved).
+    pub fn invalid_column(&self) -> Option<String> {
+        const COLUMNS: [&str; 6] = ["what", "how", "where", "when", "who", "why"];
+        match self {
+            Condition::Zachman { zachman } => zachman
+                .iter()
+                .find(|c| !COLUMNS.contains(&c.trim().to_ascii_lowercase().as_str()))
+                .cloned(),
+            Condition::Check(_) => None,
+        }
+    }
+}
+
+/// The gaps of an item against a gate's conditions.
+pub fn evaluate_conditions(
+    feature: &FeatureItem,
+    goal_ids: Option<&std::collections::BTreeSet<String>>,
+    conditions: &[Condition],
+) -> Vec<Gap> {
+    let checks: Vec<Check> = conditions
+        .iter()
+        .filter_map(|c| match c {
+            Condition::Check(c) => Some(*c),
+            Condition::Zachman { .. } => None,
+        })
+        .collect();
+    let mut gaps = evaluate(feature, goal_ids, &checks);
+    let columns: Vec<String> = conditions
+        .iter()
+        .flat_map(|c| match c {
+            Condition::Zachman { zachman } => zachman.clone(),
+            Condition::Check(_) => vec![],
+        })
+        .map(|c| c.trim().to_ascii_lowercase())
+        .collect();
+    if !columns.is_empty()
+        && let Some(def) = feature.definition.as_ref()
+        && def.exempt.trim().is_empty()
+    {
+        for column in def.zachman.missing() {
+            if columns.contains(&column.to_ascii_lowercase())
+                && !gaps
+                    .iter()
+                    .any(|g| g.label == format!("[MISSING: {column}]"))
+            {
+                let label = format!("[MISSING: {column}]");
+                gaps.push(gap(Check::Zachman, None, &label, label.clone()));
+            }
+        }
+    }
+    gaps
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Level {

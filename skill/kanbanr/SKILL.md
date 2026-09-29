@@ -274,7 +274,8 @@ Write the definition with the batch path (`definition` on `feature.add`/`feature
 - kanbanr enforces it: moving an item into an active status is refused unless its definition is
   approved. If the definition changes after approval, the approval **lapses** and must be renewed —
   so scope cannot drift silently past a yes.
-- Genuinely urgent work can proceed with `kanbanr move <CODE> <status> --unapproved "<reason>"`.
+- Genuinely urgent work can proceed with `kanbanr move <CODE> <status> --override "<reason>"`
+  (`--unapproved` is the older name). The reason is kept in the item's history.
   The reason is recorded on the item. Use it for real emergencies, not to avoid asking. Work
   finished that way still needs agreement afterwards: it heads the monitor's Review page with a
   **Ratify** button (or `kanbanr ratify <CODE>`). Never ratify on the user's behalf.
@@ -608,13 +609,13 @@ kanbanr lessons [--for FEAT-001] [--all]        # read BEFORE starting work
 kanbanr lesson add "…" --kind pitfall --from FEAT-043 --evidence "…" [--tags a,b] [--goals G-1]
 kanbanr lesson affirm L-1 [--note "…"] | contradict L-1 [--note "…"]
 kanbanr split-from FEAT-060 FEAT-046   # this item was sliced out of that one
-kanbanr start FEAT-001 [--to STATUS] [--no-branch] [--unapproved "<reason>"]
+kanbanr start FEAT-001 [--to STATUS] [--no-branch] [--override "<reason>"]
 kanbanr commit -m "…" [--ref R-2] [--ref TL-001/T3] [-a]   # trailer filled from the branch
 kanbanr finish [FEAT-001]         # gated: tasks complete, requirements proven
 kanbanr git install-hooks [--force] | uninstall-hooks | status
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
 kanbanr approve FEAT-001          # the user records agreement (do not approve on their behalf)
-kanbanr move FEAT-001 Scheduled [--unapproved \"<reason>\"]   # gated; the override is recorded
+kanbanr move FEAT-001 Scheduled [--override \"<reason>\"]     # gated; the override is recorded
 kanbanr batch --dry-run --file b.json   # preview a bundle (e.g. an import) without writing
 kanbanr sources [--write]         # imported items' sources; --write records ones that are gone
 kanbanr mirror enable --repo owner/repo [--allow-public] | disable | status [--all]

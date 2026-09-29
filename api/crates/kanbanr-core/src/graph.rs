@@ -183,8 +183,11 @@ pub struct DependencyView {
 /// heuristic: case-insensitive "Completed" OR a no-op state (an inert disposition). Keeping the
 /// fallback means an empty `terminal_states` reproduces the pre-FEAT-039 behavior exactly.
 pub fn is_terminal_status(config: &crate::ProjectConfig, status: &str) -> bool {
+    // A status named "Completed" counts as terminal only where the workflow declares none: that is
+    // how boards made before `terminal_states` existed still work. A workflow that names its own
+    // end states is taken at its word (FEAT-113).
     config.is_terminal(status)
-        || status.eq_ignore_ascii_case("Completed")
+        || (config.terminal_states.is_empty() && status.eq_ignore_ascii_case("Completed"))
         || config.is_no_op(status)
 }
 

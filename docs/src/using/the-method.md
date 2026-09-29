@@ -47,7 +47,7 @@ kanbanr start FEAT-001       # refuses without a current approval
 
 Approval is pinned to a hash of the definition, so editing the definition afterwards **lapses** the
 approval rather than silently keeping it. The escape is explicit and recorded:
-`kanbanr start FEAT-001 --unapproved "why you are going ahead anyway"`, which stays on the item and
+`kanbanr start FEAT-001 --override "why you are going ahead anyway"` (`--unapproved` still works), which stays on the item and
 is reported by `doctor` until it is reviewed.
 
 **Reviewing in the browser.** Reading a page of markdown in a terminal is a poor way to decide
