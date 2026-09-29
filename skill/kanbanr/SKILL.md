@@ -88,7 +88,9 @@ project"** (or anything equivalent):
      one initial commit (the `.kanbanr` marker, `CLAUDE.md`, a `.gitignore`) **before** the git
      hooks. An item branch needs a commit to branch from, and `kanbanr start` refuses until one
      exists. The first commit lands on the default branch and says `[no-ref] initial commit` in its
-     message.
+     message. The `.gitignore` lists `.claude/settings.json` and `.claude/settings.local.json`.
+     `kanbanr hooks install` generates the settings file on each machine with that machine's
+     absolute paths, so it's never committed.
    - *Optional*: a git remote to back the board up to, the GitHub issue mirror (see below; a
      public repo needs an explicit OK), and importing an existing tracker (see "Importing existing
      task trackers": list what you found and ask which to bring in).
@@ -101,8 +103,9 @@ project"** (or anything equivalent):
    kanbanr charter set --file <scratch>/charter.yaml
    kanbanr hooks status                            # init registered them; install if it did not
    kanbanr claude sync                             # CLAUDE.md block pointing at the charter
+   printf '.claude/settings.json\n.claude/settings.local.json\n' >> .gitignore
    git init && git add .kanbanr CLAUDE.md .gitignore && git commit -m "[no-ref] initial commit"
-                                                   # only if the folder was not a git repo
+                                                   # these two only if the folder was not a git repo
    kanbanr git install-hooks                       # if chosen
    kanbanr remote add <name> <url>                 # if chosen
    kanbanr mirror enable --repo <owner/repo>       # if chosen
