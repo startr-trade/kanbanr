@@ -72,7 +72,7 @@ fn cli_local_mode_without_a_server() {
         "--milestone",
         "MS-1",
     ]);
-    ok(&["--project", "demo", "move", "FEAT-001", "Scheduled"]);
+    ok(&["--project", "demo", "move", "FEAT-001", "In Progress"]);
     ok(&[
         "--project",
         "demo",
@@ -545,7 +545,7 @@ esac
     assert_eq!(calls(), before, "no calls for an unchanged issue");
 
     // Completing the feature closes the issue.
-    run(&["move", "FEAT-001", "Scheduled"]);
+    run(&["move", "FEAT-001", "In Progress"]);
     run(&["move", "FEAT-001", "Completed"]);
     let closed = read(&format!(
         "patch-{}.json",
@@ -1137,7 +1137,7 @@ fn cli_capture_report_and_defect_escape() {
     );
 
     // Call the work done, then find a defect in it: that is an escape, and nobody had to say so.
-    run(&["move", "FEAT-001", "Scheduled"]);
+    run(&["move", "FEAT-001", "In Progress"]);
     run(&["move", "FEAT-001", "Completed"]);
     run(&[
         "feature",
@@ -1452,7 +1452,7 @@ fn cli_retro_reports_facts_and_writes_a_document() {
         "--milestone",
         "MS-001",
     ]);
-    run(&["move", "FEAT-001", "Scheduled"]);
+    run(&["move", "FEAT-001", "In Progress"]);
     // Three items join after the wave began, each for a different recorded reason.
     run(&[
         "feature",
@@ -1512,7 +1512,7 @@ fn cli_retro_reports_facts_and_writes_a_document() {
     assert!(run(&["retro", "--due"]).contains("no retro is due"));
     for code in ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"] {
         if code != "FEAT-001" {
-            run(&["move", code, "Scheduled"]);
+            run(&["move", code, "In Progress"]);
         }
         run(&["move", code, "Completed"]);
     }
@@ -2141,7 +2141,7 @@ fn cli_event_log_is_committed_with_the_change() {
     run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
     run(&["feature", "add", "--title", "Cart", "--milestone", "MS-001"]);
     // A status move is the op that produces an event.
-    run(&["move", "FEAT-001", "Scheduled"]);
+    run(&["move", "FEAT-001", "In Progress"]);
 
     let git = |args: &[&str]| -> String {
         let o = Command::new("git")
@@ -2657,7 +2657,45 @@ fn togaf_board(base: &std::path::Path, work: &std::path::Path) {
             "--no-hooks",
         ],
     ));
-    ok(run_in(base, work, &["config", "workflow", "--togaf"]));
+    // The TOGAF phases, loaded from a process file (FEAT-116), with gates that ask only for
+    // agreement and make the branch at Implementation, and no Implementation → Operations edge.
+    let process = base.join("process.yaml");
+    std::fs::write(
+        &process,
+        r#"statuses: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+default_state: Vision
+displayed_states: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+terminal_states: [Operations]
+transitions:
+  Vision: [Business Arch]
+  Business Arch: [System Design, Vision]
+  System Design: [Implementation, Business Arch]
+  Implementation: [Migration, System Design]
+  Migration: [Operations, Implementation]
+  Operations: [Migration]
+gates:
+  Business Arch:
+    requires: [definition, approved]
+  System Design:
+    requires: [approved]
+  Implementation:
+    requires: [approved]
+    on_enter: [branch]
+  Migration:
+    requires: [approved]
+"#,
+    )
+    .unwrap();
+    ok(run_in(
+        base,
+        work,
+        &[
+            "config",
+            "workflow",
+            "--from-file",
+            process.to_str().unwrap(),
+        ],
+    ));
     let charter = base.join("charter.yaml");
     std::fs::write(
         &charter,
@@ -2669,12 +2707,6 @@ fn togaf_board(base: &std::path::Path, work: &std::path::Path) {
         work,
         &["charter", "set", "--file", charter.to_str().unwrap()],
     ));
-    let config = base.join("code/shop.kanbanr/projects/shop/config.yaml");
-    let mut yaml = std::fs::read_to_string(&config).unwrap();
-    yaml.push_str(
-        "gates:\n  Business Arch:\n    requires: [definition, approved]\n  System Design:\n    requires: [approved]\n  Implementation:\n    requires: [approved]\n    on_enter: [branch]\n  Migration:\n    requires: [approved]\n",
-    );
-    std::fs::write(&config, yaml).unwrap();
     ok(run_in(
         base,
         work,

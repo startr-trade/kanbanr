@@ -629,7 +629,7 @@ mod tests {
         b.write(
             Method::Post,
             "/projects/shop/features/FEAT-002/move",
-            Some(json!({"to": "Scheduled"})),
+            Some(json!({"to": "In Progress"})),
         )
         .unwrap();
         b.write(

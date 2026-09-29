@@ -542,8 +542,8 @@ enum ProjectCmd {
         /// Statuses that are functionally inert (no-op) dispositions; always non-displayed.
         #[arg(long, value_delimiter = ',')]
         no_op_states: Option<Vec<String>>,
-        /// Use a named workflow preset instead of the default: `togaf` gives the six architecture
-        /// phases as board columns.
+        /// Use a named workflow preset instead of the default (FEAT-116): scheduled, togaf, pdca or
+        /// design-control. `kanbanr config workflow --preset list` describes them.
         #[arg(long)]
         workflow: Option<String>,
     },
@@ -776,13 +776,22 @@ enum ConfigCmd {
     },
     /// Reset/redefine the whole workflow at once: statuses, transitions, default/displayed/no-op states.
     Workflow {
-        /// Start from the built-in default workflow (Deferred/Planned/Scheduled/Completed +
-        /// the 3 default no-op states); any flags below then override it.
+        /// Start from a named process (FEAT-116): default, scheduled, togaf, pdca, design-control.
+        /// Its statuses, transitions and gates replace the current ones; any flags below then
+        /// override them. `--preset list` shows what each one is.
+        #[arg(long, value_name = "NAME")]
+        preset: Option<String>,
+        /// Load a whole workflow — statuses, transitions and gates — from a YAML file, such as an
+        /// organisation's own process. `--export` writes one to start from.
+        #[arg(long, value_name = "FILE")]
+        from_file: Option<String>,
+        /// Print this project's workflow, gates included, as a file `--from-file` can load (a read).
+        #[arg(long)]
+        export: bool,
+        /// Same as `--preset default`.
         #[arg(long)]
         defaults: bool,
-        /// Start from the TOGAF phase workflow instead: Vision → Business Arch → System Design →
-        /// Implementation → Migration → Operations. The phase is the status; there is no second
-        /// field to keep in step.
+        /// Same as `--preset togaf`.
         #[arg(long)]
         togaf: bool,
         #[arg(long, value_delimiter = ',')]
@@ -5954,6 +5963,9 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             Ok(())
         }
         ConfigCmd::Workflow {
+            preset,
+            from_file,
+            export,
             defaults,
             togaf,
             statuses,
@@ -5965,6 +5977,41 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             to_mermaid,
             from_mermaid,
         } => {
+            if preset.as_deref() == Some("list") {
+                for (name, about) in kanbanr_core::config::presets() {
+                    println!("{name:<15} {about}");
+                }
+                return Ok(());
+            }
+            // Export: the workflow as a file another project, or `--from-file`, can take (a read).
+            if *export {
+                let project = get_project(client, &p)?;
+                let file = kanbanr_core::config::WorkflowFile::from_config(&project.config);
+                print!("{}", serde_yaml::to_string(&file)?);
+                return Ok(());
+            }
+            // Import a whole workflow, gates included, from a file.
+            if let Some(src) = from_file {
+                let text = std::fs::read_to_string(src)
+                    .map_err(|e| anyhow::anyhow!("could not read {src}: {e}"))?;
+                let file: kanbanr_core::config::WorkflowFile = serde_yaml::from_str(&text)
+                    .map_err(|e| anyhow::anyhow!("{src} is not a workflow file: {e}"))?;
+                let resp = client.write(
+                    Method::Put,
+                    &format!("/projects/{p}/config/workflow"),
+                    Some(json!({
+                        "statuses": file.statuses,
+                        "transitions": file.transitions,
+                        "default_state": file.default_state,
+                        "displayed_states": file.displayed_states,
+                        "no_op_states": file.no_op_states,
+                        "terminal_states": file.terminal_states,
+                        "gates": file.gates,
+                    })),
+                )?;
+                print_write(cli, &resp, format!("workflow loaded from {src}"));
+                return Ok(());
+            }
             // Export: print the workflow as a Mermaid state diagram (a read).
             if *to_mermaid {
                 let diagram = client.get(&format!("/projects/{p}/workflow?format=mermaid"))?;
@@ -6010,6 +6057,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 }
             }
             let body = obj(vec![
+                ("preset", preset.clone().map(|s| json!(s))),
                 ("defaults", Some(json!(defaults))),
                 ("togaf", Some(json!(togaf))),
                 ("statuses", statuses.clone().map(|s| json!(s))),

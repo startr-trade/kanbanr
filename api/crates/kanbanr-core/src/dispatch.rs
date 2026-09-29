@@ -262,14 +262,15 @@ fn list_summaries(store: &Store) -> Result<Vec<ProjectSummary>> {
 
 // ---- config builders shared with the server's create-project / workflow routes --------------
 
-fn build_project_config(name: &str, body: &Value) -> ProjectConfig {
-    // An opt-in phase model, chosen at creation: `"workflow": "togaf"`.
-    if str_field(body, "workflow").as_deref() == Some("togaf") {
-        let mut config = crate::config::togaf_preset(name);
+fn build_project_config(name: &str, body: &Value) -> Result<ProjectConfig> {
+    // A process chosen at creation: `"workflow": "<preset>"` (FEAT-116). An unknown name is refused
+    // with the list, where it used to fall back silently to the default.
+    if let Some(preset) = str_field(body, "workflow") {
+        let mut config = crate::config::preset(&preset)?.into_config(name);
         if let Some(d) = str_field(body, "description") {
             config.description = d;
         }
-        return config;
+        return Ok(config);
     }
     let statuses = vec_field(body, "statuses");
     let displayed = vec_field(body, "displayed_states");
@@ -297,7 +298,7 @@ fn build_project_config(name: &str, body: &Value) -> ProjectConfig {
             }
         }
         None => {
-            let mut c = ProjectConfig::default_for(name);
+            let mut c = ProjectConfig::for_new_project(name);
             if let Some(ds) = &displayed {
                 c.displayed_states = ds.clone();
             }
@@ -317,16 +318,23 @@ fn build_project_config(name: &str, body: &Value) -> ProjectConfig {
     if let Some(d) = str_field(body, "description") {
         config.description = d;
     }
-    config
+    Ok(config)
 }
 
 fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
-    let base = if bool_field(body, "togaf").unwrap_or(false) {
-        Some(crate::config::togaf_preset(p))
-    } else if bool_field(body, "defaults").unwrap_or(false) {
-        Some(ProjectConfig::default_for(p))
-    } else {
-        None
+    // A preset to start from (FEAT-116): `preset: <name>`, or the older `togaf` / `defaults` flags.
+    let preset = str_field(body, "preset").or_else(|| {
+        if bool_field(body, "togaf").unwrap_or(false) {
+            Some("togaf".to_string())
+        } else if bool_field(body, "defaults").unwrap_or(false) {
+            Some("default".to_string())
+        } else {
+            None
+        }
+    });
+    let base = match preset {
+        Some(name) => Some(crate::config::preset(&name)?.into_config(p)),
+        None => None,
     };
     let statuses = match (vec_field(body, "statuses"), &base) {
         (Some(s), _) => s,
@@ -357,7 +365,7 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         ),
         None => base.as_ref().map(|x| x.gates.clone()),
     };
-    let config = store.set_workflow(
+    ser(&store.set_workflow_with_gates(
         p,
         statuses,
         transitions,
@@ -365,11 +373,8 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         displayed,
         no_ops,
         terminals,
-    )?;
-    match gates {
-        Some(gates) => ser(&store.set_gates(p, gates)?),
-        None => ser(&config),
-    }
+        gates,
+    )?)
 }
 
 // ---- the dispatcher ------------------------------------------------------------------------
@@ -413,7 +418,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("GET", ["projects"]) => ser(&list_summaries(store)?),
         ("POST", ["projects"]) => {
             let name = str_field(b, "name").unwrap_or_default();
-            let config = build_project_config(&name, b);
+            let config = build_project_config(&name, b)?;
             ser(&store.init_project(&name, config)?)
         }
         ("GET", ["projects", p]) => ser(&store.load(p)?),

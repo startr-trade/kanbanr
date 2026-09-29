@@ -2278,6 +2278,33 @@ impl Store {
         no_op_states: Option<Vec<String>>,
         terminal_states: Option<Vec<String>>,
     ) -> Result<ProjectConfig> {
+        self.set_workflow_with_gates(
+            id,
+            statuses,
+            transitions,
+            default_state,
+            displayed_states,
+            no_op_states,
+            terminal_states,
+            None,
+        )
+    }
+
+    /// As [`Store::set_workflow`], replacing the gates in the same write when `gates` is given
+    /// (FEAT-116) — a preset's statuses and its gates arrive together, so neither is ever checked
+    /// against the other one's predecessor.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_workflow_with_gates(
+        &self,
+        id: &str,
+        statuses: Vec<String>,
+        transitions: std::collections::BTreeMap<String, Vec<String>>,
+        default_state: Option<String>,
+        displayed_states: Option<Vec<String>>,
+        no_op_states: Option<Vec<String>>,
+        terminal_states: Option<Vec<String>>,
+        gates: Option<std::collections::BTreeMap<String, crate::config::Gate>>,
+    ) -> Result<ProjectConfig> {
         if statuses.is_empty() {
             return Err(CoreError::NoStatuses);
         }
@@ -2334,8 +2361,11 @@ impl Store {
                 }
             }
         }
-        // Gates already declared must still name real statuses once the workflow changes.
-        Self::validate_gates(&statuses, &project.config.gates)?;
+        // The gates this workflow will have must name its statuses: the new ones when given, or
+        // the ones already declared, which a change of statuses must not orphan.
+        let gates = gates.unwrap_or_else(|| project.config.gates.clone());
+        Self::validate_gates(&statuses, &gates)?;
+        project.config.gates = gates;
         project.config.statuses = statuses;
         project.config.transitions = transitions;
         project.config.default_state = default_state;

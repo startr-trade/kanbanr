@@ -111,7 +111,40 @@ pub fn to_state_diagram(config: &ProjectConfig) -> String {
         ));
     }
 
+    // Declared gates, as notes (FEAT-116): what entering each status asks for. Read-only — an
+    // import ignores notes, so the config stays the one source. Commas only: a `;` in a Mermaid
+    // note ends the statement and breaks the diagram (L-10).
+    for (status, gate) in &config.gates {
+        let mut asks: Vec<String> = gate.requires.iter().map(condition_text).collect();
+        asks.extend(gate.signoffs.iter().map(|s| format!("sign-off {s}")));
+        if asks.is_empty() {
+            continue;
+        }
+        let verb = match gate.enforce {
+            crate::config::Enforce::Block => "needs",
+            crate::config::Enforce::Warn => "warns without",
+        };
+        out.push_str(&format!(
+            "    note left of {}: {verb} {}\n",
+            id_of(status, &ids),
+            asks.join(", ")
+        ));
+    }
+
     out
+}
+
+fn condition_text(c: &crate::readiness::Condition) -> String {
+    match c {
+        crate::readiness::Condition::Check(check) => serde_json::to_value(check)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default()
+            .replace('_', " "),
+        crate::readiness::Condition::Zachman { zachman } => {
+            format!("zachman {}", zachman.join("/"))
+        }
+    }
 }
 
 /// Reject Mermaid features outside the flat subset we support, with a clear message.

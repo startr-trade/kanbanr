@@ -1751,6 +1751,102 @@ requirements:
         (store, d, f.code)
     }
 
+    /// FEAT-116 R-1: every preset applies cleanly — it passes the same validation as a hand-written
+    /// workflow — and brings its gates with it.
+    #[test]
+    fn presets_apply_with_their_gates() {
+        use serde_json::json;
+        let (store, _d) = temp_store();
+        crate::dispatch::dispatch(&store, "POST", "/projects", Some(&json!({"name": "demo"})))
+            .unwrap();
+        // A new project gets the default preset, which is this board's own shape.
+        let fresh = store.load("demo").unwrap().config;
+        assert!(
+            fresh.has_status("In Progress") && fresh.has_status("Ongoing"),
+            "{fresh:?}"
+        );
+        assert_eq!(fresh.terminal_states, ["Completed"]);
+        for (name, about) in crate::config::presets() {
+            assert!(!about.is_empty(), "{name} says what it is");
+            crate::dispatch::dispatch(
+                &store,
+                "PUT",
+                "/projects/demo/config/workflow",
+                Some(&json!({"preset": name})),
+            )
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let config = store.load("demo").unwrap().config;
+            let preset = crate::config::preset(name).unwrap();
+            assert_eq!(config.statuses, preset.statuses, "{name}");
+            assert_eq!(config.gates, preset.gates, "{name}");
+            assert_eq!(
+                config.schema_version,
+                config.required_schema_version(),
+                "{name}"
+            );
+        }
+        // The phased presets gate their stages; TOGAF makes the branch at Implementation.
+        let togaf = crate::config::preset("togaf").unwrap();
+        assert!(
+            togaf.gates["Implementation"]
+                .on_enter
+                .contains(&crate::config::Action::Branch)
+        );
+        assert!(togaf.transitions["Implementation"].contains(&"Operations".to_string()));
+        assert_eq!(togaf.gates["Operations"].signoffs, ["release"]);
+    }
+
+    /// FEAT-116 R-2: a preset name nobody defined is refused, with the ones there are — at creation
+    /// too, where it used to fall back to the default without a word.
+    #[test]
+    fn an_unknown_preset_is_refused() {
+        use serde_json::json;
+        let (store, _d) = temp_store();
+        let err = crate::dispatch::dispatch(
+            &store,
+            "POST",
+            "/projects",
+            Some(&json!({"name": "demo", "workflow": "waterfal"})),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("waterfal") && err.contains("togaf") && err.contains("pdca"),
+            "{err}"
+        );
+        assert!(store.load("demo").is_err(), "nothing was created");
+    }
+
+    /// FEAT-116 R-3: a workflow exported and loaded again is the same workflow, gates included — so
+    /// an organisation's process file moves between projects intact.
+    #[test]
+    fn workflow_files_round_trip() {
+        let original = crate::config::preset("design-control").unwrap();
+        let text = serde_yaml::to_string(&original).unwrap();
+        let back: crate::config::WorkflowFile = serde_yaml::from_str(&text).unwrap();
+        assert_eq!(back, original);
+        let config = back.clone().into_config("x");
+        assert_eq!(crate::config::WorkflowFile::from_config(&config), original);
+        // The Mermaid export names each gate, and a note never carries a `;` (L-10).
+        let diagram = crate::mermaid::to_state_diagram(&config);
+        assert!(
+            diagram
+                .contains("note left of Verification: needs tests named, sign-off design-review"),
+            "{diagram}"
+        );
+        assert!(
+            !diagram
+                .lines()
+                .any(|l| l.contains("note") && l.contains(';'))
+        );
+        // And importing the diagram ignores the notes, as before.
+        let parsed = crate::mermaid::parse_state_diagram(&diagram).unwrap();
+        assert_eq!(
+            parsed.default_state.as_deref(),
+            Some(config.default_state.as_str())
+        );
+    }
+
     /// FEAT-115 R-3: finishing the last task does not carry an item past its end status's gate —
     /// it stays, and says why; once the gate is met, the next task write advances it.
     #[test]
@@ -2024,9 +2120,13 @@ requirements:
     #[test]
     fn effective_gates_reproduce_the_legacy_gate() {
         use crate::config::{Action, ProjectConfig};
+        // The togaf preset declares its own gates now; the synthesis is for workflows that do not.
+        let mut togaf = crate::config::togaf_preset("t");
+        togaf.gates.clear();
         for config in [
             ProjectConfig::default_for("d"),
-            crate::config::togaf_preset("t"),
+            togaf,
+            ProjectConfig::for_new_project("n"),
         ] {
             let gates = config.effective_gates();
             let first_active = config.displayed_states.iter().find(|s| {
@@ -2074,16 +2174,16 @@ requirements:
             "unknown status"
         );
         assert!(
-            put(json!({"Scheduled": {"requires": ["telepathy"]}})).is_err(),
+            put(json!({"In Progress": {"requires": ["telepathy"]}})).is_err(),
             "unknown check"
         );
-        let err = put(json!({"Scheduled": {"requires": [{"zachman": ["what", "whence"]}]}}))
+        let err = put(json!({"In Progress": {"requires": [{"zachman": ["what", "whence"]}]}}))
             .unwrap_err()
             .to_string();
         assert!(err.contains("whence"), "{err}");
         // A good one is accepted, and removing a status a gate names is refused.
         assert!(
-            put(json!({"Scheduled": {"requires": ["statement", {"zachman": ["what"]}]}})).is_ok()
+            put(json!({"In Progress": {"requires": ["statement", {"zachman": ["what"]}]}})).is_ok()
         );
         let err = store
             .set_workflow(
@@ -2096,7 +2196,7 @@ requirements:
                 None,
             )
             .unwrap_err();
-        assert!(err.to_string().contains("Scheduled"), "{err}");
+        assert!(err.to_string().contains("In Progress"), "{err}");
     }
 
     /// FEAT-112 R-1: one item, asked through every surface, gets one answer. The endpoint (what

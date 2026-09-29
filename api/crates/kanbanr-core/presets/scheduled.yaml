@@ -1,0 +1,15 @@
+# The workflow kanbanr started with: Planned → Scheduled → Completed, with Deferred for later.
+# No gates are declared: the built-in rule applies (entering Scheduled needs an approved definition).
+statuses: [Deferred, Planned, Scheduled, Completed, No Action, Not Applicable, Out-of-Scope]
+default_state: Planned
+displayed_states: [Planned, Scheduled, Completed]
+no_op_states: [No Action, Not Applicable, Out-of-Scope]
+terminal_states: [Completed]
+transitions:
+  Deferred: [Planned, No Action, Not Applicable, Out-of-Scope]
+  Planned: [Scheduled, Deferred, No Action, Not Applicable, Out-of-Scope]
+  Scheduled: [Completed, Planned, No Action, Not Applicable, Out-of-Scope]
+  Completed: [Scheduled]
+  No Action: [Planned]
+  Not Applicable: [Planned]
+  Out-of-Scope: [Planned]
