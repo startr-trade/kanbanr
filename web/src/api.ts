@@ -1,4 +1,4 @@
-import type { Activity, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness } from "./types";
+import type { Activity, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -27,6 +27,13 @@ export const api = {
   getProject: (id: string) => getJson<Project>(`/api/projects/${encodeURIComponent(id)}`),
   // Scheduling Gantt (FEAT-035): the daemon returns Mermaid `gantt` text.
   getCharter: (id: string) => getJson<Charter>(`/api/projects/${encodeURIComponent(id)}/charter`),
+  /** A project's sprints (FEAT-119); only projects that switch them on have any. */
+  getSprints: (id: string) => getJson<Sprint[]>(`/api/projects/${encodeURIComponent(id)}/sprints`),
+  /** One sprint with its burndown — `active` names the running one. */
+  getSprint: (id: string, code: string) =>
+    getJson<SprintReport>(`/api/projects/${encodeURIComponent(id)}/sprints/${encodeURIComponent(code)}`),
+  /** A project's releases (FEAT-120). */
+  getReleases: (id: string) => getJson<Release[]>(`/api/projects/${encodeURIComponent(id)}/releases`),
   /** What each live item is missing, from the one engine every surface uses (FEAT-112). */
   getReadiness: (id: string) =>
     getJson<Readiness>(`/api/projects/${encodeURIComponent(id)}/readiness`),

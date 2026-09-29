@@ -444,7 +444,20 @@ pub fn evaluate_definition(
 ) -> Vec<Gap> {
     let mut gaps = Vec::new();
     let Some(def) = definition else {
-        if checks.contains(&Check::Definition) {
+        // Anything that reads the definition fails without one — a gate asking for a statement
+        // must not wave through an item that has no definition at all. It is said once, as the
+        // missing definition, not as every field it would have held.
+        let reads_definition = checks.iter().any(|c| {
+            !matches!(
+                c,
+                Check::Small
+                    | Check::Estimated
+                    | Check::InSprint
+                    | Check::InRelease
+                    | Check::Signoff
+            )
+        });
+        if reads_definition {
             gaps.push(gap(
                 Check::Definition,
                 None,
@@ -793,9 +806,17 @@ mod tests {
         let gaps = evaluate(&bare, None, CHECK);
         assert_eq!(gaps.len(), 1);
         assert_eq!(gaps[0].check, Check::Definition);
+        // Any list that reads the definition says, once, that there is none — even one that does
+        // not name `definition` itself. A gate asking for a statement once waved an undefined item
+        // through, because the missing definition had nothing to be reported as.
+        let file = evaluate(&bare, None, FILE);
+        assert_eq!(file.len(), 1);
+        assert_eq!(file[0].check, Check::Definition);
         assert!(
-            evaluate(&bare, None, FILE).is_empty(),
-            "FILE never asks about a missing definition"
+            !evaluate(&bare, None, &[Check::Estimated, Check::Small])
+                .iter()
+                .any(|g| g.check == Check::Definition),
+            "checks that do not read the definition do not ask for one"
         );
     }
 

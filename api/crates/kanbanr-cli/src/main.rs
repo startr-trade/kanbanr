@@ -6599,7 +6599,7 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
                 format!(
                     "planned {} into {code} ({} committed)",
                     items.join(", "),
-                    v["committed"]
+                    num(&v["committed"])
                 ),
             );
             if !cli.json

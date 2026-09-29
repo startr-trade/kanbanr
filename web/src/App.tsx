@@ -1,5 +1,7 @@
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { ThemeToggle } from "./components/bits";
+import { api } from "./api";
+import { useAsync } from "./live";
 
 /** Persistent shell: a simple breadcrumb + within-project tab bar that keeps navigation
  * between projects, the dashboard, status, and documentation one click away. */
@@ -8,6 +10,13 @@ export default function App() {
   const segs = pathname.split("/").filter(Boolean);
   const inProject = segs[0] === "p" && segs.length >= 2;
   const project = inProject ? decodeURIComponent(segs[1]) : null;
+  // The Releases tab only where the project uses releases (FEAT-123): a tab for data a project
+  // does not have is a door into an empty room.
+  const config = useAsync(
+    () => (project ? api.getProject(project).then((p) => p.config) : Promise.resolve(null)),
+    [project],
+  );
+  const usesReleases = config.data?.cadence?.releases === true;
 
   return (
     <div className="app">
@@ -45,6 +54,9 @@ export default function App() {
             <ProjectTab to={`/p/${encodeURIComponent(project)}/milestones`}>Milestones</ProjectTab>
             <ProjectTab to={`/p/${encodeURIComponent(project)}/schedule`}>Schedule</ProjectTab>
             <ProjectTab to={`/p/${encodeURIComponent(project)}/gantt`}>Gantt</ProjectTab>
+            {usesReleases ? (
+              <ProjectTab to={`/p/${encodeURIComponent(project)}/releases`}>Releases</ProjectTab>
+            ) : null}
             <ProjectTab to={`/p/${encodeURIComponent(project)}/workflow`}>Workflow</ProjectTab>
             <ProjectTab to={`/p/${encodeURIComponent(project)}/docs`}>Docs</ProjectTab>
           </nav>
