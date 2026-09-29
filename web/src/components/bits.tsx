@@ -113,12 +113,15 @@ export function FeatureCard({
   feature,
   siblings,
   gaps = [],
+  next = [],
 }: {
   project: string;
   feature: Feature;
   siblings?: Feature[];
   /** From the daemon's readiness engine; only live items have any. */
   gaps?: Gap[];
+  /** The next stage and how much moving there still lacks (FEAT-117). */
+  next?: { status: string; missing: number }[];
 }) {
   const p = featureProgress(feature);
   const blocked = siblings ? isBlockedBySiblings(feature, siblings) : false;
@@ -132,6 +135,15 @@ export function FeatureCard({
             {gaps.length === 1 && gaps[0].check === "definition" ? "no definition" : `${gaps.length} gaps`}
           </span>
         )}
+        {next.map((n) => (
+          <span
+            key={n.status}
+            className={`chip ${n.missing > 0 ? "warn" : "tasks"}`}
+            title={n.missing > 0 ? `${n.missing} thing(s) to settle before ${n.status}` : `ready for ${n.status}`}
+          >
+            {n.missing > 0 ? `→ ${n.status}: ${n.missing}` : `→ ${n.status} ✓`}
+          </span>
+        ))}
         {blocked && <span className="chip blocked">blocked</span>}
         {feature.milestone && <span className="chip">{feature.milestone}</span>}
         {p.total > 0 && (

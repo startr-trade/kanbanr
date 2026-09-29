@@ -27,10 +27,13 @@ export const api = {
   getProject: (id: string) => getJson<Project>(`/api/projects/${encodeURIComponent(id)}`),
   // Scheduling Gantt (FEAT-035): the daemon returns Mermaid `gantt` text.
   getCharter: (id: string) => getJson<Charter>(`/api/projects/${encodeURIComponent(id)}/charter`),
-  /** Items whose definition is not currently agreed — computed by the daemon (FEAT-067). */
   /** What each live item is missing, from the one engine every surface uses (FEAT-112). */
   getReadiness: (id: string) =>
     getJson<Readiness>(`/api/projects/${encodeURIComponent(id)}/readiness`),
+  /** The workflow as Mermaid, drawn by the daemon with its gates as notes (FEAT-117). */
+  getWorkflowDiagram: (id: string) =>
+    getText(`/api/projects/${encodeURIComponent(id)}/workflow?format=mermaid`),
+  /** Items whose definition is not currently agreed — computed by the daemon (FEAT-067). */
   getPendingReviews: (id: string) =>
     getJson<PendingReview[]>(`/api/projects/${encodeURIComponent(id)}/review`),
   /**
@@ -46,6 +49,21 @@ export const api = {
    */
   approve: (id: string, code: string, by: string) =>
     verdict(id, code, "approve", { by }, "approve"),
+  /** Record a named sign-off a stage asks for (FEAT-114). */
+  signoff: async (id: string, code: string, name: string, by: string) => {
+    const res = await fetch(
+      `/api/write/projects/${encodeURIComponent(id)}/features/${encodeURIComponent(code)}/signoff/${encodeURIComponent(name)}`,
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ by }) },
+    );
+    if (!res.ok) {
+      throw new Error(
+        res.status === 404 || res.status === 405
+          ? "This monitor is read-only. Start it with `kanbanr review --ui` to sign off from here."
+          : `sign-off failed: ${res.status} ${await res.text()}`,
+      );
+    }
+    return res.json();
+  },
   /** Agree after the fact to work built under a recorded bypass (FEAT-109). */
   ratify: (id: string, code: string, by: string) => verdict(id, code, "ratify", { by }, "ratify"),
   unapprove: (id: string, code: string, by: string, reason: string) =>

@@ -158,6 +158,76 @@ pub fn evaluate_conditions(
     gaps
 }
 
+/// What moving an item on to one next status would ask, and what it still lacks (FEAT-117).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NextGate {
+    pub status: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub purpose: String,
+    pub enforce: crate::config::Enforce,
+    /// What `requires` and `signoffs` still lack.
+    pub gaps: Vec<Gap>,
+    /// What `warns` lacks — said, never enforced.
+    pub warnings: Vec<Gap>,
+    /// The sign-offs this gate still needs, by name, so a surface can offer to record them.
+    pub signoffs_needed: Vec<String>,
+}
+
+/// The gates an item meets next: the statuses it can move on to in one step — forward in the
+/// workflow's own order, never a parking or no-op status — that have a gate. This is the answer to
+/// "what does the next stage need?", which a definition built stage by stage asks at every step.
+pub fn next_gates(
+    project: &crate::store::Project,
+    charter: Option<&crate::Charter>,
+    feature: &FeatureItem,
+) -> Vec<NextGate> {
+    let config = &project.config;
+    let gates = config.effective_gates();
+    let position = |s: &str| config.statuses.iter().position(|x| x == s);
+    let here = position(&feature.status);
+    let goal_ids = charter.map(|c| c.goal_ids());
+    config
+        .transitions
+        .get(&feature.status)
+        .into_iter()
+        .flatten()
+        .filter(|to| !config.is_no_op(to))
+        .filter(|to| match (here, position(to)) {
+            (Some(h), Some(t)) => t > h,
+            _ => false,
+        })
+        .filter_map(|to| {
+            let gate = gates.get(to)?;
+            if !gate.applies_to(feature.kind.as_deref()) {
+                return None;
+            }
+            let mut gaps = evaluate_conditions(feature, goal_ids.as_ref(), &gate.requires);
+            let signoffs = signoff_gaps(feature, &gate.signoffs);
+            let signoffs_needed = gate
+                .signoffs
+                .iter()
+                .filter(|name| {
+                    feature
+                        .definition
+                        .as_ref()
+                        .and_then(|d| d.signoff_current(name))
+                        .is_none()
+                })
+                .cloned()
+                .collect();
+            gaps.extend(signoffs);
+            Some(NextGate {
+                status: to.clone(),
+                purpose: gate.purpose.clone(),
+                enforce: gate.enforce,
+                gaps,
+                warnings: evaluate_conditions(feature, goal_ids.as_ref(), &gate.warns),
+                signoffs_needed,
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Level {

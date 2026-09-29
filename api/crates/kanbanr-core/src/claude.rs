@@ -64,6 +64,26 @@ pub fn block(store: &Store, project: &str) -> Result<Option<String>> {
         out.push('\n');
     }
 
+    // The process, stage by stage (FEAT-117): what each status is for, so the agent grows an
+    // item's definition one stage at a time instead of filling everything in up front. Only a
+    // workflow that declares its gates has stages to describe.
+    if let Ok(config) = store.load_meta(project).map(|p| p.config)
+        && !config.gates.is_empty()
+    {
+        out.push_str(
+            "**How work moves here** — each stage asks only for what it needs; \
+             `kanbanr check <CODE>` names what the next one still lacks:\n\n",
+        );
+        for status in &config.statuses {
+            if let Some(gate) = config.gates.get(status)
+                && !gate.purpose.trim().is_empty()
+            {
+                out.push_str(&format!("- **{status}** — {}\n", gate.purpose.trim()));
+            }
+        }
+        out.push('\n');
+    }
+
     out.push_str(
         "**Before starting an item:** `kanbanr lessons --for <CODE>` — what this project already \
          learned. **Before calling one done:** `kanbanr check <CODE>`.\n\n\

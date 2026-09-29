@@ -805,22 +805,28 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             ser(&json!({
                 "code": feature.code,
                 "gaps": crate::readiness::evaluate(feature, Some(&goal_ids), crate::readiness::CHECK),
+                // What the next stage asks, and what it still lacks (FEAT-117).
+                "next": crate::readiness::next_gates(&project, Some(&charter), feature),
             }))
         }
         // The board's cards, in one request: gaps per live item, keyed by code. Finished and
         // parked items are left out, as doctor leaves them out — they are history, not work.
         ("GET", ["projects", p, "readiness"]) => {
             let project = store.load_meta(p)?;
+            let charter = crate::charter::load(store, p)?;
             let cards: serde_json::Map<String, Value> = project
                 .features
                 .iter()
                 .filter(|f| crate::graph::is_live_work(&project.config, &f.status))
                 .map(|f| {
                     let gaps = crate::readiness::evaluate(f, None, crate::readiness::CARD);
-                    (
-                        f.code.clone(),
-                        serde_json::to_value(gaps).unwrap_or(Value::Null),
-                    )
+                    // The next stage, with how much it still lacks (FEAT-117).
+                    let next: Vec<Value> =
+                        crate::readiness::next_gates(&project, Some(&charter), f)
+                            .into_iter()
+                            .map(|n| json!({"status": n.status, "missing": n.gaps.len()}))
+                            .collect();
+                    (f.code.clone(), json!({ "gaps": gaps, "next": next }))
                 })
                 .collect();
             ser(&cards)
@@ -828,6 +834,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("GET", ["projects", p, "review"]) => {
             use crate::models::ApprovalState;
             let project = store.load_meta(p)?;
+            let charter = crate::charter::load(store, p)?;
             // Whether an approval is current or has lapsed depends on a hash of the definition's
             // content, so it is decided here rather than in each caller: the CLI, the monitor and
             // any future client all get the same answer to "is this agreed?".
@@ -849,10 +856,26 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                     if !live && !unratified {
                         return None;
                     }
+                    // Sign-offs the next stage asks for are the same kind of question: a person's
+                    // agreement, recorded before the item can move on (FEAT-117).
+                    let signoffs_needed: Vec<String> = if live {
+                        crate::readiness::next_gates(&project, Some(&charter), f)
+                            .into_iter()
+                            .flat_map(|n| n.signoffs_needed)
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
                     let state = match definition.approval_state() {
                         _ if unratified => "unratified",
                         // Agreed is agreed, however late — a ratified item is not still a
-                        // decision waiting to be made, so it leaves the queue (FEAT-080).
+                        // decision waiting to be made, so it leaves the queue (FEAT-080) — unless
+                        // its next stage is waiting on a sign-off.
+                        ApprovalState::Current | ApprovalState::Ratified
+                            if !signoffs_needed.is_empty() =>
+                        {
+                            "signoff"
+                        }
                         ApprovalState::Current | ApprovalState::Ratified => return None,
                         ApprovalState::Missing => "missing",
                         ApprovalState::Lapsed => "lapsed",
@@ -862,6 +885,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                         "title": f.title,
                         "status": f.status,
                         "approval": state,
+                        "signoffs_needed": signoffs_needed,
                         "started_unapproved": definition.started_unapproved,
                         "definition": definition,
                         // What the ordering below keys on, and useful to a client besides.

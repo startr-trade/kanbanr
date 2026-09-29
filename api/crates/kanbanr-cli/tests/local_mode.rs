@@ -2796,3 +2796,67 @@ fn finish_reaches_a_terminal_through_an_allowed_edge() {
     assert!(String::from_utf8_lossy(&done.stdout).contains("FEAT-001 -> Operations"));
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-117 R-1: `check` names what the next stage needs, stage by stage, under a phased process.
+#[test]
+fn check_names_what_the_next_stage_needs() {
+    let (base, work) = togaf_scratch("check-next");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "workflow", "--preset", "togaf"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["feature", "add", "--title", "Cart", "--milestone", "MS-001"],
+    ));
+    let def = base.join("def.yaml");
+    std::fs::write(&def, "statement: Keep a cart\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    let out = ok(run_in(&base, &work, &["check", "FEAT-001"]));
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(said.contains("to move to Business Arch"), "{said}");
+    assert!(
+        said.contains("Who it is for"),
+        "the stage's purpose is said: {said}"
+    );
+    assert!(said.contains("[MISSING: Who]"), "{said}");
+    // The JSON carries it too, for Claude and scripts.
+    let json = ok(run_in(&base, &work, &["check", "FEAT-001", "--json"]));
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(v[0]["next"][0]["status"], "Business Arch");
+    let _ = std::fs::remove_dir_all(&base);
+}

@@ -59,6 +59,21 @@ export default function ReviewPage() {
     }
   };
 
+  // A named sign-off the item's next stage is waiting on (FEAT-117), recorded as the same identity.
+  const signoff = async (item: PendingReview, name: string) => {
+    if (!who) return;
+    const code = item.code;
+    setBusy(code);
+    try {
+      await api.signoff(project, code, name, who);
+      setDone((d) => ({ ...d, [code]: `signed off ${name}` }));
+    } catch (e) {
+      setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="review-page">
       <div className="page-head">
@@ -114,6 +129,7 @@ export default function ReviewPage() {
           // because a queue of twelve read as one unbroken column (FEAT-076).
           defaultOpen={i === 0}
           onApprove={() => agree(item)}
+          onSignoff={(name) => signoff(item, name)}
         />
       ))}
     </div>
@@ -128,6 +144,7 @@ function Brief({
   outcome,
   defaultOpen,
   onApprove,
+  onSignoff,
 }: {
   project: string;
   item: PendingReview;
@@ -136,13 +153,17 @@ function Brief({
   outcome?: string;
   defaultOpen: boolean;
   onApprove: () => void;
+  onSignoff: (name: string) => void;
 }) {
   const def = item.definition ?? {};
   const requirements = def.requirements ?? [];
   const dimensions = zachmanColumns(def.zachman).filter((d) => d.answer.trim());
   const ratify = item.approval === "unratified";
+  const waitingOnSignoff = item.approval === "signoff";
   const verb = ratify ? "Ratify" : "Approve";
-  const approved = outcome === "approved" || outcome === "ratified";
+  const approved =
+    outcome === "approved" || outcome === "ratified" || (outcome ?? "").startsWith("signed off");
+  const signoffs = item.signoffs_needed ?? [];
 
   return (
     <details className="review-item" id={item.code} open={defaultOpen}>
@@ -153,9 +174,11 @@ function Brief({
         <span className={`chip ${item.approval === "missing" ? "" : "warn"}`}>
           {ratify
             ? `${item.status} without agreement`
-            : item.approval === "lapsed"
-              ? "approval lapsed"
-              : "never approved"}
+            : waitingOnSignoff
+              ? `waiting on sign-off: ${signoffs.join(", ")}`
+              : item.approval === "lapsed"
+                ? "approval lapsed"
+                : "never approved"}
         </span>
         {approved ? <span className="chip done">{outcome}</span> : null}
       </summary>
@@ -232,12 +255,28 @@ function Brief({
         {approved ? (
           <span className="chip done">{outcome} — it leaves this list on the next refresh</span>
         ) : writable ? (
-          <button className="btn btn-primary" onClick={onApprove} disabled={busy}>
-            {busy ? "recording…" : `${verb} ${item.code}`}
-          </button>
+          <>
+            {waitingOnSignoff ? null : (
+              <button className="btn btn-primary" onClick={onApprove} disabled={busy}>
+                {busy ? "recording…" : `${verb} ${item.code}`}
+              </button>
+            )}
+            {signoffs.map((name) => (
+              <button
+                key={name}
+                className={`btn ${waitingOnSignoff ? "btn-primary" : ""}`}
+                onClick={() => onSignoff(name)}
+                disabled={busy}
+              >
+                {busy ? "recording…" : `Sign off ${name}`}
+              </button>
+            ))}
+          </>
         ) : (
           <code>
-            kanbanr {verb.toLowerCase()} {item.code}
+            {waitingOnSignoff
+              ? signoffs.map((n) => `kanbanr signoff ${item.code} ${n}`).join("  ·  ")
+              : `kanbanr ${verb.toLowerCase()} ${item.code}`}
           </code>
         )}
         {outcome && !approved ? <span className="chip warn">{outcome}</span> : null}

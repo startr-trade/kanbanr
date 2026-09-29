@@ -63,7 +63,8 @@ export default function MilestonePage() {
                     project={project}
                     feature={f}
                     siblings={data.features}
-                    gaps={readiness.data?.[f.code]}
+                    gaps={readiness.data?.[f.code]?.gaps}
+                    next={readiness.data?.[f.code]?.next}
                   />
             ))}
           </div>
