@@ -86,6 +86,7 @@ board.
 | `small` | not estimated above three days |
 | `estimated` | estimated in the project's unit: story points or days (`kanbanr config cadence --unit points`) |
 | `in_sprint` | planned into the active sprint (projects with sprints switched on) |
+| `in_release` | planned into a release (projects with releases switched on) |
 
 An unknown check, an unknown status or an unknown Zachman column is refused when the workflow is
 saved. A gate that could never match is a guardrail that silently isn't there.

@@ -91,6 +91,9 @@ pub struct FeatureItem {
     /// The sprint this item is planned into (FEAT-119), for projects that use sprints.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sprint: Option<String>,
+    /// The release this item is planned into (FEAT-120), for projects that use releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
     /// Optional assignee (the person/agent owning this feature); free text.
     #[serde(default)]
     pub assignee: Option<String>,
@@ -603,6 +606,7 @@ impl FeatureItem {
             estimate_days: self.estimate_days,
             points: self.points,
             sprint: self.sprint.clone(),
+            release: self.release.clone(),
             assignee: self.assignee.clone(),
             team: self.team.clone(),
             labels: self.labels.clone(),
@@ -634,6 +638,7 @@ impl FeatureItem {
             estimate_days: meta.estimate_days,
             points: meta.points,
             sprint: meta.sprint,
+            release: meta.release,
             assignee: meta.assignee,
             team: meta.team,
             labels: meta.labels,
@@ -674,6 +679,8 @@ pub struct FeatureMeta {
     pub points: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<String>,
     #[serde(default)]
     pub assignee: Option<String>,
     #[serde(default)]

@@ -197,6 +197,16 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **Releases (FEAT-120).** For projects that switch them on: `kanbanr release add | plan | list |
+  cut`. A release is planned up front, in `projects/<id>/releases.yaml`, and items carry `release`.
+  - `release cut` ships the planned items that are finished. An item whose work is done is moved
+    to its end status through that status's gate.
+  - It writes release notes from the shipped items' statements and requirements to
+    `releases/<version>.md` on the board.
+  - Anything that didn't make it is carried to the next planned release, or back to unplanned,
+    with the reason. `--tag` also tags the code repository.
+  - `feature add --found-in <version>` records feedback against a shipped release.
+  - A new `in_release` check lets a gate require an item to be planned into a release.
 - **Sprints (FEAT-119).** For projects that switch them on: `kanbanr sprint add | plan | start |
   show | list | close`.
   - A sprint (SP-001) has a goal, dates and a capacity, and lives in `projects/<id>/sprints.yaml`.

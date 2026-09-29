@@ -676,6 +676,27 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             &str_field(b, "new").unwrap_or_default(),
         )?),
         ("PUT", ["projects", p, "config", "workflow"]) => apply_workflow(store, p, b),
+        // ---- releases (FEAT-120) ----
+        ("GET", ["projects", p, "releases"]) => ser(&crate::releases::load(store, p)?),
+        ("POST", ["projects", p, "releases"]) => ser(&crate::releases::add(
+            store,
+            p,
+            &str_field(b, "version").unwrap_or_default(),
+            &str_field(b, "target").unwrap_or_default(),
+            &str_field(b, "name").unwrap_or_default(),
+        )?),
+        ("POST", ["projects", p, "releases", version, "plan"]) => {
+            let items = vec_field(b, "items").unwrap_or_default();
+            ser(&crate::releases::plan(
+                store,
+                p,
+                &percent_decode(version),
+                &items,
+            )?)
+        }
+        ("POST", ["projects", p, "releases", version, "cut"]) => {
+            ser(&crate::releases::cut(store, p, &percent_decode(version))?)
+        }
         // ---- sprints (FEAT-119) ----
         ("GET", ["projects", p, "sprints"]) => ser(&crate::sprints::load(store, p)?),
         ("GET", ["projects", p, "sprints", code]) => {
@@ -1135,6 +1156,8 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "milestones", c] => format!("edit milestone {c}"),
         ["projects", _p, "config", what] => format!("update config: {what}"),
         ["projects", _p, "sprints"] => "add a sprint".into(),
+        ["projects", _p, "releases"] => "add a release".into(),
+        ["projects", _p, "releases", v, what] => format!("{what} release {}", percent_decode(v)),
         ["projects", _p, "sprints", c, what] => format!("{what} sprint {c}"),
         ["projects", _p, "docs", "folder"] => "configure doc folder".into(),
         ["projects", _p, "docs", "content"] if del => "remove document".into(),

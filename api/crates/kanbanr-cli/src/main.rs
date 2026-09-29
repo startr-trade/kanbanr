@@ -219,6 +219,10 @@ enum Command {
     /// switch them on: `kanbanr config cadence --sprints on`.
     #[command(subcommand)]
     Sprint(SprintCmd),
+    /// Releases: planned up front, cut from finished work (FEAT-120). Only for projects that switch
+    /// them on: `kanbanr config cadence --releases on`.
+    #[command(subcommand)]
+    Release(ReleaseCmd),
     /// Record that an item was sliced out of another, so a wave's growth can be accounted for.
     SplitFrom {
         code: String,
@@ -624,6 +628,10 @@ enum FeatureCmd {
         /// Estimated size in story points (FEAT-121; a value <= 0 clears it).
         #[arg(long)]
         points: Option<f64>,
+        /// Feedback on a shipped release (FEAT-120): records the version it was found in, the
+        /// same field a defect record uses.
+        #[arg(long, value_name = "VERSION")]
+        found_in: Option<String>,
         /// Assignee (the person/agent owning this feature).
         #[arg(long)]
         assignee: Option<String>,
@@ -847,6 +855,34 @@ enum ConfigCmd {
         /// statuses/transitions/default/terminal from the diagram.
         #[arg(long, value_name = "FILE")]
         from_mermaid: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReleaseCmd {
+    /// Add a planned release.
+    Add {
+        version: String,
+        /// Target date, YYYY-MM-DD.
+        #[arg(long)]
+        target: Option<String>,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List the project's releases.
+    List,
+    /// Plan items into a release.
+    Plan {
+        version: String,
+        #[arg(required = true)]
+        items: Vec<String>,
+    },
+    /// Cut a release: ship its finished items, write its notes, carry the rest.
+    Cut {
+        version: String,
+        /// Also tag the code repository with the version.
+        #[arg(long)]
+        tag: bool,
     },
 }
 
@@ -5034,6 +5070,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Sprint(cmd) => run_sprint(cli, &client, cmd),
+        Command::Release(cmd) => run_release(cli, &client, cmd),
         Command::Todo(cmd) => run_todo(cli, &client, cmd),
         Command::Task(cmd) => run_task(cli, &client, cmd),
         Command::Milestone(cmd) => run_milestone(cli, &client, cmd),
@@ -5622,6 +5659,7 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             due,
             estimate,
             points,
+            found_in,
             assignee,
             team,
             labels,
@@ -5646,6 +5684,14 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             ]);
             let resp =
                 client.write(Method::Post, &format!("/projects/{p}/features"), Some(body))?;
+            // Feedback on a release: say where it was found, the way a defect does (FEAT-120).
+            if let Some(version) = found_in {
+                client.write(
+                    Method::Put,
+                    &format!("/projects/{p}/features/{}/defect", field(&resp, "code")),
+                    Some(json!({ "found_in": version })),
+                )?;
+            }
             print_write(
                 cli,
                 &resp,
@@ -6289,6 +6335,110 @@ fn num(v: &Value) -> String {
         Some(x) => format!("{x}"),
         None => v.to_string(),
     }
+}
+
+fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    match cmd {
+        ReleaseCmd::Add {
+            version,
+            target,
+            name,
+        } => {
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/releases"),
+                Some(obj(vec![
+                    ("version", Some(json!(version))),
+                    ("target", target.clone().map(|t| json!(t))),
+                    ("name", name.clone().map(|n| json!(n))),
+                ])),
+            )?;
+            print_write(cli, &resp, format!("added release {version}"));
+        }
+        ReleaseCmd::List => {
+            let resp = client.get(&format!("/projects/{p}/releases"))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let releases: Vec<Value> = serde_json::from_str(&resp)?;
+            if releases.is_empty() {
+                println!("no releases yet — `kanbanr release add v0.1.0 --target YYYY-MM-DD`");
+            }
+            let project = get_project(client, &p)?;
+            for r in releases {
+                let version = r["version"].as_str().unwrap_or("");
+                let planned = project
+                    .features
+                    .iter()
+                    .filter(|f| f.release.as_deref() == Some(version))
+                    .count();
+                println!(
+                    "{:<12} {:<8} target {:<10}  {planned} item(s)",
+                    version,
+                    r["state"].as_str().unwrap_or(""),
+                    r["target"].as_str().unwrap_or("—")
+                );
+            }
+        }
+        ReleaseCmd::Plan { version, items } => {
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/releases/{}/plan", urlencode_segment(version)),
+                Some(json!({ "items": items })),
+            )?;
+            print_write(
+                cli,
+                &resp,
+                format!("planned {} into {version}", items.join(", ")),
+            );
+        }
+        ReleaseCmd::Cut { version, tag } => {
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/releases/{}/cut", urlencode_segment(version)),
+                Some(json!({})),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            let release = &v["release"];
+            let shipped: Vec<&str> = release["shipped"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c.as_str())
+                .collect();
+            print_write(
+                cli,
+                &resp,
+                format!(
+                    "{version} shipped {} item(s); notes in {}",
+                    shipped.len(),
+                    release["notes_doc"].as_str().unwrap_or("")
+                ),
+            );
+            if !cli.json {
+                for c in release["carried"].as_array().into_iter().flatten() {
+                    println!(
+                        "  carried {} → {} ({})",
+                        c["code"].as_str().unwrap_or(""),
+                        c["to"].as_str().unwrap_or(""),
+                        c["why"].as_str().unwrap_or("")
+                    );
+                }
+            }
+            if *tag {
+                let root = scm::repo_root()
+                    .ok_or_else(|| anyhow::anyhow!("not a git repository — nothing to tag"))?;
+                scm::git(
+                    &root,
+                    &["tag", "-a", version, "-m", &format!("Release {version}")],
+                )?;
+                println!("tagged {version}");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()> {
