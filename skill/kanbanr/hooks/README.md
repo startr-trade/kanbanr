@@ -91,7 +91,15 @@ The summary's shape comes from the project's own `.claude/commands/create-summar
 one, and otherwise from `session-summary.prompt.md` beside the script. Its bookkeeping
 lives next to the transcripts in `~/.claude/projects/<project>/.session-summaries/`, so nothing is
 summarised twice. It acts only where a `.kanbanr` marker is found, walking up from the project
-folder. It needs `bash`, `jq` and `python3`: without them, or without a board, it exits 0 and
+folder.
+
+**Keeping things off the board.** Put anything that must never appear in a summary in a private
+list, `~/.claude/kanbanr-summary-exclude.txt` (or set `$KANBANR_SUMMARY_EXCLUDE`). It holds one term
+per line, matched case-insensitively and as whole words, and `#` starts a comment. A transcript
+message that mentions a listed term is dropped before the model sees anything. Any line of a
+summary or compaction summary that mentions one is removed before it is written, so it never
+reaches the board or its git history. Keep that file outside every repository: it is the one
+place the terms are written down. It needs `bash`, `jq` and `python3`: without them, or without a board, it exits 0 and
 writes nothing. It isn't registered on Windows. The summariser's own `claude -p` runs with
 `KANBANR_SESSION_SUMMARY` set, so it never triggers a summary of itself.
 
