@@ -52,10 +52,25 @@ project"** (or anything equivalent):
      committed as this identity.
 
    **b. Charter**: why the project exists, which every item will link to.
-   - Draft it from what the repository already says (the README, manifests, existing docs):
-     `purpose`, an optional one-line `vision`, `goals` (each an outcome plus the `measure` that
-     shows it happened), `non_goals`, `stakeholders` (`name`, `role`, `interest`) and
-     `constraints`. Mark the draft **as a draft** in the plan so the user reads it as a proposal.
+   - Draft it from what the repository already says (the README, manifests, existing docs), and
+     mark the draft **as a draft** in the plan so the user reads it as a proposal. The file
+     `kanbanr charter set` takes has exactly these fields. A goal's text is `statement`, not
+     `outcome`:
+
+     ```yaml
+     purpose: One paragraph on why the project exists.
+     vision: One line (optional).
+     goals:
+       - id: G-0                      # optional; blank ids are assigned on save
+         statement: The system stays operable and maintainable
+         measure: How you would know it happened
+     non_goals: [Things the project will deliberately NOT do]
+     stakeholders:
+       - {name: Solo developer, role: Maintainer, interest: What they need from it}
+     constraints: [Rules every piece of work must respect]
+     ```
+   - Check that each non-goal reads as something the project will **not** do. Users often list
+     aims such as "flexible to add languages" under non-goals. Ask before moving one to the goals.
    - Leave anything the repository cannot answer **blank** and ask. Don't invent it. A plausible
      goal nobody agreed to is worse than a missing one, because it looks settled.
    - Suggest a standing `G-0: the system stays operable and maintainable` for maintenance work,
@@ -69,6 +84,11 @@ project"** (or anything equivalent):
      and tests. That is the method, not an option. Say so, so the user is not surprised by it.
    - *Git hooks* in the code repo (`kanbanr git install-hooks`): every commit names its board
      item, and commits on the default branch are refused. Offer them **defaulting to yes**.
+   - *No git repository yet?* If the project folder isn't one, say so and plan `git init` plus
+     one initial commit (the `.kanbanr` marker, `CLAUDE.md`, a `.gitignore`) **before** the git
+     hooks. An item branch needs a commit to branch from, and `kanbanr start` refuses until one
+     exists. The first commit lands on the default branch and says `[no-ref] initial commit` in its
+     message.
    - *Optional*: a git remote to back the board up to, the GitHub issue mirror (see below; a
      public repo needs an explicit OK), and importing an existing tracker (see "Importing existing
      task trackers": list what you found and ask which to bring in).
@@ -80,8 +100,10 @@ project"** (or anything equivalent):
    kanbanr config workflow --togaf                 # or --statuses … --transitions …; omit for default
    kanbanr charter set --file <scratch>/charter.yaml
    kanbanr hooks status                            # init registered them; install if it did not
-   kanbanr git install-hooks                       # if chosen
    kanbanr claude sync                             # CLAUDE.md block pointing at the charter
+   git init && git add .kanbanr CLAUDE.md .gitignore && git commit -m "[no-ref] initial commit"
+                                                   # only if the folder was not a git repo
+   kanbanr git install-hooks                       # if chosen
    kanbanr remote add <name> <url>                 # if chosen
    kanbanr mirror enable --repo <owner/repo>       # if chosen
    # import: one `kanbanr batch` of the chosen tracker items, if chosen
@@ -98,8 +120,10 @@ project"** (or anything equivalent):
    Save the approved plan as the board doc named in it, so the reasons for the setup outlive the
    session. Finish by checking `kanbanr hooks status`, `kanbanr git status` (if the hooks were
    chosen) and `kanbanr doctor`, then show the board. On a new board, doctor's only expected
-   warnings are the goals that no item links to yet. Anything else is a setup fault to fix now. **Only then** go back to what the
-   user originally asked for.
+   warnings are the goals that no item links to yet. Anything else is a setup fault to fix now.
+   Tell the user how to watch the board: `kanbanr serve` starts the monitor, which is built into
+   the binary (it needs no `--ui-dir`, and never another checkout's build), and `kanbanr open`
+   opens it. **Only then** go back to what the user originally asked for.
 6. From that point on, treat kanbanr as the **system of record for the entire project**, with no
    further prompting.
 

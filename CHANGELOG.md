@@ -180,6 +180,28 @@ reported against it.
 
 ### Fixed
 
+- **The shipped session-start and stop-check hooks were empty (FEAT-102).** A commit on 28 Sep
+  replaced both with `exit 0` stubs, so sessions stopped recovering the board and turns stopped
+  being nudged to record work, while `hooks status` still reported them healthy. Both are
+  restored, and a test now fails if a shipped hook script is a stub.
+- **Looking in a folder with no board created one (FEAT-103).** Any read (`whoami`, `board`,
+  `doctor` and so on) run with no marker and no `$KANBANR_DATA_DIR` left a stray `./data/`
+  behind. Reads now say there is no board and point at `kanbanr init`. Hook commands stay silent
+  there, and an existing legacy `./data` board still works.
+- **`kanbanr open` suggested `serve --ui-dir web/dist` (FEAT-104).** The monitor has been built
+  into the binary since FEAT-084. The hint, the skill and the docs now say `kanbanr serve`.
+- **A fresh repository could not make its first commit (FEAT-105).** With no commits, the git
+  hooks called the default branch `main` while HEAD was an unborn `master`, then refused the root
+  commit. An unborn HEAD is now the default branch, the root commit may land on it, `start`
+  refuses until a first commit exists, and `init.defaultBranch` only counts when that branch
+  exists.
+- **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
+  width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **Setup interview gaps from its first real run (FEAT-106).** The skill now gives the charter's
+  exact fields (`statement`, not `outcome`), checks that non-goals are non-goals, plans
+  `git init` plus an initial commit for a folder that isn't a repository, and ends by saying how
+  to open the monitor.
+
 - **The released Linux binary would not have run on Debian stable** (FEAT-087): a `-gnu` target
   links the build runner's glibc, and the release matrix built on the newest one — so the binaries
   required glibc 2.39 and would have died on bookworm (2.36) with `libc.so.6: version GLIBC_2.39
