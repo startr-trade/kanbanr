@@ -197,6 +197,19 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **Sprints (FEAT-119).** For projects that switch them on: `kanbanr sprint add | plan | start |
+  show | list | close`.
+  - A sprint (SP-001) has a goal, dates and a capacity, and lives in `projects/<id>/sprints.yaml`.
+    Items carry `sprint`.
+  - Planning past capacity warns but still plans.
+  - Only one sprint is active at a time.
+  - Closing a sprint carries unfinished items to the next sprint or the backlog, and records what
+    was carried.
+  - `sprint show` gives the burndown, derived day by day from the moves items recorded. Nothing
+    is stored for it.
+  - `kanbanr report` includes velocity per closed sprint only where sprints are on.
+  - `retro --sprint` covers one sprint.
+  - A new `in_sprint` check lets a gate require an item to be in the active sprint.
 - **Story points and cadence switches (FEAT-121).**
   - Items can carry `points` beside `estimate_days` (`--points` on `feature add` and `feature
     edit`).

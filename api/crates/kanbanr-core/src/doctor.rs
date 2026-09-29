@@ -60,7 +60,8 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_project(project, &existing, &mut report);
         let charter = crate::charter::load(store, &project.id)?;
         scan_charter(&charter, &project.id, &mut report);
-        scan_definitions(project, &charter, &mut report);
+        let ctx = crate::readiness::Context::load(store, &project.id, &project.config);
+        scan_definitions(project, &charter, &ctx, &mut report);
         scan_decisions(store, project, &mut report);
         scan_stray_folders(store, project, &mut report);
     }
@@ -83,7 +84,8 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_project(&project, &existing, &mut report);
     let charter = crate::charter::load(store, id)?;
     scan_charter(&charter, id, &mut report);
-    scan_definitions(&project, &charter, &mut report);
+    let ctx = crate::readiness::Context::load(store, id, &project.config);
+    scan_definitions(&project, &charter, &ctx, &mut report);
     scan_decisions(store, &project, &mut report);
     scan_stray_folders(store, &project, &mut report);
     Ok(report)
@@ -95,7 +97,12 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
 /// held — 45 on kanbanr's own board, 40 of them finished — and a report that long is wallpaper
 /// nobody reads. An item is in scope only when it is live work under the method: not terminal,
 /// displayed on the board, and created after the charter was adopted.
-fn scan_definitions(project: &Project, charter: &crate::Charter, report: &mut Report) {
+fn scan_definitions(
+    project: &Project,
+    charter: &crate::Charter,
+    ctx: &crate::readiness::Context,
+    report: &mut Report,
+) {
     if charter.adopted_at.trim().is_empty() {
         return; // the method has not been adopted here; nothing to hold anyone to
     }
@@ -148,7 +155,7 @@ fn scan_definitions(project: &Project, charter: &crate::Charter, report: &mut Re
                 Some(&goal_ids),
                 &[Check::Definition, Check::GoalsKnown, Check::Bypass],
             );
-            for next in crate::readiness::next_gates(project, Some(charter), feature) {
+            for next in crate::readiness::next_gates(project, Some(charter), feature, ctx) {
                 for gap in next.gaps.into_iter().chain(next.warnings) {
                     if !matches!(
                         gap.check,

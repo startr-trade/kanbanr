@@ -205,6 +205,9 @@ enum Command {
         since: Option<String>,
         #[arg(long)]
         label: Option<String>,
+        /// One sprint's retro: its items (including those it carried out) and its burndown.
+        #[arg(long)]
+        sprint: Option<String>,
         /// Store the facts as a document in the board's retros/ folder.
         #[arg(long)]
         write: bool,
@@ -212,6 +215,10 @@ enum Command {
         #[arg(long)]
         due: bool,
     },
+    /// Sprints: timeboxes with a goal, a capacity and a burndown (FEAT-119). Only for projects that
+    /// switch them on: `kanbanr config cadence --sprints on`.
+    #[command(subcommand)]
+    Sprint(SprintCmd),
     /// Record that an item was sliced out of another, so a wave's growth can be accounted for.
     SplitFrom {
         code: String,
@@ -840,6 +847,47 @@ enum ConfigCmd {
         /// statuses/transitions/default/terminal from the diagram.
         #[arg(long, value_name = "FILE")]
         from_mermaid: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SprintCmd {
+    /// Add a sprint.
+    Add {
+        /// First day, YYYY-MM-DD.
+        #[arg(long)]
+        start: String,
+        /// Length, e.g. `2w` or `10d` (default: the project's cadence, else two weeks).
+        #[arg(long)]
+        length: Option<String>,
+        /// What this sprint is for, in a sentence.
+        #[arg(long)]
+        goal: Option<String>,
+        /// What it can take, in the project's estimate unit.
+        #[arg(long)]
+        capacity: Option<f64>,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List the project's sprints.
+    List,
+    /// A sprint's goal, dates, days left, committed against done, and burndown (default: the
+    /// active one).
+    Show { code: Option<String> },
+    /// Plan items into a sprint; warns when it goes over capacity.
+    Plan {
+        code: String,
+        #[arg(required = true)]
+        items: Vec<String>,
+    },
+    /// Make a sprint the active one.
+    Start { code: String },
+    /// Close a sprint, carrying unfinished items to another sprint or back to the backlog.
+    Close {
+        code: String,
+        /// A sprint code, or `backlog` (the default).
+        #[arg(long)]
+        carry_to: Option<String>,
     },
 }
 
@@ -2349,12 +2397,14 @@ fn run_lesson(cli: &Cli, client: &Backend, cmd: &LessonCmd) -> anyhow::Result<()
 /// A wave's retrospective (FEAT-054). The printed form is deliberately plain: these are the
 /// numbers a narrative has to be consistent with, and a chart would invite reading a trend into
 /// five data points.
+#[allow(clippy::too_many_arguments)]
 fn run_retro(
     cli: &Cli,
     client: &Backend,
     milestone: Option<&str>,
     since: Option<&str>,
     label: Option<&str>,
+    sprint: Option<&str>,
     write: bool,
     due: bool,
 ) -> anyhow::Result<()> {
@@ -2388,6 +2438,7 @@ fn run_retro(
         ("milestone", milestone.map(str::to_string)),
         ("since", since.clone()),
         ("label", label.map(str::to_string)),
+        ("sprint", sprint.map(str::to_string)),
     ] {
         if let Some(value) = value {
             query.push(format!("{key}={}", urlencode(&value)));
@@ -2412,8 +2463,9 @@ fn run_retro(
             milestone: milestone.map(str::to_string),
             since,
             label: label.map(str::to_string),
+            sprint: sprint.map(str::to_string),
         };
-        let doc = kanbanr_core::retro::document_path(&wave, milestone);
+        let doc = kanbanr_core::retro::document_path(&wave, milestone.or(sprint));
         let body = format!(
             "{facts}\n## What we make of it\n\n\
              _Written by whoever writes it, from the numbers above. It may explain them, and it \
@@ -2442,6 +2494,32 @@ fn retro_markdown(r: &kanbanr_core::retro::Retro) -> String {
         "- items: {} ({} finished, {} still open)",
         r.items, r.completed, r.still_open
     );
+    // A sprint retro: what it committed to, what it finished, and what it carried out (FEAT-119).
+    if let Some(sprint) = &r.sprint {
+        let unit = sprint["unit"].as_str().unwrap_or("");
+        let _ = writeln!(
+            out,
+            "- sprint {}: {} of {} {unit} done",
+            sprint["code"].as_str().unwrap_or(""),
+            num(&sprint["done"]),
+            num(&sprint["committed"])
+        );
+        let carried: Vec<String> = sprint["carried"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|c| {
+                format!(
+                    "{} → {}",
+                    c["code"].as_str().unwrap_or(""),
+                    c["to"].as_str().unwrap_or("")
+                )
+            })
+            .collect();
+        if !carried.is_empty() {
+            let _ = writeln!(out, "- carried over: {}", carried.join(", "));
+        }
+    }
     if let Some(started) = &r.started {
         let end = match (&r.finished, r.all_done) {
             (Some(f), _) => f[..10.min(f.len())].to_string(),
@@ -4540,6 +4618,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             milestone,
             since,
             label,
+            sprint,
             write,
             due,
         } => run_retro(
@@ -4548,6 +4627,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             milestone.as_deref(),
             since.as_deref(),
             label.as_deref(),
+            sprint.as_deref(),
             *write,
             *due,
         ),
@@ -4735,20 +4815,18 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             if features.is_empty() {
                 anyhow::bail!("no such item, or nothing in scope");
             }
-            // What each item's next stage asks, from the same engine (FEAT-117).
-            let charter: Option<kanbanr_core::Charter> = client
-                .get(&format!("/projects/{p}/charter"))
-                .ok()
-                .and_then(|c| serde_json::from_str(&c).ok());
+            // What each item's next stage asks — the readiness route answers it, with the project's
+            // unit and active sprint in hand (FEAT-117, FEAT-119).
             let reports: Vec<Value> = features
                 .iter()
                 .map(|f| {
                     let mut report = check_report(f);
-                    report["next"] = json!(kanbanr_core::readiness::next_gates(
-                        &project,
-                        charter.as_ref(),
-                        f
-                    ));
+                    report["next"] = client
+                        .get(&format!("/projects/{p}/features/{}/readiness", f.code))
+                        .ok()
+                        .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+                        .map(|v| v["next"].clone())
+                        .unwrap_or_else(|| json!([]));
                     report
                 })
                 .collect();
@@ -4955,6 +5033,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             );
             Ok(())
         }
+        Command::Sprint(cmd) => run_sprint(cli, &client, cmd),
         Command::Todo(cmd) => run_todo(cli, &client, cmd),
         Command::Task(cmd) => run_task(cli, &client, cmd),
         Command::Milestone(cmd) => run_milestone(cli, &client, cmd),
@@ -6189,6 +6268,207 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             Ok(())
         }
     }
+}
+
+/// `2w`, `10d` or a bare number of days.
+fn parse_length(s: &str) -> anyhow::Result<u32> {
+    let s = s.trim();
+    let (n, per) = match s.strip_suffix('w') {
+        Some(n) => (n, 7),
+        None => (s.strip_suffix('d').unwrap_or(s), 1),
+    };
+    n.parse::<u32>()
+        .map(|n| n * per)
+        .map_err(|_| anyhow::anyhow!("'{s}' is not a length (e.g. 2w or 10d)"))
+}
+
+/// A number as a person writes it: `13`, not `13.0`.
+fn num(v: &Value) -> String {
+    match v.as_f64() {
+        Some(x) if x.fract() == 0.0 => format!("{}", x as i64),
+        Some(x) => format!("{x}"),
+        None => v.to_string(),
+    }
+}
+
+fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    match cmd {
+        SprintCmd::Add {
+            start,
+            length,
+            goal,
+            capacity,
+            name,
+        } => {
+            let length = length.as_deref().map(parse_length).transpose()?;
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/sprints"),
+                Some(obj(vec![
+                    ("start", Some(json!(start))),
+                    ("length_days", length.map(|d| json!(d))),
+                    ("goal", goal.clone().map(|g| json!(g))),
+                    ("capacity", capacity.map(|c| json!(c))),
+                    ("name", name.clone().map(|n| json!(n))),
+                ])),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            print_write(
+                cli,
+                &resp,
+                format!(
+                    "added {} ({} → {})",
+                    v["code"].as_str().unwrap_or(""),
+                    v["start"].as_str().unwrap_or(""),
+                    v["end"].as_str().unwrap_or("")
+                ),
+            );
+        }
+        SprintCmd::List => {
+            let resp = client.get(&format!("/projects/{p}/sprints"))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let sprints: Vec<Value> = serde_json::from_str(&resp)?;
+            if sprints.is_empty() {
+                println!("no sprints yet — `kanbanr sprint add --start YYYY-MM-DD`");
+            }
+            for s in sprints {
+                println!(
+                    "{:<8} {:<8} {} → {}  {}",
+                    s["code"].as_str().unwrap_or(""),
+                    s["state"].as_str().unwrap_or(""),
+                    s["start"].as_str().unwrap_or(""),
+                    s["end"].as_str().unwrap_or(""),
+                    s["goal"].as_str().unwrap_or("")
+                );
+            }
+        }
+        SprintCmd::Show { code } => {
+            let code = code.as_deref().unwrap_or("active");
+            let resp = client.get(&format!("/projects/{p}/sprints/{code}"))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let r: Value = serde_json::from_str(&resp)?;
+            let unit = r["unit"].as_str().unwrap_or("");
+            println!(
+                "{} {} [{}]  {} → {}",
+                r["code"].as_str().unwrap_or(""),
+                r["name"].as_str().unwrap_or(""),
+                r["state"].as_str().unwrap_or(""),
+                r["start"].as_str().unwrap_or(""),
+                r["end"].as_str().unwrap_or("")
+            );
+            if let Some(goal) = r["goal"].as_str().filter(|g| !g.is_empty()) {
+                println!("goal: {goal}");
+            }
+            println!(
+                "{} of {} {unit} done · {} day(s) left{}",
+                num(&r["done"]),
+                num(&r["committed"]),
+                r["days_left"],
+                r["capacity"]
+                    .as_f64()
+                    .map(|c| format!(" · capacity {c}"))
+                    .unwrap_or_default()
+            );
+            let unestimated: Vec<&str> = r["unestimated"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c.as_str())
+                .collect();
+            if !unestimated.is_empty() {
+                println!("unestimated (counted as 0): {}", unestimated.join(", "));
+            }
+            let days: Vec<(String, f64)> = r["burndown"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|d| {
+                    (
+                        d["date"].as_str().unwrap_or("").to_string(),
+                        d["remaining"].as_f64().unwrap_or(0.0),
+                    )
+                })
+                .collect();
+            let top = r["committed"].as_f64().unwrap_or(0.0).max(1.0);
+            if !days.is_empty() {
+                println!("burndown ({unit} remaining):");
+            }
+            for (date, remaining) in days {
+                let bar = "█".repeat(((remaining / top) * 30.0).round() as usize);
+                println!("  {date}  {bar} {}", num(&json!(remaining)));
+            }
+        }
+        SprintCmd::Plan { code, items } => {
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/sprints/{code}/plan"),
+                Some(json!({ "items": items })),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            print_write(
+                cli,
+                &resp,
+                format!(
+                    "planned {} into {code} ({} committed)",
+                    items.join(", "),
+                    v["committed"]
+                ),
+            );
+            if !cli.json
+                && let Some(over) = v["over_capacity"].as_str()
+            {
+                eprintln!("  warning: {over}");
+            }
+        }
+        SprintCmd::Start { code } => {
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/sprints/{code}/start"),
+                Some(json!({})),
+            )?;
+            print_write(cli, &resp, format!("{code} is the active sprint"));
+        }
+        SprintCmd::Close { code, carry_to } => {
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/sprints/{code}/close"),
+                Some(obj(vec![("carry_to", carry_to.clone().map(|c| json!(c)))])),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            let carried: Vec<String> = v["carried"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|c| {
+                    format!(
+                        "{} → {}",
+                        c["code"].as_str().unwrap_or(""),
+                        c["to"].as_str().unwrap_or("")
+                    )
+                })
+                .collect();
+            print_write(
+                cli,
+                &resp,
+                if carried.is_empty() {
+                    format!("closed {code}; nothing carried over")
+                } else {
+                    format!("closed {code}; carried {}", carried.join(", "))
+                },
+            );
+            if !cli.json {
+                println!("  look back on it: `kanbanr retro --sprint {code}`");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn run_doc(cli: &Cli, client: &Backend, cmd: &DocCmd) -> anyhow::Result<()> {

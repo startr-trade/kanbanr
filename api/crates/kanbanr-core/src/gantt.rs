@@ -40,13 +40,13 @@ fn label(s: &str) -> String {
 }
 
 /// Format a `time::Date` as `YYYY-MM-DD`.
-fn fmt_date(d: time::Date) -> String {
+pub(crate) fn fmt_date(d: time::Date) -> String {
     format!("{:04}-{:02}-{:02}", d.year(), u8::from(d.month()), d.day())
 }
 
 /// Parse the `YYYY-MM-DD` prefix of an RFC3339 timestamp into a `time::Date` (no `parsing` feature
 /// needed — we only need the calendar date, which we build from the first 10 chars).
-fn parse_ymd(s: &str) -> Option<time::Date> {
+pub(crate) fn parse_ymd(s: &str) -> Option<time::Date> {
     let mut it = s.get(..10)?.split('-');
     let y: i32 = it.next()?.parse().ok()?;
     let m: u8 = it.next()?.parse().ok()?;

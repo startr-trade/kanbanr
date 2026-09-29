@@ -559,6 +559,7 @@ impl Store {
             due: None,
             estimate_days: None,
             points: None,
+            sprint: None,
             assignee: None,
             team: None,
             labels: Vec::new(),
@@ -1176,8 +1177,9 @@ impl Store {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let charter = crate::charter::load(self, id)?;
+        let ctx = crate::readiness::Context::load(self, id, &project.config);
         let (f, warnings) =
-            Self::gated_move_on(&mut project, &mut pending, &charter, code, to, reason)?;
+            Self::gated_move_on(&mut project, &mut pending, &charter, &ctx, code, to, reason)?;
         self.flush(id, &project, &pending)?;
         Ok((f, warnings))
     }
@@ -1188,12 +1190,13 @@ impl Store {
         project: &mut Project,
         pending: &mut Pending,
         charter: &crate::Charter,
+        ctx: &crate::readiness::Context,
         code: &str,
         to: &str,
         reason: Option<&str>,
     ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
         let reason = reason.map(str::trim).filter(|r| !r.is_empty());
-        let outcome = Self::check_gate(project, charter, code, to, reason)?;
+        let outcome = Self::check_gate(project, charter, ctx, code, to, reason)?;
         // A move made with a stated reason to override is a bypass, and stays one until someone
         // approves or ratifies what was built (FEAT-048, FEAT-080) — recorded whether or not a gate
         // happened to need it, exactly as before gates were declarable.
@@ -1223,6 +1226,7 @@ impl Store {
     fn check_gate(
         project: &Project,
         charter: &crate::Charter,
+        ctx: &crate::readiness::Context,
         code: &str,
         to: &str,
         reason: Option<&str>,
@@ -1243,12 +1247,11 @@ impl Store {
             return Ok(pass);
         }
         let goal_ids = charter.goal_ids();
-        let unit = project.config.estimate_unit;
         let mut failing =
-            crate::readiness::evaluate_conditions(feature, Some(&goal_ids), &gate.requires, unit);
+            crate::readiness::evaluate_conditions(feature, Some(&goal_ids), &gate.requires, ctx);
         failing.extend(crate::readiness::signoff_gaps(feature, &gate.signoffs));
         let mut warnings =
-            crate::readiness::evaluate_conditions(feature, Some(&goal_ids), &gate.warns, unit);
+            crate::readiness::evaluate_conditions(feature, Some(&goal_ids), &gate.warns, ctx);
         if failing.is_empty() {
             return Ok(GateOutcome { warnings });
         }
@@ -1435,10 +1438,12 @@ impl Store {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let charter = crate::charter::load(self, id)?;
+        let ctx = crate::readiness::Context::load(self, id, &project.config);
         let out = Self::set_task_state_on(
             &mut project,
             &mut pending,
             &charter,
+            &ctx,
             feature,
             todo,
             key,
@@ -1448,10 +1453,12 @@ impl Store {
         Ok(out)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn set_task_state_on(
         project: &mut Project,
         pending: &mut Pending,
         charter: &crate::Charter,
+        ctx: &crate::readiness::Context,
         feature: &str,
         todo: &str,
         key: &str,
@@ -1493,7 +1500,7 @@ impl Store {
             None
         };
         let target = match target {
-            Some(to) => match Self::check_gate(project, charter, feature, &to, None) {
+            Some(to) => match Self::check_gate(project, charter, ctx, feature, &to, None) {
                 Ok(_) => Some(to),
                 Err(e) => {
                     held = Some(format!("all tasks are done, but it stays in {from}: {e}"));
@@ -1672,6 +1679,7 @@ impl Store {
 
         let mut project = self.load(id)?;
         let charter = crate::charter::load(self, id)?;
+        let ctx = crate::readiness::Context::load(self, id, &project.config);
         let mut pending = Pending::default();
         let mut aliases: HashMap<String, String> = HashMap::new();
         // `ref` aliases of skipped (already imported) features, and of todo-lists under them.
@@ -1903,6 +1911,7 @@ impl Store {
                         &mut project,
                         &mut pending,
                         &charter,
+                        &ctx,
                         &resolve(&aliases, &code),
                         &to,
                         unapproved.as_deref(),
@@ -2089,6 +2098,7 @@ impl Store {
                         &mut project,
                         &mut pending,
                         &charter,
+                        &ctx,
                         &resolve(&aliases, &feature),
                         &resolve(&aliases, &todo),
                         &key,
@@ -2424,6 +2434,24 @@ impl Store {
             }
         }
         Ok(())
+    }
+
+    /// Plan an item into a sprint, or out of one (FEAT-119).
+    pub fn set_feature_sprint(
+        &self,
+        id: &str,
+        code: &str,
+        sprint: Option<String>,
+    ) -> Result<FeatureItem> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let feature = project.feature_mut(code)?;
+        feature.sprint = sprint.filter(|s| !s.trim().is_empty());
+        feature.updated_at = now_rfc3339();
+        let updated = feature.clone();
+        pending.persist_features.insert(updated.code.clone());
+        self.flush(id, &project, &pending)?;
+        Ok(updated)
     }
 
     /// Set an item's story-point estimate (FEAT-121); `0` or less clears it.

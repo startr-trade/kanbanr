@@ -676,6 +676,46 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             &str_field(b, "new").unwrap_or_default(),
         )?),
         ("PUT", ["projects", p, "config", "workflow"]) => apply_workflow(store, p, b),
+        // ---- sprints (FEAT-119) ----
+        ("GET", ["projects", p, "sprints"]) => ser(&crate::sprints::load(store, p)?),
+        ("GET", ["projects", p, "sprints", code]) => {
+            let code = match *code {
+                "active" => crate::sprints::active(&crate::sprints::load(store, p)?)
+                    .map(|s| s.code.clone())
+                    .ok_or_else(|| CoreError::Unsupported("no sprint is active".into()))?,
+                c => c.to_string(),
+            };
+            ser(&crate::sprints::report(
+                store,
+                p,
+                &code,
+                crate::sprints::today(),
+            )?)
+        }
+        ("POST", ["projects", p, "sprints"]) => ser(&crate::sprints::add(
+            store,
+            p,
+            &str_field(b, "start").unwrap_or_default(),
+            b.get("length_days")
+                .and_then(Value::as_u64)
+                .map(|d| d as u32),
+            &str_field(b, "goal").unwrap_or_default(),
+            b.get("capacity").and_then(Value::as_f64),
+            &str_field(b, "name").unwrap_or_default(),
+        )?),
+        ("POST", ["projects", p, "sprints", code, "plan"]) => {
+            let items = vec_field(b, "items").unwrap_or_default();
+            ser(&crate::sprints::plan(store, p, code, &items)?)
+        }
+        ("POST", ["projects", p, "sprints", code, "start"]) => {
+            ser(&crate::sprints::start(store, p, code)?)
+        }
+        ("POST", ["projects", p, "sprints", code, "close"]) => ser(&crate::sprints::close(
+            store,
+            p,
+            code,
+            str_field(b, "carry_to").as_deref(),
+        )?),
         ("PUT", ["projects", p, "config", "cadence"]) => {
             let unit = match str_field(b, "estimate_unit").as_deref() {
                 None => None,
@@ -836,7 +876,12 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                 "code": feature.code,
                 "gaps": crate::readiness::evaluate(feature, Some(&goal_ids), crate::readiness::CHECK),
                 // What the next stage asks, and what it still lacks (FEAT-117).
-                "next": crate::readiness::next_gates(&project, Some(&charter), feature),
+                "next": crate::readiness::next_gates(
+                    &project,
+                    Some(&charter),
+                    feature,
+                    &crate::readiness::Context::load(store, p, &project.config),
+                ),
             }))
         }
         // The board's cards, in one request: gaps per live item, keyed by code. Finished and
@@ -844,6 +889,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("GET", ["projects", p, "readiness"]) => {
             let project = store.load_meta(p)?;
             let charter = crate::charter::load(store, p)?;
+            let ctx = crate::readiness::Context::load(store, p, &project.config);
             let cards: serde_json::Map<String, Value> = project
                 .features
                 .iter()
@@ -852,7 +898,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                     let gaps = crate::readiness::evaluate(f, None, crate::readiness::CARD);
                     // The next stage, with how much it still lacks (FEAT-117).
                     let next: Vec<Value> =
-                        crate::readiness::next_gates(&project, Some(&charter), f)
+                        crate::readiness::next_gates(&project, Some(&charter), f, &ctx)
                             .into_iter()
                             .map(|n| json!({"status": n.status, "missing": n.gaps.len()}))
                             .collect();
@@ -865,6 +911,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             use crate::models::ApprovalState;
             let project = store.load_meta(p)?;
             let charter = crate::charter::load(store, p)?;
+            let ctx = crate::readiness::Context::load(store, p, &project.config);
             // Whether an approval is current or has lapsed depends on a hash of the definition's
             // content, so it is decided here rather than in each caller: the CLI, the monitor and
             // any future client all get the same answer to "is this agreed?".
@@ -889,7 +936,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                     // Sign-offs the next stage asks for are the same kind of question: a person's
                     // agreement, recorded before the item can move on (FEAT-117).
                     let signoffs_needed: Vec<String> = if live {
-                        crate::readiness::next_gates(&project, Some(&charter), f)
+                        crate::readiness::next_gates(&project, Some(&charter), f, &ctx)
                             .into_iter()
                             .flat_map(|n| n.signoffs_needed)
                             .collect()
@@ -953,6 +1000,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                 milestone: query_param(query, "milestone"),
                 since: query_param(query, "since"),
                 label: query_param(query, "label"),
+                sprint: query_param(query, "sprint"),
             };
             ser(&crate::retro::run(store, p, &wave)?)
         }
@@ -1086,6 +1134,8 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "milestones", c] if del => format!("delete milestone {c}"),
         ["projects", _p, "milestones", c] => format!("edit milestone {c}"),
         ["projects", _p, "config", what] => format!("update config: {what}"),
+        ["projects", _p, "sprints"] => "add a sprint".into(),
+        ["projects", _p, "sprints", c, what] => format!("{what} sprint {c}"),
         ["projects", _p, "docs", "folder"] => "configure doc folder".into(),
         ["projects", _p, "docs", "content"] if del => "remove document".into(),
         ["projects", _p, "docs", "content"] => "update document".into(),
