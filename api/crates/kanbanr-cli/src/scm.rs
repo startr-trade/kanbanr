@@ -62,9 +62,22 @@ pub fn merge_in_progress(root: &Path) -> bool {
     git(root, &["rev-parse", "-q", "--verify", "MERGE_HEAD"]).is_ok()
 }
 
-/// The branch work is *not* supposed to land on directly: the remote's head, else the configured
-/// default, else whichever of main/master exists.
+/// Does the repository have a commit yet? A fresh `git init` has an unborn HEAD: a branch name
+/// with nothing behind it, from which no item branch can be made.
+pub fn has_commits(root: &Path) -> bool {
+    git(root, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok()
+}
+
+/// The branch work is *not* supposed to land on directly: in a repository with no commits, the
+/// branch HEAD is waiting on (FEAT-105) — whatever `git init` chose, which is what the first commit
+/// will create; else the remote's head, else the first of the configured default, main and master
+/// that exists here.
 pub fn default_branch(root: &Path) -> String {
+    if !has_commits(root)
+        && let Some(unborn) = current_branch(root)
+    {
+        return unborn;
+    }
     if let Ok(head) = git(
         root,
         &[
@@ -77,17 +90,22 @@ pub fn default_branch(root: &Path) -> String {
     {
         return name.to_string();
     }
-    if let Ok(name) = git(root, &["config", "--get", "init.defaultBranch"])
-        && !name.is_empty()
+    // `init.defaultBranch` says what NEW repositories are called, not what this one is: it only
+    // wins when a branch of that name exists here, or a repo made on `master` is told its default is
+    // a `main` it has never had (FEAT-105).
+    let configured = git(root, &["config", "--get", "init.defaultBranch"])
+        .ok()
+        .filter(|n| !n.is_empty());
+    for name in configured
+        .iter()
+        .map(String::as_str)
+        .chain(["main", "master"])
     {
-        return name;
-    }
-    for name in ["main", "master"] {
         if git(root, &["rev-parse", "--verify", "--quiet", name]).is_ok() {
             return name.to_string();
         }
     }
-    "main".to_string()
+    configured.unwrap_or_else(|| "main".to_string())
 }
 
 fn hooks_dir(root: &Path) -> Result<PathBuf> {
@@ -280,6 +298,35 @@ mod tests {
         // Aborting it returns to the ordinary state, where the rule applies again.
         git(&repo, &["merge", "--abort"]).unwrap();
         assert!(!merge_in_progress(&repo));
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FEAT-105 R-1: a fresh `git init` on `master` has `master` as its default, not an assumed
+    /// `main` that does not exist — and once the first commit lands, the ordinary rules resume.
+    #[test]
+    fn an_unborn_head_is_the_default_branch() {
+        let repo = std::env::temp_dir().join(format!("kanbanr-scm-unborn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "master"]).unwrap();
+        // A configured default that disagrees with what this repo was created on must not win.
+        git(&repo, &["config", "init.defaultBranch", "main"]).unwrap();
+        assert!(!has_commits(&repo));
+        assert_eq!(default_branch(&repo), "master");
+        for args in [
+            &["config", "user.email", "t@example.com"][..],
+            &["config", "user.name", "T"],
+            &["commit", "-q", "--allow-empty", "-m", "root"],
+        ] {
+            git(&repo, args).unwrap();
+        }
+        assert!(has_commits(&repo));
+        git(&repo, &["checkout", "-q", "-b", "feat/FEAT-001-thing"]).unwrap();
+        assert_eq!(
+            default_branch(&repo),
+            "master",
+            "the existing branch still wins over main"
+        );
         let _ = std::fs::remove_dir_all(&repo);
     }
 

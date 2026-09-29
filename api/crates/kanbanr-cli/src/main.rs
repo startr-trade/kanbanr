@@ -2583,9 +2583,11 @@ fn run_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         return Ok(()); // not a kanbanr project: not this guard's business
     };
     // Completing a merge is the intended way work reaches the default branch (FEAT-094).
+    // So is a repository's first commit (FEAT-105): nothing can branch from a repo with none.
     if let Some(branch) = &ctx.branch
         && branch == &scm::default_branch(&ctx.root)
         && !scm::merge_in_progress(&ctx.root)
+        && scm::has_commits(&ctx.root)
     {
         deny(format!(
             "This would commit straight to {branch}. Work belongs on a branch for its item: run \
@@ -2907,6 +2909,12 @@ fn run_check_branch(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     if branch.starts_with(kanbanr_core::scm::SPIKE_PREFIX) {
         return Ok(()); // a spike is allowed to exist; `finish` is where it is refused
     }
+    // The root commit has nowhere else to go: an item branch needs a commit to branch from, so a
+    // new repository's first commit lands on its default branch (FEAT-105). Its message is still
+    // checked by commit-msg, so it names an item or says `[no-ref] <why>` on the record.
+    if !scm::has_commits(&ctx.root) && branch == scm::default_branch(&ctx.root) {
+        return Ok(());
+    }
     // The commit completing a merge is how an item's branch is SUPPOSED to arrive here (FEAT-094).
     if branch == scm::default_branch(&ctx.root) {
         anyhow::bail!(
@@ -2948,6 +2956,16 @@ fn run_start(
     if !no_branch {
         let root = scm::repo_root()
             .ok_or_else(|| anyhow::anyhow!("not inside a git repository — use --no-branch"))?;
+        // An item branch is made from the default branch, and a repository with no commits has
+        // nothing to make it from (FEAT-105): branching anyway leaves an orphan that never joins.
+        if !scm::has_commits(&root) {
+            anyhow::bail!(
+                "this repository has no commits yet, so there is nothing to branch {code} from. \
+                 Make the initial commit on {} first, e.g.\n\n    \
+                 git commit -m \"[no-ref] initial commit\"\n",
+                scm::default_branch(&root)
+            );
+        }
         let branch =
             kanbanr_core::scm::branch_for(project.config.branch_pattern(), code, &feature.title);
         if scm::current_branch(&root).as_deref() == Some(branch.as_str()) {
