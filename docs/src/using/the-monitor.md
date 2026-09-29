@@ -29,7 +29,7 @@ Because the data folder is a **plain git repository**, you resolve exactly as yo
 **The monitor** is a separate, read-only view of your local folder — localhost, no login:
 
 ```bash
-kanbanr serve --ui-dir web/dist     # the same binary (or: make docker-up)
+kanbanr serve                       # built into the binary: no --ui-dir, no Node
 kanbanr open                        # opens http://localhost:8080 — just the board
 ```
 

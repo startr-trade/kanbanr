@@ -6,7 +6,7 @@ something moves. Everything it held now lives where it is maintained:
 
 | What you want | Where it is |
 |---|---|
-| What is planned, in progress and done | `kanbanr board` — or the monitor, `kanbanr serve --ui-dir web/dist` |
+| What is planned, in progress and done | `kanbanr board` — or the monitor, `kanbanr serve` |
 | The milestones and their order | `kanbanr milestone list` (a dependency DAG) · `kanbanr critical-path` |
 | What can be started right now | `kanbanr ready` · what is waiting: `kanbanr blocked` |
 | Why the project exists, and what it will **not** do | `kanbanr charter show` — the non-goals section |

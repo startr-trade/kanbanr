@@ -3598,6 +3598,16 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// What to do when the monitor isn't running. The monitor is built into the binary (FEAT-084), so
+/// the answer is plain `serve`: naming `--ui-dir web/dist` here once sent a setup off to find a
+/// development build in another checkout (FEAT-104).
+fn monitor_down_hint(url: &str) -> String {
+    format!(
+        "monitor not reachable at {url}.\nStart it first (the monitor is built into this binary):\n  \
+         kanbanr serve\nthen re-run `kanbanr open`."
+    )
+}
+
 /// Open the live monitor in the default browser (best-effort; warns if it isn't reachable).
 fn run_open(_cli: &Cli) -> anyhow::Result<()> {
     let url = monitor_url();
@@ -3609,10 +3619,7 @@ fn run_open(_cli: &Cli) -> anyhow::Result<()> {
         Err(ureq::Error::Transport(_))
     );
     if !up {
-        println!(
-            "monitor not reachable at {url}.\nStart it first:\n  \
-             kanbanr serve --ui-dir web/dist        # this same binary, no Docker\nthen re-run `kanbanr open`."
-        );
+        println!("{}", monitor_down_hint(&url));
         return Ok(());
     }
     open_in_browser(&url);
@@ -6095,6 +6102,16 @@ Refs: kanbanr:FEAT-082/R-1""#;
             !line.contains("R-27"),
             "the point is not to print them all: {line}"
         );
+    }
+
+    /// FEAT-104 R-1: the hint names the command that works on any machine — the built-in monitor —
+    /// not a development build that exists only in kanbanr's own checkout.
+    #[test]
+    fn open_hint_names_the_built_in_monitor() {
+        let hint = monitor_down_hint("http://localhost:8080");
+        assert!(hint.contains("kanbanr serve\n"), "{hint}");
+        assert!(!hint.contains("--ui-dir"), "{hint}");
+        assert!(!hint.contains("web/dist"), "{hint}");
     }
 
     /// FEAT-065: the guard decides from a path and nothing else. Every judgement it gets wrong is

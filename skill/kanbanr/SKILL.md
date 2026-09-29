@@ -546,7 +546,7 @@ resolution** in the data folder (kanbanr never auto-resolves).
 
 **The live monitor** is a separate, read-only **view** of the local folder — no auth, localhost:
 ```
-kanbanr serve --ui-dir web/dist     # run the view daemon (the same one binary; no Docker)
+kanbanr serve                       # the monitor is built into the binary; nothing else to point at
 kanbanr open                        # open it in the browser
 ```
 
