@@ -3142,14 +3142,23 @@ fn run_start(
         .iter()
         .find(|f| f.code == code)
         .ok_or_else(|| anyhow::anyhow!("feature '{code}' not found"))?;
+    // Where work starts is the workflow's to say: the status whose gate makes the branch
+    // (FEAT-115). Under TOGAF that is Implementation, not the first phase after Vision.
     let status = match to {
         Some(s) => s.to_string(),
-        None => first_active_status(&project)?,
+        None => branch_status(&project.config)
+            .map(Ok)
+            .unwrap_or_else(|| first_active_status(&project))?,
     };
+    require_reachable(&project.config, code, &feature.status, &status)?;
 
-    if !no_branch {
-        let root = scm::repo_root()
-            .ok_or_else(|| anyhow::anyhow!("not inside a git repository — use --no-branch"))?;
+    // Branch only where there is a repository to branch in. A project need not be code; there the
+    // item simply moves, and says so, rather than refusing to start at all.
+    let root = if no_branch { None } else { scm::repo_root() };
+    if !no_branch && root.is_none() {
+        println!("not a git repository: moving {code} without a branch");
+    }
+    if let Some(root) = root {
         // An item branch is made from the default branch, and a repository with no commits has
         // nothing to make it from (FEAT-105): branching anyway leaves an orphan that never joins.
         if !scm::has_commits(&root) {
@@ -3219,11 +3228,73 @@ fn first_active_status(project: &Project) -> anyhow::Result<String> {
         .find(|s| {
             *s != &project.config.default_state
                 && !kanbanr_core::graph::is_terminal_status(&project.config, s)
+                && !project.config.is_no_op(s)
         })
         .cloned()
         .ok_or_else(|| {
             anyhow::anyhow!("this workflow has no active status to start in; pass --to <STATUS>")
         })
+}
+
+/// The status whose gate creates the item's branch, in workflow order (FEAT-115).
+fn branch_status(config: &kanbanr_core::ProjectConfig) -> Option<String> {
+    let gates = config.effective_gates();
+    config
+        .statuses
+        .iter()
+        .find(|s| {
+            gates
+                .get(*s)
+                .is_some_and(|g| g.on_enter.contains(&kanbanr_core::config::Action::Branch))
+        })
+        .cloned()
+}
+
+/// The shortest chain of allowed transitions from one status to another, both ends included.
+fn status_path(config: &kanbanr_core::ProjectConfig, from: &str, to: &str) -> Option<Vec<String>> {
+    let mut previous: std::collections::BTreeMap<String, String> = Default::default();
+    let mut queue = std::collections::VecDeque::from([from.to_string()]);
+    let mut seen = std::collections::BTreeSet::from([from.to_string()]);
+    while let Some(at) = queue.pop_front() {
+        if at == to {
+            let mut path = vec![at.clone()];
+            let mut cur = at;
+            while let Some(p) = previous.get(&cur) {
+                path.push(p.clone());
+                cur = p.clone();
+            }
+            path.reverse();
+            return Some(path);
+        }
+        for next in config.transitions.get(&at).into_iter().flatten() {
+            if seen.insert(next.clone()) {
+                previous.insert(next.clone(), at.clone());
+                queue.push_back(next.clone());
+            }
+        }
+    }
+    None
+}
+
+/// Refuse a jump the workflow does not allow, naming the stages in between — each has its own gate,
+/// so they are walked, not skipped (FEAT-115).
+fn require_reachable(
+    config: &kanbanr_core::ProjectConfig,
+    code: &str,
+    from: &str,
+    to: &str,
+) -> anyhow::Result<()> {
+    if from == to || config.transition_allowed(from, to) {
+        return Ok(());
+    }
+    match status_path(config, from, to) {
+        Some(path) if path.len() > 2 => anyhow::bail!(
+            "{code} is at {from}, and {to} is reached through {}. Move it through those first — \
+             each stage has its own gate — with `kanbanr move {code} <STATUS>`.",
+            path[1..path.len() - 1].join(" → ")
+        ),
+        _ => anyhow::bail!("the workflow has no way from {from} to {to}"),
+    }
 }
 
 fn run_finish(cli: &Cli, client: &Backend, code: Option<&str>) -> anyhow::Result<()> {
@@ -3254,16 +3325,45 @@ fn run_finish(cli: &Cli, client: &Backend, code: Option<&str>) -> anyhow::Result
         .find(|f| f.code == code)
         .ok_or_else(|| anyhow::anyhow!("feature '{code}' not found"))?;
 
-    // Everything that makes "done" mean something, checked before it is claimed.
-    let report = check_report(feature);
-    let gaps: Vec<String> = report["gaps"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|g| g.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
+    // The end this item can reach next: a terminal status the workflow allows from where it is
+    // (FEAT-115). The first declared terminal was taken before, and refused from any stage that
+    // does not lead straight to it — Implementation under TOGAF.
+    let config = &project.config;
+    let ends: Vec<&String> = config
+        .statuses
+        .iter()
+        .filter(|s| kanbanr_core::graph::is_terminal_status(config, s) && !config.is_no_op(s))
+        .collect();
+    let terminal = match ends
+        .iter()
+        .find(|s| config.transition_allowed(&feature.status, s))
+    {
+        Some(s) => (*s).clone(),
+        None => {
+            let first = ends
+                .first()
+                .map(|s| (*s).clone())
+                .unwrap_or_else(|| "Completed".to_string());
+            require_reachable(config, &code, &feature.status, &first)?;
+            first
+        }
+    };
+
+    // Everything that makes "done" mean something, checked before it is claimed. A workflow that
+    // declares its gates says that itself, on the end status, and the move below enforces it; one
+    // that does not keeps the rules `check` reports.
+    let gaps: Vec<String> = if config.gates.is_empty() {
+        check_report(feature)["gaps"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|g| g.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let open: Vec<String> = feature
         .todo_lists
         .iter()
@@ -3283,12 +3383,6 @@ fn run_finish(cli: &Cli, client: &Backend, code: Option<&str>) -> anyhow::Result
         );
     }
 
-    let terminal = project
-        .config
-        .terminal_states
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "Completed".to_string());
     let resp = client.write(
         Method::Post,
         &format!("/projects/{p}/features/{code}/move"),
@@ -5656,6 +5750,13 @@ fn run_task(cli: &Cli, client: &Backend, cmd: &TaskCmd) -> anyhow::Result<()> {
                     field(&resp, "status")
                 ),
             );
+            if !cli.json
+                && let Some(held) = serde_json::from_str::<Value>(&resp)
+                    .ok()
+                    .and_then(|v| v["auto_advance_held"].as_str().map(str::to_string))
+            {
+                eprintln!("  {held}");
+            }
             Ok(())
         }
         TaskCmd::List { feature, todo } => {

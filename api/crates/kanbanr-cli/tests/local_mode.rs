@@ -2586,3 +2586,181 @@ fn cli_a_closed_pipe_is_not_a_panic() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A scratch repo whose board uses the TOGAF phases, with a branch made at Implementation and the
+/// charter adopted — the shape FEAT-115 is about. Returns (base, work, exec).
+fn togaf_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let base = std::env::temp_dir().join(format!("kanbanr-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(base.join("home")).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    (base, work)
+}
+
+fn run_in(base: &std::path::Path, work: &std::path::Path, args: &[&str]) -> Output {
+    Command::new(cli())
+        .args(args)
+        .current_dir(work)
+        .env("HOME", base.join("home"))
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run kanbanr CLI")
+}
+
+fn git_in(base: &std::path::Path, work: &std::path::Path, args: &[&str]) -> Output {
+    Command::new("git")
+        .args(args)
+        .current_dir(work)
+        .env("HOME", base.join("home"))
+        .env("GIT_AUTHOR_NAME", "T")
+        .env("GIT_AUTHOR_EMAIL", "t@x")
+        .env("GIT_COMMITTER_NAME", "T")
+        .env("GIT_COMMITTER_EMAIL", "t@x")
+        .output()
+        .expect("run git")
+}
+
+/// Set up: git repo with a first commit, a TOGAF board with its charter adopted, gates that ask
+/// only for approval to enter each phase and make the branch at Implementation, and one approved
+/// item at Vision.
+fn togaf_board(base: &std::path::Path, work: &std::path::Path) {
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(base, work, &["init", "--initial-branch=main"]));
+    ok(git_in(
+        base,
+        work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ],
+    ));
+    ok(run_in(
+        base,
+        work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(base, work, &["config", "workflow", "--togaf"]));
+    let charter = base.join("charter.yaml");
+    std::fs::write(
+        &charter,
+        "purpose: p\ngoals:\n  - statement: g\n    measure: m\n",
+    )
+    .unwrap();
+    ok(run_in(
+        base,
+        work,
+        &["charter", "set", "--file", charter.to_str().unwrap()],
+    ));
+    let config = base.join("code/shop.kanbanr/projects/shop/config.yaml");
+    let mut yaml = std::fs::read_to_string(&config).unwrap();
+    yaml.push_str(
+        "gates:\n  Business Arch:\n    requires: [definition, approved]\n  System Design:\n    requires: [approved]\n  Implementation:\n    requires: [approved]\n    on_enter: [branch]\n  Migration:\n    requires: [approved]\n",
+    );
+    std::fs::write(&config, yaml).unwrap();
+    ok(run_in(
+        base,
+        work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    ok(run_in(
+        base,
+        work,
+        &["feature", "add", "--title", "Cart", "--milestone", "MS-001"],
+    ));
+    let def = base.join("def.yaml");
+    std::fs::write(&def, "statement: Keep a cart\n").unwrap();
+    ok(run_in(
+        base,
+        work,
+        &[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    ok(run_in(base, work, &["approve", "FEAT-001"]));
+}
+
+/// FEAT-115 R-1: `start` goes where the workflow makes the branch — Implementation under TOGAF,
+/// not the phase after Vision — and refuses to leap there, naming the stages in between.
+#[test]
+fn start_branches_where_the_gate_says() {
+    let (base, work) = togaf_scratch("start-gate");
+    togaf_board(&base, &work);
+    let early = run_in(&base, &work, &["start", "FEAT-001"]);
+    assert!(
+        !early.status.success(),
+        "a leap from Vision to Implementation is refused"
+    );
+    let why = String::from_utf8_lossy(&early.stderr);
+    assert!(why.contains("Business Arch → System Design"), "{why}");
+    // Nothing was branched for a start that did not happen.
+    let branches = String::from_utf8_lossy(&git_in(&base, &work, &["branch"]).stdout).to_string();
+    assert!(!branches.contains("feat/"), "{branches}");
+
+    for phase in ["Business Arch", "System Design"] {
+        let o = run_in(&base, &work, &["move", "FEAT-001", phase]);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    }
+    let started = run_in(&base, &work, &["start", "FEAT-001"]);
+    assert!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    let said = String::from_utf8_lossy(&started.stdout);
+    assert!(said.contains("created feat/FEAT-001"), "{said}");
+    assert!(said.contains("FEAT-001 -> Implementation"), "{said}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-115 R-2: `finish` ends at a terminal the workflow allows from where the item is, and
+/// otherwise names the path — it no longer jumps to the first terminal regardless.
+#[test]
+fn finish_reaches_a_terminal_through_an_allowed_edge() {
+    let (base, work) = togaf_scratch("finish-edge");
+    togaf_board(&base, &work);
+    for phase in ["Business Arch", "System Design", "Implementation"] {
+        let o = run_in(&base, &work, &["move", "FEAT-001", phase]);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    }
+    // Implementation → Operations is not an edge in this workflow: finish says how to get there.
+    let refused = run_in(&base, &work, &["finish", "FEAT-001"]);
+    assert!(!refused.status.success());
+    let why = String::from_utf8_lossy(&refused.stderr);
+    assert!(why.contains("through Migration"), "{why}");
+    // From Migration the end is one step away, and finish takes it.
+    assert!(
+        run_in(&base, &work, &["move", "FEAT-001", "Migration"])
+            .status
+            .success()
+    );
+    let done = run_in(&base, &work, &["finish", "FEAT-001"]);
+    assert!(
+        done.status.success(),
+        "{}",
+        String::from_utf8_lossy(&done.stderr)
+    );
+    assert!(String::from_utf8_lossy(&done.stdout).contains("FEAT-001 -> Operations"));
+    let _ = std::fs::remove_dir_all(&base);
+}
