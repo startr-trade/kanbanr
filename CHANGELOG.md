@@ -197,6 +197,13 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **"What is this item missing?" has one answer (FEAT-112).** `check`, `finish`, `doctor`,
+  `check --file`, `query --gap` and the monitor's board cards now share one readiness engine,
+  instead of five copies that had drifted apart. Each surface still asks its own set of checks,
+  but a rule means the same thing and reads the same everywhere. Two drifts are corrected: the
+  query no longer counts a ratified item as unapproved, and an exempt item has no gaps anywhere.
+  New read routes serve the monitor: `…/features/{code}/readiness` and `…/readiness` (per live
+  item).
 - **Session summaries can keep private topics off the board (FEAT-124).** A private exclusion list,
   kept outside every repository, names terms that must never appear. Transcript messages that
   mention one are dropped before summarising, and summary lines that mention one are removed

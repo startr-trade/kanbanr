@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Feature, Task, TaskState } from "../types";
-import { definitionGaps, featureProgress } from "../types";
+import { featureProgress } from "../types";
+import type { Gap } from "../types";
 
 export function Loading() {
   return <div className="muted pad" role="status" aria-live="polite">Loading…</div>;
@@ -111,23 +112,24 @@ export function FeatureCard({
   project,
   feature,
   siblings,
+  gaps = [],
 }: {
   project: string;
   feature: Feature;
   siblings?: Feature[];
+  /** From the daemon's readiness engine; only live items have any. */
+  gaps?: Gap[];
 }) {
   const p = featureProgress(feature);
   const blocked = siblings ? isBlockedBySiblings(feature, siblings) : false;
-  // Only live work is worth nagging about; finished items are history (the rule doctor uses).
-  const gaps = feature.status === "Completed" ? [] : definitionGaps(feature);
   return (
     <Link className="card" to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(feature.code)}`}>
       <div className="card-code">{feature.code}</div>
       <div className="card-title">{feature.title}</div>
       <div className="card-meta">
         {gaps.length > 0 && (
-          <span className="chip warn" title={`Not yet stated: ${gaps.join(", ")}`}>
-            {gaps.length === 1 && gaps[0] === "no definition" ? "no definition" : `${gaps.length} gaps`}
+          <span className="chip warn" title={`Not yet stated: ${gaps.map((g) => g.label).join(", ")}`}>
+            {gaps.length === 1 && gaps[0].check === "definition" ? "no definition" : `${gaps.length} gaps`}
           </span>
         )}
         {blocked && <span className="chip blocked">blocked</span>}

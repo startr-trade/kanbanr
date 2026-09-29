@@ -255,34 +255,8 @@ pub fn run(store: &Store, query: &Query) -> Result<Vec<QueryHit>> {
 /// three questions asked when something has gone wrong: why does this exist, is it verified, and
 /// did anyone agree to it.
 fn has_gap(f: &crate::FeatureItem, gap: &str) -> bool {
-    use crate::models::{ApprovalState, TestState};
-    let def = f.definition.as_ref();
-    match gap.trim().to_ascii_lowercase().as_str() {
-        "why" => match def {
-            None => true,
-            Some(d) => {
-                d.statement.trim().is_empty()
-                    || !d.zachman.missing().is_empty()
-                    || d.goals.is_empty()
-            }
-        },
-        "test" => match def {
-            None => true,
-            Some(d) => {
-                d.requirements.is_empty()
-                    || d.requirements.iter().any(|r| {
-                        r.tests.is_empty() || !r.tests.iter().any(|t| t.state == TestState::Green)
-                    })
-            }
-        },
-        "approval" => match def {
-            None => true,
-            Some(d) => {
-                !matches!(d.approval_state(), ApprovalState::Current)
-                    || !d.started_unapproved.trim().is_empty()
-            }
-        },
-        // An unknown gap name matches nothing, rather than silently matching everything.
-        _ => false,
-    }
+    // The same rules every other surface uses (FEAT-112). An unknown gap name matches nothing,
+    // rather than silently matching everything.
+    crate::readiness::query_group(gap)
+        .is_some_and(|checks| !crate::readiness::evaluate(f, None, checks).is_empty())
 }

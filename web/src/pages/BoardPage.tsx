@@ -21,6 +21,7 @@ export default function BoardPage() {
   const { project = "" } = useParams();
   const tick = useLiveTick(api.projectEvents(project));
   const { data, error, loading } = useAsync(() => api.getProject(project), [project, tick]);
+  const readiness = useAsync(() => api.getReadiness(project), [project, tick]);
   const [q, setQ] = useState("");
   const [pageSize, setPageSize] = useState<PageSize>(initialPageSize);
   // Per-status current page (1-based); each column paginates independently.
@@ -99,7 +100,13 @@ export default function BoardPage() {
               </Link>
               <div className="column-body">
                 {shown.map((f) => (
-                  <FeatureCard key={f.code} project={project} feature={f} siblings={data.features} />
+                  <FeatureCard
+                    key={f.code}
+                    project={project}
+                    feature={f}
+                    siblings={data.features}
+                    gaps={readiness.data?.[f.code]}
+                  />
                 ))}
                 {total === 0 && <div className="muted small pad">—</div>}
               </div>

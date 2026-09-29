@@ -8,6 +8,7 @@ export default function MilestonePage() {
   const { project = "", code = "" } = useParams();
   const tick = useLiveTick(api.projectEvents(project));
   const { data, error, loading } = useAsync(() => api.getProject(project), [project, tick]);
+  const readiness = useAsync(() => api.getReadiness(project), [project, tick]);
 
   if (loading && !data) return <Loading />;
   if (error) return <ErrorBox error={error} />;
@@ -57,7 +58,13 @@ export default function MilestonePage() {
         ) : (
           <div className="tiles">
             {features.map((f) => (
-              <FeatureCard key={f.code} project={project} feature={f} siblings={data.features} />
+              <FeatureCard
+                    key={f.code}
+                    project={project}
+                    feature={f}
+                    siblings={data.features}
+                    gaps={readiness.data?.[f.code]}
+                  />
             ))}
           </div>
         )}
