@@ -560,6 +560,7 @@ impl Store {
             estimate_days: None,
             points: None,
             sprint: None,
+            release: None,
             assignee: None,
             team: None,
             labels: Vec::new(),
@@ -1223,7 +1224,7 @@ impl Store {
     /// Evaluate the gate of `to` for `code` (FEAT-113). Adoption is never retroactive: a project with
     /// no charter has not taken up the method, and items created before the charter was adopted
     /// predate it — gating either would make upgrading kanbanr break every board in existence.
-    fn check_gate(
+    pub(crate) fn check_gate(
         project: &Project,
         charter: &crate::Charter,
         ctx: &crate::readiness::Context,
@@ -2436,6 +2437,24 @@ impl Store {
         Ok(())
     }
 
+    /// Plan an item into a release, or out of one (FEAT-120).
+    pub fn set_feature_release(
+        &self,
+        id: &str,
+        code: &str,
+        release: Option<String>,
+    ) -> Result<FeatureItem> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let feature = project.feature_mut(code)?;
+        feature.release = release.filter(|r| !r.trim().is_empty());
+        feature.updated_at = now_rfc3339();
+        let updated = feature.clone();
+        pending.persist_features.insert(updated.code.clone());
+        self.flush(id, &project, &pending)?;
+        Ok(updated)
+    }
+
     /// Plan an item into a sprint, or out of one (FEAT-119).
     pub fn set_feature_sprint(
         &self,
@@ -2952,7 +2971,7 @@ struct DocSnapshot {
 
 /// What a gate decided about a move that it lets through (FEAT-113).
 #[derive(Debug, Default)]
-struct GateOutcome {
+pub(crate) struct GateOutcome {
     /// Reported, not enforced: the gate's `warns`, a `warn` gate's gaps, or what an override passed.
     warnings: Vec<crate::readiness::Gap>,
 }

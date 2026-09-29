@@ -51,6 +51,8 @@ pub enum Check {
     Estimated,
     /// Planned into the project's active sprint (FEAT-119).
     InSprint,
+    /// Planned into a release (FEAT-120).
+    InRelease,
     /// A named sign-off is recorded against the current definition. Asked for through a gate's
     /// `signoffs: [name]`, never listed on its own — it needs the name.
     Signoff,
@@ -396,6 +398,17 @@ pub fn evaluate_in(
             ));
         }
     }
+    if checks.contains(&Check::InRelease) && !exempt && feature.release.is_none() {
+        gaps.push(gap(
+            Check::InRelease,
+            None,
+            "not in a release",
+            format!(
+                "not planned into a release — `kanbanr release plan <VERSION> {}`",
+                feature.code
+            ),
+        ));
+    }
     if checks.contains(&Check::InSprint) && !exempt {
         match ctx.active_sprint.as_deref() {
             Some(active) if feature.sprint.as_deref() == Some(active) => {}
@@ -580,6 +593,7 @@ fn item_level(
         | Check::Small
         | Check::Estimated
         | Check::InSprint
+        | Check::InRelease
         | Check::Signoff => {}
     }
 }

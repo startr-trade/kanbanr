@@ -30,6 +30,7 @@ pub mod portfolio;
 pub mod project;
 pub mod query;
 pub mod readiness;
+pub mod releases;
 pub mod report;
 pub mod retro;
 pub mod scm;
@@ -2012,6 +2013,158 @@ requirements:
         crate::sprints::close(&store, "demo", &sp.code, None).unwrap();
         let with = crate::report::run(&store, "demo", &window, None).unwrap();
         assert_eq!(with.velocity, Some(vec![("SP-001".to_string(), 3.0)]));
+    }
+
+    /// A project with releases on, v0.1.0 and v0.2.0 planned, and three items in v0.1.0: one
+    /// already Completed, one Scheduled with everything `finish` asks, one still Planned.
+    fn release_board() -> (Store, tempdir::TempDirLike, [String; 3]) {
+        use crate::models::{FeatureDefinition, Requirement, TestRef, TestState, Zachman};
+        use serde_json::json;
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&json!({"releases": true})),
+        )
+        .unwrap();
+        crate::releases::add(&store, "demo", "v0.1.0", "2026-10-31", "First cut").unwrap();
+        crate::releases::add(&store, "demo", "v0.2.0", "", "").unwrap();
+        let ready = |title: &str| {
+            let f = store.add_feature("demo", title, "", "M", None).unwrap();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &f.code,
+                    Some(FeatureDefinition {
+                        statement: format!("{title} for shoppers so that they can pay"),
+                        goals: vec!["G-1".into()],
+                        zachman: Zachman {
+                            what: "w".into(),
+                            how: "h".into(),
+                            where_: "w".into(),
+                            when: "w".into(),
+                            who: "w".into(),
+                            why: "w".into(),
+                        },
+                        requirements: vec![Requirement {
+                            id: "R-1".into(),
+                            text: format!("WHEN a shopper pays, THE SYSTEM SHALL confirm {title}."),
+                            tests: vec![TestRef {
+                                name: "t".into(),
+                                state: TestState::Green,
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+            store.approve_feature("demo", &f.code, "Ada L").unwrap();
+            f.code
+        };
+        let done = ready("Receipts");
+        store.move_feature("demo", &done, "Scheduled").unwrap();
+        store.move_feature("demo", &done, "Completed").unwrap();
+        let finishing = ready("Checkout");
+        store.move_feature("demo", &finishing, "Scheduled").unwrap();
+        let open = store
+            .add_feature("demo", "Refunds", "", "M", None)
+            .unwrap()
+            .code;
+        crate::releases::plan(
+            &store,
+            "demo",
+            "v0.1.0",
+            &[done.clone(), finishing.clone(), open.clone()],
+        )
+        .unwrap();
+        (store, d, [done, finishing, open])
+    }
+
+    /// FEAT-120 R-1: a cut ships the planned items that are finished — moving the ones whose work
+    /// is done to their end status — and nothing else.
+    #[test]
+    fn a_cut_ships_only_what_is_done() {
+        let (store, _d, [done, finishing, open]) = release_board();
+        let cut = crate::releases::cut(&store, "demo", "v0.1.0").unwrap();
+        assert_eq!(cut.release.shipped, [done.clone(), finishing.clone()]);
+        assert_eq!(cut.release.state, crate::releases::ReleaseState::Shipped);
+        let project = store.load("demo").unwrap();
+        assert_eq!(
+            project.feature(&finishing).unwrap().status,
+            "Completed",
+            "it was moved"
+        );
+        assert_eq!(
+            project.feature(&open).unwrap().status,
+            "Planned",
+            "it was not"
+        );
+        // A shipped release takes no more planning, and is not cut twice.
+        assert!(
+            crate::releases::plan(&store, "demo", "v0.1.0", std::slice::from_ref(&open)).is_err()
+        );
+        assert!(crate::releases::cut(&store, "demo", "v0.1.0").is_err());
+    }
+
+    /// FEAT-120 R-2: the notes are written from what the shipped items said, onto the board.
+    #[test]
+    fn a_cut_writes_release_notes() {
+        let (store, _d, _) = release_board();
+        let cut = crate::releases::cut(&store, "demo", "v0.1.0").unwrap();
+        assert_eq!(cut.release.notes_doc, "releases/v0.1.0.md");
+        let doc = store.read_doc("demo", "releases/v0.1.0.md").unwrap();
+        assert!(doc.starts_with("# v0.1.0 — First cut"), "{doc}");
+        assert!(
+            doc.contains("Checkout for shoppers so that they can pay"),
+            "{doc}"
+        );
+        assert!(doc.contains("THE SYSTEM SHALL confirm Checkout"), "{doc}");
+        assert!(doc.contains("## Carried over"), "{doc}");
+    }
+
+    /// FEAT-120 R-3: what did not make it goes to the next planned release, with the reason; and
+    /// with no release left to take it, back to unplanned.
+    #[test]
+    fn a_cut_carries_unfinished_items() {
+        let (store, _d, [_, _, open]) = release_board();
+        let cut = crate::releases::cut(&store, "demo", "v0.1.0").unwrap();
+        assert_eq!(cut.release.carried.len(), 1);
+        let carried = &cut.release.carried[0];
+        assert_eq!(
+            (carried.code.as_str(), carried.to.as_str()),
+            (open.as_str(), "v0.2.0")
+        );
+        assert!(carried.why.contains("not finished"), "{}", carried.why);
+        let project = store.load("demo").unwrap();
+        assert_eq!(
+            project.feature(&open).unwrap().release.as_deref(),
+            Some("v0.2.0")
+        );
+        let last = crate::releases::cut(&store, "demo", "v0.2.0").unwrap();
+        assert_eq!(last.release.carried[0].to, "unplanned");
+        assert_eq!(
+            store.load("demo").unwrap().feature(&open).unwrap().release,
+            None
+        );
+    }
+
+    /// FEAT-120 R-4: releases are refused where a project has not switched them on.
+    #[test]
+    fn releases_only_where_switched_on() {
+        let (store, _d) = temp_store();
+        new_project(&store, "plain");
+        let err = crate::releases::add(&store, "plain", "v1.0.0", "", "")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--releases on"), "{err}");
+        let err = crate::releases::cut(&store, "plain", "v1.0.0")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--releases on"), "{err}");
     }
 
     /// FEAT-121 R-1: "estimated" means estimated in the unit the project plans in — story points
