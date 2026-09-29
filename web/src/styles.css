@@ -533,3 +533,15 @@ input:focus-visible,
   outline: none;
   border-color: var(--accent);
 }
+
+/* ---- sprint burndown (FEAT-123) ---- */
+.burndown { margin: 10px 0 0; }
+.burndown svg { width: 100%; max-width: 640px; height: auto; display: block; }
+.bd-axis { stroke: var(--border); stroke-width: 1; }
+.bd-ideal { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; }
+.bd-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.bd-dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
+.bd-hit { fill: transparent; cursor: default; }
+.bd-label { fill: var(--muted); font-size: 11px; }
+.bd-table { border-collapse: collapse; margin-top: 6px; }
+.bd-table th, .bd-table td { padding: 2px 10px; text-align: left; }

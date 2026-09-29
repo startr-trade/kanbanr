@@ -190,6 +190,61 @@ pub fn project_gantt(store: &Store, project_id: &str) -> Result<String> {
             emit_task(&mut out, &view, &sched, id, &in_scope);
         }
     }
+    // The cadence on the same timeline (FEAT-123): each sprint as a bar, each release as a marker
+    // on its target date (or the day it shipped) — only where the project uses them.
+    if project.config.cadence.sprints {
+        let sprints = crate::sprints::load(store, project_id)?;
+        if !sprints.is_empty() {
+            out.push_str("    section Sprints\n");
+        }
+        for s in &sprints {
+            let (Some(start), Some(end)) = (parse_ymd(&s.start), parse_ymd(&s.end)) else {
+                continue;
+            };
+            let length = (end - start).whole_days() + 1;
+            let tag = match s.state {
+                crate::sprints::SprintState::Active => "active, ",
+                crate::sprints::SprintState::Closed => "done, ",
+                crate::sprints::SprintState::Planned => "",
+            };
+            let name = if s.goal.is_empty() {
+                s.code.clone()
+            } else {
+                // A `;` ends a Mermaid statement (L-10); a goal is free text.
+                format!("{} {}", s.code, s.goal.replace([';', '#'], " "))
+            };
+            out.push_str(&format!(
+                "    {} :{tag}{}, {}, {length}d\n",
+                label(&name),
+                task_id(&format!("{project_id}:{}", s.code)),
+                fmt_date(start)
+            ));
+        }
+    }
+    if project.config.cadence.releases {
+        let releases = crate::releases::load(store, project_id)?;
+        let dated: Vec<(String, String)> = releases
+            .iter()
+            .filter_map(|r| {
+                let day = if r.shipped_at.is_empty() {
+                    &r.target
+                } else {
+                    &r.shipped_at
+                };
+                parse_ymd(day).map(|d| (r.version.clone(), fmt_date(d)))
+            })
+            .collect();
+        if !dated.is_empty() {
+            out.push_str("    section Releases\n");
+        }
+        for (version, day) in dated {
+            out.push_str(&format!(
+                "    {} :milestone, {}, {day}, 0d\n",
+                label(&version),
+                task_id(&format!("{project_id}:{version}").replace('.', "_"))
+            ));
+        }
+    }
     Ok(out)
 }
 

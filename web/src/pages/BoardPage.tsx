@@ -3,8 +3,9 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync, useLiveTick } from "../live";
 import { displayedStates, featuresNewestFirst } from "../types";
-import type { Feature } from "../types";
+import type { Feature, SprintReport } from "../types";
 import { ErrorBox, FeatureCard, Loading, LiveDot } from "../components/bits";
+import Burndown from "../components/Burndown";
 
 const PAGE_SIZES = [10, 25, 50] as const;
 type PageSize = number | "all";
@@ -22,6 +23,20 @@ export default function BoardPage() {
   const tick = useLiveTick(api.projectEvents(project));
   const { data, error, loading } = useAsync(() => api.getProject(project), [project, tick]);
   const readiness = useAsync(() => api.getReadiness(project), [project, tick]);
+  // Sprints only where the project uses them (FEAT-119, FEAT-123); everywhere else the board is as
+  // it always was.
+  const usesSprints = data?.config.cadence?.sprints === true;
+  const sprints = useAsync(
+    () => (usesSprints ? api.getSprints(project) : Promise.resolve([])),
+    [project, tick, usesSprints],
+  );
+  const active = (sprints.data ?? []).find((s) => s.state === "active");
+  const [chosen, setChosen] = useState<string | null>(null);
+  const sprintCode = chosen ?? active?.code ?? "all";
+  const sprint = useAsync(
+    () => (usesSprints && sprintCode !== "all" ? api.getSprint(project, sprintCode) : Promise.resolve(null)),
+    [project, tick, usesSprints, sprintCode],
+  );
   const [q, setQ] = useState("");
   const [pageSize, setPageSize] = useState<PageSize>(initialPageSize);
   // Per-status current page (1-based); each column paginates independently.
@@ -47,12 +62,14 @@ export default function BoardPage() {
 
   // Filter/search across code, title, kind, priority, labels.
   const needle = q.trim().toLowerCase();
+  const inSprint = (f: Feature) => !usesSprints || sprintCode === "all" || f.sprint === sprintCode;
   const matches = (f: Feature) =>
-    !needle ||
+    inSprint(f) &&
+    (!needle ||
     [f.code, f.title, f.kind ?? "", f.priority ?? "", ...(f.labels ?? [])]
       .join(" ")
       .toLowerCase()
-      .includes(needle);
+      .includes(needle));
 
   const setPage = (state: string, p: number) => setPages((prev) => ({ ...prev, [state]: p }));
 
@@ -62,6 +79,20 @@ export default function BoardPage() {
         <h1>{data.config.name || data.id}</h1>
         <LiveDot />
         <span className="spacer" />
+        {usesSprints && (
+          <label className="per-page">
+            Sprint
+            <select value={sprintCode} onChange={(e) => setChosen(e.target.value)}>
+              <option value="all">All items</option>
+              {(sprints.data ?? []).map((s) => (
+                <option key={s.code} value={s.code}>
+                  {s.code}
+                  {s.state === "active" ? " (active)" : s.state === "closed" ? " (closed)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="per-page">
           Per page
           <select
@@ -84,6 +115,7 @@ export default function BoardPage() {
         />
       </div>
       {data.config.description && <p className="muted">{data.config.description}</p>}
+      {sprint.data ? <SprintHeader report={sprint.data} /> : null}
       <div className="board">
         {states.map((state) => {
           // Reverse-chronological within the column, then paginate with the shared page size.
@@ -181,6 +213,42 @@ function ActivityPanel({ project, tick }: { project: string; tick: number }) {
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+/** What the chosen sprint is for, where it stands, and how it burned down (FEAT-123). */
+function SprintHeader({ report }: { report: SprintReport }) {
+  const unit = report.unit;
+  return (
+    <section className="section sprint-header">
+      <div className="tile">
+        <div className="tile-title">
+          {report.code} {report.name ? `· ${report.name}` : ""}{" "}
+          <span className="chip">{report.state}</span>
+        </div>
+        {report.goal ? <div className="tile-desc">{report.goal}</div> : null}
+        <div className="tile-states">
+          <span className="chip">
+            {report.start} → {report.end}
+          </span>
+          <span className="chip">{report.days_left} day(s) left</span>
+          <span className="chip tasks">
+            {report.done} of {report.committed} {unit} done
+          </span>
+          {report.capacity != null ? (
+            <span className={`chip ${report.committed > report.capacity ? "warn" : ""}`}>
+              capacity {report.capacity}
+            </span>
+          ) : null}
+          {report.unestimated.length > 0 ? (
+            <span className="chip warn" title={report.unestimated.join(", ")}>
+              {report.unestimated.length} unestimated
+            </span>
+          ) : null}
+        </div>
+        <Burndown report={report} />
+      </div>
     </section>
   );
 }

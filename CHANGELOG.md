@@ -197,6 +197,18 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **Cadence in the monitor (FEAT-123).** Where a project uses sprints:
+  - the board has a sprint selector, defaulting to the active sprint;
+  - it shows a header with the goal, dates, days left, done against committed, and capacity;
+  - it shows a burndown: one accent line against a dashed ideal, a tooltip on every day, and a
+    table view.
+
+  Where it uses releases, a **Releases** tab lists each release's scope, how much is finished, its
+  target and its notes. The project Gantt draws sprints as bars and releases as milestones. A
+  project that uses neither sees none of it.
+- **A gate that didn't name `definition` let an undefined item through (FEAT-125).** The scrum
+  Ready gate passed items with no definition at all. A missing definition now fails every check
+  that reads it.
 - **Scrum and agile, ready to use (FEAT-122).**
   - Two new presets:
     - `scrum`: Backlog → Ready → In Progress → Review → Testing → Done → Released. Ready is the

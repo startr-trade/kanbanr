@@ -41,6 +41,12 @@ export interface Feature {
   labels?: string[];
   /** Other feature codes this one is blocked by. */
   depends_on?: string[];
+  /** Story points, for projects that estimate in them (FEAT-121). */
+  points?: number | null;
+  /** The sprint it is planned into (FEAT-119). */
+  sprint?: string | null;
+  /** The release it is planned into (FEAT-120). */
+  release?: string | null;
   /** Persistent todo-lists (an epic can hold many, added across sessions). */
   todo_lists: TodoList[];
   /** Why this item exists, what must be true, and how it is verified (FEAT-047). */
@@ -290,6 +296,45 @@ export interface ProjectConfig {
   terminal_states?: string[];
   /** Entry criteria per status (FEAT-113). Absent: kanbanr's built-in rule applies. */
   gates?: Record<string, Gate>;
+  /** Days or story points (FEAT-121). */
+  estimate_unit?: "days" | "points";
+  /** Whether the project uses sprints and releases at all (FEAT-121). */
+  cadence?: { sprints?: boolean; releases?: boolean; sprint_length_days?: number; release?: string };
+}
+
+/** A timebox (FEAT-119). */
+export interface Sprint {
+  code: string;
+  name?: string;
+  goal?: string;
+  start: string;
+  end: string;
+  capacity?: number | null;
+  state: "planned" | "active" | "closed";
+  carried?: { code: string; to: string }[];
+}
+
+/** A sprint with what it holds and how it burned down, derived by the daemon. */
+export interface SprintReport extends Sprint {
+  unit: string;
+  items: string[];
+  committed: number;
+  done: number;
+  unestimated: string[];
+  days_left: number;
+  burndown: { date: string; remaining: number }[];
+}
+
+/** A release, planned up front and cut from finished work (FEAT-120). */
+export interface Release {
+  version: string;
+  name?: string;
+  target?: string;
+  state: "planned" | "shipped";
+  shipped_at?: string;
+  shipped?: string[];
+  notes_doc?: string;
+  carried?: { code: string; to: string; why?: string }[];
 }
 
 /** A check a gate names, or the Zachman check narrowed to some columns. */
