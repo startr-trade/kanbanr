@@ -2571,7 +2571,9 @@ fn run_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     let mut raw = String::new();
     std::io::stdin().read_to_string(&mut raw)?;
     let payload: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
-    let command = payload["tool_input"]["command"].as_str().unwrap_or("");
+    // A heredoc's body is data handed to another program, not shell the guard should read
+    // (FEAT-108): a script that merely documents `git commit … -n` was refused as a commit.
+    let command = &without_heredoc_bodies(payload["tool_input"]["command"].as_str().unwrap_or(""));
     if !is_git_commit(command) {
         return Ok(());
     }
@@ -2645,6 +2647,99 @@ fn run_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// The command line with every heredoc body removed, keeping the lines that introduce them.
+///
+/// `<<WORD`, `<<'WORD'`, `<<"WORD"` and `<<-WORD` open a body that runs until a line holding only
+/// `WORD` (leading tabs allowed for `<<-`); several on one line are read in order. `<<<` is a
+/// here-string, not a heredoc, and a `<<` inside quotes is text. The body is what the shell feeds a
+/// program's stdin — a Python script, a JSON bundle, a document — so words in it are never a command
+/// the guard should judge (FEAT-108). An unterminated body runs to the end, as it would in sh.
+fn without_heredoc_bodies(command: &str) -> String {
+    let mut out = String::new();
+    let mut pending: std::collections::VecDeque<(String, bool)> = Default::default();
+    for line in command.split_inclusive('\n') {
+        if let Some((word, strip_tabs)) = pending.front() {
+            let bare = line.trim_end_matches(['\n', '\r']);
+            let bare = if *strip_tabs {
+                bare.trim_start_matches('\t')
+            } else {
+                bare
+            };
+            if bare == word {
+                pending.pop_front();
+            }
+            continue;
+        }
+        pending.extend(heredoc_delimiters(line));
+        out.push_str(line);
+    }
+    out
+}
+
+/// The heredocs a single line opens, in order: `(delimiter, strips leading tabs)`.
+fn heredoc_delimiters(line: &str) -> Vec<(String, bool)> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut found = Vec::new();
+    let mut quote: Option<char> = None;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if let Some(q) = quote {
+            if c == q && (i == 0 || chars[i - 1] != '\\') {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if c == '"' || c == '\'' {
+            quote = Some(c);
+            i += 1;
+            continue;
+        }
+        if c == '<' && chars.get(i + 1) == Some(&'<') && chars.get(i + 2) != Some(&'<') {
+            let mut j = i + 2;
+            let strip_tabs = chars.get(j) == Some(&'-');
+            if strip_tabs {
+                j += 1;
+            }
+            while chars.get(j).is_some_and(|c| *c == ' ' || *c == '\t') {
+                j += 1;
+            }
+            let mut word = String::new();
+            let quoted = chars.get(j).copied().filter(|c| *c == '\'' || *c == '"');
+            if let Some(q) = quoted {
+                j += 1;
+                while let Some(&c) = chars.get(j) {
+                    j += 1;
+                    if c == q {
+                        break;
+                    }
+                    word.push(c);
+                }
+            } else {
+                while let Some(&c) = chars.get(j) {
+                    if c.is_whitespace() || ";&|<>()".contains(c) {
+                        break;
+                    }
+                    word.push(c);
+                    j += 1;
+                }
+            }
+            if !word.is_empty() {
+                found.push((word, strip_tabs));
+            }
+            i = j;
+            continue;
+        }
+        if c == '<' && chars.get(i + 1) == Some(&'<') {
+            i += 3; // `<<<`: a here-string, whose word stays on this line
+            continue;
+        }
+        i += 1;
+    }
+    found
 }
 
 /// Is this shell command a `git commit`? Deliberately narrow: `git -C x commit`, `git commit`, and
@@ -6064,6 +6159,42 @@ Refs: kanbanr:FEAT-082/R-1""#;
     }
 
     /// FEAT-098: a message quoting a phrase was cut at the escaped quote, losing its trailer.
+    /// FEAT-108: a heredoc's body is data, not shell. What was refused: a script whose body documents
+    /// a commit, flags and all, read as a commit that skips its hooks.
+    #[test]
+    fn a_heredoc_body_is_not_a_commit() {
+        let script = "cd /repo && python3 - <<'PY'\n\
+            doc = \"\"\"\n\
+            git init && git add . && git commit -m \"[no-ref] initial commit\"\n\
+            test -n \"$x\" && echo ok\n\
+            \"\"\"\n\
+            PY\n";
+        assert!(
+            is_git_commit(script),
+            "the raw line does look like a commit"
+        );
+        let seen = without_heredoc_bodies(script);
+        assert!(!is_git_commit(&seen), "{seen}");
+        assert!(!skips_hooks(&seen));
+
+        // R-2: a real commit beside a heredoc is still inspected — after it, before it, and with
+        // the tab-stripping, double-quoted form.
+        let after = "kanbanr batch <<JSON && git commit --no-verify -m \"x\"\n\
+            {\"x\": \"git commit -n\"}\nJSON\n";
+        assert!(skips_hooks(&without_heredoc_bodies(after)));
+        let before = "git commit -m \"real\" && cat <<-\"EOF\"\n\tgit commit -n\n\tEOF\n";
+        let seen = without_heredoc_bodies(before);
+        assert!(is_git_commit(&seen));
+        assert!(!skips_hooks(&seen), "the -n was in the body: {seen}");
+        assert_eq!(inline_message(&seen).as_deref(), Some("real"));
+
+        // Not heredocs: a here-string, and `<<` inside quotes.
+        let herestring = "grep x <<< \"$y\" && git commit -n -m \"z\"";
+        assert!(skips_hooks(&without_heredoc_bodies(herestring)));
+        let quoted = "git commit -n -m \"use <<EOF for input\"\nmore";
+        assert!(skips_hooks(&without_heredoc_bodies(quoted)));
+    }
+
     #[test]
     fn an_escaped_quote_does_not_end_the_message() {
         let q = '"';
