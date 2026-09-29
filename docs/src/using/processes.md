@@ -22,6 +22,8 @@ kanbanr project init shop --workflow pdca      # choose at creation
 | `togaf` | Vision → Business Arch → System Design → Implementation → Migration → Operations | the definition grows phase by phase |
 | `pdca` | Plan → Do → Check → Act | agreement to start, evidence to check, a review sign-off to act |
 | `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs at review and validation |
+| `scrum` | Backlog → Ready → In Progress → Review → Testing → Done → Released | Definition of Ready and of Done; work starts in the sprint; sprints, releases and points on |
+| `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on |
 
 `design-control` is **modelled on** the design-and-development controls of ISO 9001 clause 8.3.
 That is not a claim of compliance: only a certification body can make that.
@@ -150,6 +152,31 @@ kanbanr move FEAT-001 Check             # Check asks: tests green
 kanbanr signoff FEAT-001 review         # the user records the review
 kanbanr finish FEAT-001                 # Act: the end status, gated by the review sign-off
 ```
+
+## Sprints and releases
+
+Sprints, releases and burn-rate reports are **off unless a project switches them on**. The `scrum`
+and `agile` presets do this, and any other project can too:
+
+```bash
+kanbanr config cadence --sprints on --releases on --unit points --sprint-length 14
+kanbanr sprint add --start 2026-10-05 --goal "Shoppers can pay" --capacity 20
+kanbanr sprint plan SP-001 FEAT-001 FEAT-002    # warns when it goes over capacity
+kanbanr sprint start SP-001
+kanbanr sprint show                             # goal, days left, committed vs done, burndown
+kanbanr sprint close SP-001 --carry-to SP-002   # unfinished work moves on, and is recorded
+kanbanr retro --sprint SP-001
+
+kanbanr release add v0.1.0 --target 2026-10-18
+kanbanr release plan v0.1.0 FEAT-001 FEAT-002
+kanbanr release cut v0.1.0 --tag                # ship what is finished, write notes, carry the rest
+kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a release
+```
+
+The burndown and velocity are derived from the moves items record; nothing is stored for them.
+`kanbanr config workflow --write-agreement` writes the team's working agreement to the board,
+generated from the gates. Under Scrum that is the Definition of Ready and of Done. Because it is
+generated, it can't drift from what is enforced.
 
 ## Writing your own process
 

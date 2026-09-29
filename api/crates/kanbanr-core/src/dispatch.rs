@@ -371,7 +371,7 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         ),
         None => base.as_ref().map(|x| x.gates.clone()),
     };
-    ser(&store.set_workflow_with_gates(
+    let config = store.set_workflow_with_gates(
         p,
         statuses,
         transitions,
@@ -380,7 +380,35 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         no_ops,
         terminals,
         gates,
-    )?)
+    )?;
+    // A process that works in sprints, releases or points brings that with it (FEAT-122); one that
+    // does not leaves the project's cadence as it was.
+    let cadence: Option<crate::config::Cadence> = match body.get("cadence").filter(|v| !v.is_null())
+    {
+        Some(v) => Some(
+            serde_json::from_value(v.clone())
+                .map_err(|e| CoreError::Unsupported(format!("invalid cadence: {e}")))?,
+        ),
+        None => base
+            .as_ref()
+            .map(|x| x.cadence.clone())
+            .filter(|c| !c.is_off()),
+    };
+    let unit: Option<crate::config::EstimateUnit> =
+        match body.get("estimate_unit").filter(|v| !v.is_null()) {
+            Some(v) => Some(
+                serde_json::from_value(v.clone())
+                    .map_err(|e| CoreError::Unsupported(format!("invalid estimate unit: {e}")))?,
+            ),
+            None => base
+                .as_ref()
+                .map(|x| x.estimate_unit)
+                .filter(|u| !u.is_days()),
+        };
+    match (cadence, unit) {
+        (None, None) => ser(&config),
+        (cadence, unit) => ser(&store.set_cadence(p, unit, cadence.unwrap_or(config.cadence))?),
+    }
 }
 
 // ---- the dispatcher ------------------------------------------------------------------------

@@ -84,7 +84,7 @@ pub enum EstimateUnit {
 }
 
 impl EstimateUnit {
-    fn is_days(&self) -> bool {
+    pub fn is_days(&self) -> bool {
         *self == EstimateUnit::Days
     }
 }
@@ -105,7 +105,7 @@ pub struct Cadence {
 }
 
 impl Cadence {
-    fn is_off(&self) -> bool {
+    pub fn is_off(&self) -> bool {
         *self == Cadence::default()
     }
 }
@@ -197,6 +197,12 @@ pub struct WorkflowFile {
     pub transitions: BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub gates: BTreeMap<String, Gate>,
+    /// A process that works in points says so (FEAT-122).
+    #[serde(default, skip_serializing_if = "EstimateUnit::is_days")]
+    pub estimate_unit: EstimateUnit,
+    /// A process that works in sprints and releases switches them on (FEAT-122).
+    #[serde(default, skip_serializing_if = "Cadence::is_off")]
+    pub cadence: Cadence,
 }
 
 /// The built-in processes, as data (FEAT-116). Each file's leading comment is its description.
@@ -209,6 +215,8 @@ const PRESETS: &[(&str, &str)] = &[
         "design-control",
         include_str!("../presets/design-control.yaml"),
     ),
+    ("scrum", include_str!("../presets/scrum.yaml")),
+    ("agile", include_str!("../presets/agile.yaml")),
 ];
 
 /// Every preset: `(name, one-line description)`.
@@ -259,8 +267,8 @@ impl WorkflowFile {
             terminal_states: self.terminal_states,
             branch_pattern: None,
             gates: self.gates,
-            estimate_unit: EstimateUnit::default(),
-            cadence: Cadence::default(),
+            estimate_unit: self.estimate_unit,
+            cadence: self.cadence,
         };
         config.schema_version = config.required_schema_version();
         config
@@ -276,8 +284,98 @@ impl WorkflowFile {
             terminal_states: config.terminal_states.clone(),
             transitions: config.transitions.clone(),
             gates: config.gates.clone(),
+            estimate_unit: config.estimate_unit,
+            cadence: config.cadence.clone(),
         }
     }
+}
+
+/// The team's working agreement, rendered from the workflow's gates (FEAT-122): what each stage
+/// is for and what entering it asks. Generated rather than written, so it can never say one thing
+/// while the gates enforce another. Under Scrum, the Ready and Done entries are the Definition of
+/// Ready and the Definition of Done.
+pub fn working_agreement(project: &str, config: &ProjectConfig) -> String {
+    use crate::readiness::Condition;
+    let mut out = format!(
+        "# Working agreement — {project}\n\n\
+         _Generated from the workflow's gates by `kanbanr config workflow --write-agreement`. Change \
+         the gates, not this page, and regenerate it._\n\n"
+    );
+    let text = |c: &Condition| match c {
+        Condition::Check(check) => serde_json::to_value(check)
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.replace('_', " ")))
+            .unwrap_or_default(),
+        Condition::Zachman { zachman } => format!("zachman: {}", zachman.join(", ")),
+    };
+    let gates = config.effective_gates();
+    for status in &config.statuses {
+        if config.is_no_op(status) {
+            continue;
+        }
+        out.push_str(&format!("## {status}\n\n"));
+        let Some(gate) = gates.get(status) else {
+            out.push_str("Nothing is asked to enter.\n\n");
+            continue;
+        };
+        if !gate.purpose.trim().is_empty() {
+            out.push_str(&format!("{}\n\n", gate.purpose.trim()));
+        }
+        let mut asks: Vec<String> = gate.requires.iter().map(text).collect();
+        asks.extend(gate.signoffs.iter().map(|s| format!("sign-off: {s}")));
+        if asks.is_empty() {
+            out.push_str("Nothing is asked to enter.\n");
+        } else {
+            let how = match gate.enforce {
+                Enforce::Block => "To enter",
+                Enforce::Warn => "Expected on entry (warned, not enforced)",
+            };
+            out.push_str(&format!("{how}:\n\n"));
+            for ask in asks {
+                out.push_str(&format!("- {ask}\n"));
+            }
+        }
+        if !gate.warns.is_empty() {
+            let warns: Vec<String> = gate.warns.iter().map(text).collect();
+            out.push_str(&format!(
+                "\nAlso checked, not enforced: {}\n",
+                warns.join(", ")
+            ));
+        }
+        if gate.on_enter.contains(&Action::Branch) {
+            out.push_str("\nThe item's branch is made here.\n");
+        }
+        out.push('\n');
+    }
+    let c = &config.cadence;
+    if c.sprints || c.releases {
+        out.push_str("## Cadence\n\n");
+        if c.sprints {
+            out.push_str(&format!(
+                "- Sprints of {} days.\n",
+                c.sprint_length_days.unwrap_or(14)
+            ));
+        }
+        if c.releases {
+            out.push_str(&format!(
+                "- A release {}.\n",
+                match c.release.as_deref() {
+                    Some("per_sprint") => "every sprint",
+                    Some("every_n") => "every few sprints",
+                    _ => "when it is ready",
+                }
+            ));
+        }
+        out.push_str(&format!(
+            "- Estimates in {}.\n",
+            if config.estimate_unit == EstimateUnit::Points {
+                "story points"
+            } else {
+                "days"
+            }
+        ));
+    }
+    out
 }
 
 /// The TOGAF phases as board columns, with the definition growing phase by phase (the `togaf`
