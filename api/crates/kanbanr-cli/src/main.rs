@@ -828,6 +828,13 @@ enum ConfigCmd {
         /// Print this project's workflow, gates included, as a file `--from-file` can load (a read).
         #[arg(long)]
         export: bool,
+        /// Print the working agreement — each stage and what entering it asks — generated from the
+        /// gates (a read). Under Scrum that is the Definition of Ready and of Done.
+        #[arg(long)]
+        agreement: bool,
+        /// Write the working agreement to the board as `process/working-agreement.md`.
+        #[arg(long)]
+        write_agreement: bool,
         /// Same as `--preset default`.
         #[arg(long)]
         defaults: bool,
@@ -6201,6 +6208,8 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             preset,
             from_file,
             export,
+            agreement,
+            write_agreement,
             defaults,
             togaf,
             statuses,
@@ -6215,6 +6224,26 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             if preset.as_deref() == Some("list") {
                 for (name, about) in kanbanr_core::config::presets() {
                     println!("{name:<15} {about}");
+                }
+                return Ok(());
+            }
+            // The working agreement, generated from the gates (FEAT-122).
+            if *agreement || *write_agreement {
+                let project = get_project(client, &p)?;
+                let text = kanbanr_core::config::working_agreement(&p, &project.config);
+                if *write_agreement {
+                    let resp = client.write(
+                        Method::Put,
+                        &format!("/projects/{p}/docs/content"),
+                        Some(json!({ "path": "process/working-agreement.md", "content": text })),
+                    )?;
+                    print_write(
+                        cli,
+                        &resp,
+                        "wrote process/working-agreement.md from the gates".to_string(),
+                    );
+                } else {
+                    print!("{text}");
                 }
                 return Ok(());
             }
@@ -6242,6 +6271,8 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                         "no_op_states": file.no_op_states,
                         "terminal_states": file.terminal_states,
                         "gates": file.gates,
+                        "cadence": (!file.cadence.is_off()).then_some(&file.cadence),
+                        "estimate_unit": (!file.estimate_unit.is_days()).then_some(file.estimate_unit),
                     })),
                 )?;
                 print_write(cli, &resp, format!("workflow loaded from {src}"));

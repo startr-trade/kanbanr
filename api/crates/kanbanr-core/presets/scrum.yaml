@@ -1,0 +1,46 @@
+# Scrum: a backlog refined to Ready, worked in sprints, reviewed and tested to Done, and released
+# in increments. Ready is the Definition of Ready; Done is the Definition of Done. Sprints,
+# releases and story points are switched on.
+statuses: [Backlog, Ready, In Progress, Review, Testing, Done, Released, No Action, Not Applicable, Out-of-Scope]
+default_state: Backlog
+displayed_states: [Backlog, Ready, In Progress, Review, Testing, Done, Released]
+no_op_states: [No Action, Not Applicable, Out-of-Scope]
+terminal_states: [Released]
+transitions:
+  Backlog: [Ready, No Action, Not Applicable, Out-of-Scope]
+  Ready: [In Progress, Backlog, No Action, Not Applicable, Out-of-Scope]
+  In Progress: [Review, Ready, No Action, Not Applicable, Out-of-Scope]
+  Review: [Testing, In Progress, No Action, Not Applicable, Out-of-Scope]
+  Testing: [Done, In Progress, No Action, Not Applicable, Out-of-Scope]
+  Done: [Released, In Progress]
+  Released: [In Progress]
+  No Action: [Backlog]
+  Not Applicable: [Backlog]
+  Out-of-Scope: [Backlog]
+gates:
+  Backlog:
+    purpose: Capture it — a title is enough.
+  Ready:
+    purpose: Definition of Ready — why it matters, what must be true, and how big it is.
+    requires: [statement, goals, requirements, ears, estimated]
+  In Progress:
+    purpose: Work it in the current sprint, on an agreed definition.
+    requires: [approved, in_sprint]
+    on_enter: [branch]
+  Review:
+    purpose: Review the work — each requirement names the test that will show it.
+    requires: [tests_named]
+  Testing:
+    purpose: Test it against its requirements.
+  Done:
+    purpose: Definition of Done — every requirement shown to hold.
+    requires: [tests_green]
+  Released:
+    purpose: Shipped in a release.
+    requires: [in_release]
+estimate_unit: points
+cadence:
+  sprints: true
+  releases: true
+  sprint_length_days: 14
+  release: per_sprint

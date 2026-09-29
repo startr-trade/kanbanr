@@ -2167,6 +2167,129 @@ requirements:
         assert!(err.contains("--releases on"), "{err}");
     }
 
+    /// FEAT-122 R-3: the processes that work in sprints bring sprints, releases and their unit with
+    /// them; the others leave a project's cadence as it was.
+    #[test]
+    fn presets_set_the_cadence_switches() {
+        use serde_json::json;
+        let (store, _d) = temp_store();
+        crate::dispatch::dispatch(
+            &store,
+            "POST",
+            "/projects",
+            Some(&json!({"name": "team", "workflow": "scrum"})),
+        )
+        .unwrap();
+        let team = store.load("team").unwrap().config;
+        assert!(team.cadence.sprints && team.cadence.releases);
+        assert_eq!(team.estimate_unit, crate::config::EstimateUnit::Points);
+        assert_eq!(team.cadence.sprint_length_days, Some(14));
+
+        new_project(&store, "flow");
+        let apply = |preset: &str| {
+            crate::dispatch::dispatch(
+                &store,
+                "PUT",
+                "/projects/flow/config/workflow",
+                Some(&json!({"preset": preset})),
+            )
+            .unwrap();
+            store.load("flow").unwrap().config
+        };
+        let togaf = apply("togaf");
+        assert!(togaf.cadence.is_off(), "togaf does not switch them on");
+        let agile = apply("agile");
+        assert!(agile.cadence.sprints && agile.cadence.releases);
+        assert_eq!(
+            agile.estimate_unit,
+            crate::config::EstimateUnit::Days,
+            "agile plans in days"
+        );
+        let back = apply("pdca");
+        assert!(
+            back.cadence.sprints,
+            "another preset leaves the cadence as it was"
+        );
+    }
+
+    /// FEAT-122 R-2: under Scrum, work starts only inside the sprint — In Progress asks for it.
+    #[test]
+    fn scrum_refuses_work_outside_the_sprint() {
+        use crate::models::FeatureDefinition;
+        use serde_json::json;
+        let (store, _d) = temp_store();
+        crate::dispatch::dispatch(
+            &store,
+            "POST",
+            "/projects",
+            Some(&json!({"name": "team", "workflow": "scrum"})),
+        )
+        .unwrap();
+        adopt_charter(&store, "team");
+        store
+            .add_milestone("team", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let f = store
+            .add_feature("team", "Checkout", "", "M", None)
+            .unwrap();
+        store
+            .set_feature_definition(
+                "team",
+                &f.code,
+                Some(FeatureDefinition {
+                    statement: "Checkout for shoppers so that they can pay".into(),
+                    goals: vec!["G-1".into()],
+                    requirements: vec![crate::models::Requirement {
+                        id: "R-1".into(),
+                        text: "WHEN a shopper pays, THE SYSTEM SHALL confirm the order.".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        // The Definition of Ready asks for an estimate in points.
+        let err = store
+            .move_feature_approved("team", &f.code, "Ready", None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("not estimated — this project estimates in story points"),
+            "{err}"
+        );
+        store.set_feature_points("team", &f.code, 3.0).unwrap();
+        store
+            .move_feature_approved("team", &f.code, "Ready", None)
+            .unwrap();
+        store.approve_feature("team", &f.code, "Ada L").unwrap();
+        // Agreed and ready, but no sprint is running.
+        let err = store
+            .move_feature_approved("team", &f.code, "In Progress", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no sprint is active"), "{err}");
+        let sp = crate::sprints::add(&store, "team", "2026-10-05", None, "", None, "").unwrap();
+        crate::sprints::start(&store, "team", &sp.code).unwrap();
+        let err = store
+            .move_feature_approved("team", &f.code, "In Progress", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not in the active sprint SP-001"), "{err}");
+        crate::sprints::plan(&store, "team", &sp.code, std::slice::from_ref(&f.code)).unwrap();
+        store
+            .move_feature_approved("team", &f.code, "In Progress", None)
+            .expect("in the sprint, it starts");
+        // The working agreement is generated from those same gates.
+        let agreement =
+            crate::config::working_agreement("team", &store.load("team").unwrap().config);
+        assert!(
+            agreement.contains("## Ready\n\nDefinition of Ready"),
+            "{agreement}"
+        );
+        assert!(agreement.contains("- estimated") && agreement.contains("- in sprint"));
+        assert!(agreement.contains("Sprints of 14 days") && agreement.contains("story points"));
+    }
+
     /// FEAT-121 R-1: "estimated" means estimated in the unit the project plans in — story points
     /// for a points project, days otherwise.
     #[test]

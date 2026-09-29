@@ -83,10 +83,22 @@ project"** (or anything equivalent):
      - **togaf**: architecture phases, where the definition grows phase by phase.
      - **pdca**: Plan → Do → Check → Act.
      - **design-control**: modelled on ISO 9001 §8.3, with sign-offs.
+     - **scrum**: Backlog → Ready → In Progress → Review → Testing → Done → Released, worked in
+       sprints. Ready is the Definition of Ready, and Done is the Definition of Done.
+     - **agile**: Plan → Design → Develop → Test → Review → Released.
 
      Alternatively, load the organisation's own process with `--from-file`, or use custom
      statuses the user describes. The phased presets ask for part of the definition at each stage,
      not all of it up front.
+   - *Cadence*, only when the chosen process uses sprints (scrum, agile), or the user asks for
+     sprints or releases:
+     - sprint length: 1, 2, 3 or 4 weeks, defaulting to 2;
+     - when the first sprint starts: default next Monday;
+     - its capacity, in story points for Scrum;
+     - how often a release is cut: every sprint, every few sprints, or on demand;
+     - the first release's version: default `v0.1.0`.
+
+     For any other process, sprints and releases stay off. Most projects don't need them.
    - *Definitions*: every item carries the Zachman six-dimension definition, EARS requirements
      and tests. That is the method, not an option. Say so, so the user is not surprised by it.
    - *Git hooks* in the code repo (`kanbanr git install-hooks`): every commit names its board
@@ -114,6 +126,10 @@ project"** (or anything equivalent):
    git init && git add .kanbanr CLAUDE.md .gitignore && git commit -m "[no-ref] initial commit"
                                                    # these two only if the folder was not a git repo
    kanbanr git install-hooks                       # if chosen
+   kanbanr config cadence --sprint-length 14 --release per_sprint   # sprint presets only
+   kanbanr sprint add --start <date> --goal "<first goal>" --capacity <n>
+   kanbanr release add v0.1.0 --target <date>
+   kanbanr config workflow --write-agreement       # the working agreement, generated from the gates
    kanbanr remote add <name> <url>                 # if chosen
    kanbanr mirror enable --repo <owner/repo>       # if chosen
    # import: one `kanbanr batch` of the chosen tracker items, if chosen

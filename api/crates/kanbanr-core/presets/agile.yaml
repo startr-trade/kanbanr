@@ -1,0 +1,41 @@
+# An agile delivery flow — plan, design, develop, test, review, release — with or without sprints.
+# Feedback on a release arrives as new items that name the version it was found in. Sprints and
+# releases are switched on; estimates are in days.
+statuses: [Plan, Design, Develop, Test, Review, Released, No Action, Not Applicable, Out-of-Scope]
+default_state: Plan
+displayed_states: [Plan, Design, Develop, Test, Review, Released]
+no_op_states: [No Action, Not Applicable, Out-of-Scope]
+terminal_states: [Released]
+transitions:
+  Plan: [Design, No Action, Not Applicable, Out-of-Scope]
+  Design: [Develop, Plan, No Action, Not Applicable, Out-of-Scope]
+  Develop: [Test, Design, No Action, Not Applicable, Out-of-Scope]
+  Test: [Review, Develop, No Action, Not Applicable, Out-of-Scope]
+  Review: [Released, Develop, No Action, Not Applicable, Out-of-Scope]
+  Released: [Develop]
+  No Action: [Plan]
+  Not Applicable: [Plan]
+  Out-of-Scope: [Plan]
+gates:
+  Plan:
+    purpose: Say what it is and why it matters.
+  Design:
+    purpose: What it must do, agreed before it is built.
+    requires: [statement, goals, requirements, approved]
+  Develop:
+    purpose: Build it — how and where settled, a test named for every requirement.
+    requires: [{zachman: [how, where]}, tests_named]
+    on_enter: [branch]
+  Test:
+    purpose: Test it against its requirements.
+  Review:
+    purpose: Review it with the evidence in hand.
+    requires: [tests_green]
+  Released:
+    purpose: Shipped in a release.
+    requires: [in_release]
+cadence:
+  sprints: true
+  releases: true
+  sprint_length_days: 14
+  release: per_sprint

@@ -197,6 +197,17 @@ reported against it.
   exists.
 - **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
   width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **Scrum and agile, ready to use (FEAT-122).**
+  - Two new presets:
+    - `scrum`: Backlog → Ready → In Progress → Review → Testing → Done → Released. Ready is the
+      Definition of Ready, and work starts only inside the active sprint.
+    - `agile`: Plan → Design → Develop → Test → Review → Released.
+  - Both switch sprints and releases on, with their defaults. Other presets leave the cadence
+    alone, and a workflow file can carry its own.
+  - `kanbanr config workflow --write-agreement` writes the working agreement to the board,
+    generated from the gates.
+  - The setup interview asks for sprint length, first start, capacity, release cadence and first
+    version when the chosen process uses sprints.
 - **Releases (FEAT-120).** For projects that switch them on: `kanbanr release add | plan | list |
   cut`. A release is planned up front, in `projects/<id>/releases.yaml`, and items carry `release`.
   - `release cut` ships the planned items that are finished. An item whose work is done is moved
