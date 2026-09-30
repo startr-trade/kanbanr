@@ -41,9 +41,9 @@ the release host rather than a CDN of the default branch that could serve a mism
 the whole thing: `verify-install` runs the published one-liner in clean Debian and Ubuntu containers
 and asserts the monitor is actually served. See `docs/INSTALL.md` and `ADR-0009`.
 
-kanbanr is **not** published to crates.io with the UI: a published crate cannot carry built assets
-without committing generated files, so the archive and the installer are the supported way to get a
-complete binary.
+kanbanr is **not** published to crates.io: a published crate cannot carry built assets without
+committing generated files, so the archive and the installer are the supported way to get a
+complete binary (ADR-0011). `ears-classifier` is the one published crate.
 
 #### Reasoning, evidence and traceability (MS-006)
 

@@ -8,6 +8,24 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+#### Setup is a plan-mode interview, then one approved setup (FEAT-100)
+
+Asking Claude to set up kanbanr in an untracked folder now starts in **plan mode**: board folder
+and commit identity, a charter drafted from the repository and marked as a draft, and the process
+(default kanban, TOGAF phases or custom, git hooks, remote, mirror, import). Exiting plan mode is
+the approval; the whole setup then runs, is saved as a board doc and checked with `doctor` before
+any other work starts.
+
+#### Session summaries ship with kanbanr (FEAT-101)
+
+The session-summary hooks (a compaction's summary, the end of a session, and a sweep at the next
+start) moved from one checkout's ignored `.claude/` into `skill/kanbanr/hooks/`, and
+`kanbanr hooks install` registers them for PostCompact, SessionEnd and SessionStart, as does the
+plugin. They act only in folders with a `.kanbanr` marker, need `bash`, `jq` and `python3`, and
+are not offered on Windows. A project's own `.claude/commands/create-summary.md` sets the
+summary's shape when it has one. `.gitignore` now ignores only the machine-local parts of
+`.claude/`.
+
 #### One binary, installed in one line (FEAT-084)
 
 The web monitor is now **compiled into the binary**, gzipped and decompressed once at startup, so
@@ -162,6 +180,185 @@ reported against it.
 
 ### Fixed
 
+- **CI failed on `main` on all three platforms (FEAT-129).** The `rust` job tested a binary with
+  no monitor inside, because it never built `web/dist`; it now builds the web app first. The docs
+  guard compared a file path it had not resolved against a repository root it had, so on macOS —
+  where the temp folder is a symlink — a loose note inside the repository was let through; both are
+  now resolved on disk before comparing. And every binary that links libgit2 now also links
+  Windows' `advapi32`, which the vendored libgit2 needs and the current MSVC no longer adds itself.
+- **Board commits went out as `kanbanr <kanbanr@local>` (FEAT-128).** A new data repository was
+  given that placeholder identity in its own git config and committed with it before
+  `init --author/--email` recorded anyone, so every board's first commit was nobody's; a board set
+  up without those flags kept committing as nobody, because the placeholder also hid the user's own
+  git identity. Now the identity is recorded before the first commit, the user's git identity is
+  used when the board has none, and with no identity at all `init` creates nothing and writes are
+  refused with the command that fixes it. `doctor` reports a board still carrying the placeholder.
+- **The commit guard judged the wrong repository (FEAT-127).** `cd ../other && git commit …` (or
+  `git -C ../other commit …`) was judged by the branch and board of the session's folder, so a
+  correct commit elsewhere could be refused as "straight to master". The guard now follows the
+  command to the repository it commits in and uses that repository's board; a folder without one,
+  or a directory only the shell could work out (`cd $X`), is left to that repository's git hooks.
+- **The shipped session-start and stop-check hooks were empty (FEAT-102).** A commit on 28 Sep
+  replaced both with `exit 0` stubs, so sessions stopped recovering the board and turns stopped
+  being nudged to record work, while `hooks status` still reported them healthy. Both are
+  restored, and a test now fails if a shipped hook script is a stub.
+- **Looking in a folder with no board created one (FEAT-103).** Any read (`whoami`, `board`,
+  `doctor` and so on) run with no marker and no `$KANBANR_DATA_DIR` left a stray `./data/`
+  behind. Reads now say there is no board and point at `kanbanr init`. Hook commands stay silent
+  there, and an existing legacy `./data` board still works.
+- **`kanbanr open` suggested `serve --ui-dir web/dist` (FEAT-104).** The monitor has been built
+  into the binary since FEAT-084. The hint, the skill and the docs now say `kanbanr serve`.
+- **A fresh repository could not make its first commit (FEAT-105).** With no commits, the git
+  hooks called the default branch `main` while HEAD was an unborn `master`, then refused the root
+  commit. An unborn HEAD is now the default branch, the root commit may land on it, `start`
+  refuses until a first commit exists, and `init.defaultBranch` only counts when that branch
+  exists.
+- **Board columns scrolled inside a 1200px page (FEAT-107).** The board now uses the window's
+  width, so a six-status TOGAF board fits. Reading pages keep their 1200px measure.
+- **Cadence in the monitor (FEAT-123).** Where a project uses sprints:
+  - the board has a sprint selector, defaulting to the active sprint;
+  - it shows a header with the goal, dates, days left, done against committed, and capacity;
+  - it shows a burndown: one accent line against a dashed ideal, a tooltip on every day, and a
+    table view.
+
+  Where it uses releases, a **Releases** tab lists each release's scope, how much is finished, its
+  target and its notes. The project Gantt draws sprints as bars and releases as milestones. A
+  project that uses neither sees none of it.
+- **A gate that didn't name `definition` let an undefined item through (FEAT-125).** The scrum
+  Ready gate passed items with no definition at all. A missing definition now fails every check
+  that reads it.
+- **Scrum and agile, ready to use (FEAT-122).**
+  - Two new presets:
+    - `scrum`: Backlog → Ready → In Progress → Review → Testing → Done → Released. Ready is the
+      Definition of Ready, and work starts only inside the active sprint.
+    - `agile`: Plan → Design → Develop → Test → Review → Released.
+  - Both switch sprints and releases on, with their defaults. Other presets leave the cadence
+    alone, and a workflow file can carry its own.
+  - `kanbanr config workflow --write-agreement` writes the working agreement to the board,
+    generated from the gates.
+  - The setup interview asks for sprint length, first start, capacity, release cadence and first
+    version when the chosen process uses sprints.
+- **Releases (FEAT-120).** For projects that switch them on: `kanbanr release add | plan | list |
+  cut`. A release is planned up front, in `projects/<id>/releases.yaml`, and items carry `release`.
+  - `release cut` ships the planned items that are finished. An item whose work is done is moved
+    to its end status through that status's gate.
+  - It writes release notes from the shipped items' statements and requirements to
+    `releases/<version>.md` on the board.
+  - Anything that didn't make it is carried to the next planned release, or back to unplanned,
+    with the reason. `--tag` also tags the code repository.
+  - `feature add --found-in <version>` records feedback against a shipped release.
+  - A new `in_release` check lets a gate require an item to be planned into a release.
+- **Sprints (FEAT-119).** For projects that switch them on: `kanbanr sprint add | plan | start |
+  show | list | close`.
+  - A sprint (SP-001) has a goal, dates and a capacity, and lives in `projects/<id>/sprints.yaml`.
+    Items carry `sprint`.
+  - Planning past capacity warns but still plans.
+  - Only one sprint is active at a time.
+  - Closing a sprint carries unfinished items to the next sprint or the backlog, and records what
+    was carried.
+  - `sprint show` gives the burndown, derived day by day from the moves items recorded. Nothing
+    is stored for it.
+  - `kanbanr report` includes velocity per closed sprint only where sprints are on.
+  - `retro --sprint` covers one sprint.
+  - A new `in_sprint` check lets a gate require an item to be in the active sprint.
+- **Story points and cadence switches (FEAT-121).**
+  - Items can carry `points` beside `estimate_days` (`--points` on `feature add` and `feature
+    edit`).
+  - A project chooses its unit with `kanbanr config cadence --unit points`. A new `estimated`
+    check judges estimates in that unit, and a Definition of Ready can require it.
+  - Sprints and releases are **off unless switched on** (`kanbanr config cadence --sprints on
+    --releases on`), because most projects follow a different rhythm. A project that never
+    switches them on carries no cadence at all on disk.
+- **Processes are documented, and the decision recorded (FEAT-118).** A new book chapter,
+  *Processes: presets, gates and sign-offs*, covers the presets, the gate fields, every check, how
+  sign-offs work, how a definition grows stage by stage, a worked PDCA example, and how to write
+  your own process file. ADR-0010, *Process is configuration: kanbanr owns the checks, the project
+  owns the process*, is on the board. The skill teaches stage-by-stage definitions, and that
+  sign-offs belong to the user.
+- **Every surface says what the next stage needs (FEAT-117).**
+  - `kanbanr check` lists, for each stage an item can move on to, what that stage is for and what
+    is still missing.
+  - `doctor` is stage-aware on workflows that declare gates. It reports what the next stage asks,
+    not what a later stage will ask.
+  - The Review page offers **Sign off** buttons for sign-offs a next stage is waiting on.
+  - Board cards show the next stage and how much it still lacks.
+  - The Workflow page draws the daemon's diagram, gates included, instead of a hand-kept copy of
+    the exporter, and lists each stage's requirements.
+  - `kanbanr claude sync` writes each stage's purpose into CLAUDE.md, so the agent grows a
+    definition one stage at a time.
+- **Workflow presets are data, and a project can load its own process (FEAT-116).**
+  - Presets are YAML files shipped in the binary:
+    - `default`: this board's shape, Planned → In Progress → Completed plus Deferred and Ongoing.
+      This is now what a **new** project gets.
+    - `scheduled`: the old default, Planned → Scheduled → Completed.
+    - `togaf`: the definition grows phase by phase, with the branch at Implementation, a release
+      sign-off, and a direct Implementation → Operations edge.
+    - `pdca`.
+    - `design-control`: modelled on ISO 9001 §8.3, not claimed compliant.
+  - `kanbanr config workflow --preset <name>` applies one, and `--preset list` describes them.
+    `--from-file` loads an organisation's own process, and `--export` writes a project's workflow,
+    gates included.
+  - An unknown preset name is refused with the list of known ones. `project init --workflow` used
+    to fall back silently.
+  - A preset's statuses and gates are replaced in one write.
+  - The Mermaid export shows each declared gate as a note.
+  - Existing boards keep their own workflow.
+- **start, finish and auto-advance follow the workflow (FEAT-115).**
+  - `start` goes to the status whose gate makes the branch: Implementation under TOGAF, not the
+    phase after Vision. A jump the workflow doesn't allow is refused, naming the stages in between.
+    In a folder that isn't a git repository, the item moves without a branch.
+  - `finish` ends at a terminal status reachable from where the item is. It used to take the
+    first terminal regardless.
+  - When every task is done, the item advances to that terminal status only if its gate is met.
+    Otherwise it stays and `task state` says why. It no longer depends on a status literally named
+    "Completed".
+- **Sign-offs (FEAT-114).** `kanbanr signoff <CODE> <name>` records a named agreement a stage can
+  require, such as a design review held or a release approved: who, when, in which status, with an
+  optional note and doc. A gate lists them as `signoffs: [design-review]`.
+  - A sign-off is tied to the definition it covered, so changing the definition lapses it and the
+    gate asks again. Earlier sign-offs are kept.
+  - Approvals now also record the status they were given in.
+  - `feature show` lists each sign-off and says whether it has lapsed.
+- **Declarable gates (FEAT-113).** A workflow can say, per status, what an item must show before
+  it enters that status. The config's `gates` map takes `purpose`, `requires`, `warns`,
+  `enforce: block|warn`, `kinds` and `on_enter`, and a Zachman condition can name only the columns
+  a stage needs. Unknown statuses, checks or columns are refused when the workflow is saved.
+  - **No existing board changes.** With no gates declared, today's rule is synthesised exactly:
+    entering a status that means "working on it" needs a definition and a current approval.
+  - **Overrides are recorded.** `--override "<reason>"` (formerly `--unapproved`, which still
+    works) passes a blocking gate, and the reason is kept in the move's history.
+  - **Schema 3, only when needed.** A board that declares gates is stamped `schema_version: 3`, so
+    an older kanbanr refuses it instead of ignoring its guardrails. Boards without gates stay at 2.
+  - **Terminal statuses.** A status named "Completed" counts as terminal only where the workflow
+    declares no terminal states.
+- **"What is this item missing?" has one answer (FEAT-112).** `check`, `finish`, `doctor`,
+  `check --file`, `query --gap` and the monitor's board cards now share one readiness engine,
+  instead of five copies that had drifted apart. Each surface still asks its own set of checks,
+  but a rule means the same thing and reads the same everywhere. Two drifts are corrected: the
+  query no longer counts a ratified item as unapproved, and an exempt item has no gaps anywhere.
+  New read routes serve the monitor: `…/features/{code}/readiness` and `…/readiness` (per live
+  item).
+- **Session summaries can keep private topics off the board (FEAT-124).** A private exclusion list,
+  kept outside every repository, names terms that must never appear. Transcript messages that
+  mention one are dropped before summarising, and summary lines that mention one are removed
+  before anything is written.
+- **The docs guard refused files outside the repository (FEAT-111).** It blocked Claude Code's
+  own plan file in `~/.claude/plans` and suggested an unusable `notes//home/…` board path. It now
+  judges only files inside the tracked repository, and suggests a path relative to it.
+- **Piping output into `head` printed a panic (FEAT-110).** `kanbanr git status | head -1` ended
+  with a stack trace after a command that had succeeded. A closed pipe now ends the command
+  quietly with status 141, as it does for `git`.
+- **Work finished under a recorded bypass couldn't be ratified from the monitor (FEAT-109).**
+  `doctor` was the only place it appeared, and `kanbanr ratify` the only way to agree to it. It now
+  heads the Review page with a **Ratify** button, chosen with the same rule `doctor` uses.
+- **The commit guard read heredoc bodies as commands (FEAT-108).** A script that only *mentioned*
+  `git commit` was refused. Heredoc bodies are now skipped. A real commit on the same line is
+  still checked.
+- **Setup interview gaps from its first real run (FEAT-106).** The skill now gives the charter's
+  exact fields (`statement`, not `outcome`), checks that non-goals are non-goals, plans
+  `git init` plus an initial commit for a folder that isn't a repository, and ends by saying how
+  to open the monitor.
+
 - **The released Linux binary would not have run on Debian stable** (FEAT-087): a `-gnu` target
   links the build runner's glibc, and the release matrix built on the newest one — so the binaries
   required glibc 2.39 and would have died on bookworm (2.36) with `libc.so.6: version GLIBC_2.39
@@ -216,6 +413,19 @@ reported against it.
 
 ### Changed
 - Relicensed the workspace to **MIT OR Apache-2.0** (was MIT) — the Rust-ecosystem norm.
+- **kanbanr is not published to crates.io (FEAT-024, ADR-0011).** It ships only as the GitHub
+  release archives, the `install.sh` / `install.ps1` installers and the GHCR image; `kanbanr-cli`,
+  `kanbanr-core` and `kanbanr-server` now declare `publish = false`. `ears-classifier` is the one
+  published crate. The open-sourcing guide, the release workflow's notes and the VS Code
+  extension's install hint no longer point at `cargo install kanbanr`, and `.github/CODEOWNERS`
+  asks the `kanbanr-maintainers` team to review every pull request.
+- **Releases and the docs site come from `main` only (FEAT-024).** The release workflow refuses a
+  version tag whose commit is not on `main`, before anything is built or published, and the docs
+  site deploys only from `main` (a manual run elsewhere builds the book without deploying it).
+- **No Dependabot version updates (FEAT-024).** `.github/dependabot.yml` is removed: on the first
+  push it opened eighteen pull requests, one per major bump across cargo, the web app, the VS Code
+  extension and the workflows. Dependencies are updated deliberately, and major upgrades are
+  planned as board items.
 
 ## [0.1.0] - Unreleased
 
