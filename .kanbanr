@@ -1,3 +1,0 @@
-# kanbanr: this folder's project and where its board lives (relative to this file)
-project: kanbanr
-data_dir: ../kanbanr-board
