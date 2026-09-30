@@ -185,7 +185,10 @@ reported against it.
   guard compared a file path it had not resolved against a repository root it had, so on macOS —
   where the temp folder is a symlink — a loose note inside the repository was let through; both are
   now resolved on disk before comparing. And every binary that links libgit2 now also links
-  Windows' `advapi32`, which the vendored libgit2 needs and the current MSVC no longer adds itself.
+  Windows' `advapi32`, which the vendored libgit2 needs and the current MSVC no longer adds itself. With that
+  linked, every command then overflowed the 1 MiB stack Windows gives a program's main thread
+  (`--version` included, in a debug build); the CLI now runs on a thread with a 16 MiB stack on
+  every platform.
 - **Board commits went out as `kanbanr <kanbanr@local>` (FEAT-128).** A new data repository was
   given that placeholder identity in its own git config and committed with it before
   `init --author/--email` recorded anyone, so every board's first commit was nobody's; a board set
