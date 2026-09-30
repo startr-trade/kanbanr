@@ -8,6 +8,16 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+#### `make ci`: every CI check, locally, before a push (FEAT-131)
+
+`make ci` copies the tracked tree to a clean folder and runs every CI check that can run off
+GitHub: actionlint over the workflows, a check that every action they use exists, and each
+workflow step's own script read from the workflow file (web, Rust, installers, docs, the release
+build and packaging, the Docker image). Every script step of every workflow must be classified as
+run locally or GitHub-only, so a new CI check cannot go unverified unnoticed, and the run ends by
+listing what only GitHub can verify. Its first run found the release workflow naming a retired
+macOS runner.
+
 #### Setup is a plan-mode interview, then one approved setup (FEAT-100)
 
 Asking Claude to set up kanbanr in an untracked folder now starts in **plan mode**: board folder

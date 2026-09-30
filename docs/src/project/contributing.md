@@ -38,7 +38,18 @@ make test           # cargo test --workspace (unit + Docker-less integration)
 make itest          # packaging smoke: build the image + testcontainers test (needs Docker)
 ```
 
-Run the same checks CI runs before opening a PR:
+Run the same checks CI runs before opening a PR — all of them, in one command:
+
+```bash
+make ci
+```
+
+It copies the tracked tree to a clean folder (`~/.cache/kanbanr-ci/tree`, with its own build
+cache) and runs every CI check that can run off GitHub, reading each step's script from the
+workflow file itself, plus actionlint and a check that every action the workflows use exists. It
+ends by listing what only GitHub can verify: the macOS and Windows legs, uploads and publishing.
+It needs Docker (for actionlint and PowerShell), an authenticated `gh`, `shellcheck`, and the
+`mdbook` / `mdbook-mermaid` versions pinned in `docs.yml`. The individual checks, if you want one:
 
 ```bash
 cd api && cargo fmt --all --check          # formatting
@@ -134,7 +145,7 @@ above is the one that ran. That is the whole shape: a reason, a requirement, a t
    the item, or describe it in the PR if you don't have the board.
 4. Optionally sign off your commits (`git commit -s`) to certify the
    [Developer Certificate of Origin](https://developercertificate.org/).
-5. Make sure `fmt` / `clippy` / `test` / web build are green, and that every requirement in your
+5. Make sure `make ci` is green, and that every requirement in your
    definition has a **green** test.
 6. Open a PR; fill in the template, definition included; link any issue.
 

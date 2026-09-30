@@ -50,7 +50,8 @@ jobs:
             echo "::error::Merge the work into main, then tag the merged commit." >&2
             exit 1
           fi
-      - id: check
+      - name: The tag is a semver that names the version being built
+        id: check
         run: |
           set -eu
           tag="${GITHUB_REF_NAME}"

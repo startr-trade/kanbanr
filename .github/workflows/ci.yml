@@ -185,10 +185,13 @@ jobs:
           cargo tree -p kanbanr-cli -e normal -i rustls \
             || { echo "::error::kanbanr-cli has no TLS backend — self-update and https webhooks cannot work" >&2; exit 1; }
 
+      # Installing and checking are separate steps so `make ci` can run the check exactly as
+      # written here, with the shellcheck already on the machine (FEAT-131).
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
       - name: shellcheck install.sh
-        run: |
-          sudo apt-get update && sudo apt-get install -y shellcheck
-          shellcheck --shell=sh --severity=warning scripts/install.sh
+        run: shellcheck --shell=sh --severity=warning scripts/install.sh
 
       # pwsh is preinstalled on GitHub's ubuntu runners. Parsing is not running, but it catches
       # the unbalanced-quote and bad-cmdlet mistakes that would otherwise only surface on a
