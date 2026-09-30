@@ -416,6 +416,10 @@ reported against it.
 - **Releases and the docs site come from `main` only (FEAT-024).** The release workflow refuses a
   version tag whose commit is not on `main`, before anything is built or published, and the docs
   site deploys only from `main` (a manual run elsewhere builds the book without deploying it).
+- **No Dependabot version updates (FEAT-024).** `.github/dependabot.yml` is removed: on the first
+  push it opened eighteen pull requests, one per major bump across cargo, the web app, the VS Code
+  extension and the workflows. Dependencies are updated deliberately, and major upgrades are
+  planned as board items.
 
 ## [0.1.0] - Unreleased
 

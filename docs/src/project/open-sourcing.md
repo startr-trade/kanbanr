@@ -7,7 +7,7 @@
 >
 > Status today (updated): the workspace is now relicensed **MIT OR Apache-2.0** with
 > `LICENSE-MIT` + `LICENSE-APACHE` files; `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`,
-> `CHANGELOG.md`, `THIRD_PARTY.md`, GitHub **issue/PR templates**, **Dependabot**, a **CI** workflow
+> `CHANGELOG.md`, `THIRD_PARTY.md`, GitHub **issue/PR templates**, a **CI** workflow
 > and a **release** workflow all exist. What's left is mostly **your** work: reserve names, create
 > accounts/tokens, fill two placeholders, add screenshots, and cut the first tagged release. Checked
 > boxes below mark what's already in the repo.
@@ -276,7 +276,7 @@ on `PATH`; the hooks are best-effort and stay silent if it isn't installed. Keep
 - [x] LICENSE(s), CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG, THIRD_PARTY present.
 - [x] Owner slug (`startr-trade`) + copyright/email placeholders filled (see the top of this file).
 - [ ] **Names reserved** (GitHub, and `ears-classifier` on crates.io); image + binaries published for the first tagged release.
-- [ ] Dependabot is on, Discussions enabled (optional), `release.yml` secrets/variables set if publishing.
+- [ ] Discussions enabled (optional), `release.yml` secrets/variables set if publishing.
 - [ ] Secrets sweep (§0) re-confirmed on the exact commit you'll make public.
 - [ ] Screenshots (`make screenshots`) + a couple of example projects under `data/projects/` (non-sensitive).
 
@@ -285,7 +285,11 @@ on `PATH`; the hooks are best-effort and stay silent if it isn't installed. Keep
 - [ ] Triage with labels; be explicit that it's a personal project (best-effort).
 - [ ] Keep the board current so contributors know where to help — `kanbanr ready` is the answer
       to "what can I pick up?".
-- [ ] Dependabot/`cargo update` + `npm audit` cadence; re-run `cargo deny`.
+- [ ] Dependency updates are deliberate, not automatic: there is no Dependabot version-update
+      config (it opened one pull request per major bump across four ecosystems). Update on your own
+      cadence with `cargo update` / `npm update` and `npm audit`, plan major upgrades as board
+      items, and re-run `cargo deny`. Dependabot *alerts* and *security updates* are repository
+      settings, independent of any file, if you want to be told about vulnerabilities.
 - [ ] Cut releases from `CHANGELOG.md`; don't let `main` drift far ahead of a tagged release.
 
 ---
