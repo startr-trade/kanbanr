@@ -36,6 +36,20 @@ jobs:
       prerelease: ${{ steps.check.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the whole history, so "is this commit on main?" has an answer
+      # A release is cut from main, never from a branch (FEAT-024/R-6). A tag is only a name for a
+      # commit, and nothing stops one being pushed on a side branch's commit — which would publish
+      # binaries, move the image's `latest` and publish ears-classifier from work nobody merged.
+      - name: the tagged commit is on main
+        run: |
+          set -eu
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which is not on main." >&2
+            echo "::error::Merge the work into main, then tag the merged commit." >&2
+            exit 1
+          fi
       - id: check
         run: |
           set -eu

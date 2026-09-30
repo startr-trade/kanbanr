@@ -413,6 +413,9 @@ reported against it.
   published crate. The open-sourcing guide, the release workflow's notes and the VS Code
   extension's install hint no longer point at `cargo install kanbanr`, and `.github/CODEOWNERS`
   asks the `kanbanr-maintainers` team to review every pull request.
+- **Releases and the docs site come from `main` only (FEAT-024).** The release workflow refuses a
+  version tag whose commit is not on `main`, before anything is built or published, and the docs
+  site deploys only from `main` (a manual run elsewhere builds the book without deploying it).
 
 ## [0.1.0] - Unreleased
 

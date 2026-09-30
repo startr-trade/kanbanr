@@ -205,6 +205,10 @@ content** and your **publish credentials**:
 - [ ] **Publish `ears-classifier` to crates.io.** The workflow's `crates` job publishes it — and
       only it — on a tag once repo variable `PUBLISH_CRATES=true` and the `CARGO_REGISTRY_TOKEN`
       secret (or Trusted Publishing) are set. See the credentials section above.
+- [x] **Releases come from `main` only.** The release workflow refuses a tag whose commit is not on
+      `main`, so merge first, then tag the merged commit. The docs site deploys only from `main`
+      as well. Once the repository is public, add a tag ruleset for `v*` that lets only
+      `kanbanr-maintainers` create or delete release tags.
 - [ ] **Cut the first release:** `git tag v0.1.0 && git push origin v0.1.0`, then verify the Release
       assets + the GHCR image appear. Move the `[0.1.0]` section in the changelog from *Unreleased*
       to dated.
