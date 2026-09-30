@@ -2866,3 +2866,26 @@ fn check_names_what_the_next_stage_needs() {
     assert_eq!(v[0]["next"][0]["status"], "Business Arch");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-129: Windows gives a program's main thread 1 MiB of stack, and every command — even
+/// `--version` — overflowed it in a debug build, so the whole suite failed on Windows while Linux,
+/// with 8 MiB, never noticed. A 1 MiB stack limit reproduces Windows' main thread here.
+#[cfg(unix)]
+#[test]
+fn the_cli_runs_within_a_one_mebibyte_main_stack() {
+    let out = Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "ulimit -s 1024 && exec '{}' --version",
+            cli().display()
+        ))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).starts_with("kanbanr "));
+}

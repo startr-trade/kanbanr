@@ -1205,7 +1205,23 @@ struct SetTransitionArgs {
     deny: bool,
 }
 
+/// The stack the command runs on (FEAT-129). Windows gives a program's main thread 1 MiB, Linux
+/// 8 MiB; argument parsing alone needed more than 1 MiB in a debug build, so on Windows every
+/// command — `--version` included — died with "has overflowed its stack". A thread of our own
+/// gets the same, ample stack on every platform.
+const MAIN_STACK_BYTES: usize = 16 * 1024 * 1024;
+
 fn main() -> ExitCode {
+    std::thread::Builder::new()
+        .name("main".into())
+        .stack_size(MAIN_STACK_BYTES)
+        .spawn(real_main)
+        .expect("start the main thread")
+        .join()
+        .unwrap_or(ExitCode::FAILURE)
+}
+
+fn real_main() -> ExitCode {
     quiet_on_a_closed_pipe();
     let cli = Cli::parse();
     match run(&cli) {

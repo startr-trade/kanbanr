@@ -109,7 +109,9 @@ jobs:
             target: aarch64-unknown-linux-gnu
           - os: macos-latest
             target: aarch64-apple-darwin
-          - os: macos-13
+          # Intel macOS. `macos-13` was retired, and a job naming a runner label that no longer
+          # exists waits for one forever instead of failing; actionlint names the live labels.
+          - os: macos-15-intel
             target: x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -315,7 +317,7 @@ jobs:
           set -eu
           v="$(kanbanr --version)"
           echo "$v"
-          echo "$v" | grep -q "$(echo "${GITHUB_REF_NAME}" | sed 's/^v//')" \
+          echo "$v" | grep -q "${GITHUB_REF_NAME#v}" \
             || { echo "::error::--version does not name the released version: $v" >&2; exit 1; }
           # The same SHA the release page shows, so an installed binary can be matched against it.
           echo "$v" | grep -q "${GITHUB_SHA:0:12}" \
