@@ -2530,7 +2530,13 @@ fn cli_reads_in_an_untracked_folder_create_nothing() {
         assert!(listing().is_empty(), "{args:?} created {:?}", listing());
     }
 
-    // R-2: a legacy ./data board that already exists is still read.
+    // R-2: a legacy ./data board that already exists is still read. Creating it commits, which
+    // needs someone to author it (FEAT-128): here, the user's own git identity.
+    std::fs::write(
+        home.join(".gitconfig"),
+        "[user]\n\tname = Tester\n\temail = t@example.com\n",
+    )
+    .unwrap();
     let legacy = Command::new(cli())
         .args(["--data-dir", "data", "project", "init", "plain"])
         .current_dir(&work)

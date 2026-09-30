@@ -1301,13 +1301,32 @@ fn run_serve(
 fn run_identity(cli: &Cli, name: &str, email: &str) -> anyhow::Result<()> {
     let dir = project::resolve_data_dir(cli.data_dir.as_deref());
     std::fs::create_dir_all(dir.join("projects"))?;
-    kanbanr_core::git::ensure_repo(&dir);
+    // A new board's first commit is authored by the identity being set (FEAT-128).
+    kanbanr_core::git::ensure_repo_as(&dir, Some((name, email)));
     kanbanr_core::git::set_identity(&dir, name, email).map_err(|e| anyhow::anyhow!(e))?;
     println!(
         "local commit identity set: {name} <{email}>  (data dir: {})",
         dir.display()
     );
     Ok(())
+}
+
+/// The board's git repository, created with the identity its first commit is authored by
+/// (FEAT-128): the one given, else the board's or the user's own git identity. With nobody to
+/// author it, nothing is created and the error says what to pass.
+fn prepare_board_repo(dir: &Path, given: Option<(&str, &str)>) -> anyhow::Result<(String, String)> {
+    let who = match given {
+        Some((name, email)) => (name.to_string(), email.to_string()),
+        None => kanbanr_core::git::identity(dir).ok_or_else(|| {
+            anyhow::anyhow!(
+                "no commit identity, so no board was created: pass --author \"Your Name\" and \
+                 --email you@example.com, or set git's user.name and user.email"
+            )
+        })?,
+    };
+    std::fs::create_dir_all(dir.join("projects"))?;
+    kanbanr_core::git::ensure_repo_as(dir, given);
+    Ok(who)
 }
 
 /// One-shot local setup: data dir + git repo + identity + a first project, selected here.
@@ -1332,23 +1351,12 @@ fn run_init(
             repo.display()
         );
     }
-    std::fs::create_dir_all(dir.join("projects"))?;
-    kanbanr_core::git::ensure_repo(&dir);
+    let given = author.as_deref().zip(email.as_deref());
+    let (n, e) = prepare_board_repo(&dir, given)?;
     if record {
         println!("✓ board: {}", project::normalize(&dir).display());
     }
-
-    if let (Some(n), Some(e)) = (&author, &email) {
-        kanbanr_core::git::set_identity(&dir, n, e).map_err(|e| anyhow::anyhow!(e))?;
-        println!("✓ commit identity: {n} <{e}>");
-    } else if kanbanr_core::git::identity(&dir)
-        .map(|(n, _)| n == "kanbanr")
-        .unwrap_or(true)
-    {
-        println!(
-            "• tip: set your commit identity with `kanbanr identity --name \"You\" --email you@example.com`"
-        );
-    }
+    println!("✓ commit identity: {n} <{e}>");
 
     let proj = name
         .or_else(|| project::resolve_project(None))
@@ -6972,6 +6980,28 @@ fn print_board(project: &Project) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FEAT-128: `init --author --email` recorded the identity only after the repository's first
+    /// commit, which therefore went out as `kanbanr <kanbanr@local>`.
+    #[test]
+    fn init_sets_the_identity_before_the_first_commit() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-init-id-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let who = prepare_board_repo(&dir, Some(("Ada Lovelace", "ada@example.com"))).unwrap();
+        assert_eq!(who, ("Ada Lovelace".into(), "ada@example.com".into()));
+        let log = std::process::Command::new("git")
+            .args(["log", "--format=%an <%ae> | %cn <%ce>"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let log = String::from_utf8_lossy(&log.stdout);
+        assert_eq!(
+            log.trim(),
+            "Ada Lovelace <ada@example.com> | Ada Lovelace <ada@example.com>",
+            "the first commit, and the only one"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// FEAT-127: preparing the public repository, `cd kanbanr-public && git commit …` was refused
     /// as "would commit straight to master" — the branch of the session's repository, not the one

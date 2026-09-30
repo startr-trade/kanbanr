@@ -65,6 +65,7 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_decisions(store, project, &mut report);
         scan_stray_folders(store, project, &mut report);
     }
+    scan_identity(store, "board", &mut report);
     Ok(report)
 }
 
@@ -88,7 +89,34 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_definitions(&project, &charter, &ctx, &mut report);
     scan_decisions(store, &project, &mut report);
     scan_stray_folders(store, &project, &mut report);
+    scan_identity(store, id, &mut report);
     Ok(report)
+}
+
+/// Report a board that commits as nobody (FEAT-128): the placeholder identity older versions wrote
+/// into every new data repository, or no identity at all — in which case kanbanr now refuses to
+/// commit, and this says why before a write does.
+fn scan_identity(store: &Store, project: &str, report: &mut Report) {
+    let dir = store.data_dir();
+    if !dir.join(".git").exists() {
+        return;
+    }
+    let message = if crate::git::has_placeholder_identity(dir) {
+        "this board's git config names the placeholder `kanbanr <kanbanr@local>` as its commit \
+         identity, which authors commits as nobody. Set yours with `kanbanr identity --name \
+         \"Your Name\" --email you@example.com`"
+    } else if crate::git::identity(dir).is_none() {
+        "this board has no commit identity, so writes are refused. Set one with `kanbanr identity \
+         --name \"Your Name\" --email you@example.com`"
+    } else {
+        return;
+    };
+    report.issues.push(Issue {
+        severity: Severity::Warning,
+        project: project.to_string(),
+        code: None,
+        message: message.to_string(),
+    });
 }
 
 /// Report what a work item has not said yet (FEAT-049).
@@ -624,5 +652,29 @@ mod tests {
             "scope changed after the yes, so the escape is unanswered again"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FEAT-128: a board whose git config still carries the placeholder identity commits as
+    /// nobody; doctor says so, with the command that fixes it, and stops once it is fixed.
+    #[test]
+    fn a_placeholder_identity_is_reported() {
+        let (store, dir) = fixture();
+        crate::git::ensure_repo_as(&dir, Some(("kanbanr", crate::git::PLACEHOLDER_EMAIL)));
+        let identity_issues = |store: &Store| -> Vec<String> {
+            run_project(store, "demo")
+                .unwrap()
+                .issues
+                .into_iter()
+                .filter(|i| i.message.contains("commit identity"))
+                .map(|i| i.message)
+                .collect()
+        };
+        let found = identity_issues(&store);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("placeholder") && found[0].contains("kanbanr identity"));
+
+        crate::git::set_identity(&dir, "Ada", "ada@example.com").unwrap();
+        assert!(identity_issues(&store).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

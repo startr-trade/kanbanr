@@ -117,6 +117,10 @@ pub fn write(
 ) -> Result<WriteOutcome, String> {
     with_write_lock(data_dir, || {
         git::ensure_repo(data_dir);
+        // Refused before anything changes on disk when nobody can author the commit (FEAT-128).
+        if dispatch::is_mutation(method) && !dispatch::is_dry_run(body) {
+            git::require_identity(data_dir)?;
+        }
         let out = dispatch::dispatch(store, method, path, body).map_err(|e| e.to_string())?;
         let mut warnings = Vec::new();
         if dispatch::is_mutation(method) && !dispatch::is_dry_run(body) {
@@ -190,6 +194,8 @@ mod tests {
                 .unwrap()
         ));
         std::fs::create_dir_all(p.join("projects")).unwrap();
+        // A board commits as someone (FEAT-128).
+        git::ensure_repo_as(&p, Some(("Tester", "t@example.com")));
         p
     }
 

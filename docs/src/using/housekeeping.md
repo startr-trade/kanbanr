@@ -24,8 +24,11 @@ where --json` tells you which folder is in use and why.
 
 - **`monitor not reachable` from `kanbanr open`** — start the view daemon first:
   `kanbanr serve`. The monitor is built into the binary, so there is no `--ui-dir` to find.
-- **Commits authored as `kanbanr <kanbanr@local>`** — set your identity:
-  `kanbanr identity --name "You" --email you@example.com`.
+- **`no commit identity for this board`** — kanbanr commits only as a real person. Set yours:
+  `kanbanr identity --name "You" --email you@example.com` (or git's own `user.name` and
+  `user.email`). Boards made by older versions carry the placeholder `kanbanr <kanbanr@local>`
+  in their git config; `kanbanr doctor` points it out, and the same command replaces it. Commits
+  already made under the placeholder keep it unless you rewrite the board's history.
 - **`could not determine project`** — pass `--project`, set `$KANBANR_PROJECT`, or
   `kanbanr project use <name>` (writes a `.kanbanr` marker).
 - **`project '…' not found` / an empty board** — you may be pointed at the wrong data folder.
