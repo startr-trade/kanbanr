@@ -20,12 +20,40 @@ fn stage_all(repo: &Repository) -> Result<git2::Oid, git2::Error> {
     index.write_tree()
 }
 
-/// The repo-local fallback identity (set in `ensure_repo`); used for merge commits and local-mode
-/// commits when no explicit identity is given.
-fn fallback_signature(repo: &Repository) -> Signature<'static> {
-    repo.signature()
-        .or_else(|_| Signature::now("kanbanr", "kanbanr@local"))
-        .expect("signature")
+/// The placeholder email older versions wrote into every new data repository (FEAT-128). It is
+/// nobody's identity, so wherever it is found it counts as none.
+pub const PLACEHOLDER_EMAIL: &str = "kanbanr@local";
+
+/// Why a commit was refused: nobody to author it (FEAT-128).
+pub const NO_IDENTITY: &str = "no commit identity for this board, so nothing was committed. Set \
+     yours with `kanbanr identity --name \"Your Name\" --email you@example.com` (or set git's \
+     user.name and user.email)";
+
+/// `(name, email)` from one git config, unless it is missing, blank or the placeholder.
+fn identity_in(cfg: &git2::Config) -> Option<(String, String)> {
+    let name = cfg.get_string("user.name").ok()?;
+    let email = cfg.get_string("user.email").ok()?;
+    (!name.trim().is_empty() && !email.trim().is_empty() && email.trim() != PLACEHOLDER_EMAIL)
+        .then_some((name, email))
+}
+
+/// Who commits: the repository's own identity, else the user's git identity. The second is asked
+/// separately because a placeholder in the repository's config would otherwise hide it.
+fn resolve_identity(
+    repo: Option<&git2::Config>,
+    user: Option<&git2::Config>,
+) -> Option<(String, String)> {
+    repo.and_then(identity_in)
+        .or_else(|| user.and_then(identity_in))
+}
+
+/// The signature for a commit in `repo` — never a placeholder (FEAT-128). With no identity to be
+/// found, the error names the command that sets one.
+fn signature(repo: &Repository) -> Result<Signature<'static>, git2::Error> {
+    let user = git2::Config::open_default().ok();
+    let (name, email) = resolve_identity(repo.config().ok().as_ref(), user.as_ref())
+        .ok_or_else(|| git2::Error::from_str(NO_IDENTITY))?;
+    Signature::now(&name, &email)
 }
 
 /// Secrets that must NEVER be committed (the data repo is pushed to remotes). `security.yaml`
@@ -95,6 +123,13 @@ fn ensure_secret_ignored(repo: &Repository, dir: &Path) {
 
 /// Initialize the data dir as a git repo (and make an initial commit) if it isn't one yet.
 pub fn ensure_repo(dir: &Path) {
+    ensure_repo_as(dir, None);
+}
+
+/// [`ensure_repo`], recording `identity` first when one is given, so that the first commit is
+/// authored by it (FEAT-128). With no identity anywhere, the repository is created without a
+/// commit; the first write that has an author makes it.
+pub fn ensure_repo_as(dir: &Path, identity: Option<(&str, &str)>) {
     let fresh = !dir.join(".git").exists();
     let repo = if fresh {
         match Repository::init(dir) {
@@ -107,12 +142,11 @@ pub fn ensure_repo(dir: &Path) {
             Err(_) => return,
         }
     };
-    if fresh {
-        // Repo-local fallback identity so merge commits from pulls always have an author.
-        if let Ok(mut cfg) = repo.config() {
-            let _ = cfg.set_str("user.name", "kanbanr");
-            let _ = cfg.set_str("user.email", "kanbanr@local");
-        }
+    // No placeholder identity is written here any more (FEAT-128): it authored every new board's
+    // first commit, and, being repository-local, hid the user's own git identity from every
+    // commit after it.
+    if let Some((name, email)) = identity {
+        let _ = set_identity(dir, name, email);
     }
     // Always: keep credentials out of the repo (write .gitignore before the first commit so the
     // secret file is never tracked in the first place).
@@ -121,7 +155,7 @@ pub fn ensure_repo(dir: &Path) {
         let _ = (|| -> Result<(), git2::Error> {
             let tree_oid = stage_all(&repo)?;
             let tree = repo.find_tree(tree_oid)?;
-            let sig = fallback_signature(&repo);
+            let sig = signature(&repo)?;
             repo.commit(
                 Some("HEAD"),
                 &sig,
@@ -146,13 +180,28 @@ pub fn set_identity(dir: &Path, name: &str, email: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The configured commit identity (name, email) from the repo's git config, if any.
+/// The identity commits here are authored by: the repository's own, else the user's git identity.
+/// A placeholder left by an older version counts as none (FEAT-128).
 pub fn identity(dir: &Path) -> Option<(String, String)> {
-    let repo = Repository::open(dir).ok()?;
-    let cfg = repo.config().ok()?;
-    let name = cfg.get_string("user.name").ok()?;
-    let email = cfg.get_string("user.email").ok()?;
-    Some((name, email))
+    let repo_cfg = Repository::open(dir).ok().and_then(|r| r.config().ok());
+    let user = git2::Config::open_default().ok();
+    resolve_identity(repo_cfg.as_ref(), user.as_ref())
+}
+
+/// [`identity`], or the reason nothing can be committed (FEAT-128). Writers ask this *before*
+/// changing anything, so a refused commit never leaves a change on disk that no commit records.
+pub fn require_identity(dir: &Path) -> Result<(String, String), String> {
+    identity(dir).ok_or_else(|| NO_IDENTITY.to_string())
+}
+
+/// Does this repository's own config still carry the placeholder identity? (FEAT-128)
+pub fn has_placeholder_identity(dir: &Path) -> bool {
+    Repository::open(dir)
+        .ok()
+        .and_then(|r| r.config().ok())
+        .and_then(|c| c.open_level(git2::ConfigLevel::Local).ok())
+        .and_then(|c| c.get_string("user.email").ok())
+        .is_some_and(|e| e.trim() == PLACEHOLDER_EMAIL)
 }
 
 fn do_commit(repo: &Repository, sig: &Signature, message: &str) -> Result<bool, git2::Error> {
@@ -188,7 +237,9 @@ pub fn commit_local(dir: &Path, message: &str) -> bool {
     let Ok(repo) = Repository::open(dir) else {
         return false;
     };
-    let sig = fallback_signature(&repo);
+    let Ok(sig) = signature(&repo) else {
+        return false;
+    };
     do_commit(&repo, &sig, message).unwrap_or(false)
 }
 
@@ -263,7 +314,7 @@ fn pull(repo: &Repository, remote_name: &str, branch: &str) -> Result<(), git2::
     let tree = repo.find_tree(tree_oid)?;
     let head = repo.head()?.peel_to_commit()?;
     let theirs = repo.find_commit(their.id())?;
-    let sig = fallback_signature(repo);
+    let sig = signature(repo)?;
     repo.commit(
         Some("HEAD"),
         &sig,
@@ -352,4 +403,97 @@ pub fn remove_remote(dir: &Path, name: &str) -> Result<(), String> {
     repo.remote_delete(name)
         .map_err(|e| e.message().to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn temp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("kanbanr-git-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// FEAT-128: every new board's first commit was authored `kanbanr <kanbanr@local>`, because
+    /// the repository was created and committed before `init --author/--email` recorded anyone.
+    #[test]
+    fn the_first_commit_carries_the_users_identity() {
+        let dir = temp("first");
+        ensure_repo_as(&dir, Some(("Ada Lovelace", "ada@example.com")));
+        let repo = Repository::open(&dir).unwrap();
+        let first = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(
+            first.parent_count(),
+            0,
+            "this is the repository's first commit"
+        );
+        for who in [first.author(), first.committer()] {
+            assert_eq!(who.name(), Some("Ada Lovelace"));
+            assert_eq!(who.email(), Some("ada@example.com"));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-128: the placeholder was written into the repository's own config, where it hid the
+    /// user's git identity from every later commit too.
+    #[test]
+    fn a_new_repository_gets_no_placeholder_identity() {
+        let dir = temp("fresh");
+        ensure_repo(&dir);
+        let local = Repository::open(&dir)
+            .unwrap()
+            .config()
+            .unwrap()
+            .open_level(git2::ConfigLevel::Local)
+            .unwrap();
+        assert!(local.get_string("user.name").is_err());
+        assert!(local.get_string("user.email").is_err());
+        assert!(!has_placeholder_identity(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-128: with nobody to author it, a commit used to go out as the placeholder. Now there is
+    /// no commit, and the reason names the command that fixes it.
+    #[test]
+    fn no_identity_refuses_to_commit() {
+        let dir = temp("none");
+        let config = |name: &str, body: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, body).unwrap();
+            git2::Config::open(&path).unwrap()
+        };
+        let placeholder = config(
+            "placeholder",
+            "[user]\n\tname = kanbanr\n\temail = kanbanr@local\n",
+        );
+        let user = config("user", "[user]\n\tname = Ada\n\temail = ada@example.com\n");
+
+        // The placeholder is nobody; neither is an empty config.
+        assert_eq!(resolve_identity(Some(&placeholder), None), None);
+        assert_eq!(resolve_identity(None, None), None);
+        // And it no longer hides the user's own identity.
+        assert_eq!(
+            resolve_identity(Some(&placeholder), Some(&user)),
+            Some(("Ada".into(), "ada@example.com".into()))
+        );
+        assert!(NO_IDENTITY.contains("kanbanr identity"));
+
+        // End to end, where this machine's own git config names nobody either.
+        let repo_dir = temp("none-repo");
+        ensure_repo(&repo_dir);
+        if identity(&repo_dir).is_none() {
+            std::fs::write(repo_dir.join("a.txt"), "a").unwrap();
+            assert!(!commit_local(&repo_dir, "a change"));
+            assert!(
+                require_identity(&repo_dir)
+                    .unwrap_err()
+                    .contains("kanbanr identity")
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo_dir);
+    }
 }

@@ -271,6 +271,11 @@ impl Backend {
 
         git::ensure_repo(&self.data_dir);
         let m = method_str(method);
+        // Nobody to author the commit: refuse before anything changes on disk (FEAT-128), rather
+        // than write a change no commit records, or record it as a placeholder.
+        if dispatch::is_mutation(m) && !dispatch::is_dry_run(body.as_ref()) {
+            git::require_identity(&self.data_dir).map_err(|e| anyhow!(e))?;
+        }
         let out = dispatch::dispatch(&self.store, m, path, body.as_ref())
             .map_err(|e| anyhow!(e.to_string()))?;
         if dispatch::is_mutation(m) && !dispatch::is_dry_run(body.as_ref()) {
@@ -353,6 +358,7 @@ impl Backend {
 
     fn write_doc_asset_locked(&self, project: &str, rel: &str, bytes: &[u8]) -> Result<String> {
         git::ensure_repo(&self.data_dir);
+        git::require_identity(&self.data_dir).map_err(|e| anyhow!(e))?;
         let saved = self
             .store
             .write_doc_bytes(project, rel, bytes)
@@ -398,6 +404,7 @@ impl Backend {
     pub fn rebuild_index(&self, ids: &[String]) -> Result<()> {
         self.with_write_lock(move || {
             git::ensure_repo(&self.data_dir);
+            git::require_identity(&self.data_dir).map_err(|e| anyhow!(e))?;
             for id in ids {
                 self.store
                     .rebuild_index(id)
@@ -493,6 +500,8 @@ mod tests {
                 .unwrap()
         ));
         std::fs::create_dir_all(&p).unwrap();
+        // A board commits as someone (FEAT-128).
+        git::ensure_repo_as(&p, Some(("Tester", "t@example.com")));
         p
     }
 

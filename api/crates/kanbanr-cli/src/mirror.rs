@@ -554,6 +554,8 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        // A board commits as someone (FEAT-128).
+        kanbanr_core::git::ensure_repo_as(&dir, Some(("Tester", "t@example.com")));
         let b = Backend::with_policy(dir.clone(), crate::backend::PushPolicy::Off);
         b.disable_auto_mirror();
         b.write(Method::Post, "/projects", Some(json!({"name": "shop"})))

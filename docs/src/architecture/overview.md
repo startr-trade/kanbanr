@@ -71,7 +71,8 @@ sequenceDiagram
   window onto your files. **Access control for sharing is the git remote's job** (e.g. GitHub
   decides who can pull/push the data repo).
 - **Identity** for commits comes from the data repo's git config (`kanbanr identity --name --email`),
-  the same in every write.
+  else the user's own git identity, the same in every write — the first commit included. With
+  neither, kanbanr refuses the write rather than commit as a placeholder.
 - **Git** uses `git2`/libgit2, statically linked — no external `git` binary. Sync is best-effort and
   never blocks a write; a conflict aborts the merge cleanly and is resolved with normal git in the
   folder.

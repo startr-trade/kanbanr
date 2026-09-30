@@ -180,6 +180,13 @@ reported against it.
 
 ### Fixed
 
+- **Board commits went out as `kanbanr <kanbanr@local>` (FEAT-128).** A new data repository was
+  given that placeholder identity in its own git config and committed with it before
+  `init --author/--email` recorded anyone, so every board's first commit was nobody's; a board set
+  up without those flags kept committing as nobody, because the placeholder also hid the user's own
+  git identity. Now the identity is recorded before the first commit, the user's git identity is
+  used when the board has none, and with no identity at all `init` creates nothing and writes are
+  refused with the command that fixes it. `doctor` reports a board still carrying the placeholder.
 - **The commit guard judged the wrong repository (FEAT-127).** `cd ../other && git commit …` (or
   `git -C ../other commit …`) was judged by the branch and board of the session's folder, so a
   correct commit elsewhere could be refused as "straight to master". The guard now follows the
