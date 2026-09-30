@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "kanbanr CLI: a git-backed kanban writer for Claude-driven development, plus a read-only live monitor"
+# kanbanr ships as release archives, installers and an image — never as a crate (FEAT-024).
+publish = false
 
 # The single kanbanr runtime: a local-only writer that also runs the view daemon via `kanbanr serve`.
 [[bin]]

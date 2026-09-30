@@ -51,16 +51,17 @@ for you). **Never** paste a token into a file that gets committed.
 | Destination | What it's for | Account | Credential to create | Where it lives |
 |---|---|---|---|---|
 | **GitHub** | Hosts the repo, runs CI, stores release binaries, serves the plugin marketplace | github.com (free) + **2FA** | an **SSH key** for `git push`; CI's `GITHUB_TOKEN` is automatic | SSH key on your laptop (`~/.ssh`); `GITHUB_TOKEN` is injected into Actions — nothing to store |
-| **crates.io** | Publishes the `kanbanr` CLI so `cargo install kanbanr` works | crates.io (log in with GitHub) + **2FA** | an **API token**, *or* set up **Trusted Publishing** | `CARGO_REGISTRY_TOKEN` secret, **or** none (Trusted Publishing) |
+| **crates.io** | Publishes the standalone **`ears-classifier`** library — the only crate that is published. kanbanr itself is **not** on crates.io (see §5) | crates.io (log in with GitHub) + **2FA** | an **API token**, *or* set up **Trusted Publishing** | `CARGO_REGISTRY_TOKEN` secret, **or** none (Trusted Publishing) |
 | **GHCR** (GitHub Container Registry) | Publishes the Docker image so `docker run ghcr.io/startr-trade/kanbanr` works | your GitHub account | **none** — Actions uses the automatic `GITHUB_TOKEN` (`packages: write`) | nothing to store; locally use a PAT with `write:packages` |
 | **Claude Code plugin marketplace** | Lets users `claude plugin install kanbanr` | your GitHub account | **none** — it's just your public git repo | nothing — users add the repo URL |
 | **VS Code Marketplace** *(only when you ship the extension — `editor/vscode/`)* | Publishes the VS Code extension | **Azure DevOps** account (free) + a **publisher** at marketplace.visualstudio.com/manage | a **Personal Access Token** scoped *Marketplace → Manage* | `VSCE_PAT` secret |
 | **Open VSX** *(optional, open-source VS Code registry)* | Same extension for VSCodium/Cursor/etc. | open-vsx.org (log in with GitHub) | an access token | `OVSX_TOKEN` secret |
 | **npm** *(probably NOT needed)* | Only if you ever publish the web UI as a reusable package — kanbanr bundles it into the binary, so you likely just **reserve the name** | npmjs.com + **2FA** | an **Automation token** | `NPM_TOKEN` secret |
 
-> You don't need every row. For a **first release** the essentials are **GitHub** (always),
-> **crates.io** (for `cargo install`), and **GHCR** (for `docker run`). The Claude plugin needs
-> nothing beyond a public repo. VS Code / Open VSX / npm can come later.
+> You don't need every row. For a **first release** the essentials are **GitHub** (always: it
+> hosts the release archives and the installers) and **GHCR** (for `docker run`). **crates.io** is
+> only for `ears-classifier`. The Claude plugin needs nothing beyond a public repo. VS Code /
+> Open VSX / npm can come later.
 
 ### Step-by-step: creating each credential
 
@@ -71,7 +72,7 @@ cat ~/.ssh/id_ed25519.pub                     # copy this line
 ```
 Paste it at GitHub → Settings → **SSH and GPG keys** → New SSH key. Test: `ssh -T git@github.com`.
 
-**crates.io API token (to publish the CLI):**
+**crates.io API token (to publish `ears-classifier`):**
 1. Sign in at crates.io with GitHub; enable 2FA.
 2. Account Settings → **API Tokens** → New Token. Name it `kanbanr-release`; scope to
    **publish-update** (plus **publish-new** for the very first publish); set an expiry.
@@ -79,7 +80,9 @@ Paste it at GitHub → Settings → **SSH and GPG keys** → New SSH key. Test: 
 4. Automated publish: add it as the `CARGO_REGISTRY_TOKEN` secret **and** set repo variable
    `PUBLISH_CRATES=true` (the release workflow's crates job is guarded on that). **Better:** skip the
    token and set up **Trusted Publishing** on crates.io (your crate → Settings → Trusted Publishing →
-   add `startr-trade/kanbanr` + the `release.yml` workflow), then delete the token line.
+   add `startr-trade/kanbanr` + the `release.yml` workflow), then delete the token line. The job
+   publishes `ears-classifier` only; every kanbanr crate declares `publish = false`, so a stray
+   `cargo publish` of one of them is refused.
 5. ⚠️ **A published version is permanent** — you can `cargo yank` a bad version but never delete or
    reuse it. Double-check before `cargo publish`.
 
@@ -137,9 +140,9 @@ content** and your **publish credentials**:
       legal name/handle if you prefer; if you'd rather stay MIT-only, delete `LICENSE-APACHE` and set
       `license = "MIT"`.)*
 - [ ] (Optional) Add `# SPDX-License-Identifier: MIT OR Apache-2.0` headers where convenient.
-- [ ] **Name check (do before announcing):** confirm `kanbanr` is free on **crates.io** (and **npm**
-      if you'll reserve it), plus the GitHub `startr-trade/kanbanr` repo and a domain if you want one.
-      Reserve early — `cargo publish` of a `0.0.0` placeholder claims the crate name.
+- [x] **Name check:** `ears-classifier` is confirmed free on **crates.io** — the only crate name
+      kanbanr needs, since kanbanr itself is not published there. Its first publish claims it.
+      (Check **npm** too if you'll reserve it, plus a domain if you want one.)
 - [x] **Third-party notices** documented in [`THIRD_PARTY.md`](../THIRD_PARTY.md) (vendored
       **libgit2** GPL-2.0-WITH-linking-exception + **OpenSSL** Apache-2.0, statically linked — fine
       for MIT/Apache distribution). Still **to do:** run `cargo deny check licenses` (and add it to
@@ -150,7 +153,7 @@ content** and your **publish credentials**:
 - [ ] **README** polish: one-line pitch, a screenshot or short GIF of the live monitor, the
       60-second quickstart, the architecture diagram (reuse [DESIGN.md](DESIGN.md)), and a clear
       "is this for me?" (personal, git-backed, Claude-driven).
-- [ ] Badges: CI status, license, latest release, crates.io version.
+- [ ] Badges: CI status, license, latest release.
 - [ ] A `docs/` index linking USER_GUIDE, DESIGN, ROADMAP, this file.
 - [ ] Capture screenshots in `docs/src/images/` (`make screenshots`) (board, feature page, status page, milestones, docs).
       A reproducible **Selenium-Grid-in-Docker screenshot tool** lives in
@@ -171,6 +174,11 @@ content** and your **publish credentials**:
 - [x] **Issue + PR templates** under [`../.github/`](../.github/) (`ISSUE_TEMPLATE/bug_report.yml`,
       `feature_request.yml`, `config.yml`, `PULL_REQUEST_TEMPLATE.md`).
 - [x] **Support promise** stated as "personal project, best-effort, no SLA" (in CONTRIBUTING/SECURITY).
+- [x] **[`CODEOWNERS`](../.github/CODEOWNERS)** asks the `startr-trade/kanbanr-maintainers` team to
+      review every pull request. Give that team the **Maintain** role on the repository (Settings →
+      Collaborators and teams): GitHub only requests a review from a team with write access or more.
+      Requiring a code-owner review in branch protection is optional — with a single maintainer it
+      would block your own pull requests unless admins may bypass it.
 - [ ] (Optional) Enable **GitHub Discussions** for Q&A (the issue `config.yml` links to it).
 
 ## 4. CI (GitHub Actions)
@@ -190,10 +198,13 @@ content** and your **publish credentials**:
 - [x] **[`release.yml`](../.github/workflows/release.yml)** triggered on `v*` tags does it all:
       builds cross-platform `kanbanr` binaries (linux/macos-arm/macos-x86/windows) and attaches them
       to a GitHub Release, and pushes the **Docker image to GHCR** (`ghcr.io/startr-trade/kanbanr`).
-- [ ] **Publish the CLI to crates.io** so `cargo install kanbanr` works. The workflow's `crates` job
-      is wired but **guarded** — set repo variable `PUBLISH_CRATES=true` + the `CARGO_REGISTRY_TOKEN`
-      secret (or switch to Trusted Publishing), then it publishes `kanbanr-core` then `kanbanr-cli`
-      on tag. See the credentials section above.
+- [x] **kanbanr is not published to crates.io.** A published crate cannot carry the built monitor
+      (ADR-0009), so kanbanr ships only as the release archives, the `install.sh` / `install.ps1`
+      installers and the GHCR image; from source, `make install` builds the web assets first.
+      `kanbanr-cli`, `kanbanr-core` and `kanbanr-server` declare `publish = false`.
+- [ ] **Publish `ears-classifier` to crates.io.** The workflow's `crates` job publishes it — and
+      only it — on a tag once repo variable `PUBLISH_CRATES=true` and the `CARGO_REGISTRY_TOKEN`
+      secret (or Trusted Publishing) are set. See the credentials section above.
 - [ ] **Cut the first release:** `git tag v0.1.0 && git push origin v0.1.0`, then verify the Release
       assets + the GHCR image appear. Move the `[0.1.0]` section in the changelog from *Unreleased*
       to dated.
@@ -245,7 +256,7 @@ publishing with `claude plugin validate .`.
 [../skill/kanbanr/hooks/README.md](../skill/kanbanr/hooks/README.md).
 
 **The plugin carries only the integration, not the program.** The `kanbanr` **binary** still ships
-separately (crates.io via `cargo install kanbanr`, and/or GitHub Releases / GHCR per §5) and must be
+separately (the GitHub Release archives and installers, or GHCR, per §5 — not crates.io) and must be
 on `PATH`; the hooks are best-effort and stay silent if it isn't installed. Keep the manifest's
 `version` in step with releases (or omit it to let the git SHA version the plugin).
 
@@ -260,7 +271,7 @@ on `PATH`; the hooks are best-effort and stay silent if it isn't installed. Keep
 - [ ] `make` / `cargo test` / web build all green in CI.
 - [x] LICENSE(s), CONTRIBUTING, SECURITY, CODE_OF_CONDUCT, CHANGELOG, THIRD_PARTY present.
 - [x] Owner slug (`startr-trade`) + copyright/email placeholders filled (see the top of this file).
-- [ ] **Names reserved** (GitHub, crates.io); image + binaries published for the first tagged release.
+- [ ] **Names reserved** (GitHub, and `ears-classifier` on crates.io); image + binaries published for the first tagged release.
 - [ ] Dependabot is on, Discussions enabled (optional), `release.yml` secrets/variables set if publishing.
 - [ ] Secrets sweep (§0) re-confirmed on the exact commit you'll make public.
 - [ ] Screenshots (`make screenshots`) + a couple of example projects under `data/projects/` (non-sensitive).
@@ -283,7 +294,8 @@ manual steps only you can do:
 1. Create the `startr-trade/kanbanr` repository on GitHub (the owner slug is already filled in throughout).
 2. Run the **secrets sweep** (§0); remove `data/security.yaml`; decide what `data/` to publish.
 3. `git init` (if needed), commit, push, make the repo **public**.
-4. Reserve the crate name + set up crates.io publishing (token **or** Trusted Publishing).
+4. Set up crates.io publishing for `ears-classifier` (token **or** Trusted Publishing, plus
+   `PUBLISH_CRATES=true`); its first publish reserves the name. kanbanr itself is not published there.
 5. `git tag v0.1.0 && git push origin v0.1.0` → the release workflow builds binaries + the GHCR image.
 6. Add screenshots to the README (`make screenshots`), then announce.
 

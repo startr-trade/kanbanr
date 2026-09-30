@@ -3,6 +3,8 @@ name = "kanbanr-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# kanbanr ships as release archives, installers and an image — never as a crate (FEAT-024).
+publish = false
 
 # A LIBRARY: the view daemon (`run()`), used by the single `kanbanr` binary via `kanbanr serve`.
 [lib]
