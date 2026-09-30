@@ -1,6 +1,15 @@
 //! kanbanr-core: domain models, YAML store, validation, and export.
 //! Shared by the CLI (the only writer) and the read-only server.
 
+// Vendored libgit2 checks repository ownership on Windows with OpenProcessToken,
+// CheckTokenMembership and CopySid, which live in advapi32. libgit2-sys 0.17 does not ask the
+// linker for it, and the current MSVC toolchain no longer brings it in by default, so every test
+// binary failed to link on Windows (FEAT-129/R-3). Declared here, it reaches every binary that
+// links libgit2 through this crate.
+#[cfg(windows)]
+#[link(name = "advapi32")]
+unsafe extern "system" {}
+
 pub mod activity;
 pub mod adr;
 pub mod batch;
