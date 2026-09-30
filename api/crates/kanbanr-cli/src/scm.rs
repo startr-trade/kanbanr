@@ -38,8 +38,12 @@ pub fn git(root: &Path, args: &[&str]) -> Result<String> {
 
 /// The working tree root of the repo the current directory is in.
 pub fn repo_root() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    git(&cwd, &["rev-parse", "--show-toplevel"])
+    repo_root_in(&std::env::current_dir().ok()?)
+}
+
+/// The working tree root of the repo `dir` is in.
+pub fn repo_root_in(dir: &Path) -> Option<PathBuf> {
+    git(dir, &["rev-parse", "--show-toplevel"])
         .ok()
         .map(PathBuf::from)
 }

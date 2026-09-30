@@ -180,6 +180,11 @@ reported against it.
 
 ### Fixed
 
+- **The commit guard judged the wrong repository (FEAT-127).** `cd ../other && git commit …` (or
+  `git -C ../other commit …`) was judged by the branch and board of the session's folder, so a
+  correct commit elsewhere could be refused as "straight to master". The guard now follows the
+  command to the repository it commits in and uses that repository's board; a folder without one,
+  or a directory only the shell could work out (`cd $X`), is left to that repository's git hooks.
 - **The shipped session-start and stop-check hooks were empty (FEAT-102).** A commit on 28 Sep
   replaced both with `exit 0` stubs, so sessions stopped recovering the board and turns stopped
   being nudged to record work, while `hooks status` still reported them healthy. Both are
