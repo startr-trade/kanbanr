@@ -10,9 +10,22 @@ name: CI
 # Caching (Swatinem/rust-cache) keeps subsequent runs reasonable, but expect
 # the cold build to take a while — this is expected, not a hang.
 
+# One run per change (FEAT-130): a push to main, or a pull request. A pull request's branch used to
+# run twice — once for the push, once for the pull request — and every branch pushed ran the full
+# matrix, macOS included, which a private repository pays ten times the Linux rate for.
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# A newer run for the same branch or pull request makes the older one pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   rust:
@@ -22,7 +35,7 @@ jobs:
       # Don't cancel the whole matrix if one OS fails — we want to see all of them.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-24.04, macos-15, windows-2025]
 
     defaults:
       run:
@@ -30,15 +43,15 @@ jobs:
         working-directory: api
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: rustfmt, clippy
 
       - name: Cache cargo registry / build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # The workspace lives in api/, not at the repo root.
           workspaces: "api"
@@ -74,7 +87,7 @@ jobs:
       # thing a release never ships — and the test that asserts the monitor is served failed here
       # while passing on any machine that had built the web app once.
       - name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -106,10 +119,10 @@ jobs:
   # access, and `kanbanr check --file` validates it on its own.
   definition:
     name: definition
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Extract the definition from the PR body
         env:
           BODY: ${{ github.event.pull_request.body }}
@@ -128,17 +141,17 @@ jobs:
 
   web:
     name: web
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     defaults:
       run:
         working-directory: web
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
@@ -168,9 +181,9 @@ jobs:
   # release.yml's verify-install job, because it needs a release to install.
   installers:
     name: installers
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # shellcheck catches the class of bug that has cost installers real debugging: a helper
       # whose `[ -n "$x" ] && printf …` returns 1 when the value is empty, aborting the caller
@@ -248,3 +261,84 @@ jobs:
             echo "$published" | grep -qx "$t" \
               || { echo "::error::install script offers $t, which release.yml does not build" >&2; exit 1; }
           done
+
+  # The workflows themselves (FEAT-130). A third-party action named by a tag runs whatever that tag
+  # points at on the day; a commit SHA runs what was reviewed. Updates are deliberate, since there
+  # is no Dependabot here.
+  workflows:
+    name: workflows
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Every third-party action is pinned to a commit
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import glob, re, sys
+          bad = []
+          for path in sorted(glob.glob(".github/workflows/*.yml")):
+              for n, line in enumerate(open(path), 1):
+                  m = re.search(r"uses:\s+([^\s#]+)", line)
+                  if not m or m.group(1).startswith("./"):
+                      continue
+                  ref = m.group(1).rpartition("@")[2]
+                  if not re.fullmatch(r"[0-9a-f]{40}", ref) or "#" not in line:
+                      bad.append(f"{path}:{n}: {m.group(1)}")
+          for b in bad:
+              print(f"::error::not pinned to a commit SHA with its version in a comment: {b}")
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Every scanner suppression has a reason and an expiry
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import datetime, sys, yaml
+          doc = yaml.safe_load(open(".trivyignore.yaml")) or {}
+          bad = []
+          for kind, entries in doc.items():
+              for e in entries or []:
+                  name = e.get("id") or e.get("path") or "?"
+                  if not str(e.get("statement", "")).strip():
+                      bad.append(f"{kind} {name}: no statement (the reason)")
+                  exp = e.get("expired_at")
+                  if not exp:
+                      bad.append(f"{kind} {name}: no expired_at")
+                  elif datetime.date.fromisoformat(str(exp)) < datetime.date.today():
+                      bad.append(f"{kind} {name}: expired on {exp} — re-triage it")
+          for b in bad:
+              print(f"::error::.trivyignore.yaml {b}")
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo --entrypoint sh rhysd/actionlint:1.7.12 -c "actionlint -no-color .github/workflows/*.yml"
+
+  # Supply chain (FEAT-130): licences, sources, and known vulnerabilities in what kanbanr ships.
+  # These FAIL the run. The monitor's build tools are not shipped, so npm audits production
+  # dependencies only.
+  supply-chain:
+    name: supply chain
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-deny,cargo-audit
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - name: cargo deny (licences, bans, sources, advisories)
+        working-directory: api
+        run: cargo deny check
+
+      - name: cargo audit (RustSec advisories, yanked crates)
+        working-directory: api
+        run: cargo audit
+
+      - name: npm audit (the monitor's production dependencies)
+        working-directory: web
+        run: npm audit --omit=dev

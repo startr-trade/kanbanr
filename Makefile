@@ -16,7 +16,7 @@ DATA_DIR ?= $(shell kanbanr where 2>/dev/null || echo $(CURDIR)/../$(notdir $(CU
 SKILLS_DIR ?= $(HOME)/.claude/skills
 IMAGE ?= kanbanr:latest
 
-.PHONY: help build test itest ci cli web check-docs install-cli install-skill install serve docker-build docker-up docker-down screenshots clean
+.PHONY: help build test itest ci audit scan-deps scan-image codeql cli web check-docs install-cli install-skill install serve docker-build docker-up docker-down screenshots clean
 
 help:
 	@echo "Targets:"
@@ -24,6 +24,10 @@ help:
 	@echo "  test          Unit + Docker-less integration (CLI local writes + 'kanbanr serve' reads)"
 	@echo "  itest         Packaging smoke: build the image + run the testcontainers test"
 	@echo "  ci            Every CI check that can run off GitHub, before a push (scripts/ci-local.sh)"
+	@echo "  audit         Supply chain: cargo deny + cargo audit + npm audit (fails on findings)"
+	@echo "  scan-deps     Trivy over the tracked tree: deps, secrets, Dockerfile (fails on any finding)"
+	@echo "  scan-image    Trivy over an image as a release scans it (IMAGE=, default kanbanr:ci-local)"
+	@echo "  codeql        CodeQL for Rust, TypeScript and the workflows; several minutes"
 	@echo "  install-cli   cargo install the one 'kanbanr' binary onto your PATH"
 	@echo "  install-skill Symlink skill/kanbanr into ~/.claude/skills/"
 	@echo "  install       install-cli + install-skill"
@@ -57,6 +61,23 @@ web:
 # GitHub can verify (the macOS and Windows legs, uploads, publishing).
 ci:
 	scripts/ci-local.sh
+
+# The supply-chain gate CI's supply-chain job runs (FEAT-130): licences, sources, advisories.
+audit:
+	cd api && cargo deny check
+	cd api && cargo audit
+	cd web && npm audit --omit=dev
+
+# The scanners trivy.yml, release.yml and codeql.yml run, locally (scripts/security-scan.sh). Each
+# fails on a finding, where the workflows report: better seen here than on a public Security tab.
+scan-deps:
+	scripts/security-scan.sh deps
+
+scan-image:
+	scripts/security-scan.sh image $(IMAGE)
+
+codeql:
+	scripts/security-scan.sh codeql
 
 # Every mermaid diagram in the docs parses with the library the monitor renders them with. A
 # diagram that fails renders as nothing, which reads as a missing image rather than an error.

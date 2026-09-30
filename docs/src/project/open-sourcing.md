@@ -183,14 +183,37 @@ content** and your **publish credentials**:
 
 ## 4. CI (GitHub Actions)
 
-- [x] **[`ci.yml`](../.github/workflows/ci.yml)** on push/PR: `cargo fmt --check`,
+- [x] **[`ci.yml`](../.github/workflows/ci.yml)** on a push to `main` and on pull requests (one
+      run per change; a newer run cancels an older one): `cargo fmt --check`,
       `cargo clippy -- -D warnings`, `cargo test --workspace`, and `npm ci && npm run build` for the
       web, with cargo + vendored-libgit2/openssl caching.
+- [x] **Run everything locally first: `make ci`.** It runs every CI check that can run off GitHub,
+      reading each step from the workflow files, and lists what only GitHub can verify (the macOS
+      and Windows legs, uploads, publishing). Nothing should reach the public repository that
+      `make ci` has not passed.
+- [x] **Security scanning** (FEAT-130): [`codeql.yml`](../.github/workflows/codeql.yml) (Rust,
+      TypeScript and the workflows themselves) and [`trivy.yml`](../.github/workflows/trivy.yml)
+      (dependencies, committed secrets, the Dockerfile) on `main`, on pull requests and weekly,
+      reporting to the Security tab; `release.yml` scans the image before pushing it and stops on a
+      fixable HIGH or CRITICAL finding; ci.yml's `supply-chain` job fails on a disallowed licence
+      or a known vulnerability (`cargo deny`, `cargo audit`, `npm audit`). Locally: `make audit`,
+      `make scan-deps`, `make scan-image`, `make codeql`. Code-scanning uploads need a public
+      repository on the free plan, so they are skipped until it is public.
+- [x] **Suppressions are time-boxed.** A scanner finding with no reachable fix goes in
+      `.trivyignore.yaml` with its reason and an expiry date; CI refuses an entry without both, and
+      one past its date.
+- [x] **Actions and runners are pinned.** Every third-party action is pinned to a commit SHA with
+      its version in a comment (CI refuses one that is not), and runners name an image
+      (`ubuntu-24.04`, `macos-15`, `windows-2025`), not `-latest`, so neither changes under the
+      project on the provider's schedule. Both are updated deliberately — there is no Dependabot.
+- [ ] **Once public:** Settings → Actions → General → "Require approval for fork pull request
+      workflows" (all outside collaborators), so no workflow runs on an outsider's pull request
+      until a maintainer has read it; and consider requiring code-scanning results in the `main`
+      ruleset once the first scans are clean.
 - [x] **Cross-platform matrix** (ubuntu/macos/windows) for `cargo test` — already in `ci.yml`.
 - [x] **Image build + GHCR push on tags** — handled by [`release.yml`](../.github/workflows/release.yml)
       (see §5), so a separate `docker.yml` isn't needed.
-- [ ] (Optional) Add `cargo deny check licenses` and the `#[ignore]`d testcontainers smoke
-      (`make itest`) to CI.
+- [ ] (Optional) Add the `#[ignore]`d testcontainers smoke (`make itest`) to CI.
 
 ## 5. Versioning & releases
 

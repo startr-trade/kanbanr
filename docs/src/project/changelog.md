@@ -8,6 +8,22 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+#### Security scanning in CI, and one CI run per change (FEAT-130)
+
+- **CodeQL** (`codeql.yml`) analyses the Rust, the TypeScript (monitor and VS Code extension) and
+  the workflows themselves, on `main`, on pull requests and weekly.
+- **Trivy** (`trivy.yml`) scans dependencies, committed secrets and the Dockerfile; `release.yml`
+  scans the image before pushing it and stops on a fixable HIGH or CRITICAL finding.
+- **Supply chain**: ci.yml's `supply-chain` job runs `cargo deny` (licence allowlist in
+  `api/deny.toml`, sources, advisories), `cargo audit` and `npm audit --omit=dev`, and fails on a
+  finding. A suppression needs a reason and an expiry (`.trivyignore.yaml`), checked in CI.
+- Code-scanning uploads are skipped while the repository is private, rather than failing.
+- Every action is pinned to a commit SHA of a Node 24 release (Node 20 actions are deprecated),
+  runners name their image (`ubuntu-24.04`, `macos-15`, `windows-2025`) rather than `-latest`, and
+  CI runs once per change — on a push to `main` or a pull request — cancelling superseded runs.
+- Locally: `make audit`, `make scan-deps`, `make scan-image`, `make codeql`; `make ci` includes the
+  audit and the Trivy scans.
+
 #### `make ci`: every CI check, locally, before a push (FEAT-131)
 
 `make ci` copies the tracked tree to a clean folder and runs every CI check that can run off

@@ -1,0 +1,13 @@
+# CodeQL configuration, shared by .github/workflows/codeql.yml and `make codeql`
+# (scripts/security-scan.sh), so the local run and the GitHub run analyse the same code.
+#
+# The scope is the code that ships. Tests never do: what CodeQL flags in them — fixture paths,
+# throwaway credentials in a scratch board, a panic that names a temp file — is noise rather than
+# exposure. Generated output (the built monitor) is analysed as its source instead.
+paths-ignore:
+  - "**/tests/**"
+  - api/target/**
+  - web/dist/**
+  - web/node_modules/**
+  - editor/vscode/node_modules/**
+  - tools/screenshots/**

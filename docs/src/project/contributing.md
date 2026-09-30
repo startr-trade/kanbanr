@@ -49,7 +49,8 @@ cache) and runs every CI check that can run off GitHub, reading each step's scri
 workflow file itself, plus actionlint and a check that every action the workflows use exists. It
 ends by listing what only GitHub can verify: the macOS and Windows legs, uploads and publishing.
 It needs Docker (for actionlint and PowerShell), an authenticated `gh`, `shellcheck`, and the
-`mdbook` / `mdbook-mermaid` versions pinned in `docs.yml`. The individual checks, if you want one:
+`mdbook` / `mdbook-mermaid` versions pinned in `docs.yml`, and `cargo-deny` + `cargo-audit`
+(`cargo install cargo-deny cargo-audit --locked`). The individual checks, if you want one:
 
 ```bash
 cd api && cargo fmt --all --check          # formatting

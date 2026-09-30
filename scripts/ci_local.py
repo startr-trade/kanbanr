@@ -62,6 +62,16 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Docs diagrams parse": LOCAL,
             "The monitor presents itself correctly": LOCAL,
         },
+        "workflows": {
+            "Every third-party action is pinned to a commit": LOCAL,
+            "Every scanner suppression has a reason and an expiry": LOCAL,
+            "actionlint": LOCAL,
+        },
+        "supply-chain": {
+            "cargo deny (licences, bans, sources, advisories)": LOCAL,
+            "cargo audit (RustSec advisories, yanked crates)": LOCAL,
+            "npm audit (the monitor's production dependencies)": LOCAL,
+        },
         "installers": {
             "The CLI links a TLS backend": LOCAL,
             "Install shellcheck": "installs a system package on the runner",
@@ -69,6 +79,16 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "install.ps1 parses": LOCAL,
             "The installers pin https on request and redirect": LOCAL,
             "The installer's targets are the targets we publish": LOCAL,
+        },
+    },
+    "codeql.yml": {
+        "analyze": {
+            "Code scanning is available": "asks GitHub whether the repository can take code-scanning results",
+        },
+    },
+    "trivy.yml": {
+        "fs": {
+            "Code scanning is available": "asks GitHub whether the repository can take code-scanning results",
         },
     },
     "docs.yml": {
@@ -312,6 +332,12 @@ def uses_equivalents() -> None:
         ok and want["MDBOOK_MERMAID_VERSION"] in out, out)
     ok, out = sh(["docker", "build", "-q", "-f", "docker/Dockerfile", "-t", "kanbanr:ci-local", "."], TREE)
     say("release image: docker/Dockerfile builds (docker/build-push-action, without the push)", ok, out)
+    ok, out = sh([str(TREE / "scripts/security-scan.sh"), "image", "kanbanr:ci-local"], TREE)
+    say("release image: no fixable HIGH/CRITICAL finding (release.yml's scan before the push)", ok, out)
+    ok, out = sh([str(TREE / "scripts/security-scan.sh"), "deps", str(TREE)], TREE)
+    say("trivy.yml: no finding in dependencies, secrets or the Dockerfile (stricter than CI)", ok, out)
+    not_verified.append("codeql.yml: CodeQL (run `make codeql`; several minutes, so not part of make ci)")
+    not_verified.append("codeql.yml / trivy.yml: uploads to code scanning")
     not_verified.append("release.yml image: pushing to GHCR")
     not_verified.append("release.yml release: creating the GitHub release")
     not_verified.append("docs.yml deploy: publishing to GitHub Pages")

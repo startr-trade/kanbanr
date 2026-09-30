@@ -1,0 +1,73 @@
+name: CodeQL
+
+# Static analysis of the code kanbanr ships and of the workflows that build it (FEAT-130): Rust (the
+# CLI, the engine, the daemon), JavaScript/TypeScript (the monitor and the VS Code extension), and
+# the workflow files themselves (`actions`), which catches untrusted input — a pull request's title
+# or body — reaching a shell. Results go to the Security tab; they do not fail the run.
+#
+# Locally: `make codeql` runs the same analysis (scripts/security-scan.sh).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "27 3 * * 1" # weekly, Monday 03:27 UTC: new queries find old code
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # `build-mode: none` extracts from source: no vendored-C build is needed to analyse Rust.
+        language: [rust, javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # Code scanning needs a public repository on GitHub's free plan (or GitHub Advanced Security);
+      # on a private one the upload fails the run. Until the repository is public this is
+      # skipped rather than red (FEAT-130/R-7).
+      - name: Code scanning is available
+        id: scanning
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          visibility=$(gh api "repos/${GITHUB_REPOSITORY}" --jq .visibility)
+          if [ "$visibility" = public ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::The repository is ${visibility}: code-scanning uploads are skipped until it is public."
+          fi
+
+      - name: Initialize CodeQL
+        if: steps.scanning.outputs.enabled == 'true'
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          # Shared with `make codeql`, so the local run and this one analyse the same code.
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Perform CodeQL analysis
+        if: steps.scanning.outputs.enabled == 'true'
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: "/language:${{ matrix.language }}"

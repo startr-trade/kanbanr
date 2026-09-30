@@ -1,0 +1,13 @@
+# Trivy triage record (FEAT-130).
+#
+# POLICY
+#   Every severity is reported. The one sanctioned suppression is a finding with no fix anyone can
+#   reach, and it is always TIME-BOXED: each entry carries `statement` (the reason, in full) and
+#   `expired_at`. CI refuses an entry missing either, and refuses one past its date — when it
+#   expires the finding must be re-triaged: take the fix if one has shipped, or renew the entry
+#   with a fresh reason. Nothing is silenced for good, because a permanent silence is how a fix
+#   that shipped last quarter goes unnoticed for a year.
+#
+#   An entry that cannot say why it is here does not belong here.
+
+vulnerabilities: []
