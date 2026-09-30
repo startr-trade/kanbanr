@@ -407,6 +407,12 @@ reported against it.
 
 ### Changed
 - Relicensed the workspace to **MIT OR Apache-2.0** (was MIT) — the Rust-ecosystem norm.
+- **kanbanr is not published to crates.io (FEAT-024, ADR-0011).** It ships only as the GitHub
+  release archives, the `install.sh` / `install.ps1` installers and the GHCR image; `kanbanr-cli`,
+  `kanbanr-core` and `kanbanr-server` now declare `publish = false`. `ears-classifier` is the one
+  published crate. The open-sourcing guide, the release workflow's notes and the VS Code
+  extension's install hint no longer point at `cargo install kanbanr`, and `.github/CODEOWNERS`
+  asks the `kanbanr-maintainers` team to review every pull request.
 
 ## [0.1.0] - Unreleased
 

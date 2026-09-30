@@ -28,10 +28,14 @@ surfaced via the *kanbanr* output channel and VS Code notifications.
 
 ## Requirements
 
-- The **`kanbanr` binary must be on your `PATH`**. Install it with:
+- The **`kanbanr` binary must be on your `PATH`**. Install it with the release installer
+  (kanbanr is not published to crates.io):
 
   ```sh
-  cargo install kanbanr
+  # Linux / macOS
+  curl -fsSL https://github.com/startr-trade/kanbanr/releases/latest/download/install.sh | sh
+  # Windows (PowerShell)
+  irm https://github.com/startr-trade/kanbanr/releases/latest/download/install.ps1 | iex
   ```
 
   If the binary is missing, the extension tells you exactly this when you run a

@@ -5,12 +5,14 @@ name: Release
 # Produces, for that tag:
 #   1. cross-platform `kanbanr` binaries attached to a GitHub Release
 #   2. a multi-arch-capable Docker image pushed to GHCR (ghcr.io/startr-trade/kanbanr)
-#   3. (optional) the CLI published to crates.io
+#   3. (optional) the ears-classifier library published to crates.io — the ONLY crate that is.
+#      kanbanr itself ships as these archives, the installers and the image, never as a crate;
+#      its crates declare `publish = false` (FEAT-024).
 #
-# Secrets/setup required (see docs/OPEN_SOURCING.md → "Accounts, keys & credentials"):
+# Secrets/setup required (see docs/src/project/open-sourcing.md → "Accounts, keys & credentials"):
 #   - GHCR: none — uses the automatic GITHUB_TOKEN (needs `packages: write`, set below).
-#   - crates.io: set repo secret CARGO_REGISTRY_TOKEN, OR configure Trusted Publishing and
-#     drop the token line. The publish job is skipped automatically if the secret is absent.
+#   - crates.io (ears-classifier only): set repo variable PUBLISH_CRATES=true, plus the repo
+#     secret CARGO_REGISTRY_TOKEN or Trusted Publishing. Without PUBLISH_CRATES the job is skipped.
 
 on:
   push:
@@ -359,8 +361,8 @@ jobs:
     name: publish ears-classifier to crates.io
     needs: tag
     runs-on: ubuntu-latest
-    # Only runs if you've added the CARGO_REGISTRY_TOKEN secret. Remove this guard if you
-    # switch to Trusted Publishing (OIDC), which needs no secret.
+    # Only runs once the repo variable PUBLISH_CRATES is `true`; it then needs the
+    # CARGO_REGISTRY_TOKEN secret, or Trusted Publishing (OIDC), which needs no secret.
     if: ${{ vars.PUBLISH_CRATES == 'true' }}
     defaults:
       run:

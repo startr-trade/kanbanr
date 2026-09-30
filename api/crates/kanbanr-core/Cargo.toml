@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Engine for kanbanr: YAML/markdown store, dispatch router, git-backed commits, validation"
+# kanbanr ships as release archives, installers and an image — never as a crate (FEAT-024).
+publish = false
 
 [dependencies]
 # Extracted and published separately (FEAT-092): the EARS/ISO vocabulary is not kanbanr-specific.

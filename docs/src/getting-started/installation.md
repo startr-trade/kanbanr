@@ -197,9 +197,10 @@ make install       # builds the SPA, installs the binary, links the Claude skill
 
 `cargo install --path api/crates/kanbanr-cli` on its own works too, but without a built `web/dist`
 present it embeds no monitor — `kanbanr serve` then says so at startup and tells you what to do.
-That is also why **kanbanr is not published to crates.io with the UI**: a published crate cannot
-carry the built assets without committing generated files to the repository, so the archive and the
-installer are the supported way to get a complete binary.
+That is also why **kanbanr is not published to crates.io**: a published crate cannot carry the
+built assets without committing generated files to the repository, so the archive and the installer
+are the supported way to get a complete binary. (The one crate that is published is
+`ears-classifier`, the standalone EARS library kanbanr uses.)
 
 ## Next
 

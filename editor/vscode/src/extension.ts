@@ -75,12 +75,12 @@ function runKanbanr(args: string[]): Promise<RunResult> {
 /**
  * Translate a child_process error into a friendly message. The common case is
  * ENOENT — the binary is not installed / not on PATH — for which we point the
- * user at `cargo install kanbanr`.
+ * user at the release installer (kanbanr is not on crates.io).
  */
 function describeRunError(error: unknown): string {
   const err = error as NodeJS.ErrnoException;
   if (err && err.code === "ENOENT") {
-    return `The 'kanbanr' binary was not found on your PATH. Install it with 'cargo install kanbanr', then reload the window.`;
+    return `The 'kanbanr' binary was not found on your PATH. Install it from https://github.com/startr-trade/kanbanr/releases (the install.sh / install.ps1 installer), then reload the window.`;
   }
   return `kanbanr command failed: ${err?.message ?? String(error)}`;
 }
