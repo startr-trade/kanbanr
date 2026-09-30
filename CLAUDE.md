@@ -12,8 +12,9 @@ The board is the system of record for scope, reasoning, progress and documentati
 - `G-2` Every work item records why it exists and how it will be verified
 - `G-3` Nothing substantial gets built before its reasoning is agreed
 - `G-4` Any line of code can be traced back to the requirement and goal it serves
-- `G-5` The tool stays low-friction enough that it is never worth bypassing
+- `G-5` The tool stays low-friction enough that it is never worth bypassing — getting it, keeping it current, and finding out how it works included
 - `G-0` The system stays operable and maintainable
+- `G-6` What is installed is what was built, and can be shown to be
 
 **Deliberately out of scope** — do not propose these as gaps:
 
