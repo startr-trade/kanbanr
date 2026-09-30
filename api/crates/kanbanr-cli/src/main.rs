@@ -2737,6 +2737,32 @@ fn scm_context(cli: &Cli, client: &Backend) -> anyhow::Result<Context> {
     })
 }
 
+/// [`scm_context`] for a directory other than the one this process runs in (FEAT-127): the repo
+/// at `dir`, judged against the board *its* `.kanbanr` marker names. A folder with no marker is not
+/// a kanbanr project, so this fails and the guard stays out of it.
+fn scm_context_in(dir: &Path) -> anyhow::Result<Context> {
+    // Resolved on disk first: the marker search walks up the path as written, and
+    // `session/../other` passes through `session` — whose marker is the wrong one.
+    let dir = &project::normalize(dir);
+    let home = project::home_dir();
+    project::find_marker(dir, home.as_deref())
+        .ok_or_else(|| anyhow::anyhow!("{} is not tracked with kanbanr", dir.display()))?;
+    let env_project = std::env::var("KANBANR_PROJECT").ok();
+    let env_data = std::env::var("KANBANR_DATA_DIR").ok();
+    let p = project::resolve_project_in(None, env_project.as_deref(), dir, home.as_deref())
+        .ok_or_else(|| anyhow::anyhow!("could not determine the project of {}", dir.display()))?;
+    let data_dir = project::resolve_data_dir_in(None, env_data.as_deref(), dir, home.as_deref());
+    let project = get_project(&Backend::new(data_dir.path), &p)?;
+    let root = scm::repo_root_in(dir)
+        .ok_or_else(|| anyhow::anyhow!("{} is not inside a git repository", dir.display()))?;
+    let branch = scm::current_branch(&root);
+    Ok(Context {
+        project,
+        root,
+        branch,
+    })
+}
+
 /// The item the current branch is about. This is the whole reason the branch rule exists: with it,
 /// nothing else has to ask what is being worked on.
 fn branch_item(ctx: &Context) -> Option<String> {
@@ -2770,7 +2796,7 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
             Ok(())
         }
         GitCmd::CheckMsg { file } => run_check_msg(cli, client, file),
-        GitCmd::Guard => run_guard(cli, client),
+        GitCmd::Guard => run_guard(cli, Some(client)),
         GitCmd::CheckBranch => run_check_branch(cli, client),
         GitCmd::Status => {
             let ctx = scm_context(cli, client)?;
@@ -2801,7 +2827,9 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
 ///
 /// It only ever denies a `git commit`. Anything it cannot parse, and any repo without a board,
 /// passes silently — a guard that blocks what it does not understand would be turned off.
-fn run_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
+///
+/// `client` is the board of the folder the session runs in, or `None` where there is none.
+fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     use std::io::Read;
     let mut raw = String::new();
     std::io::stdin().read_to_string(&mut raw)?;
@@ -2835,7 +2863,26 @@ fn run_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         );
         return Ok(());
     }
-    let Ok(ctx) = scm_context(cli, client) else {
+    // Judge the repository the commit actually lands in (FEAT-127). `cd ../other && git commit`
+    // was refused by the rules of the session's repository — its branch, its board. A directory
+    // the guard cannot work out is left to the git hooks in whatever repository it turns out to be.
+    let base = payload["cwd"]
+        .as_str()
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default();
+    let Some(target) = commit_directory(command, &base, project::home_dir().as_deref()) else {
+        return Ok(());
+    };
+    let ctx = if project::normalize(&target) == project::normalize(&base) {
+        match client {
+            Some(client) => scm_context(cli, client),
+            None => return Ok(()),
+        }
+    } else {
+        scm_context_in(&target)
+    };
+    let Ok(ctx) = ctx else {
         return Ok(()); // not a kanbanr project: not this guard's business
     };
     // Completing a merge is the intended way work reaches the default branch (FEAT-094).
@@ -3013,6 +3060,93 @@ fn commit_invocation(command: &str) -> Option<&str> {
         }
         false
     })
+}
+
+/// The directory the `git commit` in this command line runs in (FEAT-127): `base`, moved by each
+/// `cd <dir>` before the commit and by the commit's own `git -C <dir>` options, in order.
+///
+/// `None` when a step cannot be worked out without running the shell — a variable, a command
+/// substitution, `cd -` — so the guard says nothing rather than judge the wrong repository.
+fn commit_directory(command: &str, base: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    let resolve = |from: &Path, to: &str| -> Option<PathBuf> {
+        if to == "-" || to.contains('$') || to.contains('`') {
+            return None;
+        }
+        if to == "~" {
+            return home.map(Path::to_path_buf);
+        }
+        if let Some(rest) = to.strip_prefix("~/") {
+            return home.map(|h| h.join(rest));
+        }
+        Some(from.join(to))
+    };
+    let mut dir = base.to_path_buf();
+    for part in command.split("&&") {
+        let words = shell_words(part);
+        let mut words = words
+            .iter()
+            .map(String::as_str)
+            .skip_while(|w| *w == "sudo");
+        match words.next() {
+            Some("cd") => {
+                dir = match words.next() {
+                    Some(to) => resolve(&dir, to)?,
+                    None => home?.to_path_buf(),
+                };
+            }
+            Some(git) if git.ends_with("git") => {
+                let mut at = dir.clone();
+                while let Some(word) = words.next() {
+                    match word {
+                        "-C" => at = resolve(&at, words.next()?)?,
+                        "-c" => {
+                            words.next();
+                        }
+                        "commit" => return Some(at),
+                        w if w.starts_with('-') => {}
+                        _ => break,
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(dir)
+}
+
+/// The words of one simple shell command, with quotes removed and quoted text kept (`cd "a b"` is
+/// two words). Only what [`commit_directory`] needs: no expansion, no escapes beyond `\"`.
+fn shell_words(part: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    let mut prev = '\0';
+    for c in part.chars() {
+        match quote {
+            Some(q) if c == q && prev != '\\' => quote = None,
+            Some(_) => current.push(c),
+            None if c == '"' || c == '\'' => {
+                quote = Some(c);
+                in_word = true;
+            }
+            None if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut current));
+                    in_word = false;
+                }
+            }
+            None => {
+                current.push(c);
+                in_word = true;
+            }
+        }
+        prev = c;
+    }
+    if in_word {
+        words.push(current);
+    }
+    words
 }
 
 /// Does this command line ask git to skip the commit hooks?
@@ -4527,6 +4661,11 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     // board in a project during a read-only setup interview. Hooks stay silent instead — they run
     // in every folder, and one without a board is simply not their business.
     if let Some(dir) = no_board_here(cli) {
+        // The commit guard still has a job here (FEAT-127): `cd ../repo && git commit` from a
+        // folder with no board commits in a repository that may well have one.
+        if matches!(cli.command, Command::Git(GitCmd::Guard)) {
+            return run_guard(cli, None);
+        }
         if runs_from_a_hook(&cli.command) {
             return Ok(());
         }
@@ -6833,6 +6972,62 @@ fn print_board(project: &Project) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FEAT-127: preparing the public repository, `cd kanbanr-public && git commit …` was refused
+    /// as "would commit straight to master" — the branch of the session's repository, not the one
+    /// the commit landed in. The guard now follows the command to the repository it commits in.
+    #[test]
+    fn the_guard_judges_the_repository_the_command_commits_in() {
+        let base = Path::new("/work/session");
+        let home = Some(Path::new("/home/someone"));
+        let at = |c: &str| commit_directory(c, base, home);
+
+        // No change of directory: the session's own repository, as before.
+        assert_eq!(at("git commit -m x"), Some(base.to_path_buf()));
+        // A `cd` before the commit moves it, relative or absolute, quoted or not.
+        assert_eq!(
+            at("cd ../public && git add -A && git commit -m x"),
+            Some(base.join("../public"))
+        );
+        assert_eq!(at("cd /srv/other && git commit"), Some("/srv/other".into()));
+        assert_eq!(
+            at(r#"cd "/srv/a b" && git commit"#),
+            Some("/srv/a b".into())
+        );
+        assert_eq!(
+            at("cd ~/code && git commit"),
+            Some("/home/someone/code".into())
+        );
+        // `git -C` moves only the commit it is given to, and builds on any earlier `cd`.
+        assert_eq!(
+            at("cd sub && git -C inner commit -m x"),
+            Some(base.join("sub").join("inner"))
+        );
+        assert_eq!(
+            at("git -C /srv/x status && git commit"),
+            Some(base.to_path_buf())
+        );
+        // What only the shell could work out is not guessed at.
+        assert_eq!(at("cd $REPO && git commit"), None);
+        assert_eq!(at("cd - && git commit"), None);
+
+        // A repository with no `.kanbanr` marker has no board to judge against: the guard stays
+        // out of it instead of applying the session's rules there.
+        // Reached as `session/../other`, as `cd ../other` produces: the path walks through the
+        // session's folder, and the session's marker must not be mistaken for the other repo's.
+        let tmp = std::env::temp_dir().join(format!("kanbanr-guard-{}", std::process::id()));
+        let (session, other) = (tmp.join("session"), tmp.join("other"));
+        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(session.join(".kanbanr"), "project: session\n").unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&other)
+            .status();
+        assert!(scm_context_in(&other).is_err());
+        assert!(scm_context_in(&session.join("../other")).is_err());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     /// FEAT-082: the guard located the message with `find("-m")` — two characters, anywhere in the
     /// command line. A commit passing its message by file was refused because the match landed in
