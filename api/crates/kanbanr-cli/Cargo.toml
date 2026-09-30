@@ -36,7 +36,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # ceiling ADR-0009 set.
 ureq = { version = "2", default-features = false, features = ["tls", "json", "gzip"] }
 # The running binary's own checksum, compared against what the release publishes (FEAT-088/R-1).
-sha2 = "0.10"
+sha2 = "0.11"
 # Unpack a release archive in memory during self-update (FEAT-088); flate2 is already in the
 # tree via the server crate, which gzips the embedded monitor.
 tar = "0.4"
