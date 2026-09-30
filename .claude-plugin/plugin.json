@@ -18,7 +18,7 @@
     "  - hooks (object|string): inline hook config (used here) OR a path to a",
     "    hooks file. Hook `command` paths MUST use ${CLAUDE_PLUGIN_ROOT} so they",
     "    resolve inside the installed/cached plugin dir (NEVER hardcode absolute",
-    "    paths like /home/someone/...). ${CLAUDE_PLUGIN_ROOT} expands to this plugin's",
+    "    paths like /home/you/...). ${CLAUDE_PLUGIN_ROOT} expands to this plugin's",
     "    root directory at runtime.",
     "",
     "  NOTE on `_comment*` keys: real plugin.json is strict JSON and ignores",
