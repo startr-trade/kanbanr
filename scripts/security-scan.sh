@@ -71,9 +71,9 @@ codeql)
     for lang in rust javascript-typescript actions; do
         "$codeql" database create "$out/db-$lang" --language="$lang" --build-mode=none \
             --source-root="$tree" --codescanning-config="$root/.github/codeql/codeql-config.yml" \
-            --overwrite >/dev/null
+            --overwrite >"$out/$lang.log" 2>&1 || { cat "$out/$lang.log"; exit 1; }
         "$codeql" database analyze "$out/db-$lang" --format=sarif-latest \
-            --output="$out/$lang.sarif" >/dev/null
+            --output="$out/$lang.sarif" >>"$out/$lang.log" 2>&1 || { cat "$out/$lang.log"; exit 1; }
         n=$(jq '[.runs[].results[]] | length' "$out/$lang.sarif")
         echo "codeql $lang: $n result(s)"
         if [ "$n" -gt 0 ]; then
