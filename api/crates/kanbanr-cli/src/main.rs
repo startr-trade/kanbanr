@@ -2172,7 +2172,12 @@ fn board_path_for(path: &str, root: &Path, cwd: &Path) -> Option<String> {
             other => resolved.push(other),
         }
     }
-    let relative = resolved.strip_prefix(root).ok()?;
+    // Then resolve on disk as far as the path exists (FEAT-129). The root comes from the working
+    // directory, which the OS reports with symlinks resolved; the file path arrives as Claude Code
+    // spelled it. On macOS the temp folder is `/var/…`, a symlink to `/private/var/…`, so the two
+    // never shared a prefix and a loose note there was waved through as "outside the repository".
+    let (resolved, root) = (project::normalize(&resolved), project::normalize(root));
+    let relative = resolved.strip_prefix(&root).ok()?;
     let relative: Vec<String> = relative
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
@@ -7285,6 +7290,38 @@ Refs: kanbanr:FEAT-082/R-1""#;
         // Inside it, the rule is unchanged: loose notes are refused, deliverables are not.
         assert!(board_path_for("/work/shop/NOTES.md", root, root).is_some());
         assert_eq!(board_path_for("/work/shop/README.md", root, root), None);
+    }
+
+    /// FEAT-129: on macOS the temp folder is `/var/…`, a symlink to `/private/var/…`. The root is
+    /// read from the working directory with symlinks resolved; the file path is not. They shared no
+    /// prefix, so a loose note inside the repository counted as outside it and was let through —
+    /// which only a CI runner, not a Linux laptop, showed.
+    #[cfg(unix)]
+    #[test]
+    fn the_docs_guard_follows_a_symlinked_folder() {
+        let base = std::env::temp_dir().join(format!("kanbanr-guard-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let real = base.join("real");
+        std::fs::create_dir_all(real.join("shop")).unwrap();
+        std::os::unix::fs::symlink(&real, base.join("link")).unwrap();
+        let root = std::fs::canonicalize(real.join("shop")).unwrap();
+
+        // Spelled through the link, it is still the repository's file: refused with the same
+        // suggestion as when spelled through the real path.
+        let through_link = base.join("link/shop/NOTES.md");
+        let through_real = real.join("shop/NOTES.md");
+        let suggestion = board_path_for(through_real.to_str().unwrap(), &root, &root);
+        assert!(suggestion.is_some());
+        assert_eq!(
+            board_path_for(through_link.to_str().unwrap(), &root, &root),
+            suggestion
+        );
+        // A deliverable stays allowed, and an escape through `..` stays outside.
+        let readme = base.join("link/shop/README.md");
+        assert_eq!(board_path_for(readme.to_str().unwrap(), &root, &root), None);
+        let escape = base.join("link/shop/../elsewhere/PLAN.md");
+        assert_eq!(board_path_for(escape.to_str().unwrap(), &root, &root), None);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// FEAT-111 R-2: the suggestion is a board path someone can actually run — built from the

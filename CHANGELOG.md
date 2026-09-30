@@ -180,6 +180,12 @@ reported against it.
 
 ### Fixed
 
+- **CI failed on `main` on all three platforms (FEAT-129).** The `rust` job tested a binary with
+  no monitor inside, because it never built `web/dist`; it now builds the web app first. The docs
+  guard compared a file path it had not resolved against a repository root it had, so on macOS —
+  where the temp folder is a symlink — a loose note inside the repository was let through; both are
+  now resolved on disk before comparing. And every binary that links libgit2 now also links
+  Windows' `advapi32`, which the vendored libgit2 needs and the current MSVC no longer adds itself.
 - **Board commits went out as `kanbanr <kanbanr@local>` (FEAT-128).** A new data repository was
   given that placeholder identity in its own git config and committed with it before
   `init --author/--email` recorded anyone, so every board's first commit was nobody's; a board set

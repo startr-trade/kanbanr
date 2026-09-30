@@ -68,6 +68,24 @@ jobs:
           cmake --version
           perl --version
 
+      # --- The monitor, embedded into the binary under test (FEAT-129/R-1) ---
+      # kanbanr-server's build.rs embeds web/dist when it exists and embeds nothing when it does
+      # not (ADR-0009). Without this, every test ran against a monitor-less binary — the one
+      # thing a release never ships — and the test that asserts the monitor is served failed here
+      # while passing on any machine that had built the web app once.
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build the monitor (web/dist)
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
       # --- Lint + format checks: run on Ubuntu only to keep the matrix fast. ---
 
       - name: Check formatting (ubuntu only)
