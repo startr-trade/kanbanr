@@ -208,7 +208,6 @@ def other_legs(job: dict) -> list[str]:
 def run_workflow_steps() -> None:
     version = workspace_version()
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
-    seen: dict[tuple[str, str, str], str] = {}
     for wf_name, jobs_plan in PLAN.items():
         wf = yaml.safe_load((TREE / ".github/workflows" / wf_name).read_text())
         wf_env = {k: str(v) for k, v in (wf.get("env") or {}).items()}
@@ -216,6 +215,13 @@ def run_workflow_steps() -> None:
             plan = jobs_plan.get(job_id, {})
             for leg in other_legs(job):
                 not_verified.append(f"{wf_name} {job_id}: the {leg} leg")
+            # Each job starts from a fresh checkout on GitHub, so it does here too: one job's
+            # outputs (a regenerated chapter, a built web/dist) must not leak into the next —
+            # a release build then reported itself "-dirty" because a docs step had synced a file.
+            # The build caches survive, as the runner's caches do.
+            subprocess.run(["git", "checkout", "-q", "--", "."], cwd=TREE, check=True)
+            subprocess.run(["git", "clean", "-fdqx", "-e", "api/target", "-e", "web/node_modules"],
+                           cwd=TREE, check=True)
             job_env = {**wf_env, **{k: str(v) for k, v in (job.get("env") or {}).items()}}
             job_wd = ((job.get("defaults") or {}).get("run") or {}).get("working-directory")
             for step in job.get("steps", []):
@@ -250,10 +256,6 @@ def run_workflow_steps() -> None:
                     say(label, False, str(err))
                     continue
                 wd = TREE / (step.get("working-directory") or job_wd or ".")
-                key = (str(wd), script, step.get("shell", "bash"))
-                if key in seen:
-                    say(label, True)  # the identical step already ran (and passed) as `seen[key]`
-                    continue
                 with tempfile.TemporaryDirectory() as scratch:
                     env = {
                         **os.environ, **job_env, **step_env,
@@ -268,8 +270,6 @@ def run_workflow_steps() -> None:
                                       PWSH, "pwsh", "-NoProfile", "-Command", script], TREE)
                     else:
                         ok, out = sh(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script], wd, env)
-                if ok:
-                    seen[key] = label
                 say(label, ok, out)
             for name in plan:
                 if not any(s.get("name") == name for s in job.get("steps", [])):
