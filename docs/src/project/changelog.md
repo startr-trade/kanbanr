@@ -189,6 +189,8 @@ reported against it.
   linked, every command then overflowed the 1 MiB stack Windows gives a program's main thread
   (`--version` included, in a debug build); the CLI now runs on a thread with a 16 MiB stack on
   every platform.
+  The release workflow also named the retired `macos-13` runner for the Intel macOS build, which
+  would have left that job waiting for a runner that no longer exists; it now uses `macos-15-intel`.
 - **Board commits went out as `kanbanr <kanbanr@local>` (FEAT-128).** A new data repository was
   given that placeholder identity in its own git config and committed with it before
   `init --author/--email` recorded anyone, so every board's first commit was nobody's; a board set
