@@ -16,13 +16,14 @@ DATA_DIR ?= $(shell kanbanr where 2>/dev/null || echo $(CURDIR)/../$(notdir $(CU
 SKILLS_DIR ?= $(HOME)/.claude/skills
 IMAGE ?= kanbanr:latest
 
-.PHONY: help build test itest cli web check-docs install-cli install-skill install serve docker-build docker-up docker-down screenshots clean
+.PHONY: help build test itest ci cli web check-docs install-cli install-skill install serve docker-build docker-up docker-down screenshots clean
 
 help:
 	@echo "Targets:"
 	@echo "  build         Build the Rust workspace + web SPA"
 	@echo "  test          Unit + Docker-less integration (CLI local writes + 'kanbanr serve' reads)"
 	@echo "  itest         Packaging smoke: build the image + run the testcontainers test"
+	@echo "  ci            Every CI check that can run off GitHub, before a push (scripts/ci-local.sh)"
 	@echo "  install-cli   cargo install the one 'kanbanr' binary onto your PATH"
 	@echo "  install-skill Symlink skill/kanbanr into ~/.claude/skills/"
 	@echo "  install       install-cli + install-skill"
@@ -50,6 +51,12 @@ cli:
 
 web:
 	cd web && npm install && npm run build
+
+# Every CI check that can run off GitHub, on a clean copy of the tracked tree, read from the
+# workflow files themselves (FEAT-131). Run it before every push; it ends by listing what only
+# GitHub can verify (the macOS and Windows legs, uploads, publishing).
+ci:
+	scripts/ci-local.sh
 
 # Every mermaid diagram in the docs parses with the library the monitor renders them with. A
 # diagram that fails renders as nothing, which reads as a missing image rather than an error.
