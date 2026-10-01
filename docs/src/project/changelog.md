@@ -8,6 +8,15 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+#### kanbanr's own board is public, and the code points at it (FEAT-136)
+
+The board kanbanr is developed on is published at `startr-trade/kanbanr-board`, its history
+sanitised first. The README gains "Developed with kanbanr" — the charter, an item's definition and
+tests, the decisions, retros and lessons, commit trailers and `kanbanr why` — and the contributing
+chapter shows how to read the board. A committed `.kanbanr` points at `../kanbanr-board`, so a clone
+beside the board needs no setup, and `kanbanr claude sync` names the board's published address in
+the CLAUDE.md block once the board has a remote.
+
 #### Security scanning in CI, and one CI run per change (FEAT-130)
 
 - **CodeQL** (`codeql.yml`) analyses the Rust, the TypeScript (monitor and VS Code extension) and
