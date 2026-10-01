@@ -1,0 +1,17 @@
+/* The kanbanr lockup on the introduction page (FEAT-133). mdBook switches themes with a class on
+   <html> (light, rust; coal, navy, ayu), not with prefers-color-scheme, so a <picture> would follow
+   the OS rather than the theme the reader picked. Both lockups are in the page; the theme shows one. */
+.brand-lockup { margin: 0.5em 0 1.5em; }
+.brand-lockup img { max-width: 540px; width: 100%; height: auto; }
+.brand-lockup .on-dark { display: none; }
+html.coal .brand-lockup .on-light,
+html.navy .brand-lockup .on-light,
+html.ayu .brand-lockup .on-light { display: none; }
+html.coal .brand-lockup .on-dark,
+html.navy .brand-lockup .on-dark,
+html.ayu .brand-lockup .on-dark { display: inline; }
+/* The lockup already says "kanbanr": the page's heading stays for the table of contents, search and
+   screen readers, but is not drawn twice. */
+main h1:first-child:has(+ .brand-lockup) {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}

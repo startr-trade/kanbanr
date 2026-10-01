@@ -1,5 +1,10 @@
 # kanbanr
 
+<div class="brand-lockup">
+  <img class="on-light" src="images/brand/kanbanr-lockup-light.svg" alt="kanbanr — 看板, a system of record">
+  <img class="on-dark" src="images/brand/kanbanr-lockup-dark.svg" alt="kanbanr — 看板, a system of record">
+</div>
+
 A kanban board that is the **system of record** for Claude-driven development. Claude manages it
 through a [skill](using/everyday.md) that drives the `kanbanr` CLI, and a read-only web monitor
 shows what is happening live while you work.
