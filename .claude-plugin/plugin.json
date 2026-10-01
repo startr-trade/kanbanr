@@ -31,7 +31,7 @@
   "author": {
     "name": "startr-trade / kanbanr maintainers"
   },
-  "homepage": "https://github.com/startr-trade/kanbanr",
+  "homepage": "https://kanbanr.startr.trade",
   "repository": "https://github.com/startr-trade/kanbanr",
   "license": "Apache-2.0",
   "keywords": ["kanbanr", "project-management", "kanban", "workflow", "system-of-record"],

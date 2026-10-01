@@ -180,7 +180,7 @@ make itest    # packaging smoke (testcontainers): the image boots and serves the
 
 The full documentation is an mdBook — searchable, with every page in one table of contents:
 
-**<https://startr-trade.github.io/kanbanr>**
+**<https://kanbanr.startr.trade>**
 
 Or read it from this repository under [`docs/src/`](docs/src/SUMMARY.md), or build it locally with
 `mdbook serve docs`.
