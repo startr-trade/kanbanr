@@ -1,7 +1,7 @@
 //! Local (serverless) mode: the real CLI binary operates on the data folder directly with NO
 //! server running. Runs in plain `cargo test` against an ephemeral data dir under the build output.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn cli() -> PathBuf {
@@ -269,7 +269,8 @@ fn cli_init_puts_the_board_next_to_the_git_repo_and_finds_it_from_subfolders() {
         !stdout.contains('⚠'),
         "unexpected nesting warning: {stdout}"
     );
-    let board = std::fs::canonicalize(base.join("code").join("app.kanbanr")).unwrap();
+    // Resolved the way the CLI resolves paths: on Windows, without canonicalize's `\\?\` prefix.
+    let board = kanbanr_core::project::normalize(&base.join("code").join("app.kanbanr"));
     assert!(board.join("projects/app/config.yaml").is_file());
     assert!(board.join(".git").is_dir(), "board is its own git repo");
     assert!(!repo.join("data").exists(), "no board inside the project");
@@ -629,7 +630,8 @@ fn cli_init_registers_claude_code_hooks_once_and_respects_no_hooks() {
         v["hooks"]["SessionStart"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap()
-            .starts_with(home.to_str().unwrap()),
+            // On Windows the command is `powershell … -File "<script>"`, so the path is inside it.
+            .contains(home.to_str().unwrap()),
         "the project's settings point at the machine's scripts, not copies"
     );
     assert!(
@@ -2055,7 +2057,16 @@ fn cli_claude_sync_and_the_docs_guard() {
 
     // Hooks register for THIS project, not the machine.
     let installed = run(&["hooks", "install"]);
-    assert!(installed.contains(".claude/settings.json"), "{installed}");
+    // Named the platform's way: `.claude\settings.json` on Windows.
+    let settings_shown = Path::new(".claude").join("settings.json");
+    assert!(
+        installed.contains(&*settings_shown.to_string_lossy()),
+        "{installed}"
+    );
+    assert!(
+        !installed.contains(r"\\?\"),
+        "no verbatim prefix: {installed}"
+    );
     assert!(
         work.join(".claude").join("settings.json").exists(),
         "the project's settings file is the one that was written"
