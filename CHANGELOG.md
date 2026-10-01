@@ -6,6 +6,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-01
+
+The first public release.
+
 ### Added
 
 #### One install: the program carries its skill (FEAT-141)
@@ -545,11 +549,7 @@ reported against it.
   extension and the workflows. Dependencies are updated deliberately, and major upgrades are
   planned as board items.
 
-## [0.1.0] - Unreleased
-
-First public-candidate release.
-
-### Added
+### Added: the foundation
 - One binary `kanbanr`: a local, git-backed CLI **writer** plus `kanbanr serve`, a read-only
   view daemon (localhost, no accounts) over the same folder.
 - `kanbanr-core` engine: YAML/markdown store, `dispatch` router, vendored-libgit2 commits +
