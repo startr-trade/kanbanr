@@ -225,6 +225,12 @@ reported against it.
 
 ### Fixed
 
+- **The monitor rendered board markdown unsanitised (FEAT-140).** CodeQL's first run on the public
+  repository flagged a Mermaid diagram inserted as raw HTML; behind it, every spec and board
+  document went into the page as `marked` produced it. A shared board's documents are written by
+  whoever can push to it, and with `--allow-writes` the page can approve, ratify and sign off, so a
+  pushed document could act as the viewer. Markdown and diagrams now pass through DOMPurify, and
+  `npm run check:markdown` (in CI) renders a hostile document through the same code.
 - **A Scrum sprint burned down nothing until release day (FEAT-137).** The burndown counted an item
   finished only at the workflow's end status, which in the `scrum` preset is Released. A stage's
   gate can now say `done: true`; the `scrum` preset marks Done, its Definition of Done, so items
