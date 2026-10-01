@@ -78,7 +78,10 @@ Paste it at GitHub → Settings → **SSH and GPG keys** → New SSH key. Test: 
    **publish-update** (plus **publish-new** for the very first publish); set an expiry.
 3. Manual publish: `cargo login` then paste it (stored in `~/.cargo/credentials.toml` — never commit).
 4. Automated publish: add it as the `CARGO_REGISTRY_TOKEN` secret **and** set repo variable
-   `PUBLISH_CRATES=true` (the release workflow's crates job is guarded on that). **Better:** skip the
+   `PUBLISH_CRATES=true` (the release workflow's crates job is guarded on that). It must be a
+   **variable**, not a secret: `vars.PUBLISH_CRATES` cannot read a secret, and the job is then
+   skipped without a word — `gh variable set PUBLISH_CRATES --body true`. `make ci` fails when a
+   name the workflows read with `vars.` exists only as a secret. **Better:** skip the
    token and set up **Trusted Publishing** on crates.io (your crate → Settings → Trusted Publishing →
    add `startr-trade/kanbanr` + the `release.yml` workflow), then delete the token line. The job
    publishes `ears-classifier` only; every kanbanr crate declares `publish = false`, so a stray
@@ -326,8 +329,13 @@ manual steps only you can do:
 2. Run the **secrets sweep** (§0); remove `data/security.yaml`; decide what `data/` to publish.
 3. `git init` (if needed), commit, push, make the repo **public**.
 4. Set up crates.io publishing for `ears-classifier` (token **or** Trusted Publishing, plus
-   `PUBLISH_CRATES=true`); its first publish reserves the name. kanbanr itself is not published there.
+   the `PUBLISH_CRATES=true` *variable*); its first publish reserves the name. kanbanr itself is not
+   published there.
 5. `git tag v0.1.0 && git push origin v0.1.0` → the release workflow builds binaries + the GHCR image.
+   A failed run is fixed on `main`, never by re-running its jobs: a re-run uses the workflow file of
+   the tagged commit, so it repeats the failure. Move the tag onto the fix instead —
+   `git tag -d v0.1.0 && git push origin :refs/tags/v0.1.0`, then tag and push again; the release
+   step updates the existing release and replaces its assets.
 6. Add screenshots to the README (`make screenshots`), then announce.
 
 Everything else (Open VSX, npm reservation, MCP, badges polish) can follow.

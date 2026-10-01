@@ -324,6 +324,58 @@ def lint_workflows() -> None:
             missing.append(ref)
     say(f"workflows: all {len(refs)} action references resolve upstream", not missing,
         "unresolvable: " + ", ".join(missing))
+    container_steps_are_posix()
+    vars_are_variables()
+
+
+def container_steps_are_posix() -> None:
+    """A job in a `container:` runs its steps with `sh`, not bash, unless it says otherwise.
+
+    On Debian and Ubuntu that is dash, which stops on a bashism such as `${GITHUB_SHA:0:12}` —
+    how v0.1.0's installer check failed in public (FEAT-143). actionlint shellchecks every run
+    block as bash, so it cannot see this; here those blocks are shellchecked as POSIX sh.
+    """
+    problems = []
+    for wf in sorted((TREE / ".github/workflows").glob("*.yml")):
+        doc = yaml.safe_load(wf.read_text())
+        wf_shell = ((doc.get("defaults") or {}).get("run") or {}).get("shell")
+        for job_id, job in (doc.get("jobs") or {}).items():
+            if not job.get("container"):
+                continue
+            job_shell = ((job.get("defaults") or {}).get("run") or {}).get("shell") or wf_shell
+            for step in job.get("steps", []):
+                if "run" not in step or (step.get("shell") or job_shell or "sh").split()[0] != "sh":
+                    continue
+                script = re.sub(r"\$\{\{.*?\}\}", "x", step["run"])
+                with tempfile.NamedTemporaryFile("w", suffix=".sh") as f:
+                    f.write(script)
+                    f.flush()
+                    ok, out = sh(["shellcheck", "-s", "sh", "-S", "warning", f.name], TREE)
+                if not ok:
+                    problems.append(f"{wf.name} {job_id} / {step.get('name')}:\n{out}")
+    say("workflows: container-job steps are POSIX sh (their default shell)", not problems,
+        "\n".join(problems))
+
+
+def vars_are_variables() -> None:
+    """`vars.NAME` reads a repository *variable*; a secret of the same name is invisible to it.
+
+    PUBLISH_CRATES created as a secret silently skipped the crates.io publish of v0.1.0
+    (FEAT-143). Only a name held as a secret and not as a variable fails: an unset variable is
+    a switch left off on purpose.
+    """
+    names = sorted(set(re.findall(r"\bvars\.([A-Za-z_][A-Za-z0-9_]*)",
+                                  "\n".join(p.read_text() for p in (TREE / ".github/workflows").glob("*.yml")))))
+    ok_v, variables = sh(["gh", "variable", "list", "-R", "startr-trade/kanbanr", "--json", "name", "-q", ".[].name"], TREE)
+    ok_s, secrets = sh(["gh", "secret", "list", "-R", "startr-trade/kanbanr", "--json", "name", "-q", ".[].name"], TREE)
+    if not (ok_v and ok_s):
+        say("workflows: vars.* are repository variables, not secrets", False,
+            "could not list the repository's variables and secrets with gh:\n" + variables + secrets)
+        return
+    wrong = [n for n in names if n in secrets.split() and n not in variables.split()]
+    say(f"workflows: vars.* are repository variables, not secrets ({', '.join(names) or 'none'})", not wrong,
+        "held as a secret, so `vars.` reads it as empty: " + ", ".join(wrong)
+        + " — create it with `gh variable set NAME --body …` and delete the secret")
 
 
 def uses_equivalents() -> None:

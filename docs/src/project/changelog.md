@@ -235,6 +235,12 @@ reported against it.
 
 ### Fixed
 
+- **The release reported a correct binary as wrong, and skipped crates.io (FEAT-143).** The installer
+  check ran in a container, where steps run under `sh` (dash), and cut the commit to 12 characters
+  with a bash-only expansion — so v0.1.0 published correctly and then said its binary did not name
+  its commit. The check is POSIX now. `make ci` shellchecks every container-job step as `sh`, and
+  fails when a workflow reads a `vars.` setting the repository holds only as a secret, which is how
+  the crates.io publish was skipped without a word.
 - **A board could not reach GitHub, and its batched push never fired (FEAT-142).** The git library
   was built without its network transports, so `kanbanr sync` to an SSH or HTTPS remote failed with
   "unsupported URL protocol" — and then reported "nothing to sync", because a failed push cleared
