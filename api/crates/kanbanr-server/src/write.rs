@@ -15,37 +15,7 @@ use kanbanr_core::{Store, activity, dispatch, eventing, git};
 use serde_json::Value;
 use std::path::Path;
 
-/// Push policy for the daemon, mirroring the CLI's (`KANBANR_PUSH`). Default debounced so the
-/// network stays off the per-write hot path; commits are always local-first.
-#[derive(Clone, Copy, Debug)]
-pub enum PushPolicy {
-    Auto,
-    Debounce { every: u32 },
-    Off,
-}
-
-const DEBOUNCE_DEFAULT_EVERY: u32 = 10;
-
-impl PushPolicy {
-    pub fn from_env() -> Self {
-        match std::env::var("KANBANR_PUSH").ok().as_deref() {
-            Some("auto") => PushPolicy::Auto,
-            Some("off") => PushPolicy::Off,
-            Some(s) if s.starts_with("debounce") => {
-                let every = s
-                    .split(':')
-                    .nth(1)
-                    .and_then(|n| n.parse().ok())
-                    .filter(|n| *n > 0)
-                    .unwrap_or(DEBOUNCE_DEFAULT_EVERY);
-                PushPolicy::Debounce { every }
-            }
-            _ => PushPolicy::Debounce {
-                every: DEBOUNCE_DEFAULT_EVERY,
-            },
-        }
-    }
-}
+pub use kanbanr_core::git::PushPolicy;
 
 /// Outcome of a daemon write: the response body, plus any push warnings to surface to the caller.
 pub struct WriteOutcome {
@@ -69,39 +39,6 @@ fn with_write_lock<T>(data_dir: &Path, f: impl FnOnce() -> T) -> std::io::Result
     Ok(result)
 }
 
-/// Apply the push policy after a successful local commit (mirrors the CLI). The commit is already
-/// durable, so deferring a push never loses work. Returns push warnings (empty unless a push ran).
-fn after_commit(
-    data_dir: &Path,
-    policy: PushPolicy,
-    pending: &std::sync::atomic::AtomicU32,
-) -> Vec<String> {
-    use std::sync::atomic::Ordering;
-    match policy {
-        PushPolicy::Auto => push_now(data_dir, pending),
-        PushPolicy::Off => {
-            git::mark_unpushed(data_dir);
-            Vec::new()
-        }
-        PushPolicy::Debounce { every } => {
-            git::mark_unpushed(data_dir);
-            let n = pending.fetch_add(1, Ordering::SeqCst) + 1;
-            if n >= every {
-                push_now(data_dir, pending)
-            } else {
-                Vec::new()
-            }
-        }
-    }
-}
-
-fn push_now(data_dir: &Path, pending: &std::sync::atomic::AtomicU32) -> Vec<String> {
-    let warnings = git::sync_all(data_dir);
-    git::clear_unpushed(data_dir);
-    pending.store(0, std::sync::atomic::Ordering::SeqCst);
-    warnings
-}
-
 /// The data-route write recipe: dispatch + activity + local commit + debounced push, serialized by
 /// the advisory write lock. `method` is one of POST/PUT/PATCH/DELETE. This is the daemon's only
 /// mutation entry point and it reuses `dispatch::dispatch` exactly like the CLI. Returns the
@@ -109,7 +46,6 @@ fn push_now(data_dir: &Path, pending: &std::sync::atomic::AtomicU32) -> Vec<Stri
 pub fn write(
     store: &Store,
     data_dir: &Path,
-    pending: &std::sync::atomic::AtomicU32,
     policy: PushPolicy,
     method: &str,
     path: &str,
@@ -138,7 +74,10 @@ pub fn write(
             // responsibility for now, and a daemon-side sender slots in after the commit.
             let events = eventing::record(store, data_dir, method, path, &out);
             if git::commit_local(data_dir, &msg) {
-                warnings = after_commit(data_dir, policy, pending);
+                // The board's policy, as the CLI applies it (FEAT-142): one rule, in core.
+                if let Some(outcome) = git::after_commit(data_dir, policy) {
+                    warnings = outcome.failures;
+                }
             }
             eventing::deliver_all(data_dir, &events, &eventing::NullSender);
         }
@@ -151,8 +90,8 @@ pub fn write(
 }
 
 /// Explicit sync: push pending local commits regardless of policy (the daemon's `/sync` route).
-pub fn sync(data_dir: &Path, pending: &std::sync::atomic::AtomicU32) -> Vec<String> {
-    with_write_lock(data_dir, || push_now(data_dir, pending)).unwrap_or_default()
+pub fn sync(data_dir: &Path) -> git::SyncOutcome {
+    with_write_lock(data_dir, || git::push_pending(data_dir)).unwrap_or_default()
 }
 
 /// The project id from `/projects/<id>/...` (mirrors the CLI helper).
@@ -183,7 +122,6 @@ fn item_of(path: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use std::sync::atomic::AtomicU32;
 
     fn temp_dir(tag: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!(
@@ -206,12 +144,9 @@ mod tests {
     fn daemon_write_applies_and_commits() {
         let dir = temp_dir("apply");
         let store = Store::new(dir.clone());
-        let pending = AtomicU32::new(0);
-
         let out = write(
             &store,
             &dir,
-            &pending,
             PushPolicy::Debounce { every: 10 },
             "POST",
             "/projects",
@@ -239,11 +174,9 @@ mod tests {
     fn daemon_sync_clears_pending() {
         let dir = temp_dir("sync");
         let store = Store::new(dir.clone());
-        let pending = AtomicU32::new(0);
         write(
             &store,
             &dir,
-            &pending,
             PushPolicy::Off,
             "POST",
             "/projects",
@@ -251,7 +184,7 @@ mod tests {
         )
         .unwrap();
         assert!(git::has_unpushed(&dir));
-        let _ = sync(&dir, &pending);
+        let _ = sync(&dir);
         assert!(!git::has_unpushed(&dir), "sync cleared the marker");
         std::fs::remove_dir_all(&dir).ok();
     }

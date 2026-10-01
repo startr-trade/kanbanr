@@ -19,4 +19,4 @@ time.workspace = true
 # Git-backed data folder (shared by the server and the CLI's local mode). vendored-libgit2 +
 # vendored-openssl compile the C deps from source and link them statically, so neither the build
 # host nor the runtime needs git/libgit2 installed.
-git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2", "vendored-openssl", "cred"] }
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2", "vendored-openssl", "ssh", "https"] }

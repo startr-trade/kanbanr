@@ -66,6 +66,7 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_stray_folders(store, project, &mut report);
     }
     scan_identity(store, "board", &mut report);
+    scan_remote_lag(store, "board", &mut report);
     Ok(report)
 }
 
@@ -90,7 +91,38 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_decisions(store, &project, &mut report);
     scan_stray_folders(store, &project, &mut report);
     scan_identity(store, id, &mut report);
+    scan_remote_lag(store, id, &mut report);
     Ok(report)
+}
+
+/// Report a board further behind its remote than its push policy allows (FEAT-142). kanbanr's own
+/// public board drifted 58 commits behind GitHub with nothing saying so: the CLI's batched push
+/// never fired, and when it was asked to, it could not reach GitHub at all.
+fn scan_remote_lag(store: &Store, project: &str, report: &mut Report) {
+    use crate::git::PushPolicy;
+    let dir = store.data_dir();
+    let Some(ahead) = crate::git::ahead_of_remotes(dir) else {
+        return;
+    };
+    let (policy, _) = PushPolicy::for_board(dir);
+    let allowed = match policy {
+        PushPolicy::Auto => 0,
+        PushPolicy::Debounce { every } => every as usize,
+        // Pushing only by hand is a choice, not a fault; still say so once it is a real backlog.
+        PushPolicy::Off => 10,
+    };
+    if ahead > allowed {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.to_string(),
+            code: None,
+            message: format!(
+                "this board is {ahead} commit(s) ahead of its remote (push policy: {policy}) — \
+                 `kanbanr sync` pushes them; `kanbanr remote push-policy` shows why they have not \
+                 gone"
+            ),
+        });
+    }
 }
 
 /// Report a board that commits as nobody (FEAT-128): the placeholder identity older versions wrote
@@ -676,5 +708,41 @@ mod tests {
         crate::git::set_identity(&dir, "Ada", "ada@example.com").unwrap();
         assert!(identity_issues(&store).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-142 R-6: a board further ahead of its remote than its policy allows is reported, with
+    /// the command that pushes it; one within it is not.
+    #[test]
+    fn a_board_far_ahead_of_its_remote_is_reported() {
+        let (store, dir) = fixture();
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let remote =
+            std::env::temp_dir().join(format!("kanbanr-doctor-remote-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&remote);
+        git2::Repository::init_bare(&remote).unwrap();
+        crate::git::add_remote(&dir, "origin", remote.to_str().unwrap()).unwrap();
+        crate::git::set_push_setting(&dir, crate::git::PushPolicy::Debounce { every: 2 }).unwrap();
+        let lag = |store: &Store| -> Vec<String> {
+            run_project(store, "demo")
+                .unwrap()
+                .issues
+                .into_iter()
+                .filter(|i| i.message.contains("ahead of its remote"))
+                .map(|i| i.message)
+                .collect()
+        };
+        for n in 0..3 {
+            std::fs::write(dir.join(format!("note-{n}.txt")), "x").unwrap();
+            assert!(crate::git::commit_local(&dir, "a change"));
+        }
+        // Never pushed: every commit is ahead — more than two.
+        let found = lag(&store);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("kanbanr sync"), "{}", found[0]);
+        let pushed = crate::git::push_pending(&dir);
+        assert!(pushed.failures.is_empty(), "{pushed:?}");
+        assert!(lag(&store).is_empty(), "within the policy once pushed");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&remote);
     }
 }
