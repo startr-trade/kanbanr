@@ -77,12 +77,15 @@ A reminder is due only when **all** of these hold:
 > tells Claude to stop without changes when everything is already recorded. The rules are
 > documented at the top of `stop-check.sh`.
 
-### `session-summary.sh`: session history on the board (PostCompact, SessionEnd, SessionStart)
-Keeps a record of every session as a board doc named `sessions/<YYYY-MM-DD-HHMMSS>-<sid8>.md`, so
-a later session, or a person, can see what earlier ones did without the transcript.
+### `session-summary.sh`: session history beside the board (PostCompact, SessionEnd, SessionStart)
+Keeps a record of every session as a file beside the board,
+`<board>/.sessions/<project>/<YYYY-MM-DD-HHMMSS>-<sid8>.md`, so a later session, or a person, can see
+what earlier ones did without the transcript. **It is never committed:** every board ignores
+`.sessions/` (FEAT-135), because a summary is a condensed conversation — local paths, other
+projects, half-formed ideas — and a board is what a team shares through its remote.
 
 - **PostCompact** saves the summary Claude Code has just written for the compaction (suffix
-  `-compact`). It's one board write, done before the hook returns.
+  `-compact`). It's one file write, done before the hook returns.
 - **SessionEnd** summarises the transcript with `claude -p` (Sonnet) in the background.
 - **SessionStart** sweeps the project's recent transcripts for sessions that ended without a
   summary, at most three per start and none older than 14 days, again in the background.
@@ -93,12 +96,12 @@ lives next to the transcripts in `~/.claude/projects/<project>/.session-summarie
 summarised twice. It acts only where a `.kanbanr` marker is found, walking up from the project
 folder.
 
-**Keeping things off the board.** Put anything that must never appear in a summary in a private
+**Keeping things out of summaries.** Put anything that must never appear in a summary in a private
 list, `~/.claude/kanbanr-summary-exclude.txt` (or set `$KANBANR_SUMMARY_EXCLUDE`). It holds one term
 per line, matched case-insensitively and as whole words, and `#` starts a comment. A transcript
 message that mentions a listed term is dropped before the model sees anything. Any line of a
 summary or compaction summary that mentions one is removed before it is written, so it never
-reaches the board or its git history. Keep that file outside every repository: it is the one
+reaches the file at all. Keep that file outside every repository: it is the one
 place the terms are written down. It needs `bash`, `jq` and `python3`: without them, or without a board, it exits 0 and
 writes nothing. It isn't registered on Windows. The summariser's own `claude -p` runs with
 `KANBANR_SESSION_SUMMARY` set, so it never triggers a summary of itself.

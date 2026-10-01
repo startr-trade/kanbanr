@@ -6,10 +6,12 @@
     summarise_session.py sweep      <transcripts_dir> <current_session_id>
     summarise_session.py backfill   <transcripts_dir>                          # by hand
 
-Summaries become board docs, `sessions/<YYYY-MM-DD>-<HHMMSS>-<sid8>.md`: dated and timed so several
-sessions in a day never collide, and carrying the session id prefix so each maps back to its
-transcript. Nothing is written to the repo, and nothing is imported into CLAUDE.md — the board is
-already what a new session recovers from, so a summary is a record to consult, not context to load.
+Summaries are files beside the board, `<board>/.sessions/<project>/<YYYY-MM-DD>-<HHMMSS>-<sid8>.md`:
+dated and timed so several sessions in a day never collide, and carrying the session id prefix so
+each maps back to its transcript. They are never committed (every board ignores `.sessions/`,
+FEAT-135): a summary is a condensed conversation, and a board is what a team shares. Nothing is
+written to the code repository, and nothing is imported into CLAUDE.md — the board is already what
+a new session recovers from, so a summary is a record to consult, not context to load.
 
 The transcript is never piped in whole. This project's was 49 MB, about 13M tokens, and a summary is
 wanted exactly when the context is full. What is sent is the conversation only: the latest summary
@@ -23,7 +25,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -106,21 +107,22 @@ def kanbanr() -> str:
 
 
 def save_to_board(name: str, body: str) -> str:
-    """Write `body` as board doc `sessions/<name>.md`. The board path is resolved by kanbanr from the
-    project directory's .kanbanr marker, so this must run there."""
-    path = f"sessions/{name}.md"
-    # The one door to the board, so the one place the exclusion list is enforced on the way out.
+    """Write `body` to `<board>/.sessions/<project>/<name>.md`, beside the board and outside its
+    history (FEAT-135). The board and project are kanbanr's answer for the project directory — its
+    .kanbanr marker — so this must run there; nothing is committed."""
+    where = json.loads(subprocess.run(
+        [kanbanr(), "where", "--json"],
+        cwd=PROJECT, check=True, capture_output=True, text=True, timeout=60,
+    ).stdout)
+    folder = Path(where["data_dir"]) / ".sessions" / where["project"]
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{name}.md"
+    # The one door out, so the one place the exclusion list is enforced on the way.
     body = redact(body, excluded_terms()) + "\n"
-    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as tmp:
-        tmp.write(body)
-    try:
-        subprocess.run(
-            [kanbanr(), "doc", "add", path, "--file", tmp.name],
-            cwd=PROJECT, check=True, capture_output=True, text=True, timeout=60,
-        )
-    finally:
-        os.unlink(tmp.name)
-    return path
+    tmp = path.with_suffix(".md.tmp")
+    tmp.write_text(body)
+    tmp.replace(path)
+    return str(path)
 
 
 def text_of(entry: dict) -> str:

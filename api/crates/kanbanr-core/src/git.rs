@@ -69,6 +69,11 @@ pub const WRITE_LOCK_FILE: &str = ".kanbanr.lock";
 /// Like the lock file it is machine-local and must never be tracked or pushed.
 pub const UNPUSHED_FILE: &str = ".kanbanr.unpushed";
 
+/// Where session summaries live, beside the board and never in its history (FEAT-135). A summary is
+/// a condensed conversation — local paths, other projects, half-formed ideas — and a board is what
+/// a team shares through a remote, so the folder is ignored like the secrets file and the lock.
+pub const SESSIONS_DIR: &str = ".sessions/";
+
 /// Mark the data dir as having local commits not yet pushed to remotes (FEAT-034). Cheap and
 /// best-effort; called after a local commit when push is debounced rather than immediate.
 pub fn mark_unpushed(dir: &Path) {
@@ -100,6 +105,7 @@ fn ensure_secret_ignored(repo: &Repository, dir: &Path) {
         WRITE_LOCK_FILE,
         UNPUSHED_FILE,
         crate::eventing::CONFIG_FILE,
+        SESSIONS_DIR,
     ] {
         if !contents.lines().any(|l| l.trim() == entry) {
             if !contents.is_empty() && !contents.ends_with('\n') {
@@ -497,5 +503,28 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo_dir);
+    }
+
+    /// FEAT-135: a summary written beside the board never reaches its history, and an existing
+    /// board learns that on its next write.
+    #[test]
+    fn a_board_ignores_its_session_summaries() {
+        let dir = temp("sessions");
+        ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let notes = dir.join(".sessions").join("shop");
+        std::fs::create_dir_all(&notes).unwrap();
+        std::fs::write(notes.join("2026-10-01-120000-abcd1234.md"), "a summary").unwrap();
+        std::fs::write(dir.join("item.yaml"), "x: 1").unwrap();
+        assert!(commit_local(&dir, "a write"));
+        let repo = Repository::open(&dir).unwrap();
+        let tree = repo.head().unwrap().peel_to_tree().unwrap();
+        assert!(
+            tree.get_name("item.yaml").is_some(),
+            "the write was committed"
+        );
+        assert!(tree.get_name(".sessions").is_none(), "the summary was not");
+        let ignore = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert!(ignore.lines().any(|l| l.trim() == SESSIONS_DIR), "{ignore}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
