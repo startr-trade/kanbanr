@@ -19,11 +19,13 @@ export KANBANR_DATA_DIR="$DATA_DIR"
 k() { "$KANBANR" --data-dir "$DATA_DIR" "$@"; }
 
 echo "building a demo portfolio in $DATA_DIR"
+# Every board commit is authored by someone (FEAT-128): a demo one by a demo identity.
+k identity --name "Demo Maintainer" --email demo@example.com >/dev/null
 
 # Three projects. `identity` is the shared one; the other two rest on it, which is the whole point
 # of a portfolio view — the dependency that matters is the one you cannot see from inside a project.
 for p in identity checkout mobile; do
-    k project init "$p" --description "demo: the $p product" >/dev/null
+    k project init "$p" --workflow scheduled --description "demo: the $p product" >/dev/null
     k --project "$p" milestone add --name "v1" --code MS-001 >/dev/null
 done
 

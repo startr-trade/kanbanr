@@ -44,6 +44,10 @@ async fn main() -> anyhow::Result<()> {
     // these pages are shot against the demo board `tools/demo/portfolio.sh` builds, by pointing
     // KANBANR_URL at a daemon serving it and setting PORTFOLIO_ONLY=1.
     let portfolio_only = std::env::var("PORTFOLIO_ONLY").is_ok();
+    // Sprints and releases likewise: kanbanr's own board uses neither, so the sprint header with
+    // its burndown, the Releases page and a Gantt with sprints are shot against the Scrum demo
+    // `tools/demo/cadence.sh` builds (FEAT-133), with CADENCE_ONLY=1.
+    let cadence_only = std::env::var("CADENCE_ONLY").is_ok();
     let fw: u32 = env("FRAME_W", "900").parse().unwrap_or(900);
     let fh: u32 = env("FRAME_H", "1440").parse().unwrap_or(1440);
     let board_w: u32 = env("BOARD_W", "1440").parse().unwrap_or(1440);
@@ -75,7 +79,9 @@ async fn main() -> anyhow::Result<()> {
     ];
 
     // Cross-project rollups and the cross-project board, from the demo portfolio.
-    let pages: Vec<(String, &str)> = if portfolio_only {
+    let pages: Vec<(String, &str)> = if cadence_only {
+        Vec::new()
+    } else if portfolio_only {
         vec![
             ("/portfolio".to_string(), "portfolio.png"),
             ("/".to_string(), "portfolio-home.png"),
@@ -94,6 +100,22 @@ async fn main() -> anyhow::Result<()> {
 
     for (route, file) in &pages {
         capture(&driver, &format!("{base}{route}"), &format!("{out}/{file}"), Some("light"), portrait).await?;
+    }
+
+    if cadence_only {
+        // The board opens on the running sprint: its header, goal, days left and burndown. Scrum has
+        // seven columns, so the frame is wider than the default board's, or Done is cut off.
+        let board = format!("{base}/p/{p}");
+        let wide: u32 = env("SPRINT_W", "1900").parse().unwrap_or(1900);
+        capture(&driver, &board, &format!("{out}/sprint.png"), Some("light"), Frame::Fit(wide)).await?;
+        capture(&driver, &board, &format!("{out}/sprint-dark.png"), Some("dark"), Frame::Fit(wide)).await?;
+        let releases = format!("{base}/p/{p}/releases");
+        capture(&driver, &releases, &format!("{out}/releases.png"), Some("light"), portrait).await?;
+        let gantt = format!("{base}/p/{p}/gantt");
+        capture(&driver, &gantt, &format!("{out}/gantt-sprints.png"), Some("light"), Frame::Fit(board_w)).await?;
+        driver.quit().await?;
+        println!("done — sprint and release screenshots in {out}/");
+        return Ok(());
     }
 
     if portfolio_only {

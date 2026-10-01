@@ -65,8 +65,26 @@ else
   done
 fi
 
-# 3. Run the capture tool (builds kanbanr-screenshots on first run).
+# 3. Run the capture tool (builds kanbanr-screenshots on first run) against the project's own board.
 OUT_DIR="$OUT_DIR" KANBANR_URL="$KANBANR_URL" cargo run --quiet
+
+# 4. The views kanbanr's own board cannot show, from the demo boards in tools/demo/: the portfolio
+#    (several projects) and the sprint and release views (the scrum preset). Each is built fresh in
+#    a temp folder, served on its own port for the length of its pass, and thrown away.
+KANBANR_BIN="${KANBANR_BIN:-kanbanr}"
+demo_pass() { # demo_pass <script> <port> <project> <ENV_FLAG>
+  local dir port=$2 pid
+  dir="$(mktemp -d)/board"
+  KANBANR="$KANBANR_BIN" "$ROOT/tools/demo/$1" "$dir" >/dev/null
+  "$KANBANR_BIN" serve --data-dir "$dir" --bind "127.0.0.1:$port" >/dev/null 2>&1 &
+  pid=$!
+  for _ in $(seq 1 30); do curl -fsS -o /dev/null "http://localhost:$port/healthz" 2>/dev/null && break; sleep 1; done
+  env "$4=1" OUT_DIR="$OUT_DIR" KANBANR_URL="http://localhost:$port" KANBANR_PROJECT="$3" cargo run --quiet
+  kill "$pid" 2>/dev/null || true
+  rm -rf "$(dirname "$dir")"
+}
+demo_pass portfolio.sh 8081 identity PORTFOLIO_ONLY
+demo_pass cadence.sh 8082 shop CADENCE_ONLY
 
 echo "screenshots written to $OUT_DIR"
 echo "(grid '$CONTAINER' left running — stop it with: tools/screenshots/capture.sh --down)"
