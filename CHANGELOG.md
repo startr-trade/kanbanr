@@ -8,6 +8,16 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+#### The kanbanr mark, and screenshots of the monitor as it is (FEAT-133)
+
+kanbanr has a mark — a `k` whose stem is a kanban column and whose arms are the thread the work
+runs along — in the startr.trade palette, with light and dark lockups, a favicon, an app icon and a
+social preview in `assets/brand/`. The monitor's header, its favicon, the docs site, the VS Code
+extension and the README use it. Every screenshot is retaken, and `make screenshots` now also builds
+two demo boards — a portfolio, and a Scrum shop (`tools/demo/cadence.sh`) — to show the sprint
+header with its burndown, the Releases page and the Gantt with sprints, which kanbanr's own board
+does not use.
+
 #### kanbanr's own board is public, and the code points at it (FEAT-136)
 
 The board kanbanr is developed on is published at `startr-trade/kanbanr-board`, its history

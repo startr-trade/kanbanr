@@ -177,6 +177,18 @@ kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedb
 The burndown and velocity are derived from the moves items record; nothing is stored for them. An
 item counts as finished from the day it first reaches a stage marked `done` — Done, in `scrum` — or
 an end status.
+
+On the board, a project that uses sprints opens on the running one — its goal, dates, days left,
+committed against done, and the burndown against the ideal line:
+
+![The board on a running sprint: goal, dates, points done and the burndown](../images/sprint.png)
+
+The Releases page shows each release's scope, how much of it is finished, its target, and its notes
+once cut; the Gantt adds the sprints as a lane and the releases as milestones:
+
+![The Releases page: a shipped release and a planned one](../images/releases.png)
+
+![The Gantt with a sprint lane and release milestones](../images/gantt-sprints.png)
 `kanbanr config workflow --write-agreement` writes the team's working agreement to the board,
 generated from the gates. Under Scrum that is the Definition of Ready and of Done. Because it is
 generated, it can't drift from what is enforced.

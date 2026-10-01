@@ -41,6 +41,16 @@ status pages, the off-board "Ongoing" stream, and per-project docs:
     <td align="center"><sub>Home — project tiles</sub></td>
   </tr>
   <tr>
+    <td><img src="docs/src/images/sprint.png" alt="Sprint header and burndown" width="260"></td>
+    <td><img src="docs/src/images/releases.png" alt="Releases" width="260"></td>
+    <td><img src="docs/src/images/gantt-sprints.png" alt="Gantt with sprints and releases" width="260"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>A running sprint and its burndown</sub></td>
+    <td align="center"><sub>Releases</sub></td>
+    <td align="center"><sub>Gantt with sprints and releases</sub></td>
+  </tr>
+  <tr>
     <td><img src="docs/src/images/docs.png" alt="Docs tree" width="260"></td>
     <td><img src="docs/src/images/doc-file.png" alt="Doc with embedded image" width="260"></td>
     <td><img src="docs/src/images/doc-mermaid.png" alt="Doc with a Mermaid diagram" width="260"></td>
