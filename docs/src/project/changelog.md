@@ -225,6 +225,8 @@ reported against it.
   With that, three Windows-only defects surfaced: a `.kanbanr` marker written on Windows stored
   `..\app.kanbanr`, which Linux and macOS cannot read — markers now always use forward slashes —
   and messages named paths in Windows' verbatim form (`\\?\C:\…`), which is now dropped.
+  CI's test step now runs with `--no-fail-fast`, so one platform's failures all show in one run
+  rather than one test binary at a time.
   The release workflow also named the retired `macos-13` runner for the Intel macOS build, which
   would have left that job waiting for a runner that no longer exists; it now uses `macos-15-intel`.
 - **Board commits went out as `kanbanr <kanbanr@local>` (FEAT-128).** A new data repository was
