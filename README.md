@@ -1,4 +1,9 @@
-# kanbanr
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/kanbanr-lockup-dark.svg">
+    <img src="assets/brand/kanbanr-lockup-light.svg" alt="kanbanr" width="540">
+  </picture>
+</p>
 
 A kanban-based task manager for **Claude-driven development**. You manage the board through a
 Claude **skill** (which drives the `kanbanr` CLI), and a **read-only web monitor** shows what's
