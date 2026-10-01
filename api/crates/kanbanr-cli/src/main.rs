@@ -535,6 +535,11 @@ enum RemoteCmd {
     List,
     /// Remove a git remote.
     Remove { name: String },
+    /// Show or set when this board is pushed to its remotes (FEAT-142): `auto` after every change,
+    /// `debounce[:N]` once it is N commits ahead (the default, 10), `off` only on `kanbanr sync`.
+    /// Kept in the board's own git config, so it is this machine's choice; `KANBANR_PUSH`
+    /// overrides it for one command.
+    PushPolicy { policy: Option<String> },
 }
 
 #[derive(Subcommand)]
@@ -4426,6 +4431,39 @@ fn run_remote(cli: &Cli, client: &Backend, cmd: &RemoteCmd) -> anyhow::Result<()
             }
             Ok(())
         }
+        RemoteCmd::PushPolicy { policy } => {
+            let dir = project::resolve_data_dir(cli.data_dir.as_deref());
+            if let Some(value) = policy {
+                let parsed = kanbanr_core::git::PushPolicy::parse(value).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "unknown push policy '{value}': auto, off, debounce or debounce:N"
+                    )
+                })?;
+                kanbanr_core::git::set_push_setting(&dir, parsed)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+            }
+            let (current, source) = kanbanr_core::git::PushPolicy::for_board(&dir);
+            let from = match source {
+                kanbanr_core::git::PolicySource::Environment => {
+                    "KANBANR_PUSH, overriding the board"
+                }
+                kanbanr_core::git::PolicySource::Board => "this board's setting",
+                kanbanr_core::git::PolicySource::Default => "the default",
+            };
+            let ahead = kanbanr_core::git::ahead_of_remotes(&dir)
+                .map(|n| format!("; {n} commit(s) ahead of its remote"))
+                .unwrap_or_else(|| "; no remote".into());
+            if cli.json {
+                println!(
+                    "{}",
+                    json!({"policy": current.to_string(), "source": from,
+                           "ahead": kanbanr_core::git::ahead_of_remotes(&dir)})
+                );
+            } else {
+                println!("push policy: {current} ({from}){ahead}");
+            }
+            Ok(())
+        }
         RemoteCmd::Remove { name } => {
             client.write(Method::Delete, &format!("/remotes/{name}"), None)?;
             println!("removed remote {name}");
@@ -4731,11 +4769,26 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             unreachable!()
         }
         Command::Sync => {
-            let had = client.sync()?;
-            if had {
-                println!("synced: pushed local commits to remotes");
-            } else {
-                println!("nothing to sync (no local commits pending)");
+            // Said as it is (FEAT-142): a failed push used to be followed by "nothing to sync".
+            let (ahead, outcome) = client.sync()?;
+            for w in &outcome.failures {
+                eprintln!("kanbanr: {w}");
+            }
+            match ahead {
+                None => {
+                    println!("nothing to sync: this board has no remote (kanbanr remote add …)")
+                }
+                Some(n) if outcome.failures.is_empty() && n == 0 => {
+                    println!("already up to date with {}", outcome.pushed.join(", "))
+                }
+                Some(n) if outcome.failures.is_empty() => {
+                    println!("pushed {n} commit(s) to {}", outcome.pushed.join(", "))
+                }
+                Some(n) => anyhow::bail!(
+                    "{n} commit(s) not pushed to {} of the board's remotes — see above; they are \
+                     committed locally and nothing is lost",
+                    outcome.failures.len()
+                ),
             }
             Ok(())
         }

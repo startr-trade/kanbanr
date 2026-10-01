@@ -27,7 +27,6 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use kanbanr_core::Store;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::broadcast;
@@ -43,9 +42,8 @@ pub struct AppState {
     pub tx: broadcast::Sender<String>,
     /// Whether mutation routes are mounted (single-writer daemon). False = read-only monitor.
     pub allow_writes: bool,
-    /// Debounced-push policy and the in-process unpushed-commit tally (FEAT-034).
+    /// The board's push policy (FEAT-034, FEAT-142): its own setting, or `KANBANR_PUSH`.
     pub push: PushPolicy,
-    pub pending: Arc<AtomicU32>,
 }
 
 /// Run the view daemon until the process is stopped. `bind` like `127.0.0.1:8080`; `ui_dir` is the
@@ -65,8 +63,7 @@ pub async fn run(
         data_dir: data_dir.clone(),
         tx: tx.clone(),
         allow_writes,
-        push: PushPolicy::from_env(),
-        pending: Arc::new(AtomicU32::new(0)),
+        push: PushPolicy::for_board(&data_dir).0,
     };
 
     // Watch the data folder and push SSE "changed" events as the CLI edits files.

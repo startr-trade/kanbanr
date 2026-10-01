@@ -321,7 +321,6 @@ fn run_write(
     let outcome = crate::write::write(
         &st.store,
         &st.data_dir,
-        &st.pending,
         st.push,
         method.as_str(),
         dispatch_path,
@@ -376,9 +375,13 @@ pub async fn write_route_root(
 
 /// Explicit push of pending local commits (the daemon's `/sync`).
 pub async fn sync_now(State(st): State<AppState>) -> impl IntoResponse {
-    let warnings = crate::write::sync(&st.data_dir, &st.pending);
-    for w in &warnings {
+    let outcome = crate::write::sync(&st.data_dir);
+    for w in &outcome.failures {
         eprintln!("kanbanr: {w}");
     }
-    Json(serde_json::json!({ "synced": true, "warnings": warnings }))
+    Json(serde_json::json!({
+        "synced": outcome.failures.is_empty(),
+        "pushed": outcome.pushed,
+        "warnings": outcome.failures,
+    }))
 }

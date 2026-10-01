@@ -249,19 +249,54 @@ pub fn commit_local(dir: &Path, message: &str) -> bool {
     do_commit(&repo, &sig, message).unwrap_or(false)
 }
 
-/// Credentials callback covering the common cases: SSH (agent, then default), and HTTPS via the
-/// configured credential helper. Best-effort.
+/// Credentials for a remote (FEAT-142): SSH through the user's agent, then their default key
+/// files; HTTPS through git's credential helper. libgit2 calls this again after each refusal, so it
+/// steps through the options once and then gives up, rather than offering the same key forever.
 fn credentials_cb(
     git_config: git2::Config,
 ) -> impl FnMut(&str, Option<&str>, CredentialType) -> Result<Cred, git2::Error> {
+    let mut ssh_attempt = 0usize;
+    let mut https_tried = false;
     move |url, username_from_url, allowed| {
+        let user = username_from_url.unwrap_or("git");
         if allowed.contains(CredentialType::USERNAME) {
-            return Cred::username(username_from_url.unwrap_or("git"));
+            return Cred::username(user);
         }
         if allowed.contains(CredentialType::SSH_KEY) {
-            return Cred::ssh_key_from_agent(username_from_url.unwrap_or("git"));
+            ssh_attempt += 1;
+            if ssh_attempt == 1 {
+                return Cred::ssh_key_from_agent(user);
+            }
+            let home = std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .map(std::path::PathBuf::from);
+            let keys: Vec<std::path::PathBuf> = home
+                .map(|h| {
+                    ["id_ed25519", "id_ecdsa", "id_rsa"]
+                        .iter()
+                        .map(|k| h.join(".ssh").join(k))
+                        .filter(|k| k.exists())
+                        .collect()
+                })
+                .unwrap_or_default();
+            return match keys.get(ssh_attempt - 2) {
+                Some(key) => Cred::ssh_key(user, None, key, None),
+                None => Err(git2::Error::from_str(
+                    "no SSH key was accepted: load one into ssh-agent (ssh-add), or check the \
+                     remote's access",
+                )),
+            };
         }
-        Cred::credential_helper(&git_config, url, username_from_url).or_else(|_| Cred::default())
+        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT) && !https_tried {
+            https_tried = true;
+            return Cred::credential_helper(&git_config, url, username_from_url);
+        }
+        if allowed.contains(CredentialType::DEFAULT) {
+            return Cred::default();
+        }
+        Err(git2::Error::from_str(
+            "no credentials for this remote: configure a git credential helper, or use an SSH URL",
+        ))
     }
 }
 
@@ -344,21 +379,28 @@ fn push(repo: &Repository, remote_name: &str, branch: &str) -> Result<(), git2::
     remote.push(&[refspec.as_str()], Some(&mut opts))
 }
 
+/// What a sync did: the remotes it pushed to, and a message per remote it could not push to.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SyncOutcome {
+    pub pushed: Vec<String>,
+    pub failures: Vec<String>,
+}
+
 /// Sync with every configured remote: pull (integrate, assuming no conflicts) then push the
 /// current branch. Best-effort and **safe**: the change is already committed locally before this
-/// runs, so nothing is ever lost. Returns a warning per remote that could not be pushed (a
-/// divergence or conflict), each with the exact git commands to resolve it by hand — kanbanr never
-/// auto-resolves. (A failed *pull* on the very first sync is benign: the push then creates the
-/// branch; only a failed push is surfaced.)
+/// runs, so nothing is ever lost. Each remote that could not be pushed (a divergence, a conflict,
+/// a credential or network failure) gets a message with the exact git commands to finish by hand —
+/// kanbanr never auto-resolves. (A failed *pull* on the very first sync is benign: the push then
+/// creates the branch; only a failed push is surfaced.)
 #[must_use]
-pub fn sync_all(dir: &Path) -> Vec<String> {
-    let mut warnings = Vec::new();
+pub fn sync_all(dir: &Path) -> SyncOutcome {
+    let mut outcome = SyncOutcome::default();
     let Ok(repo) = Repository::open(dir) else {
-        return warnings;
+        return outcome;
     };
     let branch = current_branch(&repo);
     let Ok(remotes) = repo.remotes() else {
-        return warnings;
+        return outcome;
     };
     let shown = dir.display();
     // git2 0.21 reports a name that is not UTF-8 as an error, not a missing value; neither is a
@@ -366,16 +408,184 @@ pub fn sync_all(dir: &Path) -> Vec<String> {
     for name in remotes.iter().filter_map(|n| n.ok().flatten()) {
         let _ = pull(&repo, name, &branch); // best-effort integrate (first-push fetch errors are benign)
         if let Err(e) = push(&repo, name, &branch) {
-            warnings.push(format!(
+            outcome.failures.push(format!(
                 "remote '{name}': could not push ({}). Your change is committed locally, so nothing \
                  is lost. To sync, resolve in the data folder with normal git:\n    \
                  git -C {shown} pull --no-rebase {name} {branch}\n    \
                  git -C {shown} push {name} {branch}",
                 e.message()
             ));
+        } else {
+            outcome.pushed.push(name.to_string());
         }
     }
-    warnings
+    outcome
+}
+
+/// How many commits the board is ahead of its remotes: the most it is ahead of any one, counted
+/// from git rather than remembered (FEAT-142) — each `kanbanr` command is its own process, and a
+/// count kept in memory started from zero every time, so a batched push never fired. A remote it
+/// has never been pushed to counts every commit. `None` when there is no remote.
+pub fn ahead_of_remotes(dir: &Path) -> Option<usize> {
+    let repo = Repository::open(dir).ok()?;
+    let head = repo.head().ok()?.peel_to_commit().ok()?.id();
+    let branch = current_branch(&repo);
+    let names = repo.remotes().ok()?;
+    let names: Vec<String> = names
+        .iter()
+        .filter_map(|n| n.ok().flatten())
+        .map(String::from)
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    names
+        .iter()
+        .map(|name| {
+            let tracking = format!("refs/remotes/{name}/{branch}");
+            match repo.find_reference(&tracking).ok().and_then(|r| r.target()) {
+                Some(theirs) => repo
+                    .graph_ahead_behind(head, theirs)
+                    .map(|(a, _)| a)
+                    .unwrap_or(0),
+                None => {
+                    let mut walk = match repo.revwalk() {
+                        Ok(w) => w,
+                        Err(_) => return 0,
+                    };
+                    if walk.push(head).is_err() {
+                        return 0;
+                    }
+                    walk.count()
+                }
+            }
+        })
+        .max()
+}
+
+/// The git-config key holding a board's push policy (FEAT-142). In the board's own repository
+/// config: machine-local and never pushed, beside its commit identity — how often a machine pushes
+/// is that machine's choice, not something a shared file should decide for every contributor.
+pub const PUSH_SETTING: &str = "kanbanr.push";
+
+/// When a board's commits reach its remotes (FEAT-034, FEAT-142).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PushPolicy {
+    /// Push after every commit.
+    Auto,
+    /// Push once the board is `every` commits ahead of a remote. The default.
+    Debounce { every: u32 },
+    /// Never push on its own; `kanbanr sync` does.
+    Off,
+}
+
+/// Where a board's push policy came from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PolicySource {
+    /// `KANBANR_PUSH`, a one-off override.
+    Environment,
+    /// The board's `kanbanr.push` setting.
+    Board,
+    /// Neither: the default.
+    Default,
+}
+
+const DEBOUNCE_DEFAULT_EVERY: u32 = 10;
+
+impl PushPolicy {
+    /// `auto`, `off`, `debounce` or `debounce:N`; anything else is no policy.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "auto" => Some(PushPolicy::Auto),
+            "off" => Some(PushPolicy::Off),
+            "debounce" => Some(PushPolicy::Debounce {
+                every: DEBOUNCE_DEFAULT_EVERY,
+            }),
+            s => {
+                let n: u32 = s.strip_prefix("debounce:")?.parse().ok()?;
+                (n > 0).then_some(PushPolicy::Debounce { every: n })
+            }
+        }
+    }
+
+    /// The environment overrides the board's setting, which overrides the default.
+    pub fn resolve(env: Option<&str>, board: Option<&str>) -> (Self, PolicySource) {
+        if let Some(p) = env.and_then(Self::parse) {
+            return (p, PolicySource::Environment);
+        }
+        if let Some(p) = board.and_then(Self::parse) {
+            return (p, PolicySource::Board);
+        }
+        (
+            PushPolicy::Debounce {
+                every: DEBOUNCE_DEFAULT_EVERY,
+            },
+            PolicySource::Default,
+        )
+    }
+
+    /// This board's policy, from `KANBANR_PUSH` and its own setting.
+    pub fn for_board(dir: &Path) -> (Self, PolicySource) {
+        let env = std::env::var("KANBANR_PUSH").ok();
+        Self::resolve(env.as_deref(), push_setting(dir).as_deref())
+    }
+}
+
+impl std::fmt::Display for PushPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PushPolicy::Auto => write!(f, "auto"),
+            PushPolicy::Off => write!(f, "off"),
+            PushPolicy::Debounce { every } => write!(f, "debounce:{every}"),
+        }
+    }
+}
+
+/// The board's own push setting, if it has one.
+pub fn push_setting(dir: &Path) -> Option<String> {
+    let repo = Repository::open(dir).ok()?;
+    let cfg = repo
+        .config()
+        .ok()?
+        .open_level(git2::ConfigLevel::Local)
+        .ok()?;
+    cfg.get_string(PUSH_SETTING).ok()
+}
+
+/// Record the board's push policy in its own git config.
+pub fn set_push_setting(dir: &Path, policy: PushPolicy) -> Result<(), String> {
+    let repo = Repository::open(dir).map_err(|e| e.message().to_string())?;
+    let mut cfg = repo.config().map_err(|e| e.message().to_string())?;
+    cfg.set_str(PUSH_SETTING, &policy.to_string())
+        .map_err(|e| e.message().to_string())
+}
+
+/// Push every remote now. The board stays marked unpushed unless every push succeeded — a failed
+/// push used to clear the mark, and `sync` then reported there was nothing to send.
+pub fn push_pending(dir: &Path) -> SyncOutcome {
+    let outcome = sync_all(dir);
+    if outcome.failures.is_empty() {
+        clear_unpushed(dir);
+    } else {
+        mark_unpushed(dir);
+    }
+    outcome
+}
+
+/// After a commit, apply the board's policy. `Some` when a push ran.
+pub fn after_commit(dir: &Path, policy: PushPolicy) -> Option<SyncOutcome> {
+    match policy {
+        PushPolicy::Auto => Some(push_pending(dir)),
+        PushPolicy::Off => {
+            mark_unpushed(dir);
+            None
+        }
+        PushPolicy::Debounce { every } => {
+            mark_unpushed(dir);
+            let due = ahead_of_remotes(dir).is_some_and(|n| n >= every as usize);
+            due.then(|| push_pending(dir))
+        }
+    }
 }
 
 /// List configured remotes as (name, url) pairs.

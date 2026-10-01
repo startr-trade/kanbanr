@@ -31,3 +31,7 @@ time = { version = "0.3", features = ["formatting", "macros"] }
 
 [profile.release]
 opt-level = 2
+# A release ships without its symbol table (FEAT-142). Adding the SSH and HTTPS transports grew the
+# binary past release.yml's ceiling, which is there to catch an uncompressed monitor; the symbols
+# were most of the growth's worth of dead weight. Debug info was already left out of release builds.
+strip = "symbols"

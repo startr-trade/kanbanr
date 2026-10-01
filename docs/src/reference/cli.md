@@ -100,6 +100,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 
 | Command | What it does |
 |---|---|
-| `kanbanr remote add / list / remove`, `kanbanr sync` | git remotes for the board, and an immediate push |
+| `kanbanr remote add / list / remove`, `kanbanr sync` | git remotes for the board (SSH or HTTPS), and an immediate push |
+| `kanbanr remote push-policy [auto\|off\|debounce:N]` | when this board is pushed: show it, or set it in the board's own git config |
 | `kanbanr mirror enable / disable / status / sync / link / pull` | one-way mirror of items to GitHub issues |
 | `kanbanr batch [--dry-run] [--file …]` | many changes in one call and one commit |

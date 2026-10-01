@@ -225,6 +225,14 @@ reported against it.
 
 ### Fixed
 
+- **A board could not reach GitHub, and its batched push never fired (FEAT-142).** The git library
+  was built without its network transports, so `kanbanr sync` to an SSH or HTTPS remote failed with
+  "unsupported URL protocol" — and then reported "nothing to sync", because a failed push cleared
+  its marker. The batched push counted commits in memory, so the CLI, a new process every command,
+  never reached the threshold. Remotes over SSH (agent or `~/.ssh` key) and HTTPS (git's credential
+  helper) now work; the count comes from git; a failed push is reported, stays pending and makes
+  `sync` fail; the policy is a board setting (`kanbanr remote push-policy`) with `KANBANR_PUSH` as an
+  override; and `kanbanr doctor` warns when a board is too far behind its remote.
 - **The Releases page counted Done items as unfinished (FEAT-138).** It kept its own copy of the
   "finished" rule and counted only the end status, so a planned scrum release read 0% while items in
   it were Done. The daemon now reports each release's items and finished count by the sprint's rule

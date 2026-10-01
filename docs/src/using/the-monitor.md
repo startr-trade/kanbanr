@@ -5,8 +5,22 @@
 **Sharing/centralization is the git remote's job** — whoever can pull/push the data repo is in:
 
 ```bash
-kanbanr remote add origin git@host:org/data.git    # pulled + pushed after each commit
+kanbanr remote add origin git@github.com:org/board.git   # SSH (agent or ~/.ssh key) or HTTPS
+kanbanr sync                                             # push now
 ```
+
+How often the board is pushed is a **setting of the board** on this machine, kept in its own git
+config — never pushed, never forced on anyone else who clones the code (FEAT-142):
+
+```bash
+kanbanr remote push-policy                # show it, where it came from, and how far ahead the board is
+kanbanr remote push-policy debounce:10    # the default: push once 10 commits ahead
+kanbanr remote push-policy auto           # push after every change
+kanbanr remote push-policy off            # only `kanbanr sync` pushes
+```
+
+`KANBANR_PUSH=…` overrides the setting for one command. `kanbanr doctor` warns when the board is
+further ahead of its remote than its policy allows.
 
 ### Conflicts & not losing data
 

@@ -9,17 +9,21 @@
 //! ## Push policy (FEAT-034 — debounced push)
 //! Historically every write did a network pull+push (`git::sync_all`) *while holding the write
 //! lock*, putting the network on the hot path of every mutation. That is now configurable via
-//! [`PushPolicy`] (env `KANBANR_PUSH`), and the default is **debounced**:
+//! [`PushPolicy`] — the board's `kanbanr.push` setting, or `KANBANR_PUSH` as a one-off override
+//! (FEAT-142) — and the default is **debounced**:
 //!   - `commit_local` always runs per write — commits are **local-first**, so nothing is ever lost
 //!     even if the remote is unreachable.
 //!   - The network push is batched off the hot path: a write marks the repo "unpushed" and only
-//!     pushes when a debounce threshold is crossed (≥ K unpushed commits), or never automatically
+//!     pushes once the board is K commits ahead of a remote — counted from git, so it carries
+//!     across commands (FEAT-142) — or never automatically
 //!     (`off`), or always (`auto`, the legacy behaviour). An explicit `kanbanr sync` always pushes.
 //!
 //! Push warnings/conflicts are surfaced exactly as before — `git::sync_all` returns per-remote
 //! guidance and we print it; the change is already committed locally so it is safe to defer.
 
 use anyhow::{Result, anyhow};
+pub use kanbanr_core::git::PushPolicy;
+use kanbanr_core::git::SyncOutcome;
 use kanbanr_core::{Store, activity, dispatch, eventing, git};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -41,43 +45,6 @@ impl eventing::WebhookSender for UreqSender {
             .send_string(body)
         {
             eprintln!("kanbanr: webhook delivery to {url} failed: {e}");
-        }
-    }
-}
-
-/// When the local-first commit gets pushed to remotes (FEAT-034). Selected by `KANBANR_PUSH`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PushPolicy {
-    /// Push on every write, synchronously (the pre-FEAT-034 behaviour). `KANBANR_PUSH=auto`.
-    Auto,
-    /// Commit locally every write; push only once a threshold of unpushed commits accumulates, so
-    /// the network stays off most writes. The default. `KANBANR_PUSH=debounce` (or unset).
-    Debounce { every: u32 },
-    /// Never push automatically — only an explicit `kanbanr sync` pushes. `KANBANR_PUSH=off`.
-    Off,
-}
-
-/// Default number of unpushed commits that triggers a debounced push.
-const DEBOUNCE_DEFAULT_EVERY: u32 = 10;
-
-impl PushPolicy {
-    /// Resolve the policy from `KANBANR_PUSH` (`auto` | `off` | `debounce[:N]`; default debounce).
-    pub fn from_env() -> Self {
-        match std::env::var("KANBANR_PUSH").ok().as_deref() {
-            Some("auto") => PushPolicy::Auto,
-            Some("off") => PushPolicy::Off,
-            Some(s) if s.starts_with("debounce") => {
-                let every = s
-                    .split(':')
-                    .nth(1)
-                    .and_then(|n| n.parse().ok())
-                    .filter(|n| *n > 0)
-                    .unwrap_or(DEBOUNCE_DEFAULT_EVERY);
-                PushPolicy::Debounce { every }
-            }
-            _ => PushPolicy::Debounce {
-                every: DEBOUNCE_DEFAULT_EVERY,
-            },
         }
     }
 }
@@ -104,17 +71,14 @@ pub struct Backend {
     data_dir: PathBuf,
     store: Store,
     push: PushPolicy,
-    /// Unpushed commits accumulated by *this* process since its last push (debounce counter). The
-    /// durable cross-process signal is the on-disk `git::UNPUSHED_FILE` marker; this is just the
-    /// in-process tally that decides when a debounce tick fires.
-    pending: std::cell::Cell<u32>,
     /// Set while an issue-mirror sync runs, so the sync's own write-back doesn't sync again.
     mirroring: std::cell::Cell<bool>,
 }
 
 impl Backend {
     pub fn new(data_dir: PathBuf) -> Self {
-        Self::with_policy(data_dir, PushPolicy::from_env())
+        let (push, _) = PushPolicy::for_board(&data_dir);
+        Self::with_policy(data_dir, push)
     }
 
     /// Construct a backend with an explicit push policy (used by tests and the daemon).
@@ -125,7 +89,6 @@ impl Backend {
             data_dir,
             store,
             push,
-            pending: std::cell::Cell::new(0),
             mirroring: std::cell::Cell::new(false),
         }
     }
@@ -307,45 +270,23 @@ impl Backend {
         Ok(out)
     }
 
-    /// After a successful local commit, apply the push policy (FEAT-034). In `Auto` we push
-    /// immediately (legacy); otherwise we mark the repo "unpushed" and only push once enough
-    /// commits have accumulated (`Debounce`) — or never automatically (`Off`). The commit is
-    /// already durable locally, so deferring the push never loses work.
+    /// After a successful local commit, apply the board's push policy (FEAT-034, FEAT-142). The
+    /// commit is already durable locally, so deferring a push never loses work; a push that ran and
+    /// failed says so, and the board stays marked unpushed.
     fn after_commit(&self) {
-        match self.push {
-            PushPolicy::Auto => self.push_now(),
-            PushPolicy::Off => git::mark_unpushed(&self.data_dir),
-            PushPolicy::Debounce { every } => {
-                git::mark_unpushed(&self.data_dir);
-                let n = self.pending.get() + 1;
-                if n >= every {
-                    self.push_now();
-                } else {
-                    self.pending.set(n);
-                }
+        if let Some(outcome) = git::after_commit(&self.data_dir, self.push) {
+            for w in &outcome.failures {
+                eprintln!("kanbanr: {w}");
             }
         }
     }
 
-    /// Push to every remote now (pull+push via `git::sync_all`), surfacing per-remote
-    /// warnings/conflicts exactly as before, then clear the debounce state. Best-effort: the change
-    /// is already committed locally, so a failed push only defers, it never loses work.
-    fn push_now(&self) {
-        for w in git::sync_all(&self.data_dir) {
-            eprintln!("kanbanr: {w}");
-        }
-        git::clear_unpushed(&self.data_dir);
-        self.pending.set(0);
-    }
-
-    /// Explicit `kanbanr sync`: push any local commits to remotes regardless of policy. Holds the
-    /// write lock so it can't race a concurrent write's commit. Returns the number of remotes and
-    /// whether there was anything pending, for a friendly CLI message. (FEAT-034)
-    pub fn sync(&self) -> Result<bool> {
+    /// Explicit `kanbanr sync`: push now, whatever the policy. Holds the write lock so it can't race
+    /// a concurrent write's commit. Returns how far ahead the board was and what the push did.
+    pub fn sync(&self) -> Result<(Option<usize>, SyncOutcome)> {
         self.with_write_lock(|| {
-            let had_pending = git::has_unpushed(&self.data_dir);
-            self.push_now();
-            Ok(had_pending)
+            let ahead = git::ahead_of_remotes(&self.data_dir);
+            Ok((ahead, git::push_pending(&self.data_dir)))
         })
     }
 
@@ -559,6 +500,122 @@ mod tests {
             !git::has_unpushed(&dir),
             "auto policy pushes immediately and clears the marker"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A bare repository on disk to push to — the transport differs from GitHub's, the counting
+    /// and the policy do not.
+    fn bare_remote(tag: &str) -> PathBuf {
+        let p =
+            std::env::temp_dir().join(format!("kanbanr-be-remote-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        git2::Repository::init_bare(&p).unwrap();
+        p
+    }
+
+    /// FEAT-142 R-3: each `kanbanr` command is its own process, so the batched push has to be
+    /// counted from git. Two separate backends — two commands — make the second one push.
+    #[test]
+    fn a_debounced_board_pushes_across_separate_commands() {
+        let dir = temp_dir("across");
+        let remote = bare_remote("across");
+        git::add_remote(&dir, "origin", remote.to_str().unwrap()).unwrap();
+        let first = Backend::with_policy(dir.clone(), PushPolicy::Debounce { every: 2 });
+        first
+            .write(Method::Post, "/projects", Some(json!({ "name": "demo" })))
+            .unwrap();
+        // The initial commit and this one: two ahead of a remote never pushed to, so it pushed.
+        assert_eq!(
+            git::ahead_of_remotes(&dir),
+            Some(0),
+            "the second commit reached the threshold"
+        );
+        drop(first);
+        let second = Backend::with_policy(dir.clone(), PushPolicy::Debounce { every: 2 });
+        second
+            .write(
+                Method::Post,
+                "/projects/demo/milestones",
+                Some(json!({ "name": "M" })),
+            )
+            .unwrap();
+        assert_eq!(
+            git::ahead_of_remotes(&dir),
+            Some(1),
+            "one ahead: below the threshold"
+        );
+        drop(second);
+        let third = Backend::with_policy(dir.clone(), PushPolicy::Debounce { every: 2 });
+        third
+            .write(
+                Method::Post,
+                "/projects/demo/milestones",
+                Some(json!({ "name": "N" })),
+            )
+            .unwrap();
+        assert_eq!(
+            git::ahead_of_remotes(&dir),
+            Some(0),
+            "a third command pushed both"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&remote).ok();
+    }
+
+    /// FEAT-142 R-4: a push that fails says so and leaves the board marked unpushed. It used to
+    /// clear the mark, and `sync` then reported "nothing to sync".
+    #[test]
+    fn a_failed_push_is_reported_and_stays_pending() {
+        let dir = temp_dir("failed");
+        let gone =
+            std::env::temp_dir().join(format!("kanbanr-no-such-remote-{}", std::process::id()));
+        git::add_remote(&dir, "origin", gone.to_str().unwrap()).unwrap();
+        let be = Backend::with_policy(dir.clone(), PushPolicy::Off);
+        be.write(Method::Post, "/projects", Some(json!({ "name": "demo" })))
+            .unwrap();
+        let (ahead, outcome) = be.sync().unwrap();
+        assert!(ahead.unwrap() >= 1);
+        assert_eq!(outcome.failures.len(), 1, "{outcome:?}");
+        assert!(outcome.pushed.is_empty());
+        assert!(
+            git::has_unpushed(&dir),
+            "still marked: nothing reached the remote"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// FEAT-142 R-5: the board's own setting decides, unless `KANBANR_PUSH` overrides it; with
+    /// neither, the default.
+    #[test]
+    fn the_board_setting_applies_and_the_environment_overrides_it() {
+        use kanbanr_core::git::PolicySource;
+        let dir = temp_dir("setting");
+        assert_eq!(git::push_setting(&dir), None);
+        git::set_push_setting(&dir, PushPolicy::Auto).unwrap();
+        assert_eq!(git::push_setting(&dir).as_deref(), Some("auto"));
+        let board = git::push_setting(&dir);
+        assert_eq!(
+            PushPolicy::resolve(None, board.as_deref()),
+            (PushPolicy::Auto, PolicySource::Board)
+        );
+        assert_eq!(
+            PushPolicy::resolve(Some("off"), board.as_deref()),
+            (PushPolicy::Off, PolicySource::Environment)
+        );
+        assert_eq!(
+            PushPolicy::resolve(Some("nonsense"), board.as_deref()),
+            (PushPolicy::Auto, PolicySource::Board),
+            "an unreadable override is ignored, not obeyed"
+        );
+        assert_eq!(
+            PushPolicy::resolve(None, None),
+            (PushPolicy::Debounce { every: 10 }, PolicySource::Default)
+        );
+        assert_eq!(
+            PushPolicy::parse("debounce:3"),
+            Some(PushPolicy::Debounce { every: 3 })
+        );
+        assert_eq!(PushPolicy::parse("debounce:0"), None);
         std::fs::remove_dir_all(&dir).ok();
     }
 }
