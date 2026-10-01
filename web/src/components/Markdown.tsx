@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef } from "react";
-import { marked } from "marked";
 import mermaid from "mermaid";
+import { markdownToSafeHtml, safeSvg } from "../markdownHtml";
 
 // Unique-per-render id source for mermaid (ids must be stable strings, unique across renders).
 let mermaidSeq = 0;
 
 /**
- * Render trusted (locally-authored) markdown to HTML.
+ * Render a board's markdown to HTML. Not trusted: a shared board's documents are written by
+ * whoever can push to it, so the HTML is sanitised before it reaches the page (FEAT-140).
  *
  * - `resolveImage`, when given, rewrites relative `<img>` sources (e.g. `diagram.png`) to an
  *   absolute URL. `DocPage` passes a resolver scoped to **each document's own folder**, so a
@@ -21,15 +22,7 @@ export default function Markdown({
   source: string;
   resolveImage?: (src: string) => string;
 }) {
-  const html = useMemo(() => {
-    let out = marked.parse(source, { async: false }) as string;
-    if (resolveImage) {
-      out = out.replace(/(<img\b[^>]*?\bsrc=")([^"]+)(")/g, (m, pre, src, post) =>
-        /^(https?:|data:|\/)/i.test(src) ? m : pre + resolveImage(src) + post
-      );
-    }
-    return out;
-  }, [source, resolveImage]);
+  const html = useMemo(() => markdownToSafeHtml(source, resolveImage), [source, resolveImage]);
 
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -48,7 +41,7 @@ export default function Markdown({
           const { svg } = await mermaid.render(`mmd-${mermaidSeq++}`, src);
           const wrap = document.createElement("div");
           wrap.className = "mermaid-diagram";
-          wrap.innerHTML = svg;
+          wrap.innerHTML = safeSvg(svg);
           host.replaceWith(wrap);
         } catch (e) {
           const note = document.createElement("div");

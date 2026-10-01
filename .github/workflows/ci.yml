@@ -178,6 +178,11 @@ jobs:
       - name: The monitor presents itself correctly
         run: npm run check:ui
 
+      # A shared board's documents are written by whoever can push to it, and the monitor can
+      # write (FEAT-140): markdown that would run script must come out of the renderer without it.
+      - name: The monitor's markdown cannot run script
+        run: npm run check:markdown
+
   # The installers are the first thing a stranger runs, and they run as root on a machine we will
   # never see. Static checks are cheap; the end-to-end run against a real release lives in
   # release.yml's verify-install job, because it needs a release to install.

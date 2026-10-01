@@ -61,6 +61,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Build": LOCAL,
             "Docs diagrams parse": LOCAL,
             "The monitor presents itself correctly": LOCAL,
+            "The monitor's markdown cannot run script": LOCAL,
         },
         "workflows": {
             "Every third-party action is pinned to a commit": LOCAL,
