@@ -111,8 +111,10 @@ jobs:
 
       # --- Tests: run on every OS in the matrix. ---
 
+      # --no-fail-fast: every test binary runs even after one fails, so a platform's failures all
+      # show in one run. Without it Windows revealed its failures one test binary per push.
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
   # A contribution states why it exists and proves each requirement with a green test
   # (CONTRIBUTING.md). The definition travels in the PR body, because a contributor has no board

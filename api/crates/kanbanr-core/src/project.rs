@@ -373,7 +373,8 @@ mod tests {
             COUNTER.fetch_add(1, Ordering::SeqCst)
         ));
         std::fs::create_dir_all(&p).unwrap();
-        std::fs::canonicalize(p).unwrap()
+        // As `normalize` resolves: on Windows, without canonicalize's `\\?\` prefix (FEAT-129).
+        without_verbatim_prefix(std::fs::canonicalize(p).unwrap())
     }
 
     #[test]
@@ -559,9 +560,9 @@ mod tests {
             relative_to(&proj.join("data"), &proj),
             PathBuf::from("data")
         );
-        // Far away → absolute.
+        // Far away → absolute: the root, resolved — `/` here, `D:\` (the current drive) on Windows.
         let far = Path::new("/");
-        assert_eq!(relative_to(far, &proj), PathBuf::from("/"));
+        assert_eq!(relative_to(far, &proj), normalize(far));
     }
 
     #[test]
