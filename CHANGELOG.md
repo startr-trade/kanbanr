@@ -206,6 +206,10 @@ reported against it.
 
 ### Fixed
 
+- **Session summaries were committed with the board (FEAT-135).** A summary is a condensed
+  conversation, and it was written as a board document, so it was committed and pushed with
+  everything else. Summaries now go to `<board>/.sessions/<project>/`, beside the board, and every
+  board ignores `.sessions/`, existing ones from their next write.
 - **Dependency advisories in what kanbanr ships (FEAT-132).** The first supply-chain scans found
   a TLS 1.3 handshake flaw in `rustls` (now 0.23.45), an unsound `anyhow` API (now 1.0.104), three
   unsound `git2` APIs (now `git2` 0.21, which also brings a newer libgit2), and advisories in the
