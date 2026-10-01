@@ -363,6 +363,10 @@ jobs:
       - name: Lowercase image name
         id: img
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      # The build context has no .git, so the commit and its date are handed in (FEAT-144).
+      - name: The commit and its date, for the image's --version
+        id: stamp
+        run: echo "date=$(git log -1 --format=%cd --date=short)" >> "$GITHUB_OUTPUT"
       # The image is scanned BEFORE it is pushed (FEAT-130/R-4): a HIGH or CRITICAL finding that has
       # a fix stops the release here, instead of a separate job rebuilding the image later only to
       # report on one already published. Findings with no fix are reported, not blocking — the
@@ -375,6 +379,13 @@ jobs:
           push: false
           load: true
           tags: kanbanr:scan
+          build-args: |
+            KANBANR_GIT_SHA=${{ github.sha }}
+            KANBANR_BUILD_DATE=${{ steps.stamp.outputs.date }}
+
+      # Same check the archives get: a binary that cannot say which build it is is not pushed.
+      - name: The image names the commit it was built from
+        run: scripts/check-image-stamp.sh kanbanr:scan "$GITHUB_SHA"
 
       - name: Scan the image before it is pushed
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -393,6 +404,9 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
+          build-args: |
+            KANBANR_GIT_SHA=${{ github.sha }}
+            KANBANR_BUILD_DATE=${{ steps.stamp.outputs.date }}
           # `latest` is deliberately conditional: a pre-release must not become what an
           # unqualified `docker pull` gives you.
           tags: |

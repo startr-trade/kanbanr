@@ -6,6 +6,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **The container image's kanbanr could not say which build it is (FEAT-144).** `kanbanr --version`
+  in the GHCR image printed `(unknown, built unknown)`: the image is built without `.git`, and nothing
+  handed it the commit. The release now passes the commit and its date in as build arguments, and
+  refuses to push an image whose binary does not name them — the check the archives already had.
+  `make ci` builds the image the same way and runs the same check.
+
 ## [0.1.0] - 2026-10-01
 
 The first public release.

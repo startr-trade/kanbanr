@@ -21,6 +21,7 @@ fn main() {
         }
     }
     println!("cargo:rerun-if-env-changed=KANBANR_GIT_SHA");
+    println!("cargo:rerun-if-env-changed=KANBANR_BUILD_DATE");
 
     // CI can pass it in (a shallow clone or an exported tree may have no usable git metadata).
     let sha = std::env::var("KANBANR_GIT_SHA")
@@ -37,7 +38,11 @@ fn main() {
         sha
     };
 
-    let date = git(&["log", "-1", "--format=%cd", "--date=short"])
+    // Passed in too, for a build with no `.git` at all — the container image's (FEAT-144).
+    let date = std::env::var("KANBANR_BUILD_DATE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| git(&["log", "-1", "--format=%cd", "--date=short"]))
         .unwrap_or_else(|| "unknown".to_string());
 
     println!("cargo:rustc-env=KANBANR_GIT_SHA={sha}");
