@@ -1,0 +1,84 @@
+name: Trivy
+
+# Vulnerable dependencies (api/Cargo.lock, web/ and editor/vscode/ package-lock.json), committed
+# secrets, and misconfiguration in docker/Dockerfile (FEAT-130). Every severity is reported; the
+# one sanctioned suppression is a finding with no reachable fix, recorded with its reason and an
+# expiry date in .trivyignore.yaml (ci.yml refuses an entry without either).
+#
+# While the repository is private the findings go to this run's log; once it is public they go to
+# the Security tab. The release image is scanned in release.yml, before it is pushed.
+#
+# Locally: `make scan-deps` runs the same scan (scripts/security-scan.sh) and fails on any finding.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "41 4 * * 1" # weekly, Monday 04:41 UTC: new advisories arrive for old lockfiles
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fs:
+    name: filesystem (dependencies, secrets, Dockerfile)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # Code scanning needs a public repository on GitHub's free plan (or GitHub Advanced Security);
+      # on a private one the upload fails the run. Until the repository is public this is
+      # skipped rather than red (FEAT-130/R-7).
+      - name: Code scanning is available
+        id: scanning
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          visibility=$(gh api "repos/${GITHUB_REPOSITORY}" --jq .visibility)
+          if [ "$visibility" = public ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::The repository is ${visibility}: code-scanning uploads are skipped until it is public."
+          fi
+
+      - name: Trivy filesystem scan (to code scanning)
+        if: steps.scanning.outputs.enabled == 'true'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: sarif
+          output: trivy-fs.sarif
+          # Passed explicitly: the action adds --ignorefile only when this is set, so without it
+          # the triage record would be silently ignored here while a local run applies it.
+          trivyignores: .trivyignore.yaml
+
+      - name: Upload to code scanning
+        if: steps.scanning.outputs.enabled == 'true'
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+      - name: Trivy filesystem scan (to this log)
+        if: steps.scanning.outputs.enabled != 'true'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: table
+          trivyignores: .trivyignore.yaml
