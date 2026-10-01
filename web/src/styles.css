@@ -18,6 +18,9 @@
   --control: #2b313d;
   --control-hover: #363d4c;
   --radius: 10px;
+  /* The kanbanr mark (FEAT-133): the startr.trade family palette, dark cut. */
+  --brand-ink: #aeb6e8;
+  --brand-done: #f49d1a;
 }
 
 /* Light theme — applied when <html data-theme="light"> (set by the toggle / OS preference). */
@@ -38,6 +41,8 @@
   --on-accent: #fff;
   --control: #ffffff;
   --control-hover: #f3f5f8;
+  --brand-ink: #26317e;
+  --brand-done: #e8871e;
 }
 
 * { box-sizing: border-box; }
@@ -67,7 +72,13 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   top: 0;
   z-index: 10;
 }
-.brand a { font-weight: 700; color: var(--text); font-size: 16px; }
+.brand a { font-weight: 700; color: var(--text); font-size: 16px; display: inline-flex; align-items: center; gap: 8px; }
+/* The k-mark (FEAT-133): a column of three cards for the stem, the thread for the arms. */
+.brand-mark { width: 22px; height: 22px; flex: none; }
+.brand-mark .card { fill: var(--panel); stroke: var(--brand-ink); stroke-width: 9; }
+.brand-mark .arm { fill: none; stroke: var(--brand-ink); stroke-width: 12; stroke-linecap: round; }
+.brand-mark .next { fill: var(--panel); stroke: var(--brand-ink); stroke-width: 9; }
+.brand-mark .done { fill: var(--brand-done); }
 .crumbs { color: var(--muted); display: flex; align-items: center; gap: 8px; }
 .crumbs .sep { color: var(--border); }
 .crumb-project { color: var(--text); font-weight: 600; }

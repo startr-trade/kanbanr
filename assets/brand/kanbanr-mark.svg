@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-label="kanbanr mark">
+  <!-- The k: its stem is a kanban column of three cards; its arms are the thread the work runs
+       along. One arm climbs to the next item (an open ring), the other lands on done (saffron). -->
+  <path d="M70 80 L124 32" fill="none" stroke="#26317E" stroke-width="7" stroke-linecap="round"/>
+  <path d="M70 80 L124 128" fill="none" stroke="#26317E" stroke-width="7" stroke-linecap="round"/>
+  <rect x="26" y="20"  width="44" height="30" rx="7" fill="#FFFFFF" stroke="#26317E" stroke-width="5"/>
+  <rect x="26" y="65"  width="44" height="30" rx="7" fill="#FFFFFF" stroke="#26317E" stroke-width="5"/>
+  <rect x="26" y="110" width="44" height="30" rx="7" fill="#FFFFFF" stroke="#26317E" stroke-width="5"/>
+  <circle cx="124" cy="32" r="12" fill="#FFFFFF" stroke="#26317E" stroke-width="5"/>
+  <circle cx="124" cy="128" r="13" fill="#E8871E"/>
+</svg>

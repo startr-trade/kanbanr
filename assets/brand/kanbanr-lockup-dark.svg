@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 200" role="img" aria-label="kanbanr logo">
+  <!-- The k-mark, then its upper arm runs on as the headline bar the wordmark hangs from — the
+       same thread that carries every startr.trade lockup — ending in a saffron arrow. -->
+  <g transform="translate(14,20)">
+    <path d="M70 80 L124 32" fill="none" stroke="#AEB6E8" stroke-width="7" stroke-linecap="round"/>
+    <path d="M70 80 L124 128" fill="none" stroke="#AEB6E8" stroke-width="7" stroke-linecap="round"/>
+    <rect x="26" y="20"  width="44" height="30" rx="7" fill="#0F1117" stroke="#AEB6E8" stroke-width="5"/>
+    <rect x="26" y="65"  width="44" height="30" rx="7" fill="#0F1117" stroke="#AEB6E8" stroke-width="5"/>
+    <rect x="26" y="110" width="44" height="30" rx="7" fill="#0F1117" stroke="#AEB6E8" stroke-width="5"/>
+    <circle cx="124" cy="128" r="13" fill="#F49D1A"/>
+  </g>
+  <path d="M150 52 H686" fill="none" stroke="#AEB6E8" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="138" cy="52" r="12" fill="#0F1117" stroke="#AEB6E8" stroke-width="5"/>
+  <path d="M686 44 L704 52 L686 60 Z" fill="#F49D1A"/>
+  <text x="196" y="124" font-family="'Noto Sans','Segoe UI',ui-sans-serif,sans-serif"
+        font-size="74" font-weight="700" letter-spacing="1" fill="#EDEFF9">kanbanr</text>
+  <text x="200" y="166" font-family="'Noto Sans CJK JP','Noto Sans JP','Noto Sans',sans-serif"
+        font-size="26" fill="#7C82A0">看板 · a system of record</text>
+</svg>

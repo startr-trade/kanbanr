@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-label="kanbanr — a system of record for Claude-driven development">
+  <!-- GitHub social-preview card (render to PNG at 1280×640 before uploading). -->
+  <rect width="1280" height="640" fill="#0F1117"/>
+  <g transform="translate(90,130) scale(2.4)">
+    <path d="M70 80 L124 32" fill="none" stroke="#AEB6E8" stroke-width="7" stroke-linecap="round"/>
+    <path d="M70 80 L124 128" fill="none" stroke="#AEB6E8" stroke-width="7" stroke-linecap="round"/>
+    <rect x="26" y="20"  width="44" height="30" rx="7" fill="#0F1117" stroke="#AEB6E8" stroke-width="5"/>
+    <rect x="26" y="65"  width="44" height="30" rx="7" fill="#0F1117" stroke="#AEB6E8" stroke-width="5"/>
+    <rect x="26" y="110" width="44" height="30" rx="7" fill="#0F1117" stroke="#AEB6E8" stroke-width="5"/>
+    <circle cx="124" cy="32" r="12" fill="#0F1117" stroke="#AEB6E8" stroke-width="5"/>
+    <circle cx="124" cy="128" r="13" fill="#F49D1A"/>
+  </g>
+  <path d="M566 190 H1120" fill="none" stroke="#AEB6E8" stroke-width="6" stroke-linecap="round"/>
+  <path d="M1120 180 L1144 190 L1120 200 Z" fill="#F49D1A"/>
+  <text x="566" y="330" font-family="'Noto Sans','Segoe UI',ui-sans-serif,sans-serif"
+        font-size="132" font-weight="700" letter-spacing="2" fill="#EDEFF9">kanbanr</text>
+  <text x="572" y="392" font-family="'Noto Sans CJK JP','Noto Sans JP','Noto Sans',sans-serif"
+        font-size="34" fill="#7C82A0">看板</text>
+  <text x="570" y="470" font-family="'Noto Sans','Segoe UI',ui-sans-serif,sans-serif"
+        font-size="27" fill="#C9CDE4">A system of record for Claude-driven development —</text>
+  <text x="570" y="514" font-family="'Noto Sans','Segoe UI',ui-sans-serif,sans-serif"
+        font-size="27" fill="#C9CDE4">every line of code traced to the reason it exists.</text>
+  <text x="570" y="586" font-family="'Noto Sans','Segoe UI',ui-sans-serif,sans-serif"
+        font-size="30" letter-spacing="1" fill="#E8871E">kanbanr.startr.trade</text>
+</svg>

@@ -22,7 +22,10 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <Link to="/">▦ kanbanr</Link>
+          <Link to="/" aria-label="kanbanr — all projects">
+            <BrandMark />
+            kanbanr
+          </Link>
         </div>
         <nav className="global-nav" aria-label="Global views">
           <NavLink to="/" end className={({ isActive }) => (isActive ? "tab active" : "tab")}>
@@ -76,5 +79,23 @@ function ProjectTab({ to, end, children }: { to: string; end?: boolean; children
     <NavLink to={to} end={end} className={({ isActive }) => (isActive ? "tab active" : "tab")}>
       {children}
     </NavLink>
+  );
+}
+
+/**
+ * The kanbanr mark (FEAT-133): a `k` whose stem is a kanban column of three cards and whose arms
+ * are the thread the work runs along — one to the next item, one landing on done. Drawn with the
+ * theme's brand tokens, so it follows the light/dark toggle; assets/brand/ holds the same mark.
+ */
+function BrandMark() {
+  return (
+    <svg className="brand-mark" viewBox="0 0 160 160" aria-hidden="true" focusable="false">
+      <path className="arm" d="M70 80 L124 32 M70 80 L124 128" />
+      <rect className="card" x="26" y="20" width="44" height="30" rx="7" />
+      <rect className="card" x="26" y="65" width="44" height="30" rx="7" />
+      <rect className="card" x="26" y="110" width="44" height="30" rx="7" />
+      <circle className="next" cx="124" cy="32" r="13" />
+      <circle className="done" cx="124" cy="128" r="16" />
+    </svg>
   );
 }
