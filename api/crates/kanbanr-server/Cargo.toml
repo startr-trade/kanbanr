@@ -37,4 +37,4 @@ flate2 = "1"
 
 [dev-dependencies]
 # FEAT-034 write-path tests inspect the data repo's commit log directly (matches kanbanr-core).
-git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2", "vendored-openssl"] }
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2", "vendored-openssl"] }

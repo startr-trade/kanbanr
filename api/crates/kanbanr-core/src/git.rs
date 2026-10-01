@@ -262,7 +262,7 @@ fn credentials_cb(
 fn current_branch(repo: &Repository) -> String {
     repo.head()
         .ok()
-        .and_then(|h| h.shorthand().map(String::from))
+        .and_then(|h| h.shorthand().ok().map(String::from))
         .unwrap_or_else(|| "master".to_string())
 }
 
@@ -355,7 +355,9 @@ pub fn sync_all(dir: &Path) -> Vec<String> {
         return warnings;
     };
     let shown = dir.display();
-    for name in remotes.iter().flatten() {
+    // git2 0.21 reports a name that is not UTF-8 as an error, not a missing value; neither is a
+    // remote we could name to the user, so both are skipped.
+    for name in remotes.iter().filter_map(|n| n.ok().flatten()) {
         let _ = pull(&repo, name, &branch); // best-effort integrate (first-push fetch errors are benign)
         if let Err(e) = push(&repo, name, &branch) {
             warnings.push(format!(
@@ -380,7 +382,7 @@ pub fn list_remotes(dir: &Path) -> Vec<(String, String)> {
     };
     names
         .iter()
-        .flatten()
+        .filter_map(|n| n.ok().flatten())
         .filter_map(|name| {
             repo.find_remote(name)
                 .ok()
@@ -431,8 +433,8 @@ mod tests {
             "this is the repository's first commit"
         );
         for who in [first.author(), first.committer()] {
-            assert_eq!(who.name(), Some("Ada Lovelace"));
-            assert_eq!(who.email(), Some("ada@example.com"));
+            assert_eq!(who.name().ok(), Some("Ada Lovelace"));
+            assert_eq!(who.email().ok(), Some("ada@example.com"));
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

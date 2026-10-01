@@ -68,6 +68,15 @@ ENV KANBANR_DATA_DIR=/data \
     KANBANR_BIND=0.0.0.0:8080
 EXPOSE 8080
 VOLUME ["/data"]
+# Not root (FEAT-132). The daemon only reads the board, and a board's files are world-readable as git
+# writes them, so an unprivileged user needs nothing more; a container escape then lands without root.
+RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin kanbanr
+USER 10001
+
+# Healthy means the daemon answers /healthz. No curl in a slim image, so bash's /dev/tcp asks.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /healthz HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200 '"]
+
 # The view daemon is read-only and unauthenticated; expose it beyond localhost only behind a
 # reverse proxy you control.
 CMD ["kanbanr", "serve"]

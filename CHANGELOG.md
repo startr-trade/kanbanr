@@ -206,6 +206,13 @@ reported against it.
 
 ### Fixed
 
+- **Dependency advisories in what kanbanr ships (FEAT-132).** The first supply-chain scans found
+  a TLS 1.3 handshake flaw in `rustls` (now 0.23.45), an unsound `anyhow` API (now 1.0.104), three
+  unsound `git2` APIs (now `git2` 0.21, which also brings a newer libgit2), and advisories in the
+  monitor's `dompurify`, `mermaid` and `react-router` (the monitor now uses React Router 7.18).
+  The tests' `testcontainers` moved to 0.28, dropping a vulnerable `tokio-tar` and an unmaintained
+  crate, and the screenshot tool's lockfile took a fixed `quinn-proto`. The Docker image now runs as
+  an unprivileged user and declares a `HEALTHCHECK` against `/healthz`.
 - **CI failed on `main` on all three platforms (FEAT-129).** The `rust` job tested a binary with
   no monitor inside, because it never built `web/dist`; it now builds the web app first. The docs
   guard compared a file path it had not resolved against a repository root it had, so on macOS —
