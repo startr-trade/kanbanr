@@ -57,6 +57,47 @@ pub struct Release {
     pub carried: Vec<Carry>,
 }
 
+/// A release with what it holds and how much of that is finished, as the monitor shows it
+/// (FEAT-138). Derived, never stored.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReleaseReport {
+    #[serde(flatten)]
+    pub release: Release,
+    /// Planned into it, or shipped in it.
+    pub items: Vec<String>,
+    /// How many of `items` are finished, by the same rule as the sprint's: an end status, or a stage
+    /// marked `done` (FEAT-137). The page used to keep its own copy of the rule, counting only the
+    /// end status — a Done item in a planned scrum release read as unfinished.
+    pub finished: usize,
+}
+
+/// Every release, reported.
+pub fn report_all(store: &Store, id: &str) -> Result<Vec<ReleaseReport>> {
+    let project = store.load_meta(id)?;
+    Ok(load(store, id)?
+        .into_iter()
+        .map(|release| {
+            let items: Vec<&crate::FeatureItem> = project
+                .features
+                .iter()
+                .filter(|f| {
+                    f.release.as_deref() == Some(release.version.as_str())
+                        || release.shipped.contains(&f.code)
+                })
+                .collect();
+            let finished = items
+                .iter()
+                .filter(|f| project.config.counts_as_done(&f.status))
+                .count();
+            ReleaseReport {
+                items: items.iter().map(|f| f.code.clone()).collect(),
+                finished,
+                release,
+            }
+        })
+        .collect())
+}
+
 fn path(store: &Store, id: &str) -> PathBuf {
     store.project_dir(id).join(RELEASES_FILE)
 }
@@ -277,4 +318,54 @@ fn notes(release: &Release, shipped: &[FeatureItem], carried: &[Carry]) -> Strin
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{ProjectConfig, Store};
+
+    /// FEAT-138: a planned release's progress counts what is Done in a scrum project, as the sprint
+    /// does — not only what has shipped.
+    #[test]
+    fn a_release_counts_done_items_as_finished() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-releases-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        let scrum = crate::config::preset("scrum").unwrap();
+        let mut config = ProjectConfig::default_for("shop");
+        config.statuses = scrum.statuses;
+        config.default_state = scrum.default_state;
+        config.terminal_states = scrum.terminal_states;
+        config.no_op_states = scrum.no_op_states;
+        config.transitions = scrum.transitions;
+        config.gates = scrum.gates;
+        store.init_project("shop", config).unwrap();
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/shop/config/cadence",
+            Some(&serde_json::json!({"releases": true})),
+        )
+        .unwrap();
+        store
+            .add_milestone("shop", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let codes: Vec<String> = ["A", "B", "C"]
+            .iter()
+            .map(|t| store.add_feature("shop", t, "", "M", None).unwrap().code)
+            .collect();
+        super::add(&store, "shop", "v0.2.0", "", "").unwrap();
+        super::plan(&store, "shop", "v0.2.0", &codes).unwrap();
+        for stage in ["Ready", "In Progress", "Review", "Testing", "Done"] {
+            store.move_feature("shop", &codes[0], stage).unwrap();
+        }
+        let reports = super::report_all(&store, "shop").unwrap();
+        let r = reports
+            .iter()
+            .find(|r| r.release.version == "v0.2.0")
+            .unwrap();
+        assert_eq!(r.items.len(), 3);
+        assert_eq!(r.finished, 1, "Done counts, as it does for the sprint");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
