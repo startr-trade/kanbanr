@@ -4199,9 +4199,23 @@ fn run_mirror(cli: &Cli, client: &Backend, cmd: &MirrorCmd) -> anyhow::Result<()
 
 /// How a data folder is written into a marker in `marker_dir`: relative when nearby, else absolute.
 fn marker_path(data_dir: &Path, marker_dir: &Path) -> String {
-    project::relative_to(data_dir, marker_dir)
-        .display()
-        .to_string()
+    portable_path(
+        &project::relative_to(data_dir, marker_dir)
+            .display()
+            .to_string(),
+        cfg!(windows),
+    )
+}
+
+/// A path as a marker stores it: with forward slashes, which every platform reads (FEAT-129). A
+/// marker written on Windows said `data_dir: ..\app.kanbanr`, which Linux and macOS read as one
+/// file name — so a marker committed from one machine broke the board on the next.
+fn portable_path(path: &str, windows: bool) -> String {
+    if windows {
+        path.replace('\\', "/")
+    } else {
+        path.to_string()
+    }
 }
 
 /// Print the data folder this directory resolves to (`--json`: provenance and suggestions too).
@@ -7001,6 +7015,30 @@ fn print_board(project: &Project) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FEAT-129: Windows' CI run showed two path forms leaking out — a marker with backslashes,
+    /// which no other platform can read, and canonicalize's `\\?\` verbatim prefix in messages.
+    #[test]
+    fn paths_written_and_shown_are_portable() {
+        assert_eq!(portable_path(r"..\app.kanbanr", true), "../app.kanbanr");
+        assert_eq!(
+            portable_path(r"C:\work\app.kanbanr", true),
+            "C:/work/app.kanbanr"
+        );
+        // On Linux and macOS a backslash is an ordinary file-name character: left alone.
+        assert_eq!(portable_path(r"odd\name", false), r"odd\name");
+
+        let plain = |s: &str| project::without_verbatim_prefix(PathBuf::from(s));
+        assert_eq!(
+            plain(r"\\?\C:\Users\a\.claude"),
+            PathBuf::from(r"C:\Users\a\.claude")
+        );
+        assert_eq!(
+            plain(r"\\?\UNC\server\share"),
+            PathBuf::from(r"\\?\UNC\server\share")
+        );
+        assert_eq!(plain("/home/a/.claude"), PathBuf::from("/home/a/.claude"));
+    }
 
     /// FEAT-128: `init --author --email` recorded the identity only after the repository's first
     /// commit, which therefore went out as `kanbanr <kanbanr@local>`.

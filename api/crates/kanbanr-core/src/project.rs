@@ -296,6 +296,17 @@ pub fn relative_to(path: &Path, base: &Path) -> PathBuf {
     rel
 }
 
+/// `\\?\C:\x` becomes `C:\x` (FEAT-129). On Windows `canonicalize` returns the verbatim form,
+/// which then appeared in every message that names a path — `added kanbanr hooks to
+/// \\?\C:\Users\…` — and in anything written from one. A verbatim UNC path (`\\?\UNC\…`) is left
+/// as it is: dropping the prefix there would change which path it means.
+pub fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    match path.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        Some(rest) if !rest.starts_with(r"UNC\") => PathBuf::from(rest),
+        _ => path,
+    }
+}
+
 /// Make a path absolute and resolve `.`/`..` and symlinks as far as the path exists; a missing
 /// tail is appended as-is.
 pub fn normalize(path: &Path) -> PathBuf {
@@ -307,7 +318,7 @@ pub fn normalize(path: &Path) -> PathBuf {
             .join(path)
     };
     if let Ok(c) = std::fs::canonicalize(&abs) {
-        return c;
+        return without_verbatim_prefix(c);
     }
     match (abs.parent(), abs.file_name()) {
         (Some(parent), Some(name)) => normalize(parent).join(name),
