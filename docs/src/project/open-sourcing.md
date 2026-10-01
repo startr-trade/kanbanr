@@ -2,7 +2,7 @@
 
 > A concrete, checklist-style path to publishing kanbanr publicly and keeping it maintainable —
 > sized for a **personal open-source project** (one maintainer, friendly to contributors), not a
-> foundation-governed one. Pair with [ROADMAP.md](ROADMAP.md) and the board's own assessment
+> foundation-governed one. Pair with [ROADMAP.md](roadmap.md) and the board's own assessment
 > (`kanbanr doc show notes/assessment.md`).
 >
 > Status today (updated): the workspace is now relicensed **MIT OR Apache-2.0** with
@@ -112,7 +112,7 @@ under the same page's "Variables" tab). The workflows reference them as `${{ sec
 Do this first; making a repo public (and pushing its history) is hard to undo.
 
 kanbanr has **no accounts, passwords, or tokens of its own** (single-writer CLI + read-only viewer —
-see [DESIGN.md](DESIGN.md)), so there are no app secrets to leak. The real risks are your **own
+see [the architecture overview](../architecture/overview.md)), so there are no app secrets to leak. The real risks are your **own
 content** and your **publish credentials**:
 
 - [x] **Nothing of the board ships with the source.** kanbanr's own board lives in a sibling
@@ -134,8 +134,8 @@ content** and your **publish credentials**:
 
 ## 1. Licensing & legal
 
-- [x] **Dual-licensed MIT OR Apache-2.0** — done: [`LICENSE-MIT`](../LICENSE-MIT) +
-      [`LICENSE-APACHE`](../LICENSE-APACHE) added and `license = "MIT OR Apache-2.0"` set in
+- [x] **Dual-licensed MIT OR Apache-2.0** — done: [`LICENSE-MIT`](https://github.com/startr-trade/kanbanr/blob/main/LICENSE-MIT) +
+      [`LICENSE-APACHE`](https://github.com/startr-trade/kanbanr/blob/main/LICENSE-APACHE) added and `license = "MIT OR Apache-2.0"` set in
       `api/Cargo.toml` (workspace). *(Replace the copyright holder `the kanbanr authors` with your
       legal name/handle if you prefer; if you'd rather stay MIT-only, delete `LICENSE-APACHE` and set
       `license = "MIT"`.)*
@@ -143,7 +143,7 @@ content** and your **publish credentials**:
 - [x] **Name check:** `ears-classifier` is confirmed free on **crates.io** — the only crate name
       kanbanr needs, since kanbanr itself is not published there. Its first publish claims it.
       (Check **npm** too if you'll reserve it, plus a domain if you want one.)
-- [x] **Third-party notices** documented in [`THIRD_PARTY.md`](../THIRD_PARTY.md) (vendored
+- [x] **Third-party notices** documented in [`THIRD_PARTY.md`](https://github.com/startr-trade/kanbanr/blob/main/THIRD_PARTY.md) (vendored
       **libgit2** GPL-2.0-WITH-linking-exception + **OpenSSL** Apache-2.0, statically linked — fine
       for MIT/Apache distribution). Still **to do:** run `cargo deny check licenses` (and add it to
       CI) to verify nothing incompatible slipped in.
@@ -151,30 +151,30 @@ content** and your **publish credentials**:
 ## 2. Repo presentation (the "front page")
 
 - [ ] **README** polish: one-line pitch, a screenshot or short GIF of the live monitor, the
-      60-second quickstart, the architecture diagram (reuse [DESIGN.md](DESIGN.md)), and a clear
+      60-second quickstart, the architecture diagram (reuse [the architecture overview](../architecture/overview.md)), and a clear
       "is this for me?" (personal, git-backed, Claude-driven).
 - [ ] Badges: CI status, license, latest release.
 - [ ] A `docs/` index linking USER_GUIDE, DESIGN, ROADMAP, this file.
 - [ ] Capture screenshots in `docs/src/images/` (`make screenshots`) (board, feature page, status page, milestones, docs).
       A reproducible **Selenium-Grid-in-Docker screenshot tool** lives in
-      [`../tools/screenshots/`](../tools/screenshots/) — `make screenshots` regenerates them all
+      [`../tools/screenshots/`](https://github.com/startr-trade/kanbanr/tree/main/tools/screenshots) — `make screenshots` regenerates them all
       against a locally-running `kanbanr serve`. (No more "login" screen to capture — the monitor has
       no auth.)
 
 ## 3. Contributor & community files
 
-- [x] **[`CONTRIBUTING.md`](../CONTRIBUTING.md)** — build/test/lint commands, the design constraints
+- [x] **[`CONTRIBUTING.md`](https://github.com/startr-trade/kanbanr/blob/main/CONTRIBUTING.md)** — build/test/lint commands, the design constraints
       (CLI is the only writer), code style, PR flow, inbound=outbound licensing.
-- [x] **[`CODE_OF_CONDUCT.md`](../CODE_OF_CONDUCT.md)** — Contributor Covenant 2.1. *(Fill in the
+- [x] **[`CODE_OF_CONDUCT.md`](https://github.com/startr-trade/kanbanr/blob/main/CODE_OF_CONDUCT.md)** — Contributor Covenant 2.1. *(Fill in the
       contact method placeholder it ships with.)*
-- [x] **[`SECURITY.md`](../SECURITY.md)** — private reporting (GitHub advisory / email) and the
+- [x] **[`SECURITY.md`](https://github.com/startr-trade/kanbanr/blob/main/SECURITY.md)** — private reporting (GitHub advisory / email) and the
       actual security model: **no accounts/auth**, the `serve` daemon is read-only on 127.0.0.1, and
       exposing it is the operator's job (reverse proxy + TLS). Reports go to a GitHub private
       security advisory or **kanbanr-oss-support@startr.trade**.
-- [x] **Issue + PR templates** under [`../.github/`](../.github/) (`ISSUE_TEMPLATE/bug_report.yml`,
+- [x] **Issue + PR templates** under [`../.github/`](https://github.com/startr-trade/kanbanr/tree/main/.github) (`ISSUE_TEMPLATE/bug_report.yml`,
       `feature_request.yml`, `config.yml`, `PULL_REQUEST_TEMPLATE.md`).
 - [x] **Support promise** stated as "personal project, best-effort, no SLA" (in CONTRIBUTING/SECURITY).
-- [x] **[`CODEOWNERS`](../.github/CODEOWNERS)** asks the `startr-trade/kanbanr-maintainers` team to
+- [x] **[`CODEOWNERS`](https://github.com/startr-trade/kanbanr/blob/main/.github/CODEOWNERS)** asks the `startr-trade/kanbanr-maintainers` team to
       review every pull request. Give that team the **Maintain** role on the repository (Settings →
       Collaborators and teams): GitHub only requests a review from a team with write access or more.
       Requiring a code-owner review in branch protection is optional — with a single maintainer it
@@ -183,7 +183,7 @@ content** and your **publish credentials**:
 
 ## 4. CI (GitHub Actions)
 
-- [x] **[`ci.yml`](../.github/workflows/ci.yml)** on a push to `main` and on pull requests (one
+- [x] **[`ci.yml`](https://github.com/startr-trade/kanbanr/blob/main/.github/workflows/ci.yml)** on a push to `main` and on pull requests (one
       run per change; a newer run cancels an older one): `cargo fmt --check`,
       `cargo clippy -- -D warnings`, `cargo test --workspace`, and `npm ci && npm run build` for the
       web, with cargo + vendored-libgit2/openssl caching.
@@ -191,8 +191,8 @@ content** and your **publish credentials**:
       reading each step from the workflow files, and lists what only GitHub can verify (the macOS
       and Windows legs, uploads, publishing). Nothing should reach the public repository that
       `make ci` has not passed.
-- [x] **Security scanning** (FEAT-130): [`codeql.yml`](../.github/workflows/codeql.yml) (Rust,
-      TypeScript and the workflows themselves) and [`trivy.yml`](../.github/workflows/trivy.yml)
+- [x] **Security scanning** (FEAT-130): [`codeql.yml`](https://github.com/startr-trade/kanbanr/blob/main/.github/workflows/codeql.yml) (Rust,
+      TypeScript and the workflows themselves) and [`trivy.yml`](https://github.com/startr-trade/kanbanr/blob/main/.github/workflows/trivy.yml)
       (dependencies, committed secrets, the Dockerfile) on `main`, on pull requests and weekly,
       reporting to the Security tab; `release.yml` scans the image before pushing it and stops on a
       fixable HIGH or CRITICAL finding; ci.yml's `supply-chain` job fails on a disallowed licence
@@ -211,14 +211,14 @@ content** and your **publish credentials**:
       until a maintainer has read it; and consider requiring code-scanning results in the `main`
       ruleset once the first scans are clean.
 - [x] **Cross-platform matrix** (ubuntu/macos/windows) for `cargo test` — already in `ci.yml`.
-- [x] **Image build + GHCR push on tags** — handled by [`release.yml`](../.github/workflows/release.yml)
+- [x] **Image build + GHCR push on tags** — handled by [`release.yml`](https://github.com/startr-trade/kanbanr/blob/main/.github/workflows/release.yml)
       (see §5), so a separate `docker.yml` isn't needed.
 - [ ] (Optional) Add the `#[ignore]`d testcontainers smoke (`make itest`) to CI.
 
 ## 5. Versioning & releases
 
-- [x] **SemVer + [`CHANGELOG.md`](../CHANGELOG.md)** (Keep a Changelog format) in place.
-- [x] **[`release.yml`](../.github/workflows/release.yml)** triggered on `v*` tags does it all:
+- [x] **SemVer + [`CHANGELOG.md`](https://github.com/startr-trade/kanbanr/blob/main/CHANGELOG.md)** (Keep a Changelog format) in place.
+- [x] **[`release.yml`](https://github.com/startr-trade/kanbanr/blob/main/.github/workflows/release.yml)** triggered on `v*` tags does it all:
       builds cross-platform `kanbanr` binaries (linux/macos-arm/macos-x86/windows) and attaches them
       to a GitHub Release, and pushes the **Docker image to GHCR** (`ghcr.io/startr-trade/kanbanr`).
 - [x] **kanbanr is not published to crates.io.** A published crate cannot carry the built monitor
@@ -235,7 +235,7 @@ content** and your **publish credentials**:
 - [ ] **Cut the first release:** `git tag v0.1.0 && git push origin v0.1.0`, then verify the Release
       assets + the GHCR image appear. Move the `[0.1.0]` section in the changelog from *Unreleased*
       to dated.
-- [ ] **Publish the VS Code extension** ([`../editor/vscode/`](../editor/vscode/)) to the **VS Code
+- [ ] **Publish the VS Code extension** ([`../editor/vscode/`](https://github.com/startr-trade/kanbanr/tree/main/editor/vscode)) to the **VS Code
       Marketplace** (`vsce publish`, needs `VSCE_PAT`) and optionally **Open VSX** (`ovsx publish`)
       once you've smoke-tested it (F5 launch). Keep its `version` in step with releases.
 
@@ -280,7 +280,7 @@ publishing with `claude plugin validate .`.
 **Cross-platform hooks ship in two flavors:** Linux/macOS use the `.sh` scripts; Windows uses the
 `.ps1` equivalents (`session-start.ps1`, `stop-check.ps1`) via a hook entry with
 `"shell": "powershell"`. Both have the same best-effort, never-block semantics. See
-[../skill/kanbanr/hooks/README.md](../skill/kanbanr/hooks/README.md).
+[../skill/kanbanr/hooks/README.md](https://github.com/startr-trade/kanbanr/blob/main/skill/kanbanr/hooks/README.md).
 
 **The plugin carries only the integration, not the program.** The `kanbanr` **binary** still ships
 separately (the GitHub Release archives and installers, or GHCR, per §5 — not crates.io) and must be

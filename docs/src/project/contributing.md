@@ -74,7 +74,7 @@ make serve          # builds the SPA + serves the read-only monitor on http://lo
 - Prefer a single `kanbanr batch` / `dispatch` route over bespoke one-off code paths.
 - Update tests for behavior changes; `kanbanr-core` is where the engine tests live.
 - Update the relevant docs (the [Using kanbanr](../using/everyday.md) and [Architecture](../architecture/overview.md) chapters,
-  the [skill](skill/kanbanr/SKILL.md)) when you change a contract.
+  the [skill](https://github.com/startr-trade/kanbanr/blob/main/skill/kanbanr/SKILL.md)) when you change a contract.
 
 ## The bar: say why, and show it works
 
@@ -172,12 +172,12 @@ above is the one that ran. That is the whole shape: a reason, a requirement, a t
 
 ## Licensing of contributions
 
-kanbanr is dual-licensed **MIT OR Apache-2.0** (see [LICENSE-MIT](LICENSE-MIT) and
-[LICENSE-APACHE](LICENSE-APACHE)). Unless you state otherwise, any contribution you intentionally
+kanbanr is dual-licensed **MIT OR Apache-2.0** (see [LICENSE-MIT](https://github.com/startr-trade/kanbanr/blob/main/LICENSE-MIT) and
+[LICENSE-APACHE](https://github.com/startr-trade/kanbanr/blob/main/LICENSE-APACHE)). Unless you state otherwise, any contribution you intentionally
 submit for inclusion is licensed under those same terms, per section 5 of the Apache-2.0 license,
 with no additional terms or conditions.
 
 ## Reporting bugs / requesting features
 
 Use the GitHub issue templates. For anything security-sensitive, **do not open a public issue** —
-follow [SECURITY.md](SECURITY.md).
+follow [SECURITY.md](https://github.com/startr-trade/kanbanr/blob/main/SECURITY.md).

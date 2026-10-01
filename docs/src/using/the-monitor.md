@@ -41,7 +41,7 @@ Expose it beyond localhost only behind a reverse proxy you control.
 window onto your own files. To reach it from another machine, **don't change the bind**; instead put
 a **reverse proxy** in front that terminates **TLS** and adds **authentication**, proxying to the
 unchanged `127.0.0.1:8080`. (kanbanr deliberately ships none of this — sharing is otherwise the git
-remote's job; see [DESIGN.md](DESIGN.md) §3.) Two minimal working examples:
+remote's job; see [the architecture overview](../architecture/overview.md).) Two minimal working examples:
 
 **Caddy** (automatic HTTPS + basic auth) — `Caddyfile`:
 
@@ -156,3 +156,43 @@ Everything is **view-only** and refreshes live (a green dot shows the live conne
 **light/dark theme toggle** sits in the top bar (it remembers your choice and follows your OS
 preference by default), and the layout is **responsive** (usable on a phone) with keyboard-focus and
 reduced-motion accessibility niceties.
+
+## What the monitor shows
+
+The board — kanbanr's own, as it is developed — and, in dark mode:
+
+![kanbanr's own board](../images/board.png)
+
+![The same board in dark mode](../images/board-dark.png)
+
+An item: why it exists, the goals it serves, its requirements and the tests that proved them, its
+todo-lists and its history.
+
+![An item's page](../images/feature.png)
+
+| | | |
+|---|---|---|
+| ![Review: approve, ratify, sign off](../images/review.png) | ![The charter, goals and lessons](../images/charter.png) | ![The workflow and its gates](../images/workflow.png) |
+| **Review** — approve, ratify, sign off | **Charter** — purpose, goals, lessons | **Workflow** — stages and their gates |
+| ![Milestones](../images/milestones.png) | ![A milestone](../images/milestone.png) | ![The derived schedule](../images/schedule.png) |
+| **Milestones** and their dependencies | **A milestone** and its items | **Schedule** — derived, never stored |
+| ![The Gantt](../images/gantt.png) | ![A status page](../images/status.png) | ![The Ongoing stream](../images/ongoing.png) |
+| **Gantt** with the critical path | **A status**, grouped | **Ongoing** — work that never completes |
+| ![Docs](../images/docs.png) | ![A doc with an embedded image](../images/doc-file.png) | ![A doc with a Mermaid diagram](../images/doc-mermaid.png) |
+| **Docs** — a folder tree per project | Embedded images | Live **Mermaid** diagrams |
+
+With sprints and releases switched on ([Processes](processes.md#sprints-and-releases)), the board
+opens on the running sprint, and Releases and the Gantt show the cadence:
+
+| | | |
+|---|---|---|
+| ![A running sprint and its burndown](../images/sprint.png) | ![Releases](../images/releases.png) | ![The Gantt with sprints and releases](../images/gantt-sprints.png) |
+| **A sprint** — goal, days left, burndown | **Releases** — scope, progress, notes | **Gantt** with sprints and releases |
+
+Across several projects ([Portfolio](portfolio.md)):
+
+![The portfolio: rollups and cross-project lanes](../images/portfolio.png)
+
+The sprint, release and portfolio views come from the demo boards `make screenshots` builds
+(`tools/demo/cadence.sh`, `tools/demo/portfolio.sh`), because kanbanr's own board is one project
+without sprints.

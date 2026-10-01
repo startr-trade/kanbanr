@@ -27,9 +27,9 @@ flowchart LR
   end
   CLI["kanbanr (CLI)<br/>local writer + 'serve'"]
   Core["kanbanr-core<br/>store · dispatch · git · activity · export"]
-  FS[("data/ — a git repo<br/>YAML + markdown")]
+  FS[("the board — its own git repo<br/>YAML + markdown")]
   Daemon["kanbanr serve<br/>view daemon (read API + SSE + SPA)"]
-  Browser["React monitor (view-only)<br/>· future: VS Code ext / TUI"]
+  Browser["React monitor (view-only)"]
 
   Claude -->|"runs commands"| CLI
   CLI --> Core
@@ -79,4 +79,45 @@ sequenceDiagram
 - **Exposure.** `kanbanr serve` binds `127.0.0.1` by default and has no TLS/auth by design. To
   reach it from another machine, leave the bind alone and put it behind a reverse proxy that
   terminates TLS and adds auth (Caddy/nginx examples in
-  [USER_GUIDE.md](USER_GUIDE.md#exposing-the-monitor-beyond-localhost)).
+  [the monitor chapter](../using/the-monitor.md#exposing-the-monitor-beyond-localhost)).
+
+## The rules: one engine for what is missing
+
+Whether an item may move, what `kanbanr check` reports, what `doctor` warns about, what
+`check --file` holds a pull request to, what `query --gap` finds and what the monitor's chips say
+are all **one question**: what does this item lack against a list of conditions? `readiness.rs`
+answers it, once, for every surface — they used to carry five copies of the rule, and the copies had
+drifted apart.
+
+- **Checks are a closed vocabulary** kanbanr can evaluate from the board alone: `definition`,
+  `statement`, `goals`, `zachman` (optionally named dimensions), `requirements`, `ears`,
+  `tests_named`, `tests_green`, `approved`, `estimated`, `in_sprint`, `in_release`, and named
+  sign-offs. No process semantics are hard-coded and no user code runs (ADR-0010).
+- **Gates** (`config.yaml` → `gates`) say which checks a stage asks of an item entering it, whether
+  a gap blocks or only warns, which sign-offs it needs, whether it makes the branch, and whether
+  reaching it counts as done for the sprint. A board with no gates gets the old rule synthesised —
+  approval to start, the readiness list to finish — so it behaves exactly as before, and is stamped
+  schema 3 only once it declares any, so an older binary refuses it instead of ignoring its gates.
+- **Agreement is pinned to content.** An approval or a sign-off records the definition's revision;
+  editing the definition lapses it. A move made past a gate with `--override` records why, and
+  `ratify` agrees to it afterwards.
+
+```mermaid
+flowchart LR
+  G["gates (config.yaml)"] --> E["readiness engine"]
+  F["item: definition, tests, sign-offs, sprint, release"] --> E
+  E --> M["move / start / finish"]
+  E --> CK["check · doctor · check --file · query --gap"]
+  E --> UI["monitor chips · review queue"]
+```
+
+## Cadence: sprints, releases and the burndown
+
+Sprints and releases are **off unless a project switches them on** (`config cadence`). Sprints live
+in `sprints.yaml` and releases in `releases.yaml`, beside the project; an item records the sprint and
+release it is planned into. Nothing about progress is stored: the **burndown** is derived from the
+moves items recorded — each day's remaining is the sprint's scope less what had reached a stage
+counting as done (an end status, or one whose gate says `done`, like Scrum's Done) — and velocity
+from the sprints that closed. `release cut` ships what is finished, writes the notes as a board
+document, and carries the rest to the next release, recording that it did.
+
