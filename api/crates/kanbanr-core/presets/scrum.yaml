@@ -35,6 +35,8 @@ gates:
   Done:
     purpose: Definition of Done — every requirement shown to hold.
     requires: [tests_green]
+    # Done finishes an item for the sprint burndown; Released is when it ships (FEAT-137).
+    done: true
   Released:
     purpose: Shipped in a release.
     requires: [in_release]

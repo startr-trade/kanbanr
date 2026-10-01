@@ -215,6 +215,11 @@ reported against it.
 
 ### Fixed
 
+- **A Scrum sprint burned down nothing until release day (FEAT-137).** The burndown counted an item
+  finished only at the workflow's end status, which in the `scrum` preset is Released. A stage's
+  gate can now say `done: true`; the `scrum` preset marks Done, its Definition of Done, so items
+  burn down as they are done, and a closing sprint no longer carries over work that is Done but not
+  yet released.
 - **Session summaries were committed with the board (FEAT-135).** A summary is a condensed
   conversation, and it was written as a board document, so it was committed and pushed with
   everything else. Summaries now go to `<board>/.sessions/<project>/`, beside the board, and every
