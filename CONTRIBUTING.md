@@ -3,7 +3,7 @@
 The contributing guide is a chapter of the documentation book, so it sits beside the architecture
 and method it refers to:
 
-**<https://startr-trade.github.io/kanbanr/project/contributing.html>**
+**<https://kanbanr.startr.trade/project/contributing.html>**
 
 or, in this repository: **[docs/src/project/contributing.md](docs/src/project/contributing.md)**.
 
