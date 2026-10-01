@@ -316,7 +316,9 @@ def lint_workflows() -> None:
         exact = [f"/repos/{repo}/git/ref/tags/{tag}", f"/repos/{repo}/git/ref/heads/{tag}"]
         if re.fullmatch(r"[0-9a-f]{40}", tag):
             exact = [f"/repos/{repo}/commits/{tag}"]
-        if not any(sh(["gh", "api", path, "--silent"], TREE)[0] for path in exact):
+        # Three tries: a single network hiccup reported one of eighteen references as missing.
+        found = any(sh(["gh", "api", path, "--silent"], TREE)[0] for _ in range(3) for path in exact)
+        if not found:
             missing.append(ref)
     say(f"workflows: all {len(refs)} action references resolve upstream", not missing,
         "unresolvable: " + ", ".join(missing))
