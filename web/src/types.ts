@@ -335,6 +335,10 @@ export interface Release {
   shipped?: string[];
   notes_doc?: string;
   carried?: { code: string; to: string; why?: string }[];
+  /** Planned into it or shipped in it, as the daemon reports (FEAT-138). */
+  items?: string[];
+  /** How many of `items` are finished — by the daemon's rule, the same as the sprint's. */
+  finished?: number;
 }
 
 /** A check a gate names, or the Zachman check narrowed to some columns. */

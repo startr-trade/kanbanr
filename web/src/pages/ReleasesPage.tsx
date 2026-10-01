@@ -2,7 +2,6 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
-import type { Feature, ProjectConfig } from "../types";
 
 /**
  * Releases (FEAT-120, FEAT-123): each release's planned scope, how much of it is finished, its
@@ -48,10 +47,11 @@ export default function ReleasesPage() {
       ) : (
         <div className="tiles">
           {list.map((r) => {
-            const planned = board.data!.features.filter(
-              (f) => f.release === r.version || (r.shipped ?? []).includes(f.code),
-            );
-            const finished = planned.filter((f) => isFinished(config, f)).length;
+            const holds = new Set(r.items ?? []);
+            const planned = board.data!.features.filter((f) => holds.has(f.code));
+            // Counted by the daemon, by the same rule as the sprint's (FEAT-138): this page used
+            // to keep its own copy, which counted only the end status.
+            const finished = r.finished ?? 0;
             const pct = planned.length ? Math.round((finished / planned.length) * 100) : 0;
             return (
               <div className="tile" key={r.version}>
@@ -93,12 +93,4 @@ export default function ReleasesPage() {
       )}
     </div>
   );
-}
-
-/** Finished: at an end status that is not a parking one. */
-function isFinished(config: ProjectConfig, f: Feature): boolean {
-  const terminal = config.terminal_states?.length
-    ? config.terminal_states
-    : config.statuses.filter((s) => s.toLowerCase() === "completed");
-  return terminal.includes(f.status) && !(config.no_op_states ?? []).includes(f.status);
 }

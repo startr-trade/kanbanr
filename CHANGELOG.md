@@ -225,6 +225,10 @@ reported against it.
 
 ### Fixed
 
+- **The Releases page counted Done items as unfinished (FEAT-138).** It kept its own copy of the
+  "finished" rule and counted only the end status, so a planned scrum release read 0% while items in
+  it were Done. The daemon now reports each release's items and finished count by the sprint's rule
+  (FEAT-137), and the page shows what it reports.
 - **The Claude Code plugin failed validation (FEAT-139).** Its skill path used
   `${CLAUDE_PLUGIN_ROOT}`, which Claude Code expands only in hook commands, so `claude plugin
   validate` failed and the plugin could not load its skill. The path is `./skill/` now, the

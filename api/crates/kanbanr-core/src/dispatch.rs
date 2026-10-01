@@ -705,7 +705,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         )?),
         ("PUT", ["projects", p, "config", "workflow"]) => apply_workflow(store, p, b),
         // ---- releases (FEAT-120) ----
-        ("GET", ["projects", p, "releases"]) => ser(&crate::releases::load(store, p)?),
+        ("GET", ["projects", p, "releases"]) => ser(&crate::releases::report_all(store, p)?),
         ("POST", ["projects", p, "releases"]) => ser(&crate::releases::add(
             store,
             p,
