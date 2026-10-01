@@ -18,7 +18,8 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr hooks install / status / uninstall` | the Claude Code hooks (session start, stop nudge, test capture, commit guard) |
 | `kanbanr serve [--ui-dir …]` | the read-only monitor over this board |
 | `kanbanr open` | open the running monitor in a browser |
-| `kanbanr self-update [--check]` | replace this binary with the release's, checksum-verified |
+| `kanbanr self-update [--check]` | replace this binary with the release's, checksum-verified (and the skill kanbanr installed) |
+| `kanbanr skill install / status / uninstall` | the Claude Code skill this program carries, in `~/.claude/skills/kanbanr` |
 
 **The work**
 

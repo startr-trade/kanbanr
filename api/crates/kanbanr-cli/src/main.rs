@@ -7,6 +7,7 @@ mod hooks;
 mod mirror;
 mod scm;
 mod self_update;
+mod skill;
 
 use backend::{Backend, Method};
 use clap::{Args, Parser, Subcommand};
@@ -96,6 +97,11 @@ enum Command {
         #[arg(long = "version", value_name = "TAG")]
         tag: Option<String>,
     },
+    /// The Claude Code skill this program carries (FEAT-141): install it into Claude Code's personal
+    /// skills folder, check it matches this program, or remove it. The release installers run
+    /// `install`, and `self-update` keeps an installed copy in step.
+    #[command(subcommand)]
+    Skill(SkillCmd),
     /// Set the commit identity (name + email) on this data repo.
     Identity {
         #[arg(long)]
@@ -525,6 +531,21 @@ enum EventsCmd {
     /// Emit a sample event to verify the log + any configured webhook delivery (FEAT-036). Writes a
     /// test event to the project's events log and POSTs it to every configured webhook.
     Test,
+}
+
+#[derive(Subcommand)]
+enum SkillCmd {
+    /// Write the skill to `~/.claude/skills/kanbanr` (or `$CLAUDE_CONFIG_DIR/skills/kanbanr`),
+    /// replacing a copy kanbanr installed earlier; a folder kanbanr did not write is left alone.
+    Install {
+        /// Only update a copy kanbanr already installed — what `self-update` runs.
+        #[arg(long)]
+        if_installed: bool,
+    },
+    /// Is the skill installed, and does it match this program?
+    Status,
+    /// Remove the copy kanbanr installed (never one it did not).
+    Uninstall,
 }
 
 #[derive(Subcommand)]
@@ -1316,6 +1337,39 @@ fn run_serve(
     });
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(kanbanr_server::run(dir, bind, ui_dir, allow_writes))
+}
+
+/// `kanbanr skill …` (FEAT-141): needs no board — it is about this machine's Claude Code.
+fn run_skill(cli: &Cli, cmd: &SkillCmd) -> anyhow::Result<()> {
+    let dir = skill::target()?;
+    let message = match cmd {
+        SkillCmd::Install { if_installed } => {
+            if *if_installed && !matches!(skill::status_at(&dir), skill::Status::Installed { .. }) {
+                return Ok(());
+            }
+            skill::install_at(&dir)?
+        }
+        SkillCmd::Status => skill::describe(&dir),
+        SkillCmd::Uninstall => skill::uninstall_at(&dir)?,
+    };
+    if cli.json {
+        let status = match skill::status_at(&dir) {
+            skill::Status::Missing => json!({"state": "missing"}),
+            skill::Status::Installed { version, current } => {
+                json!({"state": "installed", "version": version, "current": current})
+            }
+            skill::Status::Foreign { link } => {
+                json!({"state": "foreign", "link": link.map(|l| l.display().to_string())})
+            }
+        };
+        println!(
+            "{}",
+            json!({"path": dir.display().to_string(), "message": message, "status": status})
+        );
+    } else {
+        println!("{message}");
+    }
+    Ok(())
 }
 
 /// Set the commit identity on the data repo.
@@ -4721,6 +4775,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             return self_update::run(*check, tag.as_deref(), cli.json);
         }
         Command::Hooks(cmd) => return run_hooks(cli, cmd),
+        Command::Skill(cmd) => return run_skill(cli, cmd),
         Command::Serve {
             bind,
             ui_dir,
@@ -4765,6 +4820,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         | Command::Open
         | Command::Where
         | Command::SelfUpdate { .. }
+        | Command::Skill(_)
         | Command::Hooks(_) => {
             unreachable!()
         }

@@ -28,6 +28,11 @@ local folder; a read-only web monitor renders it live.
 When the user asks to **set up kanbanr**, **init kanbanr**, or **"start using kanbanr for this
 project"** (or anything equivalent):
 
+0. **Check the program is installed** (`kanbanr --version`). The skill is instructions; the
+   `kanbanr` program does the work. If it is missing, stop and tell the user it installs with
+   `curl -fsSL https://github.com/startr-trade/kanbanr/releases/latest/download/install.sh | sh`
+   (Windows: `irm https://github.com/startr-trade/kanbanr/releases/latest/download/install.ps1 | iex`)
+   — nothing below can run without it.
 1. **Check whether it's already set up.** Run `kanbanr where --json`. If `source` is `marker` and
    `exists` is true, the project is already tracked: skip the interview, recover the board (see
    "Recover & resume") and carry on. Everything below is for a folder that is not yet tracked.

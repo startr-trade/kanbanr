@@ -8,6 +8,16 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+#### One install: the program carries its skill (FEAT-141)
+
+The `kanbanr` program embeds the Claude Code skill it matches — SKILL.md, the hook scripts and
+their prompt — and `kanbanr skill install | status | uninstall` puts it in `~/.claude/skills/kanbanr`.
+The release installers run it when Claude Code is on PATH (`--no-skill` to skip), so installing
+kanbanr is one step, and the skill is always the release's, never a branch's. `self-update`
+updates a skill kanbanr installed; a folder it did not write — a link to a clone, a plugin's copy —
+is left alone. In a tracked project without the program, the session-start hook says how to
+install it, and the setup interview checks for it first.
+
 #### The kanbanr mark, and screenshots of the monitor as it is (FEAT-133)
 
 kanbanr has a mark — a `k` whose stem is a kanban column and whose arms are the thread the work

@@ -527,11 +527,28 @@ pub fn run(check: bool, pinned: Option<&str>, json: bool) -> Result<()> {
         verify("the kanbanr binary", &binary, expected)?;
     }
     replace_binary(&exe, &binary)?;
+    let skill = follow_skill(&exe);
     if !json {
         println!("  installed {} ({})", exe.display(), normalize(&tag));
+        if let Some(said) = skill {
+            println!("  {said}");
+        }
         println!("run `kanbanr --version` to confirm");
     }
     Ok(())
+}
+
+/// Bring an installed skill up to the new program (FEAT-141): the skill and the commands it
+/// describes ship together, so a program updated alone would leave the skill describing the old
+/// one. Asked of the NEW binary — it carries the new skill; this process carries the old. Only a
+/// copy kanbanr installed is touched (`--if-installed`); a link to a clone is not.
+fn follow_skill(exe: &Path) -> Option<String> {
+    let out = std::process::Command::new(exe)
+        .args(["skill", "install", "--if-installed"])
+        .output()
+        .ok()?;
+    let said = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !said.is_empty()).then_some(said)
 }
 
 /// Pull the `kanbanr` executable out of a release archive, in memory.
@@ -912,5 +929,34 @@ cccc  install.sh
             sum_for(sums, "kanbanr-v0.1.0-x86_64-unknown-linux-gnu.zip"),
             None
         );
+    }
+
+    /// FEAT-141 R-4: after the program is replaced, the NEW program is asked to update a skill
+    /// kanbanr installed — and only one it installed.
+    #[cfg(unix)]
+    #[test]
+    fn the_skill_follows_the_program() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("kanbanr-follow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("args");
+        let exe = dir.join("kanbanr");
+        std::fs::write(
+            &exe,
+            format!(
+                "#!/bin/sh\necho \"$@\" > '{}'\necho 'installed the kanbanr skill 9.9.9'\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let said = follow_skill(&exe);
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap().trim(),
+            "skill install --if-installed"
+        );
+        assert_eq!(said.as_deref(), Some("installed the kanbanr skill 9.9.9"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
