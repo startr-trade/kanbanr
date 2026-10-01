@@ -22,8 +22,17 @@
 # never abort the user's session. Do NOT use `$ErrorActionPreference='Stop'`.
 $ErrorActionPreference = 'Continue'
 
-# 1) kanbanr must be installed. If not, silently do nothing.
+# 1) kanbanr must be installed. In a project kanbanr tracks, its absence is worth one sentence
+#    (FEAT-141); anywhere else, silence.
 if (-not (Get-Command kanbanr -ErrorAction SilentlyContinue)) {
+    if ($env:KANBANR_PROJECT -or (Test-Path -LiteralPath '.kanbanr' -PathType Leaf)) {
+        Write-Output '## kanbanr - the program is not installed'
+        Write-Output ''
+        Write-Output 'This project is tracked with kanbanr (it has a .kanbanr marker), but the kanbanr program is'
+        Write-Output 'not on PATH, so the board cannot be recovered. Tell the user, once, that it installs with:'
+        Write-Output ''
+        Write-Output '    irm https://github.com/startr-trade/kanbanr/releases/latest/download/install.ps1 | iex'
+    }
     exit 0
 }
 

@@ -99,17 +99,30 @@ subtle failure.
 ## Install the skill
 
 The program is half of kanbanr; the other half is the **skill** that teaches Claude Code to use it.
-Pick one way — not both, or Claude Code loads two copies.
+**The program carries its skill**, and the installer above puts it in place when it finds Claude
+Code (the `claude` command) — so usually there is nothing to do here. The skill always matches the
+program: `kanbanr self-update` updates both.
 
-**As a Claude Code plugin** — the skill plus its session-start, stop and session-summary hooks, in
-one step:
+```bash
+kanbanr skill status       # is it installed, and does it match this program?
+kanbanr skill install      # write it to ~/.claude/skills/kanbanr (or $CLAUDE_CONFIG_DIR/skills)
+kanbanr skill uninstall    # remove the copy kanbanr installed
+```
+
+A skill folder kanbanr did not write — a link to a clone, a plugin's copy — is left alone. The
+other ways below are for people who want them; pick **one** route, or Claude Code loads two copies
+of the skill.
+
+**As a Claude Code plugin** — the skill plus its session-start, stop and session-summary hooks, from
+the repository's `main` rather than your release:
 
 ```bash
 claude plugin marketplace add startr-trade/kanbanr
 claude plugin install kanbanr@kanbanr
 ```
 
-**From a clone** — a link into Claude Code's personal skills folder, updated by `git pull`:
+**From a clone** — for working on the skill itself: a link into Claude Code's personal skills
+folder, updated by `git pull`:
 
 ```bash
 git clone https://github.com/startr-trade/kanbanr ~/.local/share/kanbanr

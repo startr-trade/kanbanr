@@ -6,11 +6,13 @@
     irm https://github.com/startr-trade/kanbanr/releases/latest/download/install.ps1 | iex
 
     Downloads the `kanbanr.exe` binary for this platform from a GitHub release, VERIFIES its
-    SHA-256 against the release's own SHA256SUMS, and installs it. Nothing else: no PATH is
-    rewritten without telling you, no service is registered.
+    SHA-256 against the release's own SHA256SUMS, and installs it — and, when Claude Code (the
+    `claude` command) is on PATH, installs the kanbanr skill that binary carries into
+    ~\.claude\skills\kanbanr (FEAT-141). Nothing else: no PATH is rewritten without telling you,
+    no service is registered. -NoSkill leaves Claude Code alone.
 
-    The binary carries the web monitor inside it (FEAT-084), so this is the whole install —
-    there is no second step to build a UI and no folder to point `serve` at.
+    The binary carries the web monitor and the skill inside it (FEAT-084, FEAT-141), so this is
+    the whole install, and the skill always matches the program it drives.
 
     Structure follows an installer that has already met the failures this kind of script hits.
 
@@ -24,12 +26,16 @@
 
 .PARAMETER NoVerify
     Skip checksum verification (discouraged).
+
+.PARAMETER NoSkill
+    Do not install the Claude Code skill. Also $env:KANBANR_NO_SKILL.
 #>
 [CmdletBinding()]
 param(
     [string]$Version = $env:KANBANR_VERSION,
     [string]$Dir     = $env:KANBANR_INSTALL_DIR,
-    [switch]$NoVerify
+    [switch]$NoVerify,
+    [switch]$NoSkill
 )
 
 $ErrorActionPreference = 'Stop'
@@ -168,6 +174,18 @@ try {
 
 & (Join-Path $Dir 'kanbanr.exe') --version
 
+# The skill (FEAT-141): the program carries the one it matches; Claude Code needs it in its skills
+# folder. A folder kanbanr did not write is left alone, and the program says so.
+if ($NoSkill -or $env:KANBANR_NO_SKILL) {
+    Write-Host '  Claude Code skill: skipped (-NoSkill) - later: kanbanr skill install'
+} elseif (Get-Command claude -ErrorAction SilentlyContinue) {
+    & (Join-Path $Dir 'kanbanr.exe') skill install
+    if ($LASTEXITCODE -ne 0) { Write-Host '  Claude Code skill: not installed - run: kanbanr skill install' }
+} else {
+    Write-Host '  Claude Code skill: no claude command on PATH - once Claude Code is installed, run:'
+    Write-Host '      kanbanr skill install'
+}
+
 # PATH is a user-visible change, so it is offered rather than done silently.
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if ($userPath -notlike "*$Dir*") {
@@ -177,10 +195,14 @@ if ($userPath -notlike "*$Dir*") {
 }
 
 Write-Host ""
-Write-Host 'Next - from inside a git repository you want to track:'
+Write-Host 'Next - open Claude Code in a project you want to track and say:'
+Write-Host ''
+Write-Host '    set up kanbanr for this project'
+Write-Host ''
+Write-Host 'Or from a terminal, inside the project:'
 Write-Host ''
 Write-Host '    kanbanr init      # asks where to keep the board, suggesting <repo>.kanbanr beside it'
 Write-Host '    kanbanr serve     # the monitor on http://127.0.0.1:8080'
 Write-Host ''
 Write-Host 'serve needs no --ui-dir: the web monitor is built into this binary.'
-Write-Host 'Docs: https://github.com/startr-trade/kanbanr#readme'
+Write-Host 'Docs: https://kanbanr.startr.trade'

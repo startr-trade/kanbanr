@@ -23,8 +23,22 @@
 # always exit 0. A failing recovery step must not abort the user's session.
 set -u
 
-# 1) kanbanr must be installed. If not, silently do nothing.
+# 1) kanbanr must be installed. In a project kanbanr tracks, its absence is worth one sentence
+#    (FEAT-141): the skill and its hooks are here but the program they drive is not, and without
+#    this the session would simply act as if kanbanr did not exist. Anywhere else, silence.
 if ! command -v kanbanr >/dev/null 2>&1; then
+  if [ -f ".kanbanr" ] || [ -n "${KANBANR_PROJECT:-}" ]; then
+    cat <<'MISSING'
+## kanbanr — the program is not installed
+
+This project is tracked with kanbanr (it has a `.kanbanr` marker), but the `kanbanr` program is
+not on PATH, so the board cannot be recovered. Tell the user, once, that it installs with:
+
+    curl -fsSL https://github.com/startr-trade/kanbanr/releases/latest/download/install.sh | sh
+
+(Windows: `irm https://github.com/startr-trade/kanbanr/releases/latest/download/install.ps1 | iex`)
+MISSING
+  fi
   exit 0
 fi
 

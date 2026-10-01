@@ -249,6 +249,32 @@ jobs:
           fi
           echo "installers pin https on request and redirect."
 
+      # The installer installs the skill when Claude Code is there, and only then (FEAT-141). Its
+      # skill step is run as written in install.sh — cut out between its markers, with the
+      # script's own helpers — against a stub kanbanr that records what it was asked, in the
+      # three cases that matter: claude on PATH, --no-skill, no claude.
+      - name: The installer's skill step does what it says
+        run: |
+          set -eu
+          work="$(mktemp -d)"
+          { sed -n '/^die() /p;/^info() /p;/^have() /p' scripts/install.sh
+            sed -n '/^# ---- the skill (FEAT-141)/,/^# ---- report/p' scripts/install.sh; } > "$work/step.sh"
+          grep -q 'skill install' "$work/step.sh" || { echo "::error::no skill step found in install.sh" >&2; exit 1; }
+          mkdir -p "$work/bin" "$work/claude"
+          printf '#!/bin/sh\necho "$@" >> "%s/asked"\n' "$work" > "$work/bin/kanbanr"
+          printf '#!/bin/sh\nexit 0\n' > "$work/claude/claude"
+          chmod +x "$work/bin/kanbanr" "$work/claude/claude"
+          run() { rm -f "$work/asked"; env -i PATH="$1:/usr/bin:/bin" INSTALL_DIR="$work/bin" NO_SKILL="$2" sh -c ". '$work/step.sh'" 2>"$work/said"; }
+          run "$work/claude" ""
+          [ "$(cat "$work/asked")" = "skill install" ] || { echo "::error::with claude present the skill was not installed" >&2; exit 1; }
+          run "$work/claude" 1
+          [ ! -e "$work/asked" ] || { echo "::error::--no-skill still installed the skill" >&2; exit 1; }
+          grep -q "skipped" "$work/said"
+          run "/nonexistent" ""
+          [ ! -e "$work/asked" ] || { echo "::error::without claude the skill was installed anyway" >&2; exit 1; }
+          grep -q "kanbanr skill install" "$work/said" || { echo "::error::without claude, no hint was given" >&2; exit 1; }
+          echo "install.sh: installs the skill with claude present, skips it on --no-skill, hints without claude."
+
       # Every platform the shell installer claims to support must be one the release workflow
       # actually builds. They drifted apart once already, in the other direction — the script
       # promised linux/aarch64 that release.yml did not produce.

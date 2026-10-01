@@ -4,16 +4,19 @@
 #   curl -fsSL https://github.com/startr-trade/kanbanr/releases/latest/download/install.sh | sh
 #
 # Downloads the `kanbanr` binary for this platform from a GitHub release, VERIFIES its SHA-256
-# against the release's own SHA256SUMS, and installs it. Nothing else: no shell profile is edited,
-# no package manager is invoked, no daemon is started.
+# against the release's own SHA256SUMS, and installs it — and, when Claude Code (the `claude`
+# command) is on PATH, installs the kanbanr skill that binary carries into ~/.claude/skills/kanbanr
+# (FEAT-141). Nothing else: no shell profile is edited, no package manager is invoked, no daemon is
+# started. --no-skill leaves Claude Code alone.
 #
-# The binary carries the web monitor inside it (FEAT-084), so this is the whole install — there is
-# no second step to build a UI and no folder to point `serve` at.
+# The binary carries the web monitor and the skill inside it (FEAT-084, FEAT-141), so this is the
+# whole install, and the skill always matches the program it drives.
 #
 # Knobs (env or flag):
 #   KANBANR_VERSION=v0.1.0        --version <tag>   pin a release (default: latest, incl. pre-release)
 #   KANBANR_INSTALL_DIR=~/.local/bin  --dir <path>  install location (default: see below)
 #   KANBANR_NO_VERIFY=1                             skip checksum verification (discouraged)
+#   KANBANR_NO_SKILL=1                --no-skill    do not install the Claude Code skill
 #
 # Default install dir: $KANBANR_INSTALL_DIR, else /usr/local/bin when writable (or sudo is
 # available and we are interactive), else ~/.local/bin.
@@ -35,6 +38,7 @@ DL="https://github.com/${REPO}/releases/download"
 VERSION="${KANBANR_VERSION:-}"
 INSTALL_DIR="${KANBANR_INSTALL_DIR:-}"
 NO_VERIFY="${KANBANR_NO_VERIFY:-}"
+NO_SKILL="${KANBANR_NO_SKILL:-}"
 
 die() { printf 'kanbanr-install: %s\n' "$1" >&2; exit "${2:-1}"; }
 info() { printf '  %s\n' "$1" >&2; }
@@ -45,8 +49,9 @@ while [ $# -gt 0 ]; do
         --version) VERSION="${2:?--version needs a tag}"; shift 2 ;;
         --dir)     INSTALL_DIR="${2:?--dir needs a path}"; shift 2 ;;
         --no-verify) NO_VERIFY=1; shift ;;
+        --no-skill)  NO_SKILL=1; shift ;;
         -h|--help)
-            sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) die "unknown argument: $1" ;;
     esac
@@ -248,6 +253,20 @@ chmod +x "$bin"
 $SUDO mv "$bin" "${INSTALL_DIR}/kanbanr" || die "could not install into ${INSTALL_DIR}" 1
 info "installed ${INSTALL_DIR}/kanbanr"
 
+# ---- the skill (FEAT-141) ----------------------------------------------------------------
+# The program carries the skill it matches; Claude Code needs it in its skills folder. Written by
+# the program, as the user — never with sudo, which would leave it in root's home. A skill folder
+# kanbanr did not write (a link to a clone, a plugin's copy) is left alone, and the program says so.
+if [ -n "$NO_SKILL" ]; then
+    info "Claude Code skill: skipped (--no-skill) — later: kanbanr skill install"
+elif have claude; then
+    "${INSTALL_DIR}/kanbanr" skill install \
+        || info "Claude Code skill: not installed — run: kanbanr skill install"
+else
+    info "Claude Code skill: no claude command on PATH — once Claude Code is installed, run:"
+    info "    kanbanr skill install"
+fi
+
 # ---- report -----------------------------------------------------------------------------
 printf '\n'
 "${INSTALL_DIR}/kanbanr" --version 2>/dev/null || true
@@ -257,10 +276,14 @@ case ":${PATH}:" in
            "$INSTALL_DIR" "$INSTALL_DIR" ;;
 esac
 
-# The monitor is inside the binary, so "next" really is two commands and no build step.
+# The monitor and the skill are inside the binary, so "next" is Claude Code and nothing to build.
 cat <<'NEXT'
 
-Next — from inside a git repository you want to track:
+Next — open Claude Code in a project you want to track and say:
+
+    set up kanbanr for this project
+
+Or from a terminal, inside the project:
 
     kanbanr init                   # asks where to keep the board, suggesting <repo>.kanbanr
                                    #   beside it, and records the choice in a .kanbanr marker
@@ -269,5 +292,5 @@ Next — from inside a git repository you want to track:
 `serve` needs no --ui-dir: the web monitor is built into this binary. It finds the board from the
 .kanbanr marker; to point it elsewhere use `kanbanr serve --data-dir <path>` or KANBANR_DATA_DIR.
 
-Docs: https://github.com/startr-trade/kanbanr#readme
+Docs: https://kanbanr.startr.trade
 NEXT
