@@ -14,7 +14,7 @@ something moves. Everything it held now lives where it is maintained:
 | Why the architecture is the way it is | `kanbanr adr list` |
 | How the last wave actually went | `kanbanr retro <MS-00x>` |
 
-A released version's scope is in [CHANGELOG.md](../CHANGELOG.md), which is the roadmap's durable
+A released version's scope is in [CHANGELOG.md](https://github.com/startr-trade/kanbanr/blob/main/CHANGELOG.md), which is the roadmap's durable
 half: it says what shipped rather than what was hoped for.
 
 > If you are reading this in a published repository without the board beside it, the CHANGELOG is

@@ -164,12 +164,14 @@ kanbanr config cadence --sprints on --releases on --unit points --sprint-length 
 kanbanr sprint add --start 2026-10-05 --goal "Shoppers can pay" --capacity 20
 kanbanr sprint plan SP-001 FEAT-001 FEAT-002    # warns when it goes over capacity
 kanbanr sprint start SP-001
+kanbanr sprint list                             # every sprint and its state
 kanbanr sprint show                             # goal, days left, committed vs done, burndown
 kanbanr sprint close SP-001 --carry-to SP-002   # unfinished work moves on, and is recorded
 kanbanr retro --sprint SP-001
 
 kanbanr release add v0.1.0 --target 2026-10-18
 kanbanr release plan v0.1.0 FEAT-001 FEAT-002
+kanbanr release list                            # every release, planned or shipped
 kanbanr release cut v0.1.0 --tag                # ship what is finished, write notes, carry the rest
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a release
 ```

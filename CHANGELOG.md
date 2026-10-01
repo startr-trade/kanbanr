@@ -483,6 +483,12 @@ reported against it.
   already continuing because of a Stop hook.
 
 ### Changed
+- **The README describes kanbanr as it now is (FEAT-134).** It leads with why kanbanr exists and
+  what it gives you — the method, processes and gates, sprints and releases, traceability, the
+  monitor, local-first — each linked to its chapter, then the screenshots, a quick start, how kanbanr
+  is developed with kanbanr, and how it works. The screenshot gallery moved to the monitor chapter,
+  the command reference now lists every command, the architecture chapter covers the readiness
+  engine, gates and cadence, and the quick start no longer says hooks are installed machine-wide.
 - Relicensed the workspace to **MIT OR Apache-2.0** (was MIT) — the Rust-ecosystem norm.
 - **kanbanr is not published to crates.io (FEAT-024, ADR-0011).** It ships only as the GitHub
   release archives, the `install.sh` / `install.ps1` installers and the GHCR image; `kanbanr-cli`,

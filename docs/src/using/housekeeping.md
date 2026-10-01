@@ -40,4 +40,4 @@ where --json` tells you which folder is in use and why.
 - **A move was rejected** — the transition isn't allowed; check `kanbanr config show`.
 - **A feature add was rejected** — every feature needs an existing `--milestone`.
 
-See **[DESIGN.md](DESIGN.md)** for architecture and on-disk layout.
+See **[the architecture overview](../architecture/overview.md)** and **[the on-disk layout](../reference/data-layout.md)**.

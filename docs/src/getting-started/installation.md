@@ -204,4 +204,4 @@ are the supported way to get a complete binary. (The one crate that is published
 
 ## Next
 
-**[USER_GUIDE.md](USER_GUIDE.md)** — the board, the method, and what the CLI can do.
+**[Everyday use](../using/everyday.md)** — the board, the method, and what the CLI can do.

@@ -11,7 +11,7 @@ kanbanr init my-app --author "You" --email you@example.com  # data dir + git rep
 
 From source instead: `make install`, which builds the SPA, installs the binary and links the skill.
 Version pinning, checksums, rate limits, published targets and the glibc floor are in
-**[INSTALL.md](INSTALL.md)**.
+**[the installation chapter](installation.md)**.
 
 `init` creates the data dir (a git repo), sets your commit identity, scaffolds a project, and
 selects it here (a `.kanbanr` marker). If this folder **already** names a board, `init` refuses
@@ -21,11 +21,12 @@ deliberately, and `kanbanr project use <name>` switches project within the same 
 no accounts**. Each change you make is a git commit authored by your identity. (libgit2 is linked
 in — no external `git` needed.)
 
-`init` also registers kanbanr's two **Claude Code hooks** in your global Claude Code settings
-(`~/.claude/settings.json`): one shows the board when a Claude session starts, the other reminds
-Claude to record its work. It's done once per machine and merged with your existing settings; the
-hooks only act in folders kanbanr tracks. Skip it with `kanbanr init --no-hooks`, and manage it
-later with `kanbanr hooks install | status | uninstall`.
+`init` also registers kanbanr's **Claude Code hooks** in this project's `.claude/settings.json`,
+merged with whatever is there: the board is shown when a Claude session starts, a turn that changed
+code is reminded to record it, commits and notes are checked on the way, and each session is
+summarised beside the board. They act only in folders kanbanr tracks. Skip them with
+`kanbanr init --no-hooks`; `kanbanr hooks install --global` registers them for every project on the
+machine instead; `kanbanr hooks install | status | uninstall` manages them later.
 
 ### Setting up through Claude: a setup interview first
 
