@@ -34,6 +34,3 @@ docs/book
 
 
 
-# This checkout's pointer to its board. The board is private and lives beside the repository;
-# the marker names a local folder, so it is kept out of the published tree.
-/.kanbanr

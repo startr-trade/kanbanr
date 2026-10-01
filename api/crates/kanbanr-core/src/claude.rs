@@ -19,6 +19,30 @@ use crate::{Charter, Store};
 pub const BEGIN: &str = "<!-- kanbanr:begin — generated, edits here are overwritten -->";
 pub const END: &str = "<!-- kanbanr:end -->";
 
+/// The board's published address: its first remote, as a browsable https URL. `None` for a board
+/// that is not shared, or shared at an address that is not a web host.
+fn board_url(store: &Store) -> Option<String> {
+    let (_, url) = crate::git::list_remotes(store.data_dir())
+        .into_iter()
+        .next()?;
+    web_url(&url)
+}
+
+/// `git@github.com:o/r.git` and `https://github.com/o/r.git` both become `https://github.com/o/r`;
+/// a local path or an unfamiliar scheme is no address a reader can open.
+fn web_url(remote: &str) -> Option<String> {
+    let trimmed = remote.trim().trim_end_matches('/');
+    let trimmed = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+    if let Some(rest) = trimmed.strip_prefix("git@") {
+        let (host, path) = rest.split_once(':')?;
+        return Some(format!("https://{host}/{path}"));
+    }
+    if let Some(rest) = trimmed.strip_prefix("ssh://git@") {
+        return Some(format!("https://{rest}"));
+    }
+    trimmed.starts_with("https://").then(|| trimmed.to_string())
+}
+
 /// Render the block for a project. `None` when there is nothing worth saying — a project with no
 /// charter has no reasoning to put in front of anyone, and an empty block would be noise that
 /// still has to be maintained.
@@ -35,6 +59,19 @@ pub fn block(store: &Store, project: &str) -> Result<Option<String>> {
          a separate git repository beside this one. **Recover from it at the start of every \
          session** and record work there as you go — this block is a pointer, not a copy.\n\n",
     );
+    // Where it is published, when it is (FEAT-136): a contributor's Claude, in a fresh clone, has
+    // no board until it is told where to get one.
+    if let Some(url) = board_url(store) {
+        let folder = store
+            .data_dir()
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "the board".into());
+        out.push_str(&format!(
+            "The board is published at <{url}>. Clone it beside this repository as `{folder}` \
+             (`git clone {url} ../{folder}`) and kanbanr finds it.\n\n"
+        ));
+    }
 
     if !charter.purpose.trim().is_empty() {
         let purpose = charter.purpose.trim().replace('\n', " ");
@@ -194,5 +231,40 @@ mod tests {
         );
         assert_eq!(again.matches(BEGIN).count(), 1, "exactly one block");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FEAT-136: the board's remote becomes the address a contributor clones; a local path does not.
+    #[test]
+    fn the_block_names_where_the_board_is_published() {
+        assert_eq!(
+            web_url("git@github.com:startr-trade/kanbanr-board.git").as_deref(),
+            Some("https://github.com/startr-trade/kanbanr-board")
+        );
+        assert_eq!(
+            web_url("https://github.com/startr-trade/kanbanr-board.git").as_deref(),
+            Some("https://github.com/startr-trade/kanbanr-board")
+        );
+        assert_eq!(web_url("/srv/boards/shop.git"), None);
+
+        let (store, dir) = fixture();
+        crate::charter::save(
+            &store,
+            "demo",
+            &Charter {
+                purpose: "Keep the reasoning with the work.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let without = block(&store, "demo").unwrap().unwrap();
+        assert!(!without.contains("published at"), "{without}");
+        crate::git::add_remote(&dir, "origin", "git@github.com:o/shop-board.git").unwrap();
+        let with = block(&store, "demo").unwrap().unwrap();
+        assert!(
+            with.contains("published at <https://github.com/o/shop-board>"),
+            "{with}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

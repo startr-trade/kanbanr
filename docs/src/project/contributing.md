@@ -97,6 +97,26 @@ In practice, the PR template has a `Definition` block. Fill it in:
 You do **not** need the board to do this. `kanbanr check --file definition.yaml` validates a
 definition on its own, which is what CI runs on your PR — no board access required.
 
+### Reading the project's board
+
+The board itself is public: **<https://github.com/startr-trade/kanbanr-board>**. Clone it beside
+this repository — the committed `.kanbanr` points at `../kanbanr-board` — and the whole method is
+there to read:
+
+```bash
+git clone https://github.com/startr-trade/kanbanr-board ../kanbanr-board
+kanbanr board                        # what is planned, in progress and done
+kanbanr ready                        # what can be picked up now
+kanbanr feature show FEAT-128        # why an item exists, and how it was verified
+kanbanr why api/crates/kanbanr-cli/src/main.rs:120   # the item and requirement behind a line
+kanbanr serve                        # the live monitor
+```
+
+Before you change something, `kanbanr why` on the lines you are touching names the requirement they
+serve; your definition should say whether you keep it, change it, or add one beside it. Only the
+maintainer writes to the board: a contribution's definition travels in its pull request, and the
+maintainer records it on the board when the pull request is merged.
+
 ### A worked example
 
 A real change from this project's own history, end to end. The defect: ticking an item's last task

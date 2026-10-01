@@ -96,6 +96,40 @@ flowchart LR
 - The shared `kanbanr-core` (incl. a `dispatch` router) is the single engine used by both the
   writer and the view daemon.
 
+## Developed with kanbanr
+
+kanbanr is built the way it asks you to build: its own board is the system of record for its
+development, and it is public — **<https://github.com/startr-trade/kanbanr-board>**.
+
+- **Why it exists:** the [charter](https://github.com/startr-trade/kanbanr-board/blob/main/projects/kanbanr/charter.yaml) — the purpose, the goals every item links to
+  (`G-1` … `G-5`), and what is deliberately out of scope.
+- **Every item says why and how it is verified.** For example [FEAT-128](https://github.com/startr-trade/kanbanr-board/blob/main/projects/kanbanr/features/Completed/FEAT-128.yaml):
+  a statement, the goals it serves, Zachman answers, EARS requirements, and the named tests that
+  turned them green — agreed to before the work started.
+- **Decisions and what was learned:** the [architecture decisions](https://github.com/startr-trade/kanbanr-board/tree/main/projects/kanbanr/docs/decisions), the
+  [milestone retrospectives](https://github.com/startr-trade/kanbanr-board/tree/main/projects/kanbanr/docs/retros), and the [lessons](https://github.com/startr-trade/kanbanr-board/blob/main/projects/kanbanr/lessons.yaml) a new item is
+  checked against.
+- **Every commit names its item.** `git log` here carries `Refs: kanbanr:FEAT-…` trailers, and the
+  commit hooks refuse one that names nothing.
+- **Any line traces back to its reason:**
+
+  ```console
+  $ kanbanr why api/crates/kanbanr-core/src/git.rs:40
+  api/crates/kanbanr-core/src/git.rs:40 — from the annotation on the code: FEAT-128
+
+    requirement  FEAT-128/R-1: WHEN a data repository is created, THE SYSTEM SHALL author its first commit with the user's identity.
+    …
+  ```
+
+To browse it live, clone the board beside this repository — the committed `.kanbanr` already
+points there:
+
+```bash
+git clone https://github.com/startr-trade/kanbanr-board ../kanbanr-board
+kanbanr board          # the kanban, in the terminal
+kanbanr serve          # the live monitor
+```
+
 ## How Claude uses it
 
 Say **"start using kanbanr for this project"** once, and Claude adopts kanbanr as the **single

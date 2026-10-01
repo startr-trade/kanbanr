@@ -1,0 +1,4 @@
+# kanbanr: this folder's project and where its board lives (relative to this file).
+# The board is public: git clone https://github.com/startr-trade/kanbanr-board ../kanbanr-board
+project: kanbanr
+data_dir: ../kanbanr-board
