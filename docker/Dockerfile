@@ -2,7 +2,9 @@
 # One image, one binary: `kanbanr` runs the view daemon (`kanbanr serve`) which serves the built
 # React SPA + read API + live SSE over the mounted data folder. Docker is OPTIONAL — the same
 # binary runs natively with no container. Build context must be the repo root:
-#     docker build -f docker/Dockerfile -t kanbanr .
+#     docker build -f docker/Dockerfile -t kanbanr \
+#       --build-arg KANBANR_GIT_SHA="$(git rev-parse --short=12 HEAD)" \
+#       --build-arg KANBANR_BUILD_DATE="$(git log -1 --format=%cd --date=short)" .
 
 # ---- Stage 1: build the web SPA ----
 FROM node:22-slim AS web
@@ -53,7 +55,13 @@ COPY api/ ./
 # deployment where a stale --ui-dir could still work and hide a broken embed.
 COPY --from=web /web/dist /web/dist
 ENV KANBANR_UI_DIST=/web/dist
-RUN cargo build --release -p kanbanr-cli
+# The build context has no .git (.dockerignore), so the commit and its date come in as arguments,
+# or `--version` says `unknown` (FEAT-144). Declared here, after the cooked dependencies, so a new
+# commit does not invalidate that layer.
+ARG KANBANR_GIT_SHA=""
+ARG KANBANR_BUILD_DATE=""
+RUN KANBANR_GIT_SHA="$KANBANR_GIT_SHA" KANBANR_BUILD_DATE="$KANBANR_BUILD_DATE" \
+    cargo build --release -p kanbanr-cli
 
 # ---- Stage 3: slim runtime — the one binary, in serve mode ----
 FROM debian:bookworm-slim
