@@ -54,6 +54,10 @@ COPY api/ ./
 # exercises the same embedded path a downloaded release binary takes, instead of being the one
 # deployment where a stale --ui-dir could still work and hide a broken embed.
 COPY --from=web /web/dist /web/dist
+# The skill the program carries (FEAT-141) is embedded at build time from ../../../skill/kanbanr,
+# which from /api/crates/kanbanr-cli is /skill. Without it the image's kanbanr carries none and is
+# not the program the archives ship (FEAT-145).
+COPY skill/ /skill/
 ENV KANBANR_UI_DIST=/web/dist
 # The build context has no .git (.dockerignore), so the commit and its date come in as arguments,
 # or `--version` says `unknown` (FEAT-144). Declared here, after the cooked dependencies, so a new

@@ -383,9 +383,9 @@ jobs:
             KANBANR_GIT_SHA=${{ github.sha }}
             KANBANR_BUILD_DATE=${{ steps.stamp.outputs.date }}
 
-      # Same check the archives get: a binary that cannot say which build it is is not pushed.
-      - name: The image names the commit it was built from
-        run: scripts/check-image-stamp.sh kanbanr:scan "$GITHUB_SHA"
+      # A binary that cannot say which build it is, or lacks the skill the archives carry, is not pushed.
+      - name: The image's kanbanr is the released program (its commit, date and skill)
+        run: scripts/check-image.sh kanbanr:scan "$GITHUB_SHA"
 
       - name: Scan the image before it is pushed
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

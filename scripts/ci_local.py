@@ -130,7 +130,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
         "image": {
             "Lowercase image name": "names the GHCR image; the image build itself is checked below",
             "The commit and its date, for the image's --version": "feeds the image build; checked below with the same values",
-            "The image names the commit it was built from": "checks the image built for scanning; run below on the image make ci builds",
+            "The image's kanbanr is the released program (its commit, date and skill)": "checks the image built for scanning; run below on the image make ci builds",
         },
         "crates": {
             "Publish ears-classifier": "publishes to crates.io",
@@ -394,8 +394,8 @@ def uses_equivalents() -> None:
                   "--build-arg", f"KANBANR_GIT_SHA={sha.strip()}",
                   "--build-arg", f"KANBANR_BUILD_DATE={date.strip()}", "."], TREE)
     say("release image: docker/Dockerfile builds (docker/build-push-action, without the push)", ok, out)
-    ok, out = sh([str(TREE / "scripts/check-image-stamp.sh"), "kanbanr:ci-local"], TREE)
-    say("release image: its kanbanr names the commit and date it was built from", ok, out)
+    ok, out = sh([str(TREE / "scripts/check-image.sh"), "kanbanr:ci-local"], TREE)
+    say("release image: its kanbanr names its commit and date, and carries the repository's skill", ok, out)
     ok, out = sh([str(TREE / "scripts/security-scan.sh"), "image", "kanbanr:ci-local"], TREE)
     say("release image: no fixable HIGH/CRITICAL finding (release.yml's scan before the push)", ok, out)
     ok, out = sh([str(TREE / "scripts/security-scan.sh"), "deps", str(TREE)], TREE)

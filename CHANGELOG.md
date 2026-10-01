@@ -13,6 +13,11 @@ All notable changes to kanbanr are documented here. The format follows
   handed it the commit. The release now passes the commit and its date in as build arguments, and
   refuses to push an image whose binary does not name them — the check the archives already had.
   `make ci` builds the image the same way and runs the same check.
+- **The container image's kanbanr carried no skill (FEAT-145).** The image's build stage copied only
+  `api/`, so the program embedded no Claude Code skill and `kanbanr skill install` in the image
+  refused — the same version as the archives, but not the same program. The build now copies
+  `skill/`, and the check before the push (`scripts/check-image.sh`) also requires the image's
+  kanbanr to install the repository's skill, file for file.
 
 ## [0.1.0] - 2026-10-01
 
