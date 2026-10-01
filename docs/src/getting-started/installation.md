@@ -96,6 +96,30 @@ anything newer. On an older distribution than that, build from source or use the
 a glibc mismatch shows up as `libc.so.6: version 'GLIBC_2.xx' not found` at startup, not as a
 subtle failure.
 
+## Install the skill
+
+The program is half of kanbanr; the other half is the **skill** that teaches Claude Code to use it.
+Pick one way — not both, or Claude Code loads two copies.
+
+**As a Claude Code plugin** — the skill plus its session-start, stop and session-summary hooks, in
+one step:
+
+```bash
+claude plugin marketplace add startr-trade/kanbanr
+claude plugin install kanbanr@kanbanr
+```
+
+**From a clone** — a link into Claude Code's personal skills folder, updated by `git pull`:
+
+```bash
+git clone https://github.com/startr-trade/kanbanr ~/.local/share/kanbanr
+make -C ~/.local/share/kanbanr install-skill      # links ~/.claude/skills/kanbanr
+```
+
+With the clone, the hooks come from `kanbanr hooks install` in each project, which `kanbanr init`
+and the setup interview run for you. Either way, then open Claude Code in a project and say **"set up
+kanbanr for this project"**.
+
 ## Run the monitor somewhere else
 
 ```bash

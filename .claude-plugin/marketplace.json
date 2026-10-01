@@ -1,31 +1,5 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "_comment_about_this_file": [
-    "Claude Code plugin MARKETPLACE catalog for kanbanr (roadmap FEAT-023).",
-    "It lists exactly one plugin — `kanbanr` — whose source is this same repo.",
-    "",
-    "Usage for end users:",
-    "  claude plugin marketplace add <github-owner>/kanbanr",
-    "  claude plugin install kanbanr@kanbanr",
-    "(or the in-app /plugin marketplace add + /plugin install equivalents).",
-    "",
-    "VERIFY-AGAINST-DOCS (per code.claude.com/docs/en/plugin-marketplaces,",
-    "current as of 2026-06):",
-    "  - name (required): marketplace id (kebab-case). Users reference it as",
-    "    `plugin@<this-name>`. Must NOT collide with reserved Anthropic names.",
-    "  - owner (required): { name, email? }.",
-    "  - plugins (required): array; each entry needs `name` + `source`.",
-    "  - source `\"./\"`: a relative path (must start with `./`) resolved from the",
-    "    marketplace ROOT (the dir containing this .claude-plugin/). Here the",
-    "    plugin IS the repo root, so its source is `\"./\"` and its manifest is the",
-    "    sibling .claude-plugin/plugin.json. Relative-path sources only work when",
-    "    the marketplace is added via git (GitHub/GitLab/git URL), which is the",
-    "    intended distribution path.",
-    "",
-    "  `_comment*` keys are ignored by Claude Code (strict JSON, unknown keys",
-    "  dropped) and may be stripped."
-  ],
-
   "name": "kanbanr",
   "description": "Marketplace for the kanbanr Claude Code plugin (skill + enforcement hooks).",
   "owner": {
@@ -35,9 +9,14 @@
     {
       "name": "kanbanr",
       "source": "./",
-      "description": "kanbanr — project-management system of record for Claude-driven development. Bundles the kanbanr skill with SessionStart + Stop enforcement hooks. Requires the `kanbanr` binary on PATH (ships separately via crates.io / GitHub Releases).",
+      "description": "kanbanr — the system of record for Claude-driven development: the skill plus its session-start, stop and session-summary hooks. Needs the kanbanr program from the GitHub release.",
       "category": "productivity",
-      "keywords": ["kanbanr", "project-management", "kanban", "workflow"]
+      "keywords": [
+        "kanbanr",
+        "project-management",
+        "kanban",
+        "workflow"
+      ]
     }
   ]
 }

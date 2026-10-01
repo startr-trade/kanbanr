@@ -86,8 +86,16 @@ curl -fsSL https://github.com/startr-trade/kanbanr/releases/latest/download/inst
 irm https://github.com/startr-trade/kanbanr/releases/latest/download/install.ps1 | iex
 ```
 
-One binary, checked against the release's `SHA256SUMS`, with the monitor inside it. Then, in your
-project, ask Claude to **"set up kanbanr for this project"**: it interviews you in plan mode —
+One binary, checked against the release's `SHA256SUMS`, with the monitor inside it. Then add the
+skill to Claude Code:
+
+```bash
+claude plugin marketplace add startr-trade/kanbanr
+claude plugin install kanbanr@kanbanr
+```
+
+([or from a clone](docs/src/getting-started/installation.md#install-the-skill)). In your project,
+ask Claude to **"set up kanbanr for this project"**: it interviews you in plan mode —
 where the board lives, your identity, a charter drafted from your repository, and the process —
 and sets everything up when you approve the plan. Or from a terminal:
 
