@@ -341,6 +341,14 @@ def uses_equivalents() -> None:
     say("trivy.yml: no finding in dependencies, secrets or the Dockerfile (stricter than CI)", ok, out)
     not_verified.append("codeql.yml: CodeQL (run `make codeql`; several minutes, so not part of make ci)")
     not_verified.append("codeql.yml / trivy.yml: uploads to code scanning")
+    # The plugin manifests (FEAT-139): nothing checked them, and a skills path Claude Code could not
+    # resolve shipped. Validated wherever the claude command is installed; said so where it is not.
+    if shutil.which("claude"):
+        ok, out = sh(["claude", "plugin", "validate", "."], TREE)
+        say("plugin: claude plugin validate . (marketplace and plugin manifests)",
+            ok and "warning" not in out.lower(), out)
+    else:
+        not_verified.append("plugin: claude plugin validate . (no claude command here)")
     not_verified.append("release.yml image: pushing to GHCR")
     not_verified.append("release.yml release: creating the GitHub release")
     not_verified.append("docs.yml deploy: publishing to GitHub Pages")

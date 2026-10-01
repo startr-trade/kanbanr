@@ -270,7 +270,7 @@ their `settings.json`. The plugin files live at the repo root:
 Users install with:
 
 ```shell
-claude plugin marketplace add <github-owner>/kanbanr   # add this repo as a marketplace
+claude plugin marketplace add startr-trade/kanbanr     # add this repo as a marketplace
 claude plugin install kanbanr@kanbanr                  # install the plugin (skill + hooks)
 ```
 

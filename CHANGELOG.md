@@ -225,6 +225,13 @@ reported against it.
 
 ### Fixed
 
+- **The Claude Code plugin failed validation (FEAT-139).** Its skill path used
+  `${CLAUDE_PLUGIN_ROOT}`, which Claude Code expands only in hook commands, so `claude plugin
+  validate` failed and the plugin could not load its skill. The path is `./skill/` now, the
+  manifests carry no comment keys (the notes are in `.claude-plugin/README.md`), the description no
+  longer points at crates.io, the licence reads `MIT OR Apache-2.0`, and `make ci` validates the
+  plugin wherever `claude` is installed. The README and the installation chapter now say how to
+  install the skill — as a plugin, or from a clone.
 - **The monitor rendered board markdown unsanitised (FEAT-140).** CodeQL's first run on the public
   repository flagged a Mermaid diagram inserted as raw HTML; behind it, every spec and board
   document went into the page as `marked` produced it. A shared board's documents are written by
