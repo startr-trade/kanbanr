@@ -6,7 +6,24 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-10-02
+## [0.1.1] - 2026-10-02
+
+The container image is the released program.
+
+### Fixed
+
+- **The container image's kanbanr could not say which build it is (FEAT-144).** `kanbanr --version`
+  in the GHCR image printed `(unknown, built unknown)`: the image is built without `.git`, and nothing
+  handed it the commit. The release now passes the commit and its date in as build arguments, and
+  refuses to push an image whose binary does not name them — the check the archives already had.
+  `make ci` builds the image the same way and runs the same check.
+- **The container image's kanbanr carried no skill (FEAT-145).** The image's build stage copied only
+  `api/`, so the program embedded no Claude Code skill and `kanbanr skill install` in the image
+  refused — the same version as the archives, but not the same program. The build now copies
+  `skill/`, and the check before the push (`scripts/check-image.sh`) also requires the image's
+  kanbanr to install the repository's skill, file for file.
+
+## [0.1.0] - 2026-10-01
 
 The first public release.
 
@@ -239,16 +256,6 @@ reported against it.
 
 ### Fixed
 
-- **The container image's kanbanr could not say which build it is (FEAT-144).** `kanbanr --version`
-  in the GHCR image printed `(unknown, built unknown)`: the image is built without `.git`, and nothing
-  handed it the commit. The release now passes the commit and its date in as build arguments, and
-  refuses to push an image whose binary does not name them — the check the archives already had.
-  `make ci` builds the image the same way and runs the same check.
-- **The container image's kanbanr carried no skill (FEAT-145).** The image's build stage copied only
-  `api/`, so the program embedded no Claude Code skill and `kanbanr skill install` in the image
-  refused — the same version as the archives, but not the same program. The build now copies
-  `skill/`, and the check before the push (`scripts/check-image.sh`) also requires the image's
-  kanbanr to install the repository's skill, file for file.
 - **The release reported a correct binary as wrong, and skipped crates.io (FEAT-143).** The installer
   check ran in a container, where steps run under `sh` (dash), and cut the commit to 12 characters
   with a bash-only expansion — so v0.1.0 published correctly and then said its binary did not name
@@ -576,5 +583,6 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/startr-trade/kanbanr/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/startr-trade/kanbanr/releases/tag/v0.1.0
