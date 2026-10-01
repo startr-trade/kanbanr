@@ -321,7 +321,9 @@ jobs:
           echo "$v" | grep -q "${GITHUB_REF_NAME#v}" \
             || { echo "::error::--version does not name the released version: $v" >&2; exit 1; }
           # The same SHA the release page shows, so an installed binary can be matched against it.
-          echo "$v" | grep -q "${GITHUB_SHA:0:12}" \
+          # POSIX only: a container job runs this with sh (dash), which has no ${VAR:0:12} (FEAT-143).
+          sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-12)"
+          echo "$v" | grep -q "$sha" \
             || { echo "::error::--version does not name the released commit: $v" >&2; exit 1; }
 
       - name: The monitor is served with no --ui-dir and no build step
