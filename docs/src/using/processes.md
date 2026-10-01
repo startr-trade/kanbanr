@@ -65,6 +65,7 @@ gates:
 | `enforce` | `block` (the default) refuses the move; `warn` allows it and reports what is missing. |
 | `kinds` | Apply only to items of these kinds; an item with no kind is a `feature`. |
 | `on_enter` | `branch`: `kanbanr start` makes the item's branch here, where the project is a git repository. |
+| `done` | `true`: reaching this stage finishes an item for the sprint burndown, the sprint's done total and what a closing sprint carries over. Without it only the end statuses count. The `scrum` preset marks **Done**, its Definition of Done, so a sprint burns down as items are done rather than all at once when a release ships them. |
 
 ### The checks
 
@@ -173,7 +174,9 @@ kanbanr release cut v0.1.0 --tag                # ship what is finished, write n
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a release
 ```
 
-The burndown and velocity are derived from the moves items record; nothing is stored for them.
+The burndown and velocity are derived from the moves items record; nothing is stored for them. An
+item counts as finished from the day it first reaches a stage marked `done` — Done, in `scrum` — or
+an end status.
 `kanbanr config workflow --write-agreement` writes the team's working agreement to the board,
 generated from the gates. Under Scrum that is the Definition of Ready and of Done. Because it is
 generated, it can't drift from what is enforced.

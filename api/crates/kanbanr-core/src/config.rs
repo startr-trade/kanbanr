@@ -157,6 +157,12 @@ pub struct Gate {
     pub kinds: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub on_enter: Vec<Action>,
+    /// Reaching this stage finishes an item for the cadence views — the sprint burndown, its done
+    /// total, what a closing sprint carries over (FEAT-137). Scrum's Definition of Done is the Done
+    /// column, not the release that ships it, and a burndown that waited for the release dropped in
+    /// one step on release day.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub done: bool,
 }
 
 impl Gate {
@@ -342,6 +348,9 @@ pub fn working_agreement(project: &str, config: &ProjectConfig) -> String {
                 warns.join(", ")
             ));
         }
+        if gate.done {
+            out.push_str("\nReaching this stage finishes an item for the sprint burndown.\n");
+        }
         if gate.on_enter.contains(&Action::Branch) {
             out.push_str("\nThe item's branch is made here.\n");
         }
@@ -424,6 +433,13 @@ impl ProjectConfig {
         self.no_op_states.iter().any(|s| s == status)
     }
 
+    /// Does reaching `status` finish an item for the cadence views (FEAT-137)? An end status that is
+    /// not a no-op does, as it always has; so does any stage whose gate says `done: true`.
+    pub fn counts_as_done(&self, status: &str) -> bool {
+        (crate::graph::is_terminal_status(self, status) && !self.is_no_op(status))
+            || self.gates.get(status).is_some_and(|g| g.done)
+    }
+
     /// Is moving from `from` to `to` allowed by the workflow? (Same-status is always allowed.)
     pub fn transition_allowed(&self, from: &str, to: &str) -> bool {
         if from == to {
@@ -486,5 +502,29 @@ impl ProjectConfig {
         } else {
             self.statuses.first().cloned().unwrap_or_default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FEAT-137: Scrum's Definition of Done is the Done column, so that is what finishes an item for
+    /// a sprint; Released still does too, and a no-op disposition never does.
+    #[test]
+    fn the_scrum_preset_counts_done_for_the_burndown() {
+        let scrum = preset("scrum").unwrap();
+        let mut config = ProjectConfig::default_for("shop");
+        config.statuses = scrum.statuses.clone();
+        config.terminal_states = scrum.terminal_states.clone();
+        config.no_op_states = scrum.no_op_states.clone();
+        config.gates = scrum.gates.clone();
+        assert!(config.counts_as_done("Done"));
+        assert!(config.counts_as_done("Released"));
+        assert!(!config.counts_as_done("Testing"));
+        assert!(!config.counts_as_done("Out-of-Scope"));
+        assert!(
+            working_agreement("shop", &config).contains("finishes an item for the sprint burndown")
+        );
     }
 }

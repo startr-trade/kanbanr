@@ -246,9 +246,11 @@ pub fn close(store: &Store, id: &str, code: &str, carry_to: Option<&str>) -> Res
     Ok(closed)
 }
 
+/// Finished for the sprint: at a stage that counts as done — an end status, or one the workflow
+/// marks `done` (FEAT-137). An item Done but not yet released is not carried over; one sent back
+/// from Done for rework is.
 fn done(project: &Project, f: &FeatureItem) -> bool {
-    crate::graph::is_terminal_status(&project.config, &f.status)
-        && !project.config.is_no_op(&f.status)
+    project.config.counts_as_done(&f.status)
 }
 
 /// An item's size in the project's unit; an unestimated item counts as nothing.
@@ -286,10 +288,7 @@ fn total(values: impl Iterator<Item = f64>) -> f64 {
 fn finished_on(project: &Project, f: &FeatureItem) -> Option<time::Date> {
     f.history
         .iter()
-        .find(|t| {
-            crate::graph::is_terminal_status(&project.config, &t.to)
-                && !project.config.is_no_op(&t.to)
-        })
+        .find(|t| project.config.counts_as_done(&t.to))
         .and_then(|t| crate::gantt::parse_ymd(&t.at))
 }
 
@@ -417,4 +416,122 @@ pub fn velocity(store: &Store, id: &str) -> Result<Option<Vec<(String, f64)>>> {
 /// Today's date (UTC, as every timestamp on the board is).
 pub fn today() -> time::Date {
     time::OffsetDateTime::now_utc().date()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{ProjectConfig, Store};
+
+    /// A store whose project has sprints and points on, three estimated items planned into SP-001
+    /// (5–9 Oct), and the given gates.
+    fn board(
+        tag: &str,
+        gates: std::collections::BTreeMap<String, crate::config::Gate>,
+    ) -> (Store, Vec<String>, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-sprints-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        let scrum = crate::config::preset("scrum").unwrap();
+        let mut config = ProjectConfig::default_for("shop");
+        config.statuses = scrum.statuses.clone();
+        config.default_state = scrum.default_state.clone();
+        config.displayed_states = scrum.displayed_states.clone();
+        config.terminal_states = scrum.terminal_states.clone();
+        config.no_op_states = scrum.no_op_states.clone();
+        config.transitions = scrum.transitions.clone();
+        config.gates = gates;
+        store.init_project("shop", config).unwrap();
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/shop/config/cadence",
+            Some(&serde_json::json!({"sprints": true, "estimate_unit": "points"})),
+        )
+        .unwrap();
+        store
+            .add_milestone("shop", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let mut codes = Vec::new();
+        for (title, points) in [("A", 3.0), ("B", 5.0), ("C", 8.0)] {
+            let f = store.add_feature("shop", title, "", "M", None).unwrap();
+            store.set_feature_points("shop", &f.code, points).unwrap();
+            codes.push(f.code);
+        }
+        let sp = super::add(&store, "shop", "2026-10-05", Some(5), "", None, "").unwrap();
+        super::plan(&store, "shop", &sp.code, &codes).unwrap();
+        (store, codes, dir)
+    }
+
+    /// Walk an item along the scrum stages to `status`, then date its arrival there `at`, as the
+    /// move history would have recorded it.
+    fn arrive(store: &Store, code: &str, status: &str, at: &str) {
+        const STAGES: [&str; 7] = [
+            "Backlog",
+            "Ready",
+            "In Progress",
+            "Review",
+            "Testing",
+            "Done",
+            "Released",
+        ];
+        let from = store
+            .load("shop")
+            .unwrap()
+            .feature(code)
+            .unwrap()
+            .status
+            .clone();
+        let start = STAGES.iter().position(|s| *s == from).unwrap();
+        let end = STAGES.iter().position(|s| *s == status).unwrap();
+        for stage in &STAGES[start + 1..=end] {
+            store.move_feature("shop", code, stage).unwrap();
+        }
+        let mut f = store.load("shop").unwrap().feature(code).unwrap().clone();
+        f.history.last_mut().unwrap().at = at.into();
+        store.persist_feature_for_test("shop", &f).unwrap();
+    }
+
+    fn remaining(store: &Store) -> Vec<f64> {
+        let today = crate::gantt::parse_ymd("2026-10-09").unwrap();
+        super::report(store, "shop", "SP-001", today)
+            .unwrap()
+            .burndown
+            .iter()
+            .map(|d| d.remaining)
+            .collect()
+    }
+
+    /// FEAT-137 R-1: with Done marked, an item burns down the day it reaches Done, not the day a
+    /// release ships it.
+    #[test]
+    fn a_stage_marked_done_burns_down_the_day_it_is_reached() {
+        let gates = crate::config::preset("scrum").unwrap().gates;
+        assert!(gates["Done"].done, "the preset marks Done");
+        let (store, codes, dir) = board("marked", gates);
+        arrive(&store, &codes[0], "Done", "2026-10-06T10:00:00Z");
+        arrive(&store, &codes[1], "Done", "2026-10-08T16:00:00Z");
+        arrive(&store, &codes[1], "Released", "2026-10-09T09:00:00Z");
+        assert_eq!(remaining(&store), [16.0, 13.0, 13.0, 8.0, 8.0]);
+        // And closing the sprint carries only what is not Done.
+        let closed = super::close(&store, "shop", "SP-001", Some("backlog")).unwrap();
+        let carried: Vec<&str> = closed.carried.iter().map(|c| c.code.as_str()).collect();
+        assert_eq!(carried, [codes[2].as_str()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-137 R-2: with no stage marked, the end status alone counts — as before.
+    #[test]
+    fn without_a_marked_stage_the_end_statuses_count() {
+        let mut gates = crate::config::preset("scrum").unwrap().gates;
+        for gate in gates.values_mut() {
+            gate.done = false;
+        }
+        let (store, codes, dir) = board("unmarked", gates);
+        arrive(&store, &codes[0], "Done", "2026-10-06T10:00:00Z");
+        arrive(&store, &codes[1], "Done", "2026-10-07T10:00:00Z");
+        arrive(&store, &codes[1], "Released", "2026-10-08T16:00:00Z");
+        assert_eq!(remaining(&store), [16.0, 16.0, 16.0, 11.0, 11.0]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
