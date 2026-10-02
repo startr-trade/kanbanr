@@ -76,8 +76,8 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
         "installers": {
             "The CLI links a TLS backend": LOCAL,
             "Install shellcheck": "installs a system package on the runner",
-            "shellcheck install.sh": LOCAL,
-            "install.ps1 parses": LOCAL,
+            "shellcheck the installer and its verifier": LOCAL,
+            "The PowerShell installer and its verifier parse": LOCAL,
             "The installers pin https on request and redirect": LOCAL,
             "The installer's targets are the targets we publish": LOCAL,
             "The installer's skill step does what it says": LOCAL,
@@ -124,8 +124,13 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
         "verify-install": {
             "Minimal prerequisites (as a stranger would have)": "installs from a published release",
             "Run the published installer": "installs from a published release",
-            "It installed, and it names both the version and the commit": "installs from a published release",
-            "The monitor is served with no --ui-dir and no build step": "installs from a published release",
+            "It names the release and its commit, and serves the monitor": "checks a just-published release; the script is run below against the latest one",
+        },
+        "verify-install-native": {
+            "Run the published installer (macOS)": "macOS runner, installs from a published release",
+            "Run the published installer (Windows)": "Windows runner, installs from a published release",
+            "It names the release and its commit, and serves the monitor (macOS)": "macOS runner; the same script is run below on Linux",
+            "It names the release and its commit, and serves the monitor (Windows)": "Windows runner; the script is parsed by the installers job",
         },
         "image": {
             "Lowercase image name": "names the GHCR image; the image build itself is checked below",
@@ -359,6 +364,33 @@ def container_steps_are_posix() -> None:
         "\n".join(problems))
 
 
+def verify_install_script() -> None:
+    """release.yml's installer check, run as the release runs it — install.sh in a bare container,
+    then scripts/verify-install.sh under its sh — against the latest published release (FEAT-149).
+
+    The release can only run it on a release it has just published; this is the one place the
+    script itself is exercised before a tag depends on it.
+    """
+    ok, tag = sh(["gh", "release", "view", "-R", "startr-trade/kanbanr", "--json", "tagName", "-q", ".tagName"], TREE)
+    ok2, commit = sh(["gh", "api", f"repos/startr-trade/kanbanr/commits/{tag.strip()}", "-q", ".sha"], TREE)
+    if not (ok and ok2):
+        say("release verify-install: scripts/verify-install.sh against the latest release", False,
+            "could not resolve the latest release with gh:\n" + tag + commit)
+        return
+    tag, commit = tag.strip(), commit.strip()
+    script = (
+        "set -eu; apt-get update -qq >/dev/null; "
+        "apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null; "
+        f"curl -fsSL https://github.com/startr-trade/kanbanr/releases/download/{tag}/install.sh "
+        f"| sh -s -- --version {tag} --dir /usr/local/bin --no-skill; "
+        "sh /repo/scripts/verify-install.sh"
+    )
+    ok, out = sh(["docker", "run", "--rm", "-v", f"{TREE}:/repo:ro", "-e", f"GITHUB_REF_NAME={tag}",
+                  "-e", f"GITHUB_SHA={commit}", "debian:bookworm-slim", "sh", "-c", script], TREE)
+    say(f"release verify-install: scripts/verify-install.sh against the latest release ({tag}, debian:bookworm-slim)",
+        ok, out)
+
+
 def vars_are_variables() -> None:
     """`vars.NAME` reads a repository *variable*; a secret of the same name is invisible to it.
 
@@ -388,6 +420,7 @@ def uses_equivalents() -> None:
     ok, out = sh(["mdbook-mermaid", "--version"], TREE)
     say(f"docs: mdbook-mermaid is the pinned {want['MDBOOK_MERMAID_VERSION']}",
         ok and want["MDBOOK_MERMAID_VERSION"] in out, out)
+    verify_install_script()
     _, sha = sh(["git", "rev-parse", "HEAD"], TREE)
     _, date = sh(["git", "log", "-1", "--format=%cd", "--date=short"], TREE)
     ok, out = sh(["docker", "build", "-q", "-f", "docker/Dockerfile", "-t", "kanbanr:ci-local",

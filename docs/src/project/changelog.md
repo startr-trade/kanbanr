@@ -6,6 +6,15 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The release proves its installers on every system it publishes for (FEAT-149).** After a
+  release is published, `install.sh` now runs on macOS and `install.ps1` on Windows — run as the
+  docs tell a user to, `irm … | iex` included — beside the two Linux containers, and each install
+  must name the release and its commit and serve the monitor. The checks live in
+  `scripts/verify-install.sh` and its Windows twin, and `make ci` runs the first against the latest
+  published release.
+
 ## [0.1.1] - 2026-10-02
 
 The container image is the released program.

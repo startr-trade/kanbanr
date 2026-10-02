@@ -210,20 +210,22 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
-      - name: shellcheck install.sh
-        run: shellcheck --shell=sh --severity=warning scripts/install.sh
+      - name: shellcheck the installer and its verifier
+        run: shellcheck --shell=sh --severity=warning scripts/install.sh scripts/verify-install.sh
 
       # pwsh is preinstalled on GitHub's ubuntu runners. Parsing is not running, but it catches
       # the unbalanced-quote and bad-cmdlet mistakes that would otherwise only surface on a
       # Windows machine we are not testing on.
-      - name: install.ps1 parses
+      - name: The PowerShell installer and its verifier parse
         shell: pwsh
         run: |
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            "scripts/install.ps1", [ref]$null, [ref]$errors) | Out-Null
-          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
-          Write-Host "install.ps1 parses clean"
+          foreach ($script in "scripts/install.ps1", "scripts/verify-install.ps1") {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              $script, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+            Write-Host "$script parses clean"
+          }
 
       # Updates over plaintext are not made safe by a checksum — SHA256SUMS arrives over the same
       # channel (FEAT-089). curl's -L follows redirects and a release download IS one, so the
