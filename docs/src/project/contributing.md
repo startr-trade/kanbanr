@@ -75,6 +75,8 @@ make serve          # builds the SPA + serves the read-only monitor on http://lo
 - Update tests for behavior changes; `kanbanr-core` is where the engine tests live.
 - Update the relevant docs (the [Using kanbanr](../using/everyday.md) and [Architecture](../architecture/overview.md) chapters,
   the [skill](https://github.com/startr-trade/kanbanr/blob/main/skill/kanbanr/SKILL.md)) when you change a contract.
+- A change to a surface [Stability](stability.md) lists as stable says so in its item and its
+  changelog entry, and never breaks it outside a major version.
 
 ## The bar: say why, and show it works
 

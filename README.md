@@ -161,7 +161,8 @@ More in [the architecture chapter](docs/src/architecture/overview.md).
 ## Documentation
 
 **<https://kanbanr.startr.trade>** — or [`docs/src/`](docs/src/SUMMARY.md) in this repository,
-`mdbook serve docs` to build it locally.
+`mdbook serve docs` to build it locally. What stays compatible from 1.0 — the board format, the
+CLI and its `--json`, the monitor's API — is in [Stability](docs/src/project/stability.md).
 
 ## Contributing
 
