@@ -78,6 +78,12 @@ jobs:
             echo "::error:: commit provenance point at a release the binary does not claim to be.)" >&2
             exit 1
           fi
+          # The VS Code extension ships in the release too (FEAT-152), under the same version.
+          ext="$(python3 -c "import json; print(json.load(open('editor/vscode/package.json'))['version'])")"
+          if [ "$ext" != "$version" ]; then
+            echo "::error::tag ${tag} names version ${version}, but editor/vscode/package.json says ${ext}." >&2
+            exit 1
+          fi
 
           # A tag with a hyphen is a pre-release (v0.1.0-rc.1) and must NOT move `latest`:
           # `docker pull …:latest` after an rc would quietly hand people the release candidate.
@@ -245,9 +251,38 @@ jobs:
   # being a CDN of the default branch, would hand out an installer that may not match the release
   # it is installing. From here the script and the binaries it fetches are one artifact set,
   # versioned together.
+  # ---- 1a'. The VS Code extension, packaged from the tag (FEAT-152) -------------
+  # Attached to the release beside the binaries, so SHA256SUMS covers it and a VS Code user can
+  # install it with `code --install-extension`; Open VSX gets the same file, further down.
+  vscode:
+    name: VS Code extension
+    needs: tag
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: editor/vscode
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editor/vscode/package-lock.json
+      - name: Install the extension's dependencies
+        run: npm ci
+      - name: Package the extension
+        env:
+          VERSION: ${{ needs.tag.outputs.version }}
+        run: npm run package -- -o "kanbanr-vscode-${VERSION}.vsix"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: dist-vscode
+          path: editor/vscode/kanbanr-vscode-*.vsix
+          if-no-files-found: error
+
   release:
     name: publish the release
-    needs: binaries
+    needs: [binaries, vscode]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -278,6 +313,37 @@ jobs:
           files: staged/*
           fail_on_unmatched_files: false
           generate_release_notes: true
+
+  # ---- 1b'. The extension on Open VSX (FEAT-152), once the repository opts in ------------
+  # Open VSX is the registry VSCodium, Cursor, Windsurf, Gitpod and Theia install from. Off until
+  # the repository variable PUBLISH_OPENVSX is `true` and the OVSX_PAT secret holds a token for the
+  # `kanbanr` namespace. A version already there is a success, as on crates.io: a re-run must pass.
+  openvsx:
+    name: publish the extension to Open VSX
+    needs: [tag, release]
+    if: ${{ vars.PUBLISH_OPENVSX == 'true' }}
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: editor/vscode
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editor/vscode/package-lock.json
+      - name: Install the extension's dependencies
+        run: npm ci
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: dist-vscode
+          path: editor/vscode/dist
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          VERSION: ${{ needs.tag.outputs.version }}
+        run: npx ovsx publish "dist/kanbanr-vscode-${VERSION}.vsix" --pat "$OVSX_PAT" --skip-duplicate
 
   # ---- 1c. Prove the one-liner actually works --------------------------------
   # Staging the installer as an asset makes it *available*; it does not make it *work*. This runs

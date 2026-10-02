@@ -41,14 +41,30 @@ surfaced via the *kanbanr* output channel and VS Code notifications.
   If the binary is missing, the extension tells you exactly this when you run a
   command.
 
+## Install
+
+Each [kanbanr release](https://github.com/startr-trade/kanbanr/releases) carries the extension as
+`kanbanr-vscode-<version>.vsix`, the same version as the program (and covered by the release's
+`SHA256SUMS`):
+
+```sh
+gh release download -R startr-trade/kanbanr -p 'kanbanr-vscode-*.vsix'
+code --install-extension kanbanr-vscode-*.vsix
+```
+
+Or, in VS Code: **Extensions → ⋯ → Install from VSIX…**. VSCodium, Cursor, Windsurf and other
+editors that use [Open VSX](https://open-vsx.org) can install it from there once it is published
+under the `kanbanr` namespace.
+
 ## Build & run (development)
 
 This extension is authored in TypeScript and compiled with `tsc`. No bundler.
 
 ```sh
 cd editor/vscode
-npm install        # installs @types/vscode, @types/node, typescript
+npm ci             # the pinned toolchain: typescript, @vscode/vsce, ovsx
 npm run compile    # tsc -p ./  →  emits out/extension.js
+npm run package    # a .vsix, as the release builds it
 ```
 
 Then open this folder in VS Code and press **F5** (Run Extension) to launch an

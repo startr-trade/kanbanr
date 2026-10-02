@@ -183,6 +183,38 @@ jobs:
       - name: The monitor's markdown cannot run script
         run: npm run check:markdown
 
+  # The VS Code extension ships in every release (FEAT-152), so a broken manifest or a version
+  # that has drifted from the workspace's must fail here, not on a tag.
+  vscode:
+    name: VS Code extension
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: editor/vscode
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Install Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editor/vscode/package-lock.json
+      - name: Install the extension's dependencies
+        run: npm ci
+      - name: The extension's version is the workspace's
+        run: |
+          set -eu
+          ext="$(node -p "require('./package.json').version")"
+          ws="$(sed -n 's/^version = "\(.*\)"$/\1/p' ../../api/Cargo.toml | head -n1)"
+          [ "$ext" = "$ws" ] \
+            || { echo "::error::editor/vscode/package.json says $ext, the workspace builds $ws" >&2; exit 1; }
+      - name: The extension compiles and packages
+        run: |
+          set -eu
+          out="$(mktemp -d)"
+          npm run package -- -o "$out/kanbanr-vscode.vsix"
+          test -s "$out/kanbanr-vscode.vsix"
+
   # The installers are the first thing a stranger runs, and they run as root on a machine we will
   # never see. Static checks are cheap; the end-to-end run against a real release lives in
   # release.yml's verify-install job, because it needs a release to install.

@@ -14,6 +14,12 @@ that makes the 1.0 promise checkable — no new features. What 1.0 will keep com
 
 ### Added
 
+- **The VS Code extension ships with every release (FEAT-152).** Each release attaches
+  `kanbanr-vscode-<version>.vsix`, built from the tag, at the program's version and in
+  `SHA256SUMS` — `code --install-extension` installs it. The release also publishes it to
+  [Open VSX](https://open-vsx.org), for VSCodium, Cursor and Windsurf, once the repository enables
+  it. CI packages the extension on every push and refuses a version that has drifted from the
+  workspace's.
 - **What 1.0 keeps compatible is written down (FEAT-148).** A new chapter,
   [Stability](https://kanbanr.startr.trade/project/stability.html), lists what stays stable from
   1.0 until 2.0 — the board format and `config.yaml`, the `.kanbanr` marker, CLI commands, flags,
