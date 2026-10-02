@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 # The minimum that compiles, which is a promise to anyone building this — not the version we
 # develop on (see rust-toolchain.toml). Edition 2024 needs 1.85; the let-chains clippy applied need 1.88.

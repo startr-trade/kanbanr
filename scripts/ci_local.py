@@ -69,6 +69,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The extension compiles and packages": LOCAL,
         },
         "workflows": {
+            "The version being built has release notes": LOCAL,
             "Every third-party action is pinned to a commit": LOCAL,
             "Every scanner suppression has a reason and an expiry": LOCAL,
             "actionlint": LOCAL,
@@ -124,6 +125,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
         },
         "release": {
             "Stage the installers beside the binaries": "needs every leg's artifacts",
+            "The release notes, for the release page": LOCAL,
             "Compute SHA256SUMS": "needs every leg's artifacts",
         },
         "verify-install": {
@@ -305,6 +307,7 @@ def run_workflow_steps() -> None:
                         "GITHUB_REPOSITORY": "startr-trade/kanbanr",
                         "GITHUB_OUTPUT": f"{scratch}/output", "GITHUB_ENV": f"{scratch}/env",
                         "GITHUB_PATH": f"{scratch}/path", "GITHUB_STEP_SUMMARY": f"{scratch}/summary",
+                        "RUNNER_TEMP": scratch,
                     }
                     if step.get("shell") == "pwsh":
                         rel = wd.relative_to(TREE)
