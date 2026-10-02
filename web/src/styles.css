@@ -291,7 +291,13 @@ input:focus-visible,
 .review-item[open] > summary { border-bottom: 1px solid var(--border); border-radius: 10px 10px 0 0; }
 .review-item .review-body { padding: 4px 14px 14px; }
 .review-item .review-title { font-weight: 600; }
-.review-actions { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
+.review-actions { display: flex; gap: 10px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+/* The reason a decision is rejected (FEAT-153): a field, so it reads as one. */
+.review-reason {
+  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text); font: inherit; min-width: 220px; flex: 1 1 220px;
+}
+.review-reason:focus { outline: none; border-color: var(--accent); }
 
 /* ---- status page / tasks ---- */
 .status-name, .status-group-head b, .mono { font-family: ui-monospace, monospace; }

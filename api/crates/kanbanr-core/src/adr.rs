@@ -73,6 +73,19 @@ pub struct Adr {
     /// Written by `adr supersede`, never by hand.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub superseded_by: String,
+    /// When the decider accepted or rejected it (FEAT-153). `date` is when it was proposed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub decided: String,
+    /// Why it was rejected: a rejected decision is still a record, and its reason is the record.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+    /// Front-matter keys this version does not know, kept (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 
     // The three below are part of the document, not of its front-matter: `render` strips them
     // before writing, so the title is never stored twice and the body is never stored at all.
@@ -86,6 +99,10 @@ pub struct Adr {
     /// Where it lives in the doc tree.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub path: String,
+    /// The scaffolded sections it leaves unanswered, as `list` reports them — so the Review page
+    /// can say why Accept is refused without a second copy of the rule (FEAT-153). Never stored.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
 }
 
 impl Adr {
@@ -169,6 +186,7 @@ pub fn render(adr: &Adr) -> String {
         title: String::new(),
         body: String::new(),
         path: String::new(),
+        missing: Vec::new(),
         ..adr.clone()
     };
     let front = serde_yaml::to_string(&front).unwrap_or_default();
@@ -182,6 +200,14 @@ pub fn list(store: &Store, project: &str) -> Result<Vec<Adr>> {
         .into_iter()
         .filter(|p| p.starts_with(FOLDER))
         .filter_map(|p| store.read_doc(project, &p).ok().and_then(|t| parse(&p, &t)))
+        .map(|mut adr| {
+            adr.missing = adr
+                .missing_sections()
+                .into_iter()
+                .map(String::from)
+                .collect();
+            adr
+        })
         .collect();
     out.sort_by(|a, b| b.id.cmp(&a.id));
     Ok(out)
@@ -263,6 +289,62 @@ pub fn create(store: &Store, project: &str, title: &str, mut adr: Adr) -> Result
 pub fn update(store: &Store, project: &str, adr: &Adr) -> Result<()> {
     store.write_doc(project, &adr.path, &render(adr))?;
     Ok(())
+}
+
+/// Accept or reject a proposed decision (FEAT-153). A decision is the user's to make: the CLI and
+/// the Review page call this with the commit identity, and nothing else does. Accepting needs every
+/// section answered — an accepted decision with an empty Consequences is the record lying — and a
+/// rejection needs its reason.
+pub fn decide(
+    store: &Store,
+    project: &str,
+    id: &str,
+    accept: bool,
+    by: &str,
+    reason: &str,
+) -> Result<Adr> {
+    let mut adr = get(store, project, id)?;
+    if !adr.status.eq_ignore_ascii_case("proposed") {
+        return Err(CoreError::Unsupported(format!(
+            "{} is {}, not proposed: only a proposed decision is accepted or rejected",
+            adr.id, adr.status
+        )));
+    }
+    if by.trim().is_empty() {
+        return Err(CoreError::Unsupported(
+            "a decision must name who made it".to_string(),
+        ));
+    }
+    if accept {
+        let missing = adr.missing_sections();
+        if !missing.is_empty() {
+            return Err(CoreError::Unsupported(format!(
+                "{} cannot be accepted with unanswered sections: {}",
+                adr.id,
+                missing.join(", ")
+            )));
+        }
+    } else if reason.trim().is_empty() {
+        return Err(CoreError::Unsupported(format!(
+            "rejecting {} needs a reason: it is what a later reader of the rejection needs",
+            adr.id
+        )));
+    }
+    adr.status = if accept { "accepted" } else { "rejected" }.to_string();
+    if !adr.deciders.iter().any(|d| d == by) {
+        adr.deciders.push(by.to_string());
+    }
+    adr.decided = crate::now_rfc3339()
+        .get(..10)
+        .unwrap_or_default()
+        .to_string();
+    adr.reason = if accept {
+        String::new()
+    } else {
+        reason.trim().to_string()
+    };
+    update(store, project, &adr)?;
+    Ok(adr)
 }
 
 /// What superseding one decision with another produced: both sides written, and the work that was
@@ -416,6 +498,69 @@ mod tests {
             .add_milestone("demo", "M", "", vec![], Some("M".into()))
             .unwrap();
         (store, dir)
+    }
+
+    /// FEAT-153 R-1: accepting and rejecting record the verdict, who gave it, when, and a
+    /// rejection's reason — and only a proposed decision takes a verdict.
+    #[test]
+    fn adr_accept_and_reject_record_status_decider_date_and_reason() {
+        let (store, dir) = fixture();
+        let filled = |title: &str| {
+            let mut adr = create(&store, "demo", title, Adr::default()).unwrap();
+            adr.body = format!(
+                "# {title}\n\n## Context\n\nc\n\n## Decision\n\nd\n\n\
+                 ## Alternatives considered\n\na\n\n## Consequences\n\nq\n\n## Compliance\n\nt\n"
+            );
+            update(&store, "demo", &adr).unwrap();
+            adr.id
+        };
+        let yes = filled("Keep it");
+        let no = filled("Drop it");
+
+        let accepted = decide(&store, "demo", &yes, true, "Ada L", "").unwrap();
+        assert_eq!(accepted.status, "accepted");
+        assert_eq!(accepted.deciders, vec!["Ada L".to_string()]);
+        assert_eq!(accepted.decided.len(), 10, "a date: {}", accepted.decided);
+        let reread = get(&store, "demo", &yes).unwrap();
+        assert_eq!(
+            (reread.status.as_str(), reread.decided.as_str()),
+            ("accepted", accepted.decided.as_str())
+        );
+        assert!(
+            reread.body.contains("## Consequences\n\nq"),
+            "the prose is untouched"
+        );
+
+        assert!(
+            decide(&store, "demo", &no, false, "Ada L", " ").is_err(),
+            "a rejection needs a reason"
+        );
+        let rejected = decide(&store, "demo", &no, false, "Ada L", "too costly").unwrap();
+        assert_eq!(
+            (rejected.status.as_str(), rejected.reason.as_str()),
+            ("rejected", "too costly")
+        );
+
+        let again = decide(&store, "demo", &yes, false, "Ada L", "changed my mind").unwrap_err();
+        assert!(again.to_string().contains("not proposed"), "{again}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FEAT-153 R-2: a decision with an unanswered section cannot be accepted, and the refusal
+    /// names what is missing.
+    #[test]
+    fn accepting_a_decision_with_an_empty_section_is_refused() {
+        let (store, dir) = fixture();
+        let adr = create(&store, "demo", "Half written", Adr::default()).unwrap();
+        let err = decide(&store, "demo", &adr.id, true, "Ada L", "")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Consequences") && err.contains("Context"),
+            "{err}"
+        );
+        assert_eq!(get(&store, "demo", &adr.id).unwrap().status, "proposed");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

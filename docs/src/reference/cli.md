@@ -85,6 +85,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr why <file>:<line>` | the item, requirement and goal behind a line of code |
 | `kanbanr trace <G-…\|CODE\|CODE/R-n>` | what hangs off a goal, an item or a requirement, and what is missing |
 | `kanbanr adr new / list / supersede / history` | architecture decisions, linked to the items they affect |
+| `kanbanr adr accept / reject --reason` | the user's verdict on a proposed decision |
 | `kanbanr lessons [--for CODE]` / `kanbanr lesson add / affirm / contradict` | what the project has learned, and judging it |
 | `kanbanr retro <MS-…>` / `kanbanr report` | how a milestone went; flow and quality derived from the record |
 

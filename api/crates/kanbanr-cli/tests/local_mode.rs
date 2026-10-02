@@ -1922,6 +1922,31 @@ fn cli_trace_and_why_follow_the_chain_in_both_directions() {
         "work resting on an overturned decision is a gap"
     );
 
+    // FEAT-153: the user's verdict on a proposed decision, from the CLI, on the record — and in
+    // the project's activity like every other write.
+    run(&["adr", "new", "Cache carts on the server"]);
+    let refused = exec(&["adr", "accept", "ADR-0003"]);
+    assert!(
+        !refused.status.success(),
+        "a scaffold has unanswered sections"
+    );
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("Consequences"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    let out = run(&[
+        "adr",
+        "reject",
+        "ADR-0003",
+        "--reason",
+        "the browser is enough",
+    ]);
+    assert!(out.contains("ADR-0003 rejected by A"), "{out}");
+    assert!(run(&["adr", "list"]).contains("rejected"));
+    let activity = run(&["activity"]);
+    assert!(activity.contains("reject decision ADR-0003"), "{activity}");
+
     let _ = std::fs::remove_dir_all(&base);
 }
 

@@ -6,7 +6,7 @@ import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
 import { zachmanColumns } from "../types";
-import type { PendingReview } from "../types";
+import type { Adr, PendingReview } from "../types";
 
 /**
  * What is waiting for agreement, and the one action that gives it (FEAT-067).
@@ -27,10 +27,13 @@ export default function ReviewPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const meta = useAsync(() => api.getMeta(), []);
   const pending = useAsync(() => api.getPendingReviews(project), [project, tick]);
+  // Decisions waiting for their owner (FEAT-153): proposed, and nothing else.
+  const adrs = useAsync(() => api.getAdrs(project), [project, tick]);
 
   if (pending.loading && !pending.data) return <Loading />;
   if (pending.error) return <ErrorBox error={pending.error} />;
   const items = pending.data ?? [];
+  const proposed = (adrs.data ?? []).filter((a) => a.status.toLowerCase() === "proposed");
   // Who a yes here is recorded as (FEAT-077). The board's commit identity, exactly as
   // `kanbanr approve` defaults it — not the string "reviewed in the monitor", which named the place
   // the click happened and left twenty-eight approvals on this board attributable to nobody.
@@ -59,6 +62,20 @@ export default function ReviewPage() {
     }
   };
 
+  // A verdict on a proposed decision (FEAT-153), recorded as the same identity.
+  const decide = async (adr: Adr, verdict: "accept" | "reject", reason = "") => {
+    if (!who) return;
+    setBusy(adr.id);
+    try {
+      await api.decideAdr(project, adr.id, verdict, who, reason);
+      setDone((d) => ({ ...d, [adr.id]: verdict === "accept" ? "accepted" : "rejected" }));
+    } catch (e) {
+      setDone((d) => ({ ...d, [adr.id]: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   // A named sign-off the item's next stage is waiting on (FEAT-117), recorded as the same identity.
   const signoff = async (item: PendingReview, name: string) => {
     if (!who) return;
@@ -81,7 +98,9 @@ export default function ReviewPage() {
         <LiveDot />
       </div>
 
-      {items.length === 0 ? (
+      {items.length === 0 && proposed.length > 0 ? (
+        <p className="muted">No definitions are waiting for agreement.</p>
+      ) : items.length === 0 ? (
         <p className="muted">
           Nothing is waiting for agreement. An item appears here when its definition has never been
           approved, or when the definition changed after a yes — which lapses the approval rather
@@ -132,7 +151,124 @@ export default function ReviewPage() {
           onSignoff={(name) => signoff(item, name)}
         />
       ))}
+
+      {proposed.length > 0 && (
+        <>
+          <h2>Decisions</h2>
+          <p className="muted">
+            {proposed.length} architecture decision{proposed.length === 1 ? "" : "s"} proposed and
+            waiting for a verdict. Accepting needs every section answered; rejecting needs a
+            reason, which stays on the record.
+          </p>
+          {proposed.map((adr) => (
+            <DecisionBrief
+              key={adr.id}
+              project={project}
+              adr={adr}
+              writable={writable}
+              busy={busy === adr.id}
+              outcome={done[adr.id]}
+              onDecide={(verdict, reason) => decide(adr, verdict, reason)}
+            />
+          ))}
+        </>
+      )}
     </div>
+  );
+}
+
+/** One proposed decision: its text, what rests on it, and the two verdicts (FEAT-153). */
+function DecisionBrief({
+  project,
+  adr,
+  writable,
+  busy,
+  outcome,
+  onDecide,
+}: {
+  project: string;
+  adr: Adr;
+  writable: boolean;
+  busy: boolean;
+  outcome?: string;
+  onDecide: (verdict: "accept" | "reject", reason?: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const decided = outcome === "accepted" || outcome === "rejected";
+  const missing = adr.missing ?? [];
+  // The title is the summary's; the body below starts after it.
+  const body = (adr.body ?? "").replace(/^#\s[^\n]*\n/, "");
+
+  return (
+    <details className="review-item" id={adr.id}>
+      <summary>
+        <code className="taskkey">{adr.id}</code>
+        <span className="review-title">{adr.title}</span>
+        <span className={`chip ${missing.length > 0 ? "warn" : ""}`}>
+          {missing.length > 0 ? `unanswered: ${missing.join(", ")}` : "proposed"}
+        </span>
+        {decided ? <span className="chip done">{outcome}</span> : null}
+      </summary>
+
+      <div className="review-body">
+        {adr.path ? (
+          <p className="muted small">
+            <Link
+              to={`/p/${encodeURIComponent(project)}/docs/file/${adr.path.split("/").map(encodeURIComponent).join("/")}`}
+            >
+              open {adr.path}
+            </Link>
+            {adr.date ? ` · proposed ${adr.date}` : null}
+          </p>
+        ) : null}
+        {(adr.affects ?? []).length > 0 && (
+          <div className="tile-states">
+            {(adr.affects ?? []).map((code) => (
+              <span className="chip tasks" key={code}>
+                affects {code}
+              </span>
+            ))}
+          </div>
+        )}
+        <Markdown source={body} />
+
+        <div className="review-actions">
+          {decided ? (
+            <span className="chip done">{outcome} — it leaves this list on the next refresh</span>
+          ) : writable ? (
+            <>
+              <button
+                className="btn btn-primary"
+                onClick={() => onDecide("accept")}
+                disabled={busy || missing.length > 0}
+                title={missing.length > 0 ? `Answer ${missing.join(", ")} first` : undefined}
+              >
+                {busy ? "recording…" : `Accept ${adr.id}`}
+              </button>
+              <input
+                className="review-reason"
+                placeholder="Why reject it?"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                aria-label={`Reason for rejecting ${adr.id}`}
+              />
+              <button
+                className="btn"
+                onClick={() => onDecide("reject", reason)}
+                disabled={busy || reason.trim() === ""}
+              >
+                {busy ? "recording…" : `Reject ${adr.id}`}
+              </button>
+            </>
+          ) : (
+            <code>
+              kanbanr adr accept {adr.id} · kanbanr adr reject {adr.id} --reason "…"
+            </code>
+          )}
+          {outcome && !decided ? <span className="chip warn">{outcome}</span> : null}
+        </div>
+      </div>
+    </details>
   );
 }
 

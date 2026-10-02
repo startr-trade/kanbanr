@@ -12,6 +12,7 @@ kanbanr trace MS-006 --zachman               # which of the six columns nothing 
 kanbanr why src/cart.rs:42                   # up: annotation or trailer → requirement → goal
 kanbanr adr new "…" --affects FEAT-001 --driven-by FEAT-001/R-2 --quality Reliability
 kanbanr adr list [--for FEAT-001] | adr supersede ADR-0007 --replaces ADR-0003 | adr history ADR-0007
+kanbanr adr accept ADR-0007 | adr reject ADR-0007 --reason "…"   # the user's verdict
 ```
 
 One item, one branch, and every commit says what it serves. The hooks refuse a commit on the
@@ -24,3 +25,9 @@ Architecture decisions stay **documents** with front-matter that joins them to t
 no estimate, branch or tests, so counting them as work items would distort the flow metrics.
 Deciding is still work — it is a task on the item that needed the decision, and the ADR is its
 output.
+
+A decision starts **proposed** and is accepted or rejected by its owner — never by Claude — on the
+Review page (beside the definitions waiting for approval) or with `kanbanr adr accept` /
+`adr reject --reason`. Accepting is refused while a section is unanswered; a rejection keeps its
+reason. The verdict, the decider and the date are written on the decision, and the verdict appears
+in the project's activity like every other change.
