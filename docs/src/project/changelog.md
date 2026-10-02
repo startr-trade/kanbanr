@@ -15,6 +15,14 @@ All notable changes to kanbanr are documented here. The format follows
   refused while a section is unanswered; a rejection keeps its reason; the verdict appears in the
   activity log.
 
+### Fixed
+
+- **The release's installer check failed on every platform, though every install worked
+  (FEAT-155).** v0.1.2 installed and named its version and commit on Debian, Ubuntu, macOS and
+  Windows; the check then ran `kanbanr init` in the repository checkout, whose `.kanbanr` marker
+  made init refuse. The check now runs from a folder of its own, and `make ci` starts it from the
+  repository root as the release does.
+
 ## [0.1.2] - 2026-10-02
 
 **Features are frozen until 1.0.** The 0.1.x releases now take fixes, documentation, and the work

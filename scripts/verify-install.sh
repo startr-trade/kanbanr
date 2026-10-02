@@ -21,8 +21,12 @@ echo "$v" | grep -q "$sha" \
   || { echo "::error::--version does not name the released commit: $v" >&2; exit 1; }
 
 # The monitor is served with no --ui-dir and no build step. --data-dir given, so init does not
-# ask; --no-hooks because there is no Claude Code here.
-board="$(mktemp -d)/board"
+# ask; --no-hooks because there is no Claude Code here. Run from a fresh folder of its own: the
+# release starts this script in the repository checkout, whose .kanbanr marker makes init refuse
+# (FEAT-155).
+work="$(mktemp -d)"
+cd "$work"
+board="$work/board"
 port="${KANBANR_VERIFY_PORT:-8080}"
 kanbanr init ci-check --data-dir "$board" --no-hooks --author "CI" --email "ci@kanbanr.local"
 kanbanr serve --data-dir "$board" --bind "127.0.0.1:$port" &

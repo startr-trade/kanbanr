@@ -396,9 +396,11 @@ def verify_install_script() -> None:
         "apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null; "
         f"curl -fsSL https://github.com/startr-trade/kanbanr/releases/download/{tag}/install.sh "
         f"| sh -s -- --version {tag} --dir /usr/local/bin --no-skill; "
-        "sh /repo/scripts/verify-install.sh"
+        "sh scripts/verify-install.sh"
     )
-    ok, out = sh(["docker", "run", "--rm", "-v", f"{TREE}:/repo:ro", "-e", f"GITHUB_REF_NAME={tag}",
+    # Started from the repository root, as release.yml starts it — the checkout's .kanbanr marker
+    # is part of what the script has to cope with (FEAT-155).
+    ok, out = sh(["docker", "run", "--rm", "-v", f"{TREE}:/repo:ro", "-w", "/repo", "-e", f"GITHUB_REF_NAME={tag}",
                   "-e", f"GITHUB_SHA={commit}", "debian:bookworm-slim", "sh", "-c", script], TREE)
     say(f"release verify-install: scripts/verify-install.sh against the latest release ({tag}, debian:bookworm-slim)",
         ok, out)
