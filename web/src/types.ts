@@ -474,3 +474,20 @@ export interface BoardLane {
 export interface BoardReport {
   lanes: BoardLane[];
 }
+
+/** An architecture decision as the daemon lists it (FEAT-057, FEAT-153). */
+export type Adr = {
+  id: string;
+  status: string;
+  title?: string;
+  date?: string;
+  decided?: string;
+  reason?: string;
+  deciders?: string[];
+  affects?: string[];
+  driven_by?: string[];
+  body?: string;
+  path?: string;
+  /** Sections still unanswered; a decision with any cannot be accepted. */
+  missing?: string[];
+};

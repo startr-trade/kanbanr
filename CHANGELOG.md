@@ -6,6 +6,15 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Accept or reject an architecture decision (FEAT-153).** A decision drafted as `proposed` had no
+  way to be agreed except editing its file. `kanbanr adr accept` and `adr reject --reason` record
+  the verdict, the decider and the date on the decision, and the Review page lists proposed
+  decisions beside the definitions waiting for approval, with Accept and Reject. Accepting is
+  refused while a section is unanswered; a rejection keeps its reason; the verdict appears in the
+  activity log.
+
 ## [0.1.2] - 2026-10-02
 
 **Features are frozen until 1.0.** The 0.1.x releases now take fixes, documentation, and the work

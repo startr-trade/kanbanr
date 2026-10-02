@@ -1040,6 +1040,17 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                 .map_err(|e| CoreError::Unsupported(format!("invalid decision: {e}")))?;
             ser(&crate::adr::create(store, p, &title, adr)?)
         }
+        ("POST", ["projects", p, "adrs", id, "accept"]) => {
+            ser(&crate::adr::decide(store, p, id, true, &approver(b)?, "")?)
+        }
+        ("POST", ["projects", p, "adrs", id, "reject"]) => ser(&crate::adr::decide(
+            store,
+            p,
+            id,
+            false,
+            &approver(b)?,
+            &str_field(b, "reason").unwrap_or_default(),
+        )?),
         ("POST", ["projects", p, "adrs", id, "supersede"]) => {
             let replaces = str_field(b, "replaces").unwrap_or_default();
             ser(&crate::adr::supersede(store, p, id, &replaces)?)
@@ -1148,6 +1159,8 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "lessons"] => "record a lesson".into(),
         ["projects", _p, "adrs"] => "record an architecture decision".into(),
         ["projects", _p, "adrs", a, "supersede"] => format!("{a} supersedes an earlier decision"),
+        ["projects", _p, "adrs", a, "accept"] => format!("accept decision {a}"),
+        ["projects", _p, "adrs", a, "reject"] => format!("reject decision {a}"),
         ["projects", _p, "lessons", l, v] => format!("{v} lesson {l}"),
         ["projects", _p, "features", c, "split-from"] => format!("record what {c} was split from"),
         ["projects", _p, "mirror"] => "configure issue mirror".into(),

@@ -1,4 +1,4 @@
-import type { Activity, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -67,6 +67,28 @@ export const api = {
         res.status === 404 || res.status === 405
           ? "This monitor is read-only. Start it with `kanbanr review --ui` to sign off from here."
           : `sign-off failed: ${res.status} ${await res.text()}`,
+      );
+    }
+    return res.json();
+  },
+  /** Every architecture decision on the board, newest first (FEAT-057). */
+  getAdrs: (id: string) => getJson<Adr[]>(`/api/projects/${encodeURIComponent(id)}/adrs`),
+  /** The user's verdict on a proposed decision (FEAT-153), through the route `kanbanr adr accept`
+   * and `adr reject` use. */
+  decideAdr: async (id: string, adr: string, verdict: "accept" | "reject", by: string, reason = "") => {
+    const res = await fetch(
+      `/api/write/projects/${encodeURIComponent(id)}/adrs/${encodeURIComponent(adr)}/${verdict}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ by, reason }),
+      },
+    );
+    if (!res.ok) {
+      throw new Error(
+        res.status === 404 || res.status === 405
+          ? `This monitor is read-only. Start it with \`kanbanr review --ui\` to ${verdict} from here.`
+          : `${verdict} failed: ${res.status} ${await res.text()}`,
       );
     }
     return res.json();

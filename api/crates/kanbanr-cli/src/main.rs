@@ -1128,6 +1128,23 @@ enum AdrCmd {
     },
     /// Walk the lineage: 0001 → 0003 → 0007.
     History { id: String },
+    /// Accept a proposed decision — the user's verdict, never Claude's (FEAT-153). Every section
+    /// has to be answered first.
+    Accept {
+        id: String,
+        /// Who decides (defaults to the data repo's commit identity).
+        #[arg(long)]
+        by: Option<String>,
+    },
+    /// Reject a proposed decision, saying why. The decision stays on the board as a record.
+    Reject {
+        id: String,
+        #[arg(long)]
+        reason: String,
+        /// Who decides (defaults to the data repo's commit identity).
+        #[arg(long)]
+        by: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2438,6 +2455,26 @@ fn run_adr(cli: &Cli, client: &Backend, cmd: &AdrCmd) -> anyhow::Result<()> {
                     .unwrap_or_default();
                 println!("{}{step}  {title}", "  ".repeat(i));
             }
+            Ok(())
+        }
+        AdrCmd::Accept { id, by } => {
+            let who = verdict_author(cli, by.as_ref())?;
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/adrs/{id}/accept"),
+                Some(json!({ "by": who })),
+            )?;
+            print_write(cli, &resp, format!("{id} accepted by {who}"));
+            Ok(())
+        }
+        AdrCmd::Reject { id, reason, by } => {
+            let who = verdict_author(cli, by.as_ref())?;
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/adrs/{id}/reject"),
+                Some(json!({ "by": who, "reason": reason })),
+            )?;
+            print_write(cli, &resp, format!("{id} rejected by {who}"));
             Ok(())
         }
     }

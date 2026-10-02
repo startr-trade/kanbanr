@@ -382,6 +382,11 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
   --driven-by FEAT-046/R-2 --quality Reliability` scaffolds Context, Decision, Alternatives,
   Consequences and Compliance. Fill them in — `adr list` reports which are still unwritten, and
   doctor warns about a missing Decision or Consequences.
+- **A decision is the user's, never yours.** Draft it as `proposed` (the default — never pass
+  `--status accepted`), then ask. The user accepts or rejects it on the Review page or with
+  `kanbanr adr accept ADR-0007` / `adr reject ADR-0007 --reason "…"`, exactly as they approve a
+  definition. Accept is refused while a section is unanswered; the verdict, who gave it and when
+  are recorded on the decision and in the activity log.
 - The links live **on the decision** (`affects`, `driven_by`); the item's view is derived, so it
   can never disagree. `kanbanr adr supersede ADR-0007 --replaces ADR-0003` writes both sides and
   names the items now standing on an overturned decision. Deciding is *work*: it is a task on the
@@ -641,6 +646,7 @@ kanbanr trace [G-2|FEAT-001|FEAT-001/R-2] [--zachman]   # down the chain, ending
 kanbanr why src/cart.rs:42                      # up: annotation or trailer -> requirement -> goal
 kanbanr adr new "…" [--affects …] [--driven-by FEAT-001/R-2] [--quality Reliability] [--zachman How]
 kanbanr adr list [--for FEAT-001] | supersede ADR-0007 --replaces ADR-0003 | history ADR-0007
+kanbanr adr accept ADR-0007 | adr reject ADR-0007 --reason "…"   # the USER's verdict, not yours
 kanbanr lessons [--for FEAT-001] [--all]        # read BEFORE starting work
 kanbanr lesson add "…" --kind pitfall --from FEAT-043 --evidence "…" [--tags a,b] [--goals G-1]
 kanbanr lesson affirm L-1 [--note "…"] | contradict L-1 [--note "…"]
