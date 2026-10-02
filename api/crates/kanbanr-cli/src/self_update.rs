@@ -21,7 +21,7 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-const REPO: &str = "startr-trade/kanbanr";
+pub(crate) const REPO: &str = "startr-trade/kanbanr";
 
 /// Why an update is on offer — or why it is not. The distinction matters to the person reading it:
 /// "v0.1.0 -> v0.1.0" with no explanation reads as a bug rather than as a rebuild (R-2).
@@ -296,7 +296,7 @@ pub fn takes_token(url: &str) -> bool {
 /// 302 to `objects.githubusercontent.com`. So the bytes that become the binary on your PATH used to
 /// arrive from a hop nothing had looked at, and a redirect to `http://` would have been followed in
 /// silence. Automatic following is off; every hop is checked here (R-2).
-fn fetch(url: &str) -> Result<Vec<u8>> {
+pub(crate) fn fetch(url: &str) -> Result<Vec<u8>> {
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(300))
@@ -528,9 +528,13 @@ pub fn run(check: bool, pinned: Option<&str>, json: bool) -> Result<()> {
     }
     replace_binary(&exe, &binary)?;
     let skill = follow_skill(&exe);
+    let editors = follow_editors(&exe);
     if !json {
         println!("  installed {} ({})", exe.display(), normalize(&tag));
         if let Some(said) = skill {
+            println!("  {said}");
+        }
+        for said in editors {
             println!("  {said}");
         }
         println!("run `kanbanr --version` to confirm");
@@ -549,6 +553,24 @@ fn follow_skill(exe: &Path) -> Option<String> {
         .ok()?;
     let said = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !said.is_empty()).then_some(said)
+}
+
+/// Bring the VS Code extension up to the new program in each editor that already has it
+/// (FEAT-158), as `follow_skill` does for the skill — asked of the NEW binary, which knows its own
+/// version. An editor without the extension is not given one.
+fn follow_editors(exe: &Path) -> Vec<String> {
+    std::process::Command::new(exe)
+        .args(["editor", "install", "--if-installed"])
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Pull the `kanbanr` executable out of a release archive, in memory.

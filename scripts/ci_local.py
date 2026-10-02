@@ -87,6 +87,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The installers pin https on request and redirect": LOCAL,
             "The installer's targets are the targets we publish": LOCAL,
             "The installer's skill step does what it says": LOCAL,
+            "The installer's editor step does what it says": LOCAL,
         },
     },
     "codeql.yml": {

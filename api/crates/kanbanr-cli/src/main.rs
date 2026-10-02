@@ -3,6 +3,7 @@
 //! (auto-detected when no server is configured but a data dir is present; forced with `--local`).
 
 mod backend;
+mod editor;
 mod hooks;
 mod mirror;
 mod scm;
@@ -102,6 +103,11 @@ enum Command {
     /// `install`, and `self-update` keeps an installed copy in step.
     #[command(subcommand)]
     Skill(SkillCmd),
+    /// The VS Code extension in the editors on this machine (FEAT-158): install the one this
+    /// release carries into VS Code, VSCodium, Cursor or Windsurf. The installers run it with
+    /// `--vscode`; `self-update` keeps an installed copy in step.
+    #[command(subcommand)]
+    Editor(EditorCmd),
     /// Set the commit identity (name + email) on this data repo.
     Identity {
         #[arg(long)]
@@ -546,6 +552,20 @@ enum SkillCmd {
     Status,
     /// Remove the copy kanbanr installed (never one it did not).
     Uninstall,
+}
+
+#[derive(Subcommand)]
+enum EditorCmd {
+    /// Download this release's .vsix, check it against SHA256SUMS, and install it into every editor
+    /// found on PATH (code, codium, cursor, windsurf), or only the ones named.
+    Install {
+        /// An editor command to install into; repeatable. Default: every one found on PATH.
+        #[arg(long = "editor")]
+        editors: Vec<String>,
+        /// Only where the extension is already installed — what `self-update` runs.
+        #[arg(long)]
+        if_installed: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -4813,6 +4833,20 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         Command::Hooks(cmd) => return run_hooks(cli, cmd),
         Command::Skill(cmd) => return run_skill(cli, cmd),
+        Command::Editor(EditorCmd::Install {
+            editors,
+            if_installed,
+        }) => {
+            let said = editor::install(editors, *if_installed)?;
+            if cli.json {
+                println!("{}", json!({ "installed": said }));
+            } else {
+                for line in said {
+                    println!("{line}");
+                }
+            }
+            return Ok(());
+        }
         Command::Serve {
             bind,
             ui_dir,
@@ -4858,6 +4892,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         | Command::Where
         | Command::SelfUpdate { .. }
         | Command::Skill(_)
+        | Command::Editor(_)
         | Command::Hooks(_) => {
             unreachable!()
         }

@@ -292,7 +292,7 @@ jobs:
           set -eu
           work="$(mktemp -d)"
           { sed -n '/^die() /p;/^info() /p;/^have() /p' scripts/install.sh
-            sed -n '/^# ---- the skill (FEAT-141)/,/^# ---- report/p' scripts/install.sh; } > "$work/step.sh"
+            sed -n '/^# ---- the skill (FEAT-141)/,/^# ---- the editor extension/p' scripts/install.sh; } > "$work/step.sh"
           grep -q 'skill install' "$work/step.sh" || { echo "::error::no skill step found in install.sh" >&2; exit 1; }
           mkdir -p "$work/bin" "$work/claude"
           printf '#!/bin/sh\necho "$@" >> "%s/asked"\n' "$work" > "$work/bin/kanbanr"
@@ -308,6 +308,33 @@ jobs:
           [ ! -e "$work/asked" ] || { echo "::error::without claude the skill was installed anyway" >&2; exit 1; }
           grep -q "kanbanr skill install" "$work/said" || { echo "::error::without claude, no hint was given" >&2; exit 1; }
           echo "install.sh: installs the skill with claude present, skips it on --no-skill, hints without claude."
+
+      # The editor extension is opt-in (FEAT-158): --vscode asks the program for every editor found,
+      # --vscode=<editor> for that one, and without the option nothing is asked — only a hint, and
+      # only when an editor is there. Cut out of install.sh as written and run against stubs.
+      - name: The installer's editor step does what it says
+        run: |
+          set -eu
+          work="$(mktemp -d)"
+          { sed -n '/^die() /p;/^info() /p;/^have() /p' scripts/install.sh
+            sed -n '/^# ---- the editor extension (FEAT-158)/,/^# ---- report/p' scripts/install.sh; } > "$work/step.sh"
+          grep -q 'editor install' "$work/step.sh" || { echo "::error::no editor step found in install.sh" >&2; exit 1; }
+          mkdir -p "$work/bin" "$work/editors"
+          printf '#!/bin/sh\necho "$@" >> "%s/asked"\n' "$work" > "$work/bin/kanbanr"
+          printf '#!/bin/sh\nexit 0\n' > "$work/editors/code"
+          cp "$work/editors/code" "$work/editors/codium"
+          chmod +x "$work/bin/kanbanr" "$work/editors/code" "$work/editors/codium"
+          run() { rm -f "$work/asked"; env -i PATH="$1:/usr/bin:/bin" INSTALL_DIR="$work/bin" VSCODE="$2" sh -c ". '$work/step.sh'" 2>"$work/said"; }
+          run "$work/editors" ""
+          [ ! -e "$work/asked" ] || { echo "::error::without --vscode the extension was installed" >&2; exit 1; }
+          grep -q -- "--vscode" "$work/said" || { echo "::error::with an editor present, no hint was given" >&2; exit 1; }
+          run "$work/editors" 1
+          [ "$(cat "$work/asked")" = "editor install" ] || { echo "::error::--vscode did not install into every editor" >&2; exit 1; }
+          run "$work/editors" codium
+          [ "$(cat "$work/asked")" = "editor install --editor codium" ] || { echo "::error::--vscode=codium did not name codium" >&2; exit 1; }
+          run "/nonexistent" ""
+          [ ! -e "$work/asked" ] && [ ! -s "$work/said" ] || { echo "::error::with no editor and no option, the step said or did something" >&2; exit 1; }
+          echo "install.sh: --vscode installs into every editor, --vscode=<editor> into one, nothing without it."
 
       # Every platform the shell installer claims to support must be one the release workflow
       # actually builds. They drifted apart once already, in the other direction — the script

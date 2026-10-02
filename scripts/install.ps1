@@ -8,8 +8,9 @@
     Downloads the `kanbanr.exe` binary for this platform from a GitHub release, VERIFIES its
     SHA-256 against the release's own SHA256SUMS, and installs it — and, when Claude Code (the
     `claude` command) is on PATH, installs the kanbanr skill that binary carries into
-    ~\.claude\skills\kanbanr (FEAT-141). Nothing else: no PATH is rewritten without telling you,
-    no service is registered. -NoSkill leaves Claude Code alone.
+    ~\.claude\skills\kanbanr (FEAT-141). With -VSCode it also installs the release's VS Code
+    extension into the editors it finds (FEAT-158). Nothing else: no PATH is rewritten without
+    telling you, no service is registered. -NoSkill leaves Claude Code alone.
 
     The binary carries the web monitor and the skill inside it (FEAT-084, FEAT-141), so this is
     the whole install, and the skill always matches the program it drives.
@@ -29,13 +30,18 @@
 
 .PARAMETER NoSkill
     Do not install the Claude Code skill. Also $env:KANBANR_NO_SKILL.
+
+.PARAMETER VSCode
+    Also install the VS Code extension into every editor found (code, codium, cursor, windsurf).
+    Also $env:KANBANR_VSCODE = 1 — or an editor's name, e.g. 'codium', to install into that one only.
 #>
 [CmdletBinding()]
 param(
     [string]$Version = $env:KANBANR_VERSION,
     [string]$Dir     = $env:KANBANR_INSTALL_DIR,
     [switch]$NoVerify,
-    [switch]$NoSkill
+    [switch]$NoSkill,
+    [switch]$VSCode
 )
 
 $ErrorActionPreference = 'Stop'
@@ -184,6 +190,23 @@ if ($NoSkill -or $env:KANBANR_NO_SKILL) {
 } else {
     Write-Host '  Claude Code skill: no claude command on PATH - once Claude Code is installed, run:'
     Write-Host '      kanbanr skill install'
+}
+
+# The editor extension (FEAT-158): opt-in, done by the program (download, SHA256SUMS check,
+# install), so this script, install.sh and self-update share one implementation.
+$editorWanted = if ($VSCode) { '1' } else { $env:KANBANR_VSCODE }
+$kanbanrExe = Join-Path $Dir 'kanbanr.exe'
+if (-not $editorWanted) {
+    $found = @('code', 'codium', 'cursor', 'windsurf') | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue }
+    if ($found) {
+        Write-Host "  VS Code extension: found $($found -join ', ') - rerun with -VSCode to install it, or later: kanbanr editor install"
+    }
+} elseif ($editorWanted -in @('1', 'yes', 'true', 'all')) {
+    & $kanbanrExe editor install
+    if ($LASTEXITCODE -ne 0) { Write-Host '  VS Code extension: not installed - run: kanbanr editor install' }
+} else {
+    & $kanbanrExe editor install --editor $editorWanted
+    if ($LASTEXITCODE -ne 0) { Write-Host "  VS Code extension: not installed - run: kanbanr editor install --editor $editorWanted" }
 }
 
 # PATH is a user-visible change, so it is offered rather than done silently.
