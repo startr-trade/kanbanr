@@ -36,11 +36,10 @@ that makes this promise checkable — no new features.
 ## How things change
 
 - **Additions come in minor versions**: a new command, flag, `--json` field, gate check or board
-  field. An older kanbanr reads a board with fields it does not know and ignores them — but see the
-  next rule for a newer *format*, and the one after it for *writing*.
-- **Everyone who writes to a board upgrades together.** When an older kanbanr rewrites an item, a
-  field only a newer version knows is not kept. Reading is safe across versions; for writing, keep
-  every machine that commits to a shared board on the same minor version.
+  field. An older kanbanr reads a board with fields it does not know, and when it rewrites the file
+  (a move, a task, an edit) it writes those fields back unchanged — so machines sharing a board can
+  run different 1.x versions without one deleting what another recorded. See the next rule for a
+  newer *format*.
 - **A newer board is refused, never misread.** A board that needs a newer kanbanr says so with its
   `schema_version`, and an older binary refuses to open it rather than silently ignoring what it
   does not understand. This is why `schema_version` only rises when a board actually uses

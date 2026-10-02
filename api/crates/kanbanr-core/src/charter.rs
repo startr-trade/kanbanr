@@ -42,6 +42,14 @@ pub struct Charter {
     /// adopting the method never floods the report with pre-existing work.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub adopted_at: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 /// An outcome the project commits to, not an output it produces.
@@ -56,6 +64,14 @@ pub struct Goal {
     pub measure: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub horizon: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -66,6 +82,14 @@ pub struct Stakeholder {
     /// What they need from this project, and why they care.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub interest: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 impl Charter {
@@ -168,6 +192,7 @@ mod tests {
             purpose: "Keep the plan, the work and the reasoning in one git-backed folder.".into(),
             goals: vec![
                 Goal {
+                    extra: Default::default(),
                     id: String::new(),
                     statement: "A resumed session recovers full state without a human recap".into(),
                     measure: "kanbanr board gets Claude to working context in one step".into(),

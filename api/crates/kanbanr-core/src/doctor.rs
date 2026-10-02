@@ -617,6 +617,7 @@ mod tests {
             statement: "Keep a cart for 7 days".into(),
             goals: vec!["G-1".into()],
             zachman: Zachman {
+                extra: Default::default(),
                 what: "cart persistence".into(),
                 how: "server-side".into(),
                 where_: "checkout".into(),

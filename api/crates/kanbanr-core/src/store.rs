@@ -548,6 +548,7 @@ impl Store {
         }
         let now = now_rfc3339();
         let feature = FeatureItem {
+            extra: Default::default(),
             code: code.clone(),
             title: title.to_string(),
             specification: specification.to_string(),
@@ -988,11 +989,13 @@ impl Store {
         let at = now_rfc3339();
         let rev = definition.content_rev();
         definition.approval = Some(crate::models::Approval {
+            extra: Default::default(),
             by: by.to_string(),
             at: at.clone(),
             rev: rev.clone(),
         });
         definition.approvals.push(crate::models::ApprovalEvent {
+            extra: Default::default(),
             at: at.clone(),
             by: by.to_string(),
             verdict: "approved".to_string(),
@@ -1042,11 +1045,13 @@ impl Store {
         let at = now_rfc3339();
         let rev = definition.content_rev();
         definition.approval = Some(crate::models::Approval {
+            extra: Default::default(),
             by: by.to_string(),
             at: at.clone(),
             rev: rev.clone(),
         });
         definition.approvals.push(crate::models::ApprovalEvent {
+            extra: Default::default(),
             at: at.clone(),
             by: by.to_string(),
             verdict: "ratified".to_string(),
@@ -1088,6 +1093,7 @@ impl Store {
         let rev = definition.content_rev();
         definition.approval = None;
         definition.approvals.push(crate::models::ApprovalEvent {
+            extra: Default::default(),
             at: at.clone(),
             by: by.to_string(),
             verdict: "withdrawn".to_string(),
@@ -1138,6 +1144,7 @@ impl Store {
         let at = now_rfc3339();
         let rev = definition.content_rev();
         definition.signoffs.push(crate::models::Signoff {
+            extra: Default::default(),
             id: signoff.to_string(),
             by: by.trim().to_string(),
             at: at.clone(),
@@ -1298,6 +1305,7 @@ impl Store {
         let at = now_rfc3339();
         if from != to {
             feature.history.push(crate::models::Transition {
+                extra: Default::default(),
                 at: at.clone(),
                 from: from.clone(),
                 to: to.to_string(),
@@ -1352,6 +1360,7 @@ impl Store {
             return Err(CoreError::TodoListExists(todo_code, feature.to_string()));
         }
         let list = TodoList {
+            extra: Default::default(),
             code: todo_code,
             description: description.to_string(),
             tasks: Vec::new(),
@@ -1402,6 +1411,7 @@ impl Store {
             return Err(CoreError::TaskExists(key, todo.to_string()));
         }
         let task = Task {
+            extra: Default::default(),
             key,
             text: text.to_string(),
             state: TaskState::NotStarted,
@@ -1516,6 +1526,7 @@ impl Store {
             // record a manual move does — otherwise cycle time is blind to the normal path and
             // reports numbers only for items someone moved by hand (FEAT-061).
             f.history.push(crate::models::Transition {
+                extra: Default::default(),
                 at: at.clone(),
                 from: f.status.clone(),
                 to: to.clone(),
@@ -1576,6 +1587,7 @@ impl Store {
             return Err(CoreError::MilestoneExists(code));
         }
         let milestone = Milestone {
+            extra: Default::default(),
             code: code.clone(),
             name: name.to_string(),
             description: description.to_string(),
@@ -1992,6 +2004,7 @@ impl Store {
                         CoreError::Unsupported(format!("{resolved} has no definition to approve"))
                     })?;
                     definition.approval = Some(crate::models::Approval {
+                        extra: Default::default(),
                         by: by.unwrap_or_else(|| "unknown".to_string()),
                         at: now_rfc3339(),
                         rev: definition.content_rev(),
