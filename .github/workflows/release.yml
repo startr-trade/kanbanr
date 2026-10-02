@@ -313,38 +313,60 @@ jobs:
           curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/install.sh" \
             | sh -s -- --version "${GITHUB_REF_NAME}" --dir /usr/local/bin
 
-      - name: It installed, and it names both the version and the commit
-        run: |
-          set -eu
-          v="$(kanbanr --version)"
-          echo "$v"
-          echo "$v" | grep -q "${GITHUB_REF_NAME#v}" \
-            || { echo "::error::--version does not name the released version: $v" >&2; exit 1; }
-          # The same SHA the release page shows, so an installed binary can be matched against it.
-          # POSIX only: a container job runs this with sh (dash), which has no ${VAR:0:12} (FEAT-143).
-          sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-12)"
-          echo "$v" | grep -q "$sha" \
-            || { echo "::error::--version does not name the released commit: $v" >&2; exit 1; }
+      # The checks are a script so the macOS leg below runs the same ones, and `make ci` runs
+      # them against the latest published release (FEAT-149). Checking out the repository adds
+      # nothing to what was installed; it only brings the script. (No git in this image, so
+      # checkout downloads the tree instead — and sparse checkout needs git, so none here.)
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: It names the release and its commit, and serves the monitor
+        run: sh scripts/verify-install.sh
 
-      - name: The monitor is served with no --ui-dir and no build step
+  # The installers on the other two systems they are published for (FEAT-149): install.sh on
+  # macOS, install.ps1 on Windows, each run as the docs tell a user to run it, against the release
+  # this run just published. Until these existed, neither had ever been run end to end.
+  verify-install-native:
+    name: verify the installer (${{ matrix.os }})
+    needs: release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2025]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          sparse-checkout: scripts
+
+      - name: Run the published installer (macOS)
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          # --data-dir given, so it does not ask; --no-hooks because there is no Claude Code here.
-          kanbanr init ci-check --data-dir /tmp/board --no-hooks \
-            --author "CI" --email "ci@kanbanr.local"
-          kanbanr serve --data-dir /tmp/board --bind 127.0.0.1:8080 &
-          for _ in $(seq 1 30); do
-            curl -fsS -o /dev/null http://127.0.0.1:8080/healthz 2>/dev/null && break
-            sleep 1
-          done
-          body="$(curl -fsS http://127.0.0.1:8080/)"
-          echo "$body" | grep -q "/assets/" \
-            || { echo "::error::the installed binary served no monitor — the embed did not ship" >&2; exit 1; }
-          asset="$(echo "$body" | sed -n 's|.*src="/assets/\([^"]*\)".*|\1|p' | head -n1)"
-          [ -n "$asset" ] || { echo "::error::index.html names no bundle" >&2; exit 1; }
-          curl -fsS -o /dev/null "http://127.0.0.1:8080/assets/${asset}" \
-            || { echo "::error::the bundle the index names is not served" >&2; exit 1; }
-          echo "installed from a one-liner, monitor served, bundle intact."
+          dir="$HOME/.local/bin"
+          curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/install.sh" \
+            | sh -s -- --version "${GITHUB_REF_NAME}" --dir "$dir"
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Run the published installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $env:KANBANR_VERSION = $env:GITHUB_REF_NAME
+          $env:KANBANR_INSTALL_DIR = Join-Path $env:RUNNER_TEMP 'kanbanr\bin'
+          irm "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:GITHUB_REF_NAME/install.ps1" | iex
+          Add-Content -Path $env:GITHUB_PATH -Value $env:KANBANR_INSTALL_DIR
+
+      - name: It names the release and its commit, and serves the monitor (macOS)
+        if: runner.os == 'macOS'
+        run: sh scripts/verify-install.sh
+
+      - name: It names the release and its commit, and serves the monitor (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/verify-install.ps1
 
   # ---- 2. Docker image to GHCR ----------------------------------------------
   image:
