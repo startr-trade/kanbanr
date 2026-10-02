@@ -1,5 +1,12 @@
 # kanbanr — Roadmap
 
+> **Features are frozen until 1.0.** The 0.1.x line takes fixes, documentation, and the work that
+> makes the 1.0 promise checkable. That work is milestone **MS-009, "1.0.0 — General availability"**
+> on the [public board](https://github.com/startr-trade/kanbanr-board): the
+> [stability policy](stability.md), installers proven on every platform, old versions keeping
+> fields they do not know, and a soak of at least three weeks after v0.1.2 with nothing stable
+> broken. New features resume in 1.x.
+
 **The board is the roadmap.** This file used to duplicate it — milestones, the features under each,
 and a "won't do" list — and a duplicate of live state is a document that is wrong the moment
 something moves. Everything it held now lives where it is maintained:

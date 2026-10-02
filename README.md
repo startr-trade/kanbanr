@@ -18,6 +18,10 @@
   <a href="https://kanbanr.startr.trade"><img src="https://img.shields.io/badge/docs-kanbanr.startr.trade-26317e" alt="Documentation"></a>
 </p>
 
+> **Status: features frozen until 1.0.** The 0.1.x releases take fixes, documentation and the
+> [1.0 readiness work](https://github.com/startr-trade/kanbanr-board/blob/main/projects/kanbanr/milestones/MS-009.yaml)
+> — no new features. What 1.0 keeps compatible: [Stability](docs/src/project/stability.md).
+
 ## Why
 
 When Claude does real project work, the plan, the reasoning and the evidence live only in the
