@@ -78,6 +78,19 @@ try {
 }
 Write-Output ""
 
+# Decisions waiting for the user (FEAT-159): offered as a review in the conversation.
+try {
+    $queue = & kanbanr review --pending --json 2>$null | Out-String | ConvertFrom-Json
+    $waiting = @($queue).Count
+    if ($LASTEXITCODE -eq 0 -and $waiting -gt 0) {
+        Write-Output "### Waiting for the user"
+        Write-Output "$waiting item(s) need a decision (approve, ratify or sign off). Offer to review them here,"
+        Write-Output "one question each - see the skill's ""Waiting decisions"" - rather than sending the user"
+        Write-Output "to the browser."
+        Write-Output ""
+    }
+} catch { }
+
 Write-Output "_kanbanr is the system of record for this project's PLAN (features/tasks/"
 Write-Output "specs/decisions/progress). Resume from the board above; record new work in"
 Write-Output "kanbanr as you go. Every document (requested or self-initiated) goes in"

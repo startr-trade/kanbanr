@@ -96,7 +96,9 @@ too (`--no-skill` to skip; [other ways](docs/src/getting-started/installation.md
 `--vscode` to install the [VS Code extension](docs/src/getting-started/installation.md#the-vs-code-extension) as well.
 Then, in your project, ask Claude to **"set up kanbanr for this project"**: it interviews you in plan mode —
 where the board lives, your identity, a charter drafted from your repository, and the process —
-and sets everything up when you approve the plan. Or from a terminal:
+and sets everything up when you approve the plan. From then on you scope, decide and move work by
+talking to Claude — plans to accept, one question per decision ([Working with Claude](docs/src/using/with-claude.md)).
+Or from a terminal:
 
 ```bash
 kanbanr init my-app --author "You" --email you@example.com   # a board beside the repository

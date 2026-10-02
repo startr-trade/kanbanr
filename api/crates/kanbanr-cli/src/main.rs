@@ -314,6 +314,10 @@ enum Command {
         /// Who is agreeing (default: this data folder's commit identity).
         #[arg(long)]
         by: Option<String>,
+        /// The definition revision the user was shown (`kanbanr check <CODE> --json` gives it as
+        /// `rev`). Refused if the definition changed since — what Claude passes (FEAT-159).
+        #[arg(long)]
+        rev: Option<String>,
     },
     /// Take back an approval (FEAT-069). The agreement goes; the record of having given it stays,
     /// and the item returns to what is awaiting review.
@@ -333,6 +337,10 @@ enum Command {
         /// Who is approving (defaults to the data repo's commit identity).
         #[arg(long)]
         by: Option<String>,
+        /// The definition revision the user was shown (`kanbanr check <CODE> --json` gives it as
+        /// `rev`). Refused if the definition changed since — what Claude passes (FEAT-159).
+        #[arg(long)]
+        rev: Option<String>,
     },
     /// Record a named sign-off a stage can require — "design-review", "release" (FEAT-114). It covers
     /// the definition as it stands: change the definition and the sign-off lapses.
@@ -349,6 +357,10 @@ enum Command {
         /// Who is signing off (defaults to the data repo's commit identity).
         #[arg(long)]
         by: Option<String>,
+        /// The definition revision the user was shown (`kanbanr check <CODE> --json` gives it as
+        /// `rev`). Refused if the definition changed since — what Claude passes (FEAT-159).
+        #[arg(long)]
+        rev: Option<String>,
     },
     /// Manage a feature's persistent todo-lists (an epic can hold many).
     #[command(subcommand)]
@@ -5227,12 +5239,19 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 .iter()
                 .map(|f| {
                     let mut report = check_report(f);
-                    report["next"] = client
+                    let readiness = client
                         .get(&format!("/projects/{p}/features/{}/readiness", f.code))
                         .ok()
-                        .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+                        .and_then(|r| serde_json::from_str::<Value>(&r).ok());
+                    report["next"] = readiness
+                        .as_ref()
                         .map(|v| v["next"].clone())
                         .unwrap_or_else(|| json!([]));
+                    // What a verdict on this brief is pinned to (FEAT-159).
+                    report["rev"] = readiness
+                        .as_ref()
+                        .map(|v| v["rev"].clone())
+                        .unwrap_or(Value::Null);
                     report
                 })
                 .collect();
@@ -5289,7 +5308,6 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Review { code, pending, ui } => {
-            use kanbanr_core::models::ApprovalState;
             let p = require_project(cli)?;
             if *ui {
                 // Reading a page of prose belongs in something that renders prose. The daemon runs
@@ -5306,23 +5324,32 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 });
                 return run_serve(cli, Some(bind), ui_dir_for_review(), true);
             }
+            // What is waiting is the daemon's answer, the one the Review page shows (FEAT-159):
+            // never approved, lapsed, unratified, or waiting on a sign-off — and not live work
+            // already agreed, finished work, or ratified work. The CLI used to keep its own copy
+            // of the rule, and listed ratified and finished items as still waiting.
+            let queue: Vec<Value> = if *pending && code.is_none() {
+                serde_json::from_str(&client.get(&format!("/projects/{p}/review"))?)?
+            } else {
+                Vec::new()
+            };
             let features: Vec<kanbanr_core::FeatureItem> = match (code, pending) {
                 (Some(code), _) => vec![get_feature(&client, &p, code)?],
-                (None, true) => get_project(&client, &p)?
-                    .features
-                    .into_iter()
-                    // Anything defined but not currently agreed: never approved, or lapsed because
-                    // the definition changed after a yes.
-                    .filter(|f| {
-                        f.definition
-                            .as_ref()
-                            .is_some_and(|d| !matches!(d.approval_state(), ApprovalState::Current))
-                    })
-                    .collect(),
+                (None, true) => queue
+                    .iter()
+                    .filter_map(|v| v["code"].as_str())
+                    .map(|c| get_feature(&client, &p, c))
+                    .collect::<anyhow::Result<_>>()?,
                 (None, false) => anyhow::bail!(
                     "review what? an item code, or `--pending` for everything awaiting agreement"
                 ),
             };
+            if cli.json && code.is_none() {
+                // The queue as the daemon gives it: each entry's verdict state, the sign-offs its
+                // next stage needs, its definition, and the `rev` a verdict on it is pinned to.
+                println!("{}", serde_json::to_string_pretty(&queue)?);
+                return Ok(());
+            }
             if cli.json {
                 let briefs: Vec<Value> = features
                     .iter()
@@ -5331,6 +5358,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                             "code": f.code,
                             "approval": f.definition.as_ref().map(|d| d.approval_state()),
                             "definition": f.definition,
+                            "rev": f.definition.as_ref().map(|d| d.content_rev()),
                         })
                     })
                     .collect();
@@ -5387,13 +5415,18 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Command::Ratify { code, reason, by } => {
+        Command::Ratify {
+            code,
+            reason,
+            by,
+            rev,
+        } => {
             let p = require_project(cli)?;
             let who = verdict_author(cli, by.as_ref())?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/features/{code}/ratify"),
-                Some(json!({ "by": who, "reason": reason })),
+                Some(json!({ "by": who, "reason": reason, "rev": rev })),
             )?;
             print_write(
                 cli,
@@ -5404,13 +5437,13 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Command::Approve { code, by } => {
+        Command::Approve { code, by, rev } => {
             let p = require_project(cli)?;
             let who = verdict_author(cli, by.as_ref())?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/features/{code}/approve"),
-                Some(json!({ "by": who })),
+                Some(json!({ "by": who, "rev": rev })),
             )?;
             print_write(cli, &resp, format!("{code} approved by {who}"));
             Ok(())
@@ -5421,6 +5454,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             note,
             doc,
             by,
+            rev,
         } => {
             let p = require_project(cli)?;
             let who = verdict_author(cli, by.as_ref())?;
@@ -5430,7 +5464,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     "/projects/{p}/features/{code}/signoff/{}",
                     urlencode_segment(name)
                 ),
-                Some(json!({ "by": who, "note": note, "doc": doc })),
+                Some(json!({ "by": who, "note": note, "doc": doc, "rev": rev })),
             )?;
             print_write(
                 cli,

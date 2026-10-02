@@ -282,31 +282,87 @@ visible, a plausible guess is not. Never write `[MISSING: …]` into the data; t
 Write the definition with the batch path (`definition` on `feature.add`/`feature.edit`) or
 `kanbanr feature define <CODE> --file def.yaml`.
 
-## Agreement before work: the approval gate
+## Agreement before work: decided in the conversation
 
-**Scope → define → present the brief → wait for the user's approval → only then write code.**
+**Scope → define → show the brief → the user decides → only then write code.** The user decides in
+Claude Code itself: a plan they accept, or a question they answer. They should never need the
+browser or a terminal to agree to something (FEAT-159).
 
-- `kanbanr review <CODE>` prints the one-screen decision brief. Show it, or its substance, and
-  **stop**. Do not start implementing while the answer is still outstanding.
-- The user approves with `kanbanr approve <CODE>`; ask them to, rather than approving on their
-  behalf — an agent approving its own brief is the failure this exists to prevent.
-- When several items are waiting, offer `kanbanr review --ui`: it opens the review queue in the
-  browser with the approve button beside each brief. Reading a page of markdown in a terminal to
-  make a decision is poor, and an expensive gate gets rubber-stamped, which is the same failure
-  with extra steps. `kanbanr review --pending` is the terminal equivalent.
+### The workflow decides what you ask — never a preset name
+
+Do not reason from "this is TOGAF" or "this is Scrum". Ask the board what the next stage needs:
+
+```bash
+kanbanr check <CODE> --json   # rev, and for each next stage: status, purpose, gaps, warnings, signoffs_needed
+```
+
+Turn each failing check into one action — the same for every workflow, so an edited preset or an
+organisation's own process file changes what you ask with nothing changed here:
+
+| Check | What you do |
+|---|---|
+| `definition`, `statement`, `goals`, `goals_known`, `zachman` (its named columns), `requirements`, `ears`, `quality`, `tests_named`, `small` | **draft it into the plan**; ask only what you cannot work out from the charter and the code |
+| `approved` | the user's **acceptance of the plan**; with nothing to draft, an **Approve** question |
+| `bypass` | a **Ratify** question |
+| `signoff` (a name in `signoffs_needed`) | a **"Sign off \<name\>"** question |
+| `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; the active sprint; planned releases) |
+| `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
+
+Warnings go into the plan with a choice: fix it, or go ahead with the warning on record. When more
+than one next stage is possible, ask which. Head the plan with the stage's own `purpose`.
+
+### A new item: scope it in plan mode
+
+When the user asks for work, **enter plan mode** before writing anything. Read the charter and the
+code; ask only what you cannot find, a few questions at a time (AskUserQuestion, with your
+recommendation first). The plan is the brief: statement, goals, the six dimensions the stage asks
+for, EARS requirements with named tests, and the stage it starts in — as far as the target stage's
+gate requires, and no further unless the user asks for the whole definition up front.
+
+**The user accepting the plan is their approval of exactly that text.** After they accept: create
+or define the item, then record the approval with the revision you showed —
+`kanbanr approve <CODE> --rev <rev>` (rev from `kanbanr check <CODE> --json`). If they send the plan
+back, revise it; nothing is recorded.
+
+Moving an item on to a stage that asks for more is the same loop: plan the growth, the user
+accepts, record the approval again (the earlier one lapsed when the definition grew).
+
+### Waiting decisions: work the queue as questions
+
+When items are waiting (`kanbanr review --pending --json`, or "let's review"), take them **one at a
+time**: show the brief in a sentence or three, then **one AskUserQuestion** whose options are the
+verdicts that item can take — from the table above — plus **"Change it"** and **"Skip"**:
+
+- **Approve / Ratify / Sign off \<name\>** → record it at once:
+  `kanbanr approve|ratify <CODE> --rev <rev>` · `kanbanr signoff <CODE> <name> --rev <rev>`.
+- **Accept / Reject** a proposed decision → `kanbanr adr accept|reject <ADR> [--reason "…"]`.
+- **Change it** → ask what, revise the definition; it returns to the queue (its approval lapses).
+- **Skip** → leave it, and move to the next.
+
+**A verdict is recorded only from the user's explicit choice in that plan or question — never
+inferred from the conversation, never from "sounds good", never by you on your own.** Always pass
+`--rev`: if the definition changed after you showed it, the command refuses and records nothing;
+show the brief again and ask again. Recording a verdict nobody chose is the failure this exists to
+prevent — if it ever happens, say so and withdraw it (`kanbanr unapprove <CODE> --reason "…"`).
+
+The browser (`kanbanr review --ui`) and the plain commands stay available for users who prefer
+them; offer them, but do not require them.
+
+### Moving work
+
+The user moves work by asking: "park FEAT-074", "put FEAT-150 back to Planned". Run
+`kanbanr move <CODE> <status>`. If a gate refuses, say what the stage still needs — it is the same
+table — and offer to work through it. `--override "<reason>"` is for genuine emergencies, with the
+user's reason, and the item then needs ratifying.
+
+### The rules underneath
+
 - A verdict records **who** gave it, defaulting to the board's commit identity. One with no named
-  approver is refused, so never invent a value for `--by`: if it fails, the board has no identity
-  and the user sets one with `kanbanr identity`.
-- An approval recorded in error is withdrawn with `kanbanr unapprove <CODE> --reason "…"`. If you
-  ever approve something on the user's behalf, say so and withdraw it.
-- kanbanr enforces it: moving an item into an active status is refused unless its definition is
-  approved. If the definition changes after approval, the approval **lapses** and must be renewed —
-  so scope cannot drift silently past a yes.
-- Genuinely urgent work can proceed with `kanbanr move <CODE> <status> --override "<reason>"`
-  (`--unapproved` is the older name). The reason is kept in the item's history.
-  The reason is recorded on the item. Use it for real emergencies, not to avoid asking. Work
-  finished that way still needs agreement afterwards: it heads the monitor's Review page with a
-  **Ratify** button (or `kanbanr ratify <CODE>`). Never ratify on the user's behalf.
+  approver is refused, so never invent `--by`: if it fails, the board has no identity and the user
+  sets one with `kanbanr identity`.
+- kanbanr enforces the gates: a move into a stage whose gate needs `approved` is refused unless the
+  definition's approval is current. Change the definition after approval and it **lapses** — scope
+  cannot drift silently past a yes.
 - **Subagents inherit, never invent.** A coordinator passes the approved definition to each
   subagent as its brief. A subagent that finds work outside it returns a **proposed change to the
   definition**, not merged code.
@@ -656,7 +712,7 @@ kanbanr commit -m "…" [--ref R-2] [--ref TL-001/T3] [-a]   # trailer filled fr
 kanbanr finish [FEAT-001]         # gated: tasks complete, requirements proven
 kanbanr git install-hooks [--force] | uninstall-hooks | status
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
-kanbanr approve FEAT-001          # the user records agreement (do not approve on their behalf)
+kanbanr approve FEAT-001 --rev <rev>   # only after the user chose Approve in a plan or question
 kanbanr signoff FEAT-001 design-review [--note …] [--doc path]   # a named sign-off a stage asks for — the user's, never Claude's
 kanbanr move FEAT-001 Scheduled [--override \"<reason>\"]     # gated; the override is recorded
 kanbanr batch --dry-run --file b.json   # preview a bundle (e.g. an import) without writing

@@ -42,6 +42,29 @@ fn approver(b: &Value) -> Result<String> {
     }
 }
 
+/// A verdict covers what the person was shown (FEAT-159). When the request names the revision of
+/// the definition it was given on, it is refused if the definition has moved on since — so a brief
+/// shown in one moment and a yes recorded in the next can never cover different text.
+fn shown_rev(store: &Store, p: &str, code: &str, b: &Value) -> Result<()> {
+    let Some(shown) = str_field(b, "rev").filter(|r| !r.trim().is_empty()) else {
+        return Ok(());
+    };
+    let project = store.load_meta(p)?;
+    let now = project
+        .feature(code)?
+        .definition
+        .as_ref()
+        .map(|d| d.content_rev())
+        .unwrap_or_default();
+    if now != shown.trim() {
+        return Err(CoreError::Unsupported(format!(
+            "{code}'s definition changed after it was shown (shown {shown}, now {now}): show the \
+             brief again and ask again — nothing was recorded"
+        )));
+    }
+    Ok(())
+}
+
 fn str_field(body: &Value, k: &str) -> Option<String> {
     body.get(k).and_then(|v| v.as_str()).map(String::from)
 }
@@ -619,24 +642,30 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             &approver(b)?,
             &str_field(b, "reason").unwrap_or_default(),
         )?),
-        ("POST", ["projects", p, "features", code, "ratify"]) => ser(&store.ratify_feature(
-            p,
-            code,
-            &approver(b)?,
-            &str_field(b, "reason").unwrap_or_default(),
-        )?),
+        ("POST", ["projects", p, "features", code, "ratify"]) => ser(&{
+            shown_rev(store, p, code, b)?;
+            store.ratify_feature(
+                p,
+                code,
+                &approver(b)?,
+                &str_field(b, "reason").unwrap_or_default(),
+            )?
+        }),
         ("POST", ["projects", p, "features", code, "approve"]) => {
+            shown_rev(store, p, code, b)?;
             ser(&store.approve_feature(p, code, &approver(b)?)?)
         }
-        ("POST", ["projects", p, "features", code, "signoff", name]) => ser(&store
-            .signoff_feature(
+        ("POST", ["projects", p, "features", code, "signoff", name]) => ser(&{
+            shown_rev(store, p, code, b)?;
+            store.signoff_feature(
                 p,
                 code,
                 &percent_decode(name),
                 &approver(b)?,
                 &str_field(b, "note").unwrap_or_default(),
                 &str_field(b, "doc").unwrap_or_default(),
-            )?),
+            )?
+        }),
         ("POST", ["projects", p, "features", code, "todos"]) => ser(&store.add_todo_list(
             p,
             code,
@@ -925,6 +954,9 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             let goal_ids = charter.goal_ids();
             ser(&json!({
                 "code": feature.code,
+                // The definition's revision: a verdict given with `rev` is refused if it moved on
+                // (FEAT-159).
+                "rev": feature.definition.as_ref().map(|d| d.content_rev()),
                 "gaps": crate::readiness::evaluate(feature, Some(&goal_ids), crate::readiness::CHECK),
                 // What the next stage asks, and what it still lacks (FEAT-117).
                 "next": crate::readiness::next_gates(
@@ -1016,6 +1048,8 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                         "signoffs_needed": signoffs_needed,
                         "started_unapproved": definition.started_unapproved,
                         "definition": definition,
+                        // What a verdict given from this brief is pinned to (FEAT-159).
+                        "rev": definition.content_rev(),
                         // What the ordering below keys on, and useful to a client besides.
                         "in_progress": f.status != project.config.default_state,
                     }))

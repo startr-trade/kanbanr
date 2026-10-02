@@ -6,6 +6,23 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Scope and decide work inside Claude Code (FEAT-159).** Asked for new work, Claude scopes it in
+  plan mode, and your acceptance of the plan creates the item and approves exactly that text.
+  Waiting decisions are worked in the conversation, one question per item (Approve, Ratify, Sign
+  off, Accept or Reject a decision, Change it, Skip), and the session start says when some are
+  waiting. What Claude asks is read from your workflow's gates through `kanbanr check --json`, so
+  any process, including your own file, drives the conversation. `approve`, `ratify` and `signoff`
+  take `--rev`, and refuse if the definition changed after it was shown; the Review page sends it
+  too. A new book chapter, *Working with Claude*, walks through it, with a TOGAF example.
+
+### Fixed
+
+- **`kanbanr review --pending` listed items that were not waiting** — ratified and finished ones —
+  because it kept its own copy of the rule. It now shows the Review page's queue, and its `--json`
+  carries each item's verdict state, needed sign-offs and `rev`.
+
 ## [0.1.4] - 2026-10-03
 
 Completed now means proven however an item finishes, and the installers can put the VS Code

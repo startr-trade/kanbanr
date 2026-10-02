@@ -54,13 +54,13 @@ export const api = {
    * routes and the same content hash the CLI uses. Only reachable on a write-enabled daemon, which
    * is why the pages ask `getMeta` before offering either action.
    */
-  approve: (id: string, code: string, by: string) =>
-    verdict(id, code, "approve", { by }, "approve"),
+  approve: (id: string, code: string, by: string, rev = "") =>
+    verdict(id, code, "approve", { by, rev }, "approve"),
   /** Record a named sign-off a stage asks for (FEAT-114). */
-  signoff: async (id: string, code: string, name: string, by: string) => {
+  signoff: async (id: string, code: string, name: string, by: string, rev = "") => {
     const res = await fetch(
       `/api/write/projects/${encodeURIComponent(id)}/features/${encodeURIComponent(code)}/signoff/${encodeURIComponent(name)}`,
-      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ by }) },
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ by, rev }) },
     );
     if (!res.ok) {
       throw new Error(
@@ -94,7 +94,8 @@ export const api = {
     return res.json();
   },
   /** Agree after the fact to work built under a recorded bypass (FEAT-109). */
-  ratify: (id: string, code: string, by: string) => verdict(id, code, "ratify", { by }, "ratify"),
+  ratify: (id: string, code: string, by: string, rev = "") =>
+    verdict(id, code, "ratify", { by, rev }, "ratify"),
   unapprove: (id: string, code: string, by: string, reason: string) =>
     verdict(id, code, "unapprove", { by, reason }, "withdraw"),
   /**

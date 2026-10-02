@@ -49,10 +49,12 @@ export default function ReviewPage() {
     setBusy(code);
     try {
       if (item.approval === "unratified") {
-        await api.ratify(project, code, who);
+        // Pinned to the definition this page showed (FEAT-159): if it changed meanwhile, the
+        // daemon refuses rather than recording a yes to text nobody read.
+        await api.ratify(project, code, who, item.rev ?? "");
         setDone((d) => ({ ...d, [code]: "ratified" }));
       } else {
-        await api.approve(project, code, who);
+        await api.approve(project, code, who, item.rev ?? "");
         setDone((d) => ({ ...d, [code]: "approved" }));
       }
     } catch (e) {
@@ -82,7 +84,7 @@ export default function ReviewPage() {
     const code = item.code;
     setBusy(code);
     try {
-      await api.signoff(project, code, name, who);
+      await api.signoff(project, code, name, who, item.rev ?? "");
       setDone((d) => ({ ...d, [code]: `signed off ${name}` }));
     } catch (e) {
       setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));

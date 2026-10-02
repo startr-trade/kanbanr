@@ -3,7 +3,8 @@
 ## The method: why work exists, and what proves it done
 
 Everything above tracks *what* is being built. This section is about *why* — the part a board
-normally loses. It is opt-in: a project with no charter behaves exactly as it always did, and items
+normally loses. You rarely write any of it by hand: Claude drafts it in a plan and asks what it
+cannot infer — see [Working with Claude](with-claude.md). It is opt-in: a project with no charter behaves exactly as it always did, and items
 created before a charter was adopted are never reported against it.
 
 ### The charter — what the project is for
