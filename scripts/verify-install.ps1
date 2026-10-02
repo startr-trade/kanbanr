@@ -21,8 +21,13 @@ if (-not $v.Contains($sha)) {
   Write-Host "::error::--version does not name the released commit: $v"; exit 1
 }
 
-# The monitor is served with no --ui-dir and no build step.
-$board = Join-Path ([IO.Path]::GetTempPath()) ("kanbanr-verify-" + [guid]::NewGuid().ToString('N')) | Join-Path -ChildPath 'board'
+# The monitor is served with no --ui-dir and no build step. Run from a fresh folder of its own:
+# the release starts this script in the repository checkout, whose .kanbanr marker makes init
+# refuse (FEAT-155).
+$work = Join-Path ([IO.Path]::GetTempPath()) ("kanbanr-verify-" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $work | Out-Null
+Set-Location $work
+$board = Join-Path $work 'board'
 $port = if ($env:KANBANR_VERIFY_PORT) { $env:KANBANR_VERIFY_PORT } else { '8080' }
 & kanbanr init ci-check --data-dir $board --no-hooks --author CI --email ci@kanbanr.local
 if ($LASTEXITCODE -ne 0) { throw 'kanbanr init failed' }
