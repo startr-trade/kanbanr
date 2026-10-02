@@ -55,7 +55,7 @@ for you). **Never** paste a token into a file that gets committed.
 | **GHCR** (GitHub Container Registry) | Publishes the Docker image so `docker run ghcr.io/startr-trade/kanbanr` works | your GitHub account | **none** — Actions uses the automatic `GITHUB_TOKEN` (`packages: write`) | nothing to store; locally use a PAT with `write:packages` |
 | **Claude Code plugin marketplace** | Lets users `claude plugin install kanbanr` | your GitHub account | **none** — it's just your public git repo | nothing — users add the repo URL |
 | **VS Code Marketplace** *(only when you ship the extension — `editor/vscode/`)* | Publishes the VS Code extension | **Azure DevOps** account (free) + a **publisher** at marketplace.visualstudio.com/manage | a **Personal Access Token** scoped *Marketplace → Manage* | `VSCE_PAT` secret |
-| **Open VSX** *(optional, open-source VS Code registry)* | Same extension for VSCodium/Cursor/etc. | open-vsx.org (log in with GitHub) | an access token | `OVSX_TOKEN` secret |
+| **Open VSX** *(optional, open-source VS Code registry)* | Same extension for VSCodium/Cursor/etc. | open-vsx.org (log in with GitHub), and claim the `kanbanr` namespace | an access token | `OVSX_PAT` secret + `PUBLISH_OPENVSX=true` variable |
 | **npm** *(probably NOT needed)* | Only if you ever publish the web UI as a reusable package — kanbanr bundles it into the binary, so you likely just **reserve the name** | npmjs.com + **2FA** | an **Automation token** | `NPM_TOKEN` secret |
 
 > You don't need every row. For a **first release** the essentials are **GitHub** (always: it
@@ -101,7 +101,8 @@ Developer settings → PATs) with `write:packages`, then
 3. Azure DevOps → User settings → **Personal Access Tokens** → New: Organization *All accessible
    organizations*, Scopes *Custom defined → Marketplace → Manage*, set an expiry.
 4. Publish: `npx vsce publish -p <PAT>`, or store it as the `VSCE_PAT` secret and let CI run it.
-   Optional Open VSX: account at open-vsx.org → token → `npx ovsx publish -p <OVSX_TOKEN>`.
+   Open VSX instead (no Microsoft account): see the release checklist below — the release
+   workflow publishes there once `OVSX_PAT` and `PUBLISH_OPENVSX` are set.
 
 **Where the automation secrets go:** GitHub repo → **Settings → Secrets and variables → Actions →
 New repository secret**: `CARGO_REGISTRY_TOKEN`, `VSCE_PAT`, etc. (and the `PUBLISH_CRATES` *variable*
@@ -238,9 +239,12 @@ content** and your **publish credentials**:
 - [ ] **Cut the first release:** `git tag v0.1.0 && git push origin v0.1.0`, then verify the Release
       assets + the GHCR image appear. Move the `[0.1.0]` section in the changelog from *Unreleased*
       to dated.
-- [ ] **Publish the VS Code extension** ([`../editor/vscode/`](https://github.com/startr-trade/kanbanr/tree/main/editor/vscode)) to the **VS Code
-      Marketplace** (`vsce publish`, needs `VSCE_PAT`) and optionally **Open VSX** (`ovsx publish`)
-      once you've smoke-tested it (F5 launch). Keep its `version` in step with releases.
+- [x] **Ship the VS Code extension** ([`../editor/vscode/`](https://github.com/startr-trade/kanbanr/tree/main/editor/vscode)): every release attaches
+      `kanbanr-vscode-<version>.vsix`; its `version` must equal the workspace's (CI and the tag
+      check refuse a mismatch). **Open VSX**: once the `kanbanr` namespace is granted, create a
+      token there, then `gh secret set OVSX_PAT` and `gh variable set PUBLISH_OPENVSX --body true`
+      — the next release publishes it. The **VS Code Marketplace** needs a Microsoft account and
+      is not set up.
 
 ## 6. Distributing the skill
 

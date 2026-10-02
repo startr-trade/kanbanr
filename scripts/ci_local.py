@@ -63,6 +63,11 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The monitor presents itself correctly": LOCAL,
             "The monitor's markdown cannot run script": LOCAL,
         },
+        "vscode": {
+            "Install the extension's dependencies": LOCAL,
+            "The extension's version is the workspace's": LOCAL,
+            "The extension compiles and packages": LOCAL,
+        },
         "workflows": {
             "Every third-party action is pinned to a commit": LOCAL,
             "Every scanner suppression has a reason and an expiry": LOCAL,
@@ -131,6 +136,14 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Run the published installer (Windows)": "Windows runner, installs from a published release",
             "It names the release and its commit, and serves the monitor (macOS)": "macOS runner; the same script is run below on Linux",
             "It names the release and its commit, and serves the monitor (Windows)": "Windows runner; the script is parsed by the installers job",
+        },
+        "vscode": {
+            "Install the extension's dependencies": "the same install ci.yml's vscode job runs locally",
+            "Package the extension": "packages from the tag; ci.yml's vscode job packages the same way locally",
+        },
+        "openvsx": {
+            "Install the extension's dependencies": "publishes to Open VSX",
+            "Publish to Open VSX": "publishes to Open VSX",
         },
         "image": {
             "Lowercase image name": "names the GHCR image; the image build itself is checked below",

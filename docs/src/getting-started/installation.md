@@ -133,6 +133,19 @@ With the clone, the hooks come from `kanbanr hooks install` in each project, whi
 and the setup interview run for you. Either way, then open Claude Code in a project and say **"set up
 kanbanr for this project"**.
 
+## The VS Code extension
+
+An optional extension opens the monitor inside VS Code and runs the common board commands through
+the CLI. Each release carries it as `kanbanr-vscode-<version>.vsix`:
+
+```bash
+gh release download -R startr-trade/kanbanr -p 'kanbanr-vscode-*.vsix'
+code --install-extension kanbanr-vscode-*.vsix
+```
+
+Editors that install from [Open VSX](https://open-vsx.org) — VSCodium, Cursor, Windsurf — can take
+it from there once it is published under the `kanbanr` namespace.
+
 ## Run the monitor somewhere else
 
 ```bash
