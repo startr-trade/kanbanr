@@ -1463,6 +1463,121 @@ requirements:
         );
     }
 
+    /// A defined, approved item in progress with one open task, on a board whose charter is
+    /// adopted — the case FEAT-156 is about.
+    fn defined_in_progress(store: &Store, title: &str) -> (String, String) {
+        crate::charter::save(
+            store,
+            "demo",
+            &crate::charter::Charter {
+                purpose: "p".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let f = store.add_feature("demo", title, "# x", "M", None).unwrap();
+        let def: crate::models::FeatureDefinition = serde_yaml::from_str(
+            "statement: s\nrequirements:\n  - kind: functional\n    text: THE SYSTEM SHALL x.\n    tests:\n      - name: t::x\n        kind: unit\n        state: planned\n",
+        )
+        .unwrap();
+        store
+            .set_feature_definition("demo", &f.code, Some(def))
+            .unwrap();
+        store.approve_feature("demo", &f.code, "Ada").unwrap();
+        store.move_feature("demo", &f.code, "Scheduled").unwrap();
+        let list = store.add_todo_list("demo", &f.code, "work", None).unwrap();
+        store
+            .add_task("demo", &f.code, &list.code, "one", None)
+            .unwrap();
+        (f.code, list.code)
+    }
+
+    /// FEAT-156 R-1: the last task does not finish an item whose requirement has no green test —
+    /// it says why — and does once the evidence is recorded.
+    #[test]
+    fn the_last_task_does_not_complete_an_item_with_an_unproven_requirement() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let (code, list) = defined_in_progress(&store, "Unproven");
+        let (f, held) = store
+            .set_task_state_reported(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        assert_eq!(f.status, "Scheduled", "it stays where it is");
+        let held = held.expect("and says why");
+        assert!(held.contains("R-1"), "{held}");
+
+        store
+            .set_test_state(
+                "demo",
+                &code,
+                "R-1",
+                "t::x",
+                crate::models::TestState::Green,
+                None,
+            )
+            .unwrap();
+        store
+            .set_task_state(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::InProgress,
+            )
+            .unwrap();
+        let (f, held) = store
+            .set_task_state_reported(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        assert_eq!((f.status.as_str(), held), ("Completed", None));
+    }
+
+    /// FEAT-156 R-2: a batch is judged when it ends — ticking the last task and then adding an
+    /// open one leaves the item where it was.
+    #[test]
+    fn a_batch_that_adds_open_tasks_after_completing_the_last_one_does_not_advance_the_item() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let (code, list) = defined_in_progress(&store, "Batched");
+        store
+            .set_test_state(
+                "demo",
+                &code,
+                "R-1",
+                "t::x",
+                crate::models::TestState::Green,
+                None,
+            )
+            .unwrap();
+        let out = store
+            .apply_batch(
+                "demo",
+                ops(serde_json::json!([
+                    {"op":"task.state","feature":code,"todo":list,"key":"T1","state":"Completed"},
+                    {"op":"task.add","feature":code,"todo":list,"text":"proof still to come"}
+                ])),
+            )
+            .unwrap();
+        assert_eq!(out[0]["status"], "Scheduled", "{out:?}");
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert_eq!(f.status, "Scheduled");
+        assert!(
+            f.history.iter().all(|t| t.to != "Completed"),
+            "it never passed through Completed"
+        );
+    }
+
     /// FEAT-151 R-1: a field this version does not know — as a newer kanbanr would write — survives
     /// every rewrite: a move, a task state change and an edit of the item, an edit of its
     /// milestone, a change to the project config, and a save of the charter.

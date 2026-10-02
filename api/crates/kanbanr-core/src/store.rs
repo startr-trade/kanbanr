@@ -1450,34 +1450,25 @@ impl Store {
         let mut pending = Pending::default();
         let charter = crate::charter::load(self, id)?;
         let ctx = crate::readiness::Context::load(self, id, &project.config);
-        let out = Self::set_task_state_on(
-            &mut project,
-            &mut pending,
-            &charter,
-            &ctx,
-            feature,
-            todo,
-            key,
-            state,
-        )?;
+        Self::set_task_state_on(&mut project, &mut pending, feature, todo, key, state)?;
+        let out = Self::auto_advance_on(&mut project, &mut pending, &charter, &ctx, feature)?;
         self.flush(id, &project, &pending)?;
         Ok(out)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Set one task's state. Whether the item then finishes is a separate step,
+    /// [`Store::auto_advance_on`], so a batch can take it once, after its last operation
+    /// (FEAT-156): judged between operations, a batch that ticks the last task and then adds open
+    /// ones completed the item for a moment — long enough to move it.
     fn set_task_state_on(
         project: &mut Project,
         pending: &mut Pending,
-        charter: &crate::Charter,
-        ctx: &crate::readiness::Context,
         feature: &str,
         todo: &str,
         key: &str,
         state: TaskState,
-    ) -> Result<(FeatureItem, Option<String>)> {
-        let config = project.config.clone();
+    ) -> Result<()> {
         let f = project.feature_mut(feature)?;
-        let from = f.status.clone();
         let list = f
             .todo_lists
             .iter_mut()
@@ -1489,6 +1480,23 @@ impl Store {
             .find(|t| t.key == key)
             .ok_or_else(|| CoreError::TaskNotFound(key.to_string(), todo.to_string()))?;
         task.state = state;
+        f.updated_at = now_rfc3339();
+        pending.persist_features.insert(f.code.clone());
+        Ok(())
+    }
+
+    /// Finish the item if every task is done and it may end: the move a manual `finish` would
+    /// make, through the same gate. Returns why it stayed, when it did.
+    fn auto_advance_on(
+        project: &mut Project,
+        pending: &mut Pending,
+        charter: &crate::Charter,
+        ctx: &crate::readiness::Context,
+        feature: &str,
+    ) -> Result<(FeatureItem, Option<String>)> {
+        let config = project.config.clone();
+        let f = project.feature(feature)?;
+        let from = f.status.clone();
         let done = f.all_tasks_completed();
 
         // Auto-complete the feature when every task (across all lists) is done — but NOT when
@@ -1512,7 +1520,16 @@ impl Store {
         };
         let target = match target {
             Some(to) => match Self::check_gate(project, charter, ctx, feature, &to, None) {
-                Ok(_) => Some(to),
+                Ok(_) => match Self::unproven(project, charter, ctx, feature)? {
+                    None => Some(to),
+                    Some(gaps) => {
+                        held = Some(format!(
+                            "all tasks are done, but it stays in {from}: {gaps} — record the \
+                             evidence with `kanbanr test`, or move it by hand if you disagree"
+                        ));
+                        None
+                    }
+                },
                 Err(e) => {
                     held = Some(format!("all tasks are done, but it stays in {from}: {e}"));
                     None
@@ -1541,6 +1558,40 @@ impl Store {
             pending.remove_features.insert((from, feature.to_string()));
         }
         Ok((updated, held))
+    }
+
+    /// On a workflow that declares no gates, finishing the last task asks what `finish` asks of a
+    /// defined item: every requirement proven by a green test (FEAT-156). Without this the two ways
+    /// an item ends disagreed, and the common one — ticking the last task — completed items whose
+    /// requirements were still planned. A declared end gate already says what it requires, and
+    /// items with no definition, or from before the charter was adopted, keep the old rule.
+    fn unproven(
+        project: &Project,
+        charter: &crate::Charter,
+        ctx: &crate::readiness::Context,
+        feature: &str,
+    ) -> Result<Option<String>> {
+        if !project.config.gates.is_empty() || charter.adopted_at.trim().is_empty() {
+            return Ok(None);
+        }
+        let f = project.feature(feature)?;
+        if f.definition.is_none() || f.created_at.as_str() < charter.adopted_at.as_str() {
+            return Ok(None);
+        }
+        let gaps = crate::readiness::evaluate_conditions(
+            f,
+            None,
+            &[crate::readiness::Condition::Check(
+                crate::readiness::Check::TestsGreen,
+            )],
+            ctx,
+        );
+        Ok((!gaps.is_empty()).then(|| {
+            gaps.iter()
+                .map(|g| g.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        }))
     }
 
     // ---- milestone ops -------------------------------------------------------------------
@@ -1699,6 +1750,8 @@ impl Store {
         let mut skipped: HashSet<String> = HashSet::new();
         let mut out = Vec::new();
         let mut deferred: Vec<DeferredDoc> = Vec::new();
+        // Items a `task.state` touched, and the op that did, for the end-of-batch advance.
+        let mut finishing: Vec<(usize, String)> = Vec::new();
 
         for (i, op) in ops.into_iter().enumerate() {
             let result: Result<serde_json::Value> = (|| match op {
@@ -2108,21 +2161,19 @@ impl Store {
                     }
                     let st = crate::models::TaskState::parse(&state)
                         .ok_or_else(|| CoreError::InvalidTaskState(state.clone()))?;
-                    let (f, held) = Self::set_task_state_on(
+                    let code = resolve(&aliases, &feature);
+                    Self::set_task_state_on(
                         &mut project,
                         &mut pending,
-                        &charter,
-                        &ctx,
-                        &resolve(&aliases, &feature),
+                        &code,
                         &resolve(&aliases, &todo),
                         &key,
                         st,
                     )?;
-                    let mut out = serde_json::json!({"op":"task.state","status":f.status});
-                    if let Some(held) = held {
-                        out["held"] = serde_json::json!(held);
-                    }
-                    Ok(out)
+                    // Whether the item finishes is judged once the whole batch has applied.
+                    finishing.push((i, code.clone()));
+                    let status = project.feature(&code)?.status.clone();
+                    Ok(serde_json::json!({"op":"task.state","status":status}))
                 }
                 // Doc ops write to disk directly (they don't touch the in-memory project); a dry
                 // run only validates the path.
@@ -2170,6 +2221,23 @@ impl Store {
                 // only on success, so those writes landed on disk OUTSIDE git, invisible to the
                 // history and swept into whatever unrelated commit came next.
                 Err(e) => return Err(CoreError::BatchOpFailed(i, e.to_string())),
+            }
+        }
+        // The batch is one change, so it finishes items as one change would (FEAT-156): each
+        // touched item is judged once, as it stands after the last operation. The result is
+        // reported on the last `task.state` op that touched it.
+        let mut judged = std::collections::HashSet::new();
+        for (i, code) in finishing.iter().rev() {
+            if !judged.insert(code.clone()) {
+                continue;
+            }
+            let (f, held) = Self::auto_advance_on(&mut project, &mut pending, &charter, &ctx, code)
+                .map_err(|e| CoreError::BatchOpFailed(*i, e.to_string()))?;
+            if let Some(entry) = out.get_mut(*i) {
+                entry["status"] = serde_json::json!(f.status);
+                if let Some(held) = held {
+                    entry["held"] = serde_json::json!(held);
+                }
             }
         }
         if !dry_run {
