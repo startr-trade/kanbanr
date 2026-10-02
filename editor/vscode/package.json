@@ -2,7 +2,7 @@
   "publisher": "kanbanr",
   "name": "kanbanr",
   "displayName": "kanbanr",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "icon": "media/icon.png",
   "description": "VS Code viewer and thin command layer for kanbanr — the local, git-backed project management system of record. Open the live board monitor and drive the kanbanr CLI without leaving your editor.",
   "repository": {

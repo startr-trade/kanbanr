@@ -6,6 +6,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-10-03
+
+Completed now means proven however an item finishes, and the installers can put the VS Code
+extension into your editor. [Release notes](https://kanbanr.startr.trade/releases/v0.1.4.html).
+
 ### Added
 
 - **The installers can install the VS Code extension too (FEAT-158).** `install.sh --vscode`
@@ -671,7 +676,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/startr-trade/kanbanr/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/startr-trade/kanbanr/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/startr-trade/kanbanr/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/startr-trade/kanbanr/compare/v0.1.0...v0.1.1
