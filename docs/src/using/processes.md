@@ -5,6 +5,10 @@ allowed, and what each status asks of an item before the item may enter it. kanb
 check things. The project decides which checks apply where. None of it is hard-coded: TOGAF, PDCA,
 a design-control flow or your organisation's own process is a file.
 
+In Claude Code you never read this table to know what to do next: Claude asks the board what the
+next stage needs and turns each gap into a draft or a question — see
+[Working with Claude](with-claude.md).
+
 ## Choosing a process
 
 ```bash

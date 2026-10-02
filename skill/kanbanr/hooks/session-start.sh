@@ -93,6 +93,17 @@ if [ -n "$LESSONS" ] && [ "$LESSONS" != "(nothing learned here yet)" ]; then
   echo
 fi
 
+# Decisions waiting for the user (FEAT-159): offered as a review in the conversation, so agreeing
+# never needs the browser or a terminal.
+WAITING="$(kanbanr "${PROJECT_ARGS[@]}" review --pending --json 2>/dev/null | grep -c '"code":' || true)"
+if [ -n "$WAITING" ] && [ "$WAITING" -gt 0 ] 2>/dev/null; then
+  echo "### Waiting for the user"
+  echo "$WAITING item(s) need a decision (approve, ratify or sign off). Offer to review them here,"
+  echo "one question each — see the skill's \"Waiting decisions\" — rather than sending the user"
+  echo "to the browser."
+  echo
+fi
+
 echo "_kanbanr is the system of record for this project's PLAN (features/tasks/"
 echo "specs/decisions/progress). Resume from the board above; record new work in"
 echo "kanbanr as you go. Every document (requested or self-initiated) goes in"

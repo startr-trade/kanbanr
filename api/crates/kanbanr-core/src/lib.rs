@@ -1492,6 +1492,90 @@ requirements:
         (f.code, list.code)
     }
 
+    /// FEAT-159: a verdict given with the revision the user was shown is refused when the
+    /// definition has changed since — approve, ratify and sign-off alike — and changes nothing;
+    /// given with the current revision, it is recorded.
+    #[test]
+    fn approve_ratify_and_signoff_with_a_stale_rev_are_refused_and_change_nothing() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let f = store
+            .add_feature("demo", "Shown", "# x", "M", None)
+            .unwrap();
+        let def = |text: &str| -> crate::models::FeatureDefinition {
+            serde_yaml::from_str(&format!(
+                "statement: s\nrequirements:\n  - kind: functional\n    text: {text}\n"
+            ))
+            .unwrap()
+        };
+        store
+            .set_feature_definition("demo", &f.code, Some(def("THE SYSTEM SHALL a.")))
+            .unwrap();
+        let rev = |store: &Store| {
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&f.code)
+                .unwrap()
+                .definition
+                .as_ref()
+                .unwrap()
+                .content_rev()
+        };
+        let shown = rev(&store);
+        // The definition moves on after the brief was shown.
+        store
+            .set_feature_definition("demo", &f.code, Some(def("THE SYSTEM SHALL b.")))
+            .unwrap();
+        let post = |path: &str, body: serde_json::Value| {
+            crate::dispatch::dispatch(&store, "POST", path, Some(&body))
+        };
+        let base = format!("/projects/demo/features/{}", f.code);
+        for (path, body) in [
+            (
+                format!("{base}/approve"),
+                serde_json::json!({"by":"Ada","rev":shown}),
+            ),
+            (
+                format!("{base}/ratify"),
+                serde_json::json!({"by":"Ada","rev":shown}),
+            ),
+            (
+                format!("{base}/signoff/release"),
+                serde_json::json!({"by":"Ada","rev":shown}),
+            ),
+        ] {
+            let err = post(&path, body).unwrap_err().to_string();
+            assert!(err.contains("changed after it was shown"), "{path}: {err}");
+        }
+        let after = store
+            .load("demo")
+            .unwrap()
+            .feature(&f.code)
+            .unwrap()
+            .clone();
+        let d = after.definition.as_ref().unwrap();
+        assert!(
+            d.approval.is_none() && d.signoffs.is_empty(),
+            "nothing was recorded"
+        );
+
+        post(
+            &format!("{base}/approve"),
+            serde_json::json!({"by":"Ada","rev":rev(&store)}),
+        )
+        .unwrap();
+        let d = store
+            .load("demo")
+            .unwrap()
+            .feature(&f.code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        assert_eq!(d.approval.as_ref().map(|a| a.by.as_str()), Some("Ada"));
+    }
+
     /// FEAT-156 R-1: the last task does not finish an item whose requirement has no green test —
     /// it says why — and does once the evidence is recorded.
     #[test]

@@ -2,6 +2,9 @@
 
 ## Everyday use — just talk to Claude
 
+Scoping work, deciding on it and moving it all happen in the conversation: see
+[Working with Claude](with-claude.md) for the plans and questions, and why Claude asks what it asks.
+
 | You say to Claude | What the skill runs |
 |---|---|
 | "Set up kanbanr for this project, states Backlog→Doing→Done, new features start in Backlog" | `kanbanr project init … --statuses Backlog,Doing,Done --default-state Backlog` |

@@ -365,6 +365,26 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
+      # Every check a gate can ask for has its behaviour described in the Working with Claude
+      # chapter (FEAT-159): a new check cannot ship with nothing saying what Claude does about it.
+      - name: Every gate check is described in Working with Claude
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import re, sys
+          src = open("api/crates/kanbanr-core/src/readiness.rs").read()
+          body = src[src.index("pub enum Check {"):]
+          body = body[:body.index("\n}")]
+          names = [re.sub(r"(?<!^)(?=[A-Z])", "_", v).lower()
+                   for v in re.findall(r"^\s{4}([A-Z][A-Za-z]+),", body, re.M)]
+          chapter = open("docs/src/using/with-claude.md").read()
+          missing = [n for n in names if f"| `{n}` |" not in chapter]
+          if missing:
+              print("::error::docs/src/using/with-claude.md does not describe: " + ", ".join(missing))
+              sys.exit(1)
+          print(f"all {len(names)} gate checks are described")
+          PY
+
       # A tag for this version is refused without its notes (FEAT-154); this catches the gap on the
       # push that bumps the version, not on the tag.
       - name: The version being built has release notes

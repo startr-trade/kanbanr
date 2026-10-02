@@ -70,6 +70,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
         },
         "workflows": {
             "The version being built has release notes": LOCAL,
+            "Every gate check is described in Working with Claude": LOCAL,
             "Every third-party action is pinned to a commit": LOCAL,
             "Every scanner suppression has a reason and an expiry": LOCAL,
             "actionlint": LOCAL,

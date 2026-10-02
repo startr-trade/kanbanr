@@ -210,6 +210,8 @@ export interface PendingReview {
   approval: "missing" | "lapsed" | "unratified" | "signoff";
   /** Sign-offs the item's next stage is waiting on (FEAT-117). */
   signoffs_needed?: string[];
+  /** The definition revision this brief shows; a verdict sent with it is refused if it moved on (FEAT-159). */
+  rev?: string;
   started_unapproved?: string;
   definition: FeatureDefinition;
 }
