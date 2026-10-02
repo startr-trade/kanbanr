@@ -35,7 +35,9 @@ A preset is copied into the project when you choose it. From then on the project
 **The built-in rule.** A workflow that declares no gates still has one: moving an item into a
 status that means work has started needs an approved definition. That is a status the board
 displays, that is not where items start, and that is neither an end state nor a no-op. `start`
-makes the branch at the first such status.
+makes the branch at the first such status. And finishing an item's last task completes it only when
+each of its requirements has a green test — what `kanbanr finish` asks — otherwise the item stays,
+and the task write says which requirements are unproven.
 
 ## Gates
 
@@ -101,7 +103,9 @@ saved. A gate that could never match is a guardrail that silently isn't there.
   history. It also records the item as started without agreement, so it shows on the Review page
   until someone ratifies it. `--unapproved` is the older name.
 - **Finishing the last task** moves the item to its end status only if that status's gate is
-  met. Otherwise it stays, and `kanbanr task state` says why.
+  met — and, on a workflow with no gates, only if every requirement has a green test. Otherwise
+  it stays, and `kanbanr task state` says why. A batch is judged after its last operation, so one
+  that ticks the last task and then adds another never completes the item.
 
 ## Sign-offs
 

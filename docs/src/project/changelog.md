@@ -6,6 +6,15 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ticking an item's last task completed it with its requirements unproven (FEAT-156).** On a
+  workflow with no gates, auto-completion checked no evidence, though `kanbanr finish` refused the
+  same move — and a batch that ticked the last task and then added open ones completed the item
+  between its operations. Auto-completion now asks what `finish` asks of a defined item (every
+  requirement proven by a green test) and says what is missing; a batch is judged once, after its
+  last operation.
+
 ## [0.1.3] - 2026-10-02
 
 Architecture decisions get a verdict, every release gets notes, and the release's installer check
