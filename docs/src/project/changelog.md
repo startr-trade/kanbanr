@@ -6,6 +6,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-02
+
+Architecture decisions get a verdict, every release gets notes, and the release's installer check
+runs correctly on every platform. [Release notes](https://kanbanr.startr.trade/releases/v0.1.3.html).
+
 ### Added
 
 - **Accept or reject an architecture decision (FEAT-153).** A decision drafted as `proposed` had no
@@ -14,6 +19,11 @@ All notable changes to kanbanr are documented here. The format follows
   decisions beside the definitions waiting for approval, with Accept and Reject. Accepting is
   refused while a section is unanswered; a rejection keeps its reason; the verdict appears in the
   activity log.
+
+- **Release notes for every release (FEAT-154).** Each release has a notes page in the docs —
+  highlights, what is new, changed and fixed, known limits, upgrade notes — and the same text opens
+  its GitHub release page. A tag without notes is refused before anything is built. Notes are
+  written back to 0.1.0.
 
 ### Fixed
 
@@ -642,7 +652,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/startr-trade/kanbanr/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/startr-trade/kanbanr/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/startr-trade/kanbanr/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/startr-trade/kanbanr/releases/tag/v0.1.0

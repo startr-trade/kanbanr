@@ -1281,7 +1281,7 @@ dependencies = [
 
 [[package]]
 name = "kanbanr-cli"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1302,7 +1302,7 @@ dependencies = [
 
 [[package]]
 name = "kanbanr-core"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "ears-classifier",
  "git2",
@@ -1315,7 +1315,7 @@ dependencies = [
 
 [[package]]
 name = "kanbanr-server"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "axum 0.7.9",

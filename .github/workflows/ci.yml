@@ -338,6 +338,17 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
+      # A tag for this version is refused without its notes (FEAT-154); this catches the gap on the
+      # push that bumps the version, not on the tag.
+      - name: The version being built has release notes
+        run: |
+          set -eu
+          v="$(sed -n 's/^version = "\(.*\)"$/\1/p' api/Cargo.toml | head -n1)"
+          test -s "docs/src/releases/v$v.md" \
+            || { echo "::error::no release notes for $v: write docs/src/releases/v$v.md" >&2; exit 1; }
+          grep -q "(v$v.md)" docs/src/releases/index.md \
+            || { echo "::error::docs/src/releases/index.md does not list v$v" >&2; exit 1; }
+
       - name: Every third-party action is pinned to a commit
         run: |
           set -eu
