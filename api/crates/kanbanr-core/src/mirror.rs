@@ -218,6 +218,7 @@ mod tests {
 
     fn feature(code: &str, status: &str, created_at: &str) -> FeatureItem {
         FeatureItem {
+            extra: Default::default(),
             code: code.into(),
             title: format!("Title {code}"),
             specification: "# Spec\nDo it.".into(),
@@ -267,15 +268,18 @@ mod tests {
     fn renders_header_spec_checklists_state_and_sorted_labels() {
         let mut f = feature("FEAT-001", "Completed", "2026-09-11T00:00:00Z");
         f.todo_lists = vec![TodoList {
+            extra: Default::default(),
             code: "TL-001".into(),
             description: "session 1".into(),
             tasks: vec![
                 Task {
+                    extra: Default::default(),
                     key: "T1".into(),
                     text: "cart UI".into(),
                     state: TaskState::Completed,
                 },
                 Task {
+                    extra: Default::default(),
                     key: "T2".into(),
                     text: "tests".into(),
                     state: TaskState::NotStarted,
@@ -332,6 +336,7 @@ mod tests {
         let p = project(vec![linked_same.clone()]);
         let same_hash = render_issue(&p, &p.features[0]).hash();
         let link = |number, hash: Option<String>| IssueLink {
+            extra: Default::default(),
             system: "github".into(),
             repo: "acme/shop".into(),
             number,

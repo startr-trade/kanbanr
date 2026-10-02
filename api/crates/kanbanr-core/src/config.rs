@@ -72,6 +72,14 @@ pub struct ProjectConfig {
     /// on: many projects follow a different workflow, and data nobody asked for is clutter.
     #[serde(default, skip_serializing_if = "Cadence::is_off")]
     pub cadence: Cadence,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 /// The unit a project estimates in.
@@ -90,7 +98,7 @@ impl EstimateUnit {
 }
 
 /// A project's rhythm (FEAT-121): whether it has sprints and releases, and their defaults.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Cadence {
     #[serde(default)]
     pub sprints: bool,
@@ -102,6 +110,14 @@ pub struct Cadence {
     /// How often a release is cut: `per_sprint`, `every_n` sprints, or `on_demand`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release: Option<String>,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 impl Cadence {
@@ -163,6 +179,14 @@ pub struct Gate {
     /// one step on release day.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub done: bool,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 impl Gate {
@@ -262,6 +286,7 @@ impl WorkflowFile {
     /// This workflow as a project's config.
     pub fn into_config(self, name: &str) -> ProjectConfig {
         let mut config = ProjectConfig {
+            extra: Default::default(),
             schema_version: BASE_SCHEMA_VERSION,
             name: name.to_string(),
             description: String::new(),

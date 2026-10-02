@@ -1463,6 +1463,140 @@ requirements:
         );
     }
 
+    /// FEAT-151 R-1: a field this version does not know — as a newer kanbanr would write — survives
+    /// every rewrite: a move, a task state change and an edit of the item, an edit of its
+    /// milestone, a change to the project config, and a save of the charter.
+    #[test]
+    fn unknown_fields_survive_move_task_state_and_edit() {
+        use serde_yaml::Value;
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        let f = store
+            .add_feature("demo", "Newer", "# Newer", "M", None)
+            .unwrap();
+        let def: crate::models::FeatureDefinition = serde_yaml::from_str(
+            "statement: s\nrequirements:\n  - kind: functional\n    text: THE SYSTEM SHALL keep it.\n",
+        )
+        .unwrap();
+        store
+            .set_feature_definition("demo", &f.code, Some(def))
+            .unwrap();
+        let list = store.add_todo_list("demo", &f.code, "work", None).unwrap();
+        store
+            .add_task("demo", &f.code, &list.code, "one", None)
+            .unwrap();
+        store
+            .add_task("demo", &f.code, &list.code, "two", None)
+            .unwrap();
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::charter::Charter {
+                purpose: "p".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let project = d.path.join("projects/demo");
+        let feature_file = |code: &str| {
+            std::fs::read_dir(project.join("features"))
+                .unwrap()
+                .map(|s| s.unwrap().path().join(format!("{code}.yaml")))
+                .find(|p| p.exists())
+                .unwrap()
+        };
+        let edit = |path: &std::path::Path, change: &dyn Fn(&mut Value)| {
+            let mut v: Value =
+                serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            change(&mut v);
+            std::fs::write(path, serde_yaml::to_string(&v).unwrap()).unwrap();
+        };
+        let newer = |v: &mut Value, key: &str| {
+            v.as_mapping_mut().unwrap().insert(
+                key.into(),
+                serde_yaml::from_str("{from: newer, n: [1, 2]}").unwrap(),
+            );
+        };
+        edit(&feature_file(&f.code), &|v| {
+            newer(v, "newer_item_field");
+            newer(&mut v["todo_lists"][0]["tasks"][0], "newer_task_field");
+            newer(
+                &mut v["definition"]["requirements"][0],
+                "newer_requirement_field",
+            );
+        });
+        edit(&project.join("milestones/M.yaml"), &|v| {
+            newer(v, "newer_milestone_field")
+        });
+        edit(&project.join("config.yaml"), &|v| {
+            newer(v, "newer_config_field")
+        });
+        edit(&project.join("charter.yaml"), &|v| {
+            newer(v, "newer_charter_field")
+        });
+
+        // Every kind of rewrite, by this (older) version.
+        store.move_feature("demo", &f.code, "Scheduled").unwrap();
+        store
+            .set_task_state(
+                "demo",
+                &f.code,
+                &list.code,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        store
+            .edit_feature(
+                "demo",
+                &f.code,
+                Some("Newer, renamed".into()),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        store
+            .edit_milestone("demo", "M", Some("Renamed".into()), None, None)
+            .unwrap();
+        store.set_default_state("demo", "Scheduled").unwrap();
+        let charter = crate::charter::load(&store, "demo").unwrap();
+        crate::charter::save(&store, "demo", &charter).unwrap();
+
+        let kept = |path: &std::path::Path, at: &dyn Fn(&Value) -> Value| {
+            let v: Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            assert_eq!(
+                at(&v),
+                serde_yaml::from_str::<Value>("{from: newer, n: [1, 2]}").unwrap(),
+                "{}",
+                path.display()
+            );
+        };
+        let item = feature_file(&f.code);
+        let text = std::fs::read_to_string(&item).unwrap();
+        assert!(
+            text.contains("Newer, renamed") && text.contains("Scheduled"),
+            "{text}"
+        );
+        kept(&item, &|v| v["newer_item_field"].clone());
+        kept(&item, &|v| {
+            v["todo_lists"][0]["tasks"][0]["newer_task_field"].clone()
+        });
+        kept(&item, &|v| {
+            v["definition"]["requirements"][0]["newer_requirement_field"].clone()
+        });
+        kept(&project.join("milestones/M.yaml"), &|v| {
+            v["newer_milestone_field"].clone()
+        });
+        kept(&project.join("config.yaml"), &|v| {
+            v["newer_config_field"].clone()
+        });
+        kept(&project.join("charter.yaml"), &|v| {
+            v["newer_charter_field"].clone()
+        });
+    }
+
     #[test]
     fn a_feature_without_a_definition_is_untouched_on_disk() {
         // Existing boards must keep loading AND re-saving byte-identically: `skip_serializing_if`
@@ -2050,6 +2184,7 @@ requirements:
                         statement: format!("{title} for shoppers so that they can pay"),
                         goals: vec!["G-1".into()],
                         zachman: Zachman {
+                            extra: Default::default(),
                             what: "w".into(),
                             how: "h".into(),
                             where_: "w".into(),

@@ -21,6 +21,18 @@ that makes the 1.0 promise checkable — no new features. What 1.0 will keep com
   covered, and how anything stable is deprecated before it is removed. Until 1.0 the feature set
   is frozen.
 
+### Fixed
+
+- **An older kanbanr no longer deletes fields a newer one wrote (FEAT-151).** Rewriting an item, a
+  milestone, the project config or the charter dropped every key the running version did not
+  know — so once a later version adds a field, an older binary sharing the board would have erased
+  it on its next move or edit. Unknown keys are now kept and written back unchanged, nested ones
+  (in a requirement, a task) included.
+- **The VS Code extension packages (FEAT-014).** `vsce package` refused it — no repository, and
+  a README link that only resolved inside this repository. It now names the repository and the
+  docs site, carries its licence (MIT OR Apache-2.0), and installs and runs from the packaged
+  `.vsix` in a clean VS Code.
+
 ### Changed
 
 - **The release proves its installers on every system it publishes for (FEAT-149).** After a
@@ -29,13 +41,6 @@ that makes the 1.0 promise checkable — no new features. What 1.0 will keep com
   must name the release and its commit and serve the monitor. The checks live in
   `scripts/verify-install.sh` and its Windows twin, and `make ci` runs the first against the latest
   published release.
-
-### Fixed
-
-- **The VS Code extension packages (FEAT-014).** `vsce package` refused it — no repository, and
-  a README link that only resolved inside this repository. It now names the repository and the
-  docs site, carries its licence (MIT OR Apache-2.0), and installs and runs from the packaged
-  `.vsix` in a clean VS Code.
 
 ## [0.1.1] - 2026-10-02
 

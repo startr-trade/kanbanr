@@ -2,6 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The fields of a board file this version of kanbanr does not know (FEAT-151). See
+/// `docs/src/project/stability.md`: reading a newer board is safe, and so is rewriting it.
+pub type Extra = std::collections::BTreeMap<String, serde_yaml::Value>;
+
 /// A status is a configurable label (e.g. "Planned"). Kept as a free string so the
 /// workflow can be reconfigured per project without code changes.
 pub type Status = String;
@@ -31,6 +35,14 @@ pub struct Task {
     pub key: String,
     pub text: String,
     pub state: TaskState,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 /// A persistent todo-list attached to a feature item. A feature (acting as an epic) can hold
@@ -43,6 +55,14 @@ pub struct TodoList {
     #[serde(default)]
     pub tasks: Vec<Task>,
     pub created_at: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 impl TodoList {
@@ -133,6 +153,14 @@ pub struct FeatureItem {
     pub history: Vec<Transition>,
     pub created_at: String,
     pub updated_at: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 /// Where an imported feature came from (FEAT-042). This is a record of history, not a live
@@ -159,6 +187,14 @@ pub struct Source {
     /// When the source was found to be gone (set by `kanbanr sources --write`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub missing_since: Option<String>,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 impl Source {
@@ -221,6 +257,14 @@ pub struct FeatureDefinition {
     /// Appended, never overwritten — each pinned to the definition it covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signoffs: Vec<Signoff>,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 /// A named agreement, recorded by a person against the definition as it stood (FEAT-114).
@@ -243,6 +287,14 @@ pub struct Signoff {
     /// The status the item was in when it was given.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub status: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 /// Agreement to a definition, pinned to its content (FEAT-048).
@@ -275,6 +327,14 @@ pub struct ApprovalEvent {
     /// stage by stage leaves a readable trail: approved at Vision, again at System Design.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub status: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -282,6 +342,14 @@ pub struct Approval {
     pub by: String,
     pub at: String,
     pub rev: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 /// Where an item stands against its approval.
@@ -371,6 +439,14 @@ pub struct Zachman {
     pub who: String,
     #[serde(default)]
     pub why: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 impl Zachman {
@@ -444,6 +520,14 @@ pub struct Requirement {
     /// reveals that no requirement covered the case — which is itself the finding.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub violates: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 /// Stimulus / environment / response / measure — what turns "it should be fast" into something
@@ -459,6 +543,14 @@ pub struct QualityScenario {
     pub response: String,
     #[serde(default)]
     pub measure: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 /// A test that verifies a requirement, and where it currently stands.
@@ -475,6 +567,14 @@ pub struct TestRef {
     /// stale rather than trustworthy.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub checked_rev: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 /// The TDD lifecycle of a test: written but not yet run, failing, passing.
@@ -514,6 +614,14 @@ pub struct Transition {
     /// Why a gate was passed over, when it was (FEAT-113). Absent on an ordinary move.
     #[serde(default, rename = "override", skip_serializing_if = "Option::is_none")]
     pub override_reason: Option<String>,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 /// What a defect cost and where it came from (FEAT-053).
@@ -541,6 +649,14 @@ pub struct Defect {
     /// The commit or test that proves it is fixed.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fixed_by: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 /// A link from a feature to the external issue it is mirrored to (FEAT-043).
@@ -558,6 +674,14 @@ pub struct IssueLink {
     pub synced_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synced_at: Option<String>,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 impl FeatureItem {
@@ -620,6 +744,7 @@ impl FeatureItem {
             history: self.history.clone(),
             created_at: self.created_at.clone(),
             updated_at: self.updated_at.clone(),
+            extra: self.extra.clone(),
         }
     }
 
@@ -652,6 +777,7 @@ impl FeatureItem {
             history: meta.history,
             created_at: meta.created_at,
             updated_at: meta.updated_at,
+            extra: meta.extra,
         }
     }
 }
@@ -705,6 +831,14 @@ pub struct FeatureMeta {
     pub history: Vec<Transition>,
     pub created_at: String,
     pub updated_at: String,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 /// A compact, spec-free per-feature row stored in the per-project `index.yaml` cache (FEAT-033).
@@ -775,6 +909,14 @@ pub struct Milestone {
     pub description: String,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// Keys this version does not know — written by a newer kanbanr — kept and written back
+    /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    pub extra: crate::models::Extra,
 }
 
 // NOTE: There is no `Schedule` entity. A "schedule" is a *derived view*: for a given feature

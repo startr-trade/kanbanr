@@ -284,6 +284,7 @@ fn build_project_config(name: &str, body: &Value) -> Result<ProjectConfig> {
         Some(s) => {
             let no_ops = no_op.clone().unwrap_or_default();
             ProjectConfig {
+                extra: Default::default(),
                 branch_pattern: None,
                 schema_version: crate::config::BASE_SCHEMA_VERSION,
                 name: name.to_string(),
@@ -778,6 +779,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             };
             let current = store.load_meta(p)?.config.cadence;
             let cadence = crate::config::Cadence {
+                extra: current.extra.clone(),
                 sprints: bool_field(b, "sprints").unwrap_or(current.sprints),
                 releases: bool_field(b, "releases").unwrap_or(current.releases),
                 sprint_length_days: b
