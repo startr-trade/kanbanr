@@ -6,6 +6,12 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-02
+
+**Features are frozen until 1.0.** The 0.1.x releases now take fixes, documentation, and the work
+that makes the 1.0 promise checkable — no new features. What 1.0 will keep compatible is set out in
+[Stability](https://kanbanr.startr.trade/project/stability.html).
+
 ### Added
 
 - **What 1.0 keeps compatible is written down (FEAT-148).** A new chapter,
@@ -23,6 +29,13 @@ All notable changes to kanbanr are documented here. The format follows
   must name the release and its commit and serve the monitor. The checks live in
   `scripts/verify-install.sh` and its Windows twin, and `make ci` runs the first against the latest
   published release.
+
+### Fixed
+
+- **The VS Code extension packages (FEAT-014).** `vsce package` refused it — no repository, and
+  a README link that only resolved inside this repository. It now names the repository and the
+  docs site, carries its licence (MIT OR Apache-2.0), and installs and runs from the packaged
+  `.vsix` in a clean VS Code.
 
 ## [0.1.1] - 2026-10-02
 
@@ -601,6 +614,7 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/startr-trade/kanbanr/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/startr-trade/kanbanr/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/startr-trade/kanbanr/releases/tag/v0.1.0
