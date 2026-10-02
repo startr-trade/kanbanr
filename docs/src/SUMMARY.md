@@ -43,6 +43,7 @@
 - [Stability: what 1.0 promises](project/stability.md)
 - [Open-sourcing guide](project/open-sourcing.md)
 - [Release notes](releases/index.md)
+  - [0.1.4](releases/v0.1.4.md)
   - [0.1.3](releases/v0.1.3.md)
   - [0.1.2](releases/v0.1.2.md)
   - [0.1.1](releases/v0.1.1.md)
