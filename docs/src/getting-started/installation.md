@@ -135,16 +135,37 @@ kanbanr for this project"**.
 
 ## The VS Code extension
 
-An optional extension opens the monitor inside VS Code and runs the common board commands through
-the CLI. Each release carries it as `kanbanr-vscode-<version>.vsix`:
+An optional extension opens the monitor inside your editor and runs the common board commands
+through the CLI. Every release carries it as `kanbanr-vscode-<version>.vsix`, at the program's
+version and listed in the release's `SHA256SUMS`.
+
+**With the installer**: add `--vscode`, and it installs the extension into every editor it finds
+(`code`, `codium`, `cursor`, `windsurf`), or `--vscode=codium` for one. Without the option it
+installs nothing into any editor.
 
 ```bash
-gh release download -R startr-trade/kanbanr -p 'kanbanr-vscode-*.vsix'
-code --install-extension kanbanr-vscode-*.vsix
+curl -fsSL https://github.com/startr-trade/kanbanr/releases/latest/download/install.sh | sh -s -- --vscode
+```
+```powershell
+$env:KANBANR_VSCODE = 1; irm https://github.com/startr-trade/kanbanr/releases/latest/download/install.ps1 | iex
 ```
 
-Editors that install from [Open VSX](https://open-vsx.org) — VSCodium, Cursor, Windsurf — can take
-it from there once it is published under the `kanbanr` namespace.
+**From the program**, at any time: `kanbanr editor install` (or `--editor codium`) downloads the
+`.vsix` of the version you are running, checks it against `SHA256SUMS`, and installs it.
+`kanbanr self-update` then keeps it in step in every editor that has it.
+
+**From Open VSX**: VSCodium, Cursor, Windsurf and other editors that use
+[Open VSX](https://open-vsx.org/extension/kanbanr/kanbanr) can install it from their Extensions view
+(search "kanbanr"), or `codium --install-extension kanbanr.kanbanr`, and update it from there.
+VS Code itself does not read Open VSX.
+
+**By hand**, from a release:
+
+```bash
+v=0.1.4
+curl -fsSLO https://github.com/startr-trade/kanbanr/releases/download/v$v/kanbanr-vscode-$v.vsix
+code --install-extension kanbanr-vscode-$v.vsix
+```
 
 ## Run the monitor somewhere else
 

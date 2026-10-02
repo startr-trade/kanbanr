@@ -92,7 +92,8 @@ irm https://github.com/startr-trade/kanbanr/releases/latest/download/install.ps1
 
 One binary, checked against the release's `SHA256SUMS`, with the monitor **and the Claude Code
 skill** inside it: when Claude Code is installed, the installer puts the matching skill in place
-too (`--no-skill` to skip; [other ways](docs/src/getting-started/installation.md#install-the-skill)).
+too (`--no-skill` to skip; [other ways](docs/src/getting-started/installation.md#install-the-skill)). Add
+`--vscode` to install the [VS Code extension](docs/src/getting-started/installation.md#the-vs-code-extension) as well.
 Then, in your project, ask Claude to **"set up kanbanr for this project"**: it interviews you in plan mode —
 where the board lives, your identity, a charter drafted from your repository, and the process —
 and sets everything up when you approve the plan. Or from a terminal:

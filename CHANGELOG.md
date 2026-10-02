@@ -6,6 +6,16 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **The installers can install the VS Code extension too (FEAT-158).** `install.sh --vscode`
+  (`$env:KANBANR_VSCODE = 1` on Windows) also installs the release's extension into every editor
+  found — VS Code, VSCodium, Cursor, Windsurf — or `--vscode=codium` into one; without the option
+  nothing touches an editor. The work is done by a new `kanbanr editor install`, which downloads
+  the `.vsix` of the running version over https, checks it against `SHA256SUMS` and installs it;
+  `self-update` keeps it in step wherever it is installed. The installation chapter now covers
+  every way to install the extension, Open VSX included.
+
 ### Fixed
 
 - **Ticking an item's last task completed it with its requirements unproven (FEAT-156).** On a

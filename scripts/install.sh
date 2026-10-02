@@ -6,8 +6,9 @@
 # Downloads the `kanbanr` binary for this platform from a GitHub release, VERIFIES its SHA-256
 # against the release's own SHA256SUMS, and installs it — and, when Claude Code (the `claude`
 # command) is on PATH, installs the kanbanr skill that binary carries into ~/.claude/skills/kanbanr
-# (FEAT-141). Nothing else: no shell profile is edited, no package manager is invoked, no daemon is
-# started. --no-skill leaves Claude Code alone.
+# (FEAT-141). With --vscode it also installs the release's VS Code extension into the editors it
+# finds (FEAT-158). Nothing else: no shell profile is edited, no package manager is invoked, no
+# daemon is started. --no-skill leaves Claude Code alone.
 #
 # The binary carries the web monitor and the skill inside it (FEAT-084, FEAT-141), so this is the
 # whole install, and the skill always matches the program it drives.
@@ -17,6 +18,9 @@
 #   KANBANR_INSTALL_DIR=~/.local/bin  --dir <path>  install location (default: see below)
 #   KANBANR_NO_VERIFY=1                             skip checksum verification (discouraged)
 #   KANBANR_NO_SKILL=1                --no-skill    do not install the Claude Code skill
+#   KANBANR_VSCODE=1                  --vscode      also install the VS Code extension into every
+#                                                   editor found (code, codium, cursor, windsurf);
+#   KANBANR_VSCODE=codium             --vscode=codium   …or only into the one named
 #
 # Default install dir: $KANBANR_INSTALL_DIR, else /usr/local/bin when writable (or sudo is
 # available and we are interactive), else ~/.local/bin.
@@ -39,6 +43,7 @@ VERSION="${KANBANR_VERSION:-}"
 INSTALL_DIR="${KANBANR_INSTALL_DIR:-}"
 NO_VERIFY="${KANBANR_NO_VERIFY:-}"
 NO_SKILL="${KANBANR_NO_SKILL:-}"
+VSCODE="${KANBANR_VSCODE:-}"
 
 die() { printf 'kanbanr-install: %s\n' "$1" >&2; exit "${2:-1}"; }
 info() { printf '  %s\n' "$1" >&2; }
@@ -50,8 +55,10 @@ while [ $# -gt 0 ]; do
         --dir)     INSTALL_DIR="${2:?--dir needs a path}"; shift 2 ;;
         --no-verify) NO_VERIFY=1; shift ;;
         --no-skill)  NO_SKILL=1; shift ;;
+        --vscode)    VSCODE=1; shift ;;
+        --vscode=*)  VSCODE="${1#--vscode=}"; shift ;;
         -h|--help)
-            sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) die "unknown argument: $1" ;;
     esac
@@ -266,6 +273,26 @@ else
     info "Claude Code skill: no claude command on PATH — once Claude Code is installed, run:"
     info "    kanbanr skill install"
 fi
+
+# ---- the editor extension (FEAT-158) ----------------------------------------------------------
+# Opt-in: an editor is the user's, and many people with `code` installed don't want an extension
+# added to it unasked. The program does the work — download, checksum against SHA256SUMS, install —
+# so this script, install.ps1 and self-update share one implementation. As the user, never sudo.
+case "$VSCODE" in
+    "") editors_found=""
+        for e in code codium cursor windsurf; do
+            if have "$e"; then editors_found="${editors_found} ${e}"; fi
+        done
+        if [ -n "$editors_found" ]; then
+            info "VS Code extension: found${editors_found} — rerun with --vscode to install it, or later: kanbanr editor install"
+        fi ;;
+    1|yes|true|all)
+        "${INSTALL_DIR}/kanbanr" editor install \
+            || info "VS Code extension: not installed — run: kanbanr editor install" ;;
+    *)
+        "${INSTALL_DIR}/kanbanr" editor install --editor "$VSCODE" \
+            || info "VS Code extension: not installed — run: kanbanr editor install --editor ${VSCODE}" ;;
+esac
 
 # ---- report -----------------------------------------------------------------------------
 printf '\n'

@@ -7,7 +7,7 @@
   `dispatch` + git). There is no server in the write path, no login, no accounts.
 - **The view is a read-only, localhost monitor** — `kanbanr serve` serves the read API + live SSE +
   the SPA over the same folder. No auth (expose beyond localhost only behind a reverse proxy). The
-  viewer is pluggable (today a React SPA; a VS Code extension is on the roadmap).
+  viewer is pluggable: the React monitor, and a VS Code extension that frames it and drives the CLI.
 - **Git is the sharing/centralization boundary** — the data folder is a git repo; every write is a
   commit by the configured identity (`kanbanr identity`); optional remotes are pulled + pushed
   after each commit. **Merge conflicts are left for normal git resolution** — kanbanr never
