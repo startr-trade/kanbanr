@@ -6,6 +6,15 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **What 1.0 keeps compatible is written down (FEAT-148).** A new chapter,
+  [Stability](https://kanbanr.startr.trade/project/stability.html), lists what stays stable from
+  1.0 until 2.0 — the board format and `config.yaml`, the `.kanbanr` marker, CLI commands, flags,
+  exit status and `--json`, the monitor's `/api/…`, the commit trailer and hooks — what is not
+  covered, and how anything stable is deprecated before it is removed. Until 1.0 the feature set
+  is frozen.
+
 ### Changed
 
 - **The release proves its installers on every system it publishes for (FEAT-149).** After a

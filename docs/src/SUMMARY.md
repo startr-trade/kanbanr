@@ -40,5 +40,6 @@
 
 - [Contributing](project/contributing.md)
 - [Roadmap](project/roadmap.md)
+- [Stability: what 1.0 promises](project/stability.md)
 - [Open-sourcing guide](project/open-sourcing.md)
 - [Changelog](project/changelog.md)

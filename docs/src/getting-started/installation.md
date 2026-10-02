@@ -152,6 +152,9 @@ kanbanr self-update --version v0.1.0 # pin, or roll back
 ```
 
 Updates are **never automatic** — nothing runs on a timer or as a side effect of another command.
+What an update may and may not change — the board format, commands, `--json` — is set out in
+[Stability](../project/stability.md). If several machines write to one shared board, update them
+together.
 
 ### What "current" means here
 
