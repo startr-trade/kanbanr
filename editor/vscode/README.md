@@ -1,6 +1,6 @@
 # kanbanr — VS Code extension
 
-A VS Code **viewer and thin command layer** for [kanbanr](../../README.md), the
+A VS Code **viewer and thin command layer** for [kanbanr](https://kanbanr.startr.trade), the
 local, git-backed project management system of record.
 
 kanbanr is **one local binary**. `kanbanr serve` runs a read-only web monitor
