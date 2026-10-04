@@ -311,6 +311,10 @@ organisation's own process file changes what you ask with nothing changed here:
 Warnings go into the plan with a choice: fix it, or go ahead with the warning on record. When more
 than one next stage is possible, ask which. Head the plan with the stage's own `purpose`.
 
+**The purpose is a question too.** A stage's `purpose` can name something no check measures — "the
+quality it must reach", "when it happens". If the definition does not yet address it, ask (with
+options, e.g. a latency target, or "no target"), rather than noting its absence afterwards.
+
 ### A new item: scope it in plan mode
 
 When the user asks for work, **enter plan mode** before writing anything. Read the charter and the
@@ -318,6 +322,15 @@ code; ask only what you cannot find, a few questions at a time (AskUserQuestion,
 recommendation first). The plan is the brief: statement, goals, the six dimensions the stage asks
 for, EARS requirements with named tests, and the stage it starts in — as far as the target stage's
 gate requires, and no further unless the user asks for the whole definition up front.
+
+**Ask the user's choices; don't make them.** Anything with a consequence the user would recognise —
+a business rule (how two baskets merge), a retention or expiry, a limit, who may see what, what is
+in or out of scope — is an AskUserQuestion *before* the plan, with your recommendation first.
+Choices you still had to make go in the plan under **"Choices I made — accepting agrees to them"**,
+so acceptance is informed. Never leave them as "for you to decide" after the approval is recorded.
+
+When one request spans several stages ("take it to business architecture, then design it"), say at
+the top of the plan which stages it covers; accepting it approves the definition at each.
 
 **The user accepting the plan is their approval of exactly that text.** After they accept: create
 or define the item, then record the approval with the revision you showed —
@@ -329,8 +342,9 @@ accepts, record the approval again (the earlier one lapsed when the definition g
 
 ### Waiting decisions: work the queue as questions
 
-When items are waiting (`kanbanr review --pending --json`, or "let's review"), take them **one at a
-time**: show the brief in a sentence or three, then **one AskUserQuestion** whose options are the
+When items are waiting (`kanbanr review --pending --json` for definitions and sign-offs, and
+`kanbanr adr list --json` for decisions still `proposed`), or the user says "let's review", take
+them **one at a time**: show the brief in a sentence or three, then **one AskUserQuestion** whose options are the
 verdicts that item can take — from the table above — plus **"Change it"** and **"Skip"**:
 
 - **Approve / Ratify / Sign off \<name\>** → record it at once:
@@ -345,8 +359,13 @@ inferred from the conversation, never from "sounds good", never by you on your o
 show the brief again and ask again. Recording a verdict nobody chose is the failure this exists to
 prevent — if it ever happens, say so and withdraw it (`kanbanr unapprove <CODE> --reason "…"`).
 
+**A decision you draft is asked about at once.** After `kanbanr adr new`, fill its sections, show it
+in a few lines, and ask Accept / Reject (with a reason) / Later — never end by telling the user to
+run `kanbanr adr accept`. "Later" leaves it proposed, and it comes back in the next review.
+
 The browser (`kanbanr review --ui`) and the plain commands stay available for users who prefer
-them; offer them, but do not require them.
+them; offer them, but do not require them. Never end a turn by handing the user a command to type
+for a decision you could have asked about.
 
 ### Moving work
 

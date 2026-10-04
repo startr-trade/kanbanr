@@ -35,6 +35,11 @@ The plan it writes is the item's brief: a one-line statement, the goals it serve
 [six dimensions](the-method.md), EARS requirements each naming its test, and the stage it starts
 in. It goes only as far as the first stage asks, unless you ask for the whole definition up front.
 
+**Choices are yours.** Anything you'd recognise as a decision (a business rule, a retention period,
+a limit, what's in or out of scope) is asked before the plan, with Claude's recommendation first.
+Anything Claude still had to choose is listed in the plan under "Choices I made", so accepting is
+informed. If one request spans several stages, the plan says which ones it covers.
+
 **Accepting the plan creates the item and records your approval of exactly that text.** Sending it
 back with changes revises the plan, and nothing is recorded until you accept.
 
@@ -54,7 +59,7 @@ FEAT-012 Saved carts: 2 requirements, both with named tests; approval lapsed whe
 | Approve | `kanbanr approve FEAT-012 --rev <rev>`, in your name |
 | Ratify (work done under a recorded override) | `kanbanr ratify FEAT-012 --rev <rev>` |
 | Sign off *release* (a stage asks for it) | `kanbanr signoff FEAT-012 release --rev <rev>` |
-| Accept / Reject (a proposed design decision) | `kanbanr adr accept ADR-0007` / `adr reject … --reason "…"` |
+| Accept / Reject (a proposed design decision; asked as soon as Claude drafts one, or later in a review) | `kanbanr adr accept ADR-0007` / `adr reject … --reason "…"` |
 | Change it | nothing yet: Claude asks what to change, revises the definition, and the item comes back to the queue |
 | Skip | nothing: it stays waiting |
 

@@ -81,10 +81,12 @@ Write-Output ""
 # Decisions waiting for the user (FEAT-159): offered as a review in the conversation.
 try {
     $queue = & kanbanr review --pending --json 2>$null | Out-String | ConvertFrom-Json
-    $waiting = @($queue).Count
-    if ($LASTEXITCODE -eq 0 -and $waiting -gt 0) {
+    $adrs = & kanbanr adr list --json 2>$null | Out-String | ConvertFrom-Json
+    $items = @($queue).Count
+    $proposed = @($adrs | Where-Object { $_.status -eq 'proposed' }).Count
+    if ($items + $proposed -gt 0) {
         Write-Output "### Waiting for the user"
-        Write-Output "$waiting item(s) need a decision (approve, ratify or sign off). Offer to review them here,"
+        Write-Output "$items item(s) and $proposed proposed decision(s) need a verdict. Offer to review them here,"
         Write-Output "one question each - see the skill's ""Waiting decisions"" - rather than sending the user"
         Write-Output "to the browser."
         Write-Output ""
