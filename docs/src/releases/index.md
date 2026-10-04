@@ -7,6 +7,8 @@ is new, changed and fixed, what does not work yet, and what to do when you upgra
 Features are frozen until 1.0: the 0.1.x releases take fixes, documentation, and the work toward
 1.0's [stability promise](../project/stability.md).
 
+- **[0.1.5](v0.1.5.md)** — scope and decide work inside Claude Code, with your workflow deciding
+  what is asked.
 - **[0.1.4](v0.1.4.md)** — Completed means proven, however an item finishes; the installers can
   install the VS Code extension.
 - **[0.1.3](v0.1.3.md)** — architecture decisions are accepted or rejected from the CLI and the
