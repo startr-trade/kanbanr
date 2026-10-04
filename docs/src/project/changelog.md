@@ -6,6 +6,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-10-05
+
+Timestamps are compared as instants, and the release refuses a commit that has not passed CI.
+[Release notes](https://kanbanr.startr.trade/releases/v0.1.6.html).
+
 ### Changed
 
 - **The release refuses a commit that has not passed CI (FEAT-163).** v0.1.5 was tagged while CI
@@ -720,7 +725,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/startr-trade/kanbanr/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/startr-trade/kanbanr/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/startr-trade/kanbanr/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/startr-trade/kanbanr/compare/v0.1.2...v0.1.3
