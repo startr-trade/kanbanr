@@ -95,10 +95,12 @@ fi
 
 # Decisions waiting for the user (FEAT-159): offered as a review in the conversation, so agreeing
 # never needs the browser or a terminal.
-WAITING="$(kanbanr "${PROJECT_ARGS[@]}" review --pending --json 2>/dev/null | grep -c '"code":' || true)"
-if [ -n "$WAITING" ] && [ "$WAITING" -gt 0 ] 2>/dev/null; then
+ITEMS="$(kanbanr "${PROJECT_ARGS[@]}" review --pending --json 2>/dev/null | grep -c '"code":' || true)"
+ADRS="$(kanbanr "${PROJECT_ARGS[@]}" adr list --json 2>/dev/null | grep -c '"status": "proposed"' || true)"
+WAITING=$(( ${ITEMS:-0} + ${ADRS:-0} ))
+if [ "$WAITING" -gt 0 ]; then
   echo "### Waiting for the user"
-  echo "$WAITING item(s) need a decision (approve, ratify or sign off). Offer to review them here,"
+  echo "${ITEMS:-0} item(s) and ${ADRS:-0} proposed decision(s) need a verdict. Offer to review them here,"
   echo "one question each — see the skill's \"Waiting decisions\" — rather than sending the user"
   echo "to the browser."
   echo
