@@ -10,12 +10,26 @@ fn cli() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_kanbanr"))
 }
 
+/// A port no other test in this binary will be handed (FEAT-165). The tests here run in parallel,
+/// each starting a daemon; asking the OS for port 0 and letting go of it let two tests be given the
+/// same port. The second daemon then failed to bind, and its test talked to the first test's daemon
+/// (one serving a different UI) and saw a 404 for `/`. Ports now come from a per-process counter,
+/// starting at a base derived from the process id, skipping any already taken on the machine.
 fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT: AtomicU16 = AtomicU16::new(0);
+    let _ = NEXT.compare_exchange(
+        0,
+        20_000 + (std::process::id() % 20_000) as u16,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    );
+    loop {
+        let port = NEXT.fetch_add(1, Ordering::SeqCst);
+        if TcpListener::bind(("127.0.0.1", port)).is_ok() {
+            return port;
+        }
+    }
 }
 
 struct Daemon(Child);
@@ -480,7 +494,7 @@ fn the_monitor_is_served_from_the_binary_with_no_ui_dir() {
         if let Some(dir) = ui {
             cmd.args(["--ui-dir", dir.to_str().unwrap()]);
         }
-        let child = cmd
+        let mut child = cmd
             .env("HOME", &home)
             .env("KANBANR_DATA_DIR", &data)
             .spawn()
@@ -496,12 +510,24 @@ fn the_monitor_is_served_from_the_binary_with_no_ui_dir() {
                 Err(_) => std::thread::sleep(Duration::from_millis(100)),
             }
         }
+        // Whoever answered must be this test's daemon, not another one on the same port (FEAT-165).
+        std::thread::sleep(Duration::from_millis(200));
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!("this test's daemon exited ({status}) — something else answered on port {port}");
+        }
         (Daemon(child), url)
     };
 
     // R-1: no --ui-dir anywhere, and the monitor is still served.
     let (_d, url) = serve(None);
-    let index = ureq::get(&url).call().unwrap().into_string().unwrap();
+    let index = match ureq::get(&url).call() {
+        Ok(resp) => resp.into_string().unwrap(),
+        Err(ureq::Error::Status(404, _)) => panic!(
+            "no monitor at / — this binary carries none: web/dist was absent when kanbanr-server \
+             was compiled (build the monitor first: cd web && npm run build)"
+        ),
+        Err(e) => panic!("GET / failed: {e}"),
+    };
     assert!(
         index.contains("<!doctype html") || index.contains("<!DOCTYPE html"),
         "expected the SPA's index, got: {}",
