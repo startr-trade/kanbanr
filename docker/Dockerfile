@@ -21,12 +21,13 @@ RUN npm run build      # -> /web/dist
 # then NO LONGER recompiles that whole tree: Docker reuses the cached `cook` layer and only the thin
 # kanbanr crates rebuild, cutting most image rebuilds from minutes to seconds.
 #
-# Pin the base to the SAME Debian suite as the runtime stage below (bookworm). The bare
-# `rust:1.98-slim` tag floats to the latest Debian (trixie, glibc 2.39); linking against that and
-# running on bookworm (glibc 2.36) fails at startup with
-#   "libc.so.6: version `GLIBC_2.39' not found (required by kanbanr)".
-# Keeping both stages on bookworm makes the binary link glibc 2.36 and run on bookworm and newer.
-FROM rust:1.98-slim-bookworm AS chef
+# Pin the base to the SAME Debian suite as the runtime stage below (trixie, the current stable —
+# FEAT-161). A builder on a newer suite than the runtime links a newer glibc than the runtime has,
+# and fails at startup with "libc.so.6: version `GLIBC_2.xx' not found"; pinning both to one suite
+# rules that out, and the bare `rust:1.98-slim` tag would float to whatever Debian is newest.
+# (The release ARCHIVES are a different build — Ubuntu 22.04 runners — so they still run on
+# bookworm and newer; this pin only decides the image.)
+FROM rust:1.98-slim-trixie AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /api
 
@@ -68,9 +69,13 @@ RUN KANBANR_GIT_SHA="$KANBANR_GIT_SHA" KANBANR_BUILD_DATE="$KANBANR_BUILD_DATE" 
     cargo build --release -p kanbanr-cli
 
 # ---- Stage 3: slim runtime — the one binary, in serve mode ----
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 # Only CA certs (so any git HTTPS sync verifies TLS). libgit2 is linked statically — no git needed.
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+# `upgrade` applies the security fixes Debian has published since the base image was last built
+# (FEAT-161): the release's scan refuses a fixable finding, and the base image can lag the archive
+# by days.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 # Just the binary: the monitor is inside it.
