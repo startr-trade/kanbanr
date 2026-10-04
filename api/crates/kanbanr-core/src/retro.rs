@@ -224,7 +224,7 @@ pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
         // Scope growth: an item created after the wave's first item began is an addition.
         let joined_late = started
             .as_deref()
-            .is_some_and(|start| f.created_at.as_str() > start);
+            .is_some_and(|start| crate::before(start, &f.created_at));
         if !joined_late {
             retro.scope_growth.original += 1;
         } else if f.defect.is_some() || is_defect_kind(f) {

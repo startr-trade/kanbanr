@@ -6,6 +6,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Timestamps were compared as text (FEAT-162).** They are written with trailing zeros of the
+  fractional seconds dropped, so within one second `…05.12Z` sorted after `…05.1234Z`. An item
+  created in the same second as the charter could be judged older than it and escape its gates;
+  retrospectives and the issue mirror made the same comparison. Every comparison now orders by
+  instant. CI caught it on macOS, whose clock makes the case common.
+
 ## [0.1.5] - 2026-10-04
 
 Scope and decide work without leaving Claude Code: a plan to accept, one question per decision,

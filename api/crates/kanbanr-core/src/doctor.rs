@@ -183,7 +183,7 @@ fn scan_definitions(
         if !in_scope(project, charter, feature) {
             if let Some(def) = &feature.definition
                 && unreconciled_bypass(def)
-                && feature.created_at.as_str() >= charter.adopted_at.as_str()
+                && !crate::before(&feature.created_at, &charter.adopted_at)
                 && def.exempt.trim().is_empty()
             {
                 push(
@@ -372,7 +372,7 @@ pub(crate) fn unreconciled_bypass(def: &crate::models::FeatureDefinition) -> boo
 /// adoption cutoff is the doctor's own, keeping pre-method items out of the report.
 fn in_scope(project: &Project, charter: &crate::Charter, feature: &crate::FeatureItem) -> bool {
     crate::graph::is_live_work(&project.config, &feature.status)
-        && feature.created_at.as_str() >= charter.adopted_at.as_str()
+        && !crate::before(&feature.created_at, &charter.adopted_at)
 }
 
 /// Check a project's charter — the root of its reasoning (FEAT-046). Without a purpose there is
