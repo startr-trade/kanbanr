@@ -66,6 +66,25 @@ pub fn now_rfc3339() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
+/// Order two stored timestamps by the instant they denote (FEAT-162). They are written with the
+/// fractional seconds' trailing zeros dropped, so their length varies and text order is wrong
+/// within a second: `…05.12Z` sorts after `…05.1234Z`. A value that is not a timestamp (a bare
+/// date, an empty field) falls back to text order, which is right for those.
+pub fn cmp_instants(a: &str, b: &str) -> std::cmp::Ordering {
+    match (
+        OffsetDateTime::parse(a.trim(), &Rfc3339),
+        OffsetDateTime::parse(b.trim(), &Rfc3339),
+    ) {
+        (Ok(x), Ok(y)) => x.cmp(&y),
+        _ => a.cmp(b),
+    }
+}
+
+/// `a` is strictly before `b`, as instants. See [`cmp_instants`].
+pub fn before(a: &str, b: &str) -> bool {
+    cmp_instants(a, b) == std::cmp::Ordering::Less
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1490,6 +1509,29 @@ requirements:
             .add_task("demo", &f.code, &list.code, "one", None)
             .unwrap();
         (f.code, list.code)
+    }
+
+    /// FEAT-162: timestamps order by instant, whatever their fractional digits — the case text
+    /// order gets wrong — in both directions, and a non-timestamp falls back to text order.
+    #[test]
+    fn timestamps_with_different_fraction_lengths_order_by_instant() {
+        let early = "2026-10-04T18:14:05.12Z";
+        let late = "2026-10-04T18:14:05.1234Z";
+        assert!(
+            early > late,
+            "the trap: as text, the earlier one sorts later"
+        );
+        assert!(crate::before(early, late));
+        assert!(!crate::before(late, early));
+        assert!(!crate::before(early, early));
+        assert!(crate::before(
+            "2026-10-04T18:14:05Z",
+            "2026-10-04T18:14:05.000001Z"
+        ));
+        assert!(
+            crate::before("2026-10-03", "2026-10-04"),
+            "dates still order as text"
+        );
     }
 
     /// FEAT-159: a verdict given with the revision the user was shown is refused when the

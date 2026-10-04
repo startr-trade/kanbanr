@@ -193,7 +193,7 @@ pub fn plan(project: &Project, mirror: &GithubMirror, all: bool) -> Vec<MirrorAc
             Some(_) => continue,
             None => {
                 let terminal = crate::graph::is_terminal_status(&project.config, &f.status);
-                if terminal || !(all || f.created_at >= mirror.enabled_at) {
+                if terminal || !(all || !crate::before(&f.created_at, &mirror.enabled_at)) {
                     continue;
                 }
                 MirrorActionKind::Create

@@ -1244,7 +1244,7 @@ impl Store {
             return Ok(pass);
         }
         let feature = project.feature(code)?;
-        if feature.created_at.as_str() < charter.adopted_at.as_str() {
+        if crate::before(&feature.created_at, &charter.adopted_at) {
             return Ok(pass);
         }
         let gates = project.config.effective_gates();
@@ -1575,7 +1575,7 @@ impl Store {
             return Ok(None);
         }
         let f = project.feature(feature)?;
-        if f.definition.is_none() || f.created_at.as_str() < charter.adopted_at.as_str() {
+        if f.definition.is_none() || crate::before(&f.created_at, &charter.adopted_at) {
             return Ok(None);
         }
         let gaps = crate::readiness::evaluate_conditions(
