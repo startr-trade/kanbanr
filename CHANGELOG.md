@@ -6,6 +6,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The release refuses a commit that has not passed CI (FEAT-163).** v0.1.5 was tagged while CI
+  was still running on its commit and was published before CI failed on macOS. The release's tag
+  check now asks GitHub for CI's run on the tagged commit before anything is built: it waits while
+  the run is in progress, proceeds when it passed, and refuses, naming the run, when it failed or
+  never ran.
+
 ### Fixed
 
 - **Timestamps were compared as text (FEAT-162).** They are written with trailing zeros of the

@@ -31,6 +31,11 @@ jobs:
   tag:
     name: check the tag
     runs-on: ubuntu-24.04
+    # Reading CI's runs needs `actions: read` (FEAT-163); job-level permissions replace the
+    # workflow's, so the checkout's `contents: read` is restated.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       version: ${{ steps.check.outputs.version }}
       prerelease: ${{ steps.check.outputs.prerelease }}
@@ -50,6 +55,14 @@ jobs:
             echo "::error::Merge the work into main, then tag the merged commit." >&2
             exit 1
           fi
+      # Nothing is built from a commit that has not passed CI on every platform (FEAT-163). v0.1.5
+      # was tagged while CI was still running on its commit, and published before CI failed on
+      # macOS. A run still in progress is waited for; a failure, or no run at all, refuses here.
+      - name: The tagged commit passed CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh scripts/release-ci-gate.sh
+
       - name: The tag is a semver that names the version being built
         id: check
         run: |

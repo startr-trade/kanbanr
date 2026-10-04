@@ -336,6 +336,8 @@ manual steps only you can do:
    the `PUBLISH_CRATES=true` *variable*); its first publish reserves the name. kanbanr itself is not
    published there.
 5. `git tag v0.1.0 && git push origin v0.1.0` → the release workflow builds binaries + the GHCR image.
+   Tag only after CI is green on that commit; the release checks this itself and refuses a commit
+   whose CI failed or never ran, waiting while it is still running (FEAT-163).
    A failed run is fixed on `main`, never by re-running its jobs: a re-run uses the workflow file of
    the tagged commit, so it repeats the failure. Move the tag onto the fix instead —
    `git tag -d v0.1.0 && git push origin :refs/tags/v0.1.0`, then tag and push again; the release
