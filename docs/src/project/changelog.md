@@ -6,6 +6,15 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **The container image shipped Debian packages with published fixes, and an aging base (FEAT-161).**
+  The release's pre-push scan refused CVE-2026-103111 in `libpcre2-8-0`: Debian had fixed it, but
+  the bookworm base image had not been rebuilt. The image now builds and runs on Debian 13 "trixie",
+  the current stable release (bookworm is oldstable, with LTS support only), and applies Debian's
+  security updates when it is built. The downloadable binaries are unchanged and still run on
+  bookworm and newer.
+
 ### Added
 
 - **Scope and decide work inside Claude Code (FEAT-159).** Asked for new work, Claude scopes it in
