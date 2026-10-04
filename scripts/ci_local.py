@@ -112,6 +112,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
     "release.yml": {
         "tag": {
             "the tagged commit is on main": "judges a pushed tag against origin/main",
+            "The tagged commit passed CI": "asks GitHub about CI on a pushed tag's commit; the script's paths are checked against real runs and a stand-in",
             "The tag is a semver that names the version being built": LOCAL,
         },
         "binaries": {
