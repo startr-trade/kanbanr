@@ -2,7 +2,7 @@
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "kanbanr",
   "description": "kanbanr — the system of record for Claude-driven development. Bundles the kanbanr skill (recover, scope, plan and track work on a git-backed board) with its session-start, stop and session-summary hooks. Needs the kanbanr program on PATH: install it from the GitHub release (https://kanbanr.startr.trade/getting-started/installation.html).",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "author": {
     "name": "startr-trade / kanbanr maintainers"
   },

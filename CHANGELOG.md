@@ -6,14 +6,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
-### Fixed
+## [0.1.5] - 2026-10-04
 
-- **The container image shipped Debian packages with published fixes, and an aging base (FEAT-161).**
-  The release's pre-push scan refused CVE-2026-103111 in `libpcre2-8-0`: Debian had fixed it, but
-  the bookworm base image had not been rebuilt. The image now builds and runs on Debian 13 "trixie",
-  the current stable release (bookworm is oldstable, with LTS support only), and applies Debian's
-  security updates when it is built. The downloadable binaries are unchanged and still run on
-  bookworm and newer.
+Scope and decide work without leaving Claude Code: a plan to accept, one question per decision,
+and your workflow deciding what is asked. [Release notes](https://kanbanr.startr.trade/releases/v0.1.5.html).
 
 ### Added
 
@@ -31,6 +27,12 @@ All notable changes to kanbanr are documented here. The format follows
 - **`kanbanr review --pending` listed items that were not waiting** — ratified and finished ones —
   because it kept its own copy of the rule. It now shows the Review page's queue, and its `--json`
   carries each item's verdict state, needed sign-offs and `rev`.
+- **The container image shipped Debian packages with published fixes, and an aging base (FEAT-161).**
+  The release's pre-push scan refused CVE-2026-103111 in `libpcre2-8-0`: Debian had fixed it, but
+  the bookworm base image had not been rebuilt. The image now builds and runs on Debian 13 "trixie",
+  the current stable release (bookworm is oldstable, with LTS support only), and applies Debian's
+  security updates when it is built. The downloadable binaries are unchanged and still run on
+  bookworm and newer.
 
 ## [0.1.4] - 2026-10-03
 
@@ -702,7 +704,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/startr-trade/kanbanr/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/startr-trade/kanbanr/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/startr-trade/kanbanr/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/startr-trade/kanbanr/compare/v0.1.1...v0.1.2
