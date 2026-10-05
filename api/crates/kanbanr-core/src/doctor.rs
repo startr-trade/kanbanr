@@ -64,6 +64,7 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_definitions(project, &charter, &ctx, &mut report);
         scan_decisions(store, project, &mut report);
         scan_stray_folders(store, project, &mut report);
+        scan_process_drift(store, project, &mut report);
     }
     scan_identity(store, "board", &mut report);
     scan_remote_lag(store, "board", &mut report);
@@ -90,6 +91,7 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_definitions(&project, &charter, &ctx, &mut report);
     scan_decisions(store, &project, &mut report);
     scan_stray_folders(store, &project, &mut report);
+    scan_process_drift(store, &project, &mut report);
     scan_identity(store, id, &mut report);
     scan_remote_lag(store, id, &mut report);
     Ok(report)
@@ -406,6 +408,22 @@ fn scan_charter(charter: &crate::Charter, project: &str, report: &mut Report) {
 /// A folder that looks like a status but is not one any more (FEAT-071). Renaming a status used to
 /// leave its directory behind, and an empty orphan can sit in a board for months — this one did.
 /// Reported, never removed: deleting a directory the tool does not understand is not doctor's job.
+/// A project whose saved process has moved on, or whose workflow was edited after it was applied
+/// (FEAT-170). Reported, never applied: a process change reaches a project when its user says so.
+fn scan_process_drift(store: &Store, project: &Project, report: &mut Report) {
+    let Ok(Some(drift)) = store.process_drift(project) else {
+        return;
+    };
+    for message in drift.messages() {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.id.clone(),
+            code: None,
+            message,
+        });
+    }
+}
+
 fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
     let known: BTreeSet<&str> = project.config.statuses.iter().map(String::as_str).collect();
     const EXPECTED: [&str; 5] = ["features", "milestones", "docs", "activity", "events"];

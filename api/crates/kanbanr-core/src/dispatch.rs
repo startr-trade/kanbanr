@@ -556,6 +556,18 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             ser(&store.save_process(name, file, str_field(b, "description"))?)
         }
 
+        // How a project stands against its saved process (FEAT-170): read-only, for the CLI and
+        // the monitor. A personal process is the user's kanbanr's to compare; here it is named only.
+        ("GET", ["projects", p, "process"]) => {
+            let project = store.load(p)?;
+            let drift = store.process_drift(&project)?;
+            ser(&json!({
+                "source": project.config.process,
+                "drift": drift,
+                "messages": drift.as_ref().map(|d| d.messages()).unwrap_or_default(),
+            }))
+        }
+
         // ---- portfolio / program hierarchy (FEAT-030) ----
         ("GET", ["portfolio"]) => ser(&crate::portfolio::view(store)?),
         ("GET", ["portfolio", "rollups"]) => ser(&crate::portfolio::rollups(store)?),

@@ -106,6 +106,15 @@ if [ "$WAITING" -gt 0 ]; then
   echo
 fi
 
+# A saved process that has moved on (FEAT-170): said once; applied only when the user says so.
+PROCESS="$(kanbanr "${PROJECT_ARGS[@]}" process status --if-changed 2>/dev/null || true)"
+if [ -n "$PROCESS" ]; then
+  echo "### The project's process"
+  echo "$PROCESS"
+  echo "Mention it and ask once whether to update; never run \`kanbanr process update\` unasked."
+  echo
+fi
+
 echo "_kanbanr is the system of record for this project's PLAN (features/tasks/"
 echo "specs/decisions/progress). Resume from the board above; record new work in"
 echo "kanbanr as you go. Every document (requested or self-initiated) goes in"

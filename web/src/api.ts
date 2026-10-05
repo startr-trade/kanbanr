@@ -1,4 +1,4 @@
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -26,6 +26,8 @@ export const api = {
   getPortfolioBoard: () => getJson<BoardReport>("/api/portfolio/board"),
   getProject: (id: string) => getJson<Project>(`/api/projects/${encodeURIComponent(id)}`),
   // Scheduling Gantt (FEAT-035): the daemon returns Mermaid `gantt` text.
+  getProcess: (id: string) =>
+    getJson<ProcessStatus>(`/api/projects/${encodeURIComponent(id)}/process`),
   getCharter: (id: string) => getJson<Charter>(`/api/projects/${encodeURIComponent(id)}/charter`),
   /** A project's sprints (FEAT-119); only projects that switch them on have any. */
   getSprints: (id: string) => getJson<Sprint[]>(`/api/projects/${encodeURIComponent(id)}/sprints`),

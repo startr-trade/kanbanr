@@ -261,6 +261,27 @@ A personal process is sent to the board whole when you apply it, because the boa
 anyone's home folder. `process list` shows which projects use each process. When a project uses
 someone else's personal process, it says the file is not in your library.
 
+### When a saved process changes
+
+Changing a saved process never changes the projects using it. They are told, and each one updates
+when its user says so:
+
+```bash
+kanbanr process status            # which process this project uses, and whether it has moved on
+kanbanr process diff              # what is different: statuses, moves, gates
+kanbanr process update            # take the saved version now
+```
+
+- `kanbanr doctor` warns when a newer version is saved, or when the project's workflow was edited
+  after it was applied. The same notice opens each Claude session, and Claude asks once whether
+  to update.
+- The monitor's Workflow page shows the process, its version and library, and any notice.
+- Items already in progress meet the new gates on their next move. Approvals already given stay.
+- An update that would remove a status still holding items is refused. Move the items, or rename
+  the status with `kanbanr config rename-status`, first.
+- A built-in process can change with a kanbanr release, and is reported the same way.
+- A personal process is compared on the machine that has it: the board doesn't hold its file.
+
 A saved file has a short header, which an older kanbanr ignores:
 
 ```yaml

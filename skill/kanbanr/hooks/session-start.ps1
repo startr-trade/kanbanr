@@ -93,6 +93,17 @@ try {
     }
 } catch { }
 
+# A saved process that has moved on (FEAT-170): said once; applied only when the user says so.
+try {
+    $process = (& kanbanr process status --if-changed 2>$null | Out-String).Trim()
+    if ($process) {
+        Write-Output "### The project's process"
+        Write-Output $process
+        Write-Output "Mention it and ask once whether to update; never run ``kanbanr process update`` unasked."
+        Write-Output ""
+    }
+} catch { }
+
 Write-Output "_kanbanr is the system of record for this project's PLAN (features/tasks/"
 Write-Output "specs/decisions/progress). Resume from the board above; record new work in"
 Write-Output "kanbanr as you go. Every document (requested or self-initiated) goes in"

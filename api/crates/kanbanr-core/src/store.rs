@@ -163,6 +163,22 @@ impl Store {
         }
     }
 
+    /// How a project stands against its saved process (FEAT-170), for one on the board or built
+    /// in. `None` when it came from no saved process, or from a personal one, which only the
+    /// user's own kanbanr can see.
+    pub fn process_drift(&self, project: &Project) -> Result<Option<crate::library::Drift>> {
+        use crate::config::Library;
+        let Some(source) = &project.config.process else {
+            return Ok(None);
+        };
+        let current = match source.library {
+            Library::Board => self.board_process(&source.name)?,
+            Library::Builtin => crate::config::preset(&source.name).ok(),
+            Library::Personal => return Ok(None),
+        };
+        Ok(crate::library::drift(&project.config, current.as_ref()))
+    }
+
     /// Record which saved process a project's workflow came from, or that it came from none.
     pub fn set_process_source(
         &self,

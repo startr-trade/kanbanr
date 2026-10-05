@@ -611,6 +611,20 @@ enum ProcessCmd {
         #[arg(long)]
         description: Option<String>,
     },
+    /// Which saved process this project uses, and whether it has moved on or the project's
+    /// workflow was edited since (FEAT-170).
+    Status {
+        /// Print only what needs attention, and nothing when all is current — for the session hook.
+        #[arg(long)]
+        if_changed: bool,
+    },
+    /// What differs between this project's workflow and its saved process's current version, or
+    /// the process named.
+    Diff { name: Option<String> },
+    /// Apply the saved process's current version to this project. Only when asked: a process
+    /// change never reaches a project by itself. Refused while a status it would remove still
+    /// holds items.
+    Update,
     /// Every condition a gate can require, with when it passes and what it can be narrowed by —
     /// the choices to offer someone designing their process.
     Checks,
@@ -5209,6 +5223,176 @@ fn run_process_save(
     Ok(())
 }
 
+/// The current copy of the process a project was given, from the library it was given from — not
+/// by lookup order: an update brings a project its own process's new version (FEAT-170).
+fn current_copy(
+    client: &Backend,
+    source: &kanbanr_core::config::ProcessSource,
+) -> anyhow::Result<Option<kanbanr_core::config::WorkflowFile>> {
+    use kanbanr_core::config::Library;
+    Ok(match source.library {
+        Library::Board => board_process(client, &source.name),
+        Library::Personal => match personal_processes() {
+            Some(dir) => kanbanr_core::library::get(&dir, &source.name)?,
+            None => None,
+        },
+        Library::Builtin => kanbanr_core::config::preset(&source.name).ok(),
+    })
+}
+
+/// How a project stands against its saved process, the personal case included — which only this
+/// machine can judge.
+fn project_drift(
+    client: &Backend,
+    project: &Project,
+) -> anyhow::Result<Option<kanbanr_core::library::Drift>> {
+    let Some(source) = &project.config.process else {
+        return Ok(None);
+    };
+    let current = current_copy(client, source)?;
+    Ok(kanbanr_core::library::drift(
+        &project.config,
+        current.as_ref(),
+    ))
+}
+
+/// `process status`, `diff` and `update` (FEAT-170): these read a project, so they need a board.
+fn run_process_drift(cli: &Cli, client: &Backend, cmd: &ProcessCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let project = get_project(client, &p)?;
+    let drift = project_drift(client, &project)?;
+    match cmd {
+        ProcessCmd::Status { if_changed } => {
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "source": project.config.process,
+                        "drift": drift,
+                        "messages": drift.as_ref().map(|d| d.messages()).unwrap_or_default(),
+                    }))?
+                );
+                return Ok(());
+            }
+            let Some(drift) = drift else {
+                if !if_changed {
+                    println!("{p} uses no saved process (`kanbanr process list` shows them)");
+                }
+                return Ok(());
+            };
+            if !if_changed {
+                let s = &drift.source;
+                let version = if s.version == 0 {
+                    String::new()
+                } else {
+                    format!(" v{}", s.version)
+                };
+                println!(
+                    "{p} uses {}{version} ({}){}",
+                    s.name,
+                    s.library.as_str(),
+                    if drift.is_current() { ", current" } else { "" }
+                );
+            }
+            for m in drift.messages() {
+                println!("{m}");
+            }
+            Ok(())
+        }
+        ProcessCmd::Diff { name } => {
+            let mine = kanbanr_core::config::WorkflowFile::from_config(&project.config);
+            let (label, theirs) = match name {
+                Some(n) => (n.clone(), resolve_process(cli, n)?.0),
+                None => {
+                    let source = project.config.process.as_ref().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "{p} uses no saved process; name one to compare with: \
+                             `kanbanr process diff <name>`"
+                        )
+                    })?;
+                    let file = current_copy(client, source)?.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "'{}' is no longer in the {} library",
+                            source.name,
+                            source.library.as_str()
+                        )
+                    })?;
+                    let label = match file.version() {
+                        0 => source.name.clone(),
+                        v => format!("{} v{v}", source.name),
+                    };
+                    (label, file)
+                }
+            };
+            let lines = kanbanr_core::library::diff(&mine, &theirs);
+            if cli.json {
+                println!(
+                    "{}",
+                    json!({ "project": p, "process": label, "changes": lines })
+                );
+            } else if lines.is_empty() {
+                println!("{p}'s workflow is the same as {label}");
+            } else {
+                println!("{p}'s workflow → {label}:");
+                for l in &lines {
+                    println!("  {l}");
+                }
+            }
+            Ok(())
+        }
+        ProcessCmd::Update => {
+            let source = project.config.process.clone().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{p} uses no saved process; adopt one with `kanbanr config workflow --preset <name>`"
+                )
+            })?;
+            let file = current_copy(client, &source)?.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "'{}' is no longer in the {} library",
+                    source.name,
+                    source.library.as_str()
+                )
+            })?;
+            if drift.as_ref().is_some_and(|d| d.is_current()) {
+                println!("{p} already has {} as saved", source.name);
+                return Ok(());
+            }
+            let in_use = kanbanr_core::Store::statuses_in_use(&project, &file.statuses);
+            if let Some((status, n)) = in_use.first() {
+                anyhow::bail!(
+                    "{} would remove '{status}', which still holds {n} item(s) on {p} — move them, \
+                     or rename the status with `kanbanr config rename-status`, then update",
+                    source.name
+                );
+            }
+            let new_source = file.source(&source.name, source.library);
+            let resp = client.write(
+                Method::Put,
+                &format!("/projects/{p}/config/workflow"),
+                Some(json!({
+                    "statuses": file.statuses,
+                    "transitions": file.transitions,
+                    "default_state": file.default_state,
+                    "displayed_states": file.displayed_states,
+                    "no_op_states": file.no_op_states,
+                    "terminal_states": file.terminal_states,
+                    "gates": file.gates,
+                    "cadence": (!file.cadence.is_off()).then_some(&file.cadence),
+                    "estimate_unit": (!file.estimate_unit.is_days()).then_some(file.estimate_unit),
+                    "process": new_source,
+                })),
+            )?;
+            let version = match file.version() {
+                0 => String::new(),
+                v => format!(" v{v}"),
+            };
+            print_write(cli, &resp, format!("{p} now has {}{version}", source.name));
+            Ok(())
+        }
+        _ => unreachable!("handled before the board is opened"),
+    }
+}
+
 fn get_project(client: &Backend, p: &str) -> anyhow::Result<Project> {
     let s = client.get(&format!("/projects/{p}"))?;
     Ok(serde_json::from_str(&s)?)
@@ -5323,7 +5507,6 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         | Command::SelfUpdate { .. }
         | Command::Skill(_)
         | Command::Editor(_)
-        | Command::Process(_)
         | Command::Hooks(_) => {
             unreachable!()
         }
@@ -5365,6 +5548,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Command::Process(cmd) => run_process_drift(cli, &client, cmd),
         Command::Activity => run_activity(cli, &client),
         Command::Events(cmd) => run_events(cli, &client, cmd),
         Command::Remote(cmd) => run_remote(cli, &client, cmd),
@@ -6204,17 +6388,43 @@ fn print_id_list(cli: &Cli, resp: &str, empty: &str) {
 }
 
 fn run_doctor(cli: &Cli, client: &Backend, all_projects: bool) -> anyhow::Result<()> {
-    let resp = if all_projects {
-        client.get("/doctor")?
+    let (resp, scope) = if all_projects {
+        let ids: Vec<Value> = serde_json::from_str(&client.get("/projects")?)?;
+        let ids = ids
+            .iter()
+            .filter_map(|v| v["id"].as_str().or(v["name"].as_str()).map(String::from))
+            .collect();
+        (client.get("/doctor")?, ids)
     } else {
         let p = require_project(cli)?;
-        client.get(&format!("/projects/{p}/doctor"))?
+        (client.get(&format!("/projects/{p}/doctor"))?, vec![p])
     };
+    let mut report: Value = serde_json::from_str(&resp)?;
+    // A project on a personal process: only this machine has the process to compare with (FEAT-170).
+    for p in scope {
+        let Ok(project) = get_project(client, &p) else {
+            continue;
+        };
+        if !matches!(
+            project.config.process.as_ref().map(|s| s.library),
+            Some(kanbanr_core::config::Library::Personal)
+        ) {
+            continue;
+        }
+        if let Some(drift) = project_drift(client, &project)?
+            && let Some(issues) = report["issues"].as_array_mut()
+        {
+            for m in drift.messages() {
+                issues.push(
+                    json!({ "severity": "warning", "project": p, "code": null, "message": m }),
+                );
+            }
+        }
+    }
     if cli.json {
-        println!("{}", pretty(&resp));
+        println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
-    let report: Value = serde_json::from_str(&resp)?;
     let issues = report["issues"].as_array().cloned().unwrap_or_default();
     let errors: Vec<&Value> = issues.iter().filter(|i| i["severity"] == "error").collect();
     let warnings: Vec<&Value> = issues

@@ -4482,6 +4482,80 @@ requirements:
         );
     }
 
+    /// FEAT-170 R-1: doctor says when a project's saved process has a newer version, when the
+    /// project's workflow was edited after it was applied, and nothing when neither is true.
+    #[test]
+    fn doctor_reports_a_newer_or_edited_process() {
+        use crate::dispatch::dispatch;
+        let (store, _d) = temp_store();
+        let drift_of = |p: &str| -> Vec<String> {
+            crate::doctor::run_project(&store, p)
+                .unwrap()
+                .issues
+                .into_iter()
+                .map(|i| i.message)
+                .filter(|m| {
+                    m.starts_with("this project uses") || m.starts_with("this project's workflow")
+                })
+                .collect()
+        };
+        // Freshly applied, every built-in process and a saved one read as current.
+        for (name, _) in crate::config::presets() {
+            new_project(&store, name);
+            dispatch(
+                &store,
+                "PUT",
+                &format!("/projects/{name}/config/workflow"),
+                Some(&serde_json::json!({ "preset": name })),
+            )
+            .unwrap();
+            assert_eq!(drift_of(name), Vec::<String>::new(), "{name}");
+        }
+        new_project(&store, "demo");
+        store
+            .save_process("ours", crate::config::preset("pdca").unwrap(), None)
+            .unwrap();
+        dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/workflow",
+            Some(&serde_json::json!({ "preset": "ours" })),
+        )
+        .unwrap();
+        assert!(drift_of("demo").is_empty(), "{:?}", drift_of("demo"));
+
+        // The saved process moves to v2: reported, and nothing changes on the project.
+        let mut v2 = crate::config::preset("pdca").unwrap();
+        v2.gates.get_mut("Act").unwrap().signoffs = vec!["release-review".into()];
+        store.save_process("ours", v2, None).unwrap();
+        let before = store.load("demo").unwrap().config.gates;
+        let said = drift_of("demo");
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains("v2 is saved now") && said[0].contains("process update"));
+        assert_eq!(store.load("demo").unwrap().config.gates, before);
+
+        // The project's workflow edited by hand: reported too.
+        let mut gates = before.clone();
+        gates.get_mut("Do").unwrap().signoffs = vec!["pairing".into()];
+        store.set_gates("demo", gates).unwrap();
+        let said = drift_of("demo");
+        assert!(
+            said.iter().any(|m| m.contains("was edited after")),
+            "{said:?}"
+        );
+
+        // A project with no saved process has nothing to report.
+        new_project(&store, "plain");
+        assert!(drift_of("plain").is_empty());
+
+        // The route says the same.
+        let v: serde_json::Value =
+            serde_json::from_str(&dispatch(&store, "GET", "/projects/demo/process", None).unwrap())
+                .unwrap();
+        assert_eq!(v["drift"]["newer"], 2);
+        assert_eq!(v["drift"]["edited"], true);
+    }
+
     /// FEAT-169 R-1: a process is kept where it was saved — the board's library or a personal
     /// folder — and its version goes up only when its content changed.
     #[test]
