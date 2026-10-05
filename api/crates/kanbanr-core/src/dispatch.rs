@@ -289,11 +289,29 @@ fn list_summaries(store: &Store) -> Result<Vec<ProjectSummary>> {
 
 // ---- config builders shared with the server's create-project / workflow routes --------------
 
-fn build_project_config(name: &str, body: &Value) -> Result<ProjectConfig> {
+fn build_project_config(store: &Store, name: &str, body: &Value) -> Result<ProjectConfig> {
     // A process chosen at creation: `"workflow": "<preset>"` (FEAT-116). An unknown name is refused
     // with the list, where it used to fall back silently to the default.
     if let Some(preset) = str_field(body, "workflow") {
-        let mut config = crate::config::preset(&preset)?.into_config(name);
+        let (file, library) = store.resolve_process(&preset)?;
+        let source = file.source(&preset, library);
+        let mut config = file.into_config(name);
+        config.process = Some(source);
+        if let Some(d) = str_field(body, "description") {
+            config.description = d;
+        }
+        return Ok(config);
+    }
+    // A process from the user's own library (FEAT-169): the CLI sends the file and where it came
+    // from, because the board cannot see the user's home folder.
+    if let Some(v) = body.get("workflow_file").filter(|v| !v.is_null()) {
+        let file: crate::config::WorkflowFile = serde_json::from_value(v.clone())
+            .map_err(|e| CoreError::Unsupported(format!("invalid workflow file: {e}")))?;
+        if let Some(problem) = file.problems().into_iter().next() {
+            return Err(problem);
+        }
+        let mut config = file.into_config(name);
+        config.process = process_source(body)?;
         if let Some(d) = str_field(body, "description") {
             config.description = d;
         }
@@ -325,6 +343,7 @@ fn build_project_config(name: &str, body: &Value) -> Result<ProjectConfig> {
                 gates: Default::default(),
                 estimate_unit: Default::default(),
                 cadence: Default::default(),
+                process: None,
             }
         }
         None => {
@@ -362,8 +381,16 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
             None
         }
     });
+    // The process this workflow comes from (FEAT-169): a named one, looked up on the board and
+    // then among the built-in ones, or one the CLI read from the user's library and says so. A
+    // workflow from a file or from flags comes from no saved process, and clears the record.
+    let mut source = process_source(body)?;
     let base = match preset {
-        Some(name) => Some(crate::config::preset(&name)?.into_config(p)),
+        Some(name) => {
+            let (file, library) = store.resolve_process(&name)?;
+            source = Some(file.source(&name, library));
+            Some(file.into_config(p))
+        }
         None => None,
     };
     let statuses = match (vec_field(body, "statuses"), &base) {
@@ -429,10 +456,71 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
                 .map(|x| x.estimate_unit)
                 .filter(|u| !u.is_days()),
         };
-    match (cadence, unit) {
-        (None, None) => ser(&config),
-        (cadence, unit) => ser(&store.set_cadence(p, unit, cadence.unwrap_or(config.cadence))?),
+    let config = match (cadence, unit) {
+        (None, None) => config,
+        (cadence, unit) => store.set_cadence(p, unit, cadence.unwrap_or(config.cadence))?,
+    };
+    if config.process == source {
+        return ser(&config);
     }
+    ser(&store.set_process_source(p, source)?)
+}
+
+/// `"process": {name, library, version, rev}` in a body: where the workflow it carries came from.
+fn process_source(body: &Value) -> Result<Option<crate::config::ProcessSource>> {
+    match body.get("process").filter(|v| !v.is_null()) {
+        None => Ok(None),
+        Some(v) => serde_json::from_value(v.clone())
+            .map(Some)
+            .map_err(|e| CoreError::Unsupported(format!("invalid process source: {e}"))),
+    }
+}
+
+/// The processes this board can apply (FEAT-169): its own library, then the built-in ones, each
+/// with the projects on the board that use it.
+fn list_processes(store: &Store) -> Result<Value> {
+    use crate::config::Library;
+    let mut used: BTreeMap<(String, Library), Vec<String>> = BTreeMap::new();
+    for id in store.list_projects()? {
+        if let Some(src) = store.load(&id)?.config.process {
+            used.entry((src.name, src.library)).or_default().push(id);
+        }
+    }
+    let row = |name: &str, library: Library, file: &crate::config::WorkflowFile, about: String| {
+        json!({
+            "name": name,
+            "library": library,
+            "version": file.version(),
+            "description": about,
+            "rev": file.content_rev(),
+            "used_by": used.get(&(name.to_string(), library)).cloned().unwrap_or_default(),
+        })
+    };
+    let mut out = Vec::new();
+    for (name, file) in store.list_processes()? {
+        let about = file
+            .process
+            .as_ref()
+            .map(|h| h.description.clone())
+            .unwrap_or_default();
+        out.push(row(&name, Library::Board, &file, about));
+    }
+    for (name, about) in crate::config::presets() {
+        out.push(row(
+            name,
+            Library::Builtin,
+            &crate::config::preset(name)?,
+            about,
+        ));
+    }
+    // Personal processes live on someone's machine, not here; the board knows only which projects
+    // use one, and which version they applied. The CLI fills in the user's own.
+    for ((name, library), projects) in &used {
+        if *library == Library::Personal {
+            out.push(json!({ "name": name, "library": library, "used_by": projects }));
+        }
+    }
+    Ok(Value::Array(out))
 }
 
 // ---- the dispatcher ------------------------------------------------------------------------
@@ -455,6 +543,19 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("GET", ["doctor"]) => ser(&crate::doctor::run(store)?),
         ("GET", ["projects", p, "doctor"]) => ser(&crate::doctor::run_project(store, p)?),
 
+        // ---- the board's process library (FEAT-169) ----
+        ("GET", ["processes"]) => ser(&list_processes(store)?),
+        ("GET", ["processes", name]) => {
+            let (file, library) = store.resolve_process(name)?;
+            ser(&json!({ "name": name, "library": library, "file": file }))
+        }
+        ("PUT", ["processes", name]) => {
+            let file: crate::config::WorkflowFile =
+                serde_json::from_value(b.get("file").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| CoreError::Unsupported(format!("invalid process file: {e}")))?;
+            ser(&store.save_process(name, file, str_field(b, "description"))?)
+        }
+
         // ---- portfolio / program hierarchy (FEAT-030) ----
         ("GET", ["portfolio"]) => ser(&crate::portfolio::view(store)?),
         ("GET", ["portfolio", "rollups"]) => ser(&crate::portfolio::rollups(store)?),
@@ -476,7 +577,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("GET", ["projects"]) => ser(&list_summaries(store)?),
         ("POST", ["projects"]) => {
             let name = str_field(b, "name").unwrap_or_default();
-            let config = build_project_config(&name, b)?;
+            let config = build_project_config(store, &name, b)?;
             ser(&store.init_project(&name, config)?)
         }
         ("GET", ["projects", p]) => ser(&store.load(p)?),
@@ -1184,6 +1285,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
             .and_then(|b| b.get("id").and_then(|v| v.as_str()))
             .map(|id| format!("add program {id}"))
             .unwrap_or_else(|| "update portfolio".into()),
+        ["processes", name] => format!("save process {}", percent_decode(name)),
         ["projects"] => "create project".into(),
         ["projects", p] if del => format!("delete project {p}"),
         ["projects", p] => format!("edit project {p}"),

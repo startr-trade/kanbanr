@@ -80,6 +80,101 @@ impl Store {
         self.project_dir(id).join("milestones")
     }
 
+    /// The board's process library (FEAT-169): one YAML file per saved process, beside the
+    /// projects, so it travels with the board's remote.
+    pub fn processes_dir(&self) -> PathBuf {
+        self.root.join("processes")
+    }
+
+    /// The board's saved processes, by name.
+    pub fn list_processes(&self) -> Result<Vec<(String, crate::config::WorkflowFile)>> {
+        let dir = self.processes_dir();
+        let mut out = Vec::new();
+        if !dir.is_dir() {
+            return Ok(out);
+        }
+        for entry in std::fs::read_dir(&dir)? {
+            let path = entry?.path();
+            let Some(name) = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(".yaml"))
+            else {
+                continue;
+            };
+            out.push((name.to_string(), Self::read_yaml(&path)?));
+        }
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(out)
+    }
+
+    /// A process saved on this board, if there is one by that name.
+    pub fn board_process(&self, name: &str) -> Result<Option<crate::config::WorkflowFile>> {
+        if crate::config::check_process_name(name).is_err() {
+            return Ok(None);
+        }
+        let path = self.processes_dir().join(format!("{name}.yaml"));
+        if !path.is_file() {
+            return Ok(None);
+        }
+        Ok(Some(Self::read_yaml(&path)?))
+    }
+
+    /// Save a process to the board's library (FEAT-169), versioned by [`crate::config::versioned`].
+    /// Returns the file as saved.
+    pub fn save_process(
+        &self,
+        name: &str,
+        file: crate::config::WorkflowFile,
+        description: Option<String>,
+    ) -> Result<crate::config::WorkflowFile> {
+        let existing = self.board_process(name)?;
+        let (file, changed) = crate::config::versioned(name, file, existing.as_ref(), description)?;
+        if changed {
+            Self::write_yaml(&self.processes_dir().join(format!("{name}.yaml")), &file)?;
+        }
+        Ok(file)
+    }
+
+    /// Look a process up by name (FEAT-169): the board's library first, then the built-in ones.
+    /// The personal library is the CLI's to read — it is on the user's machine, not the board's.
+    pub fn resolve_process(
+        &self,
+        name: &str,
+    ) -> Result<(crate::config::WorkflowFile, crate::config::Library)> {
+        if let Some(file) = self.board_process(name)? {
+            return Ok((file, crate::config::Library::Board));
+        }
+        match crate::config::preset(name) {
+            Ok(file) => Ok((file, crate::config::Library::Builtin)),
+            Err(_) => {
+                let mut known: Vec<String> =
+                    self.list_processes()?.into_iter().map(|(n, _)| n).collect();
+                known.extend(
+                    crate::config::presets()
+                        .into_iter()
+                        .map(|(n, _)| n.to_string()),
+                );
+                Err(CoreError::Unsupported(format!(
+                    "no process named '{name}' — this board has: {}",
+                    known.join(", ")
+                )))
+            }
+        }
+    }
+
+    /// Record which saved process a project's workflow came from, or that it came from none.
+    pub fn set_process_source(
+        &self,
+        id: &str,
+        source: Option<crate::config::ProcessSource>,
+    ) -> Result<ProjectConfig> {
+        let mut project = self.load(id)?;
+        project.config.process = source;
+        self.save_config(id, &project.config)?;
+        Ok(project.config)
+    }
+
     pub fn project_exists(&self, id: &str) -> bool {
         self.project_dir(id).join("config.yaml").is_file()
     }

@@ -72,6 +72,10 @@ pub struct ProjectConfig {
     /// on: many projects follow a different workflow, and data nobody asked for is clutter.
     #[serde(default, skip_serializing_if = "Cadence::is_off")]
     pub cadence: Cadence,
+    /// The saved process this workflow was applied from, if it was (FEAT-169): what drift is
+    /// measured against. An older kanbanr keeps it through `extra`, so it needs no schema bump.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<ProcessSource>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -80,6 +84,52 @@ pub struct ProjectConfig {
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
     pub extra: crate::models::Extra,
+}
+
+/// Where a saved process lives (FEAT-169), in the order a name is looked up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Library {
+    /// `<board>/processes/`: shared with everyone who has the board, through its remote.
+    Board,
+    /// `~/.kanbanr/processes/`: this user's, on any board.
+    Personal,
+    /// Carried by the binary.
+    Builtin,
+}
+
+impl Library {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Library::Board => "board",
+            Library::Personal => "personal",
+            Library::Builtin => "built-in",
+        }
+    }
+}
+
+/// Which saved process a project's workflow came from, and which version of it (FEAT-169).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessSource {
+    pub name: String,
+    pub library: Library,
+    /// The process's version when it was applied; 0 for a built-in one.
+    #[serde(default)]
+    pub version: u32,
+    /// The content rev of what was applied ([`WorkflowFile::content_rev`]).
+    pub rev: String,
+}
+
+/// A saved process's header (FEAT-169). Optional: a file without one is still a process, and an
+/// older kanbanr reading a file with one ignores it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessHeader {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// Bumped by `kanbanr process save` when the content changes.
+    #[serde(default)]
+    pub version: u32,
 }
 
 /// The unit a project estimates in.
@@ -214,6 +264,9 @@ pub fn default_no_op_states() -> Vec<String> {
 /// it, so one process file serves any number of projects.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowFile {
+    /// Name, description and version, on a saved process (FEAT-169).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<ProcessHeader>,
     pub statuses: Vec<String>,
     #[serde(default)]
     pub default_state: String,
@@ -264,6 +317,72 @@ pub fn presets() -> Vec<(&'static str, String)> {
         .collect()
 }
 
+/// Whether `name` is a built-in process's.
+pub fn is_builtin(name: &str) -> bool {
+    let key = name.trim().to_ascii_lowercase();
+    PRESETS.iter().any(|(n, _)| *n == key)
+}
+
+/// Check a name a process can be saved under (FEAT-169): lower case letters, digits and hyphens —
+/// it is a file name on every platform and a word in a URL — and not a built-in process's, which
+/// would make the name mean two things.
+pub fn check_process_name(name: &str) -> crate::Result<()> {
+    let ok = !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !name.starts_with('-');
+    if !ok {
+        return Err(crate::CoreError::Unsupported(format!(
+            "'{name}' cannot name a process: use lower-case letters, digits and hyphens, such as \
+             our-process"
+        )));
+    }
+    if is_builtin(name) {
+        return Err(crate::CoreError::Unsupported(format!(
+            "'{name}' is a built-in process; save yours under another name"
+        )));
+    }
+    Ok(())
+}
+
+/// The file to save as process `name` (FEAT-169), given what is saved under that name now. The
+/// process must check clean. The version goes up by one when the content changed and stays when
+/// it did not; the description is the one given, else the one already there. Returns the file and
+/// whether anything changed.
+pub fn versioned(
+    name: &str,
+    mut new: WorkflowFile,
+    existing: Option<&WorkflowFile>,
+    description: Option<String>,
+) -> crate::Result<(WorkflowFile, bool)> {
+    check_process_name(name)?;
+    if let Some(problem) = new.problems().into_iter().next() {
+        return Err(problem);
+    }
+    let old_header = existing.and_then(|e| e.process.clone());
+    let same = existing.is_some_and(|e| e.content_rev() == new.content_rev());
+    let version = match (&old_header, same) {
+        (Some(h), true) => h.version.max(1),
+        (Some(h), false) => h.version + 1,
+        (None, true) => 1,
+        (None, false) => existing.map_or(1, |_| 2),
+    };
+    let description = description
+        .or_else(|| new.process.as_ref().map(|h| h.description.clone()))
+        .filter(|d| !d.trim().is_empty())
+        .or_else(|| old_header.as_ref().map(|h| h.description.clone()))
+        .unwrap_or_default();
+    new.process = Some(ProcessHeader {
+        name: name.to_string(),
+        description,
+        version,
+    });
+    let changed = existing != Some(&new);
+    Ok((new, changed))
+}
+
 /// A preset by name, or an error that lists the ones there are.
 pub fn preset(name: &str) -> crate::Result<WorkflowFile> {
     let key = name.trim().to_ascii_lowercase();
@@ -300,6 +419,7 @@ impl WorkflowFile {
             gates: self.gates,
             estimate_unit: self.estimate_unit,
             cadence: self.cadence,
+            process: None,
         };
         config.schema_version = config.required_schema_version();
         config
@@ -308,6 +428,7 @@ impl WorkflowFile {
     /// The workflow part of a project's config, as a file.
     pub fn from_config(config: &ProjectConfig) -> WorkflowFile {
         WorkflowFile {
+            process: None,
             statuses: config.statuses.clone(),
             default_state: config.default_state.clone(),
             displayed_states: config.displayed_states.clone(),
@@ -429,6 +550,29 @@ pub fn gate_problems(statuses: &[String], gates: &BTreeMap<String, Gate>) -> Vec
 }
 
 impl WorkflowFile {
+    /// A hash of the process itself — everything but its header (FEAT-169). Two files that would
+    /// govern work the same way have the same rev, whatever they are called.
+    pub fn content_rev(&self) -> String {
+        let mut bare = self.clone();
+        bare.process = None;
+        crate::hash::stable_hash(&serde_yaml::to_string(&bare).unwrap_or_default())
+    }
+
+    /// The version this file carries, 0 when it has no header.
+    pub fn version(&self) -> u32 {
+        self.process.as_ref().map_or(0, |h| h.version)
+    }
+
+    /// Where this file came from, for a project that applies it.
+    pub fn source(&self, name: &str, library: Library) -> ProcessSource {
+        ProcessSource {
+            name: name.to_string(),
+            library,
+            version: self.version(),
+            rev: self.content_rev(),
+        }
+    }
+
     /// Every problem the store would refuse this file for, as `--from-file` would send it (FEAT-168).
     /// Whether a status that would disappear still holds items depends on the project, so that is
     /// checked against one, by the caller.

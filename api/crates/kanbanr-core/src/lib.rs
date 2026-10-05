@@ -32,6 +32,7 @@ pub mod git;
 pub mod graph;
 pub mod hash;
 pub mod lessons;
+pub mod library;
 pub mod mermaid;
 pub mod mirror;
 pub mod models;
@@ -4478,6 +4479,166 @@ requirements:
         assert_eq!(
             store.load("demo").unwrap().config.terminal_states,
             vec!["Completed".to_string()]
+        );
+    }
+
+    /// FEAT-169 R-1: a process is kept where it was saved — the board's library or a personal
+    /// folder — and its version goes up only when its content changed.
+    #[test]
+    fn save_keeps_the_process_where_chosen_and_versions_changes() {
+        let (store, d) = temp_store();
+        let personal = d.path.join("home").join(".kanbanr").join("processes");
+        let pdca = crate::config::preset("pdca").unwrap();
+
+        let v1 = store
+            .save_process("ours", pdca.clone(), Some("Our PDCA".into()))
+            .unwrap();
+        assert_eq!(v1.version(), 1);
+        assert!(store.processes_dir().join("ours.yaml").is_file());
+        assert!(!personal.exists(), "a board save stays on the board");
+        // Saved again unchanged: still v1, and the description is kept.
+        let again = store.save_process("ours", pdca.clone(), None).unwrap();
+        assert_eq!(again, v1);
+        // Changed: v2.
+        let mut changed = pdca.clone();
+        changed.gates.get_mut("Act").unwrap().signoffs = vec!["release-review".into()];
+        let v2 = store.save_process("ours", changed.clone(), None).unwrap();
+        assert_eq!(v2.version(), 2);
+        assert_eq!(v2.process.as_ref().unwrap().description, "Our PDCA");
+        assert_ne!(v2.content_rev(), v1.content_rev());
+
+        // The same in a personal folder, which the board never sees.
+        let mine = crate::library::save(&personal, "mine", changed, None).unwrap();
+        assert_eq!(mine.version(), 1);
+        assert!(personal.join("mine.yaml").is_file());
+        assert!(store.board_process("mine").unwrap().is_none());
+        assert_eq!(
+            crate::library::get(&personal, "mine").unwrap().unwrap(),
+            mine
+        );
+
+        // Refused: a built-in name, a name that is not a file name, a process that does not check.
+        assert!(store.save_process("pdca", pdca.clone(), None).is_err());
+        assert!(store.save_process("../x", pdca.clone(), None).is_err());
+        let mut bad = pdca;
+        bad.default_state = "Nowhere".into();
+        assert!(store.save_process("bad", bad, None).is_err());
+        assert!(!store.processes_dir().join("bad.yaml").exists());
+    }
+
+    /// FEAT-169 R-2: a name is the board's process first, then the personal one, then the built-in
+    /// one; and a built-in name can't be taken.
+    #[test]
+    fn a_name_resolves_board_then_personal_then_builtin() {
+        use crate::config::Library;
+        use crate::library::pick;
+        let (store, _d) = temp_store();
+        let mut board = crate::config::preset("pdca").unwrap();
+        board.statuses.push("Board".into());
+        let mut personal = crate::config::preset("pdca").unwrap();
+        personal.statuses.push("Personal".into());
+
+        let (f, l) = pick("ours", Some(board.clone()), Some(personal.clone())).unwrap();
+        assert_eq!(
+            (l, f.statuses.last().unwrap().as_str()),
+            (Library::Board, "Board")
+        );
+        let (f, l) = pick("ours", None, Some(personal.clone())).unwrap();
+        assert_eq!(
+            (l, f.statuses.last().unwrap().as_str()),
+            (Library::Personal, "Personal")
+        );
+        assert_eq!(pick("togaf", None, None).unwrap().1, Library::Builtin);
+        assert!(pick("nothing", None, None).is_none());
+
+        // The board's own resolver: its library, then built-in, with the names it has on refusal.
+        store
+            .save_process("ours", crate::config::preset("pdca").unwrap(), None)
+            .unwrap();
+        assert_eq!(store.resolve_process("ours").unwrap().1, Library::Board);
+        assert_eq!(store.resolve_process("scrum").unwrap().1, Library::Builtin);
+        let err = store.resolve_process("nothing").unwrap_err().to_string();
+        assert!(err.contains("ours") && err.contains("scrum"), "{err}");
+        assert!(crate::config::check_process_name("scrum").is_err());
+    }
+
+    /// FEAT-169 R-4: applying a named process records which one, from where, at which version and
+    /// rev; a workflow from a file or flags clears it; and an older reader keeps the record.
+    #[test]
+    fn applying_a_named_process_records_where_it_came_from() {
+        use crate::config::Library;
+        use crate::dispatch::dispatch;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let saved = store
+            .save_process("ours", crate::config::preset("pdca").unwrap(), None)
+            .unwrap();
+        dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/workflow",
+            Some(&serde_json::json!({ "preset": "ours" })),
+        )
+        .unwrap();
+        let src = store.load("demo").unwrap().config.process.unwrap();
+        assert_eq!(
+            (src.name.as_str(), src.library, src.version),
+            ("ours", Library::Board, 1)
+        );
+        assert_eq!(src.rev, saved.content_rev());
+        // A built-in name records the built-in library, version 0.
+        dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/workflow",
+            Some(&serde_json::json!({ "preset": "togaf" })),
+        )
+        .unwrap();
+        let src = store.load("demo").unwrap().config.process.unwrap();
+        assert_eq!((src.library, src.version), (Library::Builtin, 0));
+        // At creation too.
+        dispatch(
+            &store,
+            "POST",
+            "/projects",
+            Some(&serde_json::json!({ "name": "other", "workflow": "ours" })),
+        )
+        .unwrap();
+        assert_eq!(
+            store.load("other").unwrap().config.process.unwrap().library,
+            Library::Board
+        );
+        // A workflow from flags comes from no saved process.
+        let pdca = crate::config::preset("pdca").unwrap();
+        dispatch(
+            &store,
+            "PUT",
+            "/projects/other/config/workflow",
+            Some(&serde_json::json!({
+                "statuses": pdca.statuses, "transitions": pdca.transitions,
+                "default_state": pdca.default_state, "no_op_states": pdca.no_op_states,
+            })),
+        )
+        .unwrap();
+        assert!(store.load("other").unwrap().config.process.is_none());
+
+        // An older reader: it does not know `process`, keeps it as an unknown key, and writes it
+        // back unchanged (FEAT-151's mechanism, which this record relies on instead of a bump).
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct OlderConfig {
+            statuses: Vec<String>,
+            #[serde(flatten)]
+            extra: crate::models::Extra,
+        }
+        let path = store.project_dir("demo").join("config.yaml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let older: OlderConfig = serde_yaml::from_str(&text).unwrap();
+        let rewritten = serde_yaml::to_string(&older).unwrap();
+        let back: crate::config::ProjectConfig = serde_yaml::from_str(&rewritten).unwrap();
+        assert_eq!(
+            back.process,
+            store.load("demo").unwrap().config.process,
+            "the record survives an older kanbanr's write"
         );
     }
 

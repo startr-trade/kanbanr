@@ -8,6 +8,13 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Processes are saved by name and reused (FEAT-169).** `kanbanr process save <name>` keeps a
+  process on the board, where the team gets it through the board's remote, or with `--personal` in
+  `~/.kanbanr/processes`, for carrying it to another board. `process list` and `process show` find
+  them, and `config workflow --preset <name>` and `project init --workflow <name>` apply them. A
+  name is looked up on the board first, then in your library, then among the built-in ones. The
+  version goes up only when the content changes. A project records which process it was given:
+  name, library, version and content hash.
 - **A process can be checked before it is applied (FEAT-168).** `kanbanr process check <file|name>`
   reports every problem the board would refuse a process for, all at once. That includes any
   status it would empty of the project's items. Then it shows the working agreement and a diagram,

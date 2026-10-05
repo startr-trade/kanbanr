@@ -226,3 +226,47 @@ The file holds statuses, `default_state`, `displayed_states`, `no_op_states`, `t
 `transitions` and `gates`. It has no name, so one process file can serve many projects. A board
 that declares gates is stamped `schema_version: 3`, so an older kanbanr refuses to open it instead
 of ignoring its gates.
+
+## Saving and sharing processes
+
+A process you will use again can be saved by name, and then chosen like a preset:
+
+```bash
+kanbanr process save our-process --description "Design review before build; QA signs off"
+kanbanr process save our-process --from-file our-process.yaml   # or from a file
+kanbanr process save my-process --personal                      # in your own library instead
+kanbanr process list                                            # every process, and who uses it
+kanbanr process show our-process                                # its file, agreement and diagram
+kanbanr config workflow --preset our-process                    # apply it to this project
+kanbanr project init storefront --workflow our-process          # or start a project with it
+```
+
+| Library | Where | Who has it |
+|---|---|---|
+| The board | `processes/` in the board, beside `projects/` | everyone with the board, through its git remote |
+| Personal | `~/.kanbanr/processes/` (`KANBANR_PROCESSES_DIR` to move it) | you, on any board |
+| Built-in | in kanbanr | everyone |
+
+`process save` keeps a process on the board unless you pass `--personal`. Without `--from-file`,
+it saves this project's workflow. A process must pass `process check` to be saved. A built-in
+process's name can't be reused. Saving again leaves the version alone when nothing changed, and
+adds one when something did.
+
+A name is looked up on the board first, then in your personal library, then among the built-in
+processes. A team's agreed process always wins over one person's copy of the same name;
+`process list` marks a personal copy the board's hides.
+
+A project records the process it was given: its name, library, version, and a hash of its content.
+A personal process is sent to the board whole when you apply it, because the board can't read
+anyone's home folder. `process list` shows which projects use each process. When a project uses
+someone else's personal process, it says the file is not in your library.
+
+A saved file has a short header, which an older kanbanr ignores:
+
+```yaml
+process:
+  name: our-process
+  description: Design review before build; QA signs off
+  version: 2
+statuses: [...]
+```
