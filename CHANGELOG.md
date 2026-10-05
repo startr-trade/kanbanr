@@ -17,6 +17,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Changed
 
+- **The release looks for the monitor instead of weighing the binary (FEAT-172).** The check that
+  the web monitor is embedded and compressed bracketed the binary between 12 and 20 MB. Code growth
+  made both bounds wrong: a binary with no monitor is now about 19 MB, and new code alone went over
+  20 MB with the assets compressed. It now checks that every monitor file is named in the binary,
+  and that the largest script's text is not in it uncompressed.
 - **Working with Claude shows what the conversation actually does (FEAT-166).** The chapter now says
   when Claude uses plan mode and when a question, and why, and gives the walkthroughs' outcomes: a
   request spanning two stages, choices asked before the plan, a drafted decision asked at once, a
