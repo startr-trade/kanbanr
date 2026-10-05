@@ -8,6 +8,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Claude designs a process with you (FEAT-171).** At setup, or when you ask to change how you
+  work, Claude offers your team's saved processes first. For a new one it starts from the nearest
+  built-in, asks one question per stage built from the checks kanbanr can enforce, turns anything
+  else into a named sign-off, and shows the checked draft's working agreement and diagram in the
+  plan. Accepting it saves the process (board or personal) and applies it. A changed process is
+  offered to each project that uses it, one question each. The decision is ADR-0013, and the
+  process file, the board's `processes/` and the project's `process` record join the 1.0 stability
+  policy.
 - **Projects are told when their saved process changes, and update when asked (FEAT-170).**
   `kanbanr process status` says which process a project uses and whether it has moved on;
   `process diff` shows what differs; `process update` takes the saved version, and is refused

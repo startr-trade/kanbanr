@@ -193,6 +193,20 @@ a project with its own process file:
   shaping stage was asked "when does this happen?" there. The TOGAF project, whose gates never ask
   it, was not, and left How and Where blank until its System Design stage asked for them.
 
+## Your own process, designed in the conversation
+
+At setup, or whenever you say "let's change our process", Claude designs the process with you
+instead of asking for a file. It offers the processes your team already saved first. For a new one
+it starts from the closest built-in process. Then it asks one question per stage, *what must be
+true before work enters it?*, with only the checks kanbanr can enforce as choices; anything else
+becomes a named sign-off. The plan shows the result as a working agreement and a diagram, and
+accepting it saves the process (on the board for the team, or in your personal library) and applies
+it.
+
+When a saved process changes, each project using it is told: at the start of the next session,
+Claude mentions it once and asks whether to update. It never updates on its own. See
+[Processes](processes.md#designing-a-process-with-claude).
+
 ## In other workflows
 
 The same conversation, with only as many decisions as each workflow asks for:
@@ -203,4 +217,4 @@ The same conversation, with only as many decisions as each workflow asks for:
 | Scrum | its size as a question at Ready (the Definition of Ready); approval and its sprint to start; Done needs green tests |
 | PDCA | one approval at Do; a review sign-off at Act |
 | design control | approval, plus sign-offs at Review and Validation |
-| your own process file | whatever its gates ask, as the table above |
+| your own process | whatever its gates ask, as the table above |

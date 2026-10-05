@@ -82,6 +82,10 @@ project"** (or anything equivalent):
      so chores link to something honest.
 
    **c. Process**
+   - *Saved processes first.* `kanbanr process list --json` (it needs no board; with
+     `--data-dir <board>` it also lists that board's) shows the processes the team saved on the
+     board and the user's own in `~/.kanbanr/processes`. Offer those before the built-in ones, in
+     the same question: a team's agreed process is usually the answer.
    - *Workflow*: a preset (`kanbanr config workflow --preset list` describes them):
      - **default**: Planned → In Progress → Completed, plus Deferred and Ongoing.
      - **scheduled**: Planned → Scheduled → Completed.
@@ -92,9 +96,10 @@ project"** (or anything equivalent):
        sprints. Ready is the Definition of Ready, and Done is the Definition of Done.
      - **agile**: Plan → Design → Develop → Test → Review → Released.
 
-     Alternatively, load the organisation's own process with `--from-file`, or use custom
-     statuses the user describes. The phased presets ask for part of the definition at each stage,
-     not all of it up front.
+     Or **"our own process"**: design it with the user now — see "Designing a process with the
+     user" — and the plan saves it and applies it. An organisation's existing process file is
+     loaded the same way: check it with `kanbanr process check`, then save and apply it. The phased
+     presets ask for part of the definition at each stage, not all of it up front.
    - *Cadence*, only when the chosen process uses sprints (scrum, agile), or the user asks for
      sprints or releases:
      - sprint length: 1, 2, 3 or 4 weeks, defaulting to 2;
@@ -123,7 +128,8 @@ project"** (or anything equivalent):
 
    ```bash
    kanbanr init <name> --data-dir <board> --author "<name>" --email <email> --description "<…>"
-   kanbanr config workflow --preset <name>         # or --from-file process.yaml; omit for default
+   kanbanr process save <name> [--personal] --from-file <scratch>/process.yaml   # a process designed now
+   kanbanr config workflow --preset <name>         # a saved, built-in or just-saved process; omit for default
    kanbanr charter set --file <scratch>/charter.yaml
    kanbanr hooks status                            # init registered them; install if it did not
    kanbanr claude sync                             # CLAUDE.md block pointing at the charter
@@ -366,6 +372,47 @@ run `kanbanr adr accept`. "Later" leaves it proposed, and it comes back in the n
 The browser (`kanbanr review --ui`) and the plain commands stay available for users who prefer
 them; offer them, but do not require them. Never end a turn by handing the user a command to type
 for a decision you could have asked about.
+
+### Designing a process with the user
+
+When the user wants a process of their own — at setup, or later ("let's change our process", "we
+need a design review before build") — design it **in plan mode**, from the board's vocabulary, so
+what is agreed is exactly what will be enforced:
+
+1. **Start from what exists.** `kanbanr process list --json`: a saved process may already fit. If
+   not, ask how work moves today, in their words, and start from the nearest built-in process
+   (`kanbanr process show <name>`), so the user corrects a draft instead of facing a blank page.
+2. **Name the stages with them**: one AskUserQuestion proposing the stage list, with your
+   recommendation first and "Other" for their own.
+3. **One question per stage: "What must be true before work enters *Stage*?"** Build the options
+   from `kanbanr process checks --json`, each phrased in the user's terms (`tests_named` → "every
+   requirement names the test that proves it"); multi-select. Recommend the checks the stage's
+   purpose needs and no more: a stage asks for what it needs, and the definition grows stage by
+   stage.
+4. **What the board can't see becomes a named sign-off.** "The architecture board has reviewed
+   it" → `signoffs: [architecture-review]`. Say it back plainly: a person records it, never you.
+5. **The process-wide choices, together in one AskUserQuestion batch:** block or only warn at each
+   gate; where the code branch is made (`on_enter: [branch]`, usually the first building stage);
+   which stage ends the work; which moves back for rework are allowed.
+6. **Name it, and ask where it is kept:** on the board (the team gets it through the board's
+   remote; recommended when the board has one) or personal (`~/.kanbanr/processes`, theirs on any
+   board).
+7. **Draft, check, show.** Write the YAML to your scratchpad, run `kanbanr process check <file>`,
+   and fix every problem before the plan. Put the **working agreement and the diagram** it prints
+   in the plan — what each stage asks, in words — with the commands:
+   `kanbanr process save <name> [--personal] --from-file <file>`, then
+   `kanbanr config workflow --preset <name>`. **Accepting the plan accepts the process.**
+
+**Changing a saved process** is the same loop, starting from `kanbanr process show <name>`. Saving
+it gives a new version; nothing else changes until each project takes it. Then, for each project on
+the board that uses it (`kanbanr process list` names them), **one question**: show
+`kanbanr process diff` in a few lines and ask Update / Not now. Update →
+`kanbanr process update --project <id>`. If it is refused because a stage it removes still holds
+items, say which, and offer to move them or rename the status first.
+
+**When a session opens with a process notice** ("v3 is saved now"), mention it once and ask
+Update / Not now. Never run `kanbanr process update` unasked, and never edit a project's gates to
+match a process by hand.
 
 ### Moving work
 
