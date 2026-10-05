@@ -493,3 +493,18 @@ export type Adr = {
   /** Sections still unanswered; a decision with any cannot be accepted. */
   missing?: string[];
 };
+
+/** Which saved process a project's workflow came from (FEAT-169). */
+export interface ProcessSource {
+  name: string;
+  library: "board" | "personal" | "builtin";
+  version: number;
+  rev: string;
+}
+
+/** How a project stands against its saved process (FEAT-170). */
+export interface ProcessStatus {
+  source: ProcessSource | null;
+  drift: { edited: boolean; newer: number | null; gone: boolean } | null;
+  messages: string[];
+}

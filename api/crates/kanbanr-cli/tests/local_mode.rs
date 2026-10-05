@@ -3120,3 +3120,138 @@ fn the_personal_folder_is_never_a_marker() {
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Save the shop's workflow as `ours`, then a version with one gate changed, as v2.
+fn shop_with_a_newer_process(base: &std::path::Path, work: &std::path::Path) -> String {
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(base, work, &["process", "save", "ours"]));
+    // `ours` was saved from the project, which now records it as its source.
+    ok(run_in(
+        base,
+        work,
+        &["config", "workflow", "--preset", "ours"],
+    ));
+    let v1 = String::from_utf8(ok(run_in(base, work, &["config", "workflow", "--export"])).stdout)
+        .unwrap();
+    let v2 = v1.replace(
+        "  Migration:\n    requires:\n    - approved\n",
+        "  Migration:\n    requires:\n    - approved\n    - tests_green\n",
+    );
+    assert_ne!(v1, v2, "the export changed shape: {v1}");
+    let file = base.join("v2.yaml");
+    std::fs::write(&file, &v2).unwrap();
+    ok(run_in(
+        base,
+        work,
+        &[
+            "process",
+            "save",
+            "ours",
+            "--from-file",
+            file.to_str().unwrap(),
+        ],
+    ));
+    v1
+}
+
+/// FEAT-170 R-2: `process diff` names what changed between the project's workflow and the saved
+/// version — and changes nothing.
+#[test]
+fn process_diff_names_what_changed() {
+    let (base, work) = togaf_scratch("process-diff");
+    togaf_board(&base, &work);
+    let v1 = shop_with_a_newer_process(&base, &work);
+    let out = run_in(&base, &work, &["process", "diff"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("ours v2"), "{text}");
+    assert!(
+        text.contains("gate 'Migration' requires") && text.contains("tests_green"),
+        "{text}"
+    );
+    assert_eq!(text.lines().count(), 2, "only the one change: {text}");
+    let now = String::from_utf8(run_in(&base, &work, &["config", "workflow", "--export"]).stdout)
+        .unwrap();
+    assert_eq!(now, v1, "diff changed the project");
+    let status = run_in(&base, &work, &["process", "status", "--if-changed"]);
+    assert!(String::from_utf8_lossy(&status.stdout).contains("v2 is saved now"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-170 R-3: `process update` applies the saved version only when run, and is refused when a
+/// status that still holds items would go, naming `config rename-status`.
+#[test]
+fn update_applies_on_request_and_keeps_occupied_statuses() {
+    let (base, work) = togaf_scratch("process-update");
+    togaf_board(&base, &work);
+    shop_with_a_newer_process(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    // Applied on request.
+    ok(run_in(&base, &work, &["process", "update"]));
+    let now =
+        String::from_utf8(ok(run_in(&base, &work, &["config", "workflow", "--export"])).stdout)
+            .unwrap();
+    assert!(now.contains("    - tests_green\n"), "{now}");
+    let status =
+        String::from_utf8(ok(run_in(&base, &work, &["process", "status"])).stdout).unwrap();
+    assert!(status.contains("ours v2 (board), current"), "{status}");
+
+    // v3 drops Vision, where the shop's item sits: refused, nothing changed.
+    let mut v3: serde_yaml::Value = serde_yaml::from_str(&now).unwrap();
+    let statuses = v3["statuses"].as_sequence_mut().unwrap();
+    statuses.retain(|s| s.as_str() != Some("Vision"));
+    v3["default_state"] = "Business Arch".into();
+    for key in ["displayed_states", "terminal_states", "no_op_states"] {
+        if let Some(list) = v3[key].as_sequence_mut() {
+            list.retain(|s| s.as_str() != Some("Vision"));
+        }
+    }
+    let transitions = v3["transitions"].as_mapping_mut().unwrap();
+    transitions.remove("Vision");
+    for (_, tos) in transitions.iter_mut() {
+        tos.as_sequence_mut()
+            .unwrap()
+            .retain(|s| s.as_str() != Some("Vision"));
+    }
+    let v3 = serde_yaml::to_string(&v3).unwrap();
+    let file = base.join("v3.yaml");
+    std::fs::write(&file, v3).unwrap();
+    let saved = run_in(
+        &base,
+        &work,
+        &[
+            "process",
+            "save",
+            "ours",
+            "--from-file",
+            file.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        saved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&saved.stderr)
+    );
+    let out = run_in(&base, &work, &["process", "update"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("'Vision'") && err.contains("rename-status"),
+        "{err}"
+    );
+    let after =
+        String::from_utf8(ok(run_in(&base, &work, &["config", "workflow", "--export"])).stdout)
+            .unwrap();
+    assert_eq!(after, now, "a refused update changed nothing");
+    let _ = std::fs::remove_dir_all(&base);
+}

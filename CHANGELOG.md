@@ -8,6 +8,12 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Projects are told when their saved process changes, and update when asked (FEAT-170).**
+  `kanbanr process status` says which process a project uses and whether it has moved on;
+  `process diff` shows what differs; `process update` takes the saved version, and is refused
+  while a status it would remove still holds items. `doctor`, the session start and the monitor's
+  Workflow page report a newer version, or a workflow edited after it was applied. Nothing is
+  applied automatically.
 - **Processes are saved by name and reused (FEAT-169).** `kanbanr process save <name>` keeps a
   process on the board, where the team gets it through the board's remote, or with `--personal` in
   `~/.kanbanr/processes`, for carrying it to another board. `process list` and `process show` find

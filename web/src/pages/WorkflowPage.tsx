@@ -4,7 +4,7 @@ import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
 import { conditionText } from "../types";
-import type { Gate } from "../types";
+import type { Gate, ProcessStatus } from "../types";
 
 /**
  * Read-only Workflow view (FEAT-039, FEAT-117). The per-project config is the single source of
@@ -17,6 +17,7 @@ export default function WorkflowPage() {
   const tick = useLiveTick(api.projectEvents(project));
   const { data, error, loading } = useAsync(() => api.getProject(project), [project, tick]);
   const diagram = useAsync(() => api.getWorkflowDiagram(project), [project, tick]);
+  const process = useAsync(() => api.getProcess(project), [project, tick]);
 
   if (loading && !data) return <Loading />;
   if (error) return <ErrorBox error={error} />;
@@ -36,6 +37,7 @@ export default function WorkflowPage() {
         Generated from the project config (statuses, transitions, default/terminal/no-op states, and
         the gates on each stage).
       </p>
+      {process.data ? <ProcessLine status={process.data} /> : null}
       {diagram.error ? (
         <ErrorBox error={diagram.error} />
       ) : diagram.data ? (
@@ -93,6 +95,38 @@ function StageTile({ status, gate }: { status: string; gate: Gate }) {
           <span className="muted small">asks nothing to enter</span>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The saved process this workflow came from, and whether it has moved on (FEAT-170). Told, never
+ * applied: `kanbanr process update` brings the new version when the project's user decides to.
+ */
+function ProcessLine({ status }: { status: ProcessStatus }) {
+  const source = status.source;
+  if (!source) return null;
+  const library = source.library === "builtin" ? "built-in" : source.library;
+  const version = source.version > 0 ? ` v${source.version}` : "";
+  const personal = source.library === "personal";
+  return (
+    <div className="section">
+      <p className="small">
+        Process: <strong>{source.name}</strong>
+        {version} · {library}{" "}
+        {personal ? (
+          <span className="muted">— a personal process, compared on its owner's machine (kanbanr process status)</span>
+        ) : status.messages.length === 0 ? (
+          <span className="chip done">current</span>
+        ) : (
+          <span className="chip warn">changed</span>
+        )}
+      </p>
+      {status.messages.map((m) => (
+        <p className="muted small" key={m}>
+          {m.split("`").map((part, i) => (i % 2 === 1 ? <code key={i}>{part}</code> : part))}
+        </p>
+      ))}
     </div>
   );
 }
