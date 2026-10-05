@@ -12,6 +12,7 @@ use crate::self_update;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The extension's id in every editor's extension list.
 pub const EXTENSION_ID: &str = "kanbanr.kanbanr";
@@ -112,7 +113,14 @@ pub fn install_into(
     let bytes = fetch(&format!("{dl}/{file}"))?;
     self_update::verify(&file, &bytes, &want)?;
 
-    let dir = std::env::temp_dir().join(format!("kanbanr-vsix-{}", std::process::id()));
+    // A folder per call, not per process: two installs in one process (the tests run in parallel)
+    // would otherwise remove the folder from under each other (FEAT-167).
+    static CALLS: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "kanbanr-vsix-{}-{}",
+        std::process::id(),
+        CALLS.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(&file);
     std::fs::write(&path, &bytes)?;
@@ -171,11 +179,16 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     /// A stand-in editor: records its arguments, and lists the extension when `has` is set.
+    ///
+    /// `cp` writes the executable, not this process: a file this process held open for writing
+    /// could be inherited by a child another test is forking, and running the stub would then fail
+    /// with "Text file busy" (FEAT-167).
     fn stub_editor(dir: &Path, name: &str, has: bool) -> PathBuf {
         let path = dir.join(name);
+        let src = dir.join(format!("{name}.src"));
         let log = dir.join(format!("{name}.log"));
         std::fs::write(
-            &path,
+            &src,
             format!(
                 "#!/bin/sh\necho \"$@\" >> '{}'\n[ \"$1\" = --list-extensions ] && {} \nexit 0\n",
                 log.display(),
@@ -183,6 +196,14 @@ mod tests {
             ),
         )
         .unwrap();
+        assert!(
+            Command::new("cp")
+                .arg(&src)
+                .arg(&path)
+                .status()
+                .unwrap()
+                .success()
+        );
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
     }
@@ -258,6 +279,37 @@ mod tests {
         let codium = std::fs::read_to_string(dir.join("codium.log")).unwrap();
         assert!(code.contains("--install-extension"), "{code}");
         assert!(!codium.contains("--install-extension"), "{codium}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-167 R-1: installs running at once in one process each download into their own folder,
+    /// so none removes the file another is about to install.
+    #[test]
+    fn concurrent_installs_do_not_share_a_download_folder() {
+        let dir = temp("concurrent");
+        let editors: Vec<_> = (0..8)
+            .map(|i| {
+                let name = format!("code{i}");
+                (name.clone(), stub_editor(&dir, &name, false))
+            })
+            .collect();
+        std::thread::scope(|s| {
+            let runs: Vec<_> = (0..16)
+                .map(|i| {
+                    let one = vec![editors[i % editors.len()].clone()];
+                    s.spawn(move || {
+                        (0..8)
+                            .map(|_| install_into(&one, "0.1.4", &release(b"x")))
+                            .collect::<Result<Vec<_>>>()
+                    })
+                })
+                .collect();
+            for run in runs {
+                for said in run.join().unwrap().unwrap() {
+                    assert!(said[0].contains("installed into"), "{said:?}");
+                }
+            }
+        });
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
