@@ -6,6 +6,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Working with Claude shows what the conversation actually does (FEAT-166).** The chapter now says
+  when Claude uses plan mode and when a question, and why, and gives the walkthroughs' outcomes: a
+  request spanning two stages, choices asked before the plan, a drafted decision asked at once, a
+  review where Change it restored an earlier approval, and a custom process asking *when* where
+  TOGAF did not.
+
 ## [0.1.6] - 2026-10-05
 
 Timestamps are compared as instants, and the release refuses a commit that has not passed CI.

@@ -63,6 +63,19 @@ FEAT-012 Saved carts: 2 requirements, both with named tests; approval lapsed whe
 | Change it | nothing yet: Claude asks what to change, revises the definition, and the item comes back to the queue |
 | Skip | nothing: it stays waiting |
 
+## Plan or question?
+
+Claude uses each one for a single job:
+
+- **Plan mode** is for *writing* a definition: a new item, or growing one for its next stage.
+  There's a brief to draft, and you read the whole text before you accept it.
+- **A question** is for *deciding* on a definition that already exists. There's nothing to write,
+  so each item gets a few lines and one question. A ten-item review is ten clicks, not ten plans.
+
+"Change it" in a review is usually a small edit, so it's shown and asked again rather than planned.
+A change that amounts to a new stage's worth of definition ("take FEAT-002 to System Design") goes
+through plan mode.
+
 ## Moving work: just ask
 
 > Park FEAT-074, we're not doing it this quarter.
@@ -158,6 +171,27 @@ Your part, in all: a short plan, two design plans, and three one-click questions
 covers more than the one before, and the item's history keeps the trail. If you already know the
 design, ask for the whole definition up front: one plan and one approval then cover every stage
 where nothing changes.
+
+## What it looked like in practice
+
+These are from the walkthroughs that tested this flow before it shipped, on a TOGAF project and on
+a project with its own process file:
+
+- **One request, two stages.** "Take saved carts to business architecture, then design it" produced
+  one plan covering both stages. Accepting it approved the definition at each stage, and the item
+  went Vision → Business Arch → System Design, through each gate in turn.
+- **Choices asked first.** Before the plan for named baskets, Claude asked about renaming, items no
+  longer for sale, and deleting. The plan then listed what it had still chosen itself ("a named
+  basket is a snapshot") under *Choices I made*.
+- **A drafted decision, asked at once.** The design decision behind saved carts came up as Accept /
+  Reject / Later, not as a command to type.
+- **A review with Change it.** Two items were waiting. Approve recorded the first. "Change it — no
+  cap on named baskets" removed the cap. That put the definition back to text already approved,
+  so the earlier approval counted again and nothing new was asked: approvals follow the content,
+  not the edit history.
+- **The process decides the questions.** The project whose own process file asks *when* at its
+  shaping stage was asked "when does this happen?" there. The TOGAF project, whose gates never ask
+  it, was not, and left How and Where blank until its System Design stage asked for them.
 
 ## In other workflows
 
