@@ -108,6 +108,11 @@ enum Command {
     /// `--vscode`; `self-update` keeps an installed copy in step.
     #[command(subcommand)]
     Editor(EditorCmd),
+    /// Processes — a workflow with its gates, as a file (FEAT-168): check one before it is applied,
+    /// and list what a gate can ask for. Neither needs a board, so a process can be designed before
+    /// the project exists.
+    #[command(subcommand)]
+    Process(ProcessCmd),
     /// Set the commit identity (name + email) on this data repo.
     Identity {
         #[arg(long)]
@@ -577,6 +582,21 @@ enum EditorCmd {
         /// Only where the extension is already installed — what `self-update` runs.
         #[arg(long)]
         if_installed: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProcessCmd {
+    /// Every condition a gate can require, with when it passes and what it can be narrowed by —
+    /// the choices to offer someone designing their process.
+    Checks,
+    /// Check a process without applying it: every problem the board would refuse it for, then its
+    /// working agreement and diagram. Takes a file, or a process's name. Changes nothing; exits
+    /// non-zero when there is a problem. Run where a board is, it also names statuses the file
+    /// would remove that still hold this project's items.
+    Check {
+        /// A process file (as `config workflow --export` writes), or a process's name.
+        source: String,
     },
 }
 
@@ -4813,6 +4833,102 @@ fn get_feature(client: &Backend, p: &str, code: &str) -> anyhow::Result<kanbanr_
         .ok_or_else(|| anyhow::anyhow!("feature '{code}' not found"))
 }
 
+/// `kanbanr process checks` (FEAT-168): the gate vocabulary, from the one list the board evaluates.
+fn run_process_checks(cli: &Cli) -> anyhow::Result<()> {
+    use kanbanr_core::readiness::Check;
+    if cli.json {
+        let checks: Vec<Value> = Check::GATEABLE
+            .iter()
+            .map(|c| {
+                json!({ "check": c.name(), "passes_when": c.passes_when(), "parameters": c.parameters() })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "checks": checks,
+                "signoffs": "anything kanbanr cannot see is a named sign-off: `signoffs: [design-review]`",
+            }))?
+        );
+        return Ok(());
+    }
+    for c in Check::GATEABLE {
+        println!("{:<14} {}", c.name(), c.passes_when());
+        if let Some(p) = c.parameters() {
+            println!("{:<14}   narrowed by {p}", "");
+        }
+    }
+    println!(
+        "\nAnything kanbanr cannot judge from the board is a named sign-off, recorded by a person: \
+         `signoffs: [design-review]` in the stage's gate."
+    );
+    Ok(())
+}
+
+/// `kanbanr process check <file|name>` (FEAT-168): the board's own validator, run alone.
+fn run_process_check(cli: &Cli, source: &str) -> anyhow::Result<()> {
+    use kanbanr_core::config::{self, WorkflowFile};
+    let (label, file): (String, WorkflowFile) = if std::path::Path::new(source).is_file() {
+        let text = std::fs::read_to_string(source)
+            .map_err(|e| anyhow::anyhow!("could not read {source}: {e}"))?;
+        let file = serde_yaml::from_str(&text)
+            .map_err(|e| anyhow::anyhow!("{source} is not a process file: {e}"))?;
+        (source.to_string(), file)
+    } else {
+        (source.to_string(), config::preset(source)?)
+    };
+    let mut problems: Vec<String> = file.problems().iter().map(|e| e.to_string()).collect();
+    // Removing a status that still holds items is refused too, but that depends on a project: check
+    // against this folder's, when there is a board here and the project is on it.
+    let mut against = None;
+    if no_board_here(cli).is_none()
+        && let Ok(p) = require_project(cli)
+        && let Ok(project) = get_project(&make_backend(cli), &p)
+    {
+        for (status, n) in kanbanr_core::Store::statuses_in_use(&project, &file.statuses) {
+            problems.push(format!(
+                "applied to {p}, it would remove '{status}', which still holds {n} item(s) — \
+                 move them, or rename the status with `kanbanr config rename-status`"
+            ));
+        }
+        against = Some(p);
+    }
+    let preview = file.clone().into_config(&label);
+    let agreement = config::working_agreement(&label, &preview);
+    let diagram = kanbanr_core::mermaid::to_state_diagram(&preview);
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "source": label,
+                "ok": problems.is_empty(),
+                "problems": problems,
+                "checked_against": against,
+                "agreement": agreement,
+                "mermaid": diagram,
+            }))?
+        );
+    } else if problems.is_empty() {
+        println!("{label}: no problems");
+        if let Some(p) = &against {
+            println!("(also checked against project {p})");
+        }
+        println!("\n{agreement}\n```mermaid\n{diagram}```");
+    } else {
+        eprintln!("{label}: {} problem(s)", problems.len());
+        for problem in &problems {
+            eprintln!("  - {problem}");
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "{label} would be refused; nothing was changed"
+        ))
+    }
+}
+
 fn get_project(client: &Backend, p: &str) -> anyhow::Result<Project> {
     let s = client.get(&format!("/projects/{p}"))?;
     Ok(serde_json::from_str(&s)?)
@@ -4858,6 +4974,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 }
             }
             return Ok(());
+        }
+        Command::Process(ProcessCmd::Checks) => return run_process_checks(cli),
+        Command::Process(ProcessCmd::Check { source }) => {
+            return run_process_check(cli, source);
         }
         Command::Serve {
             bind,
@@ -4905,6 +5025,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         | Command::SelfUpdate { .. }
         | Command::Skill(_)
         | Command::Editor(_)
+        | Command::Process(_)
         | Command::Hooks(_) => {
             unreachable!()
         }

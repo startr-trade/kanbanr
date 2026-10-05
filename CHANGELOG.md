@@ -6,6 +6,15 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A process can be checked before it is applied (FEAT-168).** `kanbanr process check <file|name>`
+  reports every problem the board would refuse a process for, all at once. That includes any
+  status it would empty of the project's items. Then it shows the working agreement and a diagram,
+  and changes nothing. It needs no board. `kanbanr process checks` lists what a gate can ask for
+  and when each check passes. A misspelt check is now named, with the checks there are, instead of
+  "did not match any variant". The board and `process check` share one validator.
+
 ### Changed
 
 - **Working with Claude shows what the conversation actually does (FEAT-166).** The chapter now says

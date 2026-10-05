@@ -4481,6 +4481,71 @@ requirements:
         );
     }
 
+    /// FEAT-168 R-2: a file `process check` passes is one the store accepts, and every file the
+    /// store refuses, `process check` refuses with the same first problem — one validator.
+    #[test]
+    fn one_validator_refuses_what_the_store_refused() {
+        use crate::config::{Gate, WorkflowFile};
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let before = serde_yaml::to_string(&store.load("demo").unwrap().config).unwrap();
+        let good: WorkflowFile = crate::config::preset("pdca").unwrap();
+        assert!(good.problems().is_empty(), "{:?}", good.problems());
+        let mut bad = Vec::new();
+        let mut f = good.clone();
+        f.statuses.clear();
+        bad.push(f);
+        let mut f = good.clone();
+        f.transitions.insert("Plan".into(), vec!["Nowhere".into()]);
+        bad.push(f);
+        let mut f = good.clone();
+        f.default_state = "Nowhere".into();
+        bad.push(f);
+        let mut f = good.clone();
+        f.displayed_states.push("No Action".into());
+        bad.push(f);
+        let mut f = good.clone();
+        f.terminal_states = vec!["Nowhere".into()];
+        bad.push(f);
+        let mut f = good.clone();
+        f.gates.insert("Nowhere".into(), Gate::default());
+        bad.push(f);
+        let mut f = good.clone();
+        f.gates.get_mut("Do").unwrap().signoffs.push(" ".into());
+        bad.push(f);
+        let mut f = good.clone();
+        f.gates
+            .get_mut("Do")
+            .unwrap()
+            .requires
+            .push(crate::readiness::Condition::Zachman {
+                zachman: vec!["colour".into()],
+            });
+        bad.push(f);
+        for file in bad {
+            let checked = file.problems();
+            let stored = store
+                .set_workflow_with_gates(
+                    "demo",
+                    file.statuses.clone(),
+                    file.transitions.clone(),
+                    Some(file.default_state.clone()),
+                    Some(file.displayed_states.clone()),
+                    Some(file.no_op_states.clone()),
+                    Some(file.terminal_states.clone()),
+                    Some(file.gates.clone()),
+                )
+                .unwrap_err();
+            assert_eq!(
+                checked.first().map(|e| e.to_string()),
+                Some(stored.to_string()),
+                "{file:?}"
+            );
+        }
+        let after = serde_yaml::to_string(&store.load("demo").unwrap().config).unwrap();
+        assert_eq!(after, before, "nothing was saved");
+    }
+
     #[test]
     fn dispatch_workflow_mermaid_export_route() {
         use crate::dispatch::dispatch;

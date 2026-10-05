@@ -211,8 +211,16 @@ Start from the closest preset and edit it:
 kanbanr config workflow --preset design-control
 kanbanr config workflow --export > our-process.yaml
 # edit our-process.yaml: rename stages, move sign-offs, add `kinds:` to gates
+kanbanr process check our-process.yaml               # every problem, then the agreement; changes nothing
 kanbanr config workflow --from-file our-process.yaml
 ```
+
+`kanbanr process check` runs the same validator the board runs when a workflow is saved, so a file
+that checks clean is one the board accepts. It reports every problem at once, not only the first.
+It needs no board, so a process can be checked before the project exists. Where there is one, it
+also names any status the file would remove that still holds this project's items. When the file
+is clean, it prints the working agreement and a Mermaid diagram. `kanbanr process checks` lists
+every check a gate can ask for, from the same list as the table above.
 
 The file holds statuses, `default_state`, `displayed_states`, `no_op_states`, `terminal_states`,
 `transitions` and `gates`. It has no name, so one process file can serve many projects. A board

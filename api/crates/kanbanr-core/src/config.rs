@@ -321,6 +321,131 @@ impl WorkflowFile {
     }
 }
 
+/// Fill in what a workflow leaves out, and check it (FEAT-168). This is the one validator: the store
+/// runs it before every workflow write, and `kanbanr process check` runs it alone, so a file that
+/// checks clean is one the store accepts. `None` means "derive it": the default state is the first
+/// status, and the displayed states are every status that is not a no-op. Returns the workflow as it
+/// would be saved, and every problem with it, in the order the store reports them.
+#[allow(clippy::too_many_arguments)]
+pub fn check_workflow(
+    statuses: Vec<String>,
+    transitions: BTreeMap<String, Vec<String>>,
+    default_state: Option<String>,
+    displayed_states: Option<Vec<String>>,
+    no_op_states: Option<Vec<String>>,
+    terminal_states: Option<Vec<String>>,
+    gates: BTreeMap<String, Gate>,
+) -> (WorkflowFile, Vec<crate::CoreError>) {
+    use crate::CoreError;
+    let mut problems = Vec::new();
+    if statuses.is_empty() {
+        problems.push(CoreError::NoStatuses);
+    }
+    let known = |s: &str| statuses.iter().any(|x| x == s);
+    let unknown = |s: &str, problems: &mut Vec<CoreError>| {
+        if !known(s) {
+            problems.push(CoreError::UnknownStatus(s.to_string()));
+        }
+    };
+    for (from, tos) in &transitions {
+        unknown(from, &mut problems);
+        for to in tos {
+            unknown(to, &mut problems);
+        }
+    }
+    let default_state =
+        default_state.unwrap_or_else(|| statuses.first().cloned().unwrap_or_default());
+    if !statuses.is_empty() {
+        unknown(&default_state, &mut problems);
+    }
+    let no_ops = no_op_states.unwrap_or_default();
+    for s in &no_ops {
+        unknown(s, &mut problems);
+    }
+    // No-op states are always non-displayed; displayed defaults to the active states.
+    let displayed = displayed_states.unwrap_or_else(|| {
+        statuses
+            .iter()
+            .filter(|s| !no_ops.contains(s))
+            .cloned()
+            .collect()
+    });
+    for s in &displayed {
+        unknown(s, &mut problems);
+        if no_ops.contains(s) {
+            problems.push(CoreError::DisplayedNoOp(s.clone()));
+        }
+    }
+    let terminals = terminal_states.unwrap_or_default();
+    for s in &terminals {
+        unknown(s, &mut problems);
+    }
+    problems.extend(gate_problems(&statuses, &gates));
+    let file = WorkflowFile {
+        statuses,
+        default_state,
+        displayed_states: displayed,
+        no_op_states: no_ops,
+        terminal_states: terminals,
+        transitions,
+        gates,
+        ..Default::default()
+    };
+    (file, problems)
+}
+
+/// What is wrong with a workflow's gates (FEAT-113): each must name a status of the workflow, name
+/// its sign-offs, and ask only for real Zachman columns. A gate that can never match is a guardrail
+/// that silently isn't there.
+pub fn gate_problems(statuses: &[String], gates: &BTreeMap<String, Gate>) -> Vec<crate::CoreError> {
+    use crate::CoreError;
+    use crate::readiness::{Check, Condition};
+    let mut problems = Vec::new();
+    for (status, gate) in gates {
+        if !statuses.iter().any(|s| s == status) {
+            problems.push(CoreError::UnknownStatus(status.clone()));
+        }
+        if gate.signoffs.iter().any(|s| s.trim().is_empty()) {
+            problems.push(CoreError::Unsupported(format!(
+                "the gate on '{status}' has a sign-off with no name"
+            )));
+        }
+        for condition in gate.requires.iter().chain(&gate.warns) {
+            if *condition == Condition::Check(Check::Signoff) {
+                problems.push(CoreError::Unsupported(format!(
+                    "the gate on '{status}' lists `signoff` as a check; name it instead: \
+                     `signoffs: [design-review]`"
+                )));
+            }
+            if let Some(column) = condition.invalid_column() {
+                problems.push(CoreError::Unsupported(format!(
+                    "the gate on '{status}' names '{column}', which is not a Zachman column \
+                     (what, how, where, when, who, why)"
+                )));
+            }
+        }
+    }
+    problems
+}
+
+impl WorkflowFile {
+    /// Every problem the store would refuse this file for, as `--from-file` would send it (FEAT-168).
+    /// Whether a status that would disappear still holds items depends on the project, so that is
+    /// checked against one, by the caller.
+    pub fn problems(&self) -> Vec<crate::CoreError> {
+        check_workflow(
+            self.statuses.clone(),
+            self.transitions.clone(),
+            Some(self.default_state.clone()),
+            Some(self.displayed_states.clone()),
+            Some(self.no_op_states.clone()),
+            Some(self.terminal_states.clone()),
+            self.gates.clone(),
+        )
+        .1
+    }
+}
+
 /// The team's working agreement, rendered from the workflow's gates (FEAT-122): what each stage
 /// is for and what entering it asks. Generated rather than written, so it can never say one thing
 /// while the gates enforce another. Under Scrum, the Ready and Done entries are the Definition of

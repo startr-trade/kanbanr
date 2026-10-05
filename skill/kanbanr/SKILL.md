@@ -756,6 +756,8 @@ kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # ship the finished items, write notes, carry the rest
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a shipped release
 kanbanr config workflow --export > process.yaml   # this project's workflow, gates included
+kanbanr process check process.yaml                # check a process without applying it: every problem, then its agreement and diagram
+kanbanr process checks [--json]                   # what a gate can ask for, and when each check passes
 
 A phased process (togaf, pdca, design-control) or the organisation's own is **a workflow with
 gates**. The phase IS the status; there is no second field. Offer one only if the user asks for

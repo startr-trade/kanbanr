@@ -2399,73 +2399,33 @@ impl Store {
         terminal_states: Option<Vec<String>>,
         gates: Option<std::collections::BTreeMap<String, crate::config::Gate>>,
     ) -> Result<ProjectConfig> {
-        if statuses.is_empty() {
-            return Err(CoreError::NoStatuses);
-        }
-        let known = |s: &str| statuses.iter().any(|x| x == s);
-        for (from, tos) in &transitions {
-            if !known(from) {
-                return Err(CoreError::UnknownStatus(from.clone()));
-            }
-            for to in tos {
-                if !known(to) {
-                    return Err(CoreError::UnknownStatus(to.clone()));
-                }
-            }
-        }
-        let default_state = default_state.unwrap_or_else(|| statuses[0].clone());
-        if !known(&default_state) {
-            return Err(CoreError::UnknownStatus(default_state));
-        }
-        let no_ops = no_op_states.unwrap_or_default();
-        for s in &no_ops {
-            if !known(s) {
-                return Err(CoreError::UnknownStatus(s.clone()));
-            }
-        }
-        // No-op states are always non-displayed; default displayed to active states.
-        let displayed = displayed_states.unwrap_or_else(|| {
-            statuses
-                .iter()
-                .filter(|s| !no_ops.contains(s))
-                .cloned()
-                .collect()
-        });
-        for s in &displayed {
-            if !known(s) {
-                return Err(CoreError::UnknownStatus(s.clone()));
-            }
-            if no_ops.contains(s) {
-                return Err(CoreError::DisplayedNoOp(s.clone()));
-            }
-        }
-        let terminals = terminal_states.unwrap_or_default();
-        for s in &terminals {
-            if !known(s) {
-                return Err(CoreError::UnknownStatus(s.clone()));
-            }
-        }
         let mut project = self.load(id)?;
-        // Referential integrity: a status being removed must not still hold feature items.
-        for old in &project.config.statuses {
-            if !statuses.contains(old) {
-                let refs = project.features.iter().filter(|f| &f.status == old).count();
-                if refs > 0 {
-                    return Err(CoreError::StatusInUse(old.clone(), refs));
-                }
-            }
-        }
         // The gates this workflow will have must name its statuses: the new ones when given, or
         // the ones already declared, which a change of statuses must not orphan.
         let gates = gates.unwrap_or_else(|| project.config.gates.clone());
-        Self::validate_gates(&statuses, &gates)?;
-        project.config.gates = gates;
-        project.config.statuses = statuses;
-        project.config.transitions = transitions;
-        project.config.default_state = default_state;
-        project.config.displayed_states = displayed;
-        project.config.no_op_states = no_ops;
-        project.config.terminal_states = terminals;
+        let (workflow, problems) = crate::config::check_workflow(
+            statuses,
+            transitions,
+            default_state,
+            displayed_states,
+            no_op_states,
+            terminal_states,
+            gates,
+        );
+        if let Some(problem) = problems.into_iter().next() {
+            return Err(problem);
+        }
+        // Referential integrity: a status being removed must not still hold feature items.
+        if let Some((old, refs)) = Self::statuses_in_use(&project, &workflow.statuses).first() {
+            return Err(CoreError::StatusInUse(old.clone(), *refs));
+        }
+        project.config.gates = workflow.gates;
+        project.config.statuses = workflow.statuses;
+        project.config.transitions = workflow.transitions;
+        project.config.default_state = workflow.default_state;
+        project.config.displayed_states = workflow.displayed_states;
+        project.config.no_op_states = workflow.no_op_states;
+        project.config.terminal_states = workflow.terminal_states;
         self.save_config(id, &project.config)?;
         Ok(project.config)
     }
@@ -2479,43 +2439,31 @@ impl Store {
         gates: std::collections::BTreeMap<String, crate::config::Gate>,
     ) -> Result<ProjectConfig> {
         let mut project = self.load(id)?;
-        Self::validate_gates(&project.config.statuses, &gates)?;
+        if let Some(problem) = crate::config::gate_problems(&project.config.statuses, &gates)
+            .into_iter()
+            .next()
+        {
+            return Err(problem);
+        }
         project.config.gates = gates;
         self.save_config(id, &project.config)?;
         Ok(project.config)
     }
 
-    fn validate_gates(
-        statuses: &[String],
-        gates: &std::collections::BTreeMap<String, crate::config::Gate>,
-    ) -> Result<()> {
-        for (status, gate) in gates {
-            if !statuses.iter().any(|s| s == status) {
-                return Err(CoreError::UnknownStatus(status.clone()));
-            }
-            if gate.signoffs.iter().any(|s| s.trim().is_empty()) {
-                return Err(CoreError::Unsupported(format!(
-                    "the gate on '{status}' has a sign-off with no name"
-                )));
-            }
-            for condition in gate.requires.iter().chain(&gate.warns) {
-                if *condition
-                    == crate::readiness::Condition::Check(crate::readiness::Check::Signoff)
-                {
-                    return Err(CoreError::Unsupported(format!(
-                        "the gate on '{status}' lists `signoff` as a check; name it instead: \
-                         `signoffs: [design-review]`"
-                    )));
-                }
-                if let Some(column) = condition.invalid_column() {
-                    return Err(CoreError::Unsupported(format!(
-                        "the gate on '{status}' names '{column}', which is not a Zachman column \
-                         (what, how, where, when, who, why)"
-                    )));
-                }
-            }
-        }
-        Ok(())
+    /// The statuses a workflow of `statuses` would remove while items still sit in them, with how
+    /// many (FEAT-168: `process check` reports these against a project, the store refuses them).
+    pub fn statuses_in_use(project: &Project, statuses: &[String]) -> Vec<(String, usize)> {
+        project
+            .config
+            .statuses
+            .iter()
+            .filter(|old| !statuses.contains(old))
+            .map(|old| {
+                let refs = project.features.iter().filter(|f| &f.status == old).count();
+                (old.clone(), refs)
+            })
+            .filter(|(_, refs)| *refs > 0)
+            .collect()
     }
 
     /// Plan an item into a release, or out of one (FEAT-120).
