@@ -202,24 +202,11 @@ jobs:
             echo "not executable on this runner (cross-build) — skipped"
           fi
 
-      # An assertion, not a note: a binary this small did not embed the monitor. FEAT-084/R-5 caps
-      # it the other way, so the two together pin the size to "the SPA is in there, compressed".
+      # Looked for, not sized (FEAT-172): the asset table names every web/dist file, and the largest
+      # script's text is not in the binary raw (FEAT-084/R-5). Size bounds went stale as code grew.
       - name: Check the monitor is embedded, and compressed
         shell: bash
-        run: |
-          set -eu
-          bin="target/${{ matrix.target }}/release/kanbanr"
-          [ -f "$bin" ] || bin="$bin.exe"
-          size=$(wc -c < "$bin")
-          echo "binary: $size bytes"
-          if [ "$size" -lt 12000000 ]; then
-            echo "::error::$bin is ${size}B — too small to contain the web monitor." >&2
-            exit 1
-          fi
-          if [ "$size" -gt 20000000 ]; then
-            echo "::error::$bin is ${size}B — the assets look uncompressed (FEAT-084/R-5)." >&2
-            exit 1
-          fi
+        run: ../scripts/check-embedded-monitor.sh "target/${{ matrix.target }}/release/kanbanr" ../web/dist
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
