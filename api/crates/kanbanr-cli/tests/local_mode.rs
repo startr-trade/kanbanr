@@ -2925,3 +2925,81 @@ fn the_cli_runs_within_a_one_mebibyte_main_stack() {
     );
     assert!(String::from_utf8_lossy(&out.stdout).starts_with("kanbanr "));
 }
+
+/// FEAT-168 R-1: `process check` reports every problem the board would refuse a process for —
+/// including statuses it would empty of this project's items — and changes nothing, board or not.
+#[test]
+fn process_check_reports_problems_and_changes_nothing() {
+    let (base, work) = togaf_scratch("process-check");
+    togaf_board(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let board = String::from_utf8(ok(run_in(&base, &work, &["where"])).stdout).unwrap();
+    let board = std::path::PathBuf::from(board.trim());
+    let state = || {
+        let head = git_in(&base, &board, &["rev-parse", "HEAD"]).stdout;
+        let dirty = git_in(&base, &board, &["status", "--porcelain"]).stdout;
+        (head, dirty)
+    };
+    let before = state();
+
+    // A file with four problems: all four are named, and it fails.
+    let bad = base.join("bad.yaml");
+    std::fs::write(
+        &bad,
+        "statuses: [Vision, Build]\ndefault_state: Vision\ndisplayed_states: [Vision, Build]\n\
+         transitions: {Vision: [Ship]}\ngates:\n  Build: {requires: [approved, {zachman: [colour]}], \
+         signoffs: [\"\"]}\n  QA: {}\n",
+    )
+    .unwrap();
+    let out = run_in(&base, &work, &["process", "check", bad.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a bad process must fail");
+    for want in [
+        "'Ship'",
+        "no name",
+        "'colour'",
+        "'QA'",
+        "nothing was changed",
+    ] {
+        assert!(err.contains(want), "missing {want}: {err}");
+    }
+
+    // A good file that drops the status the project's item sits in: refused for this project.
+    let out = run_in(&base, &work, &["process", "check", "pdca"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        err.contains("'Vision'") && err.contains("rename-status"),
+        "{err}"
+    );
+
+    // The project's own workflow, exported, checks clean, with its agreement and diagram.
+    let mine = base.join("mine.yaml");
+    let export = ok(run_in(&base, &work, &["config", "workflow", "--export"])).stdout;
+    std::fs::write(&mine, export).unwrap();
+    let out = ok(run_in(
+        &base,
+        &work,
+        &["process", "check", mine.to_str().unwrap()],
+    ));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("no problems") && text.contains("checked against project shop"));
+    assert!(text.contains("# Working agreement") && text.contains("stateDiagram-v2"));
+
+    assert_eq!(state(), before, "the board was not touched");
+
+    // No board at all: still checks, and makes none.
+    let empty = base.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let out = ok(run_in(&base, &empty, &["process", "check", "pdca"]));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("pdca: no problems"));
+    assert_eq!(
+        std::fs::read_dir(&empty).unwrap().count(),
+        0,
+        "no board made"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}

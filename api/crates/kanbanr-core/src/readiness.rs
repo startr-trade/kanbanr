@@ -59,6 +59,76 @@ pub enum Check {
 }
 
 impl Check {
+    /// Every check a gate can name, in the order the guide lists them (FEAT-168). `signoff` is not
+    /// one: a gate asks for a sign-off by its name, under `signoffs`. A new check must be added
+    /// here, and [`Check::passes_when`] will not compile until it says what the check means.
+    pub const GATEABLE: [Check; 16] = [
+        Check::Definition,
+        Check::Statement,
+        Check::Goals,
+        Check::Zachman,
+        Check::Requirements,
+        Check::Ears,
+        Check::TestsNamed,
+        Check::TestsGreen,
+        Check::Quality,
+        Check::Approved,
+        Check::Bypass,
+        Check::GoalsKnown,
+        Check::Small,
+        Check::Estimated,
+        Check::InSprint,
+        Check::InRelease,
+    ];
+
+    /// The name a gate uses for this check.
+    pub fn name(self) -> String {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default()
+    }
+
+    /// When this check passes, in a phrase — what `kanbanr process checks` prints and the guide's
+    /// table repeats, so Claude can offer it to the user in their own terms.
+    pub fn passes_when(self) -> &'static str {
+        match self {
+            Check::Definition => "the item has a definition at all",
+            Check::Statement => "the one-sentence statement is written",
+            Check::Goals => "it links at least one charter goal",
+            Check::Zachman => {
+                "all six dimensions are answered; `{zachman: [what, why]}` asks for only those"
+            }
+            Check::Requirements => "it has at least one requirement",
+            Check::Ears => "every requirement is in EARS form",
+            Check::TestsNamed => "every requirement names a test",
+            Check::TestsGreen => "every requirement has a green test",
+            Check::Quality => {
+                "quality requirements carry an ISO 25010 tag and a measured scenario that names \
+                 its test"
+            }
+            Check::Approved => "the definition is agreed: approved, or ratified after the fact",
+            Check::Bypass => "a recorded override has been answered",
+            Check::GoalsKnown => "every linked goal exists in the charter",
+            Check::Small => "not estimated above three days",
+            Check::Estimated => {
+                "estimated in the project's unit: story points or days \
+                 (`kanbanr config cadence --unit points`)"
+            }
+            Check::InSprint => "planned into the active sprint (projects with sprints switched on)",
+            Check::InRelease => "planned into a release (projects with releases switched on)",
+            Check::Signoff => "a named sign-off is recorded; a gate names it under `signoffs`",
+        }
+    }
+
+    /// What the check can be narrowed by, if anything.
+    pub fn parameters(self) -> Option<&'static str> {
+        match self {
+            Check::Zachman => Some("zachman: [what, how, where, when, who, why] (any of the six)"),
+            _ => None,
+        }
+    }
+
     /// Checks answered once per requirement, reported in requirement order.
     fn per_requirement(self) -> bool {
         matches!(
@@ -71,11 +141,37 @@ impl Check {
 /// One condition a gate can name: a check, or the Zachman check narrowed to some columns
 /// (`{zachman: [what, who, why]}`), which is how a process asks for the six dimensions a stage at a
 /// time rather than all at once.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum Condition {
     Check(Check),
     Zachman { zachman: Vec<String> },
+}
+
+/// Read by hand so a misspelt check is named, with the ones there are (FEAT-168): the derived
+/// reader said only "data did not match any variant of untagged enum Condition".
+impl<'de> Deserialize<'de> for Condition {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Name(String),
+            Zachman { zachman: Vec<String> },
+        }
+        match Raw::deserialize(d)? {
+            Raw::Zachman { zachman } => Ok(Condition::Zachman { zachman }),
+            Raw::Name(name) => serde_json::from_value(serde_json::Value::String(name.clone()))
+                .map(Condition::Check)
+                .map_err(|_| {
+                    let known: Vec<String> = Check::GATEABLE.iter().map(|c| c.name()).collect();
+                    serde::de::Error::custom(format!(
+                        "'{name}' is not a check a gate can ask for — the checks are: {} (or \
+                         {{zachman: [what, why]}}; see `kanbanr process checks`)",
+                        known.join(", ")
+                    ))
+                }),
+        }
+    }
 }
 
 impl Condition {
@@ -845,6 +941,57 @@ mod tests {
         let f = item(Some(def));
         let approval = query_group("approval").unwrap();
         assert!(evaluate(&f, None, approval).is_empty());
+    }
+
+    #[test]
+    fn every_check_is_listed_with_a_description() {
+        let mut names: Vec<String> = Check::GATEABLE.iter().map(|c| c.name()).collect();
+        for check in Check::GATEABLE {
+            let name = check.name();
+            assert!(!name.is_empty(), "{check:?} has no name");
+            assert!(!check.passes_when().is_empty(), "{name} says nothing");
+            let back: Check = serde_json::from_value(serde_json::json!(name)).unwrap();
+            assert_eq!(back, check, "{name} does not read back");
+        }
+        assert!(
+            !names.contains(&Check::Signoff.name()),
+            "signoff is named, not listed"
+        );
+        names.sort();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            Check::GATEABLE.len(),
+            "a check is listed twice"
+        );
+    }
+
+    /// FEAT-168: the guide's table of checks says what `process checks` says, row for row.
+    #[test]
+    fn the_guides_check_table_matches_process_checks() {
+        let guide = include_str!("../../../../docs/src/using/processes.md");
+        let section = guide
+            .split("### The checks")
+            .nth(1)
+            .expect("the guide has a checks section");
+        let rows: Vec<(String, String)> = section
+            .lines()
+            .skip_while(|l| !l.starts_with("| Check"))
+            .skip(2)
+            .take_while(|l| l.starts_with('|'))
+            .map(|l| {
+                let cells: Vec<&str> = l.trim_matches('|').split(" | ").collect();
+                (
+                    cells[0].trim().trim_matches('`').to_string(),
+                    cells[1].trim().to_string(),
+                )
+            })
+            .collect();
+        let want: Vec<(String, String)> = Check::GATEABLE
+            .iter()
+            .map(|c| (c.name(), c.passes_when().to_string()))
+            .collect();
+        assert_eq!(rows, want);
     }
 
     #[test]
