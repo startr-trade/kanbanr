@@ -587,6 +587,30 @@ enum EditorCmd {
 
 #[derive(Subcommand)]
 enum ProcessCmd {
+    /// Every process this board can apply (FEAT-169): its own library, your personal one
+    /// (`~/.kanbanr/processes`), and the built-in ones — with versions and the projects using each.
+    List,
+    /// A process's file, working agreement and diagram, found by name: the board's first, then
+    /// yours, then the built-in one.
+    Show { name: String },
+    /// Save a process by name, to the board (shared through its remote; the default) or to your
+    /// personal library with `--personal`. From a file, from a project's workflow, or by default
+    /// from this project's. It must check clean; the version goes up only when the content changed.
+    Save {
+        name: String,
+        /// A process file to save.
+        #[arg(long, conflicts_with = "from_project")]
+        from_file: Option<String>,
+        /// Save this project's current workflow (default: the project here).
+        #[arg(long)]
+        from_project: Option<String>,
+        /// Keep it in your personal library instead of on the board.
+        #[arg(long)]
+        personal: bool,
+        /// What the process is for, in a sentence.
+        #[arg(long)]
+        description: Option<String>,
+    },
     /// Every condition a gate can require, with when it passes and what it can be narrowed by —
     /// the choices to offer someone designing their process.
     Checks,
@@ -4875,7 +4899,7 @@ fn run_process_check(cli: &Cli, source: &str) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("{source} is not a process file: {e}"))?;
         (source.to_string(), file)
     } else {
-        (source.to_string(), config::preset(source)?)
+        (source.to_string(), resolve_process(cli, source)?.0)
     };
     let mut problems: Vec<String> = file.problems().iter().map(|e| e.to_string()).collect();
     // Removing a status that still holds items is refused too, but that depends on a project: check
@@ -4929,6 +4953,262 @@ fn run_process_check(cli: &Cli, source: &str) -> anyhow::Result<()> {
     }
 }
 
+/// The board here, if there is one. The process commands work without one (FEAT-169): a process
+/// can be designed, checked and kept personally before any project exists.
+fn board_here(cli: &Cli) -> Option<Backend> {
+    no_board_here(cli).is_none().then(|| make_backend(cli))
+}
+
+/// The personal process library's folder.
+fn personal_processes() -> Option<std::path::PathBuf> {
+    kanbanr_core::library::personal_dir(project::home_dir().as_deref())
+}
+
+/// A process saved on this board, if there is one by that name.
+fn board_process(client: &Backend, name: &str) -> Option<kanbanr_core::config::WorkflowFile> {
+    let v: Value = serde_json::from_str(&client.get(&format!("/processes/{name}")).ok()?).ok()?;
+    (v["library"] == "board")
+        .then(|| serde_json::from_value(v["file"].clone()).ok())
+        .flatten()
+}
+
+/// A process by name: the board's, then the personal one, then the built-in one (FEAT-169).
+fn resolve_process(
+    cli: &Cli,
+    name: &str,
+) -> anyhow::Result<(
+    kanbanr_core::config::WorkflowFile,
+    kanbanr_core::config::Library,
+)> {
+    let board = board_here(cli).and_then(|c| board_process(&c, name));
+    let personal = match personal_processes() {
+        Some(dir) => kanbanr_core::library::get(&dir, name)?,
+        None => None,
+    };
+    kanbanr_core::library::pick(name, board, personal).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no process named '{name}' on this board, in your personal library or built in — \
+             `kanbanr process list` shows them"
+        )
+    })
+}
+
+/// A personal process the board does not shadow, with where it came from: what the board must be
+/// sent, file and all, because it cannot read the user's home folder (FEAT-169).
+fn personal_only(
+    client: &Backend,
+    name: &str,
+) -> anyhow::Result<
+    Option<(
+        kanbanr_core::config::WorkflowFile,
+        kanbanr_core::config::ProcessSource,
+    )>,
+> {
+    if board_process(client, name).is_some() || kanbanr_core::config::is_builtin(name) {
+        return Ok(None);
+    }
+    let Some(dir) = personal_processes() else {
+        return Ok(None);
+    };
+    Ok(kanbanr_core::library::get(&dir, name)?.map(|file| {
+        let source = file.source(name, kanbanr_core::config::Library::Personal);
+        (file, source)
+    }))
+}
+
+/// `kanbanr process list` (FEAT-169).
+fn run_process_list(cli: &Cli) -> anyhow::Result<()> {
+    let mut rows: Vec<Value> = match board_here(cli) {
+        Some(client) => serde_json::from_str(&client.get("/processes")?)?,
+        None => kanbanr_core::config::presets()
+            .into_iter()
+            .map(|(name, about)| {
+                json!({ "name": name, "library": "builtin", "version": 0,
+                        "description": about, "used_by": [] })
+            })
+            .collect(),
+    };
+    let board_names: Vec<String> = rows
+        .iter()
+        .filter(|r| r["library"] == "board")
+        .filter_map(|r| r["name"].as_str().map(String::from))
+        .collect();
+    // The board lists personal processes only as "used by these projects"; the files are on
+    // people's machines. Yours fill in from your library; any left are someone else's.
+    let (mut used_personal, rest): (Vec<Value>, Vec<Value>) =
+        rows.into_iter().partition(|r| r["library"] == "personal");
+    rows = rest;
+    let mut mine = Vec::new();
+    if let Some(dir) = personal_processes() {
+        for (name, file) in kanbanr_core::library::list(&dir)? {
+            let used = used_personal
+                .iter()
+                .position(|r| r["name"] == name.as_str())
+                .map(|i| used_personal.remove(i)["used_by"].clone())
+                .unwrap_or(json!([]));
+            mine.push(json!({
+                "name": name,
+                "library": "personal",
+                "version": file.version(),
+                "description": file.process.as_ref().map(|h| h.description.clone()).unwrap_or_default(),
+                "rev": file.content_rev(),
+                "used_by": used,
+                "shadowed_by_board": board_names.contains(&name),
+            }));
+        }
+    }
+    for r in used_personal {
+        mine.push(json!({
+            "name": r["name"], "library": "personal", "version": 0,
+            "description": "someone's personal process — not in your library",
+            "used_by": r["used_by"], "not_here": true,
+        }));
+    }
+    let at = rows
+        .iter()
+        .position(|r| r["library"] == "builtin")
+        .unwrap_or(rows.len());
+    rows.splice(at..at, mine);
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+    for r in &rows {
+        let library = match r["library"].as_str().unwrap_or("") {
+            "builtin" => "built-in",
+            other => other,
+        };
+        let version = match r["version"].as_u64() {
+            Some(0) | None => String::new(),
+            Some(v) => format!("v{v}"),
+        };
+        let used: Vec<&str> = r["used_by"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
+            .unwrap_or_default();
+        let mut note = String::new();
+        if !used.is_empty() {
+            note = format!("  (used by {})", used.join(", "));
+        }
+        if r["shadowed_by_board"] == true {
+            note.push_str("  (the board's copy is used)");
+        }
+        // The first sentence: the built-in processes describe themselves at length.
+        let about = r["description"].as_str().unwrap_or("");
+        let about = about
+            .split_once(". ")
+            .map_or(about, |(first, _)| first)
+            .trim_end_matches('.');
+        println!(
+            "{:<18} {:<9} {:<4} {}{}",
+            r["name"].as_str().unwrap_or(""),
+            library,
+            version,
+            about,
+            note
+        );
+    }
+    Ok(())
+}
+
+/// `kanbanr process show <name>` (FEAT-169).
+fn run_process_show(cli: &Cli, name: &str) -> anyhow::Result<()> {
+    let (file, library) = resolve_process(cli, name)?;
+    let preview = file.clone().into_config(name);
+    let agreement = kanbanr_core::config::working_agreement(name, &preview);
+    let diagram = kanbanr_core::mermaid::to_state_diagram(&preview);
+    if cli.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "name": name, "library": library, "version": file.version(),
+                "rev": file.content_rev(), "file": file,
+                "agreement": agreement, "mermaid": diagram,
+            }))?
+        );
+        return Ok(());
+    }
+    println!("# {name} ({})\n", library.as_str());
+    println!("```yaml\n{}```\n", serde_yaml::to_string(&file)?);
+    println!("{agreement}\n```mermaid\n{diagram}```");
+    Ok(())
+}
+
+/// `kanbanr process save <name>` (FEAT-169).
+fn run_process_save(
+    cli: &Cli,
+    name: &str,
+    from_file: Option<&str>,
+    from_project: Option<&str>,
+    personal: bool,
+    description: Option<String>,
+) -> anyhow::Result<()> {
+    let board = board_here(cli);
+    let file: kanbanr_core::config::WorkflowFile = match from_file {
+        Some(src) => {
+            let text = std::fs::read_to_string(src)
+                .map_err(|e| anyhow::anyhow!("could not read {src}: {e}"))?;
+            serde_yaml::from_str(&text)
+                .map_err(|e| anyhow::anyhow!("{src} is not a process file: {e}"))?
+        }
+        None => {
+            let client = board.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("no board here to take a project's workflow from; pass --from-file")
+            })?;
+            let p = match from_project {
+                Some(p) => p.to_string(),
+                None => require_project(cli)?,
+            };
+            kanbanr_core::config::WorkflowFile::from_config(&get_project(client, &p)?.config)
+        }
+    };
+    let (saved, before, place) = if personal {
+        let dir = personal_processes()
+            .ok_or_else(|| anyhow::anyhow!("no home folder to keep a personal process in"))?;
+        let before = kanbanr_core::library::get(&dir, name)?;
+        let saved = kanbanr_core::library::save(&dir, name, file, description)?;
+        (
+            saved,
+            before,
+            format!("your personal library ({})", dir.display()),
+        )
+    } else {
+        let client = board.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "no kanbanr board here to save '{name}' to; save it to your personal library \
+                 with --personal, or run this where the board is"
+            )
+        })?;
+        let before = board_process(client, name);
+        let resp = client.write(
+            Method::Put,
+            &format!("/processes/{name}"),
+            Some(json!({ "file": file, "description": description })),
+        )?;
+        (
+            serde_json::from_str(&resp)?,
+            before,
+            "the board".to_string(),
+        )
+    };
+    let unchanged = before.as_ref() == Some(&saved);
+    if cli.json {
+        println!(
+            "{}",
+            json!({ "name": name, "version": saved.version(), "rev": saved.content_rev(),
+                    "personal": personal, "changed": !unchanged })
+        );
+    } else if unchanged {
+        println!(
+            "{name} v{} is already saved to {place}, unchanged",
+            saved.version()
+        );
+    } else {
+        println!("saved {name} v{} to {place}", saved.version());
+    }
+    Ok(())
+}
+
 fn get_project(client: &Backend, p: &str) -> anyhow::Result<Project> {
     let s = client.get(&format!("/projects/{p}"))?;
     Ok(serde_json::from_str(&s)?)
@@ -4978,6 +5258,24 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Process(ProcessCmd::Checks) => return run_process_checks(cli),
         Command::Process(ProcessCmd::Check { source }) => {
             return run_process_check(cli, source);
+        }
+        Command::Process(ProcessCmd::List) => return run_process_list(cli),
+        Command::Process(ProcessCmd::Show { name }) => return run_process_show(cli, name),
+        Command::Process(ProcessCmd::Save {
+            name,
+            from_file,
+            from_project,
+            personal,
+            description,
+        }) => {
+            return run_process_save(
+                cli,
+                name,
+                from_file.as_deref(),
+                from_project.as_deref(),
+                *personal,
+                description.clone(),
+            );
         }
         Command::Serve {
             bind,
@@ -6089,10 +6387,21 @@ fn run_project(cli: &Cli, client: &Backend, cmd: &ProjectCmd) -> anyhow::Result<
             no_op_states,
             workflow,
         } => {
+            // A personal process goes as a file, with where it came from (FEAT-169).
+            let personal = match workflow {
+                Some(w) => personal_only(client, w)?,
+                None => None,
+            };
+            let (workflow, workflow_file, process) = match personal {
+                Some((file, source)) => (None, Some(json!(file)), Some(json!(source))),
+                None => (workflow.clone().map(|w| json!(w)), None, None),
+            };
             let body = obj(vec![
                 ("name", Some(json!(name))),
                 ("description", description.clone().map(|d| json!(d))),
-                ("workflow", workflow.clone().map(|w| json!(w))),
+                ("workflow", workflow),
+                ("workflow_file", workflow_file),
+                ("process", process),
                 ("statuses", statuses.clone().map(|s| json!(s))),
                 (
                     "displayed_states",
@@ -6839,6 +7148,34 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                         .or_default()
                         .push(to.trim().to_string());
                 }
+            }
+            // A personal process the board can't see (FEAT-169): send the file and say where it came
+            // from. Any flags given alongside still override it, as they do a preset.
+            if let Some(name) = preset
+                && let Some((file, source)) = personal_only(client, name)?
+            {
+                let resp = client.write(
+                    Method::Put,
+                    &format!("/projects/{p}/config/workflow"),
+                    Some(json!({
+                        "statuses": statuses.clone().unwrap_or(file.statuses),
+                        "transitions": file.transitions,
+                        "default_state": default_state.clone().unwrap_or(file.default_state),
+                        "displayed_states": displayed_states.clone().unwrap_or(file.displayed_states),
+                        "no_op_states": no_op_states.clone().unwrap_or(file.no_op_states),
+                        "terminal_states": terminal_states.clone().unwrap_or(file.terminal_states),
+                        "gates": file.gates,
+                        "cadence": (!file.cadence.is_off()).then_some(&file.cadence),
+                        "estimate_unit": (!file.estimate_unit.is_days()).then_some(file.estimate_unit),
+                        "process": source,
+                    })),
+                )?;
+                print_write(
+                    cli,
+                    &resp,
+                    format!("workflow set from your process '{name}'"),
+                );
+                return Ok(());
             }
             let body = obj(vec![
                 ("preset", preset.clone().map(|s| json!(s))),

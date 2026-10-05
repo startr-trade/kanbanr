@@ -758,6 +758,9 @@ kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedb
 kanbanr config workflow --export > process.yaml   # this project's workflow, gates included
 kanbanr process check process.yaml                # check a process without applying it: every problem, then its agreement and diagram
 kanbanr process checks [--json]                   # what a gate can ask for, and when each check passes
+kanbanr process list [--json]                     # the board's, your personal and the built-in processes, and who uses each
+kanbanr process show <name>                       # a process's file, working agreement and diagram
+kanbanr process save <name> [--personal]          # to the board (default) or ~/.kanbanr/processes; --from-file F, else this project's
 
 A phased process (togaf, pdca, design-control) or the organisation's own is **a workflow with
 gates**. The phase IS the status; there is no second field. Offer one only if the user asks for

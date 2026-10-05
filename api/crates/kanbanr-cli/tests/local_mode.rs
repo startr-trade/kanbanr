@@ -2648,6 +2648,7 @@ fn run_in(base: &std::path::Path, work: &std::path::Path, args: &[&str]) -> Outp
         .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("KANBANR_DATA_DIR")
         .env_remove("KANBANR_PROJECT")
+        .env_remove("KANBANR_PROCESSES_DIR")
         .stdin(std::process::Stdio::null())
         .output()
         .expect("run kanbanr CLI")
@@ -3000,6 +3001,122 @@ fn process_check_reports_problems_and_changes_nothing() {
         std::fs::read_dir(&empty).unwrap().count(),
         0,
         "no board made"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-169 R-3: a process saved on the board reaches a teammate through the board's remote — their
+/// clone lists it and applies it, with no copy in anyone's home folder.
+#[test]
+fn a_teammate_clone_applies_the_boards_process() {
+    let (base, work) = togaf_scratch("process-clone");
+    togaf_board(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["process", "save", "ours", "--description", "Our TOGAF"],
+    ));
+    let board = String::from_utf8(ok(run_in(&base, &work, &["where"])).stdout).unwrap();
+    let board = board.trim();
+
+    // The teammate: another home, a clone of the board, a folder of their own.
+    let mate = base.join("mate");
+    std::fs::create_dir_all(mate.join("home")).unwrap();
+    let clone = mate.join("board");
+    ok(git_in(
+        &base,
+        &base,
+        &["clone", "-q", board, clone.to_str().unwrap()],
+    ));
+    let theirs = |args: &[&str]| {
+        let mut all = vec!["--data-dir", clone.to_str().unwrap()];
+        all.extend_from_slice(args);
+        run_in(&mate, &mate, &all)
+    };
+    ok(theirs(&["identity", "--name", "Mate", "--email", "m@x"]));
+    let list = String::from_utf8(ok(theirs(&["process", "list"])).stdout).unwrap();
+    assert!(
+        list.lines()
+            .any(|l| l.starts_with("ours") && l.contains("board") && l.contains("v1")),
+        "{list}"
+    );
+    ok(theirs(&[
+        "project",
+        "init",
+        "storefront",
+        "--workflow",
+        "ours",
+    ]));
+    let config = std::fs::read_to_string(clone.join("projects/storefront/config.yaml")).unwrap();
+    assert!(config.contains("Business Arch"), "{config}");
+    assert!(
+        config.contains("name: ours") && config.contains("library: board"),
+        "{config}"
+    );
+    assert!(
+        !mate.join("home/.kanbanr").exists(),
+        "nothing personal was needed"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-169 R-5: `~/.kanbanr/processes/` is a folder, never a project's marker — a folder under the
+/// home folder with no board still has no board, and the personal process is still found.
+#[test]
+fn the_personal_folder_is_never_a_marker() {
+    let (base, _work) = togaf_scratch("process-marker");
+    let home = base.join("home");
+    let inside = home.join("code").join("loose");
+    std::fs::create_dir_all(&inside).unwrap();
+    let file = base.join("p.yaml");
+    std::fs::write(
+        &file,
+        "statuses: [Plan, Done]\ndefault_state: Plan\ndisplayed_states: [Plan, Done]\n\
+         terminal_states: [Done]\ntransitions: {Plan: [Done]}\n",
+    )
+    .unwrap();
+    let out = run_in(
+        &base,
+        &inside,
+        &[
+            "process",
+            "save",
+            "mine",
+            "--personal",
+            "--from-file",
+            file.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(home.join(".kanbanr/processes/mine.yaml").is_file());
+
+    for dir in [&home, &inside] {
+        let out = run_in(&base, dir, &["where", "--json"]);
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_ne!(v["source"], "marker", "{dir:?} found a marker: {v}");
+        // A command that needs a board says there is none, rather than using ~/.kanbanr.
+        let out = run_in(&base, dir, &["board"]);
+        assert!(!out.status.success());
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("no kanbanr board here"),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let list = run_in(&base, &inside, &["process", "list"]);
+    let list = String::from_utf8_lossy(&list.stdout);
+    assert!(
+        list.lines()
+            .any(|l| l.starts_with("mine") && l.contains("personal")),
+        "{list}"
     );
     let _ = std::fs::remove_dir_all(&base);
 }
