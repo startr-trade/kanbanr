@@ -422,8 +422,8 @@ what is agreed is exactly what will be enforced:
    `kanbanr config workflow --preset <name>`. **Accepting the plan accepts the process.**
 
 **Changing a saved process** is the same loop, starting from `kanbanr process show <name>`. Saving
-it gives a new version; nothing else changes until each project takes it. Then ask, **for every
-project on the board that uses it** — `used_by` in `kanbanr process list --json`, the project you
+it gives a new version; nothing else changes until each project takes it. `process save` then
+lists the projects on the board still on an earlier version. Ask, **for every project it lists** — `used_by` in `kanbanr process list --json`, the project you
 are in **and every other one** — **one question each**: show `kanbanr process diff --project <id>`
 in a few lines and ask Update / Not now. Update → `kanbanr process update --project <id>`.
 

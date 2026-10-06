@@ -5216,13 +5216,25 @@ fn run_process_save(
         )
     };
     let unchanged = before.as_ref() == Some(&saved);
+    // The projects on this board that are now behind (FEAT-171): said where it is acted on, so the
+    // update is offered for each of them — not only for the project the save was made from.
+    let behind = match &board {
+        Some(client) => projects_behind(client, name, personal, &saved)?,
+        None => Vec::new(),
+    };
     if cli.json {
+        let behind: Vec<Value> = behind
+            .iter()
+            .map(|(p, v)| json!({ "project": p, "version": v }))
+            .collect();
         println!(
             "{}",
             json!({ "name": name, "version": saved.version(), "rev": saved.content_rev(),
-                    "personal": personal, "changed": !unchanged })
+                    "personal": personal, "changed": !unchanged, "behind": behind })
         );
-    } else if unchanged {
+        return Ok(());
+    }
+    if unchanged {
         println!(
             "{name} v{} is already saved to {place}, unchanged",
             saved.version()
@@ -5230,7 +5242,58 @@ fn run_process_save(
     } else {
         println!("saved {name} v{} to {place}", saved.version());
     }
+    if !behind.is_empty() {
+        let list: Vec<String> = behind
+            .iter()
+            .map(|(p, v)| {
+                if *v == 0 {
+                    p.clone()
+                } else {
+                    format!("{p} (v{v})")
+                }
+            })
+            .collect();
+        println!(
+            "\non an earlier version on this board: {}\n\
+             Nothing changes for them until each takes it. Ask the user about each one, the \
+             project you are in and every other: Update or Not now. Update runs \
+             `kanbanr process update --project <id>`.",
+            list.join(", ")
+        );
+    }
     Ok(())
+}
+
+/// The projects on this board using process `name` from the same library at a version other than
+/// `saved`, with the version each has.
+fn projects_behind(
+    client: &Backend,
+    name: &str,
+    personal: bool,
+    saved: &kanbanr_core::config::WorkflowFile,
+) -> anyhow::Result<Vec<(String, u32)>> {
+    use kanbanr_core::config::Library;
+    let library = if personal {
+        Library::Personal
+    } else {
+        Library::Board
+    };
+    let rev = saved.content_rev();
+    let ids: Vec<Value> = serde_json::from_str(&client.get("/projects")?)?;
+    let mut out = Vec::new();
+    for id in ids.iter().filter_map(|v| v["id"].as_str()) {
+        let Ok(project) = get_project(client, id) else {
+            continue;
+        };
+        if let Some(src) = &project.config.process
+            && src.name == name
+            && src.library == library
+            && src.rev != rev
+        {
+            out.push((id.to_string(), src.version));
+        }
+    }
+    Ok(out)
 }
 
 /// The current copy of the process a project was given, from the library it was given from — not

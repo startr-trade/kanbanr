@@ -3242,6 +3242,13 @@ fn update_applies_on_request_and_keeps_occupied_statuses() {
         "{}",
         String::from_utf8_lossy(&saved.stderr)
     );
+    // The save names the projects it leaves behind, so each is asked about (FEAT-171).
+    let said = String::from_utf8_lossy(&saved.stdout);
+    assert!(
+        said.contains("on an earlier version on this board: shop (v2)")
+            && said.contains("Update or Not now"),
+        "{said}"
+    );
     let out = run_in(&base, &work, &["process", "update"]);
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
