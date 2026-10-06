@@ -217,7 +217,8 @@ kanbanr config workflow --from-file our-process.yaml
 
 `kanbanr process check` runs the same validator the board runs when a workflow is saved, so a file
 that checks clean is one the board accepts. It reports every problem at once, not only the first.
-It needs no board, so a process can be checked before the project exists. Where there is one, it
+It needs no board, so a process can be checked before the project exists, and `-` reads the
+file from stdin (`kanbanr process check - < draft.yaml`). Where there is one, it
 also names any status the file would remove that still holds this project's items. When the file
 is clean, it prints the working agreement and a Mermaid diagram. `kanbanr process checks` lists
 every check a gate can ask for, from the same list as the table above.
@@ -226,6 +227,29 @@ The file holds statuses, `default_state`, `displayed_states`, `no_op_states`, `t
 `transitions` and `gates`. It has no name, so one process file can serve many projects. A board
 that declares gates is stamped `schema_version: 3`, so an older kanbanr refuses to open it instead
 of ignoring its gates.
+
+## Designing a process with Claude
+
+You don't have to write the file. Tell Claude how your team works ("design review before we build,
+QA signs off releases"), at setup or any time later. In plan mode, it:
+
+1. offers the processes already saved on the board and in your personal library, then the
+   built-in ones;
+2. for "our own", starts from the nearest built-in process and proposes stages for you to correct;
+3. asks one question per stage, *what must be true before work enters it?* The choices are the
+   checks above, in plain words (`kanbanr process checks`), so you can only agree to what kanbanr
+   can enforce;
+4. turns anything kanbanr can't see ("the architecture board has reviewed it") into a named
+   sign-off that a person records;
+5. asks the process-wide choices together: block or warn, where the branch is made, which stage
+   ends the work, which moves back are allowed;
+6. asks its name, and whether to keep it on the board for the team or in your personal library;
+7. checks the draft with `kanbanr process check` and puts its working agreement and diagram in the
+   plan, with a one-line description of what the process is for.
+
+Accepting the plan saves the process and applies it. Changing it later is the same conversation,
+and then Claude asks, one project at a time, whether each project using it should take the new
+version.
 
 ## Saving and sharing processes
 

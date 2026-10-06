@@ -8,6 +8,18 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Claude designs a process with you (FEAT-171).** At setup, or when you ask to change how you
+  work, Claude offers your team's saved processes first. For a new one it starts from the nearest
+  built-in, asks one question per stage built from the checks kanbanr can enforce, turns anything
+  else into a named sign-off, and shows the checked draft's working agreement and diagram in the
+  plan; `kanbanr process check -` reads the draft from stdin, so this works inside plan mode.
+  `kanbanr where --json` lists the questions a setup must ask (`ask_the_user`: the board's place,
+  the process, and the repository's git identity when git has none) with `git_identity`, and
+  `process save` names the projects left on an earlier version, to be asked about one by one.
+  Accepting it saves the process (board or personal), with its description, and applies it. A changed process is
+  offered to each project that uses it, one question each. The decision is ADR-0013, and the
+  process file, the board's `processes/` and the project's `process` record join the 1.0 stability
+  policy.
 - **Projects are told when their saved process changes, and update when asked (FEAT-170).**
   `kanbanr process status` says which process a project uses and whether it has moved on;
   `process diff` shows what differs; `process update` takes the saved version, and is refused
@@ -39,8 +51,9 @@ All notable changes to kanbanr are documented here. The format follows
 
 - **Setup works where git has no identity, and stops at its first failure (FEAT-173).** The
   setup's initial commit failed on a machine with no git user.name or email, and the setup carried
-  on. The commit now uses the identity agreed in the interview for that one commit, never changing
-  your git configuration, and the setup runs so that a failed step stops the rest.
+  on. Setup now asks whether to give the repository the identity you gave for the board (set for
+  that repository only, never globally); if you say no, the first commit still uses it for that one
+  commit. A failed setup step stops the rest.
 - **The release looks for the monitor instead of weighing the binary (FEAT-172).** The check that
   the web monitor is embedded and compressed bracketed the binary between 12 and 20 MB. Code growth
   made both bounds wrong: a binary with no monitor is now about 19 MB, and new code alone went over

@@ -42,8 +42,14 @@ project"** (or anything equivalent):
    done — it is picked up again at step 5.
 3. **Run the interview.** Read what you can first (`kanbanr where --json`, `git config user.name`,
    `git config user.email`, `git remote -v`, the README and manifests, any tracker files), then ask
-   only what that cannot answer, a few questions at a time with AskUserQuestion. Collect three
-   groups:
+   only what that cannot answer, a few questions at a time with AskUserQuestion. **Every entry in
+   `ask_the_user` from `kanbanr where --json` is asked, always**: the board's place, the process,
+   and the repository's git identity when git has none. Each usually has an obvious answer;
+   recommend it as the first option, and let the user give it. Never write one of these into the
+   plan as decided. **Ask them in order, each after the answer it depends on**: the process
+   question only once the board is chosen (its options are that board's saved processes first),
+   and the git identity question only once the board's commit identity is given (it offers that
+   identity). Collect three groups:
 
    **a. Board and identity**
    - *Where the board lives.* It is its own git repo and should sit **outside** the project folder,
@@ -54,10 +60,16 @@ project"** (or anything equivalent):
      silently; if the folder is inside a git repo (`suggested_inside_git_repo`), say so.
    - *Project name and one-line description* (default name: the folder's).
    - *Commit identity*: name and email, defaulted from `git config`. Every board change is
-     committed as this identity. If git itself has none (`git config user.name` is empty), the
-     plan's initial commit passes this identity for that one commit (`git -c user.name="<name>"
-     -c user.email="<email>" commit …`), and the plan tells the user to set their own git identity
-     for later commits. Never run `git config` for them.
+     committed as this identity.
+   - *The repository's git identity*, only when git itself has none (`git config user.name` and
+     `user.email` are empty): without one, neither the user nor you can commit in this repository
+     after setup. Ask once, recommending the identity just given for the board: "Use Venkatraman B
+     <…> for this repository's commits too?" — **Yes (Recommended)** sets it for this repository
+     only (`git config user.name "<name>"` and `git config user.email "<email>"`, run in the project
+     folder; never `--global`); **another name/email** sets that instead; **No** leaves git alone,
+     and then the initial commit passes the board's identity for that one commit
+     (`git -c user.name="<name>" -c user.email="<email>" commit …`) and the plan tells the user to
+     set their own before committing again.
 
    **b. Charter**: why the project exists, which every item will link to.
    - Draft it from what the repository already says (the README, manifests, existing docs), and
@@ -85,6 +97,12 @@ project"** (or anything equivalent):
      so chores link to something honest.
 
    **c. Process**
+   - *Saved processes first.* `kanbanr process list --json --data-dir <board>` (with the board
+     chosen in **a**; it needs no board otherwise) lists the processes the team saved on the board
+     (`"library": "board"`) and the user's own (`"personal"`). In the process question, **those are
+     the first options** — board ones, then personal, each with its description and who uses it —
+     and the built-in processes come after them. A team's agreed process is usually the answer;
+     recommend it when the board has one.
    - *Workflow*: a preset (`kanbanr config workflow --preset list` describes them):
      - **default**: Planned → In Progress → Completed, plus Deferred and Ongoing.
      - **scheduled**: Planned → Scheduled → Completed.
@@ -95,9 +113,10 @@ project"** (or anything equivalent):
        sprints. Ready is the Definition of Ready, and Done is the Definition of Done.
      - **agile**: Plan → Design → Develop → Test → Review → Released.
 
-     Alternatively, load the organisation's own process with `--from-file`, or use custom
-     statuses the user describes. The phased presets ask for part of the definition at each stage,
-     not all of it up front.
+     Or **"our own process"**: design it with the user now — see "Designing a process with the
+     user" — and the plan saves it and applies it. An organisation's existing process file is
+     loaded the same way: check it with `kanbanr process check`, then save and apply it. The phased
+     presets ask for part of the definition at each stage, not all of it up front.
    - *Cadence*, only when the chosen process uses sprints (scrum, agile), or the user asks for
      sprints or releases:
      - sprint length: 1, 2, 3 or 4 weeks, defaulting to 2;
@@ -126,13 +145,15 @@ project"** (or anything equivalent):
 
    ```bash
    kanbanr init <name> --data-dir <board> --author "<name>" --email <email> --description "<…>"
-   kanbanr config workflow --preset <name>         # or --from-file process.yaml; omit for default
+   kanbanr process save <name> --description "<…>" [--personal] --from-file <scratch>/process.yaml   # a process designed now
+   kanbanr config workflow --preset <name>         # a saved, built-in or just-saved process; omit for default
    kanbanr charter set --file <scratch>/charter.yaml
    kanbanr hooks status                            # init registered them; install if it did not
    kanbanr claude sync                             # CLAUDE.md block pointing at the charter
    printf '.claude/settings.json\n.claude/settings.local.json\n' >> .gitignore
+   git config user.name "<name>" && git config user.email "<email>"   # if git had none and the user said Yes
    git init && git add .kanbanr CLAUDE.md .gitignore && git commit -m "[no-ref] initial commit"
-                                                   # with -c user.name=… -c user.email=… if git has no identity
+                                                   # with -c user.name=… -c user.email=… if they said No
                                                    # these two only if the folder was not a git repo
    kanbanr git install-hooks                       # if chosen
    kanbanr config cadence --sprint-length 14 --release per_sprint   # sprint presets only
@@ -371,6 +392,56 @@ run `kanbanr adr accept`. "Later" leaves it proposed, and it comes back in the n
 The browser (`kanbanr review --ui`) and the plain commands stay available for users who prefer
 them; offer them, but do not require them. Never end a turn by handing the user a command to type
 for a decision you could have asked about.
+
+### Designing a process with the user
+
+When the user wants a process of their own — at setup, or later ("let's change our process", "we
+need a design review before build") — design it **in plan mode**, from the board's vocabulary, so
+what is agreed is exactly what will be enforced:
+
+1. **Start from what exists.** `kanbanr process list --json`: a saved process may already fit;
+   offer saved ones before built-in ones. If
+   not, ask how work moves today, in their words, and start from the nearest built-in process
+   (`kanbanr process show <name>`), so the user corrects a draft instead of facing a blank page.
+2. **Name the stages with them**: one AskUserQuestion proposing the stage list, with your
+   recommendation first and "Other" for their own.
+3. **One question per stage: "What must be true before work enters *Stage*?"** Build the options
+   from `kanbanr process checks --json`, each phrased in the user's terms (`tests_named` → "every
+   requirement names the test that proves it"); multi-select. Recommend the checks the stage's
+   purpose needs and no more: a stage asks for what it needs, and the definition grows stage by
+   stage.
+4. **What the board can't see becomes a named sign-off.** "The architecture board has reviewed
+   it" → `signoffs: [architecture-review]`. Say it back plainly: a person records it, never you.
+5. **The process-wide choices, together in one AskUserQuestion batch:** block or only warn at each
+   gate; where the code branch is made (`on_enter: [branch]`, usually the first building stage);
+   which stage ends the work; which moves back for rework are allowed.
+6. **Name it, and ask where it is kept:** on the board (the team gets it through the board's
+   remote; recommended when the board has one) or personal (`~/.kanbanr/processes`, theirs on any
+   board).
+7. **Draft, check, show — before the plan.** Plan mode allows no file writes, so check the draft
+   from stdin: `kanbanr process check - <<'YAML'` … `YAML`. Fix every problem it reports, and
+   check again. Then put in the plan, **verbatim, the working agreement and the Mermaid diagram it
+   printed** (what each stage asks, in words), not your own table: the plan must show what will be
+   enforced, as the board will enforce it. Add a one-line description of what the process is for.
+   The plan's commands, after acceptance, write the draft to a file and save it:
+   `kanbanr process save <name> --description "<one line>" [--personal] --from-file <file>`, then
+   `kanbanr config workflow --preset <name>`. **Accepting the plan accepts the process.**
+
+**Changing a saved process** is the same loop, starting from `kanbanr process show <name>`. Saving
+it gives a new version; nothing else changes until each project takes it. `process save` then
+lists the projects on the board still on an earlier version. Ask, **for every project it lists** — `used_by` in `kanbanr process list --json`, the project you
+are in **and every other one** — **one question each**: show `kanbanr process diff --project <id>`
+in a few lines and ask Update / Not now. Update → `kanbanr process update --project <id>`.
+
+Whether another project takes the new version is the user's choice, not yours: kanbanr has no
+project owners, so never skip a project because it "belongs to someone else", and never leave the
+update as a command for the user to run. If they say another person decides for that project,
+"Not now" records nothing and the notice stays for that person. If an update is refused because a
+stage it removes still holds items, say which, and offer to move them or rename the status first.
+
+**When a session opens with a process notice** ("v3 is saved now"), mention it once and ask
+Update / Not now. Never run `kanbanr process update` unasked, and never edit a project's gates to
+match a process by hand.
 
 ### Moving work
 
@@ -761,7 +832,7 @@ kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # ship the finished items, write notes, carry the rest
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a shipped release
 kanbanr config workflow --export > process.yaml   # this project's workflow, gates included
-kanbanr process check process.yaml                # check a process without applying it: every problem, then its agreement and diagram
+kanbanr process check process.yaml|-              # check a process without applying it (- reads stdin): every problem, then its agreement and diagram
 kanbanr process checks [--json]                   # what a gate can ask for, and when each check passes
 kanbanr process list [--json]                     # the board's, your personal and the built-in processes, and who uses each
 kanbanr process show <name>                       # a process's file, working agreement and diagram

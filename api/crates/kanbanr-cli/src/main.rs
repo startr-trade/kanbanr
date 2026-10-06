@@ -598,7 +598,7 @@ enum ProcessCmd {
     /// from this project's. It must check clean; the version goes up only when the content changed.
     Save {
         name: String,
-        /// A process file to save.
+        /// A process file to save, or `-` to read it from stdin.
         #[arg(long, conflicts_with = "from_project")]
         from_file: Option<String>,
         /// Save this project's current workflow (default: the project here).
@@ -633,7 +633,8 @@ enum ProcessCmd {
     /// non-zero when there is a problem. Run where a board is, it also names statuses the file
     /// would remove that still hold this project's items.
     Check {
-        /// A process file (as `config workflow --export` writes), or a process's name.
+        /// A process file (as `config workflow --export` writes), `-` to read one from stdin, or a
+        /// process's name.
         source: String,
     },
 }
@@ -4417,6 +4418,47 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
     let home = home.as_deref();
     let show = |p: &Path| p.display().to_string();
     let suggested = project::suggested_data_dir(&cwd, home);
+    // Git's own identity here, as git would use it (repository, then global).
+    let git_get = |key: &str| {
+        std::process::Command::new("git")
+            .args(["config", "--get", key])
+            .current_dir(&cwd)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let (git_name, git_email) = (git_get("user.name"), git_get("user.email"));
+    // The questions a setup here must put to the user (FEAT-171, FEAT-173). Said by the tool,
+    // because a walkthrough showed Claude filling these in itself when the skill alone asked it to
+    // ask: each has an obvious answer, and an obvious answer is still the user's to give.
+    let tracked =
+        resolved.source == project::DataDirSource::Marker && data_dir.join("projects").is_dir();
+    let mut ask: Vec<String> = Vec::new();
+    if !tracked {
+        ask.push(
+            "Where the board lives: suggested_data_dir first, then each of existing_data_dirs, or a \
+             path the user types."
+                .into(),
+        );
+        ask.push(
+            "Which process — only after the board is chosen, in a later question, because the \
+             options depend on it: that board's saved processes first (`kanbanr process list \
+             --json --data-dir <board>`, library board, then personal; recommend one when the board \
+             has it), then the built-in ones, or designing their own."
+                .into(),
+        );
+        if git_name.is_none() || git_email.is_none() {
+            ask.push(
+                "This repository's git identity — only after the board's commit identity is \
+                 given, in a later question: git has none here, so nobody can commit after setup. \
+                 Offer that identity: Yes (this repository only, never --global), another \
+                 name/email, or No (the first commit only)."
+                    .into(),
+            );
+        }
+    }
     let out = json!({
         "data_dir": show(&data_dir),
         "source": resolved.source,
@@ -4434,6 +4476,8 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
             .iter()
             .map(|p| show(p))
             .collect::<Vec<_>>(),
+        "git_identity": { "name": git_name, "email": git_email },
+        "ask_the_user": ask,
     });
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
@@ -4903,18 +4947,31 @@ fn run_process_checks(cli: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A process file's text, from a path or `-` for stdin (FEAT-171): in plan mode Claude may not write
+/// a file, so a draft is checked from a heredoc.
+fn read_process_text(src: &str) -> anyhow::Result<String> {
+    if src == "-" {
+        use std::io::Read;
+        let mut text = String::new();
+        std::io::stdin().read_to_string(&mut text)?;
+        return Ok(text);
+    }
+    std::fs::read_to_string(src).map_err(|e| anyhow::anyhow!("could not read {src}: {e}"))
+}
+
 /// `kanbanr process check <file|name>` (FEAT-168): the board's own validator, run alone.
 fn run_process_check(cli: &Cli, source: &str) -> anyhow::Result<()> {
     use kanbanr_core::config::{self, WorkflowFile};
-    let (label, file): (String, WorkflowFile) = if std::path::Path::new(source).is_file() {
-        let text = std::fs::read_to_string(source)
-            .map_err(|e| anyhow::anyhow!("could not read {source}: {e}"))?;
-        let file = serde_yaml::from_str(&text)
-            .map_err(|e| anyhow::anyhow!("{source} is not a process file: {e}"))?;
-        (source.to_string(), file)
-    } else {
-        (source.to_string(), resolve_process(cli, source)?.0)
-    };
+    let (label, file): (String, WorkflowFile) =
+        if source == "-" || std::path::Path::new(source).is_file() {
+            let text = read_process_text(source)?;
+            let label = if source == "-" { "the draft" } else { source };
+            let file = serde_yaml::from_str(&text)
+                .map_err(|e| anyhow::anyhow!("{label} is not a process file: {e}"))?;
+            (label.to_string(), file)
+        } else {
+            (source.to_string(), resolve_process(cli, source)?.0)
+        };
     let mut problems: Vec<String> = file.problems().iter().map(|e| e.to_string()).collect();
     // Removing a status that still holds items is refused too, but that depends on a project: check
     // against this folder's, when there is a board here and the project is on it.
@@ -5159,12 +5216,8 @@ fn run_process_save(
 ) -> anyhow::Result<()> {
     let board = board_here(cli);
     let file: kanbanr_core::config::WorkflowFile = match from_file {
-        Some(src) => {
-            let text = std::fs::read_to_string(src)
-                .map_err(|e| anyhow::anyhow!("could not read {src}: {e}"))?;
-            serde_yaml::from_str(&text)
-                .map_err(|e| anyhow::anyhow!("{src} is not a process file: {e}"))?
-        }
+        Some(src) => serde_yaml::from_str(&read_process_text(src)?)
+            .map_err(|e| anyhow::anyhow!("{src} is not a process file: {e}"))?,
         None => {
             let client = board.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("no board here to take a project's workflow from; pass --from-file")
@@ -5206,13 +5259,25 @@ fn run_process_save(
         )
     };
     let unchanged = before.as_ref() == Some(&saved);
+    // The projects on this board that are now behind (FEAT-171): said where it is acted on, so the
+    // update is offered for each of them — not only for the project the save was made from.
+    let behind = match &board {
+        Some(client) => projects_behind(client, name, personal, &saved)?,
+        None => Vec::new(),
+    };
     if cli.json {
+        let behind: Vec<Value> = behind
+            .iter()
+            .map(|(p, v)| json!({ "project": p, "version": v }))
+            .collect();
         println!(
             "{}",
             json!({ "name": name, "version": saved.version(), "rev": saved.content_rev(),
-                    "personal": personal, "changed": !unchanged })
+                    "personal": personal, "changed": !unchanged, "behind": behind })
         );
-    } else if unchanged {
+        return Ok(());
+    }
+    if unchanged {
         println!(
             "{name} v{} is already saved to {place}, unchanged",
             saved.version()
@@ -5220,7 +5285,60 @@ fn run_process_save(
     } else {
         println!("saved {name} v{} to {place}", saved.version());
     }
+    if !behind.is_empty() {
+        let list: Vec<String> = behind
+            .iter()
+            .map(|(p, v)| {
+                if *v == 0 {
+                    p.clone()
+                } else {
+                    format!("{p} (v{v})")
+                }
+            })
+            .collect();
+        println!(
+            "\non an earlier version on this board: {}\n\
+             Nothing changes for them until each takes it. Ask the user about each one, the \
+             project you are in and every other: Update or Not now, showing in the question what \
+             `kanbanr process diff --project <id>` says it would change (a project several \
+             versions behind takes every change since). Update runs \
+             `kanbanr process update --project <id>`.",
+            list.join(", ")
+        );
+    }
     Ok(())
+}
+
+/// The projects on this board using process `name` from the same library at a version other than
+/// `saved`, with the version each has.
+fn projects_behind(
+    client: &Backend,
+    name: &str,
+    personal: bool,
+    saved: &kanbanr_core::config::WorkflowFile,
+) -> anyhow::Result<Vec<(String, u32)>> {
+    use kanbanr_core::config::Library;
+    let library = if personal {
+        Library::Personal
+    } else {
+        Library::Board
+    };
+    let rev = saved.content_rev();
+    let ids: Vec<Value> = serde_json::from_str(&client.get("/projects")?)?;
+    let mut out = Vec::new();
+    for id in ids.iter().filter_map(|v| v["id"].as_str()) {
+        let Ok(project) = get_project(client, id) else {
+            continue;
+        };
+        if let Some(src) = &project.config.process
+            && src.name == name
+            && src.library == library
+            && src.rev != rev
+        {
+            out.push((id.to_string(), src.version));
+        }
+    }
+    Ok(out)
 }
 
 /// The current copy of the process a project was given, from the library it was given from — not

@@ -12,8 +12,9 @@ that makes this promise checkable — no new features.
 
 | Surface | What is kept |
 |---|---|
-| **The board on disk** | The folder layout (`projects/<id>/` with `config.yaml`, `charter.yaml`, `features/<status>/<CODE>.yaml`, `milestones/`, `docs/`, `lessons.yaml`, `sprints.yaml`, `releases.yaml`), and the meaning of every documented field. A board written by any 1.x opens in every later 1.x. |
-| **`config.yaml`** | Statuses, transitions, gates and their check vocabulary, cadence settings, `schema_version`. A workflow file you wrote for 1.0 loads in every 1.x. |
+| **The board on disk** | The folder layout (`projects/<id>/` with `config.yaml`, `charter.yaml`, `features/<status>/<CODE>.yaml`, `milestones/`, `docs/`, `lessons.yaml`, `sprints.yaml`, `releases.yaml`), the board's saved processes (`processes/<name>.yaml`), and the meaning of every documented field. A board written by any 1.x opens in every later 1.x. |
+| **`config.yaml`** | Statuses, transitions, gates and their check vocabulary, cadence settings, `schema_version`, and the `process` record of where the workflow came from. A workflow file you wrote for 1.0 loads in every 1.x. |
+| **Process files** | The workflow file format, its `process:` header (name, description, version), and the personal library's place, `~/.kanbanr/processes/` (or `KANBANR_PROCESSES_DIR`). |
 | **The `.kanbanr` marker** | Its fields (`project`, `data_dir`) and how the board is found from it. |
 | **CLI commands and flags** | Every documented command and flag keeps its name and meaning. Exit status: `0` on success and non-zero on failure, with `kanbanr check` (and `check --file`) exiting non-zero when something is missing, so scripts and CI can rely on it. |
 | **`--json` output** | Every field a command's `--json` prints keeps its name, type and meaning. |
