@@ -6,20 +6,24 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-10-07
+
+Your own process, designed with Claude and shared on the board.
+[Release notes](https://kanbanr.startr.trade/releases/v0.1.7.html).
+
 ### Added
 
 - **Claude designs a process with you (FEAT-171).** At setup, or when you ask to change how you
-  work, Claude offers your team's saved processes first. For a new one it starts from the nearest
-  built-in, asks one question per stage built from the checks kanbanr can enforce, turns anything
-  else into a named sign-off, and shows the checked draft's working agreement and diagram in the
-  plan; `kanbanr process check -` reads the draft from stdin, so this works inside plan mode.
-  `kanbanr where --json` lists the questions a setup must ask (`ask_the_user`: the board's place,
-  the process, and the repository's git identity when git has none) with `git_identity`, and
-  `process save` names the projects left on an earlier version, to be asked about one by one.
-  Accepting it saves the process (board or personal), with its description, and applies it. A changed process is
-  offered to each project that uses it, one question each. The decision is ADR-0013, and the
-  process file, the board's `processes/` and the project's `process` record join the 1.0 stability
-  policy.
+  work, Claude offers the processes already saved on the board first. For a new one it starts from
+  the closest built-in process, asks one question per stage using only the checks kanbanr can
+  enforce, and turns anything else into a named sign-off. The plan shows the checked draft's working
+  agreement and diagram (`kanbanr process check -` reads a draft from stdin, so this works in plan
+  mode). Accepting the plan saves the process, with a description, on the board or in your personal
+  library, and applies it. When a saved process changes, `process save` names the projects still on
+  an earlier version, and Claude asks about each one. `kanbanr where --json` now lists the questions
+  a setup must ask (`ask_the_user`) and git's identity (`git_identity`). The decision is ADR-0013;
+  the process file, the board's `processes/` folder and each project's `process` record join the
+  1.0 stability policy.
 - **Projects are told when their saved process changes, and update when asked (FEAT-170).**
   `kanbanr process status` says which process a project uses and whether it has moved on;
   `process diff` shows what differs; `process update` takes the saved version, and is refused
@@ -784,7 +788,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/startr-trade/kanbanr/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/startr-trade/kanbanr/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/startr-trade/kanbanr/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/startr-trade/kanbanr/compare/v0.1.3...v0.1.4
