@@ -13,6 +13,9 @@ All notable changes to kanbanr are documented here. The format follows
   built-in, asks one question per stage built from the checks kanbanr can enforce, turns anything
   else into a named sign-off, and shows the checked draft's working agreement and diagram in the
   plan; `kanbanr process check -` reads the draft from stdin, so this works inside plan mode.
+  `kanbanr where --json` lists the questions a setup must ask (`ask_the_user`: the board's place,
+  the process, and the repository's git identity when git has none) with `git_identity`, and
+  `process save` names the projects left on an earlier version, to be asked about one by one.
   Accepting it saves the process (board or personal), with its description, and applies it. A changed process is
   offered to each project that uses it, one question each. The decision is ADR-0013, and the
   process file, the board's `processes/` and the project's `process` record join the 1.0 stability

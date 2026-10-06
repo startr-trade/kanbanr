@@ -4418,6 +4418,45 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
     let home = home.as_deref();
     let show = |p: &Path| p.display().to_string();
     let suggested = project::suggested_data_dir(&cwd, home);
+    // Git's own identity here, as git would use it (repository, then global).
+    let git_get = |key: &str| {
+        std::process::Command::new("git")
+            .args(["config", "--get", key])
+            .current_dir(&cwd)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    let (git_name, git_email) = (git_get("user.name"), git_get("user.email"));
+    // The questions a setup here must put to the user (FEAT-171, FEAT-173). Said by the tool,
+    // because a walkthrough showed Claude filling these in itself when the skill alone asked it to
+    // ask: each has an obvious answer, and an obvious answer is still the user's to give.
+    let tracked =
+        resolved.source == project::DataDirSource::Marker && data_dir.join("projects").is_dir();
+    let mut ask: Vec<String> = Vec::new();
+    if !tracked {
+        ask.push(
+            "Where the board lives: suggested_data_dir first, then each of existing_data_dirs, or a \
+             path the user types."
+                .into(),
+        );
+        ask.push(
+            "Which process: the chosen board's saved processes first (`kanbanr process list --json \
+             --data-dir <board>`, library board, then personal), then the built-in ones, or \
+             designing their own. Ask even when one is the obvious choice; recommend it."
+                .into(),
+        );
+        if git_name.is_none() || git_email.is_none() {
+            ask.push(
+                "This repository's git identity: git has none here, so nobody can commit after \
+                 setup. Offer the identity given for the board: Yes (this repository only, never \
+                 --global), another name/email, or No (the first commit only)."
+                    .into(),
+            );
+        }
+    }
     let out = json!({
         "data_dir": show(&data_dir),
         "source": resolved.source,
@@ -4435,6 +4474,8 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
             .iter()
             .map(|p| show(p))
             .collect::<Vec<_>>(),
+        "git_identity": { "name": git_name, "email": git_email },
+        "ask_the_user": ask,
     });
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())

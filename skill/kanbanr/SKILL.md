@@ -42,8 +42,11 @@ project"** (or anything equivalent):
    done — it is picked up again at step 5.
 3. **Run the interview.** Read what you can first (`kanbanr where --json`, `git config user.name`,
    `git config user.email`, `git remote -v`, the README and manifests, any tracker files), then ask
-   only what that cannot answer, a few questions at a time with AskUserQuestion. Collect three
-   groups:
+   only what that cannot answer, a few questions at a time with AskUserQuestion. **Every entry in
+   `ask_the_user` from `kanbanr where --json` is asked, always**: the board's place, the process,
+   and the repository's git identity when git has none. Each usually has an obvious answer;
+   recommend it as the first option, and let the user give it. Never write one of these into the
+   plan as decided. Collect three groups:
 
    **a. Board and identity**
    - *Where the board lives.* It is its own git repo and should sit **outside** the project folder,

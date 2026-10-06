@@ -3348,3 +3348,60 @@ fn process_check_reads_a_draft_from_stdin() {
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-171 / FEAT-173: `where --json` names the questions a setup must put to the user — the
+/// board's place and the process always, the repository's git identity when git has none — and
+/// none once the folder is set up.
+#[test]
+fn where_names_the_questions_setup_must_ask() {
+    let (base, work) = togaf_scratch("where-ask");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    // run_in's HOME has no .gitconfig, so git has no identity here.
+    let ask = |dir: &std::path::Path| -> (serde_json::Value, Vec<String>) {
+        let v: serde_json::Value =
+            serde_json::from_slice(&ok(run_in(&base, dir, &["where", "--json"])).stdout).unwrap();
+        let ask = v["ask_the_user"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|q| q.as_str().unwrap().to_string())
+            .collect();
+        (v, ask)
+    };
+    let (v, questions) = ask(&work);
+    assert_eq!(v["git_identity"]["name"], serde_json::Value::Null);
+    assert_eq!(questions.len(), 3, "{questions:?}");
+    assert!(questions[0].starts_with("Where the board lives"));
+    assert!(
+        questions[1].starts_with("Which process") && questions[1].contains("saved processes first")
+    );
+    assert!(questions[2].contains("git identity") && questions[2].contains("never --global"));
+
+    // With a repository identity, that question goes.
+    ok(git_in(&base, &work, &["config", "user.name", "T"]));
+    ok(git_in(&base, &work, &["config", "user.email", "t@x"]));
+    let (v, questions) = ask(&work);
+    assert_eq!(v["git_identity"]["name"], "T");
+    assert_eq!(questions.len(), 2, "{questions:?}");
+
+    // Set up: nothing left to ask.
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    assert!(ask(&work).1.is_empty());
+    let _ = std::fs::remove_dir_all(&base);
+}
