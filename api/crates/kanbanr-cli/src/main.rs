@@ -4443,16 +4443,18 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
                 .into(),
         );
         ask.push(
-            "Which process: the chosen board's saved processes first (`kanbanr process list --json \
-             --data-dir <board>`, library board, then personal), then the built-in ones, or \
-             designing their own. Ask even when one is the obvious choice; recommend it."
+            "Which process — only after the board is chosen, in a later question, because the \
+             options depend on it: that board's saved processes first (`kanbanr process list \
+             --json --data-dir <board>`, library board, then personal; recommend one when the board \
+             has it), then the built-in ones, or designing their own."
                 .into(),
         );
         if git_name.is_none() || git_email.is_none() {
             ask.push(
-                "This repository's git identity: git has none here, so nobody can commit after \
-                 setup. Offer the identity given for the board: Yes (this repository only, never \
-                 --global), another name/email, or No (the first commit only)."
+                "This repository's git identity — only after the board's commit identity is \
+                 given, in a later question: git has none here, so nobody can commit after setup. \
+                 Offer that identity: Yes (this repository only, never --global), another \
+                 name/email, or No (the first commit only)."
                     .into(),
             );
         }

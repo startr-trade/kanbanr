@@ -3377,7 +3377,10 @@ fn where_names_the_questions_setup_must_ask() {
     assert_eq!(questions.len(), 3, "{questions:?}");
     assert!(questions[0].starts_with("Where the board lives"));
     assert!(
-        questions[1].starts_with("Which process") && questions[1].contains("saved processes first")
+        questions[1].starts_with("Which process")
+            && questions[1].contains("saved processes first")
+            && questions[1].contains("after the board is chosen")
+            && questions[2].contains("after the board's commit identity")
     );
     assert!(questions[2].contains("git identity") && questions[2].contains("never --global"));
 

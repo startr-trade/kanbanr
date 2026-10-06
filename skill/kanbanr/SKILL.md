@@ -46,7 +46,10 @@ project"** (or anything equivalent):
    `ask_the_user` from `kanbanr where --json` is asked, always**: the board's place, the process,
    and the repository's git identity when git has none. Each usually has an obvious answer;
    recommend it as the first option, and let the user give it. Never write one of these into the
-   plan as decided. Collect three groups:
+   plan as decided. **Ask them in order, each after the answer it depends on**: the process
+   question only once the board is chosen (its options are that board's saved processes first),
+   and the git identity question only once the board's commit identity is given (it offers that
+   identity). Collect three groups:
 
    **a. Board and identity**
    - *Where the board lives.* It is its own git repo and should sit **outside** the project folder,
