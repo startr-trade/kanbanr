@@ -85,10 +85,12 @@ project"** (or anything equivalent):
      so chores link to something honest.
 
    **c. Process**
-   - *Saved processes first.* `kanbanr process list --json` (it needs no board; with
-     `--data-dir <board>` it also lists that board's) shows the processes the team saved on the
-     board and the user's own in `~/.kanbanr/processes`. Offer those before the built-in ones, in
-     the same question: a team's agreed process is usually the answer.
+   - *Saved processes first.* `kanbanr process list --json --data-dir <board>` (with the board
+     chosen in **a**; it needs no board otherwise) lists the processes the team saved on the board
+     (`"library": "board"`) and the user's own (`"personal"`). In the process question, **those are
+     the first options** — board ones, then personal, each with its description and who uses it —
+     and the built-in processes come after them. A team's agreed process is usually the answer;
+     recommend it when the board has one.
    - *Workflow*: a preset (`kanbanr config workflow --preset list` describes them):
      - **default**: Planned → In Progress → Completed, plus Deferred and Ongoing.
      - **scheduled**: Planned → Scheduled → Completed.
@@ -384,7 +386,8 @@ When the user wants a process of their own — at setup, or later ("let's change
 need a design review before build") — design it **in plan mode**, from the board's vocabulary, so
 what is agreed is exactly what will be enforced:
 
-1. **Start from what exists.** `kanbanr process list --json`: a saved process may already fit. If
+1. **Start from what exists.** `kanbanr process list --json`: a saved process may already fit;
+   offer saved ones before built-in ones. If
    not, ask how work moves today, in their words, and start from the nearest built-in process
    (`kanbanr process show <name>`), so the user corrects a draft instead of facing a blank page.
 2. **Name the stages with them**: one AskUserQuestion proposing the stage list, with your
