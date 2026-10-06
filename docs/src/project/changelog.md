@@ -48,8 +48,9 @@ All notable changes to kanbanr are documented here. The format follows
 
 - **Setup works where git has no identity, and stops at its first failure (FEAT-173).** The
   setup's initial commit failed on a machine with no git user.name or email, and the setup carried
-  on. The commit now uses the identity agreed in the interview for that one commit, never changing
-  your git configuration, and the setup runs so that a failed step stops the rest.
+  on. Setup now asks whether to give the repository the identity you gave for the board (set for
+  that repository only, never globally); if you say no, the first commit still uses it for that one
+  commit. A failed setup step stops the rest.
 - **The release looks for the monitor instead of weighing the binary (FEAT-172).** The check that
   the web monitor is embedded and compressed bracketed the binary between 12 and 20 MB. Code growth
   made both bounds wrong: a binary with no monitor is now about 19 MB, and new code alone went over

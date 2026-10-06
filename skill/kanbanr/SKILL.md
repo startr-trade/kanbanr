@@ -54,10 +54,16 @@ project"** (or anything equivalent):
      silently; if the folder is inside a git repo (`suggested_inside_git_repo`), say so.
    - *Project name and one-line description* (default name: the folder's).
    - *Commit identity*: name and email, defaulted from `git config`. Every board change is
-     committed as this identity. If git itself has none (`git config user.name` is empty), the
-     plan's initial commit passes this identity for that one commit (`git -c user.name="<name>"
-     -c user.email="<email>" commit …`), and the plan tells the user to set their own git identity
-     for later commits. Never run `git config` for them.
+     committed as this identity.
+   - *The repository's git identity*, only when git itself has none (`git config user.name` and
+     `user.email` are empty): without one, neither the user nor you can commit in this repository
+     after setup. Ask once, recommending the identity just given for the board: "Use Venkatraman B
+     <…> for this repository's commits too?" — **Yes (Recommended)** sets it for this repository
+     only (`git config user.name "<name>"` and `git config user.email "<email>"`, run in the project
+     folder; never `--global`); **another name/email** sets that instead; **No** leaves git alone,
+     and then the initial commit passes the board's identity for that one commit
+     (`git -c user.name="<name>" -c user.email="<email>" commit …`) and the plan tells the user to
+     set their own before committing again.
 
    **b. Charter**: why the project exists, which every item will link to.
    - Draft it from what the repository already says (the README, manifests, existing docs), and
@@ -139,8 +145,9 @@ project"** (or anything equivalent):
    kanbanr hooks status                            # init registered them; install if it did not
    kanbanr claude sync                             # CLAUDE.md block pointing at the charter
    printf '.claude/settings.json\n.claude/settings.local.json\n' >> .gitignore
+   git config user.name "<name>" && git config user.email "<email>"   # if git had none and the user said Yes
    git init && git add .kanbanr CLAUDE.md .gitignore && git commit -m "[no-ref] initial commit"
-                                                   # with -c user.name=… -c user.email=… if git has no identity
+                                                   # with -c user.name=… -c user.email=… if they said No
                                                    # these two only if the folder was not a git repo
    kanbanr git install-hooks                       # if chosen
    kanbanr config cadence --sprint-length 14 --release per_sprint   # sprint presets only
