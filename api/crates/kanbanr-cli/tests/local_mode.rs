@@ -3255,3 +3255,89 @@ fn update_applies_on_request_and_keeps_occupied_statuses() {
     assert_eq!(after, now, "a refused update changed nothing");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-171 R-5: a draft is checked from stdin, so Claude can check it in plan mode, where it may
+/// not write a file; and saved from stdin, with its description, once the plan is accepted.
+#[test]
+fn process_check_reads_a_draft_from_stdin() {
+    use std::io::Write;
+    let (base, _work) = togaf_scratch("process-stdin");
+    let empty = base.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let pipe = |args: &[&str], input: &str| {
+        let mut child = Command::new(cli())
+            .args(args)
+            .current_dir(&empty)
+            .env("HOME", base.join("home"))
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_PROCESSES_DIR")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let draft = "statuses: [Idea, Build, Done]\ndefault_state: Idea\n\
+                 displayed_states: [Idea, Build, Done]\nterminal_states: [Done]\n\
+                 transitions: {Idea: [Build], Build: [Done]}\n\
+                 gates: {Build: {requires: [approved], signoffs: [design-review]}}\n";
+    let out = pipe(&["process", "check", "-"], draft);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("the draft: no problems"), "{text}");
+    assert!(text.contains("# Working agreement") && text.contains("stateDiagram-v2"));
+    assert!(
+        text.contains("design-review"),
+        "the sign-off is in the agreement: {text}"
+    );
+
+    let bad = pipe(
+        &["process", "check", "-"],
+        &draft.replace("[Build]", "[Ship]"),
+    );
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("'Ship'"));
+
+    let saved = pipe(
+        &[
+            "process",
+            "save",
+            "ours",
+            "--personal",
+            "--description",
+            "Idea to done, design reviewed",
+            "--from-file",
+            "-",
+        ],
+        draft,
+    );
+    assert!(
+        saved.status.success(),
+        "{}",
+        String::from_utf8_lossy(&saved.stderr)
+    );
+    let file = std::fs::read_to_string(base.join("home/.kanbanr/processes/ours.yaml")).unwrap();
+    assert!(
+        file.contains("description: Idea to done, design reviewed"),
+        "{file}"
+    );
+    assert_eq!(
+        std::fs::read_dir(&empty).unwrap().count(),
+        0,
+        "no board, no file here"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}

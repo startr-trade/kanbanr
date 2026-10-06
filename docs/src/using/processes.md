@@ -217,7 +217,8 @@ kanbanr config workflow --from-file our-process.yaml
 
 `kanbanr process check` runs the same validator the board runs when a workflow is saved, so a file
 that checks clean is one the board accepts. It reports every problem at once, not only the first.
-It needs no board, so a process can be checked before the project exists. Where there is one, it
+It needs no board, so a process can be checked before the project exists, and `-` reads the
+file from stdin (`kanbanr process check - < draft.yaml`). Where there is one, it
 also names any status the file would remove that still holds this project's items. When the file
 is clean, it prints the working agreement and a Mermaid diagram. `kanbanr process checks` lists
 every check a gate can ask for, from the same list as the table above.
@@ -244,7 +245,7 @@ QA signs off releases"), at setup or any time later. In plan mode, it:
    ends the work, which moves back are allowed;
 6. asks its name, and whether to keep it on the board for the team or in your personal library;
 7. checks the draft with `kanbanr process check` and puts its working agreement and diagram in the
-   plan.
+   plan, with a one-line description of what the process is for.
 
 Accepting the plan saves the process and applies it. Changing it later is the same conversation,
 and then Claude asks, one project at a time, whether each project using it should take the new

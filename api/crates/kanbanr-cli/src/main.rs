@@ -598,7 +598,7 @@ enum ProcessCmd {
     /// from this project's. It must check clean; the version goes up only when the content changed.
     Save {
         name: String,
-        /// A process file to save.
+        /// A process file to save, or `-` to read it from stdin.
         #[arg(long, conflicts_with = "from_project")]
         from_file: Option<String>,
         /// Save this project's current workflow (default: the project here).
@@ -633,7 +633,8 @@ enum ProcessCmd {
     /// non-zero when there is a problem. Run where a board is, it also names statuses the file
     /// would remove that still hold this project's items.
     Check {
-        /// A process file (as `config workflow --export` writes), or a process's name.
+        /// A process file (as `config workflow --export` writes), `-` to read one from stdin, or a
+        /// process's name.
         source: String,
     },
 }
@@ -4903,18 +4904,31 @@ fn run_process_checks(cli: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A process file's text, from a path or `-` for stdin (FEAT-171): in plan mode Claude may not write
+/// a file, so a draft is checked from a heredoc.
+fn read_process_text(src: &str) -> anyhow::Result<String> {
+    if src == "-" {
+        use std::io::Read;
+        let mut text = String::new();
+        std::io::stdin().read_to_string(&mut text)?;
+        return Ok(text);
+    }
+    std::fs::read_to_string(src).map_err(|e| anyhow::anyhow!("could not read {src}: {e}"))
+}
+
 /// `kanbanr process check <file|name>` (FEAT-168): the board's own validator, run alone.
 fn run_process_check(cli: &Cli, source: &str) -> anyhow::Result<()> {
     use kanbanr_core::config::{self, WorkflowFile};
-    let (label, file): (String, WorkflowFile) = if std::path::Path::new(source).is_file() {
-        let text = std::fs::read_to_string(source)
-            .map_err(|e| anyhow::anyhow!("could not read {source}: {e}"))?;
-        let file = serde_yaml::from_str(&text)
-            .map_err(|e| anyhow::anyhow!("{source} is not a process file: {e}"))?;
-        (source.to_string(), file)
-    } else {
-        (source.to_string(), resolve_process(cli, source)?.0)
-    };
+    let (label, file): (String, WorkflowFile) =
+        if source == "-" || std::path::Path::new(source).is_file() {
+            let text = read_process_text(source)?;
+            let label = if source == "-" { "the draft" } else { source };
+            let file = serde_yaml::from_str(&text)
+                .map_err(|e| anyhow::anyhow!("{label} is not a process file: {e}"))?;
+            (label.to_string(), file)
+        } else {
+            (source.to_string(), resolve_process(cli, source)?.0)
+        };
     let mut problems: Vec<String> = file.problems().iter().map(|e| e.to_string()).collect();
     // Removing a status that still holds items is refused too, but that depends on a project: check
     // against this folder's, when there is a board here and the project is on it.
@@ -5159,12 +5173,8 @@ fn run_process_save(
 ) -> anyhow::Result<()> {
     let board = board_here(cli);
     let file: kanbanr_core::config::WorkflowFile = match from_file {
-        Some(src) => {
-            let text = std::fs::read_to_string(src)
-                .map_err(|e| anyhow::anyhow!("could not read {src}: {e}"))?;
-            serde_yaml::from_str(&text)
-                .map_err(|e| anyhow::anyhow!("{src} is not a process file: {e}"))?
-        }
+        Some(src) => serde_yaml::from_str(&read_process_text(src)?)
+            .map_err(|e| anyhow::anyhow!("{src} is not a process file: {e}"))?,
         None => {
             let client = board.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("no board here to take a project's workflow from; pass --from-file")

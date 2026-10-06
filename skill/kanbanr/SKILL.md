@@ -128,7 +128,7 @@ project"** (or anything equivalent):
 
    ```bash
    kanbanr init <name> --data-dir <board> --author "<name>" --email <email> --description "<…>"
-   kanbanr process save <name> [--personal] --from-file <scratch>/process.yaml   # a process designed now
+   kanbanr process save <name> --description "<…>" [--personal] --from-file <scratch>/process.yaml   # a process designed now
    kanbanr config workflow --preset <name>         # a saved, built-in or just-saved process; omit for default
    kanbanr charter set --file <scratch>/charter.yaml
    kanbanr hooks status                            # init registered them; install if it did not
@@ -397,10 +397,13 @@ what is agreed is exactly what will be enforced:
 6. **Name it, and ask where it is kept:** on the board (the team gets it through the board's
    remote; recommended when the board has one) or personal (`~/.kanbanr/processes`, theirs on any
    board).
-7. **Draft, check, show.** Write the YAML to your scratchpad, run `kanbanr process check <file>`,
-   and fix every problem before the plan. Put the **working agreement and the diagram** it prints
-   in the plan — what each stage asks, in words — with the commands:
-   `kanbanr process save <name> [--personal] --from-file <file>`, then
+7. **Draft, check, show — before the plan.** Plan mode allows no file writes, so check the draft
+   from stdin: `kanbanr process check - <<'YAML'` … `YAML`. Fix every problem it reports, and
+   check again. Then put in the plan, **verbatim, the working agreement and the Mermaid diagram it
+   printed** (what each stage asks, in words), not your own table: the plan must show what will be
+   enforced, as the board will enforce it. Add a one-line description of what the process is for.
+   The plan's commands, after acceptance, write the draft to a file and save it:
+   `kanbanr process save <name> --description "<one line>" [--personal] --from-file <file>`, then
    `kanbanr config workflow --preset <name>`. **Accepting the plan accepts the process.**
 
 **Changing a saved process** is the same loop, starting from `kanbanr process show <name>`. Saving
@@ -803,7 +806,7 @@ kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # ship the finished items, write notes, carry the rest
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a shipped release
 kanbanr config workflow --export > process.yaml   # this project's workflow, gates included
-kanbanr process check process.yaml                # check a process without applying it: every problem, then its agreement and diagram
+kanbanr process check process.yaml|-              # check a process without applying it (- reads stdin): every problem, then its agreement and diagram
 kanbanr process checks [--json]                   # what a gate can ask for, and when each check passes
 kanbanr process list [--json]                     # the board's, your personal and the built-in processes, and who uses each
 kanbanr process show <name>                       # a process's file, working agreement and diagram
