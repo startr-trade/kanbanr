@@ -28,6 +28,13 @@ All notable changes to kanbanr are documented here. The format follows
   and when each check passes. A misspelt check is now named, with the checks there are, instead of
   "did not match any variant". The board and `process check` share one validator.
 
+### Security
+
+- **KaTeX and rustls advisories (FEAT-174).** The monitor's KaTeX, which mermaid brings in for
+  maths in diagrams, is pinned to 0.19.0 (GHSA-238p-pmpm-9mq7), since no mermaid release accepts
+  the fixed version yet; diagrams with maths still render. The screenshot tool's rustls goes to
+  0.23.45 (GHSA-2mjx-qc3c-rqvc); the kanbanr binary already had it.
+
 ### Changed
 
 - **The release looks for the monitor instead of weighing the binary (FEAT-172).** The check that
