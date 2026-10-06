@@ -37,8 +37,19 @@ All notable changes to kanbanr are documented here. The format follows
   and when each check passes. A misspelt check is now named, with the checks there are, instead of
   "did not match any variant". The board and `process check` share one validator.
 
+### Security
+
+- **KaTeX and rustls advisories (FEAT-174).** The monitor's KaTeX, which mermaid brings in for
+  maths in diagrams, is pinned to 0.19.0 (GHSA-238p-pmpm-9mq7), since no mermaid release accepts
+  the fixed version yet; diagrams with maths still render. The screenshot tool's rustls goes to
+  0.23.45 (GHSA-2mjx-qc3c-rqvc); the kanbanr binary already had it.
+
 ### Changed
 
+- **Setup works where git has no identity, and stops at its first failure (FEAT-173).** The
+  setup's initial commit failed on a machine with no git user.name or email, and the setup carried
+  on. The commit now uses the identity agreed in the interview for that one commit, never changing
+  your git configuration, and the setup runs so that a failed step stops the rest.
 - **The release looks for the monitor instead of weighing the binary (FEAT-172).** The check that
   the web monitor is embedded and compressed bracketed the binary between 12 and 20 MB. Code growth
   made both bounds wrong: a binary with no monitor is now about 19 MB, and new code alone went over
