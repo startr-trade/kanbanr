@@ -54,7 +54,10 @@ project"** (or anything equivalent):
      silently; if the folder is inside a git repo (`suggested_inside_git_repo`), say so.
    - *Project name and one-line description* (default name: the folder's).
    - *Commit identity*: name and email, defaulted from `git config`. Every board change is
-     committed as this identity.
+     committed as this identity. If git itself has none (`git config user.name` is empty), the
+     plan's initial commit passes this identity for that one commit (`git -c user.name="<name>"
+     -c user.email="<email>" commit …`), and the plan tells the user to set their own git identity
+     for later commits. Never run `git config` for them.
 
    **b. Charter**: why the project exists, which every item will link to.
    - Draft it from what the repository already says (the README, manifests, existing docs), and
@@ -129,6 +132,7 @@ project"** (or anything equivalent):
    kanbanr claude sync                             # CLAUDE.md block pointing at the charter
    printf '.claude/settings.json\n.claude/settings.local.json\n' >> .gitignore
    git init && git add .kanbanr CLAUDE.md .gitignore && git commit -m "[no-ref] initial commit"
+                                                   # with -c user.name=… -c user.email=… if git has no identity
                                                    # these two only if the folder was not a git repo
    kanbanr git install-hooks                       # if chosen
    kanbanr config cadence --sprint-length 14 --release per_sprint   # sprint presets only
@@ -145,7 +149,8 @@ project"** (or anything equivalent):
    **Exiting plan mode is the approval.** If the user sends changes back instead, revise the plan
    and exit again. Do not start setting up on a partial yes.
 5. **Run the approved setup, all of it, before anything else.** Run the commands in the plan's
-   order and stop at the first failure: report it, fix it, and rerun from there, rather than
+   order and stop at the first failure — one command per call, or joined with `&&`; never as a
+   script that carries on past a failed step: report it, fix it, and rerun from there, rather than
    leaving a half-configured project. Relay what `init` printed. If the Claude Code sandbox blocks
    writes to the board folder, tell the user to allow it (e.g. `sandbox.filesystem.allowWrite`).
    Save the approved plan as the board doc named in it, so the reasons for the setup outlive the
