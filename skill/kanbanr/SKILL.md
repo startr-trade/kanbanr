@@ -412,11 +412,16 @@ what is agreed is exactly what will be enforced:
    `kanbanr config workflow --preset <name>`. **Accepting the plan accepts the process.**
 
 **Changing a saved process** is the same loop, starting from `kanbanr process show <name>`. Saving
-it gives a new version; nothing else changes until each project takes it. Then, for each project on
-the board that uses it (`kanbanr process list` names them), **one question**: show
-`kanbanr process diff` in a few lines and ask Update / Not now. Update →
-`kanbanr process update --project <id>`. If it is refused because a stage it removes still holds
-items, say which, and offer to move them or rename the status first.
+it gives a new version; nothing else changes until each project takes it. Then ask, **for every
+project on the board that uses it** — `used_by` in `kanbanr process list --json`, the project you
+are in **and every other one** — **one question each**: show `kanbanr process diff --project <id>`
+in a few lines and ask Update / Not now. Update → `kanbanr process update --project <id>`.
+
+Whether another project takes the new version is the user's choice, not yours: kanbanr has no
+project owners, so never skip a project because it "belongs to someone else", and never leave the
+update as a command for the user to run. If they say another person decides for that project,
+"Not now" records nothing and the notice stays for that person. If an update is refused because a
+stage it removes still holds items, say which, and offer to move them or rename the status first.
 
 **When a session opens with a process notice** ("v3 is saved now"), mention it once and ask
 Update / Not now. Never run `kanbanr process update` unasked, and never edit a project's gates to
