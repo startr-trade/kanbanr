@@ -5256,7 +5256,9 @@ fn run_process_save(
         println!(
             "\non an earlier version on this board: {}\n\
              Nothing changes for them until each takes it. Ask the user about each one, the \
-             project you are in and every other: Update or Not now. Update runs \
+             project you are in and every other: Update or Not now, showing in the question what \
+             `kanbanr process diff --project <id>` says it would change (a project several \
+             versions behind takes every change since). Update runs \
              `kanbanr process update --project <id>`.",
             list.join(", ")
         );
