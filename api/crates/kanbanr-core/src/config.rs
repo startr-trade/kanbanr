@@ -199,6 +199,17 @@ pub enum Action {
     Branch,
 }
 
+impl Gate {
+    /// Whether judging this gate reads spec bodies (FEAT-179), so a metadata-only load would
+    /// report every spec section as missing.
+    pub fn reads_spec(&self) -> bool {
+        self.requires
+            .iter()
+            .chain(&self.warns)
+            .any(crate::readiness::Condition::reads_spec)
+    }
+}
+
 /// The entry criteria of one status. Every field is optional; an empty gate asks nothing.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Gate {
@@ -607,6 +618,9 @@ pub fn working_agreement(project: &str, config: &ProjectConfig) -> String {
             .and_then(|v| v.as_str().map(|s| s.replace('_', " ")))
             .unwrap_or_default(),
         Condition::Zachman { zachman } => format!("zachman: {}", zachman.join(", ")),
+        Condition::SpecSections { spec_sections } => {
+            format!("spec sections: {}", spec_sections.join(", "))
+        }
     };
     let gates = config.effective_gates();
     for status in &config.statuses {

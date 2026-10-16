@@ -313,6 +313,21 @@ impl Store {
         })
     }
 
+    /// Load a project for judging its gates: metadata only, unless a gate reads spec bodies
+    /// (`spec_sections`, FEAT-179), which a metadata-only load leaves empty.
+    pub fn load_for_gates(&self, id: &str) -> Result<Project> {
+        let project = self.load_meta(id)?;
+        if project
+            .config
+            .effective_gates()
+            .values()
+            .any(|g| g.reads_spec())
+        {
+            return self.load(id);
+        }
+        Ok(project)
+    }
+
     /// Load a single feature's specification body on demand. Scans the configured status folders
     /// for the feature's metadata to discover which `<status>/features-spec/<code>.md` to read.
     /// Returns the feature-not-found error if no metadata file for `code` exists. (FEAT-033)

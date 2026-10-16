@@ -144,6 +144,9 @@ fn condition_text(c: &crate::readiness::Condition) -> String {
         crate::readiness::Condition::Zachman { zachman } => {
             format!("zachman {}", zachman.join("/"))
         }
+        crate::readiness::Condition::SpecSections { spec_sections } => {
+            format!("spec sections {}", spec_sections.join("/"))
+        }
     }
 }
 

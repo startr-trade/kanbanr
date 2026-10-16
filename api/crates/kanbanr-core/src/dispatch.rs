@@ -1061,7 +1061,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         // ---- what is waiting for agreement (FEAT-067) ----
         // What an item is missing, from the one engine every surface uses (FEAT-112).
         ("GET", ["projects", p, "features", code, "readiness"]) => {
-            let project = store.load_meta(p)?;
+            let project = store.load_for_gates(p)?;
             let feature = project.feature(code)?;
             let charter = crate::charter::load(store, p)?;
             let goal_ids = charter.goal_ids();
@@ -1083,7 +1083,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         // The board's cards, in one request: gaps per live item, keyed by code. Finished and
         // parked items are left out, as doctor leaves them out — they are history, not work.
         ("GET", ["projects", p, "readiness"]) => {
-            let project = store.load_meta(p)?;
+            let project = store.load_for_gates(p)?;
             let charter = crate::charter::load(store, p)?;
             let ctx = crate::readiness::Context::load(store, p, &project.config);
             let cards: serde_json::Map<String, Value> = project
@@ -1105,7 +1105,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         }
         ("GET", ["projects", p, "review"]) => {
             use crate::models::ApprovalState;
-            let project = store.load_meta(p)?;
+            let project = store.load_for_gates(p)?;
             let charter = crate::charter::load(store, p)?;
             let ctx = crate::readiness::Context::load(store, p, &project.config);
             // Whether an approval is current or has lapsed depends on a hash of the definition's

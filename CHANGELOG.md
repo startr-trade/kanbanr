@@ -6,6 +6,17 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A design stage asks for the design itself (FEAT-179).** `spec_sections` is a new gate check: it
+  passes when the spec has each named section, at any heading level, with content under it.
+  `{spec_sections: [Design, Test plan]}` names the sections; plain `spec_sections` asks for
+  `Design`. It appears in `process checks`, the guide's table and the working agreement. The review
+  queue and readiness views load spec bodies when a gate reads them. The skill and the processes
+  chapter say what a design-stage spec holds. It is written at implementation level, and it ends
+  with a task list that a lower-cost subagent can build from without making design decisions. Pair
+  the check with `signoffs: [design-review]` to have a person review the design before build.
+
 ## [0.1.7] - 2026-10-07
 
 Your own process, designed with Claude and shared on the board.
