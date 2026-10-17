@@ -363,7 +363,9 @@ guessing:
 The definition's `how` and `where` lines are one-line summaries of this section, never a
 substitute for it. A section that does not apply says "n/a" and why. A spec that stays
 non-technical at this stage leaves implementation decisions unreviewed, which is the failure the
-gate exists to prevent. **Write it for hand-off.** The design is the point where a capable model does the thinking, so
+gate exists to prevent.
+
+**Write it for hand-off.** The design is the point where a capable model does the thinking, so
 that cheaper models can do the building. End the section with an **implementation task list** a
 lower-cost subagent can carry out one task at a time, without making a design decision. Each task
 names:
