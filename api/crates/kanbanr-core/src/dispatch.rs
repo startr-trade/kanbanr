@@ -893,13 +893,26 @@ pub fn dispatch_in(
         ("PUT", ["projects", p, "config", "workflow"]) => apply_workflow(store, p, b),
         // ---- releases (FEAT-120) ----
         ("GET", ["projects", p, "releases"]) => ser(&crate::releases::report_all(store, p)?),
-        ("POST", ["projects", p, "releases"]) => ser(&crate::releases::add(
-            store,
-            p,
-            &str_field(b, "version").unwrap_or_default(),
-            &str_field(b, "target").unwrap_or_default(),
-            &str_field(b, "name").unwrap_or_default(),
-        )?),
+        // `patch_of`: a patch of a cut release, branched from its tag (FEAT-184).
+        ("POST", ["projects", p, "releases"]) => match str_field(b, "patch_of") {
+            Some(parent) => ser(&crate::releases::add_patch(
+                store,
+                p,
+                &str_field(b, "version").unwrap_or_default(),
+                &str_field(b, "target").unwrap_or_default(),
+                &str_field(b, "name").unwrap_or_default(),
+                &parent,
+                &str_field(b, "by").unwrap_or_default(),
+                repo,
+            )?),
+            None => ser(&crate::releases::add(
+                store,
+                p,
+                &str_field(b, "version").unwrap_or_default(),
+                &str_field(b, "target").unwrap_or_default(),
+                &str_field(b, "name").unwrap_or_default(),
+            )?),
+        },
         ("POST", ["projects", p, "releases", version, "plan"]) => {
             let items = vec_field(b, "items").unwrap_or_default();
             ser(&crate::releases::plan(

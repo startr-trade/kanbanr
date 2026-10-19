@@ -345,6 +345,29 @@ the **last one is always the cut**. Every move is recorded on the release with w
   the tag and the fast-forward, both are undone. `kanbanr release cut <VERSION> --tag` is the same
   as promoting to the last stage; a plain `release cut` changes only the board.
 
+A release that has no branch yet gets `release/<VERSION>` made first whichever stage it is promoted
+to, so a process with a single stage (both first and the cut) works, and so does a promotion that
+skips the first stage.
+
+### Patch releases
+
+A fix to a release already in production gets a release of its own, a **patch**:
+
+```bash
+kanbanr release add v1.0.1 --patch-of v1.0.0
+```
+
+The patch records its parent, which must have been cut and tagged — any cut release, an older
+supported one included. `release/v1.0.1` is made from the parent's tag, not from where main has
+since gone, and the patch starts at the first stage. It goes through the same stages. Its notes say
+"Patch of v1.0.0", list what the patch adds, and what it keeps from the parent.
+
+At production the patch is tagged. Main fast-forwards to it when it can; when main has moved on
+past the parent, main is left where it is. The patch's commits that the integration branch does
+not have yet are listed — in the output and in the notes, under "To merge forward" — so the next
+release keeps the fix. kanbanr does not merge them for you: `kanbanr git forward <VERSION>` does it
+when the git model is on, or merge them by hand.
+
 The integration branch and the main branch are both the repository's default branch unless the
 project names them: `kanbanr config cadence --integration-branch develop --main-branch main`.
 

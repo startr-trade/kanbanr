@@ -54,7 +54,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | Command | What it does |
 |---|---|
 | `kanbanr sprint add / list / show / plan / start / close` | timeboxes: add one, list them, see one with its burndown, plan items in, start, close (carrying unfinished work) |
-| `kanbanr release add / list / plan / cut` | releases: add one (`--branch` also promotes it to its first stage), list them with their stage, plan items in, cut it (ship what is finished, write notes, carry the rest; `--tag` is promotion to production) |
+| `kanbanr release add / list / plan / cut` | releases: add one (`--branch` also promotes it to its first stage; `--patch-of <V>` makes a patch of a cut release, branched from its tag), list them with their stage, plan items in, cut it (ship what is finished, write notes, carry the rest; `--tag` is promotion to production) |
 | `kanbanr release promote <VERSION> [<STAGE>] [--reason …]` | move a release to its next stage or the one named ([Release stages](../using/processes.md#release-stages)): the first makes `release/<VERSION>`, the last is the cut — it tags the version and fast-forwards main, refusing and changing nothing if main has commits the release lacks. Back a stage needs `--reason`; nothing moves back from production. Run it from the project folder; nothing is pushed |
 | `kanbanr retro --sprint <SP-…>` | how a sprint went |
 
