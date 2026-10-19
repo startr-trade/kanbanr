@@ -59,13 +59,16 @@ pub enum Check {
     /// The spec has each named section, with content (FEAT-179). A design stage asks for the
     /// design itself, not a promise of one: `{spec_sections: [Design]}`.
     SpecSections,
+    /// Every doc the item declares in `affects_docs` has changed since it entered its current
+    /// stage (FEAT-180) — the design was folded into the docs it said it would change.
+    DocsUpdated,
 }
 
 impl Check {
     /// Every check a gate can name, in the order the guide lists them (FEAT-168). `signoff` is not
     /// one: a gate asks for a sign-off by its name, under `signoffs`. A new check must be added
     /// here, and [`Check::passes_when`] will not compile until it says what the check means.
-    pub const GATEABLE: [Check; 17] = [
+    pub const GATEABLE: [Check; 18] = [
         Check::Definition,
         Check::Statement,
         Check::Goals,
@@ -83,6 +86,7 @@ impl Check {
         Check::InSprint,
         Check::InRelease,
         Check::SpecSections,
+        Check::DocsUpdated,
     ];
 
     /// The name a gate uses for this check.
@@ -125,6 +129,10 @@ impl Check {
             Check::SpecSections => {
                 "the spec has each named section, with content; plain `spec_sections` asks for \
                  `Design`"
+            }
+            Check::DocsUpdated => {
+                "every board doc the item names in `affects_docs` has changed since it entered its \
+                 current stage"
             }
         }
     }
@@ -263,6 +271,9 @@ pub struct Context {
     pub unit: crate::config::EstimateUnit,
     /// The sprint currently active, if the project uses sprints and one is.
     pub active_sprint: Option<String>,
+    /// The project's doc folder, for [`Check::DocsUpdated`] (FEAT-180). Its history is read only
+    /// when that check is evaluated, and only for items that declare docs.
+    pub docs_dir: Option<std::path::PathBuf>,
 }
 
 impl Context {
@@ -277,6 +288,7 @@ impl Context {
             } else {
                 None
             },
+            docs_dir: Some(store.project_dir(id).join("docs")),
         }
     }
 }
@@ -565,6 +577,12 @@ pub fn evaluate_in(
             &["Design".to_string()],
         ));
     }
+    if checks.contains(&Check::DocsUpdated)
+        && !exempt
+        && let Some(docs) = ctx.docs_dir.as_deref()
+    {
+        gaps.extend(docs_updated_gaps(feature, docs));
+    }
     if checks.contains(&Check::InRelease) && !exempt && feature.release.is_none() {
         gaps.push(gap(
             Check::InRelease,
@@ -623,6 +641,7 @@ pub fn evaluate_definition(
                     | Check::InRelease
                     | Check::Signoff
                     | Check::SpecSections
+                    | Check::DocsUpdated
             )
         });
         if reads_definition {
@@ -776,8 +795,54 @@ fn item_level(
         | Check::InSprint
         | Check::InRelease
         | Check::Signoff
-        | Check::SpecSections => {}
+        | Check::SpecSections
+        | Check::DocsUpdated => {}
     }
+}
+
+/// A declared doc as the board stores it: under `docs/`, `.md` appended when missing.
+pub fn affects_doc_key(path: &str) -> String {
+    crate::refs::doc_key(path)
+}
+
+/// The docs an item declares that have not changed since it entered its stage (FEAT-180). An item
+/// that declares none passes — not every item touches an architecture doc; doctor says so when the
+/// next stage asks. A board with no history to judge by passes too: nothing can be shown either way.
+fn docs_updated_gaps(feature: &FeatureItem, docs: &std::path::Path) -> Vec<Gap> {
+    let declared = feature
+        .definition
+        .as_ref()
+        .map(|d| d.affects_docs.as_slice())
+        .unwrap_or(&[]);
+    let since = feature.entered_status_at();
+    let mut gaps = Vec::new();
+    for doc in declared {
+        let key = affects_doc_key(doc);
+        let path = docs.join(&key);
+        let changed = crate::git::doc_changed_since(&path, since);
+        if !path.is_file() && changed != Some(true) {
+            gaps.push(Gap {
+                level: Level::Error,
+                ..gap(
+                    Check::DocsUpdated,
+                    None,
+                    &format!("unknown doc {key}"),
+                    format!("{key} is declared in affects_docs but is not on the board"),
+                )
+            });
+        } else if changed == Some(false) {
+            gaps.push(gap(
+                Check::DocsUpdated,
+                None,
+                &format!("{key} not updated"),
+                format!(
+                    "{key} has not changed since {} entered {} — fold the design into it",
+                    feature.code, feature.status
+                ),
+            ));
+        }
+    }
+    gaps
 }
 
 fn is_exempt(feature: &FeatureItem) -> bool {
@@ -960,6 +1025,164 @@ fn requirement_level(check: Check, r: &Requirement, gaps: &mut Vec<Gap>) {
 mod tests {
     use super::*;
     use crate::models::{Requirement, TestRef};
+
+    /// A board in a temp git repository with one item declaring `architecture/data.md` (FEAT-180).
+    fn docs_board(tag: &str) -> (crate::Store, std::path::PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-docs-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = crate::Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let item = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &item.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    affects_docs: vec!["architecture/data".into()],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv1\n")
+            .unwrap();
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "board"));
+        (store, dir, item.code)
+    }
+
+    fn docs_gaps(store: &crate::Store, code: &str) -> Vec<Gap> {
+        let project = store.load("demo").unwrap();
+        let ctx = Context::load(store, "demo", &project.config);
+        evaluate_conditions(
+            project.feature(code).unwrap(),
+            None,
+            &[Condition::Check(Check::DocsUpdated)],
+            &ctx,
+        )
+    }
+
+    /// Commit times are whole seconds: keep "entered the stage" and "changed the doc" apart.
+    fn next_second() {
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+    }
+
+    /// FEAT-180 R-2: `affects_docs` is kept, does not reopen the agreement, and reads back the same
+    /// through an older binary that keeps it as an unknown key.
+    #[test]
+    fn affects_docs_round_trips() {
+        let (store, dir, code) = docs_board("roundtrip");
+        let def = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        // Stored as the board path, `.md` appended.
+        assert_eq!(def.affects_docs, vec!["architecture/data.md".to_string()]);
+
+        let mut bare = def.clone();
+        bare.affects_docs.clear();
+        assert_eq!(
+            def.content_rev(),
+            bare.content_rev(),
+            "naming the docs does not lapse the approval (Q1)"
+        );
+
+        // An older binary keeps the key in `extra`, which is written last: the same bytes.
+        let mut older = bare.clone();
+        older.extra.insert(
+            "affects_docs".into(),
+            serde_yaml::to_value(vec!["architecture/data.md"]).unwrap(),
+        );
+        assert_eq!(
+            serde_yaml::to_string(&def).unwrap(),
+            serde_yaml::to_string(&older).unwrap()
+        );
+        let back: FeatureDefinition =
+            serde_yaml::from_str(&serde_yaml::to_string(&older).unwrap()).unwrap();
+        assert_eq!(back.affects_docs, def.affects_docs);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-180 R-3: a declared doc must change after the item entered its stage. Unchanged
+    /// blocks; changed before entry still blocks; an uncommitted change and a committed one after
+    /// entry pass.
+    #[test]
+    fn docs_updated_gate() {
+        let (store, dir, code) = docs_board("gate");
+        next_second();
+        store.move_feature("demo", &code, "Scheduled").unwrap();
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "move"));
+        next_second();
+
+        let gaps = docs_gaps(&store, &code);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert!(
+            gaps[0]
+                .message
+                .contains("architecture/data.md has not changed since"),
+            "{}",
+            gaps[0].message
+        );
+        assert_eq!(gaps[0].level, Level::Warning);
+
+        // Written, not yet committed: counts.
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv2\n")
+            .unwrap();
+        assert!(docs_gaps(&store, &code).is_empty());
+        // Committed after entry: still counts.
+        assert!(crate::git::commit(
+            &dir,
+            "Ada",
+            "ada@example.com",
+            "fold design"
+        ));
+        assert!(docs_gaps(&store, &code).is_empty());
+
+        // Entering the next stage resets the clock: the change was before it.
+        next_second();
+        store.move_feature("demo", &code, "Planned").unwrap();
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "move"));
+        assert_eq!(docs_gaps(&store, &code).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-180 R-4: a declared doc the board does not have is an error, not a pending change.
+    #[test]
+    fn affects_docs_unknown_is_error() {
+        let (store, dir, code) = docs_board("unknown");
+        let mut def = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        def.affects_docs.push("architecture/nope.md".into());
+        store
+            .set_feature_definition("demo", &code, Some(def))
+            .unwrap();
+        let gaps = docs_gaps(&store, &code);
+        let unknown: Vec<&Gap> = gaps.iter().filter(|g| g.level == Level::Error).collect();
+        assert_eq!(unknown.len(), 1, "{gaps:?}");
+        assert_eq!(
+            unknown[0].message,
+            "architecture/nope.md is declared in affects_docs but is not on the board"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn requirement(id: &str, text: &str, tests: &[(&str, TestState)]) -> Requirement {
         Requirement {

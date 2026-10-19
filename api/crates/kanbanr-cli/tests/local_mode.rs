@@ -797,8 +797,8 @@ fn cli_feature_define_templates_writes_and_clears() {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&work).unwrap();
 
-    let run = |args: &[&str]| -> String {
-        let o = Command::new(cli())
+    let exec = |args: &[&str]| -> Output {
+        Command::new(cli())
             .args(args)
             .current_dir(&work)
             .env("HOME", &home)
@@ -807,7 +807,10 @@ fn cli_feature_define_templates_writes_and_clears() {
             .env_remove("KANBANR_PROJECT")
             .stdin(std::process::Stdio::null())
             .output()
-            .expect("run kanbanr CLI");
+            .expect("run kanbanr CLI")
+    };
+    let run = |args: &[&str]| -> String {
+        let o = exec(args);
         assert!(
             o.status.success(),
             "cmd {args:?} failed: {}",
@@ -855,6 +858,44 @@ fn cli_feature_define_templates_writes_and_clears() {
     ]);
     assert!(defect.contains("violates:"), "{defect}");
     assert!(defect.contains("state: red"), "{defect}");
+    assert!(chore.contains("affects_docs:"), "FEAT-180: {chore}");
+
+    // The docs an item declares it changes (FEAT-180): stored as board paths, shown on the item,
+    // and nothing outside the doc tree accepted.
+    let docs_def = base.join("docs-def.yaml");
+    std::fs::write(
+        &docs_def,
+        "statement: Keep a cart\naffects_docs: [architecture/data]\n",
+    )
+    .unwrap();
+    run(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        docs_def.to_str().unwrap(),
+    ]);
+    let shown = run(&["feature", "show", "FEAT-001"]);
+    assert!(
+        shown.contains("**Affects docs:** `architecture/data.md`"),
+        "{shown}"
+    );
+    std::fs::write(
+        &docs_def,
+        "statement: Keep a cart\naffects_docs: [../secrets]\n",
+    )
+    .unwrap();
+    let refused = exec(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        docs_def.to_str().unwrap(),
+    ]);
+    assert!(
+        !refused.status.success(),
+        "a path out of the doc tree is refused"
+    );
 
     // A definition with a deliberate gap: `how` is left blank rather than invented.
     let def = base.join("def.yaml");

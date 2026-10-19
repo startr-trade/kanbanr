@@ -109,6 +109,7 @@ same in every workflow:
 | `quality` | drafts the quality scenario, and asks for the target (for example "300 ms at p95") |
 | `tests_named` | names a test for each requirement |
 | `spec_sections` | drafts each named section of the spec into the plan; for `Design`, the build-ready design and its implementation task list |
+| `docs_updated` | folds the item's design into each doc in `affects_docs` before the move, and says which docs it changed |
 | `small` | proposes splitting the item |
 | `approved` | your acceptance of the plan, or an Approve question when nothing needs drafting |
 | `bypass` | a Ratify question |

@@ -97,6 +97,7 @@ board.
 | `in_sprint` | planned into the active sprint (projects with sprints switched on) |
 | `in_release` | planned into a release (projects with releases switched on) |
 | `spec_sections` | the spec has each named section, with content; plain `spec_sections` asks for `Design` |
+| `docs_updated` | every board doc the item names in `affects_docs` has changed since it entered its current stage |
 
 An unknown check, an unknown status or an unknown Zachman column is refused when the workflow is
 saved. A gate that could never match is a guardrail that silently isn't there.

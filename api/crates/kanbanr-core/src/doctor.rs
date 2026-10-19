@@ -66,6 +66,7 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_stray_folders(store, project, &mut report);
         scan_process_drift(store, project, &mut report);
         scan_references(store, project, &mut report);
+        scan_declared_docs(project, &charter, &ctx, &mut report);
     }
     scan_identity(store, "board", &mut report);
     scan_remote_lag(store, "board", &mut report);
@@ -94,6 +95,7 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_stray_folders(store, &project, &mut report);
     scan_process_drift(store, &project, &mut report);
     scan_references(store, &project, &mut report);
+    scan_declared_docs(&project, &charter, &ctx, &mut report);
     scan_identity(store, id, &mut report);
     scan_remote_lag(store, id, &mut report);
     Ok(report)
@@ -249,6 +251,11 @@ fn scan_definitions(
             );
         }
         for gap in rest {
+            // A declared doc the board lacks is a broken reference, said once by
+            // scan_references, gate or no gate (FEAT-180).
+            if gap.check == Check::DocsUpdated && gap.level == crate::readiness::Level::Error {
+                continue;
+            }
             let severity = match gap.level {
                 crate::readiness::Level::Error => Severity::Error,
                 crate::readiness::Level::Warning => Severity::Warning,
@@ -444,14 +451,39 @@ fn scan_references(store: &Store, project: &Project, report: &mut Report) {
             severity,
             project: project.id.clone(),
             code,
-            message: format!(
-                "{source}:{} refers to {}, which this board does not have",
-                found.line,
-                describe(&found.reference)
-            ),
+            // A field (design_doc, affects_docs) has no line to point at.
+            message: if found.line == 0 {
+                format!(
+                    "{source} refers to {}, which this board does not have",
+                    describe(&found.reference)
+                )
+            } else {
+                format!(
+                    "{source}:{} refers to {}, which this board does not have",
+                    found.line,
+                    describe(&found.reference)
+                )
+            },
         });
     };
     for f in &project.features {
+        // The docs an item says its design changes (FEAT-180): a name the board does not have is
+        // a broken link, and `docs_updated` could never pass on it.
+        for doc in f.definition.iter().flat_map(|d| d.affects_docs.iter()) {
+            let reference = crate::refs::Ref::Doc { path: doc.clone() };
+            if !index.resolves(&reference) {
+                let found = crate::refs::Found {
+                    reference,
+                    line: 0,
+                    explicit: true,
+                };
+                push(
+                    Some(f.code.clone()),
+                    &format!("{} affects_docs", f.code),
+                    &found,
+                );
+            }
+        }
         let source = format!("{} spec", f.code);
         for found in crate::refs::find(&f.specification, &index) {
             if index.is_broken(&found) {
@@ -488,6 +520,46 @@ fn scan_references(store: &Store, project: &Project, report: &mut Report) {
             if index.is_broken(&found) {
                 push(None, &format!("docs/{path}"), &found);
             }
+        }
+    }
+}
+
+/// An item whose next stage asks for `docs_updated` but that names no docs (FEAT-180, Q2). The gate
+/// passes it — not every item touches an architecture doc — so this is where it is said.
+fn scan_declared_docs(
+    project: &Project,
+    charter: &crate::Charter,
+    ctx: &crate::readiness::Context,
+    report: &mut Report,
+) {
+    let gates = project.config.effective_gates();
+    let asks = |status: &str| {
+        gates.get(status).is_some_and(|g| {
+            g.requires.iter().chain(g.warns.iter()).any(|c| {
+                *c == crate::readiness::Condition::Check(crate::readiness::Check::DocsUpdated)
+            })
+        })
+    };
+    for f in &project.features {
+        let Some(def) = f.definition.as_ref() else {
+            continue;
+        };
+        if !def.affects_docs.is_empty() || !def.exempt.trim().is_empty() {
+            continue;
+        }
+        if let Some(next) = crate::readiness::immediate_next_gate(project, Some(charter), f, ctx)
+            && asks(&next.status)
+        {
+            report.issues.push(Issue {
+                severity: Severity::Warning,
+                project: project.id.clone(),
+                code: Some(f.code.clone()),
+                message: format!(
+                    "{} declares no docs it affects, and {} asks for docs_updated — name them in \
+                     affects_docs, or confirm it changes none",
+                    f.code, next.status
+                ),
+            });
         }
     }
 }
@@ -679,6 +751,72 @@ mod tests {
                 (Severity::Error, "docs/architecture/data.md:1 refers to nowhere.md, which this board does not have".to_string()),
             ]
         );
+    }
+
+    /// FEAT-180 R-4 (doctor): a declared doc the board does not have is an error; an item whose
+    /// next stage asks for docs_updated but names no docs is warned about, and one that names its
+    /// docs is not.
+    #[test]
+    fn affects_docs_unknown_and_undeclared_reported() {
+        let (store, _dir) = fixture();
+        let named = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        let silent = store
+            .add_feature("demo", "Checkout", "", "M", None)
+            .unwrap();
+        store
+            .write_doc("demo", "architecture/data.md", "# Data")
+            .unwrap();
+        for (code, docs) in [
+            (
+                &named.code,
+                vec!["architecture/data.md".to_string(), "nope.md".to_string()],
+            ),
+            (&silent.code, vec![]),
+        ] {
+            store
+                .set_feature_definition(
+                    "demo",
+                    code,
+                    Some(FeatureDefinition {
+                        statement: "Keep a cart".into(),
+                        affects_docs: docs,
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        }
+        let gate = crate::config::Gate {
+            requires: vec![crate::readiness::Condition::Check(
+                crate::readiness::Check::DocsUpdated,
+            )],
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Scheduled".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+
+        let issues = run_project(&store, "demo").unwrap().issues;
+        let about = |code: &str, needle: &str| {
+            issues
+                .iter()
+                .filter(|i| i.code.as_deref() == Some(code) && i.message.contains(needle))
+                .map(|i| (i.severity, i.message.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            about(&named.code, "affects_docs"),
+            vec![(
+                Severity::Error,
+                format!(
+                    "{} affects_docs refers to nope.md, which this board does not have",
+                    named.code
+                )
+            )]
+        );
+        assert_eq!(about(&named.code, "declares no docs"), vec![]);
+        let warned = about(&silent.code, "declares no docs");
+        assert_eq!(warned.len(), 1, "{issues:?}");
+        assert_eq!(warned[0].0, Severity::Warning);
     }
 
     /// FEAT-080: every other gap check rightly stops caring once work is finished — you cannot fix

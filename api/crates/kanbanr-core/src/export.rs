@@ -268,6 +268,10 @@ fn definition_sections(def: &crate::models::FeatureDefinition) -> String {
     if !def.design_doc.trim().is_empty() {
         out.push_str(&format!("- **Design:** `{}`\n", def.design_doc.trim()));
     }
+    if !def.affects_docs.is_empty() {
+        let docs: Vec<String> = def.affects_docs.iter().map(|d| format!("`{d}`")).collect();
+        out.push_str(&format!("- **Affects docs:** {}\n", docs.join(", ")));
+    }
     match def.approval_state() {
         // Said differently on purpose: agreement after the fact is a real resolution and not the
         // same claim as agreement before the work (FEAT-080).

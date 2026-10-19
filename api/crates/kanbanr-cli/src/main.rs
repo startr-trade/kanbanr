@@ -4199,6 +4199,8 @@ zachman:
   when:  \"\"            # trigger, frequency, timing
   who:   \"\"            # stakeholder role
   why:   \"\"            # the problem or goal served
+affects_docs: []      # board docs the design changes, e.g. [architecture/data.md]: named at the
+                      # design stage; a `docs_updated` gate checks each changed before moving on
 ";
     let requirements = match kind.trim().to_ascii_lowercase().as_str() {
         "defect" | "bug" => {

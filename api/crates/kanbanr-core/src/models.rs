@@ -257,6 +257,11 @@ pub struct FeatureDefinition {
     /// Appended, never overwritten — each pinned to the definition it covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signoffs: Vec<Signoff>,
+    /// Board docs this item changes (FEAT-180), e.g. "architecture/data.md". Declared at the design
+    /// stage; `docs_updated` checks each was changed before the item moves on. Declared last, so a
+    /// board where it is the only key an older binary does not know reads back byte for byte.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub affects_docs: Vec<String>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -406,6 +411,9 @@ impl FeatureDefinition {
         bare.started_unapproved = String::new();
         // Sign-offs are verdicts about the content, not part of it (FEAT-114).
         bare.signoffs = Vec::new();
+        // Which docs the work touches is design, written after the definition was agreed: naming
+        // them does not reopen the agreement (FEAT-180, Q1).
+        bare.affects_docs = Vec::new();
         for requirement in &mut bare.requirements {
             for test in &mut requirement.tests {
                 test.state = TestState::default();
@@ -711,6 +719,18 @@ pub struct IssueLink {
 }
 
 impl FeatureItem {
+    /// When the item entered its current status: the last move into it, else its creation
+    /// (FEAT-180). A board edited by hand can carry a status no move led to; creation is then the
+    /// honest answer, since nothing says when it got there.
+    pub fn entered_status_at(&self) -> &str {
+        self.history
+            .iter()
+            .rev()
+            .find(|t| t.to == self.status)
+            .map(|t| t.at.as_str())
+            .unwrap_or(self.created_at.as_str())
+    }
+
     /// Iterate over every task across all todo-lists.
     pub fn all_tasks(&self) -> impl Iterator<Item = &Task> {
         self.todo_lists.iter().flat_map(|l| l.tasks.iter())
