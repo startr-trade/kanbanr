@@ -38,6 +38,14 @@ make test           # cargo test --workspace (unit + Docker-less integration)
 make itest          # packaging smoke: build the image + testcontainers test (needs Docker)
 ```
 
+**Tests never touch a real board.** Cargo sets `KANBANR_BOARD_FENCE=temp` for everything it runs
+in `api/` (`api/.cargo/config.toml`), and any board outside the system temporary directory stops
+the process before it is read or written. Keep every test's scratch folder in
+`std::env::temp_dir()`; the build tree is inside this repository, under its `.kanbanr` marker, and
+a test there would find the real board. `make ci` also checks that your board did not change while
+it ran. The fence covers `cargo run` in `api/` too: run `target/debug/kanbanr` against a real
+board instead.
+
 Run the same checks CI runs before opening a PR — all of them, in one command:
 
 ```bash

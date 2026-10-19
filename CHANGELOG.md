@@ -53,6 +53,13 @@ All notable changes to kanbanr are documented here. The format follows
   with a task list that a lower-cost subagent can build from without making design decisions. Pair
   the check with `signoffs: [design-review]` to have a person review the design before build.
 
+### Changed
+
+- **Tests cannot reach a real board (FEAT-195).** For contributors: every process cargo runs in
+  `api/` is fenced to the system temporary directory (`KANBANR_BOARD_FENCE`), so a test that
+  drifts onto a real board stops before touching it, and `make ci` fails if your board changed
+  during the run. Test scratch folders moved out of the build tree.
+
 ### Fixed
 
 - **The board is found from inside a git worktree (FEAT-192).** A linked worktree inside the
