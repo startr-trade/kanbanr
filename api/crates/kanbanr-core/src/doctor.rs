@@ -65,8 +65,11 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_decisions(store, project, &mut report);
         scan_stray_folders(store, project, &mut report);
         scan_process_drift(store, project, &mut report);
-        scan_references(store, project, &mut report);
+        if project.config.method.is_on(crate::method::Part::Links) {
+            scan_references(store, project, &mut report);
+        }
         scan_declared_docs(project, &charter, &ctx, &mut report);
+        scan_method_choice(project, &mut report);
     }
     scan_identity(store, "board", &mut report);
     scan_remote_lag(store, "board", &mut report);
@@ -94,8 +97,11 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_decisions(store, &project, &mut report);
     scan_stray_folders(store, &project, &mut report);
     scan_process_drift(store, &project, &mut report);
-    scan_references(store, &project, &mut report);
+    if project.config.method.is_on(crate::method::Part::Links) {
+        scan_references(store, &project, &mut report);
+    }
     scan_declared_docs(&project, &charter, &ctx, &mut report);
+    scan_method_choice(&project, &mut report);
     scan_identity(store, id, &mut report);
     scan_remote_lag(store, id, &mut report);
     Ok(report)
@@ -564,6 +570,30 @@ fn scan_declared_docs(
     }
 }
 
+/// A project from before the method that never chose (FEAT-193, Q3): its workflow has none of the
+/// method's gates and it has not said whether it wants them. Said once per project; either choice
+/// silences it.
+fn scan_method_choice(project: &Project, report: &mut Report) {
+    if !project.config.method.chosen_at.is_empty() {
+        return;
+    }
+    let wf = crate::config::WorkflowFile::from_config(&project.config);
+    if crate::method::Part::GATES
+        .iter()
+        .any(|p| crate::method::present(&wf, *p).is_some())
+    {
+        return;
+    }
+    report.issues.push(Issue {
+        severity: Severity::Warning,
+        project: project.id.clone(),
+        code: None,
+        message: "this project predates the method (design before build, docs kept current): \
+                  `kanbanr config method --on` to take it, or `--off` to keep it off"
+            .to_string(),
+    });
+}
+
 /// How a reference reads in a message.
 fn describe(r: &crate::refs::Ref) -> String {
     use crate::refs::Ref;
@@ -817,6 +847,51 @@ mod tests {
         let warned = about(&silent.code, "declares no docs");
         assert_eq!(warned.len(), 1, "{issues:?}");
         assert_eq!(warned[0].0, Severity::Warning);
+    }
+
+    /// FEAT-193 Q3: a project from before the method is asked once to choose, and choosing either
+    /// way silences it; with `links` off, doctor stops reporting broken references.
+    #[test]
+    fn method_choice_nudge_and_links_part() {
+        let (store, _dir) = fixture();
+        let a = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .edit_feature(
+                "demo",
+                &a.code,
+                None,
+                Some("See FEAT-999.".into()),
+                None,
+                None,
+            )
+            .unwrap();
+        let messages = |store: &Store| -> Vec<String> {
+            run_project(store, "demo")
+                .unwrap()
+                .issues
+                .into_iter()
+                .map(|i| i.message)
+                .collect()
+        };
+        let before = messages(&store);
+        assert!(
+            before.iter().any(|m| m.contains("predates the method")),
+            "{before:?}"
+        );
+        assert!(before.iter().any(|m| m.contains("FEAT-999")), "{before:?}");
+
+        store
+            .set_method("demo", false, &[crate::method::Part::Links])
+            .unwrap();
+        let after = messages(&store);
+        assert!(
+            !after.iter().any(|m| m.contains("predates the method")),
+            "{after:?}"
+        );
+        assert!(
+            !after.iter().any(|m| m.contains("FEAT-999")),
+            "links off: {after:?}"
+        );
     }
 
     /// FEAT-080: every other gap check rightly stops caring once work is finished — you cannot fix

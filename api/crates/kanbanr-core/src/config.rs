@@ -1027,9 +1027,13 @@ impl ProjectConfig {
 
     /// The workflow a new project gets when it names none: the `default` preset (FEAT-116).
     pub fn for_new_project(name: &str) -> ProjectConfig {
-        preset("default")
-            .expect("the built-in default preset parses")
-            .into_config(name)
+        let file = preset("default").expect("the built-in default preset parses");
+        // Recorded as coming from the built-in default, so a later change to it — the method
+        // included — is reported like any process's (FEAT-193, Q3).
+        let source = file.source("default", Library::Builtin);
+        let mut config = file.into_config(name);
+        config.process = Some(source);
+        config
     }
 
     /// Is this status an explicit terminal (end) state of the workflow?
