@@ -357,6 +357,36 @@ Items reach the project's end status through the production stage of a release t
 into: the cut moves them there, and a gate asking for `in_release` stops them getting there any
 other way.
 
+### The git model
+
+The cadence also says how the code repository is laid out. `kanbanr git model` shows it:
+
+| Cadence | Line of integration | Production moves at |
+|---|---|---|
+| neither (trunk) | main | the merge of each finished item |
+| sprints only | `sprint/<SP>` of the running sprint | the sprint's close |
+| releases only | the integration branch (`integration` unless named) | the release cut |
+| sprints and releases | `sprint/<SP>` of the running sprint | the release cut |
+
+Items are built on `feat/<CODE>-<slug>` (a defect on `fix/<CODE>-<slug>` when the pattern is the
+default) or `spike/*`. A release is branched as `release/<VERSION>` when it reaches its first
+stage. main, the integration branch, `sprint/*` and `release/*` are **lines**: they take merges
+only, and a merge into one must say which items it brings (`Refs: kanbanr:<CODE>`, or `[no-ref]
+<why>` on the record).
+
+The model is always shown; it drives the work only when you switch it on:
+
+```bash
+kanbanr config cadence --git-model on
+```
+
+Then `start` branches an item from its line (making the integration branch from main the first
+time), and a fix for a release under test from that release's branch. `sprint start` makes
+`sprint/<SP>` from the newest sprint main does not have yet, else from main. A release's branch is
+made from the line its cadence says. The commit hooks refuse plain commits on a line, and a
+generated merge message that names no item. kanbanr never pushes: the code repository refuses a
+push from it outright.
+
 `kanbanr config workflow --write-agreement` writes the team's working agreement to the board,
 generated from the gates. Under Scrum that is the Definition of Ready and of Done. Because it is
 generated, it can't drift from what is enforced.

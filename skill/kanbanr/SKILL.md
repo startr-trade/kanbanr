@@ -877,6 +877,7 @@ kanbanr start FEAT-001 [--to STATUS] [--no-branch] [--override "<reason>"]
 kanbanr commit -m "…" [--ref R-2] [--ref TL-001/T3] [-a]   # trailer filled from the branch
 kanbanr finish [FEAT-001]         # gated: tasks complete, requirements proven
 kanbanr git install-hooks [--force] | uninstall-hooks | status
+kanbanr git model [--json]                       # main, the line, item branches, protected lines
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
 kanbanr approve FEAT-001 --rev <rev>   # only after the user chose Approve in a plan or question
 kanbanr signoff FEAT-001 design-review [--note …] [--doc path]   # a named sign-off a stage asks for — the user's, never Claude's
