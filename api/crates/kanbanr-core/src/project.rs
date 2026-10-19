@@ -404,8 +404,11 @@ mod tests {
         let repo = git2::Repository::init(&main).unwrap();
         // A worktree needs a commit to check out.
         let sig = git2::Signature::now("T", "t@x").unwrap();
-        let tree = repo.find_tree(repo.index().unwrap().write_tree().unwrap()).unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
         write_marker(
             &main,
             &Marker {
