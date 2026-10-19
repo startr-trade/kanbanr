@@ -12,6 +12,7 @@ unsafe extern "system" {}
 
 pub mod activity;
 pub mod adr;
+mod architecture;
 pub mod batch;
 pub mod charter;
 pub mod claude;
