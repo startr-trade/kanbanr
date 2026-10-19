@@ -1762,6 +1762,18 @@ impl Store {
         } else {
             None
         };
+        // A finish that would merge the item's branch is a move made from the code repository,
+        // never a side effect of a task write (FEAT-190, Q5).
+        let target = match target {
+            Some(to) if crate::gitmodel::move_would_merge(&config, &from, &to) => {
+                held = Some(format!(
+                    "all tasks are done, but it stays in {from}: finishing it merges its branch — \
+                     run `kanbanr move {feature} {to}` from the project folder to integrate it"
+                ));
+                None
+            }
+            other => other,
+        };
         let target = match target {
             Some(to) => match Self::check_gate(project, charter, ctx, feature, &to, None) {
                 Ok(_) => match Self::unproven(project, charter, ctx, feature)? {

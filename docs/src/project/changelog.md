@@ -15,7 +15,9 @@ All notable changes to kanbanr are documented here. The format follows
   into a sprint are brought up to date with its branch when it starts (a merge, never a rebase;
   conflicts are reported and left alone). A fix integrated into a release under test is flagged,
   and `kanbanr git forward <VERSION>` merges it forward into the line. Releases promoted to their
-  first stage make the integration line from main when it is not there yet.
+  first stage make the integration line from main when it is not there yet. Ticking an item's last task
+  does not complete it when completing would merge its branch: the task write says which move to
+  make from the project folder.
 - **The git model follows the cadence (FEAT-189).** `kanbanr git model` shows how the code
   repository is laid out: main, the line finished items integrate into (main; `sprint/<SP>`; or an
   `integration` branch), item branches (`feat/`, `fix/` for defects, `spike/`), and the lines that

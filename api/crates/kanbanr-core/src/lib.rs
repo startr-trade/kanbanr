@@ -1753,6 +1753,33 @@ requirements:
         assert!(held.contains("R-1"), "{held}");
     }
 
+    /// FEAT-190 Q5: with the git model on, ticking the last task does not complete an item whose
+    /// completion would merge its branch — it holds and says which move to make.
+    #[test]
+    fn auto_complete_holds_when_it_would_merge() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let (code, list) = defined_in_progress(&store, "Merges");
+        let mut cadence = store.load("demo").unwrap().config.cadence;
+        cadence.git_model = true;
+        store.set_cadence("demo", None, cadence).unwrap();
+        let (f, held) = store
+            .set_task_state_reported(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        assert_eq!(f.status, "Scheduled", "it stays where it is");
+        let held = held.expect("and says why");
+        assert!(
+            held.contains(&format!("kanbanr move {code} Completed")),
+            "{held}"
+        );
+    }
+
     /// FEAT-156 R-2: a batch is judged when it ends — ticking the last task and then adding an
     /// open one leaves the item where it was.
     #[test]
