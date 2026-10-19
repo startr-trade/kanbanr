@@ -3408,3 +3408,55 @@ fn where_names_the_questions_setup_must_ask() {
     assert!(ask(&work).1.is_empty());
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-182: a sign-off can be withdrawn from the CLI with a reason, never without one, and the
+/// brief then says it was withdrawn and why.
+#[test]
+fn cli_signoff_withdraw_round_trip() {
+    let (base, work) = togaf_scratch("signoff-withdraw");
+    togaf_board(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["signoff", "FEAT-001", "design-review"],
+    ));
+    let refused = run_in(
+        &base,
+        &work,
+        &["signoff", "FEAT-001", "design-review", "--withdraw"],
+    );
+    assert!(!refused.status.success(), "a withdrawal needs --reason");
+    let said = String::from_utf8(
+        ok(run_in(
+            &base,
+            &work,
+            &[
+                "signoff",
+                "FEAT-001",
+                "design-review",
+                "--withdraw",
+                "--reason",
+                "given for the old design",
+            ],
+        ))
+        .stdout,
+    )
+    .unwrap();
+    assert!(
+        said.contains("sign-off 'design-review' withdrawn"),
+        "{said}"
+    );
+    let shown =
+        String::from_utf8(ok(run_in(&base, &work, &["feature", "show", "FEAT-001"])).stdout)
+            .unwrap();
+    assert!(
+        shown.contains("Sign-off `design-review` withdrawn")
+            && shown.contains("given for the old design"),
+        "{shown}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}

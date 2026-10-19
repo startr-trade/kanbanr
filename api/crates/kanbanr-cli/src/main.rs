@@ -364,8 +364,15 @@ enum Command {
         by: Option<String>,
         /// The definition revision the user was shown (`kanbanr check <CODE> --json` gives it as
         /// `rev`). Refused if the definition changed since — what Claude passes (FEAT-159).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "withdraw")]
         rev: Option<String>,
+        /// Take back a sign-off given in error (FEAT-182). The earlier one stays as history and
+        /// stops counting. Needs --reason.
+        #[arg(long, requires = "reason", conflicts_with_all = ["note", "doc"])]
+        withdraw: bool,
+        /// Why the sign-off no longer stands (with --withdraw).
+        #[arg(long, requires = "withdraw")]
+        reason: Option<String>,
     },
     /// Manage a feature's persistent todo-lists (an epic can hold many).
     #[command(subcommand)]
@@ -6176,9 +6183,27 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             doc,
             by,
             rev,
+            withdraw,
+            reason,
         } => {
             let p = require_project(cli)?;
             let who = verdict_author(cli, by.as_ref())?;
+            if *withdraw {
+                let resp = client.write(
+                    Method::Post,
+                    &format!(
+                        "/projects/{p}/features/{code}/signoff/{}/withdraw",
+                        urlencode_segment(name)
+                    ),
+                    Some(json!({ "by": who, "reason": reason })),
+                )?;
+                print_write(
+                    cli,
+                    &resp,
+                    format!("{code}: sign-off '{name}' withdrawn by {who}"),
+                );
+                return Ok(());
+            }
             let resp = client.write(
                 Method::Post,
                 &format!(

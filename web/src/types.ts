@@ -121,7 +121,7 @@ export interface Source {
 export interface ApprovalEvent {
   at: string;
   by: string;
-  verdict: "approved" | "withdrawn";
+  verdict: "approved" | "ratified" | "withdrawn";
   reason?: string;
   rev?: string;
 }
@@ -140,6 +140,23 @@ export interface FeatureDefinition {
   started_unapproved?: string;
   /** A recorded reason this item is exempt from gap reporting. */
   exempt?: string;
+  /** Named sign-offs, given and withdrawn, oldest first (FEAT-114, FEAT-182). */
+  signoffs?: Signoff[];
+}
+
+/** One sign-off entry: given, or a withdrawal of it (FEAT-182). The latest per name decides. */
+export interface Signoff {
+  id: string;
+  by: string;
+  at: string;
+  /** The definition content it covered; empty on a withdrawal. */
+  rev: string;
+  note?: string;
+  doc?: string;
+  status?: string;
+  /** Absent means given. */
+  verdict?: "given" | "withdrawn";
+  reason?: string;
 }
 
 /** The six completeness dimensions, one line each. */

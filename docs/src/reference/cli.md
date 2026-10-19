@@ -43,6 +43,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr charter show / set` | why the project exists: purpose, goals, non-goals, constraints |
 | `kanbanr feature define <CODE> [--file …] [--template]` | an item's definition: statement, goals, Zachman, requirements and their tests |
 | `kanbanr signoff <CODE> <name>` | record a named sign-off a stage's gate asks for, pinned to the current definition |
+| `kanbanr signoff <CODE> <name> --withdraw --reason "…"` | takes a sign-off back; the earlier one stays on the record and stops counting |
 | `kanbanr ratify <CODE>` | agree after the fact to work started under a recorded override |
 | `kanbanr test <CODE> <R-n> <test> planned\|red\|green` / `kanbanr tests` | move a test along its lifecycle; list tracked tests and check each still exists |
 | `kanbanr defect <CODE> …` | what a defect cost and where it came from |
@@ -73,7 +74,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr check [CODE]` | what one item has not said, and what it cannot yet show |
 | `kanbanr review [CODE] [--pending] [--ui]` | the decision brief — one item, all of them, or in the browser |
 | `kanbanr approve <CODE> [--by …]` | records agreement, attributed to the board's commit identity |
-| `kanbanr unapprove <CODE> --reason "…"` | takes an agreement back; the record of having given it stays |
+| `kanbanr unapprove <CODE> --reason "…"` | takes an agreement back, with a reason it refuses to go without; the record of having given it stays |
 | `kanbanr capture` | reads a test run's output (run by the hook; you never call it) |
 | `kanbanr split-from <CODE> <PARENT>` | records that an item was sliced out of another |
 | `kanbanr sources [--write]` | imported items whose source file has gone |

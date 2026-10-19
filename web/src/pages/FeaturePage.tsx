@@ -10,7 +10,7 @@ import {
   listFullyCompleted,
   zachmanColumns,
 } from "../types";
-import type { Feature, Requirement, TestRef } from "../types";
+import type { Feature, Requirement, Signoff, TestRef } from "../types";
 
 /** Dedicated page for one feature (epic): Specification + a tile per todo-list (newest first). */
 export default function FeaturePage() {
@@ -294,6 +294,12 @@ function Definition({ feature, project }: { feature: Feature; project: string })
             ))}
           </ul>
         ) : null}
+        <Signoffs
+          feature={feature}
+          project={project}
+          writable={meta.data?.writes === true}
+          who={who}
+        />
         <div className="tiles">
           {zachmanColumns(def.zachman).map(({ column, answer }) => (
             <div className="tile" key={column}>
@@ -435,5 +441,123 @@ function FeatureActivity({ project, code, tick }: { project: string; code: strin
         ))}
       </ul>
     </section>
+  );
+}
+
+/**
+ * The sign-offs on an item, latest per name, with their history (FEAT-182). A sign-off given in
+ * error is withdrawn here with a reason, as an approval is: the earlier entry stays on the record
+ * and stops counting.
+ */
+function Signoffs({
+  feature,
+  project,
+  writable,
+  who,
+}: {
+  feature: Feature;
+  project: string;
+  writable: boolean;
+  who: string | null;
+}) {
+  const entries = feature.definition?.signoffs ?? [];
+  const [asking, setAsking] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [withdrawn, setWithdrawn] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  if (entries.length === 0) return null;
+  const latest = new Map<string, Signoff>();
+  for (const s of entries) latest.set(s.id, s);
+
+  const withdraw = async (name: string) => {
+    if (!who) return;
+    setBusy(true);
+    try {
+      await api.withdrawSignoff(project, feature.code, name, who, reason.trim());
+      setWithdrawn([...withdrawn, name]);
+      setAsking(null);
+      setReason("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="section">
+      <h3>Sign-offs</h3>
+      <ul className="dep-list">
+        {[...latest.values()].map((s) => {
+          const gone = s.verdict === "withdrawn" || withdrawn.includes(s.id);
+          return (
+            <li key={s.id}>
+              <span className={gone ? "chip warn" : "chip done"}>{s.id}</span>{" "}
+              <span className="muted small">
+                {gone && s.verdict === "withdrawn"
+                  ? `withdrawn by ${s.by} · ${day(s.at)}: ${s.reason ?? ""}`
+                  : gone
+                    ? "withdrawn"
+                    : `by ${s.by} · ${day(s.at)}${s.status ? ` (at ${s.status})` : ""}${s.note ? ` — ${s.note}` : ""}`}
+              </span>
+              {writable && !gone ? (
+                asking === s.id ? (
+                  <div className="review-actions">
+                    <label className="muted small" htmlFor={`withdraw-${s.id}`}>
+                      Why is this sign-off being withdrawn? The stage that asks for it is gated
+                      again until someone signs off afresh.
+                    </label>
+                    <textarea
+                      id={`withdraw-${s.id}`}
+                      className="reason"
+                      rows={2}
+                      autoFocus
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                      placeholder="e.g. given before the design review was held"
+                    />
+                    <div className="review-actions">
+                      <button
+                        className="btn btn-danger"
+                        onClick={() => withdraw(s.id)}
+                        disabled={busy || !reason.trim()}
+                      >
+                        {busy ? "recording…" : `Withdraw, recorded as ${who}`}
+                      </button>
+                      <button className="btn" onClick={() => setAsking(null)} disabled={busy}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    className="btn btn-danger"
+                    onClick={() => setAsking(s.id)}
+                    disabled={!who}
+                  >
+                    Withdraw
+                  </button>
+                )
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      {entries.length > latest.size ? (
+        <details className="muted small">
+          <summary>History</summary>
+          <ul className="dep-list">
+            {entries.map((s, i) => (
+              <li key={i}>
+                {day(s.at)} — {s.id} {s.verdict === "withdrawn" ? "withdrawn" : "given"} by {s.by}
+                {s.reason ? `: ${s.reason}` : ""}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+      {error ? <span className="chip warn">{error}</span> : null}
+    </div>
   );
 }
