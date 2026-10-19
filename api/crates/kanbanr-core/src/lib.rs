@@ -2678,6 +2678,8 @@ requirements:
     fn release_stage_recorded_with_history() {
         use serde_json::json;
         let (store, _d, _) = release_board();
+        // A release's first promotion makes its branch (FEAT-184), so these run with a repository.
+        let repo = crate::coderepo::tests::scratch_repo("stage-history");
         let cadence = |body: serde_json::Value| {
             crate::dispatch::dispatch(&store, "PUT", "/projects/demo/config/cadence", Some(&body))
         };
@@ -2698,20 +2700,42 @@ requirements:
         assert!(none.contains("at least one stage"), "{none}");
         cadence(json!({"release_stages": ["candidate", "qa", "uat", "live"]})).unwrap();
 
-        // A middle stage needs no code repository; an unknown one is named as such.
-        let unknown =
-            crate::releases::promote(&store, "demo", "v0.1.0", Some("test"), "Ada L", "", None)
+        // A release with no branch gets one before any stage, so even a middle stage needs the
+        // repository the first time (FEAT-184, R-4); an unknown stage is named as such.
+        let needs =
+            crate::releases::promote(&store, "demo", "v0.1.0", Some("qa"), "Ada L", "", None)
                 .unwrap_err()
                 .to_string();
+        assert!(needs.contains("needs the code repository"), "{needs}");
+        let unknown = crate::releases::promote(
+            &store,
+            "demo",
+            "v0.1.0",
+            Some("test"),
+            "Ada L",
+            "",
+            Some(&repo),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(unknown.contains("candidate, qa, uat, live"), "{unknown}");
-        let qa = crate::releases::promote(&store, "demo", "v0.1.0", Some("qa"), "Ada L", "", None)
-            .unwrap();
+        let qa = crate::releases::promote(
+            &store,
+            "demo",
+            "v0.1.0",
+            Some("qa"),
+            "Ada L",
+            "",
+            Some(&repo),
+        )
+        .unwrap();
         assert_eq!((qa.from.as_str(), qa.to.as_str()), ("", "qa"));
         // With no stage named, the next one.
-        crate::releases::promote(&store, "demo", "v0.1.0", None, "Bo K", "", None).unwrap();
+        crate::releases::promote(&store, "demo", "v0.1.0", None, "Bo K", "", Some(&repo)).unwrap();
         // Nobody to attribute a move to: refused.
         assert!(
-            crate::releases::promote(&store, "demo", "v0.2.0", Some("qa"), " ", "", None).is_err()
+            crate::releases::promote(&store, "demo", "v0.2.0", Some("qa"), " ", "", Some(&repo))
+                .is_err()
         );
 
         // Survives a round trip, with a key from a newer build kept.
@@ -2723,7 +2747,16 @@ requirements:
         )
         .unwrap();
         crate::releases::plan(&store, "demo", "v0.2.0", &[]).unwrap();
-        crate::releases::promote(&store, "demo", "v0.2.0", Some("qa"), "Ada L", "", None).unwrap();
+        crate::releases::promote(
+            &store,
+            "demo",
+            "v0.2.0",
+            Some("qa"),
+            "Ada L",
+            "",
+            Some(&repo),
+        )
+        .unwrap();
         let releases = crate::releases::load(&store, "demo").unwrap();
         let r = &releases[0];
         assert_eq!(r.stage, "uat");
@@ -2757,8 +2790,17 @@ requirements:
     #[test]
     fn promote_back_requires_reason_and_not_from_production() {
         let (store, _d, _) = release_board();
+        let repo = crate::coderepo::tests::scratch_repo("promote-back");
         let promote = |to: &str, reason: &str| {
-            crate::releases::promote(&store, "demo", "v0.1.0", Some(to), "Ada L", reason, None)
+            crate::releases::promote(
+                &store,
+                "demo",
+                "v0.1.0",
+                Some(to),
+                "Ada L",
+                reason,
+                Some(&repo),
+            )
         };
         promote("test", "").unwrap();
         promote("staging", "").unwrap();

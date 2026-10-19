@@ -70,6 +70,9 @@ pub struct Release {
     /// The code branch, set when promoted to the first stage (`release/<V>`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub branch: String,
+    /// The cut release this patches (FEAT-184); empty for an ordinary release.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parent: String,
     /// Keys this version does not know, kept and written back unchanged, so an older binary never
     /// deletes what a newer one recorded (as `Cadence` does, FEAT-151).
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
@@ -99,12 +102,17 @@ pub struct ReleaseReport {
     /// marked `done` (FEAT-137). The page used to keep its own copy of the rule, counting only the
     /// end status — a Done item in a planned scrum release read as unfinished.
     pub finished: usize,
+    /// For a patch: what its parent shipped, which the patch keeps (FEAT-184).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub included: Vec<String>,
 }
 
 /// Every release, reported.
 pub fn report_all(store: &Store, id: &str) -> Result<Vec<ReleaseReport>> {
     let project = store.load_meta(id)?;
-    Ok(load(store, id)?
+    let all = load(store, id)?;
+    Ok(all
+        .clone()
         .into_iter()
         .map(|release| {
             let items: Vec<&crate::FeatureItem> = project
@@ -119,9 +127,15 @@ pub fn report_all(store: &Store, id: &str) -> Result<Vec<ReleaseReport>> {
                 .iter()
                 .filter(|f| project.config.counts_as_done(&f.status))
                 .count();
+            let included = all
+                .iter()
+                .find(|r| !release.parent.is_empty() && r.version == release.parent)
+                .map(|r| r.shipped.clone())
+                .unwrap_or_default();
             ReleaseReport {
                 items: items.iter().map(|f| f.code.clone()).collect(),
                 finished,
+                included,
                 release,
             }
         })
@@ -177,6 +191,83 @@ pub fn add(store: &Store, id: &str, version: &str, target: &str, name: &str) -> 
     };
     releases.push(release.clone());
     save(store, id, &releases)?;
+    Ok(release)
+}
+
+/// Add a patch of a cut release (FEAT-184): it records its parent, branches `release/<V>` from the
+/// parent's tag, and starts at the first stage. Any cut release can be patched (Q1), an older
+/// supported one included; the version is the user's to name.
+#[allow(clippy::too_many_arguments)]
+pub fn add_patch(
+    store: &Store,
+    id: &str,
+    version: &str,
+    target: &str,
+    name: &str,
+    parent: &str,
+    by: &str,
+    repo: Option<&Path>,
+) -> Result<Release> {
+    let project = cadence_on(store, id)?;
+    let releases = load(store, id)?;
+    let parent = parent.trim();
+    let not_cut = || {
+        CoreError::Unsupported(format!(
+            "{parent} has not been cut (or has no tag), so there is nothing to patch"
+        ))
+    };
+    let p = releases
+        .iter()
+        .find(|r| r.version == parent)
+        .ok_or_else(not_cut)?;
+    if p.state != ReleaseState::Shipped {
+        return Err(not_cut());
+    }
+    let first = project
+        .config
+        .cadence
+        .stages()
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    let repo = repo.ok_or_else(|| needs_repo(version, &first))?;
+    if !coderepo::tag_exists(repo, parent) {
+        return Err(not_cut());
+    }
+    let branch = format!("release/{}", version.trim());
+    if coderepo::branch_exists(repo, &branch) {
+        return Err(CoreError::Unsupported(format!(
+            "{branch} already exists in {} — nothing was changed",
+            repo.display()
+        )));
+    }
+    // The board first refuses what it would (a duplicate version, a bad date), then the branch.
+    let added = add(store, id, version, target, name)?;
+    if let Err(e) = coderepo::create_branch_from(repo, &branch, &format!("refs/tags/{parent}")) {
+        let mut all = load(store, id)?;
+        all.retain(|r| r.version != added.version);
+        save(store, id, &all)?;
+        return Err(e);
+    }
+    let mut all = load(store, id)?;
+    let r = all
+        .iter_mut()
+        .find(|r| r.version == added.version)
+        .ok_or_else(|| CoreError::Unsupported(format!("no release {version}")))?;
+    r.parent = parent.to_string();
+    r.branch = branch.clone();
+    r.stage = first.clone();
+    r.stages.push(StageChange {
+        stage: first,
+        by: by.trim().to_string(),
+        at: crate::now_rfc3339(),
+        reason: "on creation, as a patch".to_string(),
+    });
+    let release = r.clone();
+    if let Err(e) = save(store, id, &all) {
+        let _ = coderepo::delete_branch(repo, &branch);
+        return Err(e);
+    }
     Ok(release)
 }
 
@@ -307,7 +398,10 @@ fn cut_with(store: &Store, id: &str, version: &str, change: Option<StageChange>)
     }
 
     let doc = format!("releases/{version}.md");
-    let notes = notes(&releases[index], &shipped, &carried);
+    let parent = releases
+        .iter()
+        .find(|r| !releases[index].parent.is_empty() && r.version == releases[index].parent);
+    let notes = notes(&releases[index], parent, &shipped, &carried);
     store.write_doc(id, &doc, &notes)?;
     let release = &mut releases[index];
     release.state = ReleaseState::Shipped;
@@ -395,6 +489,19 @@ pub struct Promoted {
     /// At the cut: the release notes written.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// A patch at the cut: its commits the integration branch lacks (FEAT-184). kanbanr lists them;
+    /// `kanbanr git forward` or the user merges them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub forward_merge: Vec<CommitLine>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub forward_into: String,
+}
+
+/// One commit, as a list shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CommitLine {
+    pub sha: String,
+    pub subject: String,
 }
 
 fn needs_repo(version: &str, stage: &str) -> CoreError {
@@ -482,6 +589,8 @@ pub fn promote(
         main_branch: String::new(),
         preview: Vec::new(),
         notes: None,
+        forward_merge: Vec::new(),
+        forward_into: String::new(),
     };
 
     // Back a stage: a decision someone made, so the reason is required (FEAT-183, Q2).
@@ -499,11 +608,11 @@ pub fn promote(
         return Ok(done);
     }
 
-    if target == stages.len() - 1 {
-        return promote_to_production(store, id, version, change, repo, done);
-    }
+    // Every forward move needs the release's branch: the first stage makes it, and so does a move
+    // that skipped the first stage, or a process whose one stage is also the cut (FEAT-184, R-4).
+    let original = releases.clone();
     let mut made = None;
-    if target == 0 {
+    if target == 0 || release.branch.is_empty() {
         let repo = repo.ok_or_else(|| needs_repo(version, &stage))?;
         let branch = format!("release/{version}");
         // Moved back to a stage before this one and forward again, it already has its branch.
@@ -539,6 +648,22 @@ pub fn promote(
             made = Some((repo, branch.clone()));
         }
         releases[index].branch = branch;
+    }
+    if target == stages.len() - 1 {
+        // The cut reads the release from the board, so a branch just made is recorded first; if
+        // the cut is refused, the branch and the record are both taken back.
+        if made.is_some() {
+            save(store, id, &releases)?;
+            done.release = releases[index].clone();
+        }
+        let cut = promote_to_production(store, id, version, change, repo, done);
+        if cut.is_err()
+            && let Some((repo, branch)) = made
+        {
+            let _ = coderepo::delete_branch(repo, &branch);
+            let _ = save(store, id, &original);
+        }
+        return cut;
     }
     let r = &mut releases[index];
     r.stage = stage;
@@ -606,8 +731,11 @@ fn promote_to_production(
         )));
     }
     // main must fast-forward to the release, so its tip after the cut is exactly the tagged commit
-    // (decided 19 Oct 2026). A release missing main's commits is refused, never merged here.
-    if !coderepo::is_ancestor(repo, &main, &branch) {
+    // (decided 19 Oct 2026). A release missing main's commits is refused, never merged here — except
+    // a patch of an older release, which is tagged and leaves main where it is (FEAT-184, R-5).
+    let patch = !done.release.parent.is_empty();
+    let moves_main = coderepo::is_ancestor(repo, &main, &branch);
+    if !moves_main && !patch {
         let missing = coderepo::log_between(repo, &branch, &main).unwrap_or_default();
         return Err(CoreError::Unsupported(format!(
             "{main} has commits {branch} lacks: merge {main} into the release branch first — \
@@ -620,27 +748,77 @@ fn promote_to_production(
         )));
     }
 
+    // For a patch: its commits the integration branch lacks, to be merged forward (R-3). When the
+    // integration branch is main and main moves to the patch, the move brings them.
+    let integration = if project.config.cadence.git_model {
+        crate::gitmodel::load(store, id, repo)
+            .ok()
+            .and_then(|(m, _)| m.integration_branch.or(m.line))
+            .unwrap_or_else(|| main.clone())
+    } else {
+        project
+            .config
+            .cadence
+            .integration_branch
+            .clone()
+            .filter(|b| !b.trim().is_empty())
+            .unwrap_or_else(|| main.clone())
+    };
+    let forward = if patch && !(integration == main && moves_main) {
+        coderepo::commits_between(repo, &integration, &branch)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| CommitLine {
+                sha: c.sha,
+                subject: c.subject,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     // 2. The repository: tag the release tip, then fast-forward main onto it.
     let tip = coderepo::rev_parse(repo, &branch)?;
     coderepo::create_tag(repo, version, &tip, &format!("Release {version}"))?;
-    let previous = match coderepo::fast_forward(repo, &main, &tip) {
-        Ok(previous) => previous,
-        Err(e) => return Err(rolled_back(e, coderepo::delete_tag(repo, version).err())),
+    let previous = if moves_main {
+        match coderepo::fast_forward(repo, &main, &tip) {
+            Ok(previous) => Some(previous),
+            Err(e) => return Err(rolled_back(e, coderepo::delete_tag(repo, version).err())),
+        }
+    } else {
+        None
     };
 
     // 3. The board: the cut, recording this stage change.
     match cut_with(store, id, version, Some(change)) {
         Ok(cut) => {
+            let mut notes = cut.notes;
+            if !forward.is_empty() {
+                notes.push_str(&format!("\n## To merge forward into {integration}\n\n"));
+                for c in &forward {
+                    notes.push_str(&format!(
+                        "- {} {}\n",
+                        &c.sha[..c.sha.len().min(12)],
+                        c.subject
+                    ));
+                }
+                store.write_doc(id, &cut.release.notes_doc, &notes)?;
+            }
             done.release = cut.release;
-            done.notes = Some(cut.notes);
+            done.notes = Some(notes);
             done.tagged = version.to_string();
-            done.main_branch = main;
+            if moves_main {
+                done.main_branch = main;
+            }
             done.preview = preview;
+            done.forward_merge = forward;
+            done.forward_into = integration;
             Ok(done)
         }
         // 4. The board refused after the repository moved: put the repository back.
         Err(e) => {
-            let reset = coderepo::reset_branch_to(repo, &main, &previous).err();
+            let reset = previous
+                .and_then(|previous| coderepo::reset_branch_to(repo, &main, &previous).err());
             let untag = coderepo::delete_tag(repo, version).err();
             Err(rolled_back(e, reset.or(untag)))
         }
@@ -658,15 +836,30 @@ fn rolled_back(e: CoreError, undo: Option<CoreError>) -> CoreError {
 }
 
 /// Release notes, from what each shipped item said it was for and what it had to do.
-fn notes(release: &Release, shipped: &[FeatureItem], carried: &[Carry]) -> String {
+fn notes(
+    release: &Release,
+    parent: Option<&Release>,
+    shipped: &[FeatureItem],
+    carried: &[Carry],
+) -> String {
     let mut out = format!("# {}", release.version);
     if !release.name.is_empty() {
         out.push_str(&format!(" — {}", release.name));
     }
     out.push_str(&format!(
-        "\n\n_Released {}._\n\n## What shipped\n\n",
+        "\n\n_Released {}._\n\n",
         crate::gantt::fmt_date(crate::sprints::today())
     ));
+    // A patch says what it patches and what it adds to it (FEAT-184).
+    match parent {
+        Some(p) => {
+            out.push_str(&format!(
+                "Patch of {}.\n\n## What this patch adds\n\n",
+                p.version
+            ));
+        }
+        None => out.push_str("## What shipped\n\n"),
+    }
     if shipped.is_empty() {
         out.push_str("Nothing planned for this release was finished.\n");
     }
@@ -684,6 +877,16 @@ fn notes(release: &Release, shipped: &[FeatureItem], carried: &[Carry]) -> Strin
             }
         }
     }
+    if let Some(p) = parent {
+        out.push_str(&format!("## Included from {}\n\n", p.version));
+        if p.shipped.is_empty() {
+            out.push_str("Nothing shipped in it.\n");
+        }
+        for code in &p.shipped {
+            out.push_str(&format!("- {code}\n"));
+        }
+        out.push('\n');
+    }
     if !carried.is_empty() {
         out.push_str("## Carried over\n\n");
         for c in carried {
@@ -696,6 +899,41 @@ fn notes(release: &Release, shipped: &[FeatureItem], carried: &[Carry]) -> Strin
 #[cfg(test)]
 mod tests {
     use crate::{ProjectConfig, Store};
+
+    /// FEAT-184 R-2: a patch's notes say what it patches, what it adds, and what it keeps from
+    /// its parent.
+    #[test]
+    fn patch_release_notes_show_parent_and_additions() {
+        let parent = super::Release {
+            version: "v1.0.0".into(),
+            shipped: vec!["FEAT-001".into(), "FEAT-002".into()],
+            ..Default::default()
+        };
+        let patch = super::Release {
+            version: "v1.0.1".into(),
+            parent: "v1.0.0".into(),
+            ..Default::default()
+        };
+        let fix: crate::FeatureItem = serde_yaml::from_str(
+            "code: FEAT-007\ntitle: Cart loses items\nspecification: ''\nstatus: Completed\n\
+             milestone: M\ncreated_at: '2026-10-19T00:00:00Z'\nupdated_at: '2026-10-19T00:00:00Z'\n",
+        )
+        .unwrap();
+        let text = super::notes(&patch, Some(&parent), &[fix], &[]);
+        assert!(text.contains("Patch of v1.0.0."), "{text}");
+        assert!(text.contains("## What this patch adds"), "{text}");
+        assert!(text.contains("### FEAT-007 — Cart loses items"), "{text}");
+        assert!(text.contains("## Included from v1.0.0"), "{text}");
+        assert!(
+            text.contains("- FEAT-001") && text.contains("- FEAT-002"),
+            "{text}"
+        );
+        let plain = super::notes(&parent, None, &[], &[]);
+        assert!(
+            plain.contains("## What shipped") && !plain.contains("Patch of"),
+            "{plain}"
+        );
+    }
 
     /// FEAT-138: a planned release's progress counts what is Done in a scrum project, as the sprint
     /// does — not only what has shipped.

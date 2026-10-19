@@ -4748,3 +4748,175 @@ fn project_delete_leaves_no_folder() {
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-184: cut v1.0.0 through its stages, so there is a tagged release to patch.
+fn cut_first_release(base: &std::path::Path, work: &std::path::Path) {
+    for args in [
+        &["release", "promote", "v1.0.0"][..],
+        &["release", "promote", "v1.0.0", "production"],
+    ] {
+        let o = run_in(base, work, args);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    }
+}
+
+/// FEAT-184 R-1: a patch names a cut release, is branched from its tag — not from where main has
+/// since gone — and starts at the first stage; a release that was never cut cannot be patched.
+#[test]
+fn patch_release_branches_from_parent_tag() {
+    let (base, work) = release_scratch("patch-branch");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let refused = run_in(
+        &base,
+        &work,
+        &["release", "add", "v1.0.1", "--patch-of", "v1.0.0"],
+    );
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("has not been cut"));
+
+    cut_first_release(&base, &work);
+    commit_on(&base, &work, "main", "work for the next release\n");
+    let said = ok(run_in(
+        &base,
+        &work,
+        &["release", "add", "v1.0.1", "--patch-of", "v1.0.0"],
+    ));
+    assert!(said.contains("a patch of v1.0.0"), "{said}");
+    assert_eq!(
+        rev(&base, &work, "release/v1.0.1"),
+        rev(&base, &work, "v1.0.0^{commit}")
+    );
+    assert_ne!(
+        rev(&base, &work, "release/v1.0.1"),
+        rev(&base, &work, "main")
+    );
+    let r = release_json(&base, &work, "v1.0.1");
+    assert_eq!(r["parent"], "v1.0.0");
+    assert_eq!(r["stage"], "candidate");
+    assert_eq!(r["branch"], "release/v1.0.1");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-184 R-5: a patch of a release main has moved past is tagged at production and leaves main
+/// where it is; an ordinary release in that state is still refused.
+#[test]
+fn patch_production_tags_without_moving_main() {
+    let (base, work) = release_scratch("patch-production");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    cut_first_release(&base, &work);
+    commit_on(&base, &work, "main", "work for the next release\n");
+    let main = rev(&base, &work, "main");
+    ok(run_in(
+        &base,
+        &work,
+        &["release", "add", "v1.0.1", "--patch-of", "v1.0.0"],
+    ));
+    commit_on(&base, &work, "release/v1.0.1", "the fix\n");
+    let said = ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.1", "production"],
+    ));
+    assert!(said.contains("main has moved on"), "{said}");
+    assert_eq!(
+        rev(&base, &work, "v1.0.1^{commit}"),
+        rev(&base, &work, "release/v1.0.1")
+    );
+    assert_eq!(rev(&base, &work, "main"), main, "main is left where it was");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-184 R-3: at production a patch lists its commits the integration branch lacks; with
+/// main as the integration branch and main moving to the patch, there is nothing to list.
+#[test]
+fn patch_release_reports_forward_merge() {
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let (base, work) = release_scratch("patch-forward");
+    cut_first_release(&base, &work);
+    ok(git_in(&base, &work, &["branch", "develop", "main"]));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--integration-branch", "develop"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["release", "add", "v1.0.1", "--patch-of", "v1.0.0"],
+    ));
+    commit_on(&base, &work, "release/v1.0.1", "the fix\n");
+    let said = ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.1", "production"],
+    ));
+    assert!(said.contains("merge these forward into develop"), "{said}");
+    assert!(said.contains("[no-ref] change"), "{said}");
+    let notes = ok(run_in(&base, &work, &["doc", "show", "releases/v1.0.1.md"]));
+    assert!(notes.contains("To merge forward into develop"), "{notes}");
+    let _ = std::fs::remove_dir_all(&base);
+
+    let (base, work) = release_scratch("patch-forward-main");
+    cut_first_release(&base, &work);
+    ok(run_in(
+        &base,
+        &work,
+        &["release", "add", "v1.0.1", "--patch-of", "v1.0.0"],
+    ));
+    commit_on(&base, &work, "release/v1.0.1", "the fix\n");
+    let said = ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.1", "production"],
+    ));
+    assert!(!said.contains("merge these forward"), "{said}");
+    assert_eq!(
+        rev(&base, &work, "main"),
+        rev(&base, &work, "release/v1.0.1")
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-184 R-4: a release with no branch gets one before any promotion — in a process whose one
+/// stage is the cut, and when the first stage is skipped.
+#[test]
+fn promote_without_branch_makes_it_first() {
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let (base, work) = release_scratch("one-stage");
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--release-stages", "live"],
+    ));
+    let said = ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    assert!(said.contains("created release/v1.0.0"), "{said}");
+    assert!(said.contains("tagged v1.0.0"), "{said}");
+    assert_eq!(release_json(&base, &work, "v1.0.0")["state"], "shipped");
+    let _ = std::fs::remove_dir_all(&base);
+
+    let (base, work) = release_scratch("skip-first");
+    let said = ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "staging"],
+    ));
+    assert!(said.contains("created release/v1.0.0"), "{said}");
+    assert_eq!(
+        release_json(&base, &work, "v1.0.0")["branch"],
+        "release/v1.0.0"
+    );
+    assert!(!rev(&base, &work, "release/v1.0.0").is_empty());
+    let _ = std::fs::remove_dir_all(&base);
+}

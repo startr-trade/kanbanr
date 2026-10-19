@@ -1034,6 +1034,10 @@ enum ReleaseCmd {
         /// the integration branch in the code repository this runs in (FEAT-183).
         #[arg(long)]
         branch: bool,
+        /// A patch of this cut release: `release/<VERSION>` is made from its tag, and the patch
+        /// starts at the first stage (FEAT-184). Run it from the project folder.
+        #[arg(long, conflicts_with = "branch")]
+        patch_of: Option<String>,
     },
     /// List the project's releases.
     List,
@@ -7984,17 +7988,36 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             target,
             name,
             branch,
+            patch_of,
         } => {
-            let resp = client.write(
+            let by = match patch_of {
+                Some(_) => Some(verdict_author(cli, None)?),
+                None => None,
+            };
+            let resp = client.write_in(
                 Method::Post,
                 &format!("/projects/{p}/releases"),
                 Some(obj(vec![
                     ("version", Some(json!(version))),
                     ("target", target.clone().map(|t| json!(t))),
                     ("name", name.clone().map(|n| json!(n))),
+                    ("patch_of", patch_of.clone().map(|v| json!(v))),
+                    ("by", by.map(|b| json!(b))),
                 ])),
+                code_repo().as_deref(),
             )?;
-            print_write(cli, &resp, format!("added release {version}"));
+            let said = match patch_of {
+                Some(parent) => {
+                    let v: Value = serde_json::from_str(&resp)?;
+                    format!(
+                        "added {version}, a patch of {parent}: {} made from the {parent} tag, at {}",
+                        v["branch"].as_str().unwrap_or_default(),
+                        v["stage"].as_str().unwrap_or_default()
+                    )
+                }
+                None => format!("added release {version}"),
+            };
+            print_write(cli, &resp, said);
             if *branch {
                 let project = get_project(client, &p)?;
                 let first = project.config.cadence.stages().first().cloned();
@@ -8160,10 +8183,13 @@ fn promote_release(
         said.push_str(&format!("; created {b}"));
     }
     if let Some(t) = v["tagged"].as_str() {
-        said.push_str(&format!(
-            "; tagged {t}, {} fast-forwarded to it",
-            v["main_branch"].as_str().unwrap_or("main")
-        ));
+        match v["main_branch"].as_str() {
+            Some(main) => said.push_str(&format!("; tagged {t}, {main} fast-forwarded to it")),
+            // A patch of an older release leaves main where it is (FEAT-184).
+            None => said.push_str(&format!(
+                "; tagged {t}; main has moved on, so it was left as it is"
+            )),
+        }
     }
     print_write(cli, &resp, said);
     if !cli.json && v["tagged"].is_string() {
@@ -8181,9 +8207,34 @@ fn promote_release(
                 c["why"].as_str().unwrap_or("")
             );
         }
+        let forward: Vec<&Value> = v["forward_merge"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .collect();
+        if !forward.is_empty() {
+            println!(
+                "  merge these forward into {} (`kanbanr git forward {version}` with the git model \
+                 on, or by hand):",
+                v["forward_into"]
+                    .as_str()
+                    .unwrap_or("the integration branch")
+            );
+            for c in forward {
+                let sha = c["sha"].as_str().unwrap_or_default();
+                println!(
+                    "    {} {}",
+                    &sha[..sha.len().min(12)],
+                    c["subject"].as_str().unwrap_or_default()
+                );
+            }
+        }
         println!(
-            "  nothing was pushed: push the tag and {} when you are ready",
-            v["main_branch"].as_str().unwrap_or("main")
+            "  nothing was pushed: push the tag{} when you are ready",
+            v["main_branch"]
+                .as_str()
+                .map(|m| format!(" and {m}"))
+                .unwrap_or_default()
         );
     }
     Ok(())
