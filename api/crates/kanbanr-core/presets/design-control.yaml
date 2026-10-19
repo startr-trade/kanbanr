@@ -36,7 +36,7 @@ gates:
   Verification:
     purpose: Verify the outputs meet the inputs — the review is recorded before this starts.
     requires: [tests_named]
-    signoffs: [design-review]
+    signoffs: [verification-review]
   Validation:
     roles: [integrate]
     purpose: Validate that the result serves its intended use.

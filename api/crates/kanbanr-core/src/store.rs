@@ -2672,6 +2672,47 @@ impl Store {
         Ok(project.config)
     }
 
+    /// Turn parts of the method on or off for a project (FEAT-193). Off takes their fragments out
+    /// of the workflow and records the choice, so applying or updating a process keeps them out;
+    /// on puts them back. A workflow that matched its saved process still does afterwards — its
+    /// record is re-stamped — and one already edited stays edited. Nothing is written if the result
+    /// does not check. Returns the config and a note for each part that had nowhere to go.
+    pub fn set_method(
+        &self,
+        id: &str,
+        on: bool,
+        parts: &[crate::method::Part],
+    ) -> Result<(ProjectConfig, Vec<String>)> {
+        let mut config = self.load_meta(id)?.config;
+        let mut wf = crate::config::WorkflowFile::from_config(&config);
+        let was_current = config
+            .process
+            .as_ref()
+            .is_some_and(|s| s.rev == wf.content_rev());
+        let notes = if on {
+            let notes = crate::method::add(&mut wf, parts);
+            config.method.off.retain(|p| !parts.contains(p));
+            notes
+        } else {
+            crate::method::remove(&mut wf, parts);
+            config.method.off.extend_from_slice(parts);
+            config.method.off.sort();
+            config.method.off.dedup();
+            Vec::new()
+        };
+        if let Some(problem) = wf.problems().into_iter().next() {
+            return Err(problem);
+        }
+        config.method.chosen_at = crate::now_rfc3339();
+        config.gates = wf.gates;
+        let rev = crate::config::WorkflowFile::from_config(&config).content_rev();
+        if was_current && let Some(source) = config.process.as_mut() {
+            source.rev = rev;
+        }
+        self.save_config(id, &config)?;
+        Ok((config, notes))
+    }
+
     /// The statuses a workflow of `statuses` would remove while items still sit in them, with how
     /// many (FEAT-168: `process check` reports these against a project, the store refuses them).
     pub fn statuses_in_use(project: &Project, statuses: &[String]) -> Vec<(String, usize)> {

@@ -35,6 +35,7 @@ pub mod hash;
 pub mod lessons;
 pub mod library;
 pub mod mermaid;
+pub mod method;
 pub mod mirror;
 pub mod models;
 pub mod portfolio;
@@ -1672,6 +1673,85 @@ requirements:
         assert_eq!((f.status.as_str(), held), ("Completed", None));
     }
 
+    /// FEAT-193: the method joins the built-in rule instead of replacing it. A process with only
+    /// role labels (scheduled, default) still asks for a definition and an approval to start, makes
+    /// the branch there, and still holds the last task of an item whose requirement is unproven
+    /// (FEAT-156) — now with the design asked for as well.
+    #[test]
+    fn builtin_rule_kept_with_method() {
+        use crate::readiness::{Check, Condition};
+        let (store, _d) = temp_store();
+        let config = crate::config::preset("scheduled")
+            .unwrap()
+            .into_config("demo");
+        assert!(
+            !config.declares_gates(),
+            "role-addressed gates add, they do not declare"
+        );
+        let gates = config.effective_gates();
+        let start = gates.get("Scheduled").unwrap();
+        for c in [
+            Condition::Check(Check::Definition),
+            Condition::Check(Check::Approved),
+            Condition::SpecSections {
+                spec_sections: vec!["Design".into()],
+            },
+        ] {
+            assert!(start.requires.contains(&c), "{c:?}: {start:?}");
+        }
+        assert!(start.signoffs.contains(&"design-review".to_string()));
+        assert!(start.on_enter.contains(&crate::config::Action::Branch));
+        let end = gates.get("Completed").unwrap();
+        assert!(end.requires.contains(&Condition::Check(Check::DocsUpdated)));
+        assert!(end.signoffs.contains(&"docs-folded".to_string()));
+
+        // The method's end gate holds a finish without the docs folded in.
+        store.init_project("demo", config).unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let (code, list) = defined_in_progress(&store, "Unfolded");
+        let (f, held) = store
+            .set_task_state_reported(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        assert_eq!(f.status, "Scheduled");
+        let held = held.expect("and says why");
+        assert!(held.contains("docs-folded"), "{held}");
+
+        // With the docs parts off, FEAT-156's own rule is still there underneath.
+        let (store, _d) = temp_store();
+        let mut file = crate::config::preset("scheduled").unwrap();
+        crate::method::remove(
+            &mut file,
+            &[crate::method::Part::Docs, crate::method::Part::DocsFolded],
+        );
+        store
+            .init_project("demo", file.into_config("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let (code, list) = defined_in_progress(&store, "Unproven");
+        let (f, held) = store
+            .set_task_state_reported(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        assert_eq!(f.status, "Scheduled", "it stays where it is");
+        let held = held.expect("and says why");
+        assert!(held.contains("R-1"), "{held}");
+    }
+
     /// FEAT-156 R-2: a batch is judged when it ends — ticking the last task and then adding an
     /// open one leaves the item where it was.
     #[test]
@@ -1913,6 +1993,14 @@ requirements:
 
     /// Adopt the method: the start gate only applies to projects that have a charter, and only to
     /// items created after it was adopted — so upgrading never breaks an existing board.
+    /// Take the method (FEAT-193) off a test project, for tests about other gates.
+    fn without_method(store: &Store, project: &str) {
+        let config = store.load(project).unwrap().config;
+        let mut wf = crate::config::WorkflowFile::from_config(&config);
+        crate::method::remove(&mut wf, &crate::method::Part::ALL);
+        store.set_gates(project, wf.gates).unwrap();
+    }
+
     fn adopt_charter(store: &Store, id: &str) {
         crate::charter::save(
             store,
@@ -2219,8 +2307,9 @@ requirements:
         // The Mermaid export names each gate, and a note never carries a `;` (L-10).
         let diagram = crate::mermaid::to_state_diagram(&config);
         assert!(
-            diagram
-                .contains("note left of Verification: needs tests named, sign-off design-review"),
+            diagram.contains(
+                "note left of Verification: needs tests named, sign-off verification-review"
+            ),
             "{diagram}"
         );
         assert!(
@@ -2731,6 +2820,8 @@ requirements:
             Some(&json!({"name": "team", "workflow": "scrum"})),
         )
         .unwrap();
+        // This is about the sprint gate, not the method (FEAT-193).
+        without_method(&store, "team");
         adopt_charter(&store, "team");
         store
             .add_milestone("team", "M", "", vec![], Some("M".into()))
@@ -3556,7 +3647,10 @@ requirements:
         for config in [
             ProjectConfig::default_for("d"),
             togaf,
-            ProjectConfig::for_new_project("n"),
+            // The built-in rule itself; the method on top of it is FEAT-193's test.
+            crate::config::preset_bare("default")
+                .unwrap()
+                .into_config("n"),
         ] {
             let gates = config.effective_gates();
             let first_active = config.displayed_states.iter().find(|s| {

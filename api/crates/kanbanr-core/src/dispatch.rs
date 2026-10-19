@@ -344,6 +344,7 @@ fn build_project_config(store: &Store, name: &str, body: &Value) -> Result<Proje
                 estimate_unit: Default::default(),
                 cadence: Default::default(),
                 process: None,
+                method: Default::default(),
             }
         }
         None => {
@@ -388,6 +389,9 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
     let base = match preset {
         Some(name) => {
             let (file, library) = store.resolve_process(&name)?;
+            // Shaped by the project's own choice, so a part it turned off stays off (FEAT-193).
+            let choice = store.load_meta(p)?.config.method;
+            let file = crate::method::shaped(file, &choice);
             source = Some(file.source(&name, library));
             Some(file.into_config(p))
         }
@@ -943,6 +947,21 @@ pub fn dispatch_in(
             code,
             str_field(b, "carry_to").as_deref(),
         )?),
+        // The method, on by default (FEAT-193): which parts a project keeps.
+        ("GET", ["projects", p, "config", "method"]) => {
+            ser(&crate::method::status(&store.load_meta(p)?.config))
+        }
+        ("PUT", ["projects", p, "config", "method"]) => {
+            let on = bool_field(b, "on").ok_or_else(|| {
+                CoreError::Unsupported("say whether to turn the parts on or off: `on`".into())
+            })?;
+            let parts = crate::method::parse_parts(&vec_field(b, "parts").unwrap_or_default())?;
+            let (config, notes) = store.set_method(p, on, &parts)?;
+            ser(&serde_json::json!({
+                "parts": crate::method::status(&config),
+                "notes": notes,
+            }))
+        }
         ("PUT", ["projects", p, "config", "cadence"]) => {
             let unit = match str_field(b, "estimate_unit").as_deref() {
                 None => None,
@@ -1414,6 +1433,22 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "milestones"] => "add milestone".into(),
         ["projects", _p, "milestones", c] if del => format!("delete milestone {c}"),
         ["projects", _p, "milestones", c] => format!("edit milestone {c}"),
+        ["projects", p, "config", "method"] => {
+            let on = body
+                .and_then(|b| b.get("on"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let parts: Vec<String> = body
+                .and_then(|b| b.get("parts"))
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .filter(|v: &Vec<String>| !v.is_empty())
+                .unwrap_or_else(|| vec!["all".to_string()]);
+            format!(
+                "method {} {} for {p}",
+                parts.join(", "),
+                if on { "on" } else { "off" }
+            )
+        }
         ["projects", _p, "config", what] => format!("update config: {what}"),
         ["projects", _p, "sprints"] => "add a sprint".into(),
         ["projects", _p, "releases"] => "add a release".into(),

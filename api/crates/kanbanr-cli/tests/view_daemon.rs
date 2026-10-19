@@ -176,6 +176,8 @@ fn review_and_approve_through_the_daemon() {
 
     run(&["identity", "--name", "Tester", "--email", "t@example.com"]);
     run(&[&p[..], &["project", "init", "demo"][..]].concat());
+    // Approval is the subject here; the method's sign-offs would join the queue (FEAT-193).
+    run(&[&p[..], &["config", "method", "--off"][..]].concat());
     run(&[
         &p[..],
         &["milestone", "add", "--name", "M", "--code", "MS-1"][..],

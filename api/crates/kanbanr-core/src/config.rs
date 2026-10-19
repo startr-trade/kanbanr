@@ -79,6 +79,13 @@ pub struct ProjectConfig {
     /// measured against. An older kanbanr keeps it through `extra`, so it needs no schema bump.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<ProcessSource>,
+    /// Which parts of the method this project turned off, and when it chose (FEAT-193). Absent:
+    /// never chosen, everything on.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::method::MethodChoice::is_default"
+    )]
+    pub method: crate::method::MethodChoice,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -539,8 +546,18 @@ pub fn versioned(
     Ok((new, changed))
 }
 
-/// A preset by name, or an error that lists the ones there are.
+/// A built-in process as it applies: the file as written, with the method merged in (FEAT-193) —
+/// design before build, and living documentation, at the stages holding the build and integrate
+/// roles. A project that turned parts off has them taken out again where it applies a process.
 pub fn preset(name: &str) -> crate::Result<WorkflowFile> {
+    let mut file = preset_bare(name)?;
+    crate::method::add(&mut file, &crate::method::Part::GATES);
+    Ok(file)
+}
+
+/// A preset by name exactly as its file is written, without the method; or an error that lists
+/// the ones there are.
+pub fn preset_bare(name: &str) -> crate::Result<WorkflowFile> {
     let key = name.trim().to_ascii_lowercase();
     let text = PRESETS
         .iter()
@@ -576,6 +593,7 @@ impl WorkflowFile {
             estimate_unit: self.estimate_unit,
             cadence: self.cadence,
             process: None,
+            method: Default::default(),
         };
         config.schema_version = config.required_schema_version();
         config
@@ -1073,7 +1091,12 @@ impl ProjectConfig {
     /// Does the workflow declare gates of its own (FEAT-188)? Gates that only label roles do not:
     /// such a workflow keeps the built-in rule, as one with no gates at all does.
     pub fn declares_gates(&self) -> bool {
-        self.gates.values().any(|g| !g.is_role_label())
+        // A gate addressed to a role (`"@build"`) adds to whatever the stage enforces; it does not
+        // replace the built-in rule. Counting it here once made the default process drop its
+        // start rule the moment anything was addressed to a role (FEAT-193).
+        self.gates
+            .iter()
+            .any(|(k, g)| !k.starts_with(ROLE_KEY_PREFIX) && !g.is_role_label())
     }
 
     /// The roles declared on status-keyed gates, if any are.
@@ -1237,7 +1260,7 @@ mod tests {
     use super::*;
 
     fn config_of(name: &str) -> ProjectConfig {
-        preset(name).unwrap().into_config("p")
+        preset_bare(name).unwrap().into_config("p")
     }
 
     /// FEAT-188 R-1: each role resolves to one status; a status may hold several.
@@ -1319,6 +1342,36 @@ mod tests {
         assert_eq!(roles.status(Role::Design), None, "never inferred");
         assert_eq!(roles.status(Role::Integrate), None, "never inferred");
         assert_eq!(config.branch_status().as_deref(), Some("Scheduled"));
+    }
+
+    /// FEAT-193 R-1: every built-in process carries the method — the build-role stage asks for the
+    /// design and its review, the integrate-role stage for the docs and their sign-off — and still
+    /// checks clean.
+    #[test]
+    fn presets_include_method_gates() {
+        use crate::readiness::{Check, Condition};
+        for (name, _) in presets() {
+            let file = preset(name).unwrap();
+            assert!(file.problems().is_empty(), "{name}: {:?}", file.problems());
+            let config = file.into_config("p");
+            let gates = config.effective_gates();
+            let build = config.role_status(Role::Build).expect(name);
+            let integrate = config.role_status(Role::Integrate).expect(name);
+            let b = gates.get(&build).unwrap();
+            assert!(
+                b.requires.contains(&Condition::SpecSections {
+                    spec_sections: vec!["Design".into()]
+                }),
+                "{name} {build}"
+            );
+            assert!(b.signoffs.contains(&"design-review".to_string()), "{name}");
+            let i = gates.get(&integrate).unwrap();
+            assert!(
+                i.requires.contains(&Condition::Check(Check::DocsUpdated)),
+                "{name}"
+            );
+            assert!(i.signoffs.contains(&"docs-folded".to_string()), "{name}");
+        }
     }
 
     /// FEAT-188: role labels alone keep the built-in rule — In Progress still asks for a definition

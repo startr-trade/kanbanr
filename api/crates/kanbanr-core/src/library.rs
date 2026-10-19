@@ -153,7 +153,11 @@ pub fn drift(
 ) -> Option<Drift> {
     let source = config.process.clone()?;
     let mine = WorkflowFile::from_config(config).content_rev();
+    // The process as this project takes it: a part of the method it turned off is a choice, not
+    // an edit, and not news (FEAT-193).
+    let current = current.map(|c| crate::method::shaped(c.clone(), &config.method));
     let newer = current
+        .as_ref()
         .filter(|c| c.content_rev() != source.rev)
         .map(|c| c.version());
     Some(Drift {
