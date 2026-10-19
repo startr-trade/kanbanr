@@ -8,8 +8,13 @@ all-features = false
 version = 2
 # Vulnerabilities, unsound and unmaintained crates all fail. The one sanctioned exception is a
 # finding with no fix anyone can reach, listed here with its reason and the item tracking it —
-# never silently. None today.
-ignore = []
+# never silently.
+ignore = [
+    # unsafe-libyaml (via serde_yaml 0.9, which reads and writes every board file) is archived and
+    # unmaintained, with no safe upgrade and no known vulnerability. Replacing the YAML library is
+    # FEAT-187; remove this entry when it lands. Recorded 19 Oct 2026 (FEAT-186).
+    { id = "RUSTSEC-2024-0449", reason = "no safe upgrade; replacing serde_yaml is tracked as FEAT-187" },
+]
 
 [licenses]
 version = 2
