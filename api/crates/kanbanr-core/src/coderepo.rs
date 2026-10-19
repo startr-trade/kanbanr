@@ -13,6 +13,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn run(root: &Path, args: &[&str]) -> Result<Output> {
+    // kanbanr never publishes anything (FEAT-189): pushing is whoever reviewed it, by hand.
+    if args.first() == Some(&"push") {
+        return Err(CoreError::Git(
+            "kanbanr never pushes: push it yourself once you have checked it".into(),
+        ));
+    }
     Command::new("git")
         .args(args)
         .current_dir(root)
@@ -119,6 +125,42 @@ pub fn branch_exists(root: &Path, name: &str) -> bool {
 /// working tree to another branch under them.
 pub fn create_branch_from(root: &Path, name: &str, from: &str) -> Result<()> {
     git(root, &["branch", name, from]).map(|_| ())
+}
+
+/// Take away a branch this run made, when the board step after it failed (FEAT-189). Never used
+/// on a branch someone else made.
+pub fn delete_branch(root: &Path, name: &str) -> Result<()> {
+    git(root, &["branch", "-D", name]).map(|_| ())
+}
+
+/// The local branches with their tips, and which of them `main` already contains (FEAT-189): one
+/// `for-each-ref` and one `branch --merged`.
+pub fn branch_facts(root: &Path, main: &str) -> Result<crate::gitmodel::BranchFacts> {
+    let mut facts = crate::gitmodel::BranchFacts {
+        main: main.to_string(),
+        ..Default::default()
+    };
+    let refs = git(
+        root,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short) %(objectname)",
+            "refs/heads",
+        ],
+    )?;
+    for line in refs.lines() {
+        if let Some((name, sha)) = line.rsplit_once(' ') {
+            facts.branches.insert(name.to_string(), sha.to_string());
+        }
+    }
+    if facts.branches.contains_key(main) {
+        let merged = git(
+            root,
+            &["branch", "--merged", main, "--format=%(refname:short)"],
+        )?;
+        facts.merged_into_main = merged.lines().map(|l| l.trim().to_string()).collect();
+    }
+    Ok(facts)
 }
 
 pub fn tag_exists(root: &Path, tag: &str) -> bool {

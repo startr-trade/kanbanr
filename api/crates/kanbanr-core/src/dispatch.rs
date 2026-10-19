@@ -1004,6 +1004,8 @@ pub fn dispatch_in(
                     Some(name) => Some(name.trim().to_string()).filter(|n| !n.is_empty()),
                     None => current.main_branch,
                 },
+                // FEAT-189: branching follows the git model only when switched on.
+                git_model: bool_field(b, "git_model").unwrap_or(current.git_model),
             };
             ser(&store.set_cadence(p, unit, cadence)?)
         }

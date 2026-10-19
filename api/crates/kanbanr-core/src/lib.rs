@@ -30,6 +30,7 @@ pub mod eventing;
 pub mod export;
 pub mod gantt;
 pub mod git;
+pub mod gitmodel;
 pub mod graph;
 pub mod hash;
 pub mod lessons;
