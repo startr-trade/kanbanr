@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, type MouseEvent } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import mermaid from "mermaid";
+import DOMPurify from "dompurify";
 import { markdownToSafeHtml, safeSvg } from "../markdownHtml";
+import { useBoardIndex } from "../useBoardIndex";
 
 // Unique-per-render id source for mermaid (ids must be stable strings, unique across renders).
 let mermaidSeq = 0;
@@ -14,6 +17,8 @@ let mermaidSeq = 0;
  *   relative image name is meaningful in *any* docs folder (it resolves to `<that-folder>/<name>`),
  *   served by the view daemon's `/docs/raw` endpoint.
  * - Fenced ```mermaid blocks are rendered to SVG diagrams (flowcharts, sequence, etc.).
+ * - References to the board (`FEAT-012`, `ADR-0005`, a doc path…) link to their pages, and a link
+ *   into the monitor navigates in place rather than reloading it (FEAT-181).
  */
 export default function Markdown({
   source,
@@ -22,7 +27,21 @@ export default function Markdown({
   source: string;
   resolveImage?: (src: string) => string;
 }) {
-  const html = useMemo(() => markdownToSafeHtml(source, resolveImage), [source, resolveImage]);
+  const { project } = useParams();
+  const index = useBoardIndex(project);
+  const navigate = useNavigate();
+  const html = useMemo(
+    () => markdownToSafeHtml(source, resolveImage, DOMPurify, index),
+    [source, resolveImage, index],
+  );
+  const follow = (e: MouseEvent<HTMLDivElement>) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = (e.target as HTMLElement).closest?.("a");
+    const target = a?.getAttribute("href");
+    if (!target || !target.startsWith("/p/")) return;
+    e.preventDefault();
+    navigate(target);
+  };
 
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -71,5 +90,5 @@ export default function Markdown({
     });
   }, [html]);
 
-  return <div className="markdown" ref={ref} dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div className="markdown" ref={ref} onClick={follow} dangerouslySetInnerHTML={{ __html: html }} />;
 }

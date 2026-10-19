@@ -1857,7 +1857,19 @@ fn cli_trace_and_why_follow_the_chain_in_both_directions() {
         "R-1",
     ]);
 
+    // A doc that names the item in its text is an edge too (FEAT-181), followed both ways.
+    run(&[
+        "doc",
+        "add",
+        "design/cart.md",
+        "--content",
+        "# Cart\n\nHow FEAT-001 keeps a cart.\n",
+    ]);
+    let doc = run(&["trace", "design/cart.md"]);
+    assert!(doc.contains("FEAT-001"), "{doc}");
+
     let why = run(&["why", "src/cart.rs:2"]);
+    assert!(why.contains("Documented in: design/cart.md"), "{why}");
     assert!(why.contains("FEAT-001/R-1"), "{why}");
     assert!(
         why.contains("THE SYSTEM SHALL retain it for 7 days"),

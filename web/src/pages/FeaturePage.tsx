@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync, useLiveTick } from "../live";
+import { useScrollToHash } from "../useBoardIndex";
 import Markdown from "../components/Markdown";
 import { ErrorBox, FeatureBadges, Loading, LiveDot, TaskBadge, progress } from "../components/bits";
 import {
@@ -17,6 +18,7 @@ export default function FeaturePage() {
   const { project = "", code = "" } = useParams();
   const tick = useLiveTick(api.projectEvents(project));
   const { data, error, loading } = useAsync(() => api.getProject(project), [project, tick]);
+  useScrollToHash(!!data);
 
   if (loading && !data) return <Loading />;
   if (error) return <ErrorBox error={error} />;
@@ -335,7 +337,7 @@ function Definition({ feature, project }: { feature: Feature; project: string })
 function RequirementTile({ requirement: r }: { requirement: Requirement }) {
   const tests = r.tests ?? [];
   return (
-    <section className="todo-tile">
+    <section className="todo-tile" id={r.id}>
       <div className="todo-tile-head">
         <code className="taskkey">{r.id}</code>
         <span className="badge kind">{r.kind}</span>
