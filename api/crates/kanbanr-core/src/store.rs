@@ -1409,6 +1409,33 @@ impl Store {
         Ok((f, warnings))
     }
 
+    /// What moving `code` to `to` would meet, without moving it (FEAT-190): the status, the edge
+    /// and the gate, judged exactly as the move judges them. A move that would merge a branch first
+    /// asks this, so a refused move never leaves a merge behind.
+    pub fn gate_preview(
+        &self,
+        id: &str,
+        code: &str,
+        to: &str,
+        reason: Option<&str>,
+    ) -> Result<Vec<crate::readiness::Gap>> {
+        let project = self.load(id)?;
+        if !project.config.has_status(to) {
+            return Err(CoreError::UnknownStatus(to.to_string()));
+        }
+        let from = project.feature(code)?.status.clone();
+        if !project.config.transition_allowed(&from, to) {
+            return Err(CoreError::TransitionNotAllowed {
+                from,
+                to: to.to_string(),
+            });
+        }
+        let charter = crate::charter::load(self, id)?;
+        let ctx = crate::readiness::Context::load(self, id, &project.config);
+        let reason = reason.map(str::trim).filter(|r| !r.is_empty());
+        Ok(Self::check_gate(&project, &charter, &ctx, code, to, reason)?.warnings)
+    }
+
     /// The one gated move, shared by the route and the batch path — the batch is the primary way
     /// work is started, so exempting it would make every gate decorative.
     fn gated_move_on(
@@ -2190,12 +2217,22 @@ impl Store {
                     if skipped.contains(&code) {
                         return Ok(skip("feature.move", &code));
                     }
+                    let code = resolve(&aliases, &code);
+                    // A move that integrates merges a branch, which a batch cannot undo: it runs
+                    // on its own (FEAT-190).
+                    if let Ok(f) = project.feature(&code)
+                        && crate::gitmodel::move_would_merge(&project.config, &f.status, &to)
+                    {
+                        return Err(CoreError::Unsupported(format!(
+                            "move {code} on its own: integrating it merges its branch"
+                        )));
+                    }
                     let (f, warnings) = Self::gated_move_on(
                         &mut project,
                         &mut pending,
                         &charter,
                         &ctx,
-                        &resolve(&aliases, &code),
+                        &code,
                         &to,
                         unapproved.as_deref(),
                     )?;
