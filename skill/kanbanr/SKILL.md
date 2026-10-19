@@ -327,7 +327,7 @@ organisation's own process file changes what you ask with nothing changed here:
 
 | Check | What you do |
 |---|---|
-| `definition`, `statement`, `goals`, `goals_known`, `zachman` (its named columns), `requirements`, `ears`, `quality`, `tests_named`, `small` | **draft it into the plan**; ask only what you cannot work out from the charter and the code |
+| `definition`, `statement`, `goals`, `goals_known`, `zachman` (its named columns), `requirements`, `ears`, `quality`, `tests_named`, `small`, `spec_sections` (its named sections; `Design` is the build-ready design) | **draft it into the plan**; ask only what you cannot work out from the charter and the code |
 | `approved` | the user's **acceptance of the plan**; with nothing to draft, an **Approve** question |
 | `bypass` | a **Ratify** question |
 | `signoff` (a name in `signoffs_needed`) | a **"Sign off \<name\>"** question |
