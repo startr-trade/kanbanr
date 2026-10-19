@@ -40,6 +40,7 @@ pub mod portfolio;
 pub mod project;
 pub mod query;
 pub mod readiness;
+pub mod refs;
 pub mod releases;
 pub mod report;
 pub mod retro;

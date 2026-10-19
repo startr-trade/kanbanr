@@ -1056,7 +1056,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             let subject =
                 crate::trace::parse_subject(&subject, item.as_deref()).ok_or_else(|| {
                     CoreError::Unsupported(
-                    "trace what? a goal (G-2), an item (FEAT-046) or a requirement (FEAT-046/R-2)"
+                    "trace what? a goal (G-2), an item (FEAT-046), a requirement (FEAT-046/R-2) or a doc (architecture/data.md)"
                         .to_string(),
                 )
                 })?;
