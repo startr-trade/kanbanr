@@ -939,6 +939,26 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                     .map(|d| d as u32)
                     .or(current.sprint_length_days),
                 release: str_field(b, "release").or(current.release),
+                // FEAT-183. A list given empty is refused rather than read as "the default": the
+                // last stage is the cut, so a project with none could never ship.
+                release_stages: match vec_field(b, "release_stages") {
+                    Some(stages) if stages.is_empty() => {
+                        return Err(CoreError::Unsupported(
+                            "a release needs at least one stage — the last one is the cut".into(),
+                        ));
+                    }
+                    Some(stages) => stages.iter().map(|s| s.trim().to_string()).collect(),
+                    None => current.release_stages,
+                },
+                // An empty string clears the branch back to the repository's default.
+                integration_branch: match str_field(b, "integration_branch") {
+                    Some(name) => Some(name.trim().to_string()).filter(|n| !n.is_empty()),
+                    None => current.integration_branch,
+                },
+                main_branch: match str_field(b, "main_branch") {
+                    Some(name) => Some(name.trim().to_string()).filter(|n| !n.is_empty()),
+                    None => current.main_branch,
+                },
             };
             ser(&store.set_cadence(p, unit, cadence)?)
         }

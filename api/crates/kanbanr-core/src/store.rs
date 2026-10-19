@@ -2726,6 +2726,8 @@ impl Store {
                 "release cadence '{release}' is not one of per_sprint, every_n, on_demand"
             )));
         }
+        crate::config::Cadence::validate_stages(&cadence.release_stages)
+            .map_err(CoreError::Unsupported)?;
         if let Some(unit) = unit {
             project.config.estimate_unit = unit;
         }

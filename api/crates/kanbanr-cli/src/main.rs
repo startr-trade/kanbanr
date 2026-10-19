@@ -919,6 +919,18 @@ enum ConfigCmd {
         /// How often a release is cut: per_sprint | every_n | on_demand.
         #[arg(long)]
         release: Option<String>,
+        /// The stages a release moves through, in order; the last is the cut (FEAT-183). Default:
+        /// candidate,test,staging,production.
+        #[arg(long, value_delimiter = ',')]
+        release_stages: Option<Vec<String>>,
+        /// The branch a release branch is made from. Default: the repository's default branch
+        /// (pass "" to go back to it).
+        #[arg(long)]
+        integration_branch: Option<String>,
+        /// The branch production fast-forwards. Default: the repository's default branch (pass ""
+        /// to go back to it).
+        #[arg(long)]
+        main_branch: Option<String>,
     },
     SetTransition(SetTransitionArgs),
     DisplayedStates {
@@ -7259,6 +7271,9 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             unit,
             sprint_length,
             release,
+            release_stages,
+            integration_branch,
+            main_branch,
         } => {
             let body = obj(vec![
                 ("sprints", sprints.as_deref().map(|v| json!(v == "on"))),
@@ -7266,6 +7281,23 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 ("estimate_unit", unit.clone().map(|u| json!(u))),
                 ("sprint_length_days", sprint_length.map(|d| json!(d))),
                 ("release", release.clone().map(|r| json!(r))),
+                (
+                    "release_stages",
+                    release_stages.as_ref().map(|s| {
+                        // `--release-stages ""` arrives as one blank entry: an empty list, which
+                        // the route refuses by name.
+                        if s.iter().all(|x| x.trim().is_empty()) {
+                            json!([])
+                        } else {
+                            json!(s)
+                        }
+                    }),
+                ),
+                (
+                    "integration_branch",
+                    integration_branch.clone().map(|b| json!(b)),
+                ),
+                ("main_branch", main_branch.clone().map(|b| json!(b))),
             ]);
             let resp = client.write(
                 Method::Put,
