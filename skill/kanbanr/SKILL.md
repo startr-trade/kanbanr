@@ -425,7 +425,13 @@ verdicts that item can take — from the table above — plus **"Change it"** an
 inferred from the conversation, never from "sounds good", never by you on your own.** Always pass
 `--rev`: if the definition changed after you showed it, the command refuses and records nothing;
 show the brief again and ask again. Recording a verdict nobody chose is the failure this exists to
-prevent — if it ever happens, say so and withdraw it (`kanbanr unapprove <CODE> --reason "…"`).
+prevent — if it ever happens, say so and withdraw it (`kanbanr unapprove <CODE> --reason "…"`, or
+`kanbanr signoff <CODE> <name> --withdraw --reason "…"` for a sign-off). A withdrawal always needs
+the reason the user gives; never invent one.
+
+The queue offers a sign-off only for the stage the item reaches **next**, and only once that
+stage's other requirements are met. A sign-off for a later stage, or for work not done yet, is not
+asked for, so don't ask for it either.
 
 **A decision you draft is asked about at once.** After `kanbanr adr new`, fill its sections, show it
 in a few lines, and ask Accept / Reject (with a reason) / Later — never end by telling the user to
@@ -851,6 +857,7 @@ kanbanr git install-hooks [--force] | uninstall-hooks | status
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
 kanbanr approve FEAT-001 --rev <rev>   # only after the user chose Approve in a plan or question
 kanbanr signoff FEAT-001 design-review [--note …] [--doc path]   # a named sign-off a stage asks for — the user's, never Claude's
+kanbanr signoff FEAT-001 design-review --withdraw --reason "…"     # take one back; the earlier entry stays as history
 kanbanr move FEAT-001 Scheduled [--override \"<reason>\"]     # gated; the override is recorded
 kanbanr batch --dry-run --file b.json   # preview a bundle (e.g. an import) without writing
 kanbanr sources [--write]         # imported items' sources; --write records ones that are gone

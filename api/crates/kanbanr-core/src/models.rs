@@ -287,6 +287,14 @@ pub struct Signoff {
     /// The status the item was in when it was given.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub status: String,
+    /// `given`, or `withdrawn` (FEAT-182). A withdrawal is its own entry, appended like any other,
+    /// with an empty `rev`: an older kanbanr, which does not know this field, then reads the
+    /// latest entry as lapsed and stops counting the sign-off too.
+    #[serde(default, skip_serializing_if = "SignoffVerdict::is_given")]
+    pub verdict: SignoffVerdict,
+    /// Why it was withdrawn. Giving a sign-off needs no reason; taking one back does.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -295,6 +303,21 @@ pub struct Signoff {
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
     pub extra: crate::models::Extra,
+}
+
+/// Whether a sign-off entry gives the sign-off or takes it back (FEAT-182).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignoffVerdict {
+    #[default]
+    Given,
+    Withdrawn,
+}
+
+impl SignoffVerdict {
+    pub fn is_given(&self) -> bool {
+        *self == Self::Given
+    }
 }
 
 /// Agreement to a definition, pinned to its content (FEAT-048).
@@ -403,14 +426,17 @@ impl FeatureDefinition {
         }
     }
 
-    /// Is sign-off `id` recorded against the definition as it now stands? The latest one counts.
+    /// The latest entry for sign-off `id`, given or withdrawn (FEAT-182).
+    pub fn signoff_latest(&self, id: &str) -> Option<&Signoff> {
+        self.signoffs.iter().rev().find(|s| s.id == id)
+    }
+
+    /// Is sign-off `id` recorded against the definition as it now stands? The latest entry counts,
+    /// and only if it gives the sign-off: a withdrawal after it takes it back (FEAT-182).
     pub fn signoff_current(&self, id: &str) -> Option<&Signoff> {
         let rev = self.content_rev();
-        self.signoffs
-            .iter()
-            .rev()
-            .find(|s| s.id == id)
-            .filter(|s| s.rev == rev)
+        self.signoff_latest(id)
+            .filter(|s| s.verdict.is_given() && s.rev == rev)
     }
 
     /// Was the standing agreement given after the fact? Read from the log's last verdict rather

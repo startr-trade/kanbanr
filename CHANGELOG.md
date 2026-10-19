@@ -8,6 +8,12 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **A sign-off can be withdrawn, and is offered only when it means something (FEAT-182).**
+  `kanbanr signoff <CODE> <name> --withdraw --reason "…"`, or **Withdraw** on the item's page, takes
+  back a sign-off given in error. The earlier one stays on the record and stops counting. The
+  review queue now offers a sign-off only for the stage an item reaches next, not a later stage it
+  could skip to, and only once that stage's other requirements are met. `kanbanr unapprove` now
+  refuses an empty reason, as the monitor always did. Giving and withdrawing a sign-off are events.
 - **A design stage asks for the design itself (FEAT-179).** `spec_sections` is a new gate check: it
   passes when the spec has each named section, at any heading level, with content under it.
   `{spec_sections: [Design, Test plan]}` names the sections; plain `spec_sections` asks for

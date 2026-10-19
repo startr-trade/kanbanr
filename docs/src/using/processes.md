@@ -124,9 +124,21 @@ kanbanr signoff FEAT-042 design-review --note "held 30 Sep" --doc reviews/checko
 - **What it records:** who gave it, when, in which status, and the definition it covered.
 - **When it lapses:** changing the definition lapses it, just as it lapses an approval. A review
   of a different design is not a review of this one. Earlier sign-offs are kept.
-- **Where it can be given:** a gate asks for it by name (`signoffs: [design-review]`). The Review
-  page offers a **Sign off** button for each one a next stage is waiting on.
+- **How it is asked for:** a gate asks for it by name (`signoffs: [design-review]`). The Review
+  page offers a **Sign off** button for each one the next stage is waiting on.
+- **Where it can be given:** the review queue offers a sign-off only for the stage the item
+  reaches next, and only once that stage's other requirements are met. A workflow that lets an
+  item skip ahead doesn't get the later stage's sign-off offered early.
 - **Who gives it:** a sign-off is a person's agreement. Claude asks for it and never gives it.
+- **Taking it back:** a sign-off given in error is withdrawn with a reason:
+
+  ```bash
+  kanbanr signoff FEAT-042 design-review --withdraw --reason "given before the review was held"
+  ```
+
+  The earlier sign-off stays on the record and stops counting, so the stage is gated again until
+  someone signs off afresh. The item's page in the monitor has a **Withdraw** button for each
+  sign-off when the monitor can write.
 
 ## Growing a definition stage by stage
 

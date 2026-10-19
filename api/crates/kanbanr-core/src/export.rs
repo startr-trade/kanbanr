@@ -314,6 +314,17 @@ fn definition_sections(def: &crate::models::FeatureDefinition) -> String {
             continue;
         }
         named.push(&s.id);
+        // The latest entry is a withdrawal (FEAT-182): say who took it back and why.
+        if !s.verdict.is_given() {
+            out.push_str(&format!(
+                "- **Sign-off `{}` withdrawn** by {} on {} — {}\n",
+                s.id,
+                s.by,
+                s.at.get(..10).unwrap_or(&s.at),
+                s.reason
+            ));
+            continue;
+        }
         let current = def.signoff_current(&s.id).is_some();
         out.push_str(&format!(
             "- **Signed off `{}`** by {} on {}{}{}{}\n",

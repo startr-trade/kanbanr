@@ -2943,6 +2943,243 @@ requirements:
             .expect("the gate passes once the sign-off is there");
     }
 
+    /// A board whose workflow can skip a stage: Plan → Build, and Plan → Ship directly. Build asks
+    /// for green tests and a design review; Ship, the end, asks for a release sign-off. One item at
+    /// Plan, defined and approved (FEAT-182).
+    fn skip_board(
+        build_requires: Vec<crate::readiness::Condition>,
+    ) -> (Store, tempdir::TempDirLike, String) {
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        let mut transitions = std::collections::BTreeMap::new();
+        transitions.insert(
+            "Plan".to_string(),
+            vec!["Build".to_string(), "Ship".to_string()],
+        );
+        transitions.insert("Build".to_string(), vec!["Ship".to_string()]);
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Build".to_string(),
+            crate::config::Gate {
+                requires: build_requires,
+                signoffs: vec!["design-review".into()],
+                ..Default::default()
+            },
+        );
+        gates.insert(
+            "Ship".to_string(),
+            crate::config::Gate {
+                signoffs: vec!["release".into()],
+                ..Default::default()
+            },
+        );
+        store
+            .set_workflow_with_gates(
+                "demo",
+                vec!["Plan".into(), "Build".into(), "Ship".into()],
+                transitions,
+                Some("Plan".into()),
+                None,
+                Some(vec![]),
+                Some(vec!["Ship".into()]),
+                Some(gates),
+            )
+            .unwrap();
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition("demo", &f.code, Some(full_definition("Keep carts 7 days")))
+            .unwrap();
+        store.approve_feature("demo", &f.code, "Ada L").unwrap();
+        (store, d, f.code)
+    }
+
+    fn offered(store: &Store, code: &str) -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(
+            &crate::dispatch::dispatch(store, "GET", "/projects/demo/review", None).unwrap(),
+        )
+        .unwrap();
+        v.as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["code"] == code)
+            .map(|e| {
+                e["signoffs_needed"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|n| n.as_str().unwrap().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// FEAT-182 R-1: a withdrawn sign-off stops counting; the earlier one stays as history; and an
+    /// older kanbanr, which does not know `verdict`, reads the withdrawal as lapsed and agrees.
+    #[test]
+    fn signoff_withdraw_stops_counting() {
+        let (store, _d, code) = gated_board(crate::config::Gate {
+            signoffs: vec!["design-review".into()],
+            ..Default::default()
+        });
+        store
+            .signoff_feature("demo", &code, "design-review", "Ada L", "", "")
+            .unwrap();
+        let f = store
+            .withdraw_signoff(
+                "demo",
+                &code,
+                "design-review",
+                "Ada L",
+                "given for the wrong design",
+            )
+            .unwrap();
+        let def = f.definition.as_ref().unwrap();
+        assert_eq!(def.signoffs.len(), 2, "the earlier sign-off is kept");
+        assert!(def.signoff_current("design-review").is_none());
+        let err = store
+            .move_feature_approved("demo", &code, "Scheduled", None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("was withdrawn: given for the wrong design"),
+            "{err}"
+        );
+        // Withdrawing again, or something never given, is refused.
+        assert!(
+            store
+                .withdraw_signoff("demo", &code, "design-review", "Ada L", "again")
+                .is_err()
+        );
+        assert!(
+            store
+                .withdraw_signoff("demo", &code, "release", "Ada L", "never given")
+                .is_err()
+        );
+        // An older reader: no `verdict`, so it judges the latest entry by rev alone — and the
+        // withdrawal's rev is empty, so it is not current there either.
+        let latest = def.signoffs.last().unwrap();
+        assert!(latest.rev.is_empty() && latest.rev != def.content_rev());
+        // Given again, it counts again.
+        store
+            .signoff_feature("demo", &code, "design-review", "Ada L", "", "")
+            .unwrap();
+        store
+            .move_feature_approved("demo", &code, "Scheduled", None)
+            .expect("a sign-off given again counts");
+    }
+
+    /// FEAT-182 R-2: a withdrawal without a reason is refused, and nothing is recorded.
+    #[test]
+    fn signoff_withdraw_requires_reason() {
+        let (store, _d, code) = gated_board(crate::config::Gate {
+            signoffs: vec!["design-review".into()],
+            ..Default::default()
+        });
+        store
+            .signoff_feature("demo", &code, "design-review", "Ada L", "", "")
+            .unwrap();
+        for reason in ["", "   "] {
+            let err = store
+                .withdraw_signoff("demo", &code, "design-review", "Ada L", reason)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("needs a reason"), "{err}");
+        }
+        let def = store.load("demo").unwrap();
+        let def = def.feature(&code).unwrap().definition.clone().unwrap();
+        assert_eq!(def.signoffs.len(), 1, "nothing was appended");
+        assert!(def.signoff_current("design-review").is_some());
+    }
+
+    /// FEAT-182 R-5: taking an approval back needs a reason too.
+    #[test]
+    fn unapprove_requires_reason() {
+        let (store, _d, code) = skip_board(vec![]);
+        let err = store
+            .unapprove_feature("demo", &code, "Ada L", "  ")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("needs a reason"), "{err}");
+        let p = store.load("demo").unwrap();
+        assert!(
+            p.feature(&code)
+                .unwrap()
+                .definition
+                .as_ref()
+                .unwrap()
+                .approval
+                .is_some()
+        );
+    }
+
+    /// FEAT-182 R-3: an item that can skip ahead is offered only the next stage's sign-offs.
+    #[test]
+    fn review_offers_only_next_stage_signoffs() {
+        let (store, _d, code) = skip_board(vec![]);
+        assert_eq!(offered(&store, &code), vec!["design-review".to_string()]);
+    }
+
+    /// FEAT-182 R-4: a sign-off is offered only once the stage's other requirements are met.
+    #[test]
+    fn review_offers_signoff_only_when_requires_met() {
+        let (store, _d, code) = skip_board(vec![crate::readiness::Condition::Check(
+            crate::readiness::Check::TestsGreen,
+        )]);
+        assert!(offered(&store, &code).is_empty(), "nothing is built yet");
+        store
+            .set_test_state(
+                "demo",
+                &code,
+                "R-1",
+                "core::does_the_thing",
+                crate::models::TestState::Green,
+                None,
+            )
+            .unwrap();
+        assert_eq!(offered(&store, &code), vec!["design-review".to_string()]);
+    }
+
+    /// FEAT-182: giving and withdrawing a sign-off are events, with who and why.
+    #[test]
+    fn signoff_events_are_recorded() {
+        use serde_json::json;
+        let (store, _d, code) = skip_board(vec![]);
+        let given = crate::dispatch::dispatch(
+            &store,
+            "POST",
+            &format!("/projects/demo/features/{code}/signoff/design-review"),
+            Some(&json!({"by": "Ada L"})),
+        )
+        .unwrap();
+        let path = format!("/projects/demo/features/{code}/signoff/design-review/withdraw");
+        let withdrawn = crate::dispatch::dispatch(
+            &store,
+            "POST",
+            &path,
+            Some(&json!({"by": "Ada L", "reason": "wrong design"})),
+        )
+        .unwrap();
+        let e1 = crate::eventing::compute_events(
+            &store,
+            "POST",
+            &format!("/projects/demo/features/{code}/signoff/design-review"),
+            &given,
+        );
+        let e2 = crate::eventing::compute_events(&store, "POST", &path, &withdrawn);
+        assert_eq!(e1[0].kind, crate::eventing::EventKind::SignoffRecorded);
+        assert_eq!(e2[0].kind, crate::eventing::EventKind::SignoffWithdrawn);
+        assert!(e2[0].message.contains("wrong design"), "{}", e2[0].message);
+        assert!(
+            crate::dispatch::commit_message(
+                "POST",
+                &path,
+                Some(&json!({"reason": "wrong design"}))
+            )
+            .contains("withdraw sign-off design-review")
+        );
+    }
+
     /// FEAT-114 R-2: change the definition and the sign-off no longer covers it.
     #[test]
     fn a_signoff_lapses_when_the_definition_changes() {

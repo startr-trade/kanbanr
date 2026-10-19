@@ -330,6 +330,38 @@ fn review_and_approve_through_the_daemon() {
     let feature = get(&format!("{url}/api/projects/demo"));
     assert!(feature.contains("reviewed in the monitor"), "{feature}");
 
+    // FEAT-182: a sign-off withdrawn through the daemon, as the monitor's button does it — with a
+    // reason, or not at all.
+    ureq::post(&format!(
+        "{url}/api/write/projects/demo/features/FEAT-001/signoff/design-review"
+    ))
+    .set("content-type", "application/json")
+    .send_string(r#"{"by": "reviewed in the monitor"}"#)
+    .expect("sign off through the daemon");
+    let withdraw =
+        format!("{url}/api/write/projects/demo/features/FEAT-001/signoff/design-review/withdraw");
+    match ureq::post(&withdraw)
+        .set("content-type", "application/json")
+        .send_string(r#"{"by": "reviewed in the monitor", "reason": " "}"#)
+    {
+        Err(ureq::Error::Status(400, _)) => {}
+        other => panic!("a withdrawal without a reason must be refused: {other:?}"),
+    }
+    ureq::post(&withdraw)
+        .set("content-type", "application/json")
+        .send_string(r#"{"by": "reviewed in the monitor", "reason": "signed before the review"}"#)
+        .expect("withdraw through the daemon");
+    let feature = get(&format!("{url}/api/projects/demo"));
+    assert!(
+        feature.contains("\"verdict\":\"withdrawn\"")
+            && feature.contains("signed before the review"),
+        "{feature}"
+    );
+    assert!(
+        board_git(&["log", "-1", "--format=%s"]).contains("withdraw sign-off design-review"),
+        "the commit says what happened"
+    );
+
     let _ = std::fs::remove_dir_all(&base);
 }
 

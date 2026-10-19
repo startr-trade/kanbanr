@@ -73,6 +73,21 @@ export const api = {
     }
     return res.json();
   },
+  /** Take back a sign-off given in error, saying why (FEAT-182). */
+  withdrawSignoff: async (id: string, code: string, name: string, by: string, reason: string) => {
+    const res = await fetch(
+      `/api/write/projects/${encodeURIComponent(id)}/features/${encodeURIComponent(code)}/signoff/${encodeURIComponent(name)}/withdraw`,
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ by, reason }) },
+    );
+    if (!res.ok) {
+      throw new Error(
+        res.status === 404 || res.status === 405
+          ? "This monitor is read-only. Start it with `kanbanr review --ui` to withdraw a sign-off from here."
+          : `withdrawal failed: ${res.status} ${await res.text()}`,
+      );
+    }
+    return res.json();
+  },
   /** Every architecture decision on the board, newest first (FEAT-057). */
   getAdrs: (id: string) => getJson<Adr[]>(`/api/projects/${encodeURIComponent(id)}/adrs`),
   /** The user's verdict on a proposed decision (FEAT-153), through the route `kanbanr adr accept`
