@@ -4704,3 +4704,47 @@ fn fixes_forward_merged() {
     assert!(again.contains("nothing to forward"), "{again}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-196 R-1: deleting a project leaves no folder for it, and nothing for the board to commit
+/// afterwards — the delete's own activity entry used to bring the folder back.
+#[test]
+fn project_delete_leaves_no_folder() {
+    let (base, work) = togaf_scratch("delete-project");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    let where_json: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "where"]))).unwrap();
+    let board = std::path::PathBuf::from(where_json["data_dir"].as_str().unwrap());
+    assert!(board.join("projects").join("shop").is_dir());
+    ok(run_in(&base, &work, &["project", "delete", "shop"]));
+    assert!(
+        !board.join("projects").join("shop").exists(),
+        "the project's folder stays gone"
+    );
+    let status = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&board)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+        "{}",
+        String::from_utf8_lossy(&status.stdout)
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}

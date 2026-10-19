@@ -126,6 +126,11 @@ pub fn append<T: Serialize + DeserializeOwned + Dated>(
     name: &str,
     entry: T,
 ) {
+    // A log never brings back a project: after `project delete`, the delete's own entry would
+    // recreate the folder it just removed (FEAT-196). The board commit records the delete.
+    if !data_dir.join("projects").join(project).is_dir() {
+        return;
+    }
     migrate::<T>(data_dir, project, name);
     let folder = dir(data_dir, project, name);
     if std::fs::create_dir_all(&folder).is_err() {
@@ -188,4 +193,21 @@ pub fn oldest_day(data_dir: &Path, project: &str, name: &str) -> Option<String> 
         .collect();
     days.sort();
     days.into_iter().next()
+}
+
+#[cfg(test)]
+mod tests {
+    /// FEAT-196: appending to the log of a project that is gone writes nothing — no folder, no
+    /// file — while a project that exists still gets its entry.
+    #[test]
+    fn append_never_recreates_a_project() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-daylog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("projects").join("kept")).unwrap();
+        crate::activity::append(&dir, "gone", "A", "delete project gone", None);
+        assert!(!dir.join("projects").join("gone").exists());
+        crate::activity::append(&dir, "kept", "A", "edit", None);
+        assert!(dir.join("projects").join("kept").join("activity").is_dir());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
