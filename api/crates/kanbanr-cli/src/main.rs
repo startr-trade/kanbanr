@@ -1483,8 +1483,31 @@ fn run_serve(
             .ok()
             .filter(|s| !s.is_empty())
     });
+    // The code repository it is started in, when that folder's marker names a project (FEAT-183,
+    // decided 19 Oct 2026): release promotion from the monitor acts on it for that project only.
+    // A path in the project's config was the alternative, but a path belongs to one machine and
+    // the config travels with the board.
+    let code_repo = std::env::current_dir().ok().and_then(|cwd| {
+        let project = project::find_marker(&cwd, project::home_dir().as_deref())?
+            .marker
+            .project?;
+        let root = kanbanr_core::coderepo::repo_root_in(&cwd)?;
+        Some((project, root))
+    });
+    if allow_writes && let Some((project, root)) = &code_repo {
+        eprintln!(
+            "kanbanr: release promotion for {project} uses the code repository {}",
+            root.display()
+        );
+    }
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(kanbanr_server::run(dir, bind, ui_dir, allow_writes))
+    rt.block_on(kanbanr_server::run(
+        dir,
+        bind,
+        ui_dir,
+        allow_writes,
+        code_repo,
+    ))
 }
 
 /// `kanbanr skill …` (FEAT-141): needs no board — it is about this machine's Claude Code.

@@ -321,6 +321,13 @@ fn run_write(
     dispatch_path: &str,
     body: Option<&serde_json::Value>,
 ) -> axum::response::Response {
+    // The code repository the daemon was started in, for its own project only (FEAT-183): any
+    // other project's promotions that need one are refused, never run against the wrong code.
+    let repo = st
+        .code_repo
+        .as_ref()
+        .filter(|(project, _)| project_id(dispatch_path).as_deref() == Some(project.as_str()))
+        .map(|(_, root)| root.as_path());
     let outcome = crate::write::write(
         &st.store,
         &st.data_dir,
@@ -328,6 +335,7 @@ fn run_write(
         method.as_str(),
         dispatch_path,
         body,
+        repo,
     );
     match outcome {
         Ok(out) => {
