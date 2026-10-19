@@ -6,6 +6,13 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- **rustls advisories; an unmaintained YAML parser recorded (FEAT-186).** rustls goes to 0.23.46
+  (RUSTSEC-2026-0346, RUSTSEC-2026-0348). `unsafe-libyaml`, which `serde_yaml` uses to read and
+  write every board file, is unmaintained with no safe upgrade (RUSTSEC-2024-0449); it is listed
+  as a recorded exception in `api/deny.toml` until the YAML library is replaced (FEAT-187).
+
 ## [0.1.7] - 2026-10-07
 
 Your own process, designed with Claude and shared on the board.
