@@ -3460,3 +3460,60 @@ fn cli_signoff_withdraw_round_trip() {
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-192 R-1: inside a linked git worktree (`.claude/worktrees/w1`), the committed marker's
+/// relative board path is resolved from the main worktree, so commands find the board with no
+/// extra environment variables.
+#[test]
+fn marker_resolves_from_linked_worktree() {
+    let (base, work) = togaf_scratch("worktree");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    // The marker is committed, as in a real repository, so the worktree checks out its own copy.
+    ok(git_in(&base, &work, &["add", ".kanbanr"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["commit", "-q", "-m", "[no-ref] marker"],
+    ));
+    let main_board = String::from_utf8(ok(run_in(&base, &work, &["where"])).stdout).unwrap();
+    ok(git_in(
+        &base,
+        &work,
+        &["worktree", "add", "-q", ".claude/worktrees/w1", "-b", "w1"],
+    ));
+    let wt = work.join(".claude").join("worktrees").join("w1");
+    assert!(
+        wt.join(".kanbanr").is_file(),
+        "the worktree has its own marker"
+    );
+
+    let from_wt = String::from_utf8(ok(run_in(&base, &wt, &["where"])).stdout).unwrap();
+    assert_eq!(
+        from_wt.trim(),
+        main_board.trim(),
+        "the main board, found from the worktree"
+    );
+    let board = String::from_utf8(ok(run_in(&base, &wt, &["board"])).stdout).unwrap();
+    assert!(
+        board.contains("# shop board") || board.contains("board"),
+        "{board}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}

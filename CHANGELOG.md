@@ -23,6 +23,13 @@ All notable changes to kanbanr are documented here. The format follows
   with a task list that a lower-cost subagent can build from without making design decisions. Pair
   the check with `signoffs: [design-review]` to have a person review the design before build.
 
+### Fixed
+
+- **The board is found from inside a git worktree (FEAT-192).** A linked worktree inside the
+  repository (`.claude/worktrees/w1`) has its own copy of the `.kanbanr` marker, so a relative board
+  path pointed nowhere and commands needed `KANBANR_DATA_DIR`. When that path doesn't exist and
+  the marker is in a linked worktree, kanbanr now resolves it from the main worktree.
+
 ### Security
 
 - **rustls advisories; an unmaintained YAML parser recorded (FEAT-186).** rustls goes to 0.23.46
