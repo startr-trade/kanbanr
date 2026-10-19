@@ -1,5 +1,6 @@
-# The workflow kanbanr started with: Planned → Scheduled → Completed, with Deferred for later.
-# Its gates only label the stage roles (FEAT-188), so the built-in rule applies (entering Scheduled needs an approved definition).
+# The workflow kanbanr started with: Planned → Scheduled → Completed, with Deferred for later. Its
+# gates only label the stage roles (FEAT-188), so the built-in rule applies (entering Scheduled
+# needs an approved definition).
 statuses: [Deferred, Planned, Scheduled, Completed, No Action, Not Applicable, Out-of-Scope]
 default_state: Planned
 displayed_states: [Planned, Scheduled, Completed]

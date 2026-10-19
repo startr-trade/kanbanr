@@ -112,6 +112,40 @@ saved. A gate that could never match is a guardrail that silently isn't there.
   it stays, and `kanbanr task state` says why. A batch is judged after its last operation, so one
   that ticks the last task and then adds another never completes the item.
 
+## Stage roles
+
+Every process, whatever its stages are called, has four kinds of stage. A gate says which ones its
+status holds:
+
+| Role | What the stage is for |
+|---|---|
+| `design` | the item's design is written and agreed: how and where, before build |
+| `build` | code is written on the item's branch |
+| `integrate` | the item's work joins its line of integration and the docs fold in |
+| `release` | the work ships, and the item is finished |
+
+```yaml
+gates:
+  Implementation:
+    requires: [tests_named, approved]
+    roles: [build]          # the branch is made here
+  "@build":                 # a gate addressed to a role, whichever status holds it
+    signoffs: [design-review]
+```
+
+- **One holder per role.** Each role belongs to one status; a status can hold several (the
+  default process's Completed integrates and releases). Saving a workflow that gives one role to
+  two statuses is refused, and so is a release role on a status that isn't an end.
+- **Role-addressed gates.** A gate keyed `"@build"` joins the gate of whichever status holds the
+  build role. A rule written once then works in every process: kanbanr's method and its git
+  automation find their stage this way.
+- **Every built-in process declares its roles.** `kanbanr process checks` lists them, and the
+  working agreement names each stage's role.
+- **Boards without roles** get build where the branch is made and release at the first end status,
+  marked "(inferred)". Design and integrate are never guessed. Nothing behaves differently.
+- **Older kanbanr versions:** a workflow whose gates only name roles, or that addresses a gate to a
+  role, is stamped schema 4, so an older kanbanr refuses the board rather than misread it.
+
 ## Sign-offs
 
 Some conditions are invisible in board data: a design review was held, a release was approved.

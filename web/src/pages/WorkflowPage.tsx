@@ -91,6 +91,11 @@ function StageTile({ status, gate }: { status: string; gate: Gate }) {
         ))}
         {gate.enforce === "warn" ? <span className="chip warn">warn only</span> : null}
         {(gate.on_enter ?? []).includes("branch") ? <span className="chip">branch here</span> : null}
+        {(gate.roles ?? []).map((r) => (
+          <span className="chip tasks" key={`role-${r}`} title="what this stage is for, in any process">
+            role: {r}
+          </span>
+        ))}
         {requires.length + signoffs.length + warns.length === 0 ? (
           <span className="muted small">asks nothing to enter</span>
         ) : null}

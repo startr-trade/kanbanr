@@ -8,6 +8,13 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Stage roles (FEAT-188).** A gate can say what its stage is for in any process: `roles:
+  [design | build | integrate | release]`. A gate keyed `"@build"` applies to whichever status
+  holds that role, so one rule works in every process. Every built-in process declares its roles,
+  `process checks` lists them, and the working agreement names them. Boards without roles infer
+  build and release from what they already do, and behave exactly as before. A board whose gates
+  only name roles, or that addresses a gate to a role, is schema 4. Projects using a built-in
+  process will see that process as changed (`kanbanr process diff`); take it with `process update`.
 - **A sign-off can be withdrawn, and is offered only when it means something (FEAT-182).**
   `kanbanr signoff <CODE> <name> --withdraw --reason "…"`, or **Withdraw** on the item's page, takes
   back a sign-off given in error. The earlier one stays on the record and stops counting. The
