@@ -333,6 +333,7 @@ organisation's own process file changes what you ask with nothing changed here:
 | `signoff` (a name in `signoffs_needed`) | a **"Sign off \<name\>"** question |
 | `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; the active sprint; planned releases) |
 | `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
+| `docs_updated` | **never a question** — fold the design into each doc in `affects_docs` and say which you changed; if the item names none, ask whether it really changes no architecture doc |
 
 Warnings go into the plan with a choice: fix it, or go ahead with the warning on record. When more
 than one next stage is possible, ask which. Head the plan with the stage's own `purpose`.
@@ -362,7 +363,9 @@ guessing:
 - performance budgets that name their benchmark;
 - a test plan mapping each requirement to its tests;
 - compatibility and migration;
-- links to ADRs, and open questions stated as questions.
+- links to ADRs, and open questions stated as questions;
+- **Affects docs**: links to the board docs this change touches. Mirror the same paths into the
+  definition's `affects_docs`, which a `docs_updated` gate checks.
 
 The definition's `how` and `where` lines are one-line summaries of this section, never a
 substitute for it. A section that does not apply says "n/a" and why. A spec that stays
@@ -597,6 +600,10 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
 - A commit may add `Docs: design/mirror.md` and `ADR: ADR-0003`; both are checked against the
   board like any other reference.
 - `kanbanr trace <MS-006> --zachman` reports which of the six columns nothing in scope addresses.
+- **Architecture docs stay as built.** Keep one board doc per component, describing it as it is,
+  with front matter `items`, `adrs` and `covers`. Before an item is released, fold its Design into
+  each doc in its `affects_docs`; a `docs_updated` gate refuses the move until each changed since
+  the item entered its stage. End each milestone with an architecture compliance review.
 - **Every reference in a spec, doc or ADR is a live link** — the board checks them:
   `[FEAT-012](/p/<project>/feature/FEAT-012)` (a requirement: `…/feature/FEAT-012#R-2`),
   `/p/<project>/milestone/MS-004`, `/p/<project>/charter#G-1`, and

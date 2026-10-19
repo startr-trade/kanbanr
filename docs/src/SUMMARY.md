@@ -15,6 +15,7 @@
 - [The method: why work exists](using/the-method.md)
 - [Evidence and measurement](using/evidence.md)
 - [Tying code to the reason for it](using/traceability.md)
+- [Living architecture docs](using/living-docs.md)
 - [Sharing and the live monitor](using/the-monitor.md)
 - [Configuring the workflow](using/workflow.md)
 - [Processes: presets, gates and sign-offs](using/processes.md)

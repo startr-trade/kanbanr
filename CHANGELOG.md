@@ -8,6 +8,13 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Living architecture docs (FEAT-180).** An item can name the board docs its design changes,
+  in `affects_docs`. A new gate check, `docs_updated`, passes once each has changed since the item
+  entered its stage, judged from the board's git history (an uncommitted change counts). Naming the
+  docs does not reopen the approval. `feature show` and the monitor list them; `doctor` reports a
+  named doc the board does not have, and an item whose next stage asks for `docs_updated` but names
+  none. A new chapter, "Living architecture docs", sets out the architecture repository, and the
+  skill folds each design into its docs before release.
 - **References between specs, docs and decisions are live and checked (FEAT-181).** In the
   monitor, `FEAT-012`, `FEAT-012/R-2`, `MS-004`, `ADR-0005`, `G-1` and doc paths in any spec or doc
   link to their pages, and a link into the monitor no longer reloads it. Only codes with this
