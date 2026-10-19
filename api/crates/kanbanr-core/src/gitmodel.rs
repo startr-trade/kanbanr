@@ -170,8 +170,47 @@ pub fn line_for(model: &GitModel, item: &FeatureItem, releases: &[Release]) -> O
     model.line.clone()
 }
 
+/// Where an item's branch starts, and what has to exist first (FEAT-189, R-2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StartBase {
+    /// The branch to branch from.
+    pub base: String,
+    /// The line has not been made yet: make it from `main` first.
+    pub create_from_main: bool,
+    /// Something the person should know, e.g. that integrating will need a sprint.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Where `item` starts: its line (its release's branch for a fix during test), made from main if
+/// it is not there yet; with sprints on and none running, the sprint base, and a note that
+/// integrating needs a sprint (Q2).
+pub fn start_base(
+    model: &GitModel,
+    facts: &BranchFacts,
+    item: &FeatureItem,
+    releases: &[Release],
+    sprints: &[Sprint],
+) -> StartBase {
+    match line_for(model, item, releases) {
+        Some(line) => StartBase {
+            create_from_main: line != model.main && !facts.branches.contains_key(&line),
+            base: line,
+            note: None,
+        },
+        None => StartBase {
+            base: sprint_base(sprints, facts),
+            create_from_main: false,
+            note: Some(
+                "no sprint is running: the item can be built, but integrating it needs a sprint                  (`kanbanr sprint start <SP>`)"
+                    .into(),
+            ),
+        },
+    }
+}
+
 /// A sprint branch that exists and main does not yet contain.
-fn unreleased<'a>(sprint: &'a Sprint, facts: &BranchFacts) -> Option<String> {
+fn unreleased(sprint: &Sprint, facts: &BranchFacts) -> Option<String> {
     let b = sprint_branch(&sprint.code);
     (facts.branches.contains_key(&b) && !facts.merged_into_main.contains(&b)).then_some(b)
 }

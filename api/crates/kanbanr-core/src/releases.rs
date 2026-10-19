@@ -515,12 +515,20 @@ pub fn promote(
                     repo.display()
                 )));
             }
-            let from_branch = project
-                .config
-                .cadence
-                .integration_branch
-                .clone()
-                .unwrap_or_else(|| coderepo::default_branch(repo));
+            // With the git model on, from the line its topology says (FEAT-189); else from the
+            // integration branch or the default branch, as before.
+            let from_branch = if project.config.cadence.git_model {
+                let (model, facts) = crate::gitmodel::load(store, id, repo)?;
+                let sprints = crate::sprints::load(store, id)?;
+                crate::gitmodel::release_base(&model, &sprints, &facts)
+            } else {
+                project
+                    .config
+                    .cadence
+                    .integration_branch
+                    .clone()
+                    .unwrap_or_else(|| coderepo::default_branch(repo))
+            };
             coderepo::create_branch_from(repo, &branch, &from_branch)?;
             done.branch_created = branch.clone();
             made = Some((repo, branch.clone()));

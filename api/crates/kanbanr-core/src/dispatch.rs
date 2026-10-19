@@ -938,8 +938,34 @@ pub fn dispatch_in(
             let items = vec_field(b, "items").unwrap_or_default();
             ser(&crate::sprints::plan(store, p, code, &items)?)
         }
+        // With the git model on, starting a sprint makes its branch (FEAT-189).
         ("POST", ["projects", p, "sprints", code, "start"]) => {
-            ser(&crate::sprints::start(store, p, code)?)
+            ser(&crate::gitmodel::sprint_start(store, p, code, repo)?)
+        }
+        // The git model the cadence implies (FEAT-189): always derivable, with the repository's
+        // facts when there is one to read.
+        ("GET", ["projects", p, "git", "model"]) => {
+            let repo = repo.ok_or_else(|| {
+                CoreError::Unsupported(
+                    "the git model reads the code repository: run it from the project folder"
+                        .into(),
+                )
+            })?;
+            let (model, facts) = crate::gitmodel::load(store, p, repo)?;
+            // `?item=CODE`: where that item's branch starts (FEAT-189, R-2).
+            let start = match query_param(query, "item") {
+                Some(code) => {
+                    let project = store.load_meta(p)?;
+                    let item = project.feature(&code)?;
+                    let releases = crate::releases::load(store, p).unwrap_or_default();
+                    let sprints = crate::sprints::load(store, p)?;
+                    Some(crate::gitmodel::start_base(
+                        &model, &facts, item, &releases, &sprints,
+                    ))
+                }
+                None => None,
+            };
+            ser(&serde_json::json!({ "model": model, "facts": facts, "start": start }))
         }
         ("POST", ["projects", p, "sprints", code, "close"]) => ser(&crate::sprints::close(
             store,
