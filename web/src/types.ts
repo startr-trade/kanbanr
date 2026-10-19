@@ -372,6 +372,8 @@ export interface Gate {
   enforce?: "block" | "warn";
   kinds?: string[];
   on_enter?: string[];
+  /** The stage roles this status holds: design, build, integrate, release (FEAT-188). */
+  roles?: string[];
 }
 
 /** Readable text for a gate condition. */

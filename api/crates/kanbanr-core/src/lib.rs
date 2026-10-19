@@ -3014,6 +3014,64 @@ requirements:
             .unwrap_or_default()
     }
 
+    /// FEAT-188 R-3: a gate addressed to a role joins the gate of the status holding it — in TOGAF
+    /// and in PDCA alike — and a move into that stage is refused without what it asks.
+    #[test]
+    fn role_addressed_gates_apply() {
+        use crate::config::{Gate, Role};
+        use crate::readiness::{Check, Condition};
+        let extra = Gate {
+            requires: vec![Condition::Check(Check::TestsGreen)],
+            signoffs: vec!["design-review".into()],
+            ..Default::default()
+        };
+        for (preset, build) in [("togaf", "Implementation"), ("pdca", "Do")] {
+            let mut config = crate::config::preset(preset).unwrap().into_config("p");
+            config.gates.insert("@build".into(), extra.clone());
+            assert_eq!(config.role_status(Role::Build).as_deref(), Some(build));
+            let gates = config.effective_gates();
+            let gate = gates.get(build).unwrap();
+            assert!(
+                gate.requires.contains(&Condition::Check(Check::TestsGreen)),
+                "{preset}"
+            );
+            assert!(
+                gate.signoffs.contains(&"design-review".to_string()),
+                "{preset}"
+            );
+            assert!(
+                gates.keys().all(|k| !k.starts_with('@')),
+                "role keys are resolved away"
+            );
+        }
+        // Enforced on a real move: PDCA, an approved item at Plan, moving to Do.
+        let (store, _d) = temp_store();
+        crate::dispatch::dispatch(
+            &store,
+            "POST",
+            "/projects",
+            Some(&serde_json::json!({ "name": "demo", "workflow": "pdca" })),
+        )
+        .unwrap();
+        adopt_charter(&store, "demo");
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let mut gates = store.load("demo").unwrap().config.gates;
+        gates.insert("@build".into(), extra);
+        store.set_gates("demo", gates).unwrap();
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition("demo", &f.code, Some(full_definition("Keep carts 7 days")))
+            .unwrap();
+        store.approve_feature("demo", &f.code, "Ada L").unwrap();
+        let err = store
+            .move_feature_approved("demo", &f.code, "Do", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("design-review"), "{err}");
+    }
+
     /// FEAT-182 R-1: a withdrawn sign-off stops counting; the earlier one stays as history; and an
     /// older kanbanr, which does not know `verdict`, reads the withdrawal as lapsed and agrees.
     #[test]
@@ -4097,7 +4155,6 @@ requirements:
 
     #[test]
     fn config_schema_version_defaults_and_stamps() {
-        use crate::config::CURRENT_SCHEMA_VERSION;
         let (store, d) = temp_store();
         // A freshly-init project carries the schema its content needs (stamped on save): the base
         // layout, as it declares no gates.
@@ -4132,10 +4189,8 @@ requirements:
         let mut gates = std::collections::BTreeMap::new();
         gates.insert("Scheduled".to_string(), crate::config::Gate::default());
         store.set_gates("demo", gates).unwrap();
-        assert_eq!(
-            store.load("demo").unwrap().config.schema_version,
-            CURRENT_SCHEMA_VERSION
-        );
+        // Declared gates need schema 3; 4 is for role labels and role-addressed gates (FEAT-188).
+        assert_eq!(store.load("demo").unwrap().config.schema_version, 3);
         store.set_gates("demo", Default::default()).unwrap();
         assert_eq!(
             store.load("demo").unwrap().config.schema_version,

@@ -337,6 +337,10 @@ organisation's own process file changes what you ask with nothing changed here:
 Warnings go into the plan with a choice: fix it, or go ahead with the warning on record. When more
 than one next stage is possible, ask which. Head the plan with the stage's own `purpose`.
 
+**Stages have roles** (`kanbanr process checks` lists them): design, build, integrate, release.
+Whatever a process calls its stages, the design is due before the build role's stage, and code is
+written there, on the item's branch. Say which stage holds which role when you plan work.
+
 **The purpose is a question too.** A stage's `purpose` can name something no check measures — "the
 quality it must reach", "when it happens". If the definition does not yet address it, ask (with
 options, e.g. a latency target, or "no target"), rather than noting its absence afterwards.

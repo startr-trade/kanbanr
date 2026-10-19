@@ -1767,7 +1767,7 @@ impl Store {
         ctx: &crate::readiness::Context,
         feature: &str,
     ) -> Result<Option<String>> {
-        if !project.config.gates.is_empty() || charter.adopted_at.trim().is_empty() {
+        if project.config.declares_gates() || charter.adopted_at.trim().is_empty() {
             return Ok(None);
         }
         let f = project.feature(feature)?;
@@ -2635,9 +2635,14 @@ impl Store {
         gates: std::collections::BTreeMap<String, crate::config::Gate>,
     ) -> Result<ProjectConfig> {
         let mut project = self.load(id)?;
-        if let Some(problem) = crate::config::gate_problems(&project.config.statuses, &gates)
-            .into_iter()
-            .next()
+        if let Some(problem) = crate::config::gate_problems(
+            &project.config.statuses,
+            &project.config.no_op_states,
+            &project.config.terminal_states,
+            &gates,
+        )
+        .into_iter()
+        .next()
         {
             return Err(problem);
         }

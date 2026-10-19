@@ -21,9 +21,11 @@ gates:
   Planning:
     purpose: Plan the design work — its stages, reviews and responsibilities.
   Inputs:
+    roles: [design]
     purpose: Record the design inputs — the requirements it must meet, and why.
     requires: [statement, goals, requirements, ears]
   Design:
+    roles: [build]
     purpose: Produce the design outputs against those inputs.
     requires: [zachman, approved]
     warns: [quality]
@@ -36,9 +38,11 @@ gates:
     requires: [tests_named]
     signoffs: [design-review]
   Validation:
+    roles: [integrate]
     purpose: Validate that the result serves its intended use.
     requires: [tests_green]
   Released:
+    roles: [release]
     purpose: Released, with validation recorded.
     requires: [tests_green]
     signoffs: [validation]
