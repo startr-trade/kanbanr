@@ -217,10 +217,21 @@ pub fn signoff_gaps(feature: &FeatureItem, names: &[String]) -> Vec<Gap> {
     names
         .iter()
         .filter_map(|name| {
-            let latest = def.and_then(|d| d.signoffs.iter().rev().find(|s| &s.id == name));
+            let latest = def.and_then(|d| d.signoff_latest(name));
             let current = def.and_then(|d| d.signoff_current(name));
             match (latest, current) {
                 (_, Some(_)) => None,
+                // Taken back (FEAT-182): say so, with the reason, rather than "lapsed".
+                (Some(w), None) if !w.verdict.is_given() => Some(gap(
+                    Check::Signoff,
+                    None,
+                    &format!("sign-off '{name}' withdrawn"),
+                    format!(
+                        "sign-off '{name}' was withdrawn: {} — `kanbanr signoff {} {name}` to give \
+                         it again",
+                        w.reason, feature.code
+                    ),
+                )),
                 (Some(_), None) => Some(gap(
                     Check::Signoff,
                     None,
@@ -329,6 +340,9 @@ pub struct NextGate {
     pub enforce: crate::config::Enforce,
     /// What `requires` and `signoffs` still lack.
     pub gaps: Vec<Gap>,
+    /// What `requires` alone still lacks, without the sign-offs (FEAT-182): a sign-off is offered
+    /// only once this is empty, so nobody signs off work that has not happened yet.
+    pub requires_gaps: Vec<Gap>,
     /// What `warns` lacks — said, never enforced.
     pub warnings: Vec<Gap>,
     /// The sign-offs this gate still needs, by name, so a surface can offer to record them.
@@ -364,7 +378,9 @@ pub fn next_gates(
             if !gate.applies_to(feature.kind.as_deref()) {
                 return None;
             }
-            let mut gaps = evaluate_conditions(feature, goal_ids.as_ref(), &gate.requires, ctx);
+            let requires_gaps =
+                evaluate_conditions(feature, goal_ids.as_ref(), &gate.requires, ctx);
+            let mut gaps = requires_gaps.clone();
             let signoffs = signoff_gaps(feature, &gate.signoffs);
             let signoffs_needed = gate
                 .signoffs
@@ -384,11 +400,27 @@ pub fn next_gates(
                 purpose: gate.purpose.clone(),
                 enforce: gate.enforce,
                 gaps,
+                requires_gaps,
                 warnings: evaluate_conditions(feature, goal_ids.as_ref(), &gate.warns, ctx),
                 signoffs_needed,
             })
         })
         .collect()
+}
+
+/// The gate of the stage an item reaches next in the workflow's own order (FEAT-182): of the
+/// stages it can move to in one step, the earliest. A workflow that lets an item skip ahead
+/// (Implementation → Operations) still has one next stage, and only its sign-offs are due.
+pub fn immediate_next_gate(
+    project: &crate::store::Project,
+    charter: Option<&crate::Charter>,
+    feature: &FeatureItem,
+    ctx: &Context,
+) -> Option<NextGate> {
+    let position = |s: &str| project.config.statuses.iter().position(|x| x == s);
+    next_gates(project, charter, feature, ctx)
+        .into_iter()
+        .min_by_key(|g| position(&g.status).unwrap_or(usize::MAX))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

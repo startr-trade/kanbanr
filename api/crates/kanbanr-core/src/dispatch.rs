@@ -768,6 +768,15 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             shown_rev(store, p, code, b)?;
             ser(&store.approve_feature(p, code, &approver(b)?)?)
         }
+        // Withdraw a sign-off given in error (FEAT-182). Matched before the sign-off route.
+        ("POST", ["projects", p, "features", code, "signoff", name, "withdraw"]) => ser(&store
+            .withdraw_signoff(
+                p,
+                code,
+                &percent_decode(name),
+                &approver(b)?,
+                &str_field(b, "reason").unwrap_or_default(),
+            )?),
         ("POST", ["projects", p, "features", code, "signoff", name]) => ser(&{
             shown_rev(store, p, code, b)?;
             store.signoff_feature(
@@ -1130,12 +1139,15 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                         return None;
                     }
                     // Sign-offs the next stage asks for are the same kind of question: a person's
-                    // agreement, recorded before the item can move on (FEAT-117).
+                    // agreement, recorded before the item can move on (FEAT-117). Only the stage
+                    // the item reaches next, not every stage it could skip to, and only once that
+                    // stage's other requirements are met (FEAT-182): a sign-off offered before the
+                    // work exists records agreement to work that has not happened.
                     let signoffs_needed: Vec<String> = if live {
-                        crate::readiness::next_gates(&project, Some(&charter), f, &ctx)
-                            .into_iter()
-                            .flat_map(|n| n.signoffs_needed)
-                            .collect()
+                        crate::readiness::immediate_next_gate(&project, Some(&charter), f, &ctx)
+                            .filter(|n| n.requires_gaps.is_empty())
+                            .map(|n| n.signoffs_needed)
+                            .unwrap_or_default()
                     } else {
                         Vec::new()
                     };
@@ -1316,6 +1328,17 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "features", c] => format!("edit feature {c}"),
         ["projects", _p, "features", c, "move"] => format!("move feature {c}"),
         ["projects", _p, "features", c, "approve"] => format!("approve definition of {c}"),
+        ["projects", _p, "features", c, "signoff", name, "withdraw"] => {
+            let reason = body
+                .and_then(|b| b.get("reason"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            format!(
+                "withdraw sign-off {} on {c}: {}",
+                percent_decode(name),
+                reason.trim()
+            )
+        }
         ["projects", _p, "features", c, "signoff", name] => {
             format!("sign off {} on {c}", percent_decode(name))
         }

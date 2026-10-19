@@ -1202,6 +1202,13 @@ impl Store {
         by: &str,
         reason: &str,
     ) -> Result<FeatureItem> {
+        // Taking an agreement back needs a reason, wherever it is asked from (FEAT-182 R-5): the
+        // monitor's button enforced this, the store did not.
+        if reason.trim().is_empty() {
+            return Err(CoreError::Unsupported(
+                "withdrawing an approval needs a reason — say why it no longer stands".into(),
+            ));
+        }
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let feature = project.feature_mut(code)?;
@@ -1278,6 +1285,69 @@ impl Store {
             note: note.trim().to_string(),
             doc: doc.trim().to_string(),
             status,
+            ..Default::default()
+        });
+        feature.updated_at = at;
+        let updated = feature.clone();
+        pending.persist_features.insert(updated.code.clone());
+        self.flush(id, &project, &pending)?;
+        Ok(updated)
+    }
+
+    /// Withdraw sign-off `signoff` on an item (FEAT-182): appends a withdrawal, keeping the earlier
+    /// entry as history, after which the sign-off no longer counts. Needs a reason. A lapsed
+    /// sign-off can be withdrawn too — that records that the agreement was wrong, not merely old.
+    pub fn withdraw_signoff(
+        &self,
+        id: &str,
+        code: &str,
+        signoff: &str,
+        by: &str,
+        reason: &str,
+    ) -> Result<FeatureItem> {
+        let signoff = signoff.trim();
+        if reason.trim().is_empty() {
+            return Err(CoreError::Unsupported(
+                "withdrawing a sign-off needs a reason — say why it no longer stands".into(),
+            ));
+        }
+        if by.trim().is_empty() {
+            return Err(CoreError::Unsupported(
+                "a withdrawal must say who made it — set a commit identity with `kanbanr identity`"
+                    .into(),
+            ));
+        }
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let feature = project.feature_mut(code)?;
+        let status = feature.status.clone();
+        let definition = feature
+            .definition
+            .as_mut()
+            .ok_or_else(|| CoreError::Unsupported(format!("{code} has no definition")))?;
+        match definition.signoff_latest(signoff) {
+            None => {
+                return Err(CoreError::Unsupported(format!(
+                    "{code} has no sign-off '{signoff}' to withdraw"
+                )));
+            }
+            Some(s) if !s.verdict.is_given() => {
+                return Err(CoreError::Unsupported(format!(
+                    "sign-off '{signoff}' on {code} is already withdrawn"
+                )));
+            }
+            Some(_) => {}
+        }
+        let at = now_rfc3339();
+        definition.signoffs.push(crate::models::Signoff {
+            id: signoff.to_string(),
+            by: by.trim().to_string(),
+            at: at.clone(),
+            rev: String::new(),
+            status,
+            verdict: crate::models::SignoffVerdict::Withdrawn,
+            reason: reason.trim().to_string(),
+            ..Default::default()
         });
         feature.updated_at = at;
         let updated = feature.clone();
