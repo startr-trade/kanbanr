@@ -8,6 +8,12 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Patch releases (FEAT-184).** `kanbanr release add v1.0.1 --patch-of v1.0.0` makes a patch of a
+  cut release: `release/v1.0.1` from the parent's tag, starting at the first stage. Its notes name
+  the parent, what the patch adds and what it keeps. At production a patch of an older release is
+  tagged without moving main, and its commits the integration branch lacks are listed to merge
+  forward. A release with no branch now gets one before any promotion, so a one-stage process and
+  a skipped first stage both work.
 - **The board makes the merges (FEAT-190).** With the git model on, moving an item into its
   integrate stage merges its branch into its line, with a merge commit naming it; a merge that
   would conflict refuses the move, naming the files, and changes nothing. In the sprints topology,
