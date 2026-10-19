@@ -520,7 +520,12 @@ pub fn promote(
             let from_branch = if project.config.cadence.git_model {
                 let (model, facts) = crate::gitmodel::load(store, id, repo)?;
                 let sprints = crate::sprints::load(store, id)?;
-                crate::gitmodel::release_base(&model, &sprints, &facts)
+                let base = crate::gitmodel::release_base(&model, &sprints, &facts);
+                // A line not made yet is made from main, as `start` makes it (FEAT-190).
+                if !facts.branches.contains_key(&base) && base != model.main {
+                    coderepo::create_branch_from(repo, &base, &model.main)?;
+                }
+                base
             } else {
                 project
                     .config

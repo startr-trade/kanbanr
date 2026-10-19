@@ -387,6 +387,23 @@ made from the line its cadence says. The commit hooks refuse plain commits on a 
 generated merge message that names no item. kanbanr never pushes: the code repository refuses a
 push from it outright.
 
+With the model on, the board makes the merges:
+
+- **Integrating an item merges it.** Moving an item into the integrate stage (or past it) merges
+  its branch into its line with a merge commit naming the item (`Refs: kanbanr:<CODE>`). If the
+  merge would conflict, the move is refused before anything changes, naming the files: merge the
+  line into the item branch, resolve, commit, and move again. The item branch is kept. A batch
+  cannot integrate an item; move it on its own.
+- **A sprint's close is production** when there are sprints but no releases: main fast-forwards to
+  `sprint/<SP>` and is tagged with the sprint's code. If main has commits the sprint lacks, the
+  close is refused and nothing changes.
+- **Carried items catch up.** When the sprint they were carried into starts (or the close names
+  one that already has a branch), its branch is merged into each carried item's branch — never a
+  rebase. One that would conflict is reported with its files and left as it was.
+- **A fix to a release under test** integrates into `release/<VERSION>`, and the move says the line
+  lacks it. `kanbanr git forward <VERSION>` merges the release forward into the line, naming every
+  item its commits name. It is never done for you.
+
 `kanbanr config workflow --write-agreement` writes the team's working agreement to the board,
 generated from the gates. Under Scrum that is the Definition of Ready and of Done. Because it is
 generated, it can't drift from what is enforced.

@@ -204,6 +204,98 @@ pub fn merge_is_clean(root: &Path, into: &str, from: &str) -> Result<bool> {
     }
 }
 
+/// Whether `from` merges cleanly into `into`, and if not, the paths that conflict (FEAT-190).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct MergePreview {
+    pub clean: bool,
+    pub conflicts: Vec<String>,
+}
+
+/// Preview merging `from` into `into` without touching any working tree or branch.
+pub fn merge_preview(root: &Path, into: &str, from: &str) -> Result<MergePreview> {
+    let out = run(
+        root,
+        &[
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "--no-messages",
+            into,
+            from,
+        ],
+    )?;
+    match out.status.code() {
+        Some(0) => Ok(MergePreview {
+            clean: true,
+            conflicts: Vec::new(),
+        }),
+        Some(1) => {
+            // The first line is the tree; the conflicted paths follow.
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut conflicts: Vec<String> = text
+                .lines()
+                .skip(1)
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect();
+            conflicts.dedup();
+            Ok(MergePreview {
+                clean: false,
+                conflicts,
+            })
+        }
+        _ => Err(CoreError::Git(format!(
+            "git merge-tree {into} {from}: {} (needs git 2.38 or later)",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))),
+    }
+}
+
+/// A commit, for reading its trailers (FEAT-190).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Commit {
+    pub sha: String,
+    pub subject: String,
+    pub message: String,
+}
+
+/// The commits `head` has that `base` lacks, newest first.
+pub fn commits_between(root: &Path, base: &str, head: &str) -> Result<Vec<Commit>> {
+    let out = git(
+        root,
+        &[
+            "log",
+            "--format=%H%x1f%s%x1f%B%x1e",
+            &format!("{base}..{head}"),
+        ],
+    )?;
+    Ok(out
+        .split('\u{1e}')
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .filter_map(|r| {
+            let mut parts = r.splitn(3, '\u{1f}');
+            Some(Commit {
+                sha: parts.next()?.to_string(),
+                subject: parts.next()?.to_string(),
+                message: parts.next().unwrap_or_default().to_string(),
+            })
+        })
+        .collect())
+}
+
+/// Does the worktree at `root` have uncommitted changes to tracked files?
+pub fn worktree_dirty(root: &Path) -> bool {
+    !is_clean(root)
+}
+
+/// The worktree `branch` is checked out in, if any (FEAT-190: a line checked out must be clean
+/// before a merge moves it).
+pub fn worktree_of(root: &Path, branch: &str) -> Option<PathBuf> {
+    checked_out_in(root, branch)
+}
+
 /// Is `ancestor` contained in `of`? That is, can `of` be reached from `ancestor` by fast-forward.
 pub fn is_ancestor(root: &Path, ancestor: &str, of: &str) -> bool {
     succeeds(root, &["merge-base", "--is-ancestor", ancestor, of])
@@ -228,14 +320,23 @@ fn checked_out_in(root: &Path, branch: &str) -> Option<PathBuf> {
 /// Merge `from` into `into` with a merge commit, refusing a conflicted merge before it starts.
 /// Where `into` is checked out, git's own merge runs there; elsewhere the merge commit is made
 /// from the merged tree and the branch moved to it, so no working tree changes branch.
-pub fn merge_no_ff(root: &Path, into: &str, from: &str, message: &str) -> Result<()> {
+/// Returns the tips of `into` before and after, so a later failure can put it back (FEAT-190).
+pub fn merge_no_ff(root: &Path, into: &str, from: &str, message: &str) -> Result<(String, String)> {
     if !merge_is_clean(root, into, from)? {
         return Err(CoreError::Git(format!(
             "{from} does not merge cleanly into {into}"
         )));
     }
     if let Some(worktree) = checked_out_in(root, into) {
-        return git(&worktree, &["merge", "--no-ff", "-m", message, from]).map(|_| ());
+        if !is_clean(&worktree) {
+            return Err(CoreError::Git(format!(
+                "{into} is checked out in {} with uncommitted changes: commit or stash them first",
+                worktree.display()
+            )));
+        }
+        let old = rev_parse(root, into)?;
+        git(&worktree, &["merge", "--no-ff", "-m", message, from])?;
+        return Ok((old, rev_parse(root, into)?));
     }
     let tree = git(root, &["merge-tree", "--write-tree", into, from])?;
     let tree = tree.lines().next().unwrap_or_default().to_string();
@@ -257,8 +358,8 @@ pub fn merge_no_ff(root: &Path, into: &str, from: &str, message: &str) -> Result
     git(
         root,
         &["update-ref", &format!("refs/heads/{into}"), &commit, &old],
-    )
-    .map(|_| ())
+    )?;
+    Ok((old, commit))
 }
 
 /// Fast-forward `branch` to `to`, returning the commit it was on so a later failure can put it
@@ -335,6 +436,74 @@ pub(crate) mod tests {
         std::fs::write(repo.join(file), content).unwrap();
         git(repo, &["add", file]).unwrap();
         git(repo, &["commit", "-q", "-m", message]).unwrap();
+    }
+
+    /// FEAT-190: merging into a branch that is not checked out makes the merge commit without
+    /// touching the working tree, and says where the branch was.
+    #[test]
+    fn merge_no_ff_leaves_worktree_untouched() {
+        let repo = scratch_repo("merge-untouched");
+        create_branch_from(&repo, "line", "main").unwrap();
+        git(&repo, &["checkout", "-q", "-b", "feat/x"]).unwrap();
+        commit_file(&repo, "x.txt", "x\n", "x");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        std::fs::write(repo.join("README"), "edited, not committed\n").unwrap();
+        let before = rev_parse(&repo, "line").unwrap();
+        let (old, new) = merge_no_ff(
+            &repo,
+            "line",
+            "feat/x",
+            "Merge feat/x\n\nRefs: kanbanr:FEAT-1",
+        )
+        .unwrap();
+        assert_eq!(old, before);
+        assert_eq!(rev_parse(&repo, "line").unwrap(), new);
+        assert_eq!(
+            git(&repo, &["rev-list", "--parents", "-n1", "line"])
+                .unwrap()
+                .split(' ')
+                .count(),
+            3,
+            "a merge commit"
+        );
+        assert_eq!(current_branch(&repo).as_deref(), Some("main"));
+        assert_eq!(
+            std::fs::read_to_string(repo.join("README")).unwrap(),
+            "edited, not committed\n"
+        );
+        assert!(!repo.join("x.txt").exists(), "main's tree is as it was");
+    }
+
+    #[test]
+    fn fast_forward_refuses_divergence() {
+        let repo = scratch_repo("ff-diverge");
+        create_branch_from(&repo, "sprint", "main").unwrap();
+        git(&repo, &["checkout", "-q", "sprint"]).unwrap();
+        commit_file(&repo, "a.txt", "a\n", "a");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        commit_file(&repo, "b.txt", "b\n", "b");
+        let main = rev_parse(&repo, "main").unwrap();
+        let err = fast_forward(&repo, "main", "sprint")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot fast-forward"), "{err}");
+        assert_eq!(rev_parse(&repo, "main").unwrap(), main, "main did not move");
+    }
+
+    #[test]
+    fn merge_preview_names_conflicts() {
+        let repo = scratch_repo("preview");
+        create_branch_from(&repo, "feat/x", "main").unwrap();
+        commit_file(&repo, "README", "main's\n", "main edit");
+        git(&repo, &["checkout", "-q", "feat/x"]).unwrap();
+        commit_file(&repo, "README", "the item's\n", "item edit");
+        commit_file(&repo, "new.txt", "n\n", "new");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        let p = merge_preview(&repo, "main", "feat/x").unwrap();
+        assert!(!p.clean);
+        assert_eq!(p.conflicts, vec!["README".to_string()]);
+        create_branch_from(&repo, "feat/y", "main").unwrap();
+        assert!(merge_preview(&repo, "main", "feat/y").unwrap().clean);
     }
 
     #[test]

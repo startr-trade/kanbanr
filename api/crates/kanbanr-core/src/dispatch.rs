@@ -736,17 +736,34 @@ pub fn dispatch_in(
             // `unapproved` reason is recorded rather than silently allowed.
             // `override` is the name since gates became declarable (FEAT-113); `unapproved` stays.
             let reason = str_field(b, "override").or_else(|| str_field(b, "unapproved"));
-            let (feature, warnings) = store.move_feature_gated(
+            // With the git model on, a move that integrates merges the item's branch (FEAT-190).
+            let moved = crate::gitmodel::move_item(
+                store,
                 p,
                 code,
                 &str_field(b, "to").unwrap_or_default(),
                 reason.as_deref(),
+                repo,
             )?;
-            let mut out = serde_json::to_value(&feature)
+            let mut out = serde_json::to_value(&moved.feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
-            if !warnings.is_empty() {
-                out["gate_warnings"] =
-                    json!(warnings.iter().map(|g| &g.message).collect::<Vec<_>>());
+            if !moved.warnings.is_empty() {
+                out["gate_warnings"] = json!(
+                    moved
+                        .warnings
+                        .iter()
+                        .map(|g| &g.message)
+                        .collect::<Vec<_>>()
+                );
+            }
+            if let Some(merged) = &moved.merged {
+                out["merged"] = json!(merged);
+            }
+            if let Some(v) = &moved.forward_needed {
+                out["forward_needed"] = json!(v);
+            }
+            if let Some(note) = &moved.note {
+                out["note"] = json!(note);
             }
             ser(&out)
         }
@@ -967,12 +984,40 @@ pub fn dispatch_in(
             };
             ser(&serde_json::json!({ "model": model, "facts": facts, "start": start }))
         }
-        ("POST", ["projects", p, "sprints", code, "close"]) => ser(&crate::sprints::close(
-            store,
-            p,
-            code,
-            str_field(b, "carry_to").as_deref(),
-        )?),
+        // With the git model on, a sprints-only close moves production (FEAT-190).
+        ("POST", ["projects", p, "sprints", code, "close"]) => {
+            let closed = crate::gitmodel::sprint_close(
+                store,
+                p,
+                code,
+                str_field(b, "carry_to").as_deref(),
+                repo,
+            )?;
+            let mut out = serde_json::to_value(&closed.sprint)
+                .map_err(|e| CoreError::Unsupported(e.to_string()))?;
+            if let Some(tag) = &closed.tagged {
+                out["tagged"] = json!(tag);
+            }
+            if !closed.catch_up.is_empty() {
+                out["catch_up"] = json!(closed.catch_up);
+            }
+            ser(&out)
+        }
+        // A release's fixes merged forward into the line, on request (FEAT-190).
+        ("POST", ["projects", p, "git", "forward", version]) => {
+            let repo = repo.ok_or_else(|| {
+                CoreError::Unsupported(
+                    "a forward merge acts on the code repository: run it from the project folder"
+                        .into(),
+                )
+            })?;
+            ser(&crate::gitmodel::forward(
+                store,
+                p,
+                &percent_decode(version),
+                repo,
+            )?)
+        }
         // The method, on by default (FEAT-193): which parts a project keeps.
         ("GET", ["projects", p, "config", "method"]) => {
             ser(&crate::method::status(&store.load_meta(p)?.config))

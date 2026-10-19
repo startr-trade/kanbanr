@@ -1357,6 +1357,9 @@ enum GitCmd {
     /// The git model this project's cadence implies (FEAT-189): main, the line finished items
     /// integrate into, item branches, and the branches that take merges only.
     Model,
+    /// Merge a release's fixes forward into the current line, naming the items they serve
+    /// (FEAT-190). Never automatic: the move that integrated the fix says when it is needed.
+    Forward { version: String },
 }
 
 #[derive(Subcommand)]
@@ -3143,6 +3146,31 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
         GitCmd::CheckMsg { file } => run_check_msg(cli, client, file),
         GitCmd::Guard => run_guard(cli, Some(client)),
         GitCmd::CheckBranch => run_check_branch(cli, client),
+        GitCmd::Forward { version } => {
+            let p = require_project(cli)?;
+            let root =
+                scm::repo_root().ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
+            let resp = client.write_in(
+                Method::Post,
+                &format!("/projects/{p}/git/forward/{}", urlencode(version)),
+                Some(json!({})),
+                Some(&root),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            let (from, into) = (
+                v["from"].as_str().unwrap_or_default(),
+                v["into"].as_str().unwrap_or_default(),
+            );
+            let said = match v["sha"].as_str() {
+                None => format!("{into} already has everything in {from}: nothing to forward"),
+                Some(sha) => format!(
+                    "merged {from} forward into {into} ({})",
+                    &sha[..sha.len().min(12)]
+                ),
+            };
+            print_write(cli, &resp, said);
+            Ok(())
+        }
         GitCmd::Model => {
             let p = require_project(cli)?;
             let root =
@@ -3885,7 +3913,7 @@ fn run_start(
         let pattern = project.config.branch_pattern();
         let pattern = match kanbanr_core::scm::fix_twin(pattern) {
             Some(twin)
-                if feature.kind.as_deref() == Some("defect")
+                if matches!(feature.kind.as_deref(), Some("defect" | "bug"))
                     && pattern == kanbanr_core::scm::DEFAULT_BRANCH_PATTERN =>
             {
                 twin
@@ -3935,14 +3963,81 @@ fn run_start(
     if let Some(reason) = unapproved {
         body["unapproved"] = json!(reason);
     }
-    let resp = client.write(
+    let resp = client.write_in(
         Method::Post,
         &format!("/projects/{p}/features/{code}/move"),
         Some(body),
+        code_repo().as_deref(),
     )?;
     print_write(cli, &resp, format!("{code} -> {status}"));
+    print_merge(cli, &resp);
     print_gate_warnings(cli, &resp);
     Ok(())
+}
+
+/// The code repository this command runs in, if any: what the routes that merge, branch or tag
+/// act on (FEAT-183, FEAT-189, FEAT-190).
+fn code_repo() -> Option<PathBuf> {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| kanbanr_core::coderepo::repo_root_in(&cwd))
+}
+
+/// What integrating an item merged, and whether its fix needs forwarding (FEAT-190).
+fn print_merge(cli: &Cli, resp: &str) {
+    if cli.json {
+        return;
+    }
+    let Ok(v) = serde_json::from_str::<Value>(resp) else {
+        return;
+    };
+    let m = &v["merged"];
+    if let (Some(branch), Some(into)) = (m["branch"].as_str(), m["into"].as_str()) {
+        if m["already"].as_bool().unwrap_or(false) {
+            println!("{into} already has {branch}: nothing to merge");
+        } else {
+            let sha = m["sha"].as_str().unwrap_or_default();
+            println!(
+                "merged {branch} into {into} ({})",
+                &sha[..sha.len().min(12)]
+            );
+        }
+    }
+    if let Some(note) = v["note"].as_str() {
+        println!("note: {note}");
+    }
+    if let Some(version) = v["forward_needed"].as_str() {
+        println!("release/{version} has a fix the line lacks: kanbanr git forward {version}");
+    }
+}
+
+/// Carried items brought up to date with a sprint's branch (FEAT-190).
+fn print_catch_up(v: &Value) {
+    for c in v["catch_up"].as_array().into_iter().flatten() {
+        let code = c["code"].as_str().unwrap_or_default();
+        let branch = c["branch"].as_str().unwrap_or_default();
+        let detail = &c["outcome"]["detail"];
+        match c["outcome"]["outcome"].as_str().unwrap_or_default() {
+            "merged" => println!("caught up {branch} ({code})"),
+            "up_to_date" => println!("{branch} ({code}) is up to date"),
+            "conflicts" => {
+                let paths: Vec<&str> = detail
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p.as_str())
+                    .collect();
+                println!(
+                    "{branch} ({code}) conflicts in {}: resolve by hand with `git checkout                      {branch} && git merge <the sprint branch>`",
+                    paths.join(", ")
+                );
+            }
+            _ => println!(
+                "{branch} ({code}) not caught up: {}",
+                detail.as_str().unwrap_or_default()
+            ),
+        }
+    }
 }
 
 /// What a gate let through but reported (FEAT-113): its `warns`, a `warn` gate's gaps, or what an
@@ -4117,16 +4212,20 @@ fn run_finish(cli: &Cli, client: &Backend, code: Option<&str>) -> anyhow::Result
         );
     }
 
-    let resp = client.write(
+    let resp = client.write_in(
         Method::Post,
         &format!("/projects/{p}/features/{code}/move"),
         Some(json!({ "to": terminal })),
+        code_repo().as_deref(),
     )?;
-    print_write(
-        cli,
-        &resp,
-        format!("{code} -> {terminal}. Merge when you are ready; the branch is not the archive."),
-    );
+    let merged = serde_json::from_str::<Value>(&resp).is_ok_and(|v| v.get("merged").is_some());
+    let done = if merged {
+        format!("{code} -> {terminal}")
+    } else {
+        format!("{code} -> {terminal}. Merge when you are ready; the branch is not the archive.")
+    };
+    print_write(cli, &resp, done);
+    print_merge(cli, &resp);
     Ok(())
 }
 
@@ -5928,12 +6027,14 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             if let Some(reason) = unapproved {
                 body["unapproved"] = json!(reason);
             }
-            let resp = client.write(
+            let resp = client.write_in(
                 Method::Post,
                 &format!("/projects/{p}/features/{code}/move"),
                 Some(body),
+                code_repo().as_deref(),
             )?;
             print_write(cli, &resp, format!("{code} -> {}", field(&resp, "status")));
+            print_merge(cli, &resp);
             print_gate_warnings(cli, &resp);
             Ok(())
         }
@@ -8246,12 +8347,16 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
                 _ => String::new(),
             };
             print_write(cli, &resp, format!("{code} is the active sprint{branch}"));
+            if !cli.json {
+                print_catch_up(&v);
+            }
         }
         SprintCmd::Close { code, carry_to } => {
-            let resp = client.write(
+            let resp = client.write_in(
                 Method::Post,
                 &format!("/projects/{p}/sprints/{code}/close"),
                 Some(obj(vec![("carry_to", carry_to.clone().map(|c| json!(c)))])),
+                code_repo().as_deref(),
             )?;
             let v: Value = serde_json::from_str(&resp)?;
             let carried: Vec<String> = v["carried"]
@@ -8276,6 +8381,10 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
                 },
             );
             if !cli.json {
+                if let Some(tag) = v["tagged"].as_str() {
+                    println!("tagged {tag} and fast-forwarded main to sprint/{code}");
+                }
+                print_catch_up(&v);
                 println!("  look back on it: `kanbanr retro --sprint {code}`");
             }
         }
