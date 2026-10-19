@@ -573,7 +573,7 @@ renamed or deleted — and `--write` returns it to `planned`. Mark a check a per
 
 ## Every change points back at the reason for it
 
-`kanbanr trace <G-2 | FEAT-046 | FEAT-046/R-2>` goes **down** — requirements, tests, documents,
+`kanbanr trace <G-2 | FEAT-046 | FEAT-046/R-2 | doc.md>` goes **down** — requirements, tests, documents,
 decisions — and ends with the gaps, which are the point of it. `kanbanr why <file>:<line>` goes
 **up**: the annotation on the line, else the trailer of the commit that wrote it, then requirement
 → goal → charter purpose. A line nobody claimed is reported as exactly that.
@@ -597,6 +597,14 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
 - A commit may add `Docs: design/mirror.md` and `ADR: ADR-0003`; both are checked against the
   board like any other reference.
 - `kanbanr trace <MS-006> --zachman` reports which of the six columns nothing in scope addresses.
+- **Every reference in a spec, doc or ADR is a live link** — the board checks them:
+  `[FEAT-012](/p/<project>/feature/FEAT-012)` (a requirement: `…/feature/FEAT-012#R-2`),
+  `/p/<project>/milestone/MS-004`, `/p/<project>/charter#G-1`, and
+  `/p/<project>/docs/file/<path>` for an ADR or a doc. A code in prose is linked too, but a link
+  says you mean it. A file in the code repository is not a board doc: name it as a code path
+  (`docs/src/using/processes.md`), never as a `/docs/file/` link. A design's **Affects docs** list
+  is made of these links. `kanbanr doctor` reports any that point at nothing — fix them before
+  calling the item done. `kanbanr trace <doc.md>` shows what a doc names and what links to it.
 
 ## Where the rules live
 
@@ -845,7 +853,7 @@ kanbanr retro [MS-006] [--since 14d] [--label x] [--write] | --due
 kanbanr claude sync [--show]                    # refresh the generated block in CLAUDE.md
 kanbanr hooks install [--global] | status | uninstall   # per project unless --global
 kanbanr review --pending                        # every item awaiting agreement, in one pass
-kanbanr trace [G-2|FEAT-001|FEAT-001/R-2] [--zachman]   # down the chain, ending in the gaps
+kanbanr trace [G-2|FEAT-001|FEAT-001/R-2|doc.md] [--zachman]   # down the chain, ending in the gaps
 kanbanr why src/cart.rs:42                      # up: annotation or trailer -> requirement -> goal
 kanbanr adr new "…" [--affects …] [--driven-by FEAT-001/R-2] [--quality Reliability] [--zachman How]
 kanbanr adr list [--for FEAT-001] | supersede ADR-0007 --replaces ADR-0003 | history ADR-0007
