@@ -182,6 +182,11 @@ The board — kanbanr's own, as it is developed — and, in dark mode:
 An item: why it exists, the goals it serves, its requirements and the tests that proved them, its
 todo-lists and its history.
 
+In every spec, doc and charter, a reference to the board — `FEAT-012`, `FEAT-012/R-2`, `MS-004`,
+`ADR-0005`, `G-1`, `architecture/data.md` — is a link to its page, underlined dotted so it reads
+differently from a link out of the board. One that points at nothing the board has is struck
+through; `kanbanr doctor` lists the same ones. A requirement link lands on that requirement.
+
 ![An item's page](../images/feature.png)
 
 | | | |

@@ -21,15 +21,31 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Subject {
-    Goal { id: String },
-    Item { code: String },
-    Requirement { code: String, id: String },
+    Goal {
+        id: String,
+    },
+    Item {
+        code: String,
+    },
+    Requirement {
+        code: String,
+        id: String,
+    },
+    /// A board doc, by its path under `docs/` (FEAT-181).
+    Doc {
+        path: String,
+    },
 }
 
-/// Read a subject from what the user typed: `G-2`, `FEAT-046`, `FEAT-046/R-2`, or a bare `R-2`
-/// when the item is known from the branch.
+/// Read a subject from what the user typed: `G-2`, `FEAT-046`, `FEAT-046/R-2`, a bare `R-2`
+/// when the item is known from the branch, or a doc path (`architecture/data.md`).
 pub fn parse_subject(text: &str, default_item: Option<&str>) -> Option<Subject> {
     let text = text.trim();
+    if text.ends_with(".md") || text.starts_with("docs/") {
+        return Some(Subject::Doc {
+            path: crate::refs::doc_key(text),
+        });
+    }
     if let Some((code, id)) = text.split_once('/') {
         return Some(Subject::Requirement {
             code: code.to_string(),
@@ -60,8 +76,14 @@ pub struct Trace {
     pub goal: Option<String>,
     pub purpose: Option<String>,
     pub items: Vec<TracedItem>,
-    /// Documents whose front-matter references anything in this chain.
+    /// Documents whose front-matter or text references anything in this chain.
     pub documents: Vec<String>,
+    /// What the subject's own text links to: an item's spec, a doc's body (FEAT-181).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links_out: Vec<crate::refs::Ref>,
+    /// Specs and docs whose text refers to the subject: `FEAT-012 spec`, `docs/architecture/data.md`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links_in: Vec<String>,
     /// Decisions that affect the items, or are driven by their requirements.
     pub decisions: Vec<String>,
     /// What the chain does not have. This is the point of the command.
@@ -88,7 +110,9 @@ pub struct TracedRequirement {
 /// Build the trace. `head_rev` is not consulted: whether evidence is current is the report's
 /// question, and mixing it in here would make a structural view fluctuate with the last commit.
 pub fn run(store: &Store, project_id: &str, subject: &Subject) -> Result<Trace> {
-    let project = store.load_meta(project_id)?;
+    // In full: specs carry the links that make document edges (FEAT-181).
+    let project = store.load(project_id)?;
+    let index = crate::refs::BoardIndex::of(store, &project)?;
     let charter = crate::charter::load(store, project_id)?;
     let adrs = crate::adr::list(store, project_id).unwrap_or_default();
 
@@ -127,6 +151,27 @@ pub fn run(store: &Store, project_id: &str, subject: &Subject) -> Result<Trace> 
                 first_goal(&charter, feature),
                 vec![feature],
             )
+        }
+        Subject::Doc { path } => {
+            if !index.docs.contains(path) {
+                return Err(CoreError::Unsupported(format!(
+                    "no doc {path} on this board"
+                )));
+            }
+            let text = store.read_doc(project_id, path)?;
+            let named: Vec<String> = crate::refs::find(&text, &index)
+                .into_iter()
+                .filter_map(|f| match f.reference {
+                    crate::refs::Ref::Item { code, .. } => Some(code),
+                    _ => None,
+                })
+                .collect();
+            let items: Vec<&FeatureItem> = project
+                .features
+                .iter()
+                .filter(|f| named.contains(&f.code))
+                .collect();
+            (format!("docs/{path}"), None, items)
         }
     };
 
@@ -205,13 +250,43 @@ pub fn run(store: &Store, project_id: &str, subject: &Subject) -> Result<Trace> 
         });
     }
 
+    // The subject as the board spells it, so `feat-046` finds what `FEAT-046` is linked from.
+    let subject = &match subject {
+        Subject::Item { .. } => Subject::Item {
+            code: items[0].code.clone(),
+        },
+        Subject::Requirement { id, .. } => Subject::Requirement {
+            code: items[0].code.clone(),
+            id: id.clone(),
+        },
+        other => other.clone(),
+    };
+    let (links_out, links_in) = links(store, &project, &index, subject);
+
     if items.is_empty() {
-        gaps.push("nothing on the board serves this".to_string());
+        gaps.push(match subject {
+            Subject::Doc { path } if links_in.is_empty() => {
+                format!("docs/{path} names no item, and nothing links to it")
+            }
+            Subject::Doc { .. } => "this doc names no item".to_string(),
+            _ => "nothing on the board serves this".to_string(),
+        });
     }
 
     // Documents that say they are about any of this, and decisions that claim these items.
     let codes: Vec<&str> = traced.iter().map(|t| t.code.as_str()).collect();
-    let documents = documents_referencing(store, project_id, &codes, subject);
+    let mut documents = documents_referencing(store, project_id, &codes, subject);
+    if !matches!(subject, Subject::Doc { .. }) {
+        for source in &links_in {
+            if let Some(path) = source.strip_prefix("docs/")
+                && !path.starts_with(crate::adr::FOLDER)
+                && !documents.iter().any(|d| d == path)
+            {
+                documents.push(path.to_string());
+            }
+        }
+        documents.sort();
+    }
     let mut decisions: Vec<String> = codes
         .iter()
         .flat_map(|code| crate::adr::for_item(&adrs, code))
@@ -241,6 +316,8 @@ pub fn run(store: &Store, project_id: &str, subject: &Subject) -> Result<Trace> 
         }),
         items: traced,
         documents,
+        links_out,
+        links_in,
         decisions,
         gaps,
     })
@@ -265,6 +342,7 @@ fn documents_referencing(
         Subject::Goal { id } => vec![id.clone()],
         Subject::Item { code } => vec![code.clone()],
         Subject::Requirement { code, id } => vec![format!("{code}/{id}"), code.clone()],
+        Subject::Doc { .. } => return Vec::new(),
     };
     store
         .list_docs(project)
@@ -278,6 +356,88 @@ fn documents_referencing(
                 .any(|r| wanted.iter().any(|w| w == r) || codes.iter().any(|c| r == c))
         })
         .collect()
+}
+
+/// Does a reference point at the subject? A requirement is reached by a reference to it or to its
+/// item; an ADR reference reaches the ADR's doc.
+fn points_at(r: &crate::refs::Ref, subject: &Subject, index: &crate::refs::BoardIndex) -> bool {
+    use crate::refs::Ref;
+    match (subject, r) {
+        (Subject::Item { code }, Ref::Item { code: c, .. }) => c == code,
+        (
+            Subject::Requirement { code, id },
+            Ref::Item {
+                code: c,
+                requirement,
+            },
+        ) => {
+            c == code
+                && requirement
+                    .as_deref()
+                    .is_none_or(|q| q.eq_ignore_ascii_case(id))
+        }
+        (Subject::Goal { id }, Ref::Goal { id: g }) => g == id,
+        (Subject::Doc { path }, Ref::Doc { path: p }) => p == path,
+        (Subject::Doc { path }, Ref::Adr { id }) => index.adrs.get(id) == Some(path),
+        _ => false,
+    }
+}
+
+/// The document edges (FEAT-181): what the subject's own text links to, and which specs and docs
+/// link to it. Only references the board resolves count — a broken one is doctor's to report.
+fn links(
+    store: &Store,
+    project: &crate::Project,
+    index: &crate::refs::BoardIndex,
+    subject: &Subject,
+) -> (Vec<crate::refs::Ref>, Vec<String>) {
+    let own_text = match subject {
+        Subject::Item { code } | Subject::Requirement { code, .. } => project
+            .features
+            .iter()
+            .find(|f| &f.code == code)
+            .map(|f| f.specification.clone()),
+        Subject::Doc { path } => store.read_doc(&project.id, path).ok(),
+        Subject::Goal { .. } => None,
+    };
+    let mut out: Vec<crate::refs::Ref> = Vec::new();
+    for found in crate::refs::find(own_text.as_deref().unwrap_or(""), index) {
+        if index.resolves(&found.reference)
+            && !points_at(&found.reference, subject, index)
+            && !out.contains(&found.reference)
+        {
+            out.push(found.reference);
+        }
+    }
+
+    let mut incoming = Vec::new();
+    let refers = |text: &str| {
+        crate::refs::find(text, index)
+            .iter()
+            .any(|f| points_at(&f.reference, subject, index))
+    };
+    for f in &project.features {
+        let own = matches!(subject, Subject::Item { code } | Subject::Requirement { code, .. } if code == &f.code);
+        if !own && refers(&f.specification) {
+            incoming.push(format!("{} spec", f.code));
+        }
+        if let Subject::Doc { path } = subject
+            && f.definition.as_ref().is_some_and(|d| {
+                !d.design_doc.is_empty() && &crate::refs::doc_key(&d.design_doc) == path
+            })
+        {
+            incoming.push(format!("{} design_doc", f.code));
+        }
+    }
+    for path in &index.docs {
+        if matches!(subject, Subject::Doc { path: p } if p == path) {
+            continue;
+        }
+        if refers(&store.read_doc(&project.id, path).unwrap_or_default()) {
+            incoming.push(format!("docs/{path}"));
+        }
+    }
+    (out, incoming)
 }
 
 // ---- the Zachman view ----------------------------------------------------------------------
@@ -401,6 +561,97 @@ mod tests {
         )
         .unwrap();
         (store, dir)
+    }
+
+    /// FEAT-181: a link in a spec or a doc is an edge trace follows both ways — an item lists the
+    /// docs that name it and what its spec links to, and a doc can be traced on its own.
+    #[test]
+    fn doc_links_are_trace_edges() {
+        let (store, _dir) = fixture();
+        let a = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        let b = store
+            .add_feature("demo", "Checkout", "", "M", None)
+            .unwrap();
+        store
+            .edit_feature(
+                "demo",
+                &b.code,
+                None,
+                Some(format!(
+                    "Needs {} and follows architecture/data.md.",
+                    a.code
+                )),
+                None,
+                None,
+            )
+            .unwrap();
+        store
+            .write_doc(
+                "demo",
+                "architecture/data.md",
+                &format!("The cart ([{0}](/p/demo/feature/{0})) keeps G-1.", a.code),
+            )
+            .unwrap();
+        assert_eq!(
+            parse_subject("docs/architecture/data.md", None),
+            Some(Subject::Doc {
+                path: "architecture/data.md".into()
+            })
+        );
+
+        let item = run(
+            &store,
+            "demo",
+            &Subject::Item {
+                code: a.code.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(item.documents, vec!["architecture/data.md".to_string()]);
+        assert_eq!(
+            item.links_in,
+            vec![
+                format!("{} spec", b.code),
+                "docs/architecture/data.md".to_string()
+            ]
+        );
+
+        let checkout = run(
+            &store,
+            "demo",
+            &Subject::Item {
+                code: b.code.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            checkout.links_out,
+            vec![
+                crate::refs::Ref::Item {
+                    code: a.code.clone(),
+                    requirement: None
+                },
+                crate::refs::Ref::Doc {
+                    path: "architecture/data.md".into()
+                },
+            ]
+        );
+
+        let doc = run(
+            &store,
+            "demo",
+            &Subject::Doc {
+                path: "architecture/data.md".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(doc.items.len(), 1);
+        assert_eq!(doc.items[0].code, a.code);
+        assert_eq!(doc.links_in, vec![format!("{} spec", b.code)]);
+        assert!(
+            doc.links_out
+                .contains(&crate::refs::Ref::Goal { id: "G-1".into() })
+        );
     }
 
     #[test]

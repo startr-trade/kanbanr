@@ -7,7 +7,9 @@
 // Usage: npm run check:markdown
 import { JSDOM } from "jsdom";
 import createDOMPurify from "dompurify";
+import { readFileSync } from "node:fs";
 import { markdownToSafeHtml, safeSvg } from "../src/markdownHtml.ts";
+import { find, isBroken, label, makeIndex } from "../src/boardRefs.ts";
 
 const { window } = new JSDOM("");
 const purifier = createDOMPurify(window);
@@ -71,9 +73,71 @@ const cleanSvg = safeSvg(svg, purifier);
 if (cleanSvg.includes("onload") || cleanSvg.includes("<script")) problems.push("the SVG kept a script");
 if (!cleanSvg.includes("nodeLabel")) problems.push("the SVG lost its label");
 
+// Board references (FEAT-181). First, the finder agrees with the Rust one on the shared fixture.
+const fixture = JSON.parse(readFileSync(new URL("./refs-fixture.json", import.meta.url), "utf8"));
+const fx = fixture.index;
+const index = makeIndex({
+  project: fx.project,
+  items: Object.entries(fx.items).map(([code, requirements]) => ({ code, requirements })),
+  milestones: fx.milestones,
+  adrs: Object.entries(fx.adrs).map(([id, path]) => ({ id, path })),
+  goals: fx.goals,
+  docs: fx.docs,
+});
+for (const c of fixture.cases) {
+  const got = find(c.markdown, index).map((f) => [f.reference.kind, label(f.reference), f.line, f.explicit, isBroken(index, f)]);
+  if (JSON.stringify(got) !== JSON.stringify(c.expect)) {
+    problems.push(`refs fixture "${c.name}": expected ${JSON.stringify(c.expect)}, got ${JSON.stringify(got)}`);
+  }
+}
+
+// Then: markdownHtml autolinks board references (R-1) — each kind, not inside code, existing links
+// kept, foreign tokens untouched, a broken reference classed.
+const linked = markdownToSafeHtml(
+  [
+    "FEAT-012 and FEAT-012/R-2 serve G-1 in MS-004 under ADR-0005; see architecture/data.md.",
+    "",
+    "`FEAT-013` stays code, and so does UTF-8.",
+    "",
+    "```",
+    "FEAT-013 in a fence",
+    "```",
+    "",
+    "[the cart](/p/shop/feature/FEAT-013) and [data](architecture/data.md) and [web](https://example.com).",
+    "",
+    "FEAT-999 is not on this board.",
+  ].join("\n"),
+  undefined,
+  purifier,
+  index,
+);
+const linkMust = [
+  ['<a class="board-ref" href="/p/shop/feature/FEAT-012">FEAT-012</a>', "the item"],
+  ['<a class="board-ref" href="/p/shop/feature/FEAT-012#R-2">FEAT-012/R-2</a>', "the requirement"],
+  ['<a class="board-ref" href="/p/shop/charter#G-1">G-1</a>', "the goal"],
+  ['<a class="board-ref" href="/p/shop/milestone/MS-004">MS-004</a>', "the milestone"],
+  ['<a class="board-ref" href="/p/shop/docs/file/decisions/0005-carts.md">ADR-0005</a>', "the ADR"],
+  ['<a class="board-ref" href="/p/shop/docs/file/architecture/data.md">architecture/data.md</a>', "the doc"],
+  ["<code>FEAT-013</code>", "the code span, unlinked"],
+  ["FEAT-013 in a fence", "the fence, unlinked"],
+  ['<a class="board-ref" href="/p/shop/feature/FEAT-013">the cart</a>', "the explicit link, classed"],
+  ['<a class="board-ref" href="/p/shop/docs/file/architecture/data.md">data</a>', "the relative doc link, routed"],
+  ['<a href="https://example.com">web</a>', "the outside link, as it was"],
+  ['class="board-ref broken"', "the broken reference, classed"],
+];
+for (const [needle, what] of linkMust) {
+  if (!linked.includes(needle)) problems.push(`board refs: lost ${what}`);
+}
+if (/<a[^>]*>UTF-8/.test(linked)) problems.push("board refs: linked UTF-8, which is not this board's");
+if (/<a[^>]*>(?:<a|[^<]*<a)/.test(linked)) problems.push("board refs: nested a link inside a link");
+
 if (problems.length) {
   for (const p of problems) console.error(`check:markdown — ${p}`);
   console.error(html);
+  console.error(linked);
   process.exit(1);
 }
-console.log("check:markdown — scripts, handlers and javascript: URLs are removed; markdown and diagram labels render.");
+console.log(
+  "check:markdown — scripts, handlers and javascript: URLs are removed; markdown and diagram labels render; " +
+    "board references link, and match the Rust finder on the shared fixture.",
+);

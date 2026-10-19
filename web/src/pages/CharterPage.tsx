@@ -1,6 +1,7 @@
 import { useParams } from "react-router-dom";
 import { api } from "../api";
 import { useAsync, useLiveTick } from "../live";
+import { useScrollToHash } from "../useBoardIndex";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
 import type { Charter, Lesson } from "../types";
@@ -19,6 +20,7 @@ export default function CharterPage() {
   const charter = useAsync(() => api.getCharter(project), [project, tick]);
   const board = useAsync(() => api.getProject(project), [project, tick]);
   const lessons = useAsync(() => api.getLessons(project), [project, tick]);
+  useScrollToHash(!!charter.data);
 
   if (charter.loading && !charter.data) return <Loading />;
   if (charter.error) return <ErrorBox error={charter.error} />;

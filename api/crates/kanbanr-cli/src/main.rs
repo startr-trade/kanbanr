@@ -178,9 +178,11 @@ enum Command {
         #[arg(long)]
         rev: Option<String>,
     },
-    /// What hangs off a goal, an item or a requirement — and what is missing from it. (FEAT-057)
+    /// What hangs off a goal, an item, a requirement or a doc — and what is missing from it.
+    /// (FEAT-057, FEAT-181)
     Trace {
-        /// `G-2`, `FEAT-046`, `FEAT-046/R-2`, or `R-2` when the branch says which item.
+        /// `G-2`, `FEAT-046`, `FEAT-046/R-2`, `architecture/data.md`, or `R-2` when the branch says
+        /// which item.
         subject: Option<String>,
         /// Render the derived Zachman view for a milestone or item instead.
         #[arg(long)]
@@ -2063,8 +2065,29 @@ fn run_trace(
     if !t.documents.is_empty() {
         println!("documents: {}", t.documents.join(", "));
     }
+    if !t.links_out.is_empty() {
+        let out: Vec<String> = t.links_out.iter().map(ref_label).collect();
+        println!("links to:  {}", out.join(", "));
+    }
+    if !t.links_in.is_empty() {
+        println!("linked from: {}", t.links_in.join(", "));
+    }
     print_gaps(&t.gaps);
     Ok(())
+}
+
+/// A reference as a person would write it: `FEAT-012/R-1`, `ADR-0005`, `architecture/data.md`.
+fn ref_label(r: &kanbanr_core::refs::Ref) -> String {
+    use kanbanr_core::refs::Ref;
+    match r {
+        Ref::Item {
+            code,
+            requirement: Some(req),
+        } => format!("{code}/{req}"),
+        Ref::Item { code, .. } | Ref::Milestone { code } => code.clone(),
+        Ref::Adr { id } | Ref::Goal { id } => id.clone(),
+        Ref::Doc { path } => path.clone(),
+    }
 }
 
 fn print_gaps(gaps: &[String]) {
@@ -2144,6 +2167,9 @@ fn run_why(cli: &Cli, client: &Backend, target: &str) -> anyhow::Result<()> {
                 }
                 if !t.decisions.is_empty() {
                     println!("  decisions    {}", t.decisions.join(", "));
+                }
+                if !t.documents.is_empty() {
+                    println!("  Documented in: {}", t.documents.join(", "));
                 }
             }
             Err(e) => println!("  {reference}: {e}"),

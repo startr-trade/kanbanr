@@ -65,6 +65,7 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_decisions(store, project, &mut report);
         scan_stray_folders(store, project, &mut report);
         scan_process_drift(store, project, &mut report);
+        scan_references(store, project, &mut report);
     }
     scan_identity(store, "board", &mut report);
     scan_remote_lag(store, "board", &mut report);
@@ -92,6 +93,7 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_decisions(store, &project, &mut report);
     scan_stray_folders(store, &project, &mut report);
     scan_process_drift(store, &project, &mut report);
+    scan_references(store, &project, &mut report);
     scan_identity(store, id, &mut report);
     scan_remote_lag(store, id, &mut report);
     Ok(report)
@@ -424,6 +426,86 @@ fn scan_process_drift(store: &Store, project: &Project, report: &mut Report) {
     }
 }
 
+/// References in specs and docs that point at nothing on this board (FEAT-181). A link someone
+/// wrote as a link is an error — it is meant to be followed; a code named in prose that has this
+/// board's shape is a warning, since prose may name an item that was never created. A design doc an
+/// item points at must exist.
+fn scan_references(store: &Store, project: &Project, report: &mut Report) {
+    let Ok(index) = crate::refs::BoardIndex::load(store, &project.id) else {
+        return;
+    };
+    let mut push = |code: Option<String>, source: &str, found: &crate::refs::Found| {
+        let severity = if found.explicit {
+            Severity::Error
+        } else {
+            Severity::Warning
+        };
+        report.issues.push(Issue {
+            severity,
+            project: project.id.clone(),
+            code,
+            message: format!(
+                "{source}:{} refers to {}, which this board does not have",
+                found.line,
+                describe(&found.reference)
+            ),
+        });
+    };
+    for f in &project.features {
+        let source = format!("{} spec", f.code);
+        for found in crate::refs::find(&f.specification, &index) {
+            if index.is_broken(&found) {
+                push(Some(f.code.clone()), &source, &found);
+            }
+        }
+        if let Some(design) = f.definition.as_ref().map(|d| d.design_doc.trim())
+            && !design.is_empty()
+        {
+            let found = crate::refs::Found {
+                reference: crate::refs::Ref::Doc {
+                    path: design.to_string(),
+                },
+                line: 0,
+                explicit: true,
+            };
+            let resolved = crate::refs::Ref::Doc {
+                path: crate::refs::doc_key(design),
+            };
+            if !index.resolves(&resolved) {
+                push(
+                    Some(f.code.clone()),
+                    &format!("{} design_doc", f.code),
+                    &found,
+                );
+            }
+        }
+    }
+    for path in &index.docs {
+        let Ok(text) = store.read_doc(&project.id, path) else {
+            continue;
+        };
+        for found in crate::refs::find(&text, &index) {
+            if index.is_broken(&found) {
+                push(None, &format!("docs/{path}"), &found);
+            }
+        }
+    }
+}
+
+/// How a reference reads in a message.
+fn describe(r: &crate::refs::Ref) -> String {
+    use crate::refs::Ref;
+    match r {
+        Ref::Item {
+            code,
+            requirement: Some(req),
+        } => format!("{code}/{req}"),
+        Ref::Item { code, .. } | Ref::Milestone { code } => code.clone(),
+        Ref::Adr { id } | Ref::Goal { id } => id.clone(),
+        Ref::Doc { path } => path.clone(),
+    }
+}
+
 fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
     let known: BTreeSet<&str> = project.config.statuses.iter().map(String::as_str).collect();
     const EXPECTED: [&str; 5] = ["features", "milestones", "docs", "activity", "events"];
@@ -556,6 +638,47 @@ mod tests {
         )
         .unwrap();
         (store, dir)
+    }
+
+    /// FEAT-181: a link to an item, requirement or doc the board does not have is reported, with
+    /// where it is; a link that resolves, and a token that is not this board's, are not.
+    #[test]
+    fn broken_board_references_reported() {
+        let (store, _dir) = fixture();
+        let a = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        let spec = format!(
+            "Builds on {code}. See [gone](/p/demo/feature/FEAT-999) and docs/missing.md.\n\
+             Also FEAT-998, UTF-8 and [ok](/p/demo/feature/{code}).",
+            code = a.code
+        );
+        store
+            .edit_feature("demo", &a.code, None, Some(spec), None, None)
+            .unwrap();
+        store
+            .write_doc(
+                "demo",
+                "architecture/data.md",
+                "Serves G-1 and G-7; see [x](nowhere.md).",
+            )
+            .unwrap();
+
+        let issues: Vec<(Severity, String)> = run_project(&store, "demo")
+            .unwrap()
+            .issues
+            .into_iter()
+            .filter(|i| i.message.contains("which this board does not have"))
+            .map(|i| (i.severity, i.message))
+            .collect();
+        let spec = format!("{} spec", a.code);
+        assert_eq!(
+            issues,
+            vec![
+                (Severity::Error, format!("{spec}:1 refers to FEAT-999, which this board does not have")),
+                (Severity::Warning, format!("{spec}:2 refers to FEAT-998, which this board does not have")),
+                (Severity::Warning, "docs/architecture/data.md:1 refers to G-7, which this board does not have".to_string()),
+                (Severity::Error, "docs/architecture/data.md:1 refers to nowhere.md, which this board does not have".to_string()),
+            ]
+        );
     }
 
     /// FEAT-080: every other gap check rightly stops caring once work is finished — you cannot fix

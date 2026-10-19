@@ -70,7 +70,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 
 | Command | What it does |
 |---|---|
-| `kanbanr doctor` | every broken reference and every gap, across the board |
+| `kanbanr doctor` | every broken reference and every gap, across the board — including links in specs and docs to items, requirements, ADRs, goals or docs the board does not have |
 | `kanbanr check [CODE]` | what one item has not said, and what it cannot yet show |
 | `kanbanr review [CODE] [--pending] [--ui]` | the decision brief — one item, all of them, or in the browser |
 | `kanbanr approve <CODE> [--by …]` | records agreement, attributed to the board's commit identity |
@@ -85,7 +85,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | Command | What it does |
 |---|---|
 | `kanbanr why <file>:<line>` | the item, requirement and goal behind a line of code |
-| `kanbanr trace <G-…\|CODE\|CODE/R-n>` | what hangs off a goal, an item or a requirement, and what is missing |
+| `kanbanr trace <G-…\|CODE\|CODE/R-n\|doc.md>` | what hangs off a goal, an item, a requirement or a doc, the specs and docs that link to it, and what is missing |
 | `kanbanr adr new / list / supersede / history` | architecture decisions, linked to the items they affect |
 | `kanbanr adr accept / reject --reason` | the user's verdict on a proposed decision |
 | `kanbanr lessons [--for CODE]` / `kanbanr lesson add / affirm / contradict` | what the project has learned, and judging it |

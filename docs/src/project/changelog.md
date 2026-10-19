@@ -8,6 +8,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **References between specs, docs and decisions are live and checked (FEAT-181).** In the
+  monitor, `FEAT-012`, `FEAT-012/R-2`, `MS-004`, `ADR-0005`, `G-1` and doc paths in any spec or doc
+  link to their pages, and a link into the monitor no longer reloads it. Only codes with this
+  board's prefixes count, and code is never read. `kanbanr doctor` reports a reference to
+  something the board does not have: an error for a link, a warning for prose. `kanbanr trace`
+  follows these links both ways and takes a doc (`kanbanr trace architecture/data.md`);
+  `kanbanr why` adds **Documented in**. The skill now asks for every reference to be written as a
+  link.
 - **Stage roles (FEAT-188).** A gate can say what its stage is for in any process: `roles:
   [design | build | integrate | release]`. A gate keyed `"@build"` applies to whichever status
   holds that role, so one rule works in every process. Every built-in process declares its roles,
