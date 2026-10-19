@@ -82,10 +82,39 @@ impl FoundMarker {
     }
 
     /// The marker's data dir, resolved against the marker's folder.
+    ///
+    /// A linked git worktree inside the repository (`.claude/worktrees/w1`) checks out its own copy
+    /// of the marker, so a relative path resolves from the worktree and finds nothing. When that
+    /// happens, the same relative path is resolved from the main worktree's matching folder, where
+    /// the board actually is (FEAT-192). Anything that exists as written, or is absolute or `~`,
+    /// is used as written.
     pub fn data_dir(&self, home: Option<&Path>) -> Option<PathBuf> {
         let raw = self.marker.data_dir.as_deref()?;
-        Some(self.dir().join(expand_tilde(raw, home)))
+        let resolved = self.dir().join(expand_tilde(raw, home));
+        let relative = !Path::new(raw).is_absolute() && !raw.starts_with('~');
+        if resolved.exists() || !relative {
+            return Some(resolved);
+        }
+        let fallback = main_worktree_equivalent(self.dir())
+            .map(|dir| dir.join(raw))
+            .filter(|p| p.exists());
+        Some(fallback.unwrap_or(resolved))
     }
+}
+
+/// The folder in the main worktree that corresponds to `dir` in a linked git worktree, or `None`
+/// when `dir` is not inside a linked worktree (FEAT-192).
+fn main_worktree_equivalent(dir: &Path) -> Option<PathBuf> {
+    let repo = git2::Repository::discover(dir).ok()?;
+    if !repo.is_worktree() {
+        return None;
+    }
+    let worktree_root = normalize(repo.workdir()?);
+    // The common dir is the main repository's `.git`; its parent is the main worktree.
+    let main_root = normalize(repo.commondir()).parent()?.to_path_buf();
+    let inside = normalize(dir);
+    let rel = inside.strip_prefix(&worktree_root).ok()?;
+    Some(main_root.join(rel))
 }
 
 /// Walk up from `start` to the nearest `.kanbanr` marker file. `$HOME/.kanbanr` is skipped: older
@@ -364,6 +393,49 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    /// FEAT-192: inside a linked worktree, a relative board path that does not exist from there
+    /// resolves from the main worktree; one that exists, or a missing board, is left as written.
+    #[test]
+    fn linked_worktree_falls_back_only_when_missing() {
+        let base = temp_dir();
+        let main = base.join("shop");
+        std::fs::create_dir_all(&main).unwrap();
+        let repo = git2::Repository::init(&main).unwrap();
+        // A worktree needs a commit to check out.
+        let sig = git2::Signature::now("T", "t@x").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+        write_marker(
+            &main,
+            &Marker {
+                project: Some("shop".into()),
+                data_dir: Some("../shop.kanbanr".into()),
+            },
+        )
+        .unwrap();
+        let board = base.join("shop.kanbanr");
+        std::fs::create_dir_all(board.join("projects")).unwrap();
+        let wt_dir = main.join(".claude").join("worktrees").join("w1");
+        std::fs::create_dir_all(wt_dir.parent().unwrap()).unwrap();
+        repo.worktree("w1", &wt_dir, None).unwrap();
+        // The worktree has its own copy of the marker (it would be committed in a real repo).
+        std::fs::copy(main.join(MARKER_FILE), wt_dir.join(MARKER_FILE)).unwrap();
+
+        let found = find_marker(&wt_dir, None).unwrap();
+        assert_eq!(normalize(&found.data_dir(None).unwrap()), normalize(&board));
+        // From the main checkout: as written.
+        let found = find_marker(&main, None).unwrap();
+        assert_eq!(normalize(&found.data_dir(None).unwrap()), normalize(&board));
+        // No board anywhere: the answer is the path as written, so "no board here" still says so.
+        std::fs::remove_dir_all(&board).unwrap();
+        let found = find_marker(&wt_dir, None).unwrap();
+        assert!(!found.data_dir(None).unwrap().exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     /// A fresh, canonical temp dir (so path comparisons aren't tripped by symlinked /tmp).
     fn temp_dir() -> PathBuf {
