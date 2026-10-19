@@ -327,7 +327,7 @@ organisation's own process file changes what you ask with nothing changed here:
 
 | Check | What you do |
 |---|---|
-| `definition`, `statement`, `goals`, `goals_known`, `zachman` (its named columns), `requirements`, `ears`, `quality`, `tests_named`, `small` | **draft it into the plan**; ask only what you cannot work out from the charter and the code |
+| `definition`, `statement`, `goals`, `goals_known`, `zachman` (its named columns), `requirements`, `ears`, `quality`, `tests_named`, `small`, `spec_sections` (its named sections; `Design` is the build-ready design) | **draft it into the plan**; ask only what you cannot work out from the charter and the code |
 | `approved` | the user's **acceptance of the plan**; with nothing to draft, an **Approve** question |
 | `bypass` | a **Ratify** question |
 | `signoff` (a name in `signoffs_needed`) | a **"Sign off \<name\>"** question |
@@ -340,6 +340,48 @@ than one next stage is possible, ask which. Head the plan with the stage's own `
 **The purpose is a question too.** A stage's `purpose` can name something no check measures — "the
 quality it must reach", "when it happens". If the definition does not yet address it, ask (with
 options, e.g. a latency target, or "no target"), rather than noting its absence afterwards.
+
+### The design stage: the spec carries the build-ready design
+
+When an item reaches a stage whose purpose is *how and where* (System Design, Design, or the
+equivalent in the project's process), its **spec** gains a `## Design` section written at
+implementation level. A reviewer or another session should be able to build from it without
+guessing:
+- components, modules and files;
+- public interfaces with signatures, and what each must do;
+- the data model and on-disk or wire formats;
+- algorithms and edge cases, and control flow (a diagram where it helps);
+- concurrency, transactions and failure handling;
+- configuration and its defaults (with how each default was chosen);
+- dependencies;
+- security and privacy;
+- performance budgets that name their benchmark;
+- a test plan mapping each requirement to its tests;
+- compatibility and migration;
+- links to ADRs, and open questions stated as questions.
+
+The definition's `how` and `where` lines are one-line summaries of this section, never a
+substitute for it. A section that does not apply says "n/a" and why. A spec that stays
+non-technical at this stage leaves implementation decisions unreviewed, which is the failure the
+gate exists to prevent.
+
+**Write it for hand-off.** The design is the point where a capable model does the thinking, so
+that cheaper models can do the building. End the section with an **implementation task list** a
+lower-cost subagent can carry out one task at a time, without making a design decision. Each task
+names:
+- the files it creates or changes;
+- the exact signatures;
+- the behaviour, including errors;
+- the tests that prove it, by name, and the requirement each serves;
+- the tasks it depends on.
+
+Leave nothing open inside a task. A question still undecided goes to the user before the design is
+signed off, never to the subagent. Mirror the tasks into the item's todo-list, so each one can be
+handed out and tracked.
+
+A project makes the section a condition of moving on with
+`spec_sections: [Design]` in the build stage's `requires`. If it also wants a person to review the
+design before build, it adds `signoffs: [design-review]` to the same gate.
 
 ### A new item: scope it in plan mode
 

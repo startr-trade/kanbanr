@@ -56,13 +56,16 @@ pub enum Check {
     /// A named sign-off is recorded against the current definition. Asked for through a gate's
     /// `signoffs: [name]`, never listed on its own — it needs the name.
     Signoff,
+    /// The spec has each named section, with content (FEAT-179). A design stage asks for the
+    /// design itself, not a promise of one: `{spec_sections: [Design]}`.
+    SpecSections,
 }
 
 impl Check {
     /// Every check a gate can name, in the order the guide lists them (FEAT-168). `signoff` is not
     /// one: a gate asks for a sign-off by its name, under `signoffs`. A new check must be added
     /// here, and [`Check::passes_when`] will not compile until it says what the check means.
-    pub const GATEABLE: [Check; 16] = [
+    pub const GATEABLE: [Check; 17] = [
         Check::Definition,
         Check::Statement,
         Check::Goals,
@@ -79,6 +82,7 @@ impl Check {
         Check::Estimated,
         Check::InSprint,
         Check::InRelease,
+        Check::SpecSections,
     ];
 
     /// The name a gate uses for this check.
@@ -118,6 +122,10 @@ impl Check {
             Check::InSprint => "planned into the active sprint (projects with sprints switched on)",
             Check::InRelease => "planned into a release (projects with releases switched on)",
             Check::Signoff => "a named sign-off is recorded; a gate names it under `signoffs`",
+            Check::SpecSections => {
+                "the spec has each named section, with content; plain `spec_sections` asks for \
+                 `Design`"
+            }
         }
     }
 
@@ -125,6 +133,9 @@ impl Check {
     pub fn parameters(self) -> Option<&'static str> {
         match self {
             Check::Zachman => Some("zachman: [what, how, where, when, who, why] (any of the six)"),
+            Check::SpecSections => {
+                Some("spec_sections: [Design, …] (the spec's headings, any level)")
+            }
             _ => None,
         }
     }
@@ -146,6 +157,7 @@ impl Check {
 pub enum Condition {
     Check(Check),
     Zachman { zachman: Vec<String> },
+    SpecSections { spec_sections: Vec<String> },
 }
 
 /// Read by hand so a misspelt check is named, with the ones there are (FEAT-168): the derived
@@ -157,9 +169,11 @@ impl<'de> Deserialize<'de> for Condition {
         enum Raw {
             Name(String),
             Zachman { zachman: Vec<String> },
+            SpecSections { spec_sections: Vec<String> },
         }
         match Raw::deserialize(d)? {
             Raw::Zachman { zachman } => Ok(Condition::Zachman { zachman }),
+            Raw::SpecSections { spec_sections } => Ok(Condition::SpecSections { spec_sections }),
             Raw::Name(name) => serde_json::from_value(serde_json::Value::String(name.clone()))
                 .map(Condition::Check)
                 .map_err(|_| {
@@ -183,8 +197,17 @@ impl Condition {
                 .iter()
                 .find(|c| !COLUMNS.contains(&c.trim().to_ascii_lowercase().as_str()))
                 .cloned(),
-            Condition::Check(_) => None,
+            Condition::Check(_) | Condition::SpecSections { .. } => None,
         }
+    }
+
+    /// Whether evaluating this condition reads the spec body, which a metadata-only load leaves
+    /// empty.
+    pub fn reads_spec(&self) -> bool {
+        matches!(
+            self,
+            Condition::SpecSections { .. } | Condition::Check(Check::SpecSections)
+        )
     }
 }
 
@@ -257,15 +280,25 @@ pub fn evaluate_conditions(
         .iter()
         .filter_map(|c| match c {
             Condition::Check(c) => Some(*c),
-            Condition::Zachman { .. } => None,
+            Condition::Zachman { .. } | Condition::SpecSections { .. } => None,
         })
         .collect();
     let mut gaps = evaluate_in(feature, goal_ids, &checks, ctx);
+    let sections: Vec<String> = conditions
+        .iter()
+        .flat_map(|c| match c {
+            Condition::SpecSections { spec_sections } => spec_sections.clone(),
+            _ => vec![],
+        })
+        .collect();
+    if !sections.is_empty() && !is_exempt(feature) {
+        gaps.extend(spec_section_gaps(&feature.specification, &sections));
+    }
     let columns: Vec<String> = conditions
         .iter()
         .flat_map(|c| match c {
             Condition::Zachman { zachman } => zachman.clone(),
-            Condition::Check(_) => vec![],
+            Condition::Check(_) | Condition::SpecSections { .. } => vec![],
         })
         .map(|c| c.trim().to_ascii_lowercase())
         .collect();
@@ -494,6 +527,12 @@ pub fn evaluate_in(
             ));
         }
     }
+    if checks.contains(&Check::SpecSections) && !exempt {
+        gaps.extend(spec_section_gaps(
+            &feature.specification,
+            &["Design".to_string()],
+        ));
+    }
     if checks.contains(&Check::InRelease) && !exempt && feature.release.is_none() {
         gaps.push(gap(
             Check::InRelease,
@@ -551,6 +590,7 @@ pub fn evaluate_definition(
                     | Check::InSprint
                     | Check::InRelease
                     | Check::Signoff
+                    | Check::SpecSections
             )
         });
         if reads_definition {
@@ -703,8 +743,82 @@ fn item_level(
         | Check::Estimated
         | Check::InSprint
         | Check::InRelease
-        | Check::Signoff => {}
+        | Check::Signoff
+        | Check::SpecSections => {}
     }
+}
+
+fn is_exempt(feature: &FeatureItem) -> bool {
+    feature
+        .definition
+        .as_ref()
+        .is_some_and(|d| !d.exempt.trim().is_empty())
+}
+
+/// The spec's headings, as (level, text, has content). A section's content runs to the next
+/// heading of the same or a higher level, so a `## Design` holding only `### Data model` and its
+/// text has content. Headings inside fenced code are not headings.
+fn spec_headings(spec: &str) -> Vec<(usize, String, bool)> {
+    let mut headings: Vec<(usize, String, bool)> = Vec::new();
+    let mut fenced = false;
+    for line in spec.lines() {
+        let t = line.trim();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fenced = !fenced;
+        }
+        let level = t.chars().take_while(|c| *c == '#').count();
+        let heading = !fenced && (1..=6).contains(&level) && t[level..].starts_with(' ');
+        if heading {
+            let text = t[level..].trim().trim_end_matches('#').trim().to_string();
+            headings.push((level, text, false));
+            continue;
+        }
+        let content = !t.is_empty() && !(t.starts_with("<!--") && t.ends_with("-->"));
+        if content {
+            // Content belongs to every open section it sits under: the nearest heading and each
+            // enclosing one of a lower level.
+            let mut floor = usize::MAX;
+            for h in headings.iter_mut().rev() {
+                if h.0 < floor {
+                    h.2 = true;
+                    floor = h.0;
+                }
+            }
+        }
+    }
+    headings
+}
+
+/// What `{spec_sections: […]}` lacks: each named section that is absent or empty.
+fn spec_section_gaps(spec: &str, names: &[String]) -> Vec<Gap> {
+    let headings = spec_headings(spec);
+    names
+        .iter()
+        .map(|n| n.trim())
+        .filter(|n| !n.is_empty())
+        .filter_map(
+            |name| match headings.iter().find(|h| h.1.eq_ignore_ascii_case(name)) {
+                Some((_, _, true)) => None,
+                Some((level, text, false)) => Some(gap(
+                    Check::SpecSections,
+                    None,
+                    &format!("empty section '{name}'"),
+                    format!(
+                        "the spec's '{} {text}' section is empty — write it before moving on",
+                        "#".repeat(*level)
+                    ),
+                )),
+                None => Some(gap(
+                    Check::SpecSections,
+                    None,
+                    &format!("no section '{name}'"),
+                    format!(
+                        "the spec has no '{name}' section — add it as a heading, with its content"
+                    ),
+                )),
+            },
+        )
+        .collect()
 }
 
 /// A requirement's name for a message: its id, or the start of its text when it has none yet (a
@@ -992,6 +1106,93 @@ mod tests {
             .map(|c| (c.name(), c.passes_when().to_string()))
             .collect();
         assert_eq!(rows, want);
+    }
+
+    /// FEAT-179 R-2: a design stage asks for the design itself. A missing section and an empty
+    /// one are both gaps; nested content counts; a heading in a code fence is not a heading; an
+    /// exempt item has no gaps.
+    #[test]
+    fn spec_sections_gate() {
+        let with_spec = |spec: &str| {
+            let mut f = item(Some(FeatureDefinition {
+                statement: "s".into(),
+                ..Default::default()
+            }));
+            f.specification = spec.into();
+            f
+        };
+        let ask = |names: &[&str]| {
+            vec![Condition::SpecSections {
+                spec_sections: names.iter().map(|n| n.to_string()).collect(),
+            }]
+        };
+        let ctx = Context::default();
+        let gaps =
+            |f: &FeatureItem, names: &[&str]| evaluate_conditions(f, None, &ask(names), &ctx);
+
+        let none = with_spec("# Title\n\nWhy it exists.\n");
+        let g = gaps(&none, &["Design"]);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].check, Check::SpecSections);
+        assert_eq!(g[0].label, "no section 'Design'");
+
+        let empty = with_spec("# Title\n\n## Design\n\n<!-- to do -->\n\n## Tests\n\nt\n");
+        assert_eq!(gaps(&empty, &["Design"])[0].label, "empty section 'Design'");
+
+        let nested = with_spec("# T\n\n## design\n\n### Data model\n\nstruct Shard { .. }\n");
+        assert!(
+            gaps(&nested, &["Design"]).is_empty(),
+            "case-insensitive, nested content counts"
+        );
+
+        let fenced = with_spec("# T\n\n```md\n## Design\ntext\n```\n");
+        assert_eq!(
+            gaps(&fenced, &["Design"]).len(),
+            1,
+            "a fenced heading is not a section"
+        );
+
+        let two = with_spec("## Design\n\nx\n");
+        let g = gaps(&two, &["Design", "Test plan"]);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].label, "no section 'Test plan'");
+
+        // Plain `spec_sections` asks for Design.
+        let plain = vec![Condition::Check(Check::SpecSections)];
+        assert_eq!(evaluate_conditions(&none, None, &plain, &ctx).len(), 1);
+        assert!(evaluate_conditions(&nested, None, &plain, &ctx).is_empty());
+
+        let mut exempt = with_spec("");
+        exempt.definition.as_mut().unwrap().exempt = "predates the method".into();
+        assert!(gaps(&exempt, &["Design"]).is_empty());
+    }
+
+    /// FEAT-179 R-3: `spec_sections` is in the gate vocabulary, reads from a gate both ways, and
+    /// shows in the working agreement. A gate that reads specs says so, so readers load them.
+    #[test]
+    fn spec_sections_in_vocabulary() {
+        assert!(Check::GATEABLE.contains(&Check::SpecSections));
+        assert_eq!(Check::SpecSections.name(), "spec_sections");
+        assert!(Check::SpecSections.parameters().is_some());
+        let gate: crate::config::Gate = serde_yaml::from_str(
+            "requires:\n  - spec_sections\n  - spec_sections: [Design, Test plan]\n",
+        )
+        .expect("both forms read");
+        assert_eq!(gate.requires[0], Condition::Check(Check::SpecSections));
+        assert_eq!(
+            gate.requires[1],
+            Condition::SpecSections {
+                spec_sections: vec!["Design".into(), "Test plan".into()]
+            }
+        );
+        assert!(gate.reads_spec());
+        let mut config = crate::ProjectConfig::default_for("demo");
+        config.gates.insert("Scheduled".into(), gate);
+        let agreement = crate::config::working_agreement("demo", &config);
+        assert!(
+            agreement.contains("spec sections: Design, Test plan"),
+            "{agreement}"
+        );
     }
 
     #[test]

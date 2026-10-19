@@ -96,6 +96,7 @@ board.
 | `estimated` | estimated in the project's unit: story points or days (`kanbanr config cadence --unit points`) |
 | `in_sprint` | planned into the active sprint (projects with sprints switched on) |
 | `in_release` | planned into a release (projects with releases switched on) |
+| `spec_sections` | the spec has each named section, with content; plain `spec_sections` asks for `Design` |
 
 An unknown check, an unknown status or an unknown Zachman column is refused when the workflow is
 saved. A gate that could never match is a guardrail that silently isn't there.
@@ -146,6 +147,40 @@ what the next stage needs:
 what a later stage will. Each time the definition grows, its approval lapses and is given again.
 Each approval records the status it was given in, so the history reads "approved at Business
 Arch, again at System Design".
+
+## The design stage: a build-ready design in the spec
+
+At a design stage, the item's **spec** carries the technical design at implementation level, in a
+`## Design` section. It covers:
+- components, modules and files;
+- public interfaces with signatures and responsibilities;
+- data model and formats, algorithms and control flow;
+- concurrency and failure handling;
+- configuration and defaults, and dependencies;
+- security and performance budgets;
+- a test plan that maps each requirement to its tests;
+- compatibility, ADR links and open questions.
+
+The definition's `how` and `where` lines summarise it. To make the section a condition of
+leaving the design stage, and to have a person review it before build, ask for both:
+
+```yaml
+gates:
+  Implementation:
+    requires:
+      - tests_named
+      - approved
+      - spec_sections: [Design]   # the spec has a non-empty "Design" heading, at any level
+    signoffs: [design-review]
+```
+
+Write the section so a cheaper model can build from it. It ends with an implementation task
+list: each task names its files, signatures, behaviour, tests (with the requirement each serves)
+and the tasks it depends on, and leaves no decision open. The tasks go into the item's todo-list,
+so a low-cost subagent can take them one at a time.
+
+`spec_sections` passes when every named heading is in the spec with content under it. Content in
+a nested subsection counts, and a heading inside a code fence does not.
 
 ## A worked example: PDCA
 
