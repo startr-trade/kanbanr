@@ -903,6 +903,19 @@ enum MilestoneCmd {
 #[derive(Subcommand)]
 enum ConfigCmd {
     Show,
+    /// The method, on by default in every built-in process (FEAT-193): design before build, the
+    /// docs it changes updated before it integrates, and broken references reported. With no flag,
+    /// shows each part and where it is in force.
+    Method {
+        /// Turn the named parts (default: all) back on.
+        #[arg(long, conflicts_with = "off")]
+        on: bool,
+        /// Turn the named parts (default: all) off; applying or updating a process keeps them off.
+        #[arg(long)]
+        off: bool,
+        /// design | design-review | docs | docs-folded | links.
+        parts: Vec<String>,
+    },
     /// Whether this project works in sprints and releases, and what it estimates in (FEAT-121).
     /// Both are off unless switched on — most projects follow a different rhythm.
     Cadence {
@@ -5438,9 +5451,13 @@ fn projects_behind(
 /// by lookup order: an update brings a project its own process's new version (FEAT-170).
 fn current_copy(
     client: &Backend,
+    config: &kanbanr_core::config::ProjectConfig,
     source: &kanbanr_core::config::ProcessSource,
 ) -> anyhow::Result<Option<kanbanr_core::config::WorkflowFile>> {
     use kanbanr_core::config::Library;
+    // As this project would have it: the parts of the method it turned off stay off (FEAT-193).
+    let shape =
+        |f: kanbanr_core::config::WorkflowFile| kanbanr_core::method::shaped(f, &config.method);
     Ok(match source.library {
         Library::Board => board_process(client, &source.name),
         Library::Personal => match personal_processes() {
@@ -5448,7 +5465,8 @@ fn current_copy(
             None => None,
         },
         Library::Builtin => kanbanr_core::config::preset(&source.name).ok(),
-    })
+    }
+    .map(shape))
 }
 
 /// How a project stands against its saved process, the personal case included — which only this
@@ -5460,7 +5478,7 @@ fn project_drift(
     let Some(source) = &project.config.process else {
         return Ok(None);
     };
-    let current = current_copy(client, source)?;
+    let current = current_copy(client, &project.config, source)?;
     Ok(kanbanr_core::library::drift(
         &project.config,
         current.as_ref(),
@@ -5521,7 +5539,7 @@ fn run_process_drift(cli: &Cli, client: &Backend, cmd: &ProcessCmd) -> anyhow::R
                              `kanbanr process diff <name>`"
                         )
                     })?;
-                    let file = current_copy(client, source)?.ok_or_else(|| {
+                    let file = current_copy(client, &project.config, source)?.ok_or_else(|| {
                         anyhow::anyhow!(
                             "'{}' is no longer in the {} library",
                             source.name,
@@ -5557,7 +5575,7 @@ fn run_process_drift(cli: &Cli, client: &Backend, cmd: &ProcessCmd) -> anyhow::R
                     "{p} uses no saved process; adopt one with `kanbanr config workflow --preset <name>`"
                 )
             })?;
-            let file = current_copy(client, &source)?.ok_or_else(|| {
+            let file = current_copy(client, &project.config, &source)?.ok_or_else(|| {
                 anyhow::anyhow!(
                     "'{}' is no longer in the {} library",
                     source.name,
@@ -7339,6 +7357,44 @@ fn run_milestone(cli: &Cli, client: &Backend, cmd: &MilestoneCmd) -> anyhow::Res
 fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     match cmd {
+        ConfigCmd::Method { on, off, parts } => {
+            let resp = if *on || *off {
+                client.write(
+                    Method::Put,
+                    &format!("/projects/{p}/config/method"),
+                    Some(json!({ "on": *on, "parts": parts })),
+                )?
+            } else {
+                let parts = client.get(&format!("/projects/{p}/config/method"))?;
+                format!("{{\"parts\": {parts}, \"notes\": []}}")
+            };
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let v: Value = serde_json::from_str(&resp)?;
+            for note in v["notes"].as_array().into_iter().flatten() {
+                println!("note: {}", note.as_str().unwrap_or_default());
+            }
+            for part in v["parts"].as_array().into_iter().flatten() {
+                let name = part["part"].as_str().unwrap_or_default();
+                let means = part["means"].as_str().unwrap_or_default();
+                let line = match (
+                    part["on"].as_bool().unwrap_or(true),
+                    part["status"].as_str(),
+                ) {
+                    (false, _) => "off".to_string(),
+                    (true, Some(status)) => format!("on: {status} {means}"),
+                    (true, None) if name == "links" => format!("on: {means}"),
+                    (true, None) => {
+                        "on, but not in this workflow — `kanbanr config method --on` adds it"
+                            .to_string()
+                    }
+                };
+                println!("{name:<13} {line}");
+            }
+            Ok(())
+        }
         ConfigCmd::Cadence {
             sprints,
             releases,

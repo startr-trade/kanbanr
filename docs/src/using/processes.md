@@ -21,13 +21,16 @@ kanbanr project init shop --workflow pdca      # choose at creation
 
 | Preset | Stages | Gates |
 |---|---|---|
-| `default` | Planned → In Progress → Completed, plus Deferred and Ongoing | none declared: the built-in rule |
-| `scheduled` | Planned → Scheduled → Completed | none declared: the built-in rule |
+| `default` | Planned → In Progress → Completed, plus Deferred and Ongoing | the built-in rule, plus the method |
+| `scheduled` | Planned → Scheduled → Completed | the built-in rule, plus the method |
 | `togaf` | Vision → Business Arch → System Design → Implementation → Migration → Operations | the definition grows phase by phase |
 | `pdca` | Plan → Do → Check → Act | agreement to start, evidence to check, a review sign-off to act |
 | `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs at review and validation |
 | `scrum` | Backlog → Ready → In Progress → Review → Testing → Done → Released | Definition of Ready and of Done; work starts in the sprint; sprints, releases and points on |
 | `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on |
+
+Every built-in process also carries [the method](#the-method-on-by-default): a design before
+build, and the docs it changes kept current.
 
 `design-control` is **modelled on** the design-and-development controls of ISO 9001 clause 8.3.
 That is not a claim of compliance: only a certification body can make that.
@@ -36,7 +39,8 @@ A preset is copied into the project when you choose it. From then on the project
 `config.yaml` is what counts, and editing it never changes the preset. New projects get
 `default`. Existing boards keep whatever workflow they have.
 
-**The built-in rule.** A workflow that declares no gates still has one: moving an item into a
+**The built-in rule.** A workflow that declares no gates of its own still has one (a gate
+addressed to a role, such as the method's, adds to it rather than replacing it): moving an item into a
 status that means work has started needs an approved definition. That is a status the board
 displays, that is not where items start, and that is neither an end state nor a no-op. `start`
 makes the branch at the first such status. And finishing an item's last task completes it only when
@@ -147,6 +151,40 @@ gates:
 - **Older kanbanr versions:** a workflow whose gates only name roles, or that addresses a gate to a
   role, is stamped schema 4, so an older kanbanr refuses the board rather than misread it.
 
+## The method, on by default
+
+Every built-in process asks for the same two disciplines, at whichever stages hold the roles:
+
+| Part | Where | What it asks |
+|---|---|---|
+| `design` | the build stage | `spec_sections: [Design]`: the spec has its build-ready Design ([below](#the-design-stage-a-build-ready-design-in-the-spec)) |
+| `design-review` | the build stage | the `design-review` sign-off: a person reviewed that design |
+| `docs` | the integrate stage | `docs_updated`: each doc in `affects_docs` changed ([Living architecture docs](living-docs.md)) |
+| `docs-folded` | the integrate stage | the `docs-folded` sign-off: the design was folded into those docs |
+| `links` | everywhere | `kanbanr doctor` reports references to things the board does not have |
+
+It is written as two role-addressed gates, `"@build"` and `"@integrate"`, so you see it in your
+exported workflow and in the working agreement, and it adds to each stage's own rules.
+
+```bash
+kanbanr config method                       # each part, on or off, and where it is in force
+kanbanr config method --off                 # all of it off
+kanbanr config method --off docs docs-folded   # just those parts
+kanbanr config method --on design           # one part back
+```
+
+Turning a part off takes its gates out and records the choice: applying a built-in process, or
+`kanbanr process update`, keeps it off, and drift does not report it as an edit. Saved processes
+of your own are never added to; they are only shaped by the choice.
+
+**Projects from before the method** keep their workflow as it is. `kanbanr doctor` asks once —
+"this project predates the method" — until you choose either way. A project that recorded a
+built-in process sees it reported as changed (`kanbanr process diff`), and `kanbanr process update`
+brings the method in.
+
+**Upgrading:** every machine that shares a board should run a kanbanr that knows these gates
+(`docs_updated` and role-addressed gates); an older one refuses the board rather than misread it.
+
 ## Sign-offs
 
 Some conditions are invisible in board data: a design review was held, a release was approved.
@@ -208,8 +246,8 @@ At a design stage, the item's **spec** carries the technical design at implement
 - a test plan that maps each requirement to its tests;
 - compatibility, ADR links and open questions.
 
-The definition's `how` and `where` lines summarise it. To make the section a condition of
-leaving the design stage, and to have a person review it before build, ask for both:
+The definition's `how` and `where` lines summarise it. Every built-in process asks for both
+through [the method](#the-method-on-by-default). In a process of your own, write it as:
 
 ```yaml
 gates:

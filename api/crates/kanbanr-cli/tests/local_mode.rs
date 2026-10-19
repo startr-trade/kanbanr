@@ -1813,6 +1813,8 @@ fn cli_trace_and_why_follow_the_chain_in_both_directions() {
         "a@x",
         "--no-hooks",
     ]);
+    // The trace is the subject here, not the method (FEAT-193).
+    run(&["config", "method", "--off"]);
     run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
     let charter = base.join("charter.yaml");
     std::fs::write(
@@ -3971,4 +3973,79 @@ fn tests_run_inside_the_fence() {
             "{name} keeps a scratch folder in the build tree"
         );
     }
+}
+
+/// FEAT-193 R-2: the method is on in a built-in process and can be turned off, all of it or part
+/// by part. Off, an item with no Design section enters the build stage; the project's record of
+/// its process stays current, because opting out is a choice, not an edit; and turning one part
+/// back on brings back that part alone.
+#[test]
+fn method_gates_opt_out() {
+    let (base, work) = togaf_scratch("method-opt-out");
+    togaf_board(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "workflow", "--preset", "togaf"],
+    ));
+    let shown = ok(run_in(&base, &work, &["config", "method"]));
+    assert!(
+        shown.contains("design        on: Implementation"),
+        "{shown}"
+    );
+    assert!(shown.contains("docs          on: Migration"), "{shown}");
+    for phase in ["Business Arch", "System Design"] {
+        ok(run_in(
+            &base,
+            &work,
+            &[
+                "move",
+                "FEAT-001",
+                phase,
+                "--override",
+                "not what this test is about",
+            ],
+        ));
+    }
+    let refused = run_in(&base, &work, &["move", "FEAT-001", "Implementation"]);
+    assert!(!refused.status.success());
+    let why = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        why.contains("no 'Design' section") && why.contains("design-review"),
+        "{why}"
+    );
+
+    ok(run_in(&base, &work, &["config", "method", "--off"]));
+    let parts: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "config", "method"]))).unwrap();
+    let parts = parts["parts"].as_array().unwrap();
+    assert_eq!(parts.len(), 5);
+    assert!(parts.iter().all(|p| p["on"] == false), "{parts:?}");
+    let status = ok(run_in(&base, &work, &["process", "status"]));
+    assert!(
+        !status.contains("edited"),
+        "an opt-out is not an edit: {status}"
+    );
+    ok(run_in(
+        &base,
+        &work,
+        &["move", "FEAT-001", "Implementation"],
+    ));
+
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "method", "--on", "design"],
+    ));
+    let shown = ok(run_in(&base, &work, &["config", "method"]));
+    assert!(
+        shown.contains("design        on: Implementation"),
+        "{shown}"
+    );
+    assert!(shown.contains("design-review off"), "{shown}");
+    let _ = std::fs::remove_dir_all(&base);
 }

@@ -153,7 +153,11 @@ pub fn drift(
 ) -> Option<Drift> {
     let source = config.process.clone()?;
     let mine = WorkflowFile::from_config(config).content_rev();
+    // The process as this project takes it: a part of the method it turned off is a choice, not
+    // an edit, and not news (FEAT-193).
+    let current = current.map(|c| crate::method::shaped(c.clone(), &config.method));
     let newer = current
+        .as_ref()
         .filter(|c| c.content_rev() != source.rev)
         .map(|c| c.version());
     Some(Drift {
@@ -263,4 +267,31 @@ pub fn diff(from: &WorkflowFile, to: &WorkflowFile) -> Vec<String> {
         ));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FEAT-193: drift compares against the process as the project takes it — a part of the
+    /// method it turned off is neither an edit nor news.
+    #[test]
+    fn drift_honours_method_choice() {
+        use crate::method::{MethodChoice, Part};
+        let file = crate::config::preset("togaf").unwrap();
+        let choice = MethodChoice {
+            off: Part::ALL.to_vec(),
+            chosen_at: "2026-10-19T00:00:00Z".into(),
+        };
+        let shaped_file = crate::method::shaped(file.clone(), &choice);
+        let mut config = shaped_file.clone().into_config("p");
+        config.method = choice;
+        config.process = Some(shaped_file.source("togaf", crate::config::Library::Builtin));
+        let d = drift(&config, Some(&file)).unwrap();
+        assert!(!d.edited && d.newer.is_none(), "{d:?}");
+        // Without the choice recorded, the same workflow reads as behind the process.
+        config.method = MethodChoice::default();
+        let d = drift(&config, Some(&file)).unwrap();
+        assert!(d.newer.is_some(), "{d:?}");
+    }
 }
