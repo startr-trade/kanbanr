@@ -42,8 +42,7 @@ impl Drop for Daemon {
 
 #[test]
 fn view_daemon_serves_local_data_without_auth() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("view-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-view-{}", std::process::id()));
     let data = base.join("data");
     let home = base.join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -152,8 +151,7 @@ fn view_daemon_serves_local_data_without_auth() {
 /// Reviewing and approving through the daemon (FEAT-067).
 #[test]
 fn review_and_approve_through_the_daemon() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("review-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-review-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let data = base.join("data");
     let home = base.join("home");
@@ -371,8 +369,7 @@ fn review_and_approve_through_the_daemon() {
 /// it was reported: "the diagrams are not rendering".
 #[test]
 fn a_rebuilt_ui_is_served_without_restarting_the_daemon() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("ui-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-ui-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let data = base.join("data");
     let home = base.join("home");
@@ -452,8 +449,7 @@ fn a_rebuilt_ui_is_served_without_restarting_the_daemon() {
 /// conclude their data is gone, which is what happened.
 #[test]
 fn daemon_reports_the_schema_version_it_understands() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("schema-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-schema-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let data = base.join("data");
     let home = base.join("home");
@@ -506,8 +502,7 @@ fn daemon_reports_the_schema_version_it_understands() {
 /// `--ui-dir` at all, and pointing at a directory still overrides it so developing is unchanged.
 #[test]
 fn the_monitor_is_served_from_the_binary_with_no_ui_dir() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("embed-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-embed-{}", std::process::id()));
     let data = base.join("data");
     let home = base.join("home");
     std::fs::create_dir_all(&home).unwrap();

@@ -469,12 +469,52 @@ def uses_equivalents() -> None:
     not_verified.append("docs.yml deploy: publishing to GitHub Pages")
 
 
+def board_state() -> tuple[Path, str] | None:
+    """The real board this checkout uses, and its commits plus uncommitted changes (FEAT-195).
+
+    None when there is no board to protect: no `kanbanr` on PATH, no marker, or a board that is not
+    a git repository (a runner, a fresh clone)."""
+    exe = shutil.which("kanbanr")
+    if not exe:
+        return None
+    env = {k: v for k, v in os.environ.items() if k not in ("KANBANR_BOARD_FENCE", "KANBANR_DATA_DIR")}
+    ok, out = sh([exe, "where", "--json"], ROOT, env)
+    if not ok:
+        return None
+    try:
+        import json
+
+        board = Path(json.loads(out)["data_dir"])
+    except (ValueError, KeyError, TypeError):
+        return None
+    head_ok, head = sh(["git", "rev-parse", "HEAD"], board)
+    status_ok, status = sh(["git", "status", "--porcelain"], board)
+    if not (board.is_dir() and head_ok and status_ok):
+        return None
+    return board, head + status
+
+
 def main() -> int:
     print(f"make ci: a clean copy of the tracked tree at {TREE}\n", flush=True)
+    # A test that reaches the real board writes to someone's data, and its push publishes it.
+    # The fence (api/.cargo/config.toml) stops that; this proves it held for the whole run.
+    board_before = board_state()
     fresh_tree()
     lint_workflows()
     run_workflow_steps()
     uses_equivalents()
+    if board_before is None:
+        not_verified.append("the real board stayed untouched: no board found for this checkout")
+    else:
+        board, before = board_before
+        after = board_state()
+        moved = after is None or after[1] != before
+        say(
+            "make ci: the real board did not move during the run",
+            not moved,
+            f"{board} changed while make ci ran: a test reached it, or it was written to meanwhile "
+            "(then rerun).\nbefore:\n" + before + "\nafter:\n" + (after[1] if after else "unreadable"),
+        )
     failed = [name for name, ok, _ in results if not ok]
     print("\nNot verified locally (runs only on GitHub):")
     for item in not_verified:

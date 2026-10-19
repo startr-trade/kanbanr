@@ -387,9 +387,127 @@ fn basename(path: &Path) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// The environment variable that confines kanbanr to boards inside one directory (FEAT-195).
+pub const FENCE_VAR: &str = "KANBANR_BOARD_FENCE";
+
+/// The fence a `KANBANR_BOARD_FENCE` value names: `temp` is the system temporary directory, any
+/// other value a directory. None when unset or blank.
+pub fn fence_from(value: Option<&str>) -> Option<PathBuf> {
+    let value = value.map(str::trim).filter(|v| !v.is_empty())?;
+    let dir = if value == "temp" {
+        std::env::temp_dir()
+    } else {
+        PathBuf::from(value)
+    };
+    Some(canonical_ish(&dir))
+}
+
+/// The directory boards must be inside, from `KANBANR_BOARD_FENCE`. Cargo sets it to `temp` for
+/// every test (api/.cargo/config.toml), so no test can reach a real board.
+pub fn fence() -> Option<PathBuf> {
+    fence_from(std::env::var(FENCE_VAR).ok().as_deref())
+}
+
+/// `dir` made absolute and canonical as far as it exists: its nearest existing ancestor is
+/// canonicalised (symlinks, macOS's `/var` → `/private/var`) and the rest appended.
+fn canonical_ish(dir: &Path) -> PathBuf {
+    let absolute = if dir.is_absolute() {
+        dir.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("/"))
+            .join(dir)
+    };
+    // `..` resolved first, by name: a folder not yet made cannot be canonicalised, and its `..`
+    // parts would otherwise be carried through and climb out of the fence unseen.
+    let mut lexical = PathBuf::new();
+    for part in absolute.components() {
+        match part {
+            Component::ParentDir => {
+                lexical.pop();
+            }
+            Component::CurDir => {}
+            other => lexical.push(other),
+        }
+    }
+    let absolute = lexical;
+    let mut rest = Vec::new();
+    let mut cur = absolute.as_path();
+    loop {
+        if let Ok(real) = cur.canonicalize() {
+            return rest.iter().rev().fold(real, |p, part| p.join(part));
+        }
+        match (cur.parent(), cur.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                cur = parent;
+            }
+            _ => return absolute,
+        }
+    }
+}
+
+/// Is `dir` inside `fence`? The reason, naming both, when it is not.
+pub fn check_fence(dir: &Path, fence: &Path) -> std::result::Result<(), String> {
+    let real = canonical_ish(dir);
+    if real.starts_with(fence) {
+        Ok(())
+    } else {
+        Err(format!(
+            "refusing board {}: outside {FENCE_VAR} ({})",
+            real.display(),
+            fence.display()
+        ))
+    }
+}
+
+/// Stop the process if `dir` is outside the fence (FEAT-195). The fence is set only under test,
+/// where a board outside it is a test about to write someone's real data. A panic rather than an
+/// error, on purpose: an error can be caught and the run carried on with a fallback board; a panic
+/// ends it before anything is read or written. Without a fence this does nothing.
+pub fn assert_inside_fence(dir: &Path) {
+    if let Some(fence) = fence()
+        && let Err(why) = check_fence(dir, &fence)
+    {
+        panic!("{why}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fence_unset_or_blank_is_none() {
+        assert_eq!(fence_from(None), None);
+        assert_eq!(fence_from(Some("  ")), None);
+    }
+
+    #[test]
+    fn fence_temp_is_the_temporary_directory() {
+        let fence = fence_from(Some("temp")).unwrap();
+        assert_eq!(fence, std::env::temp_dir().canonicalize().unwrap());
+    }
+
+    #[test]
+    fn fence_inside_passes_and_outside_is_refused() {
+        let fence = fence_from(Some("temp")).unwrap();
+        let inside = std::env::temp_dir().join(format!("kanbanr-fence-{}", std::process::id()));
+        assert!(
+            check_fence(&inside, &fence).is_ok(),
+            "a folder not yet made is judged by where it would be"
+        );
+        let outside = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let why = check_fence(outside, &fence).unwrap_err();
+        assert!(why.contains("outside KANBANR_BOARD_FENCE"), "{why}");
+        // `..` cannot climb out.
+        let sneaky = inside.join("..").join("..").join("home");
+        assert!(
+            check_fence(&sneaky, &fence).is_err(),
+            "{}",
+            sneaky.display()
+        );
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);

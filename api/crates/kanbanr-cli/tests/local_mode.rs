@@ -10,8 +10,7 @@ fn cli() -> PathBuf {
 
 #[test]
 fn cli_local_mode_without_a_server() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("local-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-local-{}", std::process::id()));
     let data = base.join("data");
     let home = base.join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -160,8 +159,7 @@ fn cli_local_mode_without_a_server() {
 
 #[test]
 fn cli_init_scaffolds_a_local_project() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("init-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-init-{}", std::process::id()));
     let data = base.join("data");
     let home = base.join("home");
     let work = base.join("work"); // cwd for the .kanbanr marker
@@ -2322,8 +2320,7 @@ requirements:
 /// unconditionally, not a helper returning the wrong answer.
 #[test]
 fn init_refuses_to_repoint_a_folder_that_already_has_a_board() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("repoint-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-repoint-{}", std::process::id()));
     let home = base.join("home");
     let work = base.join("work");
     let first = base.join("first-board");
@@ -3831,4 +3828,106 @@ fn promote_production_refuses_unclean_merge() {
         "no notes were written"
     );
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Every file under `dir`, with its bytes, to show nothing was written.
+fn snapshot(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                out.push((p.clone(), std::fs::read(&p).unwrap()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// FEAT-195 R-1: under the fence, a board outside the temporary directory is refused before it is
+/// read or written. The board here is made with plain file writes, never through kanbanr, in the
+/// build tree — exactly where the test that reached the real board kept its scratch folder.
+#[test]
+fn board_outside_the_fence_is_refused() {
+    let outside = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("fenced-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&outside);
+    let data = outside.join("data");
+    std::fs::create_dir_all(data.join("projects").join("shop")).unwrap();
+    std::fs::write(
+        data.join("projects").join("shop").join("config.yaml"),
+        "name: shop\n",
+    )
+    .unwrap();
+    let before = snapshot(&outside);
+
+    for args in [
+        vec!["board", "--project", "shop"],
+        vec![
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+        vec!["identity", "--name", "A", "--email", "a@x"],
+    ] {
+        let mut full: Vec<&str> = args.clone();
+        full.extend(["--data-dir", data.to_str().unwrap()]);
+        let out = Command::new(cli())
+            .args(&full)
+            .current_dir(&outside)
+            .env("KANBANR_BOARD_FENCE", "temp")
+            .env_remove("KANBANR_DATA_DIR")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{args:?} ran outside the fence");
+        assert!(
+            err.contains("outside KANBANR_BOARD_FENCE"),
+            "{args:?}: {err}"
+        );
+    }
+    assert_eq!(
+        snapshot(&outside),
+        before,
+        "nothing outside the fence was touched"
+    );
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
+/// FEAT-195 R-2: every test runs fenced to the temporary directory (api/.cargo/config.toml), and
+/// no test keeps its scratch folder in the build tree, which sits under this repository's marker.
+#[test]
+fn tests_run_inside_the_fence() {
+    assert_eq!(
+        std::env::var("KANBANR_BOARD_FENCE").as_deref(),
+        Ok("temp"),
+        "cargo sets the fence for every test"
+    );
+    let (base, work) = togaf_scratch("fence-check");
+    assert!(work.starts_with(std::env::temp_dir()), "{}", work.display());
+    let _ = std::fs::remove_dir_all(&base);
+
+    // Only the refusal test above may name the build tree, and only to stand outside the fence.
+    let in_tree = concat!("env!(\"CARGO_TARGET", "_TMPDIR\")");
+    for (name, source) in [
+        ("local_mode.rs", include_str!("local_mode.rs")),
+        ("view_daemon.rs", include_str!("view_daemon.rs")),
+        ("integration.rs", include_str!("integration.rs")),
+    ] {
+        let uses = source.matches(in_tree).count();
+        let allowed = usize::from(name == "local_mode.rs");
+        assert_eq!(
+            uses, allowed,
+            "{name} keeps a scratch folder in the build tree"
+        );
+    }
 }
