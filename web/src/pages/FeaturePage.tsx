@@ -235,6 +235,17 @@ function Definition({ feature, project }: { feature: Feature; project: string })
           ) : null}
           {def.exempt?.trim() ? <span className="chip">exempt: {def.exempt}</span> : null}
         </div>
+        {(def.affects_docs ?? []).length ? (
+          // The docs this item's design changes (FEAT-180); a `docs_updated` gate checks each.
+          <div className="provenance">
+            <span className="muted">Affects docs</span>
+            {(def.affects_docs ?? []).map((d) => (
+              <Link key={d} className="chip" to={`/p/${encodeURIComponent(project)}/docs/file/${d}`}>
+                {d}
+              </Link>
+            ))}
+          </div>
+        ) : null}
         {def.approval != null && meta.data?.writes === true && !done ? (
           <div className="review-actions">
             {asking ? (

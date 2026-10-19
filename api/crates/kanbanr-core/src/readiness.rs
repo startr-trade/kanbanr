@@ -1087,7 +1087,8 @@ mod tests {
             .definition
             .clone()
             .unwrap();
-        assert_eq!(def.affects_docs, vec!["architecture/data".to_string()]);
+        // Stored as the board path, `.md` appended.
+        assert_eq!(def.affects_docs, vec!["architecture/data.md".to_string()]);
 
         let mut bare = def.clone();
         bare.affects_docs.clear();
@@ -1101,7 +1102,7 @@ mod tests {
         let mut older = bare.clone();
         older.extra.insert(
             "affects_docs".into(),
-            serde_yaml::to_value(vec!["architecture/data"]).unwrap(),
+            serde_yaml::to_value(vec!["architecture/data.md"]).unwrap(),
         );
         assert_eq!(
             serde_yaml::to_string(&def).unwrap(),

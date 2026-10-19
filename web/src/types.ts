@@ -132,6 +132,8 @@ export interface FeatureDefinition {
   goals?: string[];
   zachman?: Zachman;
   design_doc?: string;
+  /** Board docs this item's design changes (FEAT-180); `docs_updated` checks each changed. */
+  affects_docs?: string[];
   requirements?: Requirement[];
   approval?: Approval | null;
   /** Every agreement and withdrawal, oldest first (FEAT-069). Nothing is ever removed. */

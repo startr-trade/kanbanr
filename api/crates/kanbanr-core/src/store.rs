@@ -982,6 +982,23 @@ impl Store {
         definition: Option<crate::models::FeatureDefinition>,
     ) -> Result<FeatureItem> {
         let previous = project.feature(code)?.definition.clone();
+        // Declared docs are board paths (FEAT-180): `.md` appended, and nothing that could name a
+        // file outside the doc tree.
+        let mut definition = definition;
+        if let Some(def) = definition.as_mut() {
+            for doc in &mut def.affects_docs {
+                let path = std::path::Path::new(doc.trim());
+                if doc.trim().is_empty()
+                    || path.is_absolute()
+                    || path
+                        .components()
+                        .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                {
+                    return Err(CoreError::InvalidDocPath(doc.clone()));
+                }
+                *doc = crate::refs::doc_key(doc);
+            }
+        }
         let definition = definition.map(|mut def| {
             assign_requirement_ids(&mut def);
             // Carry the approval record forward: a redefinition must LAPSE the approval, not erase
