@@ -60,7 +60,11 @@ pub struct Store {
 
 impl Store {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Store { root: root.into() }
+        let root = root.into();
+        // Every read and write of a board starts here: under test, one outside the temporary
+        // directory stops the run before anything is touched (FEAT-195).
+        crate::project::assert_inside_fence(&root);
+        Store { root }
     }
 
     /// The data folder this store owns. The activity and events logs live beside the projects

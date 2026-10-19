@@ -136,6 +136,7 @@ pub fn ensure_repo(dir: &Path) {
 /// authored by it (FEAT-128). With no identity anywhere, the repository is created without a
 /// commit; the first write that has an author makes it.
 pub fn ensure_repo_as(dir: &Path, identity: Option<(&str, &str)>) {
+    crate::project::assert_inside_fence(dir); // FEAT-195
     let fresh = !dir.join(".git").exists();
     let repo = if fresh {
         match Repository::init(dir) {
@@ -177,6 +178,7 @@ pub fn ensure_repo_as(dir: &Path, identity: Option<(&str, &str)>) {
 
 /// Set the repo-local commit identity (used by local mode: `kanbanr identity --name --email`).
 pub fn set_identity(dir: &Path, name: &str, email: &str) -> Result<(), String> {
+    crate::project::assert_inside_fence(dir); // FEAT-195
     let repo = Repository::open(dir).map_err(|e| e.message().to_string())?;
     let mut cfg = repo.config().map_err(|e| e.message().to_string())?;
     cfg.set_str("user.name", name)
@@ -228,6 +230,7 @@ fn do_commit(repo: &Repository, sig: &Signature, message: &str) -> Result<bool, 
 /// Stage everything and commit authored as `name <email>` with `message`. Returns true if a commit
 /// was made (false if nothing changed or on error).
 pub fn commit(dir: &Path, name: &str, email: &str, message: &str) -> bool {
+    crate::project::assert_inside_fence(dir); // FEAT-195
     let Ok(repo) = Repository::open(dir) else {
         return false;
     };
@@ -240,6 +243,7 @@ pub fn commit(dir: &Path, name: &str, email: &str, message: &str) -> bool {
 /// Stage everything and commit using the repo's configured identity (local mode). Returns true if
 /// a commit was made.
 pub fn commit_local(dir: &Path, message: &str) -> bool {
+    crate::project::assert_inside_fence(dir); // FEAT-195
     let Ok(repo) = Repository::open(dir) else {
         return false;
     };
@@ -394,6 +398,7 @@ pub struct SyncOutcome {
 /// creates the branch; only a failed push is surfaced.)
 #[must_use]
 pub fn sync_all(dir: &Path) -> SyncOutcome {
+    crate::project::assert_inside_fence(dir); // FEAT-195
     let mut outcome = SyncOutcome::default();
     let Ok(repo) = Repository::open(dir) else {
         return outcome;
@@ -554,6 +559,7 @@ pub fn push_setting(dir: &Path) -> Option<String> {
 
 /// Record the board's push policy in its own git config.
 pub fn set_push_setting(dir: &Path, policy: PushPolicy) -> Result<(), String> {
+    crate::project::assert_inside_fence(dir); // FEAT-195
     let repo = Repository::open(dir).map_err(|e| e.message().to_string())?;
     let mut cfg = repo.config().map_err(|e| e.message().to_string())?;
     cfg.set_str(PUSH_SETTING, &policy.to_string())
