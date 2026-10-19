@@ -68,6 +68,9 @@ pub enum CoreError {
     InvalidMermaid(String),
     #[error("unsupported operation: {0}")]
     Unsupported(String),
+    /// The code repository refused (FEAT-183): git's own reason, as git said it.
+    #[error("{0}")]
+    Git(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("yaml error: {0}")]

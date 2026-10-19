@@ -15,6 +15,7 @@ pub mod adr;
 pub mod batch;
 pub mod charter;
 pub mod claude;
+pub mod coderepo;
 pub mod config;
 pub mod daylog;
 pub mod dispatch;
