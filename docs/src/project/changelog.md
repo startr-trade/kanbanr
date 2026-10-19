@@ -8,6 +8,16 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **The method, on by default in every built-in process (FEAT-193).** Design before build: the
+  build stage asks for the spec's Design section and a `design-review` sign-off. Living docs: the
+  integrate stage asks for `docs_updated` and a `docs-folded` sign-off. And `doctor` reports broken
+  references. `kanbanr config method` shows each part and where it applies; `--off [part…]` and
+  `--on [part…]` choose, and applying or updating a process honours the choice without reporting
+  it as drift. Projects that predate it are unchanged until they choose; `doctor` asks once. New
+  projects record that they use the built-in `default` process. A gate addressed to a role now adds
+  to the built-in rule instead of replacing it. design-control's Verification sign-off is renamed
+  `verification-review`, so `design-review` means the pre-build review everywhere. Upgrade every
+  machine that shares a board.
 - **Living architecture docs (FEAT-180).** An item can name the board docs its design changes,
   in `affects_docs`. A new gate check, `docs_updated`, passes once each has changed since the item
   entered its stage, judged from the board's git history (an uncommitted change counts). Naming the

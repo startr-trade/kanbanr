@@ -600,6 +600,10 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
 - A commit may add `Docs: design/mirror.md` and `ADR: ADR-0003`; both are checked against the
   board like any other reference.
 - `kanbanr trace <MS-006> --zachman` reports which of the six columns nothing in scope addresses.
+- **The method is on by default.** Every built-in process asks for the Design and its
+  `design-review` at the build stage, and `docs_updated` with `docs-folded` at the integrate stage
+  (`kanbanr config method` shows where). Never turn a part off yourself: it is the user's choice,
+  through `kanbanr config method --off <part>`.
 - **Architecture docs stay as built.** Keep one board doc per component, describing it as it is,
   with front matter `items`, `adrs` and `covers`. Before an item is released, fold its Design into
   each doc in its `affects_docs`; a `docs_updated` gate refuses the move until each changed since
