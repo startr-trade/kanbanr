@@ -226,8 +226,11 @@ kanbanr retro --sprint SP-001
 
 kanbanr release add v0.1.0 --target 2026-10-18
 kanbanr release plan v0.1.0 FEAT-001 FEAT-002
-kanbanr release list                            # every release, planned or shipped
-kanbanr release cut v0.1.0 --tag                # ship what is finished, write notes, carry the rest
+kanbanr release list                            # every release, its state and its stage
+kanbanr release promote v0.1.0                  # candidate: makes the branch release/v0.1.0
+kanbanr release promote v0.1.0 staging          # a named stage; a middle one changes only the board
+kanbanr release promote v0.1.0 test --reason "the payment check failed on staging"   # back a stage
+kanbanr release promote v0.1.0 production       # the cut: ship, notes, tag, fast-forward main
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a release
 ```
 
@@ -246,6 +249,41 @@ once cut; the Gantt adds the sprints as a lane and the releases as milestones:
 ![The Releases page: a shipped release and a planned one](../images/releases.png)
 
 ![The Gantt with a sprint lane and release milestones](../images/gantt-sprints.png)
+
+### Release stages
+
+A release moves through the environments it is deployed to before production. By default they are
+`candidate → test → staging → production`; a project names its own with
+`kanbanr config cadence --release-stages candidate,qa,uat,live`. Each stage must appear once, and
+the **last one is always the cut**. Every move is recorded on the release with who made it and when.
+
+- **The first stage** makes the branch `release/<VERSION>` from the integration branch, without
+  checking it out. `kanbanr release add v0.1.0 --branch` adds a release and promotes it there in one
+  step.
+- **A middle stage** is a board change only.
+- **Back a stage** — staging to test after a failed check — needs `--reason`, which is recorded.
+  Nothing moves back from production.
+- **The last stage** is the cut. It ships the finished items, writes the notes, tags the code
+  repository with the version and **fast-forwards the main branch** to the release, so main's tip
+  is exactly the tagged commit. Before anything changes it checks that the working tree has no
+  uncommitted changes, that the release branch exists, that the tag does not, and that main has no
+  commits the release lacks; any failure refuses with its reason and **changes nothing**. If main
+  has moved on, merge main into the release branch and promote again. If the board step fails after
+  the tag and the fast-forward, both are undone. `kanbanr release cut <VERSION> --tag` is the same
+  as promoting to the last stage; a plain `release cut` changes only the board.
+
+The integration branch and the main branch are both the repository's default branch unless the
+project names them: `kanbanr config cadence --integration-branch develop --main-branch main`.
+
+The first and last stages act on the code repository, so run them from the project folder. The
+monitor (`kanbanr serve --allow-writes`) uses the repository it was started in, when that folder's
+marker names the project; otherwise it refuses them with "use the CLI from the project folder".
+Nothing is pushed: publishing the tag and main is whoever pushes.
+
+Items reach the project's end status through the production stage of a release they are planned
+into: the cut moves them there, and a gate asking for `in_release` stops them getting there any
+other way.
+
 `kanbanr config workflow --write-agreement` writes the team's working agreement to the board,
 generated from the gates. Under Scrum that is the Definition of Ready and of Done. Because it is
 generated, it can't drift from what is enforced.

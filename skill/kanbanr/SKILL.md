@@ -879,6 +879,9 @@ kanbanr sprint start SP-001 | show [SP-001] | list | close SP-001 --carry-to SP-
 kanbanr retro --sprint SP-001                     # the sprint's items, what it carried, its burndown
 kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # ship the finished items, write notes, carry the rest
+kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # next or named stage (default candidate → test → staging → production): the first makes release/<V>; the last is the cut — tags and fast-forwards main, refuses if main has commits the release lacks; back a stage needs --reason. Run from the project folder; never pushes
+kanbanr release add v0.2.0 --branch               # add it and promote it to the first stage
+kanbanr config cadence --release-stages candidate,qa,live [--integration-branch develop] [--main-branch main]
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a shipped release
 kanbanr config workflow --export > process.yaml   # this project's workflow, gates included
 kanbanr process check process.yaml|-              # check a process without applying it (- reads stdin): every problem, then its agreement and diagram

@@ -318,7 +318,16 @@ export interface ProjectConfig {
   /** Days or story points (FEAT-121). */
   estimate_unit?: "days" | "points";
   /** Whether the project uses sprints and releases at all (FEAT-121). */
-  cadence?: { sprints?: boolean; releases?: boolean; sprint_length_days?: number; release?: string };
+  cadence?: {
+    sprints?: boolean;
+    releases?: boolean;
+    sprint_length_days?: number;
+    release?: string;
+    /** The stages a release moves through; the last is the cut (FEAT-183). */
+    release_stages?: string[];
+    integration_branch?: string;
+    main_branch?: string;
+  };
 }
 
 /** A timebox (FEAT-119). */
@@ -358,6 +367,12 @@ export interface Release {
   items?: string[];
   /** How many of `items` are finished — by the daemon's rule, the same as the sprint's. */
   finished?: number;
+  /** Where it is now, from the project's release stages; absent until first promoted (FEAT-183). */
+  stage?: string;
+  /** Every stage change, oldest first. A move back carries its reason. */
+  stages?: { stage: string; by: string; at: string; reason?: string }[];
+  /** The code branch, made on entering the first stage. */
+  branch?: string;
 }
 
 /** A check a gate names, or the Zachman check narrowed to some columns. */
