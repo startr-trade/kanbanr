@@ -42,7 +42,8 @@ fn with_write_lock<T>(data_dir: &Path, f: impl FnOnce() -> T) -> std::io::Result
 /// The data-route write recipe: dispatch + activity + local commit + debounced push, serialized by
 /// the advisory write lock. `method` is one of POST/PUT/PATCH/DELETE. This is the daemon's only
 /// mutation entry point and it reuses `dispatch::dispatch` exactly like the CLI. Returns the
-/// dispatcher's error string on failure (the caller maps it to an HTTP status).
+/// dispatcher's error string on failure (the caller maps it to an HTTP status). `repo` is the
+/// project's code repository, when the daemon has one for this project (FEAT-183).
 pub fn write(
     store: &Store,
     data_dir: &Path,
@@ -50,6 +51,7 @@ pub fn write(
     method: &str,
     path: &str,
     body: Option<&Value>,
+    repo: Option<&Path>,
 ) -> Result<WriteOutcome, String> {
     with_write_lock(data_dir, || {
         git::ensure_repo(data_dir);
@@ -57,7 +59,8 @@ pub fn write(
         if dispatch::is_mutation(method) && !dispatch::is_dry_run(body) {
             git::require_identity(data_dir)?;
         }
-        let out = dispatch::dispatch(store, method, path, body).map_err(|e| e.to_string())?;
+        let out =
+            dispatch::dispatch_in(store, method, path, body, repo).map_err(|e| e.to_string())?;
         let mut warnings = Vec::new();
         if dispatch::is_mutation(method) && !dispatch::is_dry_run(body) {
             let msg = dispatch::commit_message(method, path, body);
@@ -151,6 +154,7 @@ mod tests {
             "POST",
             "/projects",
             Some(&serde_json::json!({ "name": "demo" })),
+            None,
         )
         .expect("daemon write should succeed");
         assert!(out.body.contains("demo"), "response echoes the new project");
@@ -181,6 +185,7 @@ mod tests {
             "POST",
             "/projects",
             Some(&serde_json::json!({ "name": "demo" })),
+            None,
         )
         .unwrap();
         assert!(git::has_unpushed(&dir));

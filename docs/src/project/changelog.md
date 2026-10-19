@@ -23,6 +23,21 @@ All notable changes to kanbanr are documented here. The format follows
   build and release from what they already do, and behave exactly as before. A board whose gates
   only name roles, or that addresses a gate to a role, is schema 4. Projects using a built-in
   process will see that process as changed (`kanbanr process diff`); take it with `process update`.
+- **Release stages: a release moves through environments, and production is the cut (FEAT-183).**
+  A release now has a stage — by default `candidate → test → staging → production`, or the
+  project's own list from `kanbanr config cadence --release-stages …` — and every move is recorded
+  with who made it and when. `kanbanr release promote <VERSION> [<stage>]` moves it. The first
+  stage makes the branch `release/<VERSION>` from the integration branch (`release add --branch`
+  does both). The last stage is the cut: it ships the finished items and writes the notes, tags the
+  code repository with the version, and fast-forwards the main branch to the release. If main has
+  commits the release lacks, or the tree has uncommitted changes, or the tag exists, it refuses and
+  changes nothing; if the board step fails afterwards, the tag and main are put back. Moving back a
+  stage needs `--reason`; nothing moves back from production. `release cut --tag` is now the same
+  as promoting to production. The integration and main branches default to the repository's
+  default branch (`--integration-branch`, `--main-branch`). The monitor's daemon promotes with the
+  code repository it was started in, when that folder's marker names the project. Nothing is
+  pushed. A 0.1.7 binary that rewrites `releases.yaml` drops the new `stage`, `stages` and `branch`
+  fields.
 - **A sign-off can be withdrawn, and is offered only when it means something (FEAT-182).**
   `kanbanr signoff <CODE> <name> --withdraw --reason "…"`, or **Withdraw** on the item's page, takes
   back a sign-off given in error. The earlier one stays on the record and stops counting. The

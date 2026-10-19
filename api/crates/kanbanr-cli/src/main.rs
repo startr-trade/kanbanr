@@ -921,6 +921,18 @@ enum ConfigCmd {
         /// How often a release is cut: per_sprint | every_n | on_demand.
         #[arg(long)]
         release: Option<String>,
+        /// The stages a release moves through, in order; the last is the cut (FEAT-183). Default:
+        /// candidate,test,staging,production.
+        #[arg(long, value_delimiter = ',')]
+        release_stages: Option<Vec<String>>,
+        /// The branch a release branch is made from. Default: the repository's default branch
+        /// (pass "" to go back to it).
+        #[arg(long)]
+        integration_branch: Option<String>,
+        /// The branch production fast-forwards. Default: the repository's default branch (pass ""
+        /// to go back to it).
+        #[arg(long)]
+        main_branch: Option<String>,
     },
     SetTransition(SetTransitionArgs),
     DisplayedStates {
@@ -1001,9 +1013,29 @@ enum ReleaseCmd {
         target: Option<String>,
         #[arg(long)]
         name: Option<String>,
+        /// Also promote it to its first stage, which makes the branch `release/<VERSION>` from
+        /// the integration branch in the code repository this runs in (FEAT-183).
+        #[arg(long)]
+        branch: bool,
     },
     /// List the project's releases.
     List,
+    /// Move a release to its next stage, or to the one named (FEAT-183). The first stage makes the
+    /// branch `release/<VERSION>`; the last is the cut — it ships the finished items, tags the code
+    /// repository with the version and fast-forwards the main branch to the release, refusing
+    /// (and changing nothing) if main has commits the release lacks. Run it from the project
+    /// folder: those two stages act on the code repository there. Nothing is pushed.
+    Promote {
+        version: String,
+        /// The stage to move to (default: the next one). An earlier stage needs --reason.
+        stage: Option<String>,
+        /// Why the release moves back a stage (required for that, and recorded).
+        #[arg(long)]
+        reason: Option<String>,
+        /// Who moved it (default: the board's commit identity).
+        #[arg(long)]
+        by: Option<String>,
+    },
     /// Plan items into a release.
     Plan {
         version: String,
@@ -1013,7 +1045,8 @@ enum ReleaseCmd {
     /// Cut a release: ship its finished items, write its notes, carry the rest.
     Cut {
         version: String,
-        /// Also tag the code repository with the version.
+        /// Also tag the code repository with the version: the same as `release promote <VERSION>
+        /// production` (its last stage), so main is fast-forwarded to the release too (FEAT-183).
         #[arg(long)]
         tag: bool,
     },
@@ -1452,8 +1485,31 @@ fn run_serve(
             .ok()
             .filter(|s| !s.is_empty())
     });
+    // The code repository it is started in, when that folder's marker names a project (FEAT-183,
+    // decided 19 Oct 2026): release promotion from the monitor acts on it for that project only.
+    // A path in the project's config was the alternative, but a path belongs to one machine and
+    // the config travels with the board.
+    let code_repo = std::env::current_dir().ok().and_then(|cwd| {
+        let project = project::find_marker(&cwd, project::home_dir().as_deref())?
+            .marker
+            .project?;
+        let root = kanbanr_core::coderepo::repo_root_in(&cwd)?;
+        Some((project, root))
+    });
+    if allow_writes && let Some((project, root)) = &code_repo {
+        eprintln!(
+            "kanbanr: release promotion for {project} uses the code repository {}",
+            root.display()
+        );
+    }
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(kanbanr_server::run(dir, bind, ui_dir, allow_writes))
+    rt.block_on(kanbanr_server::run(
+        dir,
+        bind,
+        ui_dir,
+        allow_writes,
+        code_repo,
+    ))
 }
 
 /// `kanbanr skill …` (FEAT-141): needs no board — it is about this machine's Claude Code.
@@ -7287,6 +7343,9 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             unit,
             sprint_length,
             release,
+            release_stages,
+            integration_branch,
+            main_branch,
         } => {
             let body = obj(vec![
                 ("sprints", sprints.as_deref().map(|v| json!(v == "on"))),
@@ -7294,6 +7353,23 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 ("estimate_unit", unit.clone().map(|u| json!(u))),
                 ("sprint_length_days", sprint_length.map(|d| json!(d))),
                 ("release", release.clone().map(|r| json!(r))),
+                (
+                    "release_stages",
+                    release_stages.as_ref().map(|s| {
+                        // `--release-stages ""` arrives as one blank entry: an empty list, which
+                        // the route refuses by name.
+                        if s.iter().all(|x| x.trim().is_empty()) {
+                            json!([])
+                        } else {
+                            json!(s)
+                        }
+                    }),
+                ),
+                (
+                    "integration_branch",
+                    integration_branch.clone().map(|b| json!(b)),
+                ),
+                ("main_branch", main_branch.clone().map(|b| json!(b))),
             ]);
             let resp = client.write(
                 Method::Put,
@@ -7611,6 +7687,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             target,
             name,
+            branch,
         } => {
             let resp = client.write(
                 Method::Post,
@@ -7622,6 +7699,27 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 ])),
             )?;
             print_write(cli, &resp, format!("added release {version}"));
+            if *branch {
+                let project = get_project(client, &p)?;
+                let first = project.config.cadence.stages().first().cloned();
+                promote_release(cli, client, &p, version, first.as_deref(), None, None)?;
+            }
+        }
+        ReleaseCmd::Promote {
+            version,
+            stage,
+            reason,
+            by,
+        } => {
+            promote_release(
+                cli,
+                client,
+                &p,
+                version,
+                stage.as_deref(),
+                reason.as_deref(),
+                by.as_ref(),
+            )?;
         }
         ReleaseCmd::List => {
             let resp = client.get(&format!("/projects/{p}/releases"))?;
@@ -7641,10 +7739,13 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                     .iter()
                     .filter(|f| f.release.as_deref() == Some(version))
                     .count();
+                // The stage it is at (FEAT-183); none yet reads as not yet a candidate.
+                let stage = r["stage"].as_str().filter(|s| !s.is_empty()).unwrap_or("—");
                 println!(
-                    "{:<12} {:<8} target {:<10}  {planned} item(s)",
+                    "{:<12} {:<8} {:<12} target {:<10}  {planned} item(s)",
                     version,
                     r["state"].as_str().unwrap_or(""),
+                    stage,
                     r["target"].as_str().unwrap_or("—")
                 );
             }
@@ -7661,7 +7762,17 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 format!("planned {} into {version}", items.join(", ")),
             );
         }
-        ReleaseCmd::Cut { version, tag } => {
+        // `cut --tag` is promotion to the last stage (FEAT-183): the tag comes with the main branch
+        // fast-forwarded to the release, through the same preflight and rollback.
+        ReleaseCmd::Cut { version, tag: true } => {
+            let project = get_project(client, &p)?;
+            let last = project.config.cadence.stages().last().cloned();
+            promote_release(cli, client, &p, version, last.as_deref(), None, None)?;
+        }
+        ReleaseCmd::Cut {
+            version,
+            tag: false,
+        } => {
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/releases/{}/cut", urlencode_segment(version)),
@@ -7694,16 +7805,90 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                     );
                 }
             }
-            if *tag {
-                let root = scm::repo_root()
-                    .ok_or_else(|| anyhow::anyhow!("not a git repository — nothing to tag"))?;
-                scm::git(
-                    &root,
-                    &["tag", "-a", version, "-m", &format!("Release {version}")],
-                )?;
-                println!("tagged {version}");
-            }
         }
+    }
+    Ok(())
+}
+
+/// Promote a release (FEAT-183), with the code repository this command runs in. The stage is
+/// worked out here when none is named, so the board's commit says where the release went.
+fn promote_release(
+    cli: &Cli,
+    client: &Backend,
+    p: &str,
+    version: &str,
+    stage: Option<&str>,
+    reason: Option<&str>,
+    by: Option<&String>,
+) -> anyhow::Result<()> {
+    let by = verdict_author(cli, by)?;
+    let stage = match stage {
+        Some(s) => s.to_string(),
+        None => {
+            let stages = get_project(client, p)?.config.cadence.stages();
+            let releases: Vec<Value> =
+                serde_json::from_str(&client.get(&format!("/projects/{p}/releases"))?)?;
+            let current = releases
+                .iter()
+                .find(|r| r["version"] == version)
+                .and_then(|r| r["stage"].as_str())
+                .unwrap_or("");
+            let next = stages
+                .iter()
+                .position(|s| s == current)
+                .map_or(0, |i| i + 1);
+            stages.get(next).cloned().ok_or_else(|| {
+                anyhow::anyhow!("{version} is at {current}, the last stage — there is no next one")
+            })?
+        }
+    };
+    let repo = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| kanbanr_core::coderepo::repo_root_in(&cwd));
+    let resp = client.write_in(
+        Method::Post,
+        &format!(
+            "/projects/{p}/releases/{}/promote",
+            urlencode_segment(version)
+        ),
+        Some(obj(vec![
+            ("stage", Some(json!(stage))),
+            ("by", Some(json!(by))),
+            ("reason", reason.map(|r| json!(r))),
+        ])),
+        repo.as_deref(),
+    )?;
+    let v: Value = serde_json::from_str(&resp)?;
+    let mut said = format!("{version} -> {stage}");
+    if let Some(b) = v["branch_created"].as_str() {
+        said.push_str(&format!("; created {b}"));
+    }
+    if let Some(t) = v["tagged"].as_str() {
+        said.push_str(&format!(
+            "; tagged {t}, {} fast-forwarded to it",
+            v["main_branch"].as_str().unwrap_or("main")
+        ));
+    }
+    print_write(cli, &resp, said);
+    if !cli.json && v["tagged"].is_string() {
+        let release = &v["release"];
+        let shipped = release["shipped"].as_array().map_or(0, Vec::len);
+        println!(
+            "  shipped {shipped} item(s); notes in {}",
+            release["notes_doc"].as_str().unwrap_or("")
+        );
+        for c in release["carried"].as_array().into_iter().flatten() {
+            println!(
+                "  carried {} → {} ({})",
+                c["code"].as_str().unwrap_or(""),
+                c["to"].as_str().unwrap_or(""),
+                c["why"].as_str().unwrap_or("")
+            );
+        }
+        println!(
+            "  nothing was pushed: push the tag and {} when you are ready",
+            v["main_branch"].as_str().unwrap_or("main")
+        );
     }
     Ok(())
 }

@@ -44,16 +44,22 @@ pub struct AppState {
     pub allow_writes: bool,
     /// The board's push policy (FEAT-034, FEAT-142): its own setting, or `KANBANR_PUSH`.
     pub push: PushPolicy,
+    /// The code repository the daemon was started in, and the project its marker names
+    /// (FEAT-183). Release promotion acts on it for that project only.
+    pub code_repo: Option<(String, PathBuf)>,
 }
 
 /// Run the view daemon until the process is stopped. `bind` like `127.0.0.1:8080`; `ui_dir` is the
 /// built SPA directory (optional — when absent only `/api` is served). When `allow_writes` is true,
 /// write routes are also mounted (opt-in single-writer daemon, FEAT-034); otherwise read-only.
+/// `code_repo` is the code repository it was started in and the project that folder's marker
+/// names, when there is one (FEAT-183).
 pub async fn run(
     data_dir: PathBuf,
     bind: String,
     ui_dir: Option<String>,
     allow_writes: bool,
+    code_repo: Option<(String, PathBuf)>,
 ) -> anyhow::Result<()> {
     std::fs::create_dir_all(data_dir.join("projects"))?;
     let store = Arc::new(Store::new(data_dir.clone()));
@@ -64,6 +70,7 @@ pub async fn run(
         tx: tx.clone(),
         allow_writes,
         push: PushPolicy::for_board(&data_dir).0,
+        code_repo,
     };
 
     // Watch the data folder and push SSE "changed" events as the CLI edits files.

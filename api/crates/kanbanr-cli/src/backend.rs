@@ -162,8 +162,20 @@ impl Backend {
     /// A write: git remotes act on the local repo; data routes dispatch + log + commit. Serialized
     /// against other writers by an advisory lock on the data dir.
     pub fn write(&self, method: Method, path: &str, body: Option<Value>) -> Result<String> {
+        self.write_in(method, path, body, None)
+    }
+
+    /// [`Backend::write`], with the project's code repository for the routes that act on it —
+    /// release promotion (FEAT-183).
+    pub fn write_in(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        repo: Option<&std::path::Path>,
+    ) -> Result<String> {
         let dry_run = dispatch::is_dry_run(body.as_ref());
-        let out = self.with_write_lock(move || self.write_locked(method, path, body))?;
+        let out = self.with_write_lock(move || self.write_locked(method, path, body, repo))?;
         if let (false, Some(project)) = (dry_run, project_of(path)) {
             self.auto_mirror(&project);
         }
@@ -218,7 +230,13 @@ impl Backend {
         }
     }
 
-    fn write_locked(&self, method: Method, path: &str, body: Option<Value>) -> Result<String> {
+    fn write_locked(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        repo: Option<&std::path::Path>,
+    ) -> Result<String> {
         let bare = path.split('?').next().unwrap_or(path);
         if bare == "/remotes" || bare.starts_with("/remotes/") {
             if let Some(name) = bare.strip_prefix("/remotes/") {
@@ -239,7 +257,7 @@ impl Backend {
         if dispatch::is_mutation(m) && !dispatch::is_dry_run(body.as_ref()) {
             git::require_identity(&self.data_dir).map_err(|e| anyhow!(e))?;
         }
-        let out = dispatch::dispatch(&self.store, m, path, body.as_ref())
+        let out = dispatch::dispatch_in(&self.store, m, path, body.as_ref(), repo)
             .map_err(|e| anyhow!(e.to_string()))?;
         if dispatch::is_mutation(m) && !dispatch::is_dry_run(body.as_ref()) {
             let msg = dispatch::commit_message(m, path, body.as_ref());

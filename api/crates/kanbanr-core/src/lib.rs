@@ -15,6 +15,7 @@ pub mod adr;
 pub mod batch;
 pub mod charter;
 pub mod claude;
+pub mod coderepo;
 pub mod config;
 pub mod daylog;
 pub mod dispatch;
@@ -2552,6 +2553,124 @@ requirements:
             .unwrap_err()
             .to_string();
         assert!(err.contains("--releases on"), "{err}");
+    }
+
+    /// FEAT-183 R-1: a release's stage comes from the project's list, and every move is kept with
+    /// who made it and when — through a save and a load, and alongside keys this build does not know.
+    #[test]
+    fn release_stage_recorded_with_history() {
+        use serde_json::json;
+        let (store, _d, _) = release_board();
+        let cadence = |body: serde_json::Value| {
+            crate::dispatch::dispatch(&store, "PUT", "/projects/demo/config/cadence", Some(&body))
+        };
+        // The default list, until the project names its own.
+        let project = store.load("demo").unwrap();
+        assert_eq!(
+            project.config.cadence.stages(),
+            ["candidate", "test", "staging", "production"]
+        );
+        // A list must name each stage once, and have one at least.
+        let twice = cadence(json!({"release_stages": ["qa", "qa", "live"]}))
+            .unwrap_err()
+            .to_string();
+        assert!(twice.contains("listed twice"), "{twice}");
+        let none = cadence(json!({"release_stages": []}))
+            .unwrap_err()
+            .to_string();
+        assert!(none.contains("at least one stage"), "{none}");
+        cadence(json!({"release_stages": ["candidate", "qa", "uat", "live"]})).unwrap();
+
+        // A middle stage needs no code repository; an unknown one is named as such.
+        let unknown =
+            crate::releases::promote(&store, "demo", "v0.1.0", Some("test"), "Ada L", "", None)
+                .unwrap_err()
+                .to_string();
+        assert!(unknown.contains("candidate, qa, uat, live"), "{unknown}");
+        let qa = crate::releases::promote(&store, "demo", "v0.1.0", Some("qa"), "Ada L", "", None)
+            .unwrap();
+        assert_eq!((qa.from.as_str(), qa.to.as_str()), ("", "qa"));
+        // With no stage named, the next one.
+        crate::releases::promote(&store, "demo", "v0.1.0", None, "Bo K", "", None).unwrap();
+        // Nobody to attribute a move to: refused.
+        assert!(
+            crate::releases::promote(&store, "demo", "v0.2.0", Some("qa"), " ", "", None).is_err()
+        );
+
+        // Survives a round trip, with a key from a newer build kept.
+        let path = store.project_dir("demo").join("releases.yaml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            text.replacen("- version: v0.1.0", "- version: v0.1.0\n  future: kept", 1),
+        )
+        .unwrap();
+        crate::releases::plan(&store, "demo", "v0.2.0", &[]).unwrap();
+        crate::releases::promote(&store, "demo", "v0.2.0", Some("qa"), "Ada L", "", None).unwrap();
+        let releases = crate::releases::load(&store, "demo").unwrap();
+        let r = &releases[0];
+        assert_eq!(r.stage, "uat");
+        let moves: Vec<(&str, &str)> = r
+            .stages
+            .iter()
+            .map(|c| (c.stage.as_str(), c.by.as_str()))
+            .collect();
+        assert_eq!(moves, [("qa", "Ada L"), ("uat", "Bo K")]);
+        assert!(
+            r.stages
+                .iter()
+                .all(|c| crate::cmp_instants(&c.at, "2026-01-01T00:00:00Z")
+                    == std::cmp::Ordering::Greater)
+        );
+        assert!(r.extra.contains_key("future"), "{:?}", r.extra);
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("future: kept")
+        );
+        // The release report carries the stage to the monitor.
+        let report = crate::releases::report_all(&store, "demo").unwrap();
+        let shown = serde_json::to_value(&report[0]).unwrap();
+        assert_eq!(shown["stage"], "uat");
+        assert_eq!(shown["stages"].as_array().unwrap().len(), 2);
+    }
+
+    /// FEAT-183 R-5: moving back a stage needs a reason, which is kept; nothing moves back from
+    /// production.
+    #[test]
+    fn promote_back_requires_reason_and_not_from_production() {
+        let (store, _d, _) = release_board();
+        let promote = |to: &str, reason: &str| {
+            crate::releases::promote(&store, "demo", "v0.1.0", Some(to), "Ada L", reason, None)
+        };
+        promote("test", "").unwrap();
+        promote("staging", "").unwrap();
+        let err = promote("test", "  ").unwrap_err().to_string();
+        assert!(err.contains("needs a reason"), "{err}");
+        let r = crate::releases::load(&store, "demo").unwrap();
+        assert_eq!(r[0].stage, "staging", "a refused move changes nothing");
+        let back = promote("test", "the payment check failed on staging").unwrap();
+        assert_eq!(back.release.stage, "test");
+        let last = back.release.stages.last().unwrap();
+        assert_eq!(
+            (last.stage.as_str(), last.reason.as_str()),
+            ("test", "the payment check failed on staging")
+        );
+
+        // Cut: the release is in production, and stays there.
+        crate::releases::cut(&store, "demo", "v0.1.0").unwrap();
+        assert_eq!(
+            crate::releases::load(&store, "demo").unwrap()[0].stage,
+            "production"
+        );
+        let err = promote("staging", "rolled back in prod")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("never moves back from production"), "{err}");
+        assert_eq!(
+            crate::releases::load(&store, "demo").unwrap()[0].stage,
+            "production"
+        );
     }
 
     /// FEAT-122 R-3: the processes that work in sprints bring sprints, releases and their unit with

@@ -604,3 +604,150 @@ fn the_monitor_is_served_from_the_binary_with_no_ui_dir() {
         "--ui-dir must win over the embedded monitor, got: {served}"
     );
 }
+
+/// FEAT-183 (Q1): the daemon promotes with the code repository it was started in, when that
+/// folder's marker names the project; started anywhere else, the promotions that need the
+/// repository are refused and the board does not move.
+#[test]
+fn promote_through_the_daemon_uses_the_repository_it_was_started_in() {
+    // Outside the build tree, never under CARGO_TARGET_TMPDIR: that is inside this repository,
+    // whose own marker `init` and the daemon would find by walking up — and the test would write
+    // to the real board.
+    let base = std::env::temp_dir().join(format!("kanbanr-promote-daemon-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .output()
+            .expect("run git");
+        assert!(
+            o.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    let kanbanr = |args: &[&str]| {
+        let o = Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_SERVER_URL")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run cli");
+        assert!(
+            o.status.success(),
+            "cmd {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.name", "T"]);
+    git(&["config", "user.email", "t@x"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "[no-ref] base"]);
+    kanbanr(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    let board = kanbanr(&["where"]);
+    assert!(
+        std::path::Path::new(&board).starts_with(&base),
+        "the scratch board must be the test's own, not {board}"
+    );
+    kanbanr(&["config", "cadence", "--releases", "on"]);
+    kanbanr(&["release", "add", "v1.0.0"]);
+    kanbanr(&["release", "add", "v2.0.0"]);
+
+    let start = |dir: &std::path::Path| -> (Daemon, String) {
+        let port = free_port();
+        let child = Command::new(cli())
+            .args([
+                "serve",
+                "--allow-writes",
+                "--bind",
+                &format!("127.0.0.1:{port}"),
+            ])
+            .current_dir(dir)
+            .env("HOME", &home)
+            .env("KANBANR_DATA_DIR", &board)
+            .spawn()
+            .expect("spawn kanbanr serve");
+        let daemon = Daemon(child);
+        let url = format!("http://127.0.0.1:{port}");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if Instant::now() > deadline {
+                panic!("daemon did not become ready");
+            }
+            match ureq::get(&format!("{url}/api/projects")).call() {
+                Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+                Err(_) => std::thread::sleep(Duration::from_millis(100)),
+            }
+        }
+        (daemon, url)
+    };
+    // The status and body of a promotion, whichever way it went.
+    let promote = |url: &str, version: &str| -> (u16, String) {
+        match ureq::post(&format!(
+            "{url}/api/write/projects/shop/releases/{version}/promote"
+        ))
+        .set("content-type", "application/json")
+        .send_string(r#"{"stage": "candidate", "by": "A"}"#)
+        {
+            Ok(r) => (r.status(), r.into_string().unwrap()),
+            Err(ureq::Error::Status(code, r)) => (code, r.into_string().unwrap()),
+            Err(e) => panic!("no answer from the daemon: {e}"),
+        }
+    };
+
+    // Started in the project folder: the branch is made in that repository.
+    {
+        let (_daemon, url) = start(&work);
+        let (status, made) = promote(&url, "v1.0.0");
+        assert_eq!(status, 200, "promote through the daemon: {made}");
+        assert!(
+            made.contains("\"branch_created\":\"release/v1.0.0\""),
+            "{made}"
+        );
+        assert_eq!(
+            git(&["rev-parse", "release/v1.0.0"]),
+            git(&["rev-parse", "main"])
+        );
+    }
+
+    // Started elsewhere: refused, saying where to run it, and nothing moves.
+    {
+        let (_daemon, url) = start(&base);
+        let (status, why) = promote(&url, "v2.0.0");
+        assert_eq!(
+            status, 400,
+            "a promotion with no code repository is refused"
+        );
+        assert!(why.contains("use the CLI from the project folder"), "{why}");
+        let releases = ureq::get(&format!("{url}/api/projects/shop/releases"))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let releases: serde_json::Value = serde_json::from_str(&releases).unwrap();
+        assert_eq!(releases[1]["version"], "v2.0.0");
+        assert!(releases[1].get("stage").is_none(), "{releases}");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}

@@ -163,6 +163,16 @@ pub struct Cadence {
     /// How often a release is cut: `per_sprint`, `every_n` sprints, or `on_demand`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release: Option<String>,
+    /// The environments a release moves through, in order (FEAT-183). The last one is the cut.
+    /// Empty means [`DEFAULT_RELEASE_STAGES`]; read it through [`Cadence::stages`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub release_stages: Vec<String>,
+    /// The branch a release branch is made from. Unset: the code repository's default branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration_branch: Option<String>,
+    /// The branch production is fast-forwarded onto. Unset: the code repository's default branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_branch: Option<String>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -173,9 +183,41 @@ pub struct Cadence {
     pub extra: crate::models::Extra,
 }
 
+/// The stages a release moves through when a project names none (FEAT-183).
+pub const DEFAULT_RELEASE_STAGES: [&str; 4] = ["candidate", "test", "staging", "production"];
+
 impl Cadence {
     pub fn is_off(&self) -> bool {
         *self == Cadence::default()
+    }
+
+    /// The release stages in force: the project's own list, else the default. The first makes the
+    /// release branch, the last is the cut (FEAT-183).
+    pub fn stages(&self) -> Vec<String> {
+        if self.release_stages.is_empty() {
+            DEFAULT_RELEASE_STAGES
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        } else {
+            self.release_stages.clone()
+        }
+    }
+
+    /// A stage list must name each stage once, and none blank. An empty list is not checked here:
+    /// it means the default, and refusing an explicitly empty one is the caller's (FEAT-183).
+    pub fn validate_stages(stages: &[String]) -> Result<(), String> {
+        let mut seen = std::collections::BTreeSet::new();
+        for stage in stages {
+            let stage = stage.trim();
+            if stage.is_empty() {
+                return Err("a release stage cannot be blank".into());
+            }
+            if !seen.insert(stage) {
+                return Err(format!("release stage '{stage}' is listed twice"));
+            }
+        }
+        Ok(())
     }
 }
 

@@ -14,7 +14,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr whoami` / `kanbanr identity` | the commit identity this data folder writes as |
 | `kanbanr config show / set-transition / displayed-states / default-state / no-op-states / workflow` | the workflow; `config workflow --preset <name>`, `--from-file`, `--export`, `--write-agreement` ([Processes](../using/processes.md)) |
 | `kanbanr config rename-status <OLD> <NEW>` | rename a status and move every item in it |
-| `kanbanr config cadence [--sprints on\|off] [--releases on\|off] [--unit points\|days]` | switch sprints, releases and the estimate unit on or off for a project |
+| `kanbanr config cadence [--sprints on\|off] [--releases on\|off] [--unit points\|days] [--release-stages a,b,c] [--integration-branch B] [--main-branch B]` | switch sprints, releases and the estimate unit on or off for a project; name the stages a release moves through (the last is the cut) and the branches promotion uses |
 | `kanbanr hooks install / status / uninstall` | the Claude Code hooks (session start, stop nudge, test capture, commit guard) |
 | `kanbanr serve [--ui-dir …]` | the read-only monitor over this board |
 | `kanbanr open` | open the running monitor in a browser |
@@ -53,7 +53,8 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | Command | What it does |
 |---|---|
 | `kanbanr sprint add / list / show / plan / start / close` | timeboxes: add one, list them, see one with its burndown, plan items in, start, close (carrying unfinished work) |
-| `kanbanr release add / list / plan / cut` | releases: add one, list them, plan items in, cut it (ship what is finished, write notes, carry the rest) |
+| `kanbanr release add / list / plan / cut` | releases: add one (`--branch` also promotes it to its first stage), list them with their stage, plan items in, cut it (ship what is finished, write notes, carry the rest; `--tag` is promotion to production) |
+| `kanbanr release promote <VERSION> [<STAGE>] [--reason …]` | move a release to its next stage or the one named ([Release stages](../using/processes.md#release-stages)): the first makes `release/<VERSION>`, the last is the cut — it tags the version and fast-forwards main, refusing and changing nothing if main has commits the release lacks. Back a stage needs `--reason`; nothing moves back from production. Run it from the project folder; nothing is pushed |
 | `kanbanr retro --sprint <SP-…>` | how a sprint went |
 
 **Dependencies and scheduling**

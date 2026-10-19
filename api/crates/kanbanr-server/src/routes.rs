@@ -49,6 +49,9 @@ fn core_err(e: kanbanr_core::CoreError) -> (StatusCode, String) {
         | BatchOpFailed(_, _)
         | InvalidMermaid(_)
         | Unsupported(_) => StatusCode::BAD_REQUEST,
+        // The code repository refused a release promotion (FEAT-183): the request was well formed,
+        // the repository's state is what stood in the way.
+        Git(_) => StatusCode::CONFLICT,
         Io(_) | Yaml(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (code, e.to_string())
@@ -318,6 +321,13 @@ fn run_write(
     dispatch_path: &str,
     body: Option<&serde_json::Value>,
 ) -> axum::response::Response {
+    // The code repository the daemon was started in, for its own project only (FEAT-183): any
+    // other project's promotions that need one are refused, never run against the wrong code.
+    let repo = st
+        .code_repo
+        .as_ref()
+        .filter(|(project, _)| project_id(dispatch_path).as_deref() == Some(project.as_str()))
+        .map(|(_, root)| root.as_path());
     let outcome = crate::write::write(
         &st.store,
         &st.data_dir,
@@ -325,6 +335,7 @@ fn run_write(
         method.as_str(),
         dispatch_path,
         body,
+        repo,
     );
     match outcome {
         Ok(out) => {

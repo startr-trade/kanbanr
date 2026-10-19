@@ -529,6 +529,20 @@ fn list_processes(store: &Store) -> Result<Value> {
 /// alike — the caller (e.g. the CLI's local backend) decides whether to commit afterwards based on
 /// the HTTP method.
 pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -> Result<String> {
+    dispatch_in(store, method, path, body, None)
+}
+
+/// [`dispatch`], with the project's code repository when the caller has one (FEAT-183). Only
+/// release promotion reaches it: the CLI passes the repository it runs in, the daemon the one it
+/// was started in when that folder's marker names the project. Without one, the promotions that
+/// need it — the first stage and the cut — are refused, never guessed.
+pub fn dispatch_in(
+    store: &Store,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    repo: Option<&std::path::Path>,
+) -> Result<String> {
     let (path_only, query) = match path.split_once('?') {
         Some((p, q)) => (p, Some(q)),
         None => (path, None),
@@ -877,6 +891,18 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("POST", ["projects", p, "releases", version, "cut"]) => {
             ser(&crate::releases::cut(store, p, &percent_decode(version))?)
         }
+        // FEAT-183: `{stage?, by, reason?}` — the next stage, or the named one.
+        ("POST", ["projects", p, "releases", version, "promote"]) => {
+            ser(&crate::releases::promote(
+                store,
+                p,
+                &percent_decode(version),
+                str_field(b, "stage").as_deref(),
+                &str_field(b, "by").unwrap_or_default(),
+                &str_field(b, "reason").unwrap_or_default(),
+                repo,
+            )?)
+        }
         // ---- sprints (FEAT-119) ----
         ("GET", ["projects", p, "sprints"]) => ser(&crate::sprints::load(store, p)?),
         ("GET", ["projects", p, "sprints", code]) => {
@@ -939,6 +965,26 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                     .map(|d| d as u32)
                     .or(current.sprint_length_days),
                 release: str_field(b, "release").or(current.release),
+                // FEAT-183. A list given empty is refused rather than read as "the default": the
+                // last stage is the cut, so a project with none could never ship.
+                release_stages: match vec_field(b, "release_stages") {
+                    Some(stages) if stages.is_empty() => {
+                        return Err(CoreError::Unsupported(
+                            "a release needs at least one stage — the last one is the cut".into(),
+                        ));
+                    }
+                    Some(stages) => stages.iter().map(|s| s.trim().to_string()).collect(),
+                    None => current.release_stages,
+                },
+                // An empty string clears the branch back to the repository's default.
+                integration_branch: match str_field(b, "integration_branch") {
+                    Some(name) => Some(name.trim().to_string()).filter(|n| !n.is_empty()),
+                    None => current.integration_branch,
+                },
+                main_branch: match str_field(b, "main_branch") {
+                    Some(name) => Some(name.trim().to_string()).filter(|n| !n.is_empty()),
+                    None => current.main_branch,
+                },
             };
             ser(&store.set_cadence(p, unit, cadence)?)
         }
@@ -1371,6 +1417,14 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "config", what] => format!("update config: {what}"),
         ["projects", _p, "sprints"] => "add a sprint".into(),
         ["projects", _p, "releases"] => "add a release".into(),
+        // FEAT-183: the stage it went to, which a request for "the next one" does not name.
+        ["projects", _p, "releases", v, "promote"] => format!(
+            "promote release {} to {}",
+            percent_decode(v),
+            body.and_then(|b| str_field(b, "stage"))
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "its next stage".into())
+        ),
         ["projects", _p, "releases", v, what] => format!("{what} release {}", percent_decode(v)),
         ["projects", _p, "sprints", c, what] => format!("{what} sprint {c}"),
         ["projects", _p, "docs", "folder"] => "configure doc folder".into(),
