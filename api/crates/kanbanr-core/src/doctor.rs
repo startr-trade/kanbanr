@@ -458,25 +458,25 @@ fn scan_references(store: &Store, project: &Project, report: &mut Report) {
                 push(Some(f.code.clone()), &source, &found);
             }
         }
-        if let Some(design) = f.definition.as_ref().map(|d| d.design_doc.trim()) {
-            if !design.is_empty() {
-                let found = crate::refs::Found {
-                    reference: crate::refs::Ref::Doc {
-                        path: design.to_string(),
-                    },
-                    line: 0,
-                    explicit: true,
-                };
-                let resolved = crate::refs::Ref::Doc {
-                    path: design.trim_start_matches("docs/").to_string(),
-                };
-                if !index.resolves(&resolved) {
-                    push(
-                        Some(f.code.clone()),
-                        &format!("{} design_doc", f.code),
-                        &found,
-                    );
-                }
+        if let Some(design) = f.definition.as_ref().map(|d| d.design_doc.trim())
+            && !design.is_empty()
+        {
+            let found = crate::refs::Found {
+                reference: crate::refs::Ref::Doc {
+                    path: design.to_string(),
+                },
+                line: 0,
+                explicit: true,
+            };
+            let resolved = crate::refs::Ref::Doc {
+                path: crate::refs::doc_key(design),
+            };
+            if !index.resolves(&resolved) {
+                push(
+                    Some(f.code.clone()),
+                    &format!("{} design_doc", f.code),
+                    &found,
+                );
             }
         }
     }

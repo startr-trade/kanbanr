@@ -278,10 +278,11 @@ pub fn run(store: &Store, project_id: &str, subject: &Subject) -> Result<Trace> 
     let mut documents = documents_referencing(store, project_id, &codes, subject);
     if !matches!(subject, Subject::Doc { .. }) {
         for source in &links_in {
-            if let Some(path) = source.strip_prefix("docs/") {
-                if !path.starts_with(crate::adr::FOLDER) && !documents.iter().any(|d| d == path) {
-                    documents.push(path.to_string());
-                }
+            if let Some(path) = source.strip_prefix("docs/")
+                && !path.starts_with(crate::adr::FOLDER)
+                && !documents.iter().any(|d| d == path)
+            {
+                documents.push(path.to_string());
             }
         }
         documents.sort();
@@ -420,12 +421,12 @@ fn links(
         if !own && refers(&f.specification) {
             incoming.push(format!("{} spec", f.code));
         }
-        if let Subject::Doc { path } = subject {
-            if f.definition.as_ref().is_some_and(|d| {
+        if let Subject::Doc { path } = subject
+            && f.definition.as_ref().is_some_and(|d| {
                 !d.design_doc.is_empty() && &crate::refs::doc_key(&d.design_doc) == path
-            }) {
-                incoming.push(format!("{} design_doc", f.code));
-            }
+            })
+        {
+            incoming.push(format!("{} design_doc", f.code));
         }
     }
     for path in &index.docs {
