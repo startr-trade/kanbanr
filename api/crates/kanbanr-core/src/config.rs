@@ -180,6 +180,10 @@ pub struct Cadence {
     /// The branch production is fast-forwarded onto. Unset: the code repository's default branch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub main_branch: Option<String>,
+    /// Branching follows the derived git model (FEAT-189): where `start` branches, sprint
+    /// branches, and lines of integration taking merges only. Off by default, so no board changes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub git_model: bool,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(

@@ -4049,3 +4049,303 @@ fn method_gates_opt_out() {
     assert!(shown.contains("design-review off"), "{shown}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-189: a code repository with a first commit, a default-process board with its charter
+/// adopted, the cadence given, the git model on and the hooks installed, and one approved item.
+fn git_model_board(base: &std::path::Path, work: &std::path::Path, sprints: bool, releases: bool) {
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(base, work, &["init", "--initial-branch=main"]));
+    ok(git_in(base, work, &["config", "user.name", "T"]));
+    ok(git_in(base, work, &["config", "user.email", "t@x"]));
+    ok(git_in(
+        base,
+        work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ],
+    ));
+    ok(run_in(
+        base,
+        work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    // The method is not what these tests are about (FEAT-193).
+    ok(run_in(base, work, &["config", "method", "--off"]));
+    let on_off = |b: bool| if b { "on" } else { "off" };
+    ok(run_in(
+        base,
+        work,
+        &[
+            "config",
+            "cadence",
+            "--sprints",
+            on_off(sprints),
+            "--releases",
+            on_off(releases),
+            "--git-model",
+            "on",
+        ],
+    ));
+    ok(run_in(base, work, &["git", "install-hooks"]));
+    let charter = base.join("charter.yaml");
+    std::fs::write(
+        &charter,
+        "purpose: p\ngoals:\n  - statement: g\n    measure: m\n",
+    )
+    .unwrap();
+    ok(run_in(
+        base,
+        work,
+        &["charter", "set", "--file", charter.to_str().unwrap()],
+    ));
+    ok(run_in(
+        base,
+        work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    ok(run_in(
+        base,
+        work,
+        &["feature", "add", "--title", "Cart", "--milestone", "MS-001"],
+    ));
+    let def = base.join("def.yaml");
+    std::fs::write(&def, "statement: Keep a cart\n").unwrap();
+    ok(run_in(
+        base,
+        work,
+        &[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    ok(run_in(base, work, &["approve", "FEAT-001"]));
+}
+
+fn branches(base: &std::path::Path, work: &std::path::Path) -> String {
+    String::from_utf8_lossy(&git_in(base, work, &["branch", "--format=%(refname:short)"]).stdout)
+        .to_string()
+}
+
+/// FEAT-189 R-2: with releases on, `start` branches from the integration line, making it from
+/// main the first time.
+#[test]
+fn start_branches_from_integration_line() {
+    let (base, work) = togaf_scratch("gm-start");
+    git_model_board(&base, &work, false, true);
+    let model = run_in(&base, &work, &["git", "model"]);
+    let said = String::from_utf8_lossy(&model.stdout);
+    assert!(said.contains("line:       integration"), "{said}");
+    assert!(said.contains("pushing:    never automatic"), "{said}");
+
+    let started = run_in(&base, &work, &["start", "FEAT-001"]);
+    let out = String::from_utf8_lossy(&started.stdout);
+    assert!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    assert!(out.contains("created integration from main"), "{out}");
+    assert!(out.contains("from integration"), "{out}");
+    let merge_base = git_in(
+        &base,
+        &work,
+        &["merge-base", "--is-ancestor", "integration", "HEAD"],
+    );
+    assert!(
+        merge_base.status.success(),
+        "the item branch grows from integration"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-189 R-3: starting a sprint makes its branch — the first from main, the next from the
+/// sprint that has not shipped, and from main again once main holds it.
+#[test]
+fn sprint_start_creates_branch() {
+    let (base, work) = togaf_scratch("gm-sprint");
+    git_model_board(&base, &work, true, false);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    for start in ["2026-10-05", "2026-10-19", "2026-11-02"] {
+        ok(run_in(&base, &work, &["sprint", "add", "--start", start]));
+    }
+    let said = ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    assert!(said.contains("created sprint/SP-001 from main"), "{said}");
+    // Work lands on the sprint, so the next sprint has something main does not.
+    ok(git_in(&base, &work, &["checkout", "-q", "sprint/SP-001"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "--allow-unrelated-histories",
+            "main",
+            "-m",
+            "x\n\nRefs: kanbanr:FEAT-001",
+        ],
+    ));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "--no-verify",
+            "-m",
+            "sprint work",
+        ],
+    ));
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    ok(run_in(&base, &work, &["sprint", "close", "SP-001"]));
+    let said = ok(run_in(&base, &work, &["sprint", "start", "SP-002"]));
+    assert!(
+        said.contains("created sprint/SP-002 from sprint/SP-001"),
+        "{said}"
+    );
+
+    // Once main holds both, the next sprint starts from main.
+    ok(git_in(
+        &base,
+        &work,
+        &["merge", "-q", "--ff-only", "sprint/SP-002"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "close", "SP-002"]));
+    let said = ok(run_in(&base, &work, &["sprint", "start", "SP-003"]));
+    assert!(said.contains("created sprint/SP-003 from main"), "{said}");
+    assert!(branches(&base, &work).contains("sprint/SP-003"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-189 R-4: on a line of integration a plain commit is refused, and a merge must say which
+/// items it brings; item, fix and spike branches commit as before.
+#[test]
+fn hook_guards_integration_lines() {
+    let (base, work) = togaf_scratch("gm-hooks");
+    git_model_board(&base, &work, true, false);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    // Real commits through the real hooks: the hooks run `kanbanr`, so put this build on PATH.
+    let path = format!(
+        "{}:{}",
+        cli().parent().unwrap().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let git_in = |base: &std::path::Path, work: &std::path::Path, args: &[&str]| -> Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(work)
+            .env("HOME", base.join("home"))
+            .env("PATH", &path)
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .output()
+            .expect("run git")
+    };
+    let commit = |msg: &str| git_in(&base, &work, &["commit", "-q", "--allow-empty", "-m", msg]);
+
+    for line in ["main", "sprint/SP-001"] {
+        ok(git_in(&base, &work, &["checkout", "-q", line]));
+        let refused = commit("work\n\nRefs: kanbanr:FEAT-001");
+        assert!(
+            !refused.status.success(),
+            "a plain commit on {line} is refused"
+        );
+        assert!(
+            String::from_utf8_lossy(&refused.stderr).contains("line of integration"),
+            "{}",
+            String::from_utf8_lossy(&refused.stderr)
+        );
+    }
+
+    // An item branch takes work; a merge into the line must name the item.
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "checkout",
+            "-q",
+            "-b",
+            "feat/FEAT-001-cart",
+            "sprint/SP-001",
+        ],
+    ));
+    ok(commit("feat: cart\n\nRefs: kanbanr:FEAT-001"));
+    ok(git_in(&base, &work, &["checkout", "-q", "sprint/SP-001"]));
+    let generated = git_in(
+        &base,
+        &work,
+        &["merge", "--no-ff", "--no-edit", "feat/FEAT-001-cart"],
+    );
+    assert!(
+        !generated.status.success(),
+        "a generated merge message names no item"
+    );
+    let _ = git_in(&base, &work, &["merge", "--abort"]);
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "merge",
+            "--no-ff",
+            "feat/FEAT-001-cart",
+            "-m",
+            "Merge FEAT-001\n\nRefs: kanbanr:FEAT-001",
+        ],
+    ));
+
+    // fix/ and spike/ branches commit as item branches do.
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "checkout",
+            "-q",
+            "-b",
+            "fix/FEAT-001-crash",
+            "sprint/SP-001",
+        ],
+    ));
+    ok(commit("fix: crash\n\nRefs: kanbanr:FEAT-001"));
+    ok(git_in(
+        &base,
+        &work,
+        &["checkout", "-q", "-b", "spike/try", "sprint/SP-001"],
+    ));
+    ok(commit("spike\n\n[no-ref] exploring"));
+    let _ = std::fs::remove_dir_all(&base);
+}

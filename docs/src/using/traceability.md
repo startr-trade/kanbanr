@@ -22,6 +22,14 @@ merges, reverts, `spike/*` branches, and a recorded escape (`[no-ref] <why>` in 
 leaves the reason in git history forever). If kanbanr is not on PATH the hooks step aside rather
 than making the repository uncommittable for someone who never installed it.
 
+### Lines of integration
+
+With the git model on ([Processes](processes.md#the-git-model)), the hooks also guard the
+branches work integrates into: main, the integration branch, `sprint/*` and `release/*`. A plain
+commit there is refused — work belongs on an item branch — and a merge into one must carry a
+`Refs:` trailer naming what it brings, because a line is where "which items reached it" is read
+from. A defect's `fix/<CODE>-…` branch names its item as `feat/` does.
+
 ### Links between specs, docs and decisions
 
 A spec or a doc that names `FEAT-012`, `FEAT-012/R-2`, `MS-004`, `ADR-0005`, `G-1` or a doc path

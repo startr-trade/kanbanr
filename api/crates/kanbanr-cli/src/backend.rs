@@ -93,6 +93,13 @@ impl Backend {
         }
     }
 
+    /// A read that needs the project's code repository (FEAT-189: the git model reads its
+    /// branches).
+    pub fn get_in(&self, path: &str, repo: Option<&std::path::Path>) -> Result<String> {
+        dispatch::dispatch_in(&self.store, "GET", path, None, repo)
+            .map_err(|e| anyhow!(e.to_string()))
+    }
+
     /// A read.
     pub fn get(&self, path: &str) -> Result<String> {
         let bare = path.split('?').next().unwrap_or(path);

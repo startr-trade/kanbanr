@@ -8,6 +8,13 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **The git model follows the cadence (FEAT-189).** `kanbanr git model` shows how the code
+  repository is laid out: main, the line finished items integrate into (main; `sprint/<SP>`; or an
+  `integration` branch), item branches (`feat/`, `fix/` for defects, `spike/`), and the lines that
+  take merges only. With `kanbanr config cadence --git-model on`, `start` branches from the line,
+  `sprint start` makes the sprint's branch, a release branches from the line its cadence says, and
+  the hooks refuse plain commits on a line and merges into one that name no item. Off by default.
+  kanbanr's code-repository calls refuse to push.
 - **The method, on by default in every built-in process (FEAT-193).** Design before build: the
   build stage asks for the spec's Design section and a `design-review` sign-off. Living docs: the
   integrate stage asks for `docs_updated` and a `docs-folded` sign-off. And `doctor` reports broken

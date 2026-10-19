@@ -946,6 +946,10 @@ enum ConfigCmd {
         /// to go back to it).
         #[arg(long)]
         main_branch: Option<String>,
+        /// Branch by the git model the cadence implies (FEAT-189): where `start` branches, sprint
+        /// branches, lines taking merges only. on | off; off by default.
+        #[arg(long, value_parser = ["on", "off"])]
+        git_model: Option<String>,
     },
     SetTransition(SetTransitionArgs),
     DisplayedStates {
@@ -1350,6 +1354,9 @@ enum GitCmd {
     /// Check a `git commit` before it is attempted (run by the Claude Code PreToolUse hook).
     /// Reads the tool payload on stdin and answers with a decision and a reason.
     Guard,
+    /// The git model this project's cadence implies (FEAT-189): main, the line finished items
+    /// integrate into, item branches, and the branches that take merges only.
+    Model,
 }
 
 #[derive(Subcommand)]
@@ -3083,9 +3090,29 @@ fn scm_context_in(dir: &Path) -> anyhow::Result<Context> {
 
 /// The item the current branch is about. This is the whole reason the branch rule exists: with it,
 /// nothing else has to ask what is being worked on.
+/// The git model the hooks judge by, when the project has it on (FEAT-189). Which branches take
+/// merges only does not depend on the running sprint, so it is derived here without reading one.
+fn line_model(ctx: &Context) -> Option<kanbanr_core::gitmodel::GitModel> {
+    let config = &ctx.project.config;
+    if !config.cadence.git_model {
+        return None;
+    }
+    let main = config
+        .cadence
+        .main_branch
+        .clone()
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| scm::default_branch(&ctx.root));
+    let facts = kanbanr_core::gitmodel::BranchFacts {
+        main,
+        ..Default::default()
+    };
+    Some(kanbanr_core::gitmodel::derive(config, &[], &facts))
+}
+
 fn branch_item(ctx: &Context) -> Option<String> {
     let pattern = ctx.project.config.branch_pattern();
-    let code = kanbanr_core::scm::code_from_branch(pattern, ctx.branch.as_deref()?)?;
+    let code = kanbanr_core::scm::item_code_from_branch(pattern, ctx.branch.as_deref()?)?;
     ctx.project
         .features
         .iter()
@@ -3116,6 +3143,48 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
         GitCmd::CheckMsg { file } => run_check_msg(cli, client, file),
         GitCmd::Guard => run_guard(cli, Some(client)),
         GitCmd::CheckBranch => run_check_branch(cli, client),
+        GitCmd::Model => {
+            let p = require_project(cli)?;
+            let root =
+                scm::repo_root().ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
+            let resp = client.get_in(&format!("/projects/{p}/git/model"), Some(&root))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let v: Value = serde_json::from_str(&resp)?;
+            let m = &v["model"];
+            let s = |k: &str| m[k].as_str().unwrap_or_default().to_string();
+            let list = |k: &str| -> String {
+                m[k].as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|x| x.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            println!("topology:   {}", s("topology").replace('_', " "));
+            println!("main:       {}", s("main"));
+            println!(
+                "line:       {}",
+                m["line"]
+                    .as_str()
+                    .unwrap_or("none — start a sprint to have one")
+            );
+            println!("production: at the {}", s("production").replace('_', " "));
+            println!("items:      {}", list("item_patterns"));
+            println!("protected:  {}", list("protected"));
+            println!("pushing:    never automatic");
+            println!(
+                "automation: {}",
+                if m["automated"].as_bool().unwrap_or(false) {
+                    "on — start, sprints and the hooks follow this model"
+                } else {
+                    "off — a description only (`kanbanr config cadence --git-model on`)"
+                }
+            );
+            Ok(())
+        }
         GitCmd::Status => {
             let ctx = scm_context(cli, client)?;
             let item = branch_item(&ctx);
@@ -3203,6 +3272,17 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     let Ok(ctx) = ctx else {
         return Ok(()); // not a kanbanr project: not this guard's business
     };
+    // A line of integration takes merges only (FEAT-189).
+    if let Some(branch) = &ctx.branch
+        && let Some(model) = line_model(&ctx)
+        && !scm::merge_in_progress(&ctx.root)
+        && scm::has_commits(&ctx.root)
+        && let kanbanr_core::gitmodel::LineVerdict::Refused(why) =
+            kanbanr_core::gitmodel::line_commit_verdict(&model, branch, false, None)
+    {
+        deny(why);
+        return Ok(());
+    }
     // Completing a merge is the intended way work reaches the default branch (FEAT-094).
     // So is a repository's first commit (FEAT-105): nothing can branch from a repo with none.
     if let Some(branch) = &ctx.branch
@@ -3604,11 +3684,27 @@ fn run_check_msg(cli: &Cli, client: &Backend, file: &Path) -> anyhow::Result<()>
         .collect::<Vec<_>>()
         .join("\n");
 
+    // Not a kanbanr project (or no board reachable): say nothing, block nothing.
+    let ctx = scm_context(cli, client).ok();
+    // A merge into a line of integration says which items it brings, generated message or not
+    // (FEAT-189): a line is where "which items reached it" is read from.
+    if let Some(ctx) = &ctx
+        && let Some(model) = line_model(ctx)
+        && let Some(branch) = ctx.branch.as_deref()
+        && let kanbanr_core::gitmodel::LineVerdict::Refused(why) =
+            kanbanr_core::gitmodel::line_commit_verdict(
+                &model,
+                branch,
+                crate::scm::merge_in_progress(&ctx.root),
+                Some(&message),
+            )
+    {
+        anyhow::bail!("{why}");
+    }
     if scm::is_generated_commit(&message) {
         return Ok(()); // git wrote it; there is no author to ask for a reference
     }
-    // Not a kanbanr project (or no board reachable): say nothing, block nothing.
-    let Ok(ctx) = scm_context(cli, client) else {
+    let Some(ctx) = ctx else {
         return Ok(());
     };
     // References are read before the escape is considered: a message that carries both is a
@@ -3716,6 +3812,15 @@ fn run_check_branch(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     if !scm::has_commits(&ctx.root) && branch == scm::default_branch(&ctx.root) {
         return Ok(());
     }
+    // A line of integration takes merges only (FEAT-189).
+    if let Some(model) = line_model(&ctx) {
+        use kanbanr_core::gitmodel::LineVerdict;
+        match kanbanr_core::gitmodel::line_commit_verdict(&model, &branch, false, None) {
+            LineVerdict::Refused(why) => anyhow::bail!("{why}"),
+            LineVerdict::Allowed => return Ok(()),
+            LineVerdict::NotALine => {}
+        }
+    }
     // The commit completing a merge is how an item's branch is SUPPOSED to arrive here (FEAT-094).
     if branch == scm::default_branch(&ctx.root) {
         anyhow::bail!(
@@ -3776,16 +3881,46 @@ fn run_start(
                 scm::default_branch(&root)
             );
         }
-        let branch =
-            kanbanr_core::scm::branch_for(project.config.branch_pattern(), code, &feature.title);
+        // A defect goes on the pattern's `fix/` twin when the pattern is the default (FEAT-189, Q3).
+        let pattern = project.config.branch_pattern();
+        let pattern = match kanbanr_core::scm::fix_twin(pattern) {
+            Some(twin)
+                if feature.kind.as_deref() == Some("defect")
+                    && pattern == kanbanr_core::scm::DEFAULT_BRANCH_PATTERN =>
+            {
+                twin
+            }
+            _ => pattern.to_string(),
+        };
+        let branch = kanbanr_core::scm::branch_for(&pattern, code, &feature.title);
         if scm::current_branch(&root).as_deref() == Some(branch.as_str()) {
             println!("already on {branch}");
         } else if scm::git(&root, &["rev-parse", "--verify", "--quiet", &branch]).is_ok() {
             scm::git(&root, &["checkout", "-q", &branch])?;
             println!("switched to {branch}");
         } else {
-            // Branch from the default branch, not from wherever you happen to be standing.
-            let base = scm::default_branch(&root);
+            // Branch from the line the git model says (FEAT-189), else the default branch — never
+            // from wherever you happen to be standing.
+            let base = if project.config.cadence.git_model {
+                let resp = client.get_in(
+                    &format!("/projects/{p}/git/model?item={}", urlencode(code)),
+                    Some(&root),
+                )?;
+                let v: Value = serde_json::from_str(&resp)?;
+                let start = &v["start"];
+                let base = start["base"].as_str().unwrap_or_default().to_string();
+                if start["create_from_main"].as_bool().unwrap_or(false) {
+                    let main = v["model"]["main"].as_str().unwrap_or_default();
+                    scm::git(&root, &["branch", &base, main])?;
+                    println!("created {base} from {main}");
+                }
+                if let Some(note) = start["note"].as_str() {
+                    println!("note: {note}");
+                }
+                base
+            } else {
+                scm::default_branch(&root)
+            };
             scm::git(&root, &["checkout", "-q", "-b", &branch, &base])
                 .or_else(|_| scm::git(&root, &["checkout", "-q", "-b", &branch]))?;
             println!("created {branch} from {base}");
@@ -7404,8 +7539,10 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             release_stages,
             integration_branch,
             main_branch,
+            git_model,
         } => {
             let body = obj(vec![
+                ("git_model", git_model.as_deref().map(|v| json!(v == "on"))),
                 ("sprints", sprints.as_deref().map(|v| json!(v == "on"))),
                 ("releases", releases.as_deref().map(|v| json!(v == "on"))),
                 ("estimate_unit", unit.clone().map(|u| json!(u))),
@@ -8088,12 +8225,27 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
             }
         }
         SprintCmd::Start { code } => {
-            let resp = client.write(
+            // With the git model on, the sprint's branch is made in this repository (FEAT-189).
+            let repo = std::env::current_dir()
+                .ok()
+                .and_then(|cwd| kanbanr_core::coderepo::repo_root_in(&cwd));
+            let resp = client.write_in(
                 Method::Post,
                 &format!("/projects/{p}/sprints/{code}/start"),
                 Some(json!({})),
+                repo.as_deref(),
             )?;
-            print_write(cli, &resp, format!("{code} is the active sprint"));
+            let v: Value = serde_json::from_str(&resp)?;
+            let branch = match (v["branch"].as_array(), v["reused"].as_str()) {
+                (Some(b), _) => format!(
+                    "; created {} from {}",
+                    b[0].as_str().unwrap_or_default(),
+                    b[1].as_str().unwrap_or_default()
+                ),
+                (None, Some(name)) => format!("; {name} already exists"),
+                _ => String::new(),
+            };
+            print_write(cli, &resp, format!("{code} is the active sprint{branch}"));
         }
         SprintCmd::Close { code, carry_to } => {
             let resp = client.write(
