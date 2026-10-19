@@ -208,7 +208,7 @@ fn scan_definitions(
         // doctor asks only what the item's NEXT stage needs, plus that stage's warnings — a
         // definition built stage by stage is not incomplete for lacking what a later stage asks
         // (FEAT-117). Agreement and sign-offs are the review queue's questions, not doctor's.
-        let gaps = if project.config.gates.is_empty() {
+        let gaps = if !project.config.declares_gates() {
             crate::readiness::evaluate(feature, Some(&goal_ids), crate::readiness::DOCTOR)
         } else {
             use crate::readiness::Check;

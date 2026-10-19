@@ -3517,3 +3517,27 @@ fn marker_resolves_from_linked_worktree() {
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-188: `process checks` lists the stage roles a gate can hold or be addressed by, in text and
+/// JSON, without a board.
+#[test]
+fn process_checks_lists_roles() {
+    let (base, _work) = togaf_scratch("checks-roles");
+    let empty = base.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let out = run_in(&base, &empty, &["process", "checks"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    for role in ["design", "build", "integrate", "release"] {
+        assert!(text.contains(&format!("\n{role}")), "{role}: {text}");
+    }
+    let json = run_in(&base, &empty, &["process", "checks", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(v["roles"].as_array().unwrap().len(), 4);
+    assert_eq!(v["roles"][1]["role"], "build");
+    let _ = std::fs::remove_dir_all(&base);
+}

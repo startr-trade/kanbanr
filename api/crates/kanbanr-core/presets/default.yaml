@@ -1,5 +1,5 @@
 # The default workflow: plan, work, finish — with a parking place for later and a home for work
-# that recurs and never completes. No gates are declared: kanbanr's built-in rule applies (entering
+# that recurs and never completes. Its gates only label the stage roles (FEAT-188), so kanbanr's built-in rule applies (entering
 # In Progress needs an approved definition, and `start` makes the branch there).
 statuses: [Deferred, Planned, In Progress, Completed, Ongoing, No Action, Not Applicable, Out-of-Scope]
 default_state: Planned
@@ -15,3 +15,10 @@ transitions:
   No Action: [Planned]
   Not Applicable: [Planned]
   Out-of-Scope: [Planned]
+gates:
+  Planned:
+    roles: [design]
+  In Progress:
+    roles: [build]
+  Completed:
+    roles: [integrate, release]

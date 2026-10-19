@@ -20,18 +20,22 @@ gates:
   Plan:
     purpose: Say what it is and why it matters.
   Design:
+    roles: [design]
     purpose: What it must do, agreed before it is built.
     requires: [statement, goals, requirements, approved]
   Develop:
+    roles: [build]
     purpose: Build it — how and where settled, a test named for every requirement.
     requires: [{zachman: [how, where]}, tests_named]
     on_enter: [branch]
   Test:
     purpose: Test it against its requirements.
   Review:
+    roles: [integrate]
     purpose: Review it with the evidence in hand.
     requires: [tests_green]
   Released:
+    roles: [release]
     purpose: Shipped in a release.
     requires: [in_release]
 cadence:

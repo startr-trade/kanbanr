@@ -200,7 +200,7 @@ fn ship_to(
     else {
         return Err(format!("not finished — it is at {}", f.status));
     };
-    if config.gates.is_empty() {
+    if !config.declares_gates() {
         let gaps = crate::readiness::evaluate(f, None, crate::readiness::CHECK);
         if let Some(first) = gaps.first() {
             return Err(first.message.clone());

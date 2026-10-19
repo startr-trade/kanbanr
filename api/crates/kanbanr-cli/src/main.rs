@@ -3750,16 +3750,8 @@ fn first_active_status(project: &Project) -> anyhow::Result<String> {
 
 /// The status whose gate creates the item's branch, in workflow order (FEAT-115).
 fn branch_status(config: &kanbanr_core::ProjectConfig) -> Option<String> {
-    let gates = config.effective_gates();
-    config
-        .statuses
-        .iter()
-        .find(|s| {
-            gates
-                .get(*s)
-                .is_some_and(|g| g.on_enter.contains(&kanbanr_core::config::Action::Branch))
-        })
-        .cloned()
+    // The build role's status (FEAT-188), declared or inferred from where the branch is made.
+    config.branch_status()
 }
 
 /// The shortest chain of allowed transitions from one status to another, both ends included.
@@ -3864,7 +3856,7 @@ fn run_finish(cli: &Cli, client: &Backend, code: Option<&str>) -> anyhow::Result
     // Everything that makes "done" mean something, checked before it is claimed. A workflow that
     // declares its gates says that itself, on the end status, and the move below enforces it; one
     // that does not keeps the rules `check` reports.
-    let gaps: Vec<String> = if config.gates.is_empty() {
+    let gaps: Vec<String> = if !config.declares_gates() {
         check_report(feature)["gaps"]
             .as_array()
             .map(|a| {
@@ -4932,11 +4924,16 @@ fn run_process_checks(cli: &Cli) -> anyhow::Result<()> {
                 json!({ "check": c.name(), "passes_when": c.passes_when(), "parameters": c.parameters() })
             })
             .collect();
+        let roles: Vec<Value> = kanbanr_core::config::Role::ALL
+            .iter()
+            .map(|r| json!({ "role": r.name(), "means": r.means() }))
+            .collect();
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "checks": checks,
                 "signoffs": "anything kanbanr cannot see is a named sign-off: `signoffs: [design-review]`",
+                "roles": roles,
             }))?
         );
         return Ok(());
@@ -4951,6 +4948,11 @@ fn run_process_checks(cli: &Cli) -> anyhow::Result<()> {
         "\nAnything kanbanr cannot judge from the board is a named sign-off, recorded by a person: \
          `signoffs: [design-review]` in the stage's gate."
     );
+    // The stage roles a gate can hold, or be addressed by (`@build`) (FEAT-188).
+    println!("\nStage roles (`roles: [build]` on a gate, or a gate keyed `@build`):");
+    for r in kanbanr_core::config::Role::ALL {
+        println!("{:<14} {}", r.name(), r.means());
+    }
     Ok(())
 }
 
