@@ -98,6 +98,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | Command | What it does |
 |---|---|
 | `kanbanr git install-hooks / uninstall-hooks / status` | the commit hooks that require each commit to name its item |
+| `kanbanr git forward <VERSION>` | merge a release's fixes forward into the current line, naming the items they serve |
 | `kanbanr git model [--json]` | the git model the cadence implies: main, the line finished items integrate into, item branches, and the lines that take merges only |
 | `kanbanr commit -m "…"` | commit with the board reference filled in from the branch |
 | `kanbanr claude sync` | write the project's charter and stages into `CLAUDE.md` |

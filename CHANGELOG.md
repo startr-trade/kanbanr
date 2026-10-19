@@ -8,6 +8,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **The board makes the merges (FEAT-190).** With the git model on, moving an item into its
+  integrate stage merges its branch into its line, with a merge commit naming it; a merge that
+  would conflict refuses the move, naming the files, and changes nothing. In the sprints topology,
+  `sprint close` fast-forwards main to the sprint and tags it with the sprint's code. Items carried
+  into a sprint are brought up to date with its branch when it starts (a merge, never a rebase;
+  conflicts are reported and left alone). A fix integrated into a release under test is flagged,
+  and `kanbanr git forward <VERSION>` merges it forward into the line. Releases promoted to their
+  first stage make the integration line from main when it is not there yet.
 - **The git model follows the cadence (FEAT-189).** `kanbanr git model` shows how the code
   repository is laid out: main, the line finished items integrate into (main; `sprint/<SP>`; or an
   `integration` branch), item branches (`feat/`, `fix/` for defects, `spike/`), and the lines that

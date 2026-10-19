@@ -28,7 +28,9 @@ With the git model on ([Processes](processes.md#the-git-model)), the hooks also 
 branches work integrates into: main, the integration branch, `sprint/*` and `release/*`. A plain
 commit there is refused — work belongs on an item branch — and a merge into one must carry a
 `Refs:` trailer naming what it brings, because a line is where "which items reached it" is read
-from. A defect's `fix/<CODE>-…` branch names its item as `feat/` does.
+from. A defect's `fix/<CODE>-…` branch names its item as `feat/` does. The merges kanbanr itself makes
+(integrating an item, catching up a carried one, forwarding a release) carry those trailers, so a
+line's history says which items reached it.
 
 ### Links between specs, docs and decisions
 
