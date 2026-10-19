@@ -49,6 +49,9 @@ fn core_err(e: kanbanr_core::CoreError) -> (StatusCode, String) {
         | BatchOpFailed(_, _)
         | InvalidMermaid(_)
         | Unsupported(_) => StatusCode::BAD_REQUEST,
+        // The code repository refused a release promotion (FEAT-183): the request was well formed,
+        // the repository's state is what stood in the way.
+        Git(_) => StatusCode::CONFLICT,
         Io(_) | Yaml(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (code, e.to_string())

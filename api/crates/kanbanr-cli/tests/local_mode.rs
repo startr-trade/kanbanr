@@ -3517,3 +3517,282 @@ fn marker_resolves_from_linked_worktree() {
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A code repository on `main` with one commit and its own commit identity, beside a board with
+/// releases on and `v1.0.0` added — the shape FEAT-183's promotions act on.
+fn release_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (base, work) = togaf_scratch(tag);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    // The tag is made by the person's own git, so the repository needs someone to author it.
+    ok(git_in(&base, &work, &["config", "user.name", "T"]));
+    ok(git_in(&base, &work, &["config", "user.email", "t@x"]));
+    std::fs::write(work.join("app.txt"), "v0\n").unwrap();
+    ok(git_in(&base, &work, &["add", "app.txt"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["commit", "-q", "-m", "[no-ref] base"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--releases", "on"],
+    ));
+    ok(run_in(&base, &work, &["release", "add", "v1.0.0"]));
+    (base, work)
+}
+
+/// The commit a name points at in the scratch repository, or "" when it names none.
+fn rev(base: &std::path::Path, work: &std::path::Path, name: &str) -> String {
+    let o = git_in(base, work, &["rev-parse", "--verify", "--quiet", name]);
+    String::from_utf8_lossy(&o.stdout).trim().to_string()
+}
+
+/// Commit a change to `app.txt` on `branch`, leaving `main` checked out afterwards.
+fn commit_on(base: &std::path::Path, work: &std::path::Path, branch: &str, content: &str) {
+    assert!(
+        git_in(base, work, &["checkout", "-q", branch])
+            .status
+            .success()
+    );
+    std::fs::write(work.join("app.txt"), content).unwrap();
+    assert!(
+        git_in(base, work, &["commit", "-q", "-am", "[no-ref] change"])
+            .status
+            .success()
+    );
+    assert!(
+        git_in(base, work, &["checkout", "-q", "main"])
+            .status
+            .success()
+    );
+}
+
+fn release_json(
+    base: &std::path::Path,
+    work: &std::path::Path,
+    version: &str,
+) -> serde_json::Value {
+    let o = run_in(base, work, &["--json", "release", "list"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let all: Vec<serde_json::Value> = serde_json::from_slice(&o.stdout).unwrap();
+    all.into_iter()
+        .find(|r| r["version"] == version)
+        .expect("the release is listed")
+}
+
+/// FEAT-183 R-2: promoting a release to candidate makes `release/<VERSION>` from the integration
+/// branch — the repository's default when the project names none — without checking it out.
+#[test]
+fn promote_candidate_creates_branch() {
+    let (base, work) = release_scratch("promote-candidate");
+    let o = run_in(&base, &work, &["release", "promote", "v1.0.0"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let said = String::from_utf8_lossy(&o.stdout);
+    assert!(said.contains("v1.0.0 -> candidate"), "{said}");
+    assert!(said.contains("created release/v1.0.0"), "{said}");
+    assert_eq!(
+        rev(&base, &work, "release/v1.0.0"),
+        rev(&base, &work, "main")
+    );
+    let head = git_in(&base, &work, &["symbolic-ref", "--short", "HEAD"]);
+    assert_eq!(String::from_utf8_lossy(&head.stdout).trim(), "main");
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(r["stage"], "candidate");
+    assert_eq!(r["branch"], "release/v1.0.0");
+    assert_eq!(
+        r["stages"][0]["by"], "A",
+        "the board's commit identity moved it"
+    );
+
+    // A named integration branch is where the next one comes from.
+    assert!(
+        git_in(&base, &work, &["branch", "develop"])
+            .status
+            .success()
+    );
+    commit_on(&base, &work, "develop", "on develop\n");
+    let o = run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--integration-branch", "develop"],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let o = run_in(&base, &work, &["release", "add", "v1.1.0", "--branch"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(
+        rev(&base, &work, "release/v1.1.0"),
+        rev(&base, &work, "develop")
+    );
+
+    // An existing branch of that name is refused, and the board does not move.
+    assert!(
+        git_in(&base, &work, &["branch", "release/v2.0.0"])
+            .status
+            .success()
+    );
+    assert!(
+        run_in(&base, &work, &["release", "add", "v2.0.0"])
+            .status
+            .success()
+    );
+    let o = run_in(&base, &work, &["release", "promote", "v2.0.0", "candidate"]);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("already exists"));
+    assert!(release_json(&base, &work, "v2.0.0").get("stage").is_none());
+
+    // Outside any code repository, the stage that needs one is refused, saying why.
+    let board = String::from_utf8(run_in(&base, &work, &["where"]).stdout).unwrap();
+    let elsewhere = base.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(
+        elsewhere.join(".kanbanr"),
+        format!("project: shop\ndata_dir: {}\n", board.trim()),
+    )
+    .unwrap();
+    let o = run_in(&base, &elsewhere, &["release", "add", "v3.0.0", "--branch"]);
+    assert!(!o.status.success());
+    let why = String::from_utf8_lossy(&o.stderr);
+    assert!(why.contains("needs the code repository"), "{why}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-183 R-3: promoting to production cuts the release, tags its tip with the version and
+/// brings main to exactly that commit; `cut --tag` does the same.
+#[test]
+fn promote_production_cuts_tags_merges() {
+    let (base, work) = release_scratch("promote-production");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    commit_on(&base, &work, "release/v1.0.0", "fixed on the release\n");
+    ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "staging"],
+    ));
+    let o = ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "production"],
+    ));
+    let said = String::from_utf8_lossy(&o.stdout);
+    assert!(
+        said.contains("tagged v1.0.0, main fast-forwarded to it"),
+        "{said}"
+    );
+    let tip = rev(&base, &work, "release/v1.0.0");
+    assert_eq!(rev(&base, &work, "v1.0.0^{commit}"), tip);
+    assert_eq!(rev(&base, &work, "main"), tip);
+    assert_eq!(
+        std::fs::read_to_string(work.join("app.txt")).unwrap(),
+        "fixed on the release\n",
+        "the checked-out main moved with its files"
+    );
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(
+        (r["state"].as_str(), r["stage"].as_str()),
+        (Some("shipped"), Some("production"))
+    );
+    assert_eq!(r["notes_doc"], "releases/v1.0.0.md");
+    let docs = ok(run_in(&base, &work, &["doc", "list"]));
+    assert!(String::from_utf8_lossy(&docs.stdout).contains("releases/v1.0.0.md"));
+    let moves: Vec<&str> = r["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["stage"].as_str())
+        .collect();
+    assert_eq!(moves, ["candidate", "staging", "production"]);
+
+    // `cut --tag` is the same promotion.
+    ok(run_in(
+        &base,
+        &work,
+        &["release", "add", "v1.1.0", "--branch"],
+    ));
+    commit_on(&base, &work, "release/v1.1.0", "v1.1\n");
+    ok(run_in(&base, &work, &["release", "cut", "v1.1.0", "--tag"]));
+    assert_eq!(
+        rev(&base, &work, "main"),
+        rev(&base, &work, "release/v1.1.0")
+    );
+    assert_eq!(
+        rev(&base, &work, "v1.1.0^{commit}"),
+        rev(&base, &work, "main")
+    );
+    assert_eq!(release_json(&base, &work, "v1.1.0")["state"], "shipped");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-183 R-4: when main has commits the release lacks — here, a conflicting change to the same
+/// file — production is refused and nothing changes: not the board, not a tag, not main.
+#[test]
+fn promote_production_refuses_unclean_merge() {
+    let (base, work) = release_scratch("promote-unclean");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    commit_on(&base, &work, "release/v1.0.0", "the release's line\n");
+    commit_on(&base, &work, "main", "main's line\n");
+    let main_before = rev(&base, &work, "main");
+    let board = std::path::PathBuf::from(
+        String::from_utf8(ok(run_in(&base, &work, &["where"])).stdout)
+            .unwrap()
+            .trim(),
+    );
+    let shop = board.join("projects").join("shop");
+    let releases = || std::fs::read_to_string(shop.join("releases.yaml")).unwrap();
+    let before = releases();
+
+    let o = run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "production"],
+    );
+    assert!(
+        !o.status.success(),
+        "a release missing main's commits is refused"
+    );
+    let why = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        why.contains("main has commits release/v1.0.0 lacks"),
+        "{why}"
+    );
+    assert!(why.contains("nothing was changed"), "{why}");
+    assert_eq!(rev(&base, &work, "main"), main_before, "main did not move");
+    assert_eq!(rev(&base, &work, "v1.0.0"), "", "no tag was made");
+    assert_eq!(releases(), before, "the board's releases are untouched");
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(
+        (r["state"].as_str(), r["stage"].as_str()),
+        (Some("planned"), Some("candidate"))
+    );
+    let notes = ok(run_in(&base, &work, &["doc", "list"]));
+    assert!(
+        !String::from_utf8_lossy(&notes.stdout).contains("v1.0.0"),
+        "no notes were written"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
