@@ -1,5 +1,5 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -100,6 +100,38 @@ export const api = {
     }
     return res.json();
   },
+  /** Plan an item into a release (FEAT-185), through the route `kanbanr release plan` uses. */
+  planIntoRelease: (id: string, version: string, code: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/plan`,
+      { items: [code] },
+      "plan into a release",
+      `kanbanr release plan ${version} ${code}`,
+    ),
+  /** What cutting `version` now would ship and carry over, nothing written (FEAT-185). */
+  getCutPreview: (id: string, version: string) =>
+    getJson<CutPreview[]>(
+      apiUrl(`/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/cut-preview`),
+    ),
+  /** Add a planned release (FEAT-185), as `kanbanr release add` does. */
+  addRelease: (id: string, version: string, target: string, name = "") =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/releases`,
+      { version, target, name },
+      "add a release",
+      `kanbanr release add ${version}`,
+    ),
+  /**
+   * Move a release to its next stage, or the named one (FEAT-183, FEAT-185): the same core
+   * promotion as `kanbanr release promote`, recorded as `by`. The last stage is the cut.
+   */
+  promoteRelease: (id: string, version: string, by: string, stage?: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/promote`,
+      stage ? { by, stage } : { by },
+      "promote a release",
+      `kanbanr release promote ${version}${stage ? ` ${stage}` : ""}`,
+    ),
   /** Every architecture decision on the board, newest first (FEAT-057). */
   getAdrs: (id: string) => getJson<Adr[]>(apiUrl(`/projects/${encodeURIComponent(id)}/adrs`)),
   /** The user's verdict on a proposed decision (FEAT-153), through the route `kanbanr adr accept`
@@ -193,7 +225,7 @@ async function verdict(
  * not offer the action then; this is the guarantee that the standalone bundle never calls a write
  * route even if one did.
  */
-async function postWrite(url: string, body: Record<string, string>, command: string): Promise<Response> {
+async function postWrite(url: string, body: unknown, command: string): Promise<Response> {
   if (isReadOnly()) {
     throw new Error(`This monitor is read-only. Run \`${command}\` instead.`);
   }
@@ -202,4 +234,21 @@ async function postWrite(url: string, body: Record<string, string>, command: str
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+/**
+ * Post to a daemon write route (FEAT-185), through the configured API base and the read-only
+ * guard (FEAT-178). A daemon without writes has no such route, so a 404 or 405 says which monitor
+ * can; any other refusal is the daemon's own message, shown as it gave it.
+ */
+async function writePost(path: string, body: unknown, verb: string, command: string) {
+  const res = await postWrite(apiUrl(`/write${path}`), body, command);
+  if (!res.ok) {
+    throw new Error(
+      res.status === 404 || res.status === 405
+        ? `This monitor is read-only. Start it with \`kanbanr review --ui\` to ${verb} from here.`
+        : `${verb} failed: ${res.status} ${await res.text()}`,
+    );
+  }
+  return res.json();
 }
