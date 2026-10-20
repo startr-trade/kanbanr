@@ -104,6 +104,9 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **The Workflow page shows the method again (FEAT-199).** Its diagram failed ("No such shape") and
+  its Stages panel showed no gates on projects with role-addressed gates; both now show the gates
+  moves are judged by. A stage asking for `spec_sections` no longer crashes the page.
 - **Deleting a project removes its folder for good (FEAT-196).** The delete's own activity entry
   recreated `projects/<id>/` and committed it; a log no longer writes into a project that is gone.
 - **The board is found from inside a git worktree (FEAT-192).** A linked worktree inside the
