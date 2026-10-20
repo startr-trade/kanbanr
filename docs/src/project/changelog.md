@@ -8,6 +8,15 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **A versioned read API, described in OpenAPI 3.1 (FEAT-177).** The daemon's public read routes —
+  the ones the monitor uses, plus the obvious reads — are now version 1 of a documented contract
+  for integrators and tools built on the board. `kanbanr serve` serves the description at
+  `GET /api/openapi.json`; the [HTTP API](https://kanbanr.startr.trade/reference/http-api.html)
+  page lists the public routes, the internal ones, errors, live updates and versioning, and
+  includes the document. It is generated from the Rust response types, a contract test checks
+  every public route against it, and the monitor's types are checked against it too. A breaking
+  change to a public route would be published as v2 under `/api/v2/`. Other read routes stay
+  served, as internal.
 - **Release actions in the monitor (FEAT-185).** With releases on, the review queue asks which
   planned release an item belongs to once its next stage is the end (or a stage that asks for
   `in_release`) and it is in none. The Review page offers one button per planned release and
@@ -116,6 +125,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Changed
 
+- **The daemon's answers say what they are (FEAT-177).** A `GET` under `/api` that no route answers
+  is now a `404`, not a `400` "unsupported operation". Mermaid diagrams (`workflow`, `gantt`) and
+  the DOT graph are sent as `text/plain` and the project export as `text/markdown`, where they
+  were labelled `application/json`.
 - **Tests cannot reach a real board (FEAT-195).** For contributors: every process cargo runs in
   `api/` is fenced to the system temporary directory (`KANBANR_BOARD_FENCE`), so a test that
   drifts onto a real board stops before touching it, and `make ci` fails if your board changed

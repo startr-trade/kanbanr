@@ -604,6 +604,82 @@ pub fn document_text() -> String {
     text
 }
 
+/// Where the route table goes in `docs/src/reference/http-api.md`: between these two lines.
+pub const TABLE_START: &str = "<!-- generated from openapi.json: start -->";
+pub const TABLE_END: &str = "<!-- generated from openapi.json: end -->";
+
+/// The public routes as a Markdown table, generated from [`document`]: route, parameters, what
+/// a success answers with, and what the route is for.
+pub fn route_table() -> String {
+    let doc = document();
+    let mut out =
+        String::from("| Route | Parameters | Answers | What it is |\n|---|---|---|---|\n");
+    for route in public_routes() {
+        let op = &doc["paths"][route.path]["get"];
+        let params: Vec<String> = route
+            .params
+            .iter()
+            .filter(|p| p.location == In::Query)
+            .map(|p| {
+                let values = match p.kind {
+                    Kind::OneOf(v) => format!("={}", v.join("\\|")),
+                    _ => String::new(),
+                };
+                let required = if p.required { "" } else { " (optional)" };
+                format!("`{}{values}`{required}", p.name)
+            })
+            .collect();
+        let content = op["responses"]["200"]["content"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        let answers: Vec<String> = content
+            .iter()
+            .map(|(mime, c)| match mime.as_str() {
+                "application/json" => format!("JSON `{}`", schema_label(&c["schema"])),
+                "*/*" => "the file's bytes".to_string(),
+                other => format!("`{}`", other.split(';').next().unwrap_or(other)),
+            })
+            .collect();
+        out.push_str(&format!(
+            "| `GET {}` | {} | {} | {} |\n",
+            route.path,
+            if params.is_empty() {
+                "—".to_string()
+            } else {
+                params.join(", ")
+            },
+            answers.join(", or "),
+            route.summary.replace('|', "\\|"),
+        ));
+    }
+    out
+}
+
+/// A short name for a response schema: `ReviewEntry[]`, `Project`, `object`.
+fn schema_label(schema: &Value) -> String {
+    if let Some(r) = schema["$ref"].as_str() {
+        return r.trim_start_matches("#/components/schemas/").to_string();
+    }
+    if schema["type"] == "array" {
+        return format!("{}[]", schema_label(&schema["items"]));
+    }
+    schema["type"].as_str().unwrap_or("any").to_string()
+}
+
+/// `page` with the text between [`TABLE_START`] and [`TABLE_END`] replaced by [`route_table`];
+/// `None` when the page lacks either marker.
+pub fn with_route_table(page: &str) -> Option<String> {
+    let start = page.find(TABLE_START)? + TABLE_START.len();
+    let end = page[start..].find(TABLE_END)? + start;
+    Some(format!(
+        "{}\n\n{}\n{}",
+        &page[..start],
+        route_table(),
+        &page[end..]
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

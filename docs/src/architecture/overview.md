@@ -47,6 +47,16 @@ for data operations). The **CLI** links it to write the folder directly; the **v
 (`kanbanr-server`, a library run by `kanbanr serve`) links it to read. Both go through `dispatch`,
 so they agree by construction. It's all one binary.
 
+The daemon's **public read routes** are a versioned contract, v1 (FEAT-177). Their response types
+live in `kanbanr-core` and derive a JSON Schema behind the crate's `schema` feature, which the
+shipped binary does not enable; `kanbanr_core::openapi` lists the public routes and builds an
+OpenAPI 3.1 document from those schemas. The document is generated into
+`docs/src/reference/openapi.json`, committed, and served as those bytes at `/api/openapi.json`. A
+contract test runs a daemon on a fixture board and validates every public route against it, and
+fails when the committed document and the code disagree; the monitor's TypeScript types are
+checked against the same document. Every other read route is internal. See
+[HTTP API](../reference/http-api.md).
+
 
 ## Runtime: one writer, a read-only view, git
 

@@ -340,6 +340,13 @@ mod server {
             "docs/src/reference/openapi.json is out of date: run \
              `cargo run -p kanbanr-core --features schema --example openapi`"
         );
+        // And so is the route table the HTTP API page shows.
+        let page = include_str!("../../../../docs/src/reference/http-api.md");
+        assert!(
+            kanbanr_core::openapi::with_route_table(page).as_deref() == Some(page),
+            "the route table in docs/src/reference/http-api.md is out of date: run \
+             `cargo run -p kanbanr-core --features schema --example openapi`"
+        );
         let doc: Value = serde_json::from_str(committed).unwrap();
         assert_eq!(doc["openapi"], "3.1.0");
         assert_eq!(doc["info"]["version"], kanbanr_core::openapi::API_VERSION);
