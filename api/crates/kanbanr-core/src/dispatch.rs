@@ -559,7 +559,23 @@ pub fn dispatch_in(
     match (m.as_str(), segs.as_slice()) {
         // ---- doctor (portfolio integrity) ----
         ("GET", ["doctor"]) => ser(&crate::doctor::run(store)?),
-        ("GET", ["projects", p, "doctor"]) => ser(&crate::doctor::run_project(store, p)?),
+        ("GET", ["projects", p, "doctor"]) => {
+            let mut report = crate::doctor::run_project(store, p)?;
+            // With the git model on, the branches are checked against the board too (FEAT-191).
+            if store.load_meta(p)?.config.cadence.git_model {
+                report.issues.extend(git_drift(store, p, repo));
+            }
+            ser(&report)
+        }
+        // Drift between the board and the branches (FEAT-191), on demand.
+        ("GET", ["projects", p, "git", "doctor"]) => {
+            let repo = repo.ok_or_else(|| {
+                CoreError::Unsupported(
+                    "git doctor reads the code repository: run it from the project folder".into(),
+                )
+            })?;
+            ser(&crate::gitdrift::scan(store, p, repo)?)
+        }
 
         // ---- the board's process library (FEAT-169) ----
         ("GET", ["processes"]) => ser(&list_processes(store)?),
@@ -1451,6 +1467,24 @@ pub fn is_mutation(method: &str) -> bool {
 
 /// A meaningful commit message for a data write, derived from the route (mirrors the server). For
 /// a batch, an explicit `message` in the body wins.
+/// The git drift findings for a project's doctor (FEAT-191): what `gitdrift::scan` finds, or one
+/// warning saying why it could not look. Never a failed doctor.
+fn git_drift(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Vec<crate::doctor::Issue> {
+    let warn = |message: String| crate::doctor::Issue {
+        severity: crate::doctor::Severity::Warning,
+        project: p.to_string(),
+        code: None,
+        message,
+    };
+    match repo {
+        None => vec![warn(
+            "git drift not checked: run from the project folder".to_string(),
+        )],
+        Some(repo) => crate::gitdrift::scan(store, p, repo)
+            .unwrap_or_else(|e| vec![warn(format!("git drift not checked: {e}"))]),
+    }
+}
+
 pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String {
     let path_only = path.split('?').next().unwrap_or(path);
     let s: Vec<&str> = path_only.split('/').filter(|x| !x.is_empty()).collect();
