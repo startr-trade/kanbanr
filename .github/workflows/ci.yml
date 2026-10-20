@@ -195,6 +195,9 @@ jobs:
         run: npm run check:api-base
       - name: The standalone monitor is read-only
         run: npm run check:read-only
+      # A card never reads as a status, and never says ready while work is open (FEAT-205).
+      - name: Board cards say what is next in plain words
+        run: npm run check:card-text
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.

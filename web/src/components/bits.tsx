@@ -1,3 +1,4 @@
+import { nextStageHint, type NextStage } from "../cardText";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Feature, Task, TaskState } from "../types";
@@ -120,8 +121,8 @@ export function FeatureCard({
   siblings?: Feature[];
   /** From the daemon's readiness engine; only live items have any. */
   gaps?: Gap[];
-  /** The next stage and how much moving there still lacks (FEAT-117). */
-  next?: { status: string; missing: number }[];
+  /** The next stage and what moving there still lacks (FEAT-117, FEAT-205). */
+  next?: NextStage[];
 }) {
   const p = featureProgress(feature);
   const blocked = siblings ? isBlockedBySiblings(feature, siblings) : false;
@@ -135,15 +136,14 @@ export function FeatureCard({
             {gaps.length === 1 && gaps[0].check === "definition" ? "no definition" : `${gaps.length} gaps`}
           </span>
         )}
-        {next.map((n) => (
-          <span
-            key={n.status}
-            className={`chip ${n.missing > 0 ? "warn" : "tasks"}`}
-            title={n.missing > 0 ? `${n.missing} thing(s) to settle before ${n.status}` : `ready for ${n.status}`}
-          >
-            {n.missing > 0 ? `→ ${n.status}: ${n.missing}` : `→ ${n.status} ✓`}
-          </span>
-        ))}
+        {next.map((n) => {
+          const hint = nextStageHint(n);
+          return hint ? (
+            <span key={n.status} className={`hint hint-${hint.kind}`} title={hint.title}>
+              {hint.text}
+            </span>
+          ) : null;
+        })}
         {blocked && <span className="chip blocked">blocked</span>}
         {feature.milestone && <span className="chip">{feature.milestone}</span>}
         {p.total > 0 && (

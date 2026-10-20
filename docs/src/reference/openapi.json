@@ -1772,20 +1772,40 @@
         "type": "object"
       },
       "NextStage": {
-        "description": "A next stage on a card: its status, and how many things it still lacks.",
+        "description": "A next stage on a card: its status, how many things it still lacks, which of those are\nsign-offs, and how many of the item's tasks are open (FEAT-205) — so a card never reads as\nready while a sign-off or work is outstanding.",
         "properties": {
+          "ends": {
+            "description": "The stage ends the work (an end status that is not a no-op): \"ready to complete\".",
+            "type": "boolean"
+          },
           "missing": {
+            "description": "Everything the stage still lacks, its sign-offs included (as before FEAT-205).",
             "format": "uint",
             "minimum": 0,
             "type": "integer"
           },
+          "signoffs": {
+            "description": "The sign-offs among `missing`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "status": {
             "type": "string"
+          },
+          "tasks_open": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
           "status",
-          "missing"
+          "missing",
+          "signoffs",
+          "tasks_open",
+          "ends"
         ],
         "type": "object"
       },

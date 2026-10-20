@@ -250,7 +250,10 @@ export interface Gap {
 }
 
 /** Per live item, keyed by code: what its card counts, and the next stage with how much it lacks. */
-export type Readiness = Record<string, { gaps: Gap[]; next: { status: string; missing: number }[] }>;
+export type Readiness = Record<
+  string,
+  { gaps: Gap[]; next: { status: string; missing: number; signoffs: string[]; tasks_open: number; ends: boolean }[] }
+>;
 
 /** A mirrored external issue (e.g. a GitHub issue kept in step with this feature). */
 export interface IssueLink {

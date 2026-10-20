@@ -65,6 +65,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The monitor's markdown cannot run script": LOCAL,
             "Every request goes to the configured API base": LOCAL,
             "The standalone monitor is read-only": LOCAL,
+            "Board cards say what is next in plain words": LOCAL,
             "The monitor's types match the published API": LOCAL,
         },
         "vscode": {

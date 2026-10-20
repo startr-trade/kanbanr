@@ -143,6 +143,12 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **Board cards say plainly what an item needs next (FEAT-205).** A card's next-stage pill read
+  "→ In Progress ✓", which looked like the item's status and claimed ready while its tasks or a
+  sign-off were still outstanding. A card now says "In Progress needs 2", "waiting for sign-off
+  docs-folded", "ready for In Progress" or "ready to complete", and nothing while its tasks are
+  open. The readiness route's next stages gain `signoffs`, `tasks_open` and `ends`; `missing`
+  keeps its meaning.
 - **The Workflow page shows the method again (FEAT-199).** Its diagram failed ("No such shape") and
   its Stages panel showed no gates on projects with role-addressed gates; both now show the gates
   moves are judged by. A stage asking for `spec_sections` no longer crashes the page.
