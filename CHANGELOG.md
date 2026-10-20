@@ -130,6 +130,9 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **A sign-off that lifts the last hold finishes the item (FEAT-204).** An item whose tasks were all
+  done but whose end stage waited for a sign-off stayed in progress after the sign-off was given;
+  it now finishes then, through the same gates as ticking the last task.
 - **The Workflow page shows the method again (FEAT-199).** Its diagram failed ("No such shape") and
   its Stages panel showed no gates on projects with role-addressed gates; both now show the gates
   moves are judged by. A stage asking for `spec_sections` no longer crashes the page.
