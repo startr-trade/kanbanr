@@ -8,6 +8,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **`kanbanr git doctor`: the board and the branches agree (FEAT-191).** It reports integrated items
+  whose branch never reached its line, commits on a line for unfinished work, branches that name
+  nothing on the board, and release fixes not merged forward. It only reads, and exits 1 on an
+  error. With the git model on, `kanbanr doctor` includes these findings.
 - **Patch releases (FEAT-184).** `kanbanr release add v1.0.1 --patch-of v1.0.0` makes a patch of a
   cut release: `release/v1.0.1` from the parent's tag, starting at the first stage. Its notes name
   the parent, what the patch adds and what it keeps. At production a patch of an older release is
