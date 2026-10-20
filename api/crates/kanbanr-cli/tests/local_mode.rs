@@ -5203,3 +5203,27 @@ fn new_board_has_a_readme() {
     assert!(again.contains("up to date"), "{again}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-202 R-1: the build scripts find the monitor and the skill from where the crate is when the
+/// script runs. `env!` would fix the folder the script was compiled in, and a build cache reused one
+/// compiled in a deleted worktree: the installed binary had no monitor and no skill.
+#[test]
+fn build_scripts_read_the_manifest_dir_at_run_time() {
+    let compiled_in = concat!("env!(\"CARGO_MANIFEST", "_DIR\")");
+    for (name, source) in [
+        ("kanbanr-cli/build.rs", include_str!("../build.rs")),
+        (
+            "kanbanr-server/build.rs",
+            include_str!("../../kanbanr-server/build.rs"),
+        ),
+    ] {
+        assert!(
+            !source.contains(compiled_in),
+            "{name} fixes the folder at compile time"
+        );
+        assert!(
+            source.contains("std::env::var(\"CARGO_MANIFEST_DIR\")"),
+            "{name} reads the folder when it runs"
+        );
+    }
+}

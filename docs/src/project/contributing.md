@@ -35,6 +35,7 @@ From the repo root (the `Makefile` wraps the common flows):
 ```bash
 make build          # cargo build --release (api/) + web build
 make test           # cargo test --workspace (unit + Docker-less integration)
+make install-cli    # build the monitor, then install the CLI with it and the skill baked in
 make itest          # packaging smoke: build the image + testcontainers test (needs Docker)
 ```
 
