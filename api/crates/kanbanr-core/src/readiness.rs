@@ -399,12 +399,20 @@ impl ReadinessView {
     }
 }
 
-/// A next stage on a card: its status, and how many things it still lacks.
+/// A next stage on a card: its status, how many things it still lacks, which of those are
+/// sign-offs, and how many of the item's tasks are open (FEAT-205) — so a card never reads as
+/// ready while a sign-off or work is outstanding.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NextStage {
     pub status: String,
+    /// Everything the stage still lacks, its sign-offs included (as before FEAT-205).
     pub missing: usize,
+    /// The sign-offs among `missing`.
+    pub signoffs: Vec<String>,
+    pub tasks_open: usize,
+    /// The stage ends the work (an end status that is not a no-op): "ready to complete".
+    pub ends: bool,
 }
 
 /// One card's readiness: its gaps, and its next stages.
@@ -438,8 +446,15 @@ impl ProjectReadiness {
                         next: next_gates(&project, Some(&charter), f, &ctx)
                             .into_iter()
                             .map(|n| NextStage {
+                                ends: crate::graph::is_terminal_status(&project.config, &n.status)
+                                    && !project.config.is_no_op(&n.status),
                                 status: n.status,
                                 missing: n.gaps.len(),
+                                signoffs: n.signoffs_needed,
+                                tasks_open: f
+                                    .all_tasks()
+                                    .filter(|t| t.state != crate::models::TaskState::Completed)
+                                    .count(),
                             })
                             .collect(),
                     };
@@ -1188,6 +1203,75 @@ mod tests {
     /// Commit times are whole seconds: keep "entered the stage" and "changed the doc" apart.
     fn next_second() {
         std::thread::sleep(std::time::Duration::from_millis(1100));
+    }
+
+    /// FEAT-205 R-1: a card's next stage names the sign-offs it still needs and the tasks still
+    /// open, apart from its unmet conditions — so "ready" can only mean ready.
+    #[test]
+    fn next_stage_names_signoffs_and_open_tasks() {
+        let (store, dir, code) = docs_board("next-stage");
+        let gate = crate::config::Gate {
+            requires: vec![Condition::Check(Check::Definition)],
+            signoffs: vec!["docs-folded".into()],
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Scheduled".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        let list = store.add_todo_list("demo", &code, "work", None).unwrap();
+        store
+            .add_task("demo", &code, &list.code, "one", None)
+            .unwrap();
+        store
+            .add_task("demo", &code, &list.code, "two", None)
+            .unwrap();
+        store
+            .set_task_state(
+                "demo",
+                &code,
+                &list.code,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        let card = |store: &crate::Store| {
+            ProjectReadiness::load(store, "demo")
+                .unwrap()
+                .0
+                .into_iter()
+                .find(|(c, _)| c == &code)
+                .unwrap()
+                .1
+        };
+        let next = &card(&store).next;
+        assert_eq!(next.len(), 1, "{next:?}");
+        assert_eq!(next[0].status, "Scheduled");
+        assert_eq!(
+            next[0].missing, 1,
+            "the definition is there; the sign-off is not"
+        );
+        assert_eq!(next[0].signoffs, vec!["docs-folded".to_string()]);
+        assert_eq!(next[0].tasks_open, 1);
+
+        store
+            .signoff_feature("demo", &code, "docs-folded", "Ada", "", "")
+            .unwrap();
+        store
+            .set_task_state(
+                "demo",
+                &code,
+                &list.code,
+                "T2",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        let next = &card(&store).next;
+        assert!(
+            next.iter()
+                .all(|n| n.signoffs.is_empty() && n.tasks_open == 0),
+            "{next:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FEAT-180 R-2: `affects_docs` is kept, does not reopen the agreement, and reads back the same
