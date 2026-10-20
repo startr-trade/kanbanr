@@ -183,6 +183,13 @@ jobs:
       - name: The monitor's markdown cannot run script
         run: npm run check:markdown
 
+      # The standalone bundle points the monitor at a daemon elsewhere (FEAT-178): every URL must
+      # follow config.json's apiBase, and the shipped standalone configuration must offer no decision.
+      - name: Every request goes to the configured API base
+        run: npm run check:api-base
+      - name: The standalone monitor is read-only
+        run: npm run check:read-only
+
   # The VS Code extension ships in every release (FEAT-152), so a broken manifest or a version
   # that has drifted from the workspace's must fail here, not on a tag.
   vscode:

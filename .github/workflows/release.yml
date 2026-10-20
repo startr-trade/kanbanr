@@ -3,7 +3,8 @@ name: Release
 # Runs when you push a version tag, e.g.  git tag v0.1.0 && git push origin v0.1.0
 #
 # Produces, for that tag:
-#   1. cross-platform `kanbanr` binaries attached to a GitHub Release
+#   1. cross-platform `kanbanr` binaries attached to a GitHub Release, with the installers, the
+#      VS Code extension and the standalone monitor bundle (kanbanr-monitor-<tag>.tar.gz, FEAT-178)
 #   2. a multi-arch-capable Docker image pushed to GHCR (ghcr.io/startr-trade/kanbanr)
 #   3. (optional) the ears-classifier library published to crates.io — the ONLY crate that is.
 #      kanbanr itself ships as these archives, the installers and the image, never as a crate;
@@ -286,9 +287,39 @@ jobs:
           path: editor/vscode/kanbanr-vscode-*.vsix
           if-no-files-found: error
 
+  # ---- 1a''. The monitor as a standalone static bundle (FEAT-178) ----------------
+  # The monitor the binaries embed, built once from the same commit and lockfile, with relative
+  # asset paths and the standalone config.json (read-only, hash routing). A host unpacks it, points
+  # config.json at a daemon's read API and serves the folder; no kanbanr needed to view a board.
+  monitor:
+    name: monitor bundle
+    needs: tag
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the monitor
+        working-directory: web
+        run: npm ci && npm run build
+      - name: Pack the monitor bundle
+        run: scripts/pack-monitor-bundle.sh web/dist "kanbanr-monitor-${{ github.ref_name }}.tar.gz"
+      # Checked before it is staged (release::ui_bundle_attached): relative assets that exist, and
+      # a config.json naming the API — an archive that fails here would be a blank page on a host.
+      - name: Check the monitor bundle
+        run: scripts/check-monitor-bundle.sh "kanbanr-monitor-${{ github.ref_name }}.tar.gz"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: dist-monitor
+          path: kanbanr-monitor-${{ github.ref_name }}.tar.gz
+          if-no-files-found: error
+
   release:
     name: publish the release
-    needs: [binaries, vscode]
+    needs: [binaries, vscode, monitor]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0

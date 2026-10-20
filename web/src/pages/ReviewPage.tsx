@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
@@ -38,7 +39,9 @@ export default function ReviewPage() {
   // `kanbanr approve` defaults it — not the string "reviewed in the monitor", which named the place
   // the click happened and left twenty-eight approvals on this board attributable to nobody.
   const who = api.approver(meta.data ?? null);
-  const writable = meta.data?.writes === true && who != null;
+  // A monitor configured read-only (the standalone bundle, FEAT-178) offers no decision at all; each
+  // brief shows the CLI command that records it instead.
+  const writable = !isReadOnly() && meta.data?.writes === true && who != null;
 
   // One verdict per item, and which one follows from how it got here: work built under a recorded
   // bypass is ratified — agreed after the fact, and recorded as such (FEAT-109) — anything else is
@@ -115,7 +118,13 @@ export default function ReviewPage() {
           {items.some((i) => i.approval === "unratified")
             ? " Work already finished under a recorded bypass is listed first, to ratify."
             : null}
-          {meta.data?.writes !== true ? (
+          {isReadOnly() ? (
+            <>
+              {" "}
+              This copy of the monitor is <strong>read-only</strong> — record a verdict in Claude
+              Code, or run <code>kanbanr approve &lt;CODE&gt;</code>.
+            </>
+          ) : meta.data?.writes !== true ? (
             <>
               {" "}
               This monitor is <strong>read-only</strong> — restart it with{" "}
