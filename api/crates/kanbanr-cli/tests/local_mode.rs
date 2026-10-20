@@ -5133,3 +5133,73 @@ fn git_doctor_is_read_only() {
     assert_eq!(snapshot(&board), board_before, "no board file changed");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-201 R-3: a new board's README is committed with its first project and follows its
+/// projects; a board without one is told how to get it, and `kanbanr readme` writes it.
+#[test]
+fn new_board_has_a_readme() {
+    let (base, work) = togaf_scratch("board-readme");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    let where_json: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "where"]))).unwrap();
+    let board = std::path::PathBuf::from(where_json["data_dir"].as_str().unwrap());
+    let board_git = |args: &[&str]| -> String {
+        String::from_utf8_lossy(
+            &Command::new("git")
+                .args(args)
+                .current_dir(&board)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .to_string()
+    };
+    assert_eq!(
+        board_git(&["ls-files", "README.md"]).trim(),
+        "README.md",
+        "committed"
+    );
+    assert!(board_git(&["status", "--porcelain"]).trim().is_empty());
+    let readme = std::fs::read_to_string(board.join("README.md")).unwrap();
+    assert!(
+        readme.contains("`shop`") && readme.contains("kanbanr serve --data-dir"),
+        "{readme}"
+    );
+
+    ok(run_in(&base, &work, &["project", "init", "ops"]));
+    let readme = std::fs::read_to_string(board.join("README.md")).unwrap();
+    assert!(
+        readme.contains("`ops`"),
+        "a new project joins the list:\n{readme}"
+    );
+
+    // A board from before: no README. Doctor says how to get one, and `kanbanr readme` writes it.
+    std::fs::remove_file(board.join("README.md")).unwrap();
+    board_git(&["commit", "-qam", "an older board"]);
+    let doctor = ok(run_in(&base, &work, &["doctor"]));
+    assert!(doctor.contains("`kanbanr readme` writes one"), "{doctor}");
+    let said = ok(run_in(&base, &work, &["readme"]));
+    assert!(said.contains("wrote the board README"), "{said}");
+    assert_eq!(board_git(&["ls-files", "README.md"]).trim(), "README.md");
+    let doctor = ok(run_in(&base, &work, &["doctor"]));
+    assert!(!doctor.contains("kanbanr readme"), "{doctor}");
+    let again = ok(run_in(&base, &work, &["readme"]));
+    assert!(again.contains("up to date"), "{again}");
+    let _ = std::fs::remove_dir_all(&base);
+}

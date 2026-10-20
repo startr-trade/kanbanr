@@ -432,6 +432,8 @@ impl Store {
             std::fs::create_dir_all(self.features_dir(id).join(status))?;
         }
         self.save_config(id, &config)?;
+        // The board says what it holds and how to see it (FEAT-201); in the same commit.
+        crate::boardreadme::write(self)?;
         self.load(id)
     }
 
@@ -2591,6 +2593,7 @@ impl Store {
             ));
         }
         std::fs::remove_dir_all(self.project_dir(id))?;
+        crate::boardreadme::write(self)?;
         Ok(())
     }
 
@@ -3183,6 +3186,7 @@ impl Store {
             project.config.description = d;
         }
         self.save_config(id, &project.config)?;
+        crate::boardreadme::write(self)?; // a renamed or re-described project (FEAT-201)
         Ok(project.config)
     }
 }

@@ -72,6 +72,7 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_method_choice(project, &mut report);
     }
     scan_identity(store, "board", &mut report);
+    scan_readme(store, "board", &mut report);
     scan_remote_lag(store, "board", &mut report);
     Ok(report)
 }
@@ -103,6 +104,7 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_declared_docs(&project, &charter, &ctx, &mut report);
     scan_method_choice(&project, &mut report);
     scan_identity(store, id, &mut report);
+    scan_readme(store, id, &mut report);
     scan_remote_lag(store, id, &mut report);
     Ok(report)
 }
@@ -592,6 +594,21 @@ fn scan_method_choice(project: &Project, report: &mut Report) {
                   `kanbanr config method --on` to take it, or `--off` to keep it off"
             .to_string(),
     });
+}
+
+/// A board without its generated README (FEAT-201): someone who clones it is not told how to see
+/// it. Said until `kanbanr readme` writes one.
+fn scan_readme(store: &Store, project: &str, report: &mut Report) {
+    if !crate::boardreadme::present(store) {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.to_string(),
+            code: None,
+            message: "this board has no README telling a reader how to view it — `kanbanr readme` \
+                      writes one"
+                .to_string(),
+        });
+    }
 }
 
 /// How a reference reads in a message.

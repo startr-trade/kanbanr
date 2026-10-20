@@ -510,6 +510,9 @@ enum Command {
         #[arg(long)]
         all_projects: bool,
     },
+    /// Write or refresh the board's README: what this repository is, its projects, and how to
+    /// install kanbanr and see it as a board (FEAT-201). Text outside its markers is kept.
+    Readme,
     /// Scan for integrity problems (dangling deps, unknown milestones, outdated schema). (FEAT-037)
     /// Defaults to the current/selected project; pass --all-projects for the whole portfolio.
     Doctor {
@@ -6788,6 +6791,22 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Doctor { all_projects } => run_doctor(cli, &client, *all_projects),
+        Command::Readme => {
+            let resp = client.write(Method::Post, "/readme", Some(json!({})))?;
+            let changed = serde_json::from_str::<Value>(&resp)?["changed"]
+                .as_bool()
+                .unwrap_or(false);
+            print_write(
+                cli,
+                &resp,
+                if changed {
+                    "wrote the board README".to_string()
+                } else {
+                    "the board README is up to date".to_string()
+                },
+            );
+            Ok(())
+        }
         Command::Index { all_projects } => run_index(cli, &client, *all_projects),
         Command::Query(args) => run_query(cli, &client, args),
     }
