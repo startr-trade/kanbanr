@@ -40,6 +40,8 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/projects/{project}/adrs` | — | JSON `Adr[]` | The project's architecture decision records |
 | `GET /api/projects/{project}/lessons` | `for` (optional), `all` (optional) | JSON `Lesson[]` | The lessons worth showing, most believed first |
 | `GET /api/projects/{project}/process` | — | JSON `ProcessStatus` | How the project's workflow stands against the process it was applied from |
+| `GET /api/projects/{project}/gates` | — | JSON `object` | The gate each status's moves are judged by, keyed by status: role-addressed gates resolved, the built-in rule included |
+| `GET /api/projects/{project}/releases/{version}/cut-preview` | — | JSON `CutPreview[]` | What cutting a release now would ship and carry over, with nothing written |
 | `GET /api/projects/{project}/workflow` | `format=mermaid` | `text/plain` | The workflow as a Mermaid state diagram |
 | `GET /api/projects/{project}/gantt` | — | `text/plain` | The schedule as a Mermaid gantt diagram, by milestone |
 | `GET /api/projects/{project}/docs` | — | JSON `DocFolder` | The project's documentation tree |
@@ -102,9 +104,8 @@ Served, not covered by the contract, and free to change: the doctor (`/api/docto
 dependency views (`/ready`, `/blocked`, `/graph`, `/critical-path`, `/features/{code}/impact`, and
 their portfolio-wide forms), the portfolio Gantt (`/api/gantt`), trace and Zachman coverage, the
 retrospective and report, the issue mirror's settings, the CLAUDE.md block, the process library
-(`/api/processes`), the project-wide export (`/api/projects/{project}/export`), and the routes added
-since v1 was drawn up: `/gates`, `/releases/{version}/cut-preview`, `/git/model`, `/git/doctor` and
-`/config/method`. Each answers JSON, except the DOT graph (`?format=dot`) and the Markdown
+(`/api/processes`), the project-wide export (`/api/projects/{project}/export`), `/git/model`,
+`/git/doctor` and `/config/method`. Each answers JSON, except the DOT graph (`?format=dot`) and the Markdown
 project export, which are text.
 
 ## Writes happen in the CLI (`dispatch`)

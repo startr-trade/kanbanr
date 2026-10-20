@@ -669,6 +669,30 @@
         ],
         "type": "object"
       },
+      "CutPreview": {
+        "description": "What a cut would do with one planned item, worked out without writing anything (FEAT-183).",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "ships": {
+            "description": "It ships; otherwise it is carried over, for `why`.",
+            "type": "boolean"
+          },
+          "to": {
+            "description": "The end status it would move to, when it is not already at one.",
+            "type": "string"
+          },
+          "why": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "ships"
+        ],
+        "type": "object"
+      },
       "Defect": {
         "additionalProperties": true,
         "description": "What a defect cost and where it came from (FEAT-053).\n\n`escaped` is the field that earns its keep: a defect found after the work was called done is a\ndifferent animal from one caught during it, and the ratio between them is the one quality\nnumber a board can honestly produce.",
@@ -3693,6 +3717,50 @@
         "summary": "The schedule as a Mermaid gantt diagram, by milestone"
       }
     },
+    "/api/projects/{project}/gates": {
+      "get": {
+        "operationId": "getProjectsGates",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/Gate"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The gate each status's moves are judged by, keyed by status: role-addressed gates resolved, the built-in rule included"
+      }
+    },
     "/api/projects/{project}/lessons": {
       "get": {
         "operationId": "getProjectsLessons",
@@ -3879,6 +3947,59 @@
           }
         },
         "summary": "The project's releases, each with what it ships"
+      }
+    },
+    "/api/projects/{project}/releases/{version}/cut-preview": {
+      "get": {
+        "operationId": "getProjectsReleasesCutPreview",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The release's version, such as 1.0.",
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CutPreview"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "What cutting a release now would ship and carry over, with nothing written"
       }
     },
     "/api/projects/{project}/review": {

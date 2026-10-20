@@ -432,6 +432,7 @@ fn cut_with(store: &Store, id: &str, version: &str, change: Option<StageChange>)
 
 /// What a cut would do with one planned item, worked out without writing anything (FEAT-183).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CutPreview {
     pub code: String,
     /// It ships; otherwise it is carried over, for `why`.

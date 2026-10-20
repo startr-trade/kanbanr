@@ -245,6 +245,30 @@ pub fn public_routes() -> Vec<RouteDoc> {
             params: &[PROJECT],
             response: Response::Json(schema_of::<crate::library::ProcessStatus>),
         },
+        RouteDoc {
+            path: "/api/projects/{project}/gates",
+            summary: "The gate each status's moves are judged by, keyed by status: role-addressed \
+                      gates resolved, the built-in rule included",
+            params: &[PROJECT],
+            response: Response::Json(
+                schema_of::<std::collections::BTreeMap<String, crate::config::Gate>>,
+            ),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/releases/{version}/cut-preview",
+            summary: "What cutting a release now would ship and carry over, with nothing written",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "version",
+                    location: In::Path,
+                    required: true,
+                    kind: Kind::String,
+                    description: "The release's version, such as 1.0.",
+                },
+            ],
+            response: Response::Json(schema_of::<Vec<crate::releases::CutPreview>>),
+        },
         // ---- diagrams ----
         RouteDoc {
             path: "/api/projects/{project}/workflow",

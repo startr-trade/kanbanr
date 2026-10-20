@@ -244,7 +244,8 @@ fn requests(path: &str, sprint: &str) -> Vec<String> {
     let base = path
         .replace("{project}", "shop")
         .replace("{code}", "FEAT-001")
-        .replace("{sprint}", sprint);
+        .replace("{sprint}", sprint)
+        .replace("{version}", "1.0");
     let mut out = vec![];
     match path {
         "/api/projects/{project}/workflow" => out.push(format!("{base}?format=mermaid")),
@@ -379,6 +380,15 @@ mod server {
                     String::from_utf8_lossy(&answer.2)
                 );
                 seen_mimes.insert((path.clone(), answer.1.clone()));
+                // The cut preview names the item planned into the release, so its schema is
+                // checked against a real entry, not an empty list.
+                if path.ends_with("/cut-preview") {
+                    let rows: Vec<Value> = serde_json::from_slice(&answer.2).unwrap();
+                    assert!(
+                        rows.iter().any(|r| r["code"] == "FEAT-001"),
+                        "GET {request}: {rows:?}"
+                    );
+                }
                 check(&doc, path, &request, answer);
             }
         }
@@ -437,7 +447,7 @@ mod server {
         let doc: Value = serde_json::from_str(&kanbanr_core::openapi::document_text()).unwrap();
         for internal in [
             "/api/projects/shop/doctor",
-            "/api/projects/shop/gates",
+            "/api/projects/shop/blocked",
             "/api/projects/shop/graph",
             "/api/projects/shop/graph?format=dot",
             "/api/projects/shop/export",
