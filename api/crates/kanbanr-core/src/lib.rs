@@ -1786,6 +1786,77 @@ requirements:
         );
     }
 
+    /// FEAT-204 R-1: a sign-off that lifts the last hold finishes an item whose work is done; one
+    /// that does not (another sign-off still due, or an open task) leaves it where it is.
+    #[test]
+    fn signoff_completes_a_held_item() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let gate = crate::config::Gate {
+            signoffs: vec!["docs-folded".into(), "release".into()],
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Completed".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        let (code, list) = defined_in_progress(&store, "Held");
+        store
+            .set_test_state(
+                "demo",
+                &code,
+                "R-1",
+                "t::x",
+                crate::models::TestState::Green,
+                None,
+            )
+            .unwrap();
+        let (f, held) = store
+            .set_task_state_reported(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        assert_eq!(f.status, "Scheduled");
+        assert!(held.unwrap().contains("docs-folded"));
+
+        let f = store
+            .signoff_feature("demo", &code, "docs-folded", "Ada", "", "")
+            .unwrap();
+        assert_eq!(f.status, "Scheduled", "release is still due");
+        let f = store
+            .signoff_feature("demo", &code, "release", "Ada", "", "")
+            .unwrap();
+        assert_eq!(f.status, "Completed", "the last hold lifted, it finishes");
+        let project = store.load("demo").unwrap();
+        let history = &project.feature(&code).unwrap().history;
+        assert_eq!(history.last().map(|t| t.to.as_str()), Some("Completed"));
+
+        // Work still open: a sign-off finishes nothing.
+        let (open, list) = defined_in_progress(&store, "Open");
+        store.add_task("demo", &open, &list, "two", None).unwrap();
+        store
+            .set_task_state(
+                "demo",
+                &open,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        for s in ["docs-folded", "release"] {
+            store
+                .signoff_feature("demo", &open, s, "Ada", "", "")
+                .unwrap();
+        }
+        assert_eq!(
+            store.load("demo").unwrap().feature(&open).unwrap().status,
+            "Scheduled"
+        );
+    }
+
     /// FEAT-156 R-2: a batch is judged when it ends — ticking the last task and then adding an
     /// open one leaves the item where it was.
     #[test]

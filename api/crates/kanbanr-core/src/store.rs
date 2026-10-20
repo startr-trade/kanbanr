@@ -1312,8 +1312,15 @@ impl Store {
             ..Default::default()
         });
         feature.updated_at = at;
-        let updated = feature.clone();
+        let mut updated = feature.clone();
         pending.persist_features.insert(updated.code.clone());
+        // The sign-off may have been the last thing holding finished work (FEAT-204): finish it as
+        // the last task would have, through the same gates and holds.
+        if updated.all_tasks_completed() {
+            let charter = crate::charter::load(self, id)?;
+            let ctx = crate::readiness::Context::load(self, id, &project.config);
+            updated = Self::auto_advance_on(&mut project, &mut pending, &charter, &ctx, code)?.0;
+        }
         self.flush(id, &project, &pending)?;
         Ok(updated)
     }

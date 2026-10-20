@@ -143,6 +143,9 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **A sign-off that lifts the last hold finishes the item (FEAT-204).** An item whose tasks were all
+  done but whose end stage waited for a sign-off stayed in progress after the sign-off was given;
+  it now finishes then, through the same gates as ticking the last task.
 - **Board cards say plainly what an item needs next (FEAT-205).** A card's next-stage pill read
   "→ In Progress ✓", which looked like the item's status and claimed ready while its tasks or a
   sign-off were still outstanding. A card now says "In Progress needs 2", "waiting for sign-off
