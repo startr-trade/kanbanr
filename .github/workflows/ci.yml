@@ -137,6 +137,9 @@ jobs:
           fi
           cat definition.yaml
       - name: Build the CLI
+        # Only `kanbanr check` is needed here, not the monitor (FEAT-202).
+        env:
+          KANBANR_ALLOW_BARE_BUILD: "1"
         run: cd api && cargo build --release -p kanbanr-cli
       - name: Check it against the bar
         run: ./api/target/release/kanbanr check --file definition.yaml
