@@ -111,10 +111,17 @@ pub fn to_state_diagram(config: &ProjectConfig) -> String {
         ));
     }
 
-    // Declared gates, as notes (FEAT-116): what entering each status asks for. Read-only — an
-    // import ignores notes, so the config stays the one source. Commas only: a `;` in a Mermaid
-    // note ends the statement and breaks the diagram (L-10).
-    for (status, gate) in &config.gates {
+    // The gates, as notes (FEAT-116): what entering each status asks for. Read-only — an import
+    // ignores notes, so the config stays the one source. Commas only: a `;` in a Mermaid note ends
+    // the statement and breaks the diagram (L-10). They are the gates moves are judged by — a gate
+    // addressed to a role lands on its stage, and a workflow with none shows the built-in rule —
+    // never the raw keys: `"@build"` named no state and broke the whole diagram (FEAT-199).
+    let gates = config.effective_gates();
+    for (status, gate) in config
+        .statuses
+        .iter()
+        .filter_map(|s| gates.get(s).map(|g| (s, g)))
+    {
         let mut asks: Vec<String> = gate.requires.iter().map(condition_text).collect();
         asks.extend(gate.signoffs.iter().map(|s| format!("sign-off {s}")));
         if asks.is_empty() {
@@ -303,4 +310,63 @@ fn parse_alias(t: &str) -> Option<(String, String)> {
         return None;
     }
     Some((label.to_string(), id.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FEAT-199: every note sits on a state the diagram declares — never on a role key — and the
+    /// method's gates show on the stage that holds them.
+    #[test]
+    fn gate_notes_name_real_states() {
+        let mut configs: Vec<(String, crate::ProjectConfig)> = crate::config::presets()
+            .into_iter()
+            .map(|(name, _)| {
+                (
+                    name.to_string(),
+                    crate::config::preset(name).unwrap().into_config("p"),
+                )
+            })
+            .collect();
+        configs.push(("label-only".into(), crate::ProjectConfig::default_for("p")));
+        for (name, config) in configs {
+            let diagram = to_state_diagram(&config);
+            let declared: Vec<String> = config
+                .statuses
+                .iter()
+                .map(|s| {
+                    s.chars()
+                        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                        .collect()
+                })
+                .collect();
+            for line in diagram
+                .lines()
+                .filter(|l| l.trim_start().starts_with("note "))
+            {
+                let target = line
+                    .split(" of ")
+                    .nth(1)
+                    .and_then(|t| t.split(':').next())
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                assert!(
+                    declared.contains(&target),
+                    "{name}: note on {target:?}\n{diagram}"
+                );
+            }
+            assert!(
+                !diagram.contains("_build") && !diagram.contains("_integrate"),
+                "{name}"
+            );
+        }
+        let togaf = to_state_diagram(&crate::config::preset("togaf").unwrap().into_config("p"));
+        let note = togaf
+            .lines()
+            .find(|l| l.contains("note left of Implementation"))
+            .expect("the build stage has a note");
+        assert!(note.contains("sign-off design-review"), "{note}");
+    }
 }
