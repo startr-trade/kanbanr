@@ -559,6 +559,8 @@ pub fn dispatch_in(
     match (m.as_str(), segs.as_slice()) {
         // ---- doctor (portfolio integrity) ----
         ("GET", ["doctor"]) => ser(&crate::doctor::run(store)?),
+        // The board's README (FEAT-201): written now, keeping its owner's text.
+        ("POST", ["readme"]) => ser(&json!({ "changed": crate::boardreadme::write(store)? })),
         ("GET", ["projects", p, "doctor"]) => {
             let mut report = crate::doctor::run_project(store, p)?;
             // With the git model on, the branches are checked against the board too (FEAT-191).
@@ -1535,6 +1537,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
     let s: Vec<&str> = path_only.split('/').filter(|x| !x.is_empty()).collect();
     let del = method.eq_ignore_ascii_case("DELETE");
     match s.as_slice() {
+        ["readme"] => "write the board README".to_string(),
         ["portfolio", "programs"] => body
             .and_then(|b| b.get("id").and_then(|v| v.as_str()))
             .map(|id| format!("add program {id}"))
