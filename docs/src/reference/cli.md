@@ -72,6 +72,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 
 | Command | What it does |
 |---|---|
+| `kanbanr readme` | write or refresh the board's README: what it is, its projects, and how to install kanbanr and see it as a board; text outside its markers is kept |
 | `kanbanr doctor` | every broken reference and every gap, across the board — including links in specs and docs to items, requirements, ADRs, goals or docs the board does not have |
 | `kanbanr check [CODE]` | what one item has not said, and what it cannot yet show |
 | `kanbanr review [CODE] [--pending] [--ui]` | the decision brief — one item, all of them, or in the browser |
