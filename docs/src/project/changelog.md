@@ -8,6 +8,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Release actions in the monitor (FEAT-185).** With releases on, the review queue asks which
+  planned release an item belongs to once its next stage is the end (or a stage that asks for
+  `in_release`) and it is in none. The Review page offers one button per planned release and
+  **New release…**; `kanbanr review --pending` lists the matching `kanbanr release plan` command,
+  and the skill has Claude ask the same question. The Releases page shows each release's stage and
+  its history, and a **Promote to \<next stage\>** button, which asks for confirmation before the
+  production cut (tag and merge to main). Both use the same operations as the CLI, through the
+  writes-enabled monitor.
 - **Patch releases (FEAT-184).** `kanbanr release add v1.0.1 --patch-of v1.0.0` makes a patch of a
   cut release: `release/v1.0.1` from the parent's tag, starting at the first stage. Its notes name
   the parent, what the patch adds and what it keeps. At production a patch of an older release is
