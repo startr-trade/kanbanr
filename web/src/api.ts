@@ -1,4 +1,4 @@
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -29,6 +29,9 @@ export const api = {
   getProcess: (id: string) =>
     getJson<ProcessStatus>(`/api/projects/${encodeURIComponent(id)}/process`),
   getCharter: (id: string) => getJson<Charter>(`/api/projects/${encodeURIComponent(id)}/charter`),
+  /** The gates moves are judged by, per status: role-addressed gates resolved, the built-in rule included (FEAT-199). */
+  getGates: (id: string) =>
+    getJson<Record<string, Gate>>(`/api/projects/${encodeURIComponent(id)}/gates`),
   /** A project's sprints (FEAT-119); only projects that switch them on have any. */
   getSprints: (id: string) => getJson<Sprint[]>(`/api/projects/${encodeURIComponent(id)}/sprints`),
   /** One sprint with its burndown — `active` names the running one. */

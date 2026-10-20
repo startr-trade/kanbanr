@@ -1047,6 +1047,9 @@ pub fn dispatch_in(
                 repo,
             )?)
         }
+        // The gates moves are judged by (FEAT-199): role-addressed gates on their stage, and the
+        // built-in rule where a workflow declares none. The monitor's Workflow page reads these.
+        ("GET", ["projects", p, "gates"]) => ser(&store.load_meta(p)?.config.effective_gates()),
         // The method, on by default (FEAT-193): which parts a project keeps.
         ("GET", ["projects", p, "config", "method"]) => {
             ser(&crate::method::status(&store.load_meta(p)?.config))

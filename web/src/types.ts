@@ -377,8 +377,9 @@ export interface Release {
   branch?: string;
 }
 
-/** A check a gate names, or the Zachman check narrowed to some columns. */
-export type Condition = string | { zachman: string[] };
+/** A check a gate names, the Zachman check narrowed to some columns, or the spec's named sections
+ * (FEAT-179). */
+export type Condition = string | { zachman: string[] } | { spec_sections: string[] };
 
 /** What entering a status asks for (FEAT-113, FEAT-114). */
 export interface Gate {
@@ -395,7 +396,11 @@ export interface Gate {
 
 /** Readable text for a gate condition. */
 export function conditionText(c: Condition): string {
-  return typeof c === "string" ? c.replace(/_/g, " ") : `zachman ${c.zachman.join("/")}`;
+  if (typeof c === "string") return c.replace(/_/g, " ");
+  if ("spec_sections" in c) return `spec sections ${c.spec_sections.join(", ")}`;
+  if ("zachman" in c) return `zachman ${c.zachman.join("/")}`;
+  // A condition a newer kanbanr writes: shown as it is rather than breaking the page (FEAT-199).
+  return JSON.stringify(c);
 }
 
 export interface Project {
