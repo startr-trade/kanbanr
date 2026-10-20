@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
+import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
 import Markdown from "../components/Markdown";
 import { ErrorBox, FeatureBadges, Loading, LiveDot, TaskBadge, progress } from "../components/bits";
@@ -233,7 +234,14 @@ function Definition({ feature, project }: { feature: Feature; project: string })
           ) : null}
           {def.exempt?.trim() ? <span className="chip">exempt: {def.exempt}</span> : null}
         </div>
-        {def.approval != null && meta.data?.writes === true && !done ? (
+        {/* Read-only copy of the monitor (FEAT-178): the command that withdraws, not a button. */}
+        {def.approval != null && isReadOnly() ? (
+          <p className="muted small">
+            To withdraw this approval, run{" "}
+            <code>kanbanr unapprove {feature.code} --reason "…"</code>.
+          </p>
+        ) : null}
+        {def.approval != null && !isReadOnly() && meta.data?.writes === true && !done ? (
           <div className="review-actions">
             {asking ? (
               <>

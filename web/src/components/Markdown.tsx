@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import mermaid from "mermaid";
 import { markdownToSafeHtml, safeSvg } from "../markdownHtml";
+import { appHref } from "../runtimeConfig";
 
 // Unique-per-render id source for mermaid (ids must be stable strings, unique across renders).
 let mermaidSeq = 0;
@@ -22,7 +23,17 @@ export default function Markdown({
   source: string;
   resolveImage?: (src: string) => string;
 }) {
-  const html = useMemo(() => markdownToSafeHtml(source, resolveImage), [source, resolveImage]);
+  // A board link written as a path (`/p/x/feature/Y`) is an in-app route. Under hash routing — the
+  // standalone bundle on a plain static host (FEAT-178) — it must become `#/p/…`, or it would ask
+  // the host for a file that is not there.
+  const html = useMemo(
+    () =>
+      markdownToSafeHtml(source, resolveImage).replace(
+        /(<a\b[^>]*?\bhref=")(\/(?:p\/|portfolio\b)[^"]*)(")/g,
+        (_m, pre, path, post) => pre + appHref(path) + post,
+      ),
+    [source, resolveImage],
+  );
 
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
