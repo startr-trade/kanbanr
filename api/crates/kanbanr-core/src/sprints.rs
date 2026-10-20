@@ -19,6 +19,7 @@ const SPRINTS_FILE: &str = "sprints.yaml";
 
 /// Where a sprint is in its life.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum SprintState {
     #[default]
@@ -29,6 +30,11 @@ pub enum SprintState {
 
 /// An item that left a sprint unfinished, and where it went.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "schema",
+    derive(schemars::JsonSchema),
+    schemars(rename = "SprintCarry")
+)]
 pub struct Carry {
     pub code: String,
     /// The sprint it moved to, or `backlog`.
@@ -36,6 +42,7 @@ pub struct Carry {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Sprint {
     pub code: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -294,6 +301,7 @@ fn finished_on(project: &Project, f: &FeatureItem) -> Option<time::Date> {
 
 /// One day of a burndown: what was still to do at the end of it.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct BurndownDay {
     pub date: String,
     pub remaining: f64,
@@ -301,6 +309,7 @@ pub struct BurndownDay {
 
 /// A sprint as a report: its record, what it holds, and how it burned down.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SprintReport {
     #[serde(flatten)]
     pub sprint: Sprint,

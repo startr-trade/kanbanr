@@ -109,6 +109,12 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo clippy --workspace -- -D warnings
 
+      # The read API's description is generated from the response types and committed (FEAT-177):
+      # a response type that changed without the document being regenerated fails here.
+      - name: The published OpenAPI matches the code
+        if: runner.os == 'Linux'
+        run: cargo run -p kanbanr-core --features schema --example openapi -- --check
+
       # --- Tests: run on every OS in the matrix. ---
 
       # --no-fail-fast: every test binary runs even after one fails, so a platform's failures all
@@ -192,6 +198,11 @@ jobs:
         run: npm run check:api-base
       - name: The standalone monitor is read-only
         run: npm run check:read-only
+
+      # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
+      # be one the route sends, as the OpenAPI document generated from the Rust types describes it.
+      - name: The monitor's types match the published API
+        run: npm run check:api-types
 
   # The VS Code extension ships in every release (FEAT-152), so a broken manifest or a version
   # that has drifted from the workspace's must fail here, not on a tag.

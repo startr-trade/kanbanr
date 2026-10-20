@@ -17,6 +17,7 @@ pub struct FolderMeta {
 
 /// A documentation file leaf.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DocFile {
     /// Path relative to the project docs root (forward-slashed), e.g. `design/customer/overview.md`.
     pub path: String,
@@ -26,6 +27,7 @@ pub struct DocFile {
 
 /// A documentation folder node (renders as a tile with sub-folders + documents as links).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DocFolder {
     /// Path relative to the docs root (empty string for the root), forward-slashed.
     pub path: String,

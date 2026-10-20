@@ -30,6 +30,7 @@ pub const SECTIONS: [&str; 5] = [
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TradeOff {
     /// The quality bought.
     pub gain: String,
@@ -39,6 +40,7 @@ pub struct TradeOff {
 
 /// An architecture decision record: front-matter plus the prose it belongs to.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Adr {
     /// `ADR-0003`.
     #[serde(default)]
@@ -85,6 +87,7 @@ pub struct Adr {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 
     // The three below are part of the document, not of its front-matter: `render` strips them

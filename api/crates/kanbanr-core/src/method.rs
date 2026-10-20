@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 /// One part of the method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum Part {
     /// The spec has a Design section before build.
@@ -101,6 +102,7 @@ impl Part {
 
 /// What a project chose. Absent on disk means never chosen: everything on.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MethodChoice {
     /// The parts switched off, sorted and unique.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

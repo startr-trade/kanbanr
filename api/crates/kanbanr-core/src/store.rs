@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 /// A fully-loaded project (config + all entities).
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Project {
     pub id: String,
     pub config: ProjectConfig,

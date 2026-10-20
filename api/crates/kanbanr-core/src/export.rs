@@ -495,12 +495,15 @@ pub fn to_markdown(feature: &FeatureItem, milestone: Option<&Milestone>) -> Stri
     out
 }
 
+/// An item as `GET /projects/{p}/features/{code}/export?format=json` gives it: the item, and its
+/// milestone resolved.
 #[derive(Serialize)]
-struct FeatureExport<'a> {
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct FeatureExport<'a> {
     #[serde(flatten)]
-    feature: &'a FeatureItem,
+    pub feature: &'a FeatureItem,
     #[serde(skip_serializing_if = "Option::is_none")]
-    milestone_detail: Option<&'a Milestone>,
+    pub milestone_detail: Option<&'a Milestone>,
 }
 
 /// Render a feature as pretty JSON (includes resolved milestone when available).

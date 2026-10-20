@@ -30,6 +30,7 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 4;
 pub const BASE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ProjectConfig {
     /// On-disk schema version. Absent in legacy configs (defaults to 0); forward-stamped to
     /// `CURRENT_SCHEMA_VERSION` whenever the config is written.
@@ -93,11 +94,13 @@ pub struct ProjectConfig {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
 /// Where a saved process lives (FEAT-169), in the order a name is looked up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Library {
     /// `<board>/processes/`: shared with everyone who has the board, through its remote.
@@ -120,6 +123,7 @@ impl Library {
 
 /// Which saved process a project's workflow came from, and which version of it (FEAT-169).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ProcessSource {
     pub name: String,
     pub library: Library,
@@ -144,6 +148,7 @@ pub struct ProcessHeader {
 
 /// The unit a project estimates in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum EstimateUnit {
     #[default]
@@ -159,6 +164,7 @@ impl EstimateUnit {
 
 /// A project's rhythm (FEAT-121): whether it has sprints and releases, and their defaults.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Cadence {
     #[serde(default)]
     pub sprints: bool,
@@ -191,6 +197,7 @@ pub struct Cadence {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
@@ -234,6 +241,7 @@ impl Cadence {
 
 /// Whether a failed gate stops the move or only reports.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Enforce {
     #[default]
@@ -249,6 +257,7 @@ impl Enforce {
 
 /// Something that happens when an item enters a status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
     /// `kanbanr start` creates the item's branch here (where the project is a git repository).
@@ -268,6 +277,7 @@ impl Gate {
 
 /// The entry criteria of one status. Every field is optional; an empty gate asks nothing.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Gate {
     /// What this stage is for, in a sentence — shown to Claude and in the monitor.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -308,6 +318,7 @@ pub struct Gate {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 

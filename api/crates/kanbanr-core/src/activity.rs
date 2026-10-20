@@ -10,6 +10,7 @@ use std::path::Path;
 const LOG: &str = "activity";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Activity {
     /// RFC3339 timestamp.
     pub time: String,

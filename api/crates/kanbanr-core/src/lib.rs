@@ -41,6 +41,8 @@ pub mod mermaid;
 pub mod method;
 pub mod mirror;
 pub mod models;
+#[cfg(feature = "schema")]
+pub mod openapi;
 pub mod portfolio;
 pub mod project;
 pub mod query;
@@ -49,7 +51,9 @@ pub mod refs;
 pub mod releases;
 pub mod report;
 pub mod retro;
+pub mod review;
 pub mod scm;
+pub mod server;
 pub mod sprints;
 pub mod store;
 pub mod trace;
@@ -4884,11 +4888,11 @@ requirements:
             commit_message("POST", "/projects/demo/features", None),
             "add feature item"
         );
-        // Unknown route -> Unsupported.
-        assert!(matches!(
-            dispatch(&store, "GET", "/nope", None).unwrap_err(),
-            CoreError::Unsupported(_)
-        ));
+        // Unknown route -> NoSuchRoute, the daemon's 404 (FEAT-177; it was Unsupported, a 400),
+        // worded as before.
+        let unknown = dispatch(&store, "GET", "/nope", None).unwrap_err();
+        assert_eq!(unknown.to_string(), "unsupported operation: GET /nope");
+        assert!(matches!(unknown, CoreError::NoSuchRoute(_)));
     }
 
     #[test]
@@ -6180,5 +6184,105 @@ requirements:
             .unwrap();
         assert!(cleared.start.is_none());
         assert!(cleared.estimate_days.is_none());
+    }
+
+    /// FEAT-177 task 1: the responses that were assembled with `json!` are named types now, and
+    /// what they put on the wire is byte for byte what they did before. The expected bodies were
+    /// captured from the `json!` code this replaced, on this fixture; dates are masked.
+    fn typed_response_fixture() -> (Store, tempdir::TempDirLike) {
+        use serde_json::json;
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        for (path, body) in [
+            ("/projects/demo/config/workflow", json!({"preset": "togaf"})),
+            ("/projects/demo/config/cadence", json!({"releases": true})),
+        ] {
+            crate::dispatch::dispatch(&store, "PUT", path, Some(&body)).unwrap();
+        }
+        crate::releases::add(&store, "demo", "1.0", "", "").unwrap();
+        let add = |title: &str| {
+            let f = store.add_feature("demo", title, "", "M", None).unwrap();
+            store
+                .set_feature_definition("demo", &f.code, Some(full_definition(title)))
+                .unwrap();
+            f.code
+        };
+        // Missing: defined, never approved, not started.
+        add("Unagreed");
+        // Lapsed: approved, then its definition moved on.
+        let lapsed = add("Moved on");
+        store.approve_feature("demo", &lapsed, "Ada L").unwrap();
+        let mut def = full_definition("Moved on, and then some");
+        def.statement.push('!');
+        store
+            .set_feature_definition("demo", &lapsed, Some(def))
+            .unwrap();
+        // At Migration with its test green: the release sign-off and the release question are due.
+        let ready = add("Ready to ship");
+        store.approve_feature("demo", &ready, "Ada L").unwrap();
+        for stage in [
+            "Business Arch",
+            "System Design",
+            "Implementation",
+            "Migration",
+        ] {
+            store.move_feature("demo", &ready, stage).unwrap();
+        }
+        store
+            .set_test_state(
+                "demo",
+                &ready,
+                "R-1",
+                "core::does_the_thing",
+                crate::models::TestState::Green,
+                None,
+            )
+            .unwrap();
+        (store, d)
+    }
+
+    /// Dates and times change from run to run; everything else in these bodies does not.
+    fn mask_dates(body: &str) -> String {
+        let chars: Vec<char> = body.chars().collect();
+        let mut out = String::new();
+        let mut i = 0;
+        while i < chars.len() {
+            let looks_like_date = i + 10 <= chars.len()
+                && chars[i..i + 10].iter().enumerate().all(|(k, c)| match k {
+                    4 | 7 => *c == '-',
+                    _ => c.is_ascii_digit(),
+                });
+            if looks_like_date {
+                out.push_str("<date>");
+                i += 10;
+                while i < chars.len() && chars[i] != '"' {
+                    i += 1;
+                }
+            } else {
+                out.push(chars[i]);
+                i += 1;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn typed_responses_put_the_same_bytes_on_the_wire() {
+        let (store, _d) = typed_response_fixture();
+        let expected = include_str!("testdata/typed_responses.txt");
+        let mut checked = 0;
+        for block in expected.split("\n\n") {
+            let (path, want) = block.trim().split_once('\n').unwrap();
+            let body = mask_dates(&crate::dispatch::dispatch(&store, "GET", path, None).unwrap());
+            if path == "/processes" {
+                // Only the row this board uses: the built-in descriptions are not this test's.
+                assert!(body.contains(want), "{path}:\n{body}\nhas no\n{want}");
+            } else {
+                assert_eq!(body, want, "{path}");
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, 6);
     }
 }

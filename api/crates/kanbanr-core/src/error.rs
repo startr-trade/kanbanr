@@ -68,6 +68,10 @@ pub enum CoreError {
     InvalidMermaid(String),
     #[error("unsupported operation: {0}")]
     Unsupported(String),
+    /// No route answers this method and path (FEAT-177): the daemon's 404. Worded as
+    /// [`CoreError::Unsupported`] was, so the CLI says what it always said.
+    #[error("unsupported operation: {0}")]
+    NoSuchRoute(String),
     /// The code repository refused (FEAT-183): git's own reason, as git said it.
     #[error("{0}")]
     Git(String),
