@@ -143,6 +143,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **A cached build no longer ships without the monitor or the skill (FEAT-202).** The build
+  scripts found `web/dist` and `skill/kanbanr` through the folder they were compiled in; a build
+  cache (sccache) reused one compiled in a deleted worktree, and the binary had neither. They now
+  read the folder when they run, and a release build of a full checkout without a built monitor
+  fails, naming the fix (`KANBANR_ALLOW_BARE_BUILD=1` builds without it; `make cli` does).
 - **The Workflow page shows the method again (FEAT-199).** Its diagram failed ("No such shape") and
   its Stages panel showed no gates on projects with role-addressed gates; both now show the gates
   moves are judged by. A stage asking for `spec_sections` no longer crashes the page.

@@ -38,8 +38,8 @@ help:
 	@echo "  docker-down   Stop the docker container"
 
 build:
-	cd api && cargo build --release
 	cd web && npm install && npm run build
+	cd api && cargo build --release
 
 test:
 	cd api && cargo test
@@ -51,8 +51,9 @@ itest: docker-build
 	docker build -f docker/Dockerfile -t kanbanr:itest .
 	cd api && cargo test -p kanbanr-cli -- --ignored
 
+# The CLI alone, without the monitor baked in (`make install-cli` builds the monitor first).
 cli:
-	cd api && cargo build --release -p kanbanr-cli
+	cd api && KANBANR_ALLOW_BARE_BUILD=1 cargo build --release -p kanbanr-cli
 
 web:
 	cd web && npm install && npm run build
