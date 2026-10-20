@@ -4920,3 +4920,216 @@ fn promote_without_branch_makes_it_first() {
     assert!(!rev(&base, &work, "release/v1.0.0").is_empty());
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-191 R-1: an integrated item whose branch never reached its line is an error in `git
+/// doctor` and in `doctor` with the git model on; once merged, it is a reminder to delete the
+/// branch, not an error. With the model off, `doctor` leaves branches alone.
+#[test]
+fn git_doctor_unmerged_integrated_items() {
+    let (base, work) = togaf_scratch("gd-unmerged");
+    git_model_board(&base, &work, false, false);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // Completed with the model off: nothing merged it.
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--git-model", "off"],
+    ));
+    ok(run_in(&base, &work, &["start", "FEAT-001"]));
+    commit_file_in(
+        &base,
+        &work,
+        "cart.txt",
+        "cart\n",
+        "feat: cart\n\nRefs: kanbanr:FEAT-001",
+    );
+    ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
+    let doctor_off = ok(run_in(&base, &work, &["doctor"]));
+    assert!(!doctor_off.contains("not merged into"), "{doctor_off}");
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--git-model", "on"],
+    ));
+
+    let found = run_in(&base, &work, &["git", "doctor"]);
+    assert_eq!(found.status.code(), Some(1), "an error exits 1");
+    let said = String::from_utf8_lossy(&found.stdout);
+    assert!(
+        said.contains("FEAT-001: FEAT-001 is Completed (integrated) but feat/FEAT-001-cart is not merged into main"),
+        "{said}"
+    );
+    let doctor = ok(run_in(&base, &work, &["doctor"]));
+    assert!(doctor.contains("is not merged into main"), "{doctor}");
+
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "--no-verify",
+            "feat/FEAT-001-cart",
+            "-m",
+            "Merge FEAT-001\n\nRefs: kanbanr:FEAT-001",
+        ],
+    ));
+    let clean = ok(run_in(&base, &work, &["git", "doctor"]));
+    assert!(
+        clean.contains("FEAT-001 is finished and feat/FEAT-001-cart is merged"),
+        "{clean}"
+    );
+    assert!(!clean.contains("Errors"), "{clean}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-191 R-2: commits on a line for work that is not integrated are errors, counted with the
+/// newest named; a commit that also serves an integrated item is justified.
+#[test]
+fn git_doctor_unfinished_commits_on_line() {
+    let (base, work) = togaf_scratch("gd-line");
+    git_model_board(&base, &work, true, false);
+    approved_item(&base, &work, "FEAT-002", "Checkout", None);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    // FEAT-001 is integrated (it has no branch, so nothing to merge).
+    ok(run_in(&base, &work, &["move", "FEAT-001", "In Progress"]));
+    ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
+    ok(run_in(&base, &work, &["start", "FEAT-002"]));
+    commit_file_in(
+        &base,
+        &work,
+        "pay.txt",
+        "pay\n",
+        "wip\n\nRefs: kanbanr:FEAT-002",
+    );
+    // Merged into the sprint by hand while FEAT-002 is still In Progress.
+    ok(git_in(&base, &work, &["checkout", "-q", "sprint/SP-001"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "--no-verify",
+            "feat/FEAT-002-checkout",
+            "-m",
+            "Merge FEAT-002\n\nRefs: kanbanr:FEAT-002",
+        ],
+    ));
+    commit_file_in(
+        &base,
+        &work,
+        "both.txt",
+        "b\n",
+        "shared\n\nRefs: kanbanr:FEAT-001, kanbanr:FEAT-002",
+    );
+    let newest_for_2 = String::from_utf8_lossy(
+        &git_in(&base, &work, &["rev-parse", "--short=7", "sprint/SP-001^"]).stdout,
+    )
+    .trim()
+    .to_string();
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+
+    let found = run_in(&base, &work, &["git", "doctor"]);
+    assert_eq!(found.status.code(), Some(1));
+    let said = String::from_utf8_lossy(&found.stdout);
+    assert!(
+        said.contains(&format!(
+            "sprint/SP-001 has 2 commits serving FEAT-002 (newest {newest_for_2}), which is In Progress, not integrated"
+        )),
+        "{said}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-191 R-3: branches that name nothing on the board, and a release fix the line lacks, are
+/// warnings; a forward merge clears the latter; spikes are never reported.
+#[test]
+fn git_doctor_orphans_and_forward_merges() {
+    let (base, work) = togaf_scratch("gd-orphans");
+    git_model_board(&base, &work, false, true);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    for b in [
+        "wip",
+        "feat/FEAT-999-x",
+        "sprint/SP-099",
+        "release/v9",
+        "spike/x",
+    ] {
+        ok(git_in(&base, &work, &["branch", b, "main"]));
+    }
+    ok(run_in(&base, &work, &["release", "add", "v1"]));
+    ok(run_in(&base, &work, &["release", "promote", "v1"]));
+    ok(git_in(&base, &work, &["checkout", "-q", "release/v1"]));
+    commit_file_in(
+        &base,
+        &work,
+        "fix.txt",
+        "fixed\n",
+        "fix: on the release\n\n[no-ref] a test fix",
+    );
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+
+    let said = ok(run_in(&base, &work, &["git", "doctor"]));
+    for want in [
+        "wip names no item",
+        "feat/FEAT-999-x names FEAT-999, which is not on the board",
+        "sprint/SP-099 names no sprint",
+        "release/v9 names no release",
+        "release/v1 has 1 commit integration lacks",
+    ] {
+        assert!(said.contains(want), "missing {want:?} in {said}");
+    }
+    assert!(!said.contains("spike/x"), "{said}");
+    ok(run_in(&base, &work, &["git", "forward", "v1"]));
+    let after = ok(run_in(&base, &work, &["git", "doctor"]));
+    assert!(!after.contains("release/v1 has"), "{after}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-191: `git doctor` only reads — the repository's refs and the board's files are the same
+/// after it as before.
+#[test]
+fn git_doctor_is_read_only() {
+    let (base, work) = togaf_scratch("gd-readonly");
+    git_model_board(&base, &work, true, true);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    ok(git_in(&base, &work, &["branch", "wip", "main"]));
+    let where_json: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "where"]))).unwrap();
+    let board = std::path::PathBuf::from(where_json["data_dir"].as_str().unwrap());
+    let refs = || ok(git_in(&base, &work, &["for-each-ref"]));
+    let (refs_before, board_before) = (refs(), snapshot(&board));
+    let _ = run_in(&base, &work, &["git", "doctor"]);
+    let _ = run_in(&base, &work, &["doctor"]);
+    assert_eq!(refs(), refs_before, "no ref moved");
+    assert_eq!(snapshot(&board), board_before, "no board file changed");
+    let _ = std::fs::remove_dir_all(&base);
+}
