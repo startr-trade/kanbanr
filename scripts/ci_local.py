@@ -62,6 +62,8 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Docs diagrams parse": LOCAL,
             "The monitor presents itself correctly": LOCAL,
             "The monitor's markdown cannot run script": LOCAL,
+            "Every request goes to the configured API base": LOCAL,
+            "The standalone monitor is read-only": LOCAL,
         },
         "vscode": {
             "Install the extension's dependencies": LOCAL,
@@ -141,6 +143,11 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Run the published installer (Windows)": "Windows runner, installs from a published release",
             "It names the release and its commit, and serves the monitor (macOS)": "macOS runner; the same script is run below on Linux",
             "It names the release and its commit, and serves the monitor (Windows)": "Windows runner; the script is parsed by the installers job",
+        },
+        "monitor": {
+            "Build the monitor": LOCAL,
+            "Pack the monitor bundle": LOCAL,
+            "Check the monitor bundle": LOCAL,
         },
         "vscode": {
             "Install the extension's dependencies": "the same install ci.yml's vscode job runs locally",
