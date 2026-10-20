@@ -572,3 +572,176 @@ fn the_monitor_is_served_from_the_binary_with_no_ui_dir() {
         "--ui-dir must win over the embedded monitor, got: {served}"
     );
 }
+
+/// A scratch folder under the system temp dir, emptied first (FEAT-178's tests keep out of the
+/// repository and its target dir).
+fn scratch(name: &str) -> PathBuf {
+    let base = std::env::temp_dir().join(format!("kanbanr-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("home")).unwrap();
+    std::fs::create_dir_all(base.join("data")).unwrap();
+    base
+}
+
+/// Start `kanbanr serve` over `base`'s data, with `--ui-dir` when given, and wait until it answers.
+fn serve_ui(base: &std::path::Path, ui: Option<&std::path::Path>) -> (Daemon, String) {
+    let port = free_port();
+    let mut cmd = Command::new(cli());
+    cmd.args(["serve", "--bind", &format!("127.0.0.1:{port}")]);
+    if let Some(dir) = ui {
+        cmd.args(["--ui-dir", dir.to_str().unwrap()]);
+    }
+    let mut child = cmd
+        .env("HOME", base.join("home"))
+        .env("KANBANR_DATA_DIR", base.join("data"))
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if Instant::now() > deadline {
+            panic!("daemon did not become ready");
+        }
+        match ureq::get(&format!("{url}/api/projects")).call() {
+            Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    if let Ok(Some(status)) = child.try_wait() {
+        panic!("this test's daemon exited ({status}) — something else answered on port {port}");
+    }
+    (Daemon(child), url)
+}
+
+/// FEAT-178: the monitor is built with relative asset paths so one build works from any folder of a
+/// static host. Under `--ui-dir`, a deep link must still load them from the root, so the index the
+/// daemon serves carries `<base href="/">`.
+#[test]
+fn a_deep_link_under_ui_dir_loads_relative_assets_from_the_root() {
+    let base = scratch("deeplink");
+    let ui = base.join("dist");
+    std::fs::create_dir_all(ui.join("assets")).unwrap();
+    std::fs::write(
+        ui.join("index.html"),
+        "<!doctype html><html><head><script type=\"module\" src=\"./assets/app.js\"></script></head><body></body></html>",
+    )
+    .unwrap();
+    std::fs::write(ui.join("assets/app.js"), "console.log(1)").unwrap();
+    let (d, url) = serve_ui(&base, Some(&ui));
+
+    let page = ureq::get(&format!("{url}/p/demo/feature/FEAT-1"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(
+        page.contains("<head><base href=\"/\">"),
+        "a deep link's index must resolve ./assets from the root: {page}"
+    );
+    assert!(page.contains("./assets/app.js"), "the index itself: {page}");
+    // The relative asset, resolved against that base, is served.
+    let asset = ureq::get(&format!("{url}/assets/app.js")).call().unwrap();
+    assert_eq!(asset.status(), 200);
+    // Asked for by name, the index is still the copy with its base.
+    let named = ureq::get(&format!("{url}/index.html"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(
+        named.contains("<base href=\"/\">"),
+        "index.html by name: {named}"
+    );
+    drop(d);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-178: under `--ui-dir` the favicon (and the runtime config.json) used to fall back to
+/// index.html, because only `/assets` was served from the dir. Any file the build puts there is
+/// served as itself; a path that does not exist, or reaches outside the dir, is still the app's.
+#[test]
+fn the_favicon_and_config_are_served_under_ui_dir_not_the_index() {
+    let base = scratch("favicon");
+    let ui = base.join("dist");
+    std::fs::create_dir_all(ui.join("assets")).unwrap();
+    std::fs::write(
+        ui.join("index.html"),
+        "<!doctype html><html><head></head>APP</html>",
+    )
+    .unwrap();
+    std::fs::write(
+        ui.join("favicon.svg"),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+    )
+    .unwrap();
+    std::fs::write(ui.join("config.json"), "{\"apiBase\": \"/api\"}").unwrap();
+    std::fs::write(base.join("secret.txt"), "outside").unwrap();
+    let (d, url) = serve_ui(&base, Some(&ui));
+
+    let icon = ureq::get(&format!("{url}/favicon.svg")).call().unwrap();
+    assert_eq!(icon.header("content-type"), Some("image/svg+xml"));
+    let body = icon.into_string().unwrap();
+    assert!(
+        body.starts_with("<svg"),
+        "the favicon, not the index: {body}"
+    );
+
+    let config = ureq::get(&format!("{url}/config.json")).call().unwrap();
+    assert!(
+        config.header("content-type").unwrap_or("").contains("json"),
+        "config.json's type: {:?}",
+        config.header("content-type")
+    );
+    assert!(config.into_string().unwrap().contains("apiBase"));
+
+    // Not a file in the dir: the app's route, as before.
+    let missing = ureq::get(&format!("{url}/no-such.png"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(
+        missing.contains("APP"),
+        "an unknown path is the app's: {missing}"
+    );
+    let escape = ureq::get(&format!("{url}/%2e%2e/secret.txt"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(
+        !escape.contains("outside"),
+        "a path must not leave the ui dir: {escape}"
+    );
+    drop(d);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-178: the embedded monitor is the relative build too, so its index also gets the root base,
+/// and the shipped config.json (the embedded defaults) is served beside it.
+#[test]
+fn the_embedded_index_carries_a_root_base_and_its_config() {
+    let base = scratch("embedbase");
+    let (d, url) = serve_ui(&base, None);
+    let page = match ureq::get(&format!("{url}/p/demo/feature/FEAT-1")).call() {
+        Ok(resp) => resp.into_string().unwrap(),
+        Err(e) => panic!("no embedded monitor (build web/dist first): {e}"),
+    };
+    assert!(
+        page.contains("<base href=\"/\">"),
+        "the embedded index must carry a root base: {page}"
+    );
+    let config: serde_json::Value = serde_json::from_str(
+        &ureq::get(&format!("{url}/config.json"))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap(),
+    )
+    .expect("config.json is JSON, not the index");
+    assert_eq!(config["apiBase"], "/api", "the embedded defaults: {config}");
+    assert_eq!(config["readOnly"], false, "the embedded defaults: {config}");
+    drop(d);
+    let _ = std::fs::remove_dir_all(&base);
+}

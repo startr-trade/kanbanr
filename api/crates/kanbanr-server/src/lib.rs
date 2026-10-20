@@ -142,9 +142,11 @@ pub async fn run(
         .layer(CorsLayer::permissive());
 
     if let Some(dir) = ui_dir {
-        // Serve hashed assets, and fall back to index.html for any other non-/api path so
-        // client-side routes work on direct load / refresh.
+        // Serve hashed assets and any other file the build put in the dir (favicon, config.json —
+        // FEAT-178), and fall back to index.html for any other non-/api path so client-side routes
+        // work on direct load / refresh.
         let base = PathBuf::from(&dir);
+        let files_root = base.clone();
         let index_path = base.join("index.html");
         // Read per request, not once at startup (FEAT-070). Vite writes hashed asset names on every
         // build, so a cached index points at a bundle that has been deleted — the app then fails in
@@ -156,10 +158,15 @@ pub async fn run(
         ));
         app = app
             .nest_service("/assets", ServeDir::new(base.join("assets")))
-            .fallback(move || {
+            .fallback(move |uri: axum::http::Uri| {
                 let path = index_path.clone();
                 let last_good = Arc::clone(&last_good);
+                let file = ui_file(&files_root, uri.path());
                 async move {
+                    if let Some((rel, body)) = file {
+                        return ([(CONTENT_TYPE, embedded::content_type(&rel))], body)
+                            .into_response();
+                    }
                     let html = match std::fs::read_to_string(&path) {
                         Ok(fresh) if !fresh.trim().is_empty() => {
                             if let Ok(mut cached) = last_good.lock() {
@@ -170,7 +177,7 @@ pub async fn run(
                         // Missing or half-written: serve what worked last rather than a blank page.
                         _ => last_good.lock().map(|c| c.clone()).unwrap_or_default(),
                     };
-                    axum::response::Html(html)
+                    axum::response::Html(with_root_base(&html)).into_response()
                 }
             });
         eprintln!("serving SPA from {dir}");
@@ -181,17 +188,20 @@ pub async fn run(
         let files = embedded::assets();
         let index = files
             .get("index.html")
-            .cloned()
+            .map(|html| with_root_base(&String::from_utf8_lossy(html)).into_bytes())
             .unwrap_or_else(|| b"<!doctype html><title>kanbanr</title>".to_vec());
         app = app.fallback(move |uri: axum::http::Uri| {
             let index = index.clone();
             async move {
                 let path = uri.path().trim_start_matches('/');
                 match files.get(path) {
-                    // A hashed asset: served as itself.
-                    Some(body) => ([(CONTENT_TYPE, embedded::content_type(path))], body.clone()),
+                    // A hashed asset, the favicon or config.json: served as itself. The index is
+                    // always the copy carrying its base, however it is asked for.
+                    Some(body) if path != "index.html" => {
+                        ([(CONTENT_TYPE, embedded::content_type(path))], body.clone())
+                    }
                     // Anything else is a client-side route, so the app decides what it means.
-                    None => ([(CONTENT_TYPE, "text/html; charset=utf-8")], index),
+                    _ => ([(CONTENT_TYPE, "text/html; charset=utf-8")], index),
                 }
             }
         });
@@ -216,6 +226,58 @@ pub async fn run(
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// The monitor's index with `<base href="/">` as the first thing in its head (FEAT-178).
+///
+/// The monitor is built with relative asset paths (`./assets/…`), so the same build works from any
+/// folder of a static host. Served by the daemon, a deep link such as `/p/x/feature/Y` would then
+/// resolve them against `/p/x/feature/` and load nothing. A root base makes them resolve from `/`,
+/// which is where the daemon serves them. An index that already names a base, or has no head, is
+/// left as it is.
+fn with_root_base(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    if lower.contains("<base") {
+        return html.to_string();
+    }
+    let Some(start) = lower.find("<head").filter(|&i| {
+        matches!(
+            lower.as_bytes().get(i + 5),
+            Some(b'>' | b' ' | b'\t' | b'\n' | b'\r')
+        )
+    }) else {
+        return html.to_string();
+    };
+    let Some(end) = lower[start..].find('>').map(|i| start + i + 1) else {
+        return html.to_string();
+    };
+    format!("{}<base href=\"/\">{}", &html[..end], &html[end..])
+}
+
+/// A file under `--ui-dir` named by a request path, if one exists there: the favicon, the runtime
+/// `config.json` (FEAT-178), anything the build emits beside `index.html`. Only plain path segments
+/// are followed, so nothing outside the dir can be named. `index.html` itself is not returned: it is
+/// always served through the index path, which gives it its base.
+fn ui_file(root: &std::path::Path, path: &str) -> Option<(String, Vec<u8>)> {
+    use std::path::Component;
+    let rel = path.trim_start_matches('/');
+    if rel.is_empty() || rel == "index.html" {
+        return None;
+    }
+    let rel_path = std::path::Path::new(rel);
+    if !rel_path
+        .components()
+        .all(|c| matches!(c, Component::Normal(_)))
+    {
+        return None;
+    }
+    let full = root.join(rel_path);
+    if !full.is_file() {
+        return None;
+    }
+    std::fs::read(&full)
+        .ok()
+        .map(|body| (rel.to_string(), body))
 }
 
 /// Liveness/readiness probe.
