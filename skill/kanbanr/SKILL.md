@@ -879,6 +879,7 @@ kanbanr finish [FEAT-001]         # gated: tasks complete, requirements proven
 kanbanr git install-hooks [--force] | uninstall-hooks | status
 kanbanr git model [--json]                       # main, the line, item branches, protected lines
 kanbanr git forward <VERSION>                    # merge a release's fixes forward into the line
+kanbanr git doctor [--json]                      # board vs branches; read-only, exits 1 on an error
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
 kanbanr approve FEAT-001 --rev <rev>   # only after the user chose Approve in a plan or question
 kanbanr signoff FEAT-001 design-review [--note …] [--doc path]   # a named sign-off a stage asks for — the user's, never Claude's

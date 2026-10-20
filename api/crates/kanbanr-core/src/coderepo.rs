@@ -285,6 +285,49 @@ pub fn commits_between(root: &Path, base: &str, head: &str) -> Result<Vec<Commit
         .collect())
 }
 
+/// At most `limit` commits of `range` — `base..head`, or a single ref for its own history —
+/// newest first (FEAT-191: a doctor reads a window, never a whole history).
+pub fn commits_limited(root: &Path, range: &str, limit: usize) -> Result<Vec<Commit>> {
+    let out = git(
+        root,
+        &[
+            "log",
+            "-n",
+            &limit.to_string(),
+            "--format=%H%x1f%s%x1f%B%x1e",
+            range,
+        ],
+    )?;
+    Ok(out
+        .split('\u{1e}')
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .filter_map(|r| {
+            let mut parts = r.splitn(3, '\u{1f}');
+            Some(Commit {
+                sha: parts.next()?.to_string(),
+                subject: parts.next()?.to_string(),
+                message: parts.next().unwrap_or_default().to_string(),
+            })
+        })
+        .collect())
+}
+
+/// The local branches `target` contains (FEAT-191): one `git branch --merged`.
+pub fn branches_merged_into(
+    root: &Path,
+    target: &str,
+) -> Result<std::collections::BTreeSet<String>> {
+    Ok(git(
+        root,
+        &["branch", "--merged", target, "--format=%(refname:short)"],
+    )?
+    .lines()
+    .map(|l| l.trim().to_string())
+    .filter(|l| !l.is_empty())
+    .collect())
+}
+
 /// Does the worktree at `root` have uncommitted changes to tracked files?
 pub fn worktree_dirty(root: &Path) -> bool {
     !is_clean(root)
