@@ -16,7 +16,7 @@ DATA_DIR ?= $(shell kanbanr where 2>/dev/null || echo $(CURDIR)/../$(notdir $(CU
 SKILLS_DIR ?= $(HOME)/.claude/skills
 IMAGE ?= kanbanr:latest
 
-.PHONY: help build test itest ci audit scan-deps scan-image codeql cli web check-docs install-cli install-skill install serve docker-build docker-up docker-down screenshots clean
+.PHONY: help build test itest ci audit scan-deps scan-image codeql cli web monitor-bundle check-docs install-cli install-skill install serve docker-build docker-up docker-down screenshots clean
 
 help:
 	@echo "Targets:"
@@ -31,6 +31,7 @@ help:
 	@echo "  install-cli   cargo install the one 'kanbanr' binary onto your PATH"
 	@echo "  install-skill Symlink skill/kanbanr into ~/.claude/skills/"
 	@echo "  install       install-cli + install-skill"
+	@echo "  monitor-bundle Pack web/dist as the standalone monitor bundle a release attaches, and check it"
 	@echo "  serve         Run the read-only view daemon (serves API + built SPA) on :8080"
 	@echo "  docker-build  Build the single Docker image (runs 'kanbanr serve')"
 	@echo "  docker-up     Build & run the view daemon container via docker compose"
@@ -55,6 +56,14 @@ cli:
 
 web:
 	cd web && npm install && npm run build
+
+# The standalone monitor bundle a release attaches (FEAT-178): web/dist with the standalone
+# config.json, packed and then checked as release.yml checks it. Packs the dist already built
+# (`make web` first); TAG names the archive.
+TAG ?= v$(shell node -p "require('./web/package.json').version" 2>/dev/null)
+monitor-bundle:
+	scripts/pack-monitor-bundle.sh web/dist "kanbanr-monitor-$(TAG).tar.gz"
+	scripts/check-monitor-bundle.sh "kanbanr-monitor-$(TAG).tar.gz"
 
 # Every CI check that can run off GitHub, on a clean copy of the tracked tree, read from the
 # workflow files themselves (FEAT-131). Run it before every push; it ends by listing what only
