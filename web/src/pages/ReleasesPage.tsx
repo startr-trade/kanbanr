@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
+import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import type { Release } from "../types";
@@ -48,7 +49,8 @@ export default function ReleasesPage() {
   const last = stages[stages.length - 1];
   // Recorded as the board's commit identity, as `kanbanr release promote` records it.
   const who = api.approver(meta.data ?? null);
-  const writable = meta.data?.writes === true && who != null;
+  // A read-only copy of the monitor (FEAT-178) never offers a promotion, whatever the daemon says.
+  const writable = !isReadOnly() && meta.data?.writes === true && who != null;
   // The stage after the one it is at; the first, before it has one. None once it is at the last.
   const nextStage = (r: Release) => {
     if (r.state === "shipped") return null;
@@ -139,11 +141,12 @@ export default function ReleasesPage() {
                     ) : confirming === r.version ? (
                       <div>
                         <p className="small">
-                          <strong>Promoting {r.version} to {next} is the cut.</strong> It ships the
-                          finished items of {planned.length > 0 ? planned.map((f) => f.code).join(", ") : "none planned"}{" "}
-                          and carries the rest over, tags the code repository <code>{r.version}</code>,
-                          and merges <code>release/{r.version} → main</code>.
+                          <strong>Promoting {r.version} to {next} is the cut.</strong> It tags the code
+                          repository <code>{r.version}</code> and fast-forwards main to{" "}
+                          <code>release/{r.version}</code> (a patch of an older release is tagged
+                          without moving main).
                         </p>
+                        <CutPreviewList project={project} version={r.version} />
                         <div className="review-actions">
                           <button className="btn btn-primary" onClick={() => promote(r, next)} disabled={busy != null}>
                             {busy === r.version ? "promoting…" : `Cut ${r.version}`}
@@ -182,6 +185,31 @@ export default function ReleasesPage() {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Exactly what the cut would ship and carry over, by its own rule (FEAT-185). */
+function CutPreviewList({ project, version }: { project: string; version: string }) {
+  const preview = useAsync(() => api.getCutPreview(project, version), [project, version]);
+  if (preview.error) return <ErrorBox error={preview.error} />;
+  if (!preview.data) return <Loading />;
+  const ships = preview.data.filter((p) => p.ships);
+  const carries = preview.data.filter((p) => !p.ships);
+  return (
+    <div className="small">
+      <p>
+        Ships: {ships.length ? ships.map((p) => (p.to ? `${p.code} (→ ${p.to})` : p.code)).join(", ") : "nothing"}
+      </p>
+      {carries.length ? (
+        <ul className="dep-list">
+          {carries.map((p) => (
+            <li key={p.code}>
+              carries {p.code}: {p.why}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }

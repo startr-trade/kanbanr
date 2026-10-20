@@ -32,6 +32,23 @@ from. A defect's `fix/<CODE>-…` branch names its item as `feat/` does. The mer
 (integrating an item, catching up a carried one, forwarding a release) carry those trailers, so a
 line's history says which items reached it.
 
+### Drift between board and branches
+
+`kanbanr git doctor` compares the board with the code repository's branches, in the git model's
+terms, and changes nothing:
+
+| Finding | |
+|---|---|
+| an integrated item whose branch is not merged into its line | error |
+| commits on a line serving only items that are not integrated | error |
+| a commit naming an item the board does not have | error |
+| a branch naming no item, or an item, sprint or release the board does not have | warning |
+| a release branch with fixes its line lacks (`kanbanr git forward <VERSION>`) | warning |
+| a finished item's merged branch (delete it), or a parked item's branch | warning |
+
+It exits 1 when it finds an error. With the git model on, `kanbanr doctor` includes the same
+findings when run from the project folder. In the trunk topology, main's last 200 commits are read.
+
 ### Links between specs, docs and decisions
 
 A spec or a doc that names `FEAT-012`, `FEAT-012/R-2`, `MS-004`, `ADR-0005`, `G-1` or a doc path

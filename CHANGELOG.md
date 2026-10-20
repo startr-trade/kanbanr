@@ -14,8 +14,21 @@ All notable changes to kanbanr are documented here. The format follows
   **New release…**; `kanbanr review --pending` lists the matching `kanbanr release plan` command,
   and the skill has Claude ask the same question. The Releases page shows each release's stage and
   its history, and a **Promote to \<next stage\>** button, which asks for confirmation before the
-  production cut (tag and merge to main). Both use the same operations as the CLI, through the
+  production cut, listing exactly what ships and what carries over (tag, and main fast-forwarded). Both use the same operations as the CLI, through the
   writes-enabled monitor.
+- **The monitor as a standalone static bundle (FEAT-178).** Each release attaches
+  `kanbanr-monitor-<tag>.tar.gz`, the monitor the binary embeds, for collaborators and reviewers to
+  view a board from any static web host without running kanbanr. Unpack it, set `apiBase` in its
+  `config.json` to a daemon's read API, and serve the folder. The bundle uses hash routing, so it
+  needs no rewrite rule, and it is read-only: every decision shows its CLI command instead, and no
+  write route is called. The embedded monitor reads the same `config.json` with defaults that keep
+  today's behaviour. `kanbanr serve --ui-dir` now serves every file in the folder, so the favicon no
+  longer falls back to the index. `make monitor-bundle` packs and checks the bundle locally. See
+  [Hosting the monitor elsewhere](https://kanbanr.startr.trade/using/the-monitor.html#hosting-the-monitor-elsewhere).
+- **`kanbanr git doctor`: the board and the branches agree (FEAT-191).** It reports integrated items
+  whose branch never reached its line, commits on a line for unfinished work, branches that name
+  nothing on the board, and release fixes not merged forward. It only reads, and exits 1 on an
+  error. With the git model on, `kanbanr doctor` includes these findings.
 - **Patch releases (FEAT-184).** `kanbanr release add v1.0.1 --patch-of v1.0.0` makes a patch of a
   cut release: `release/v1.0.1` from the parent's tag, starting at the first stage. Its notes name
   the parent, what the patch adds and what it keeps. At production a patch of an older release is
@@ -107,9 +120,14 @@ All notable changes to kanbanr are documented here. The format follows
   `api/` is fenced to the system temporary directory (`KANBANR_BOARD_FENCE`), so a test that
   drifts onto a real board stops before touching it, and `make ci` fails if your board changed
   during the run. Test scratch folders moved out of the build tree.
+- **`make ci` lets your verdicts through (FEAT-198).** Approving, ratifying or signing off items
+  on the board while `make ci` runs no longer fails its board check; any other change still does.
 
 ### Fixed
 
+- **The Workflow page shows the method again (FEAT-199).** Its diagram failed ("No such shape") and
+  its Stages panel showed no gates on projects with role-addressed gates; both now show the gates
+  moves are judged by. A stage asking for `spec_sections` no longer crashes the page.
 - **Deleting a project removes its folder for good (FEAT-196).** The delete's own activity entry
   recreated `projects/<id>/` and committed it; a log no longer writes into a project that is gone.
 - **The board is found from inside a git worktree (FEAT-192).** A linked worktree inside the

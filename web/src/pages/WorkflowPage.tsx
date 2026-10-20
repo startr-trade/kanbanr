@@ -18,13 +18,15 @@ export default function WorkflowPage() {
   const { data, error, loading } = useAsync(() => api.getProject(project), [project, tick]);
   const diagram = useAsync(() => api.getWorkflowDiagram(project), [project, tick]);
   const process = useAsync(() => api.getProcess(project), [project, tick]);
+  // What each stage actually asks (FEAT-199): the raw config misses role-addressed gates.
+  const effective = useAsync(() => api.getGates(project), [project, tick]);
 
   if (loading && !data) return <Loading />;
   if (error) return <ErrorBox error={error} />;
   if (!data) return null;
 
   const config = data.config;
-  const gates = config.gates ?? {};
+  const gates = effective.data ?? {};
   const staged = config.statuses.filter((s) => gates[s]);
 
   return (

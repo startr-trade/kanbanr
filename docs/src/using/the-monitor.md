@@ -97,6 +97,48 @@ server {
 The proxy enforces who gets in and encrypts the connection; kanbanr behind it stays read-only, so an
 authenticated viewer still can't mutate your board — writes only ever happen through the local CLI.
 
+### Hosting the monitor elsewhere
+
+Each release attaches the monitor as a plain static bundle, `kanbanr-monitor-<tag>.tar.gz`. It is
+the same build the binary embeds, so collaborators and reviewers can view a board from any static
+web host without installing kanbanr. Hosting it takes three steps:
+
+1. **Unpack** the archive into a folder your host serves. It holds `index.html`, `config.json` and
+   `assets/`, all with relative paths, so any folder works, not only the site root.
+2. **Edit `config.json`** to point at a monitor's read API:
+
+   ```json
+   {
+     "apiBase": "https://board.example.com/api",
+     "routing": "hash",
+     "readOnly": true
+   }
+   ```
+
+   - `apiBase` is where `kanbanr serve` answers `/api`. The shipped value is
+     `http://localhost:8080/api`.
+   - `routing: "hash"` gives addresses like `#/p/<project>/feature/<CODE>`, which a plain static
+     host serves with no rewrite rule. Use `"browser"` only if your host answers every path with
+     `index.html`.
+   - `readOnly: true` hides every decision (approve, ratify, sign off, withdraw, accept or reject a
+     decision) and shows the CLI command instead. The bundle never calls a write route. Decisions
+     happen in Claude Code, or in a local monitor started with `--allow-writes`.
+3. **Serve** the folder, for example with `python3 -m http.server` or any static host.
+
+The bundle contains no secrets. The daemon it reads stays the access boundary:
+
+- it is read-only unless started with `--allow-writes`;
+- it binds to localhost by default;
+- it sends permissive CORS headers, so a monitor on another origin can read it and receive live
+  updates. Anyone who can reach the daemon can read the board.
+
+To publish a board, put the daemon behind a reverse proxy with TLS and authentication, as above,
+and set `apiBase` to the proxy's address. If you serve the bundle and the API from the same origin,
+`"apiBase": "/api"` avoids cross-origin requests entirely.
+
+The monitor the binary serves reads the same `config.json`, with the defaults: `/api`, browser
+routing, and decisions offered when the daemon allows writes.
+
 ### Mirroring to GitHub issues
 
 If collaborators follow your GitHub issues, kanbanr can keep issues in step with the board using

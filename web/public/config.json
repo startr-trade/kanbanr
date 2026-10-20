@@ -1,0 +1,5 @@
+{
+  "apiBase": "/api",
+  "routing": "browser",
+  "readOnly": false
+}

@@ -1364,6 +1364,10 @@ enum GitCmd {
     /// Merge a release's fixes forward into the current line, naming the items they serve
     /// (FEAT-190). Never automatic: the move that integrated the fix says when it is needed.
     Forward { version: String },
+    /// Compare the board with the branches (FEAT-191): integrated items not merged, commits on a
+    /// line for unfinished work, branches naming nothing, release fixes not merged forward.
+    /// Read-only; exits 1 when it finds an error.
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -3150,6 +3154,58 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
         GitCmd::CheckMsg { file } => run_check_msg(cli, client, file),
         GitCmd::Guard => run_guard(cli, Some(client)),
         GitCmd::CheckBranch => run_check_branch(cli, client),
+        GitCmd::Doctor => {
+            let p = require_project(cli)?;
+            let root =
+                scm::repo_root().ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
+            let resp = client.get_in(&format!("/projects/{p}/git/doctor"), Some(&root))?;
+            let issues: Vec<Value> = serde_json::from_str(&resp)?;
+            let has_error = issues.iter().any(|i| i["severity"] == "error");
+            if cli.json {
+                println!("{}", pretty(&resp));
+            } else {
+                let model: Value = serde_json::from_str(
+                    &client.get_in(&format!("/projects/{p}/git/model"), Some(&root))?,
+                )?;
+                let automated = model["model"]["automated"].as_bool().unwrap_or(false);
+                println!(
+                    "topology: {}; {}",
+                    model["model"]["topology"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .replace('_', " "),
+                    if automated {
+                        "the git model is on"
+                    } else {
+                        "the git model is off: these findings are against the derived model"
+                    }
+                );
+                for (label, severity) in [("Errors", "error"), ("Warnings", "warning")] {
+                    let found: Vec<&Value> = issues
+                        .iter()
+                        .filter(|i| i["severity"] == severity)
+                        .collect();
+                    if found.is_empty() {
+                        continue;
+                    }
+                    println!("{label} ({}):", found.len());
+                    for i in found {
+                        let code = i["code"]
+                            .as_str()
+                            .map(|c| format!("{c}: "))
+                            .unwrap_or_default();
+                        println!("  {code}{}", i["message"].as_str().unwrap_or_default());
+                    }
+                }
+                if issues.is_empty() {
+                    println!("clean: the board and the branches agree");
+                }
+            }
+            if has_error {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
         GitCmd::Forward { version } => {
             let p = require_project(cli)?;
             let root =
@@ -6925,7 +6981,11 @@ fn run_doctor(cli: &Cli, client: &Backend, all_projects: bool) -> anyhow::Result
         (client.get("/doctor")?, ids)
     } else {
         let p = require_project(cli)?;
-        (client.get(&format!("/projects/{p}/doctor"))?, vec![p])
+        // With the git model on, doctor checks the branches too, in this repository (FEAT-191).
+        (
+            client.get_in(&format!("/projects/{p}/doctor"), code_repo().as_deref())?,
+            vec![p],
+        )
     };
     let mut report: Value = serde_json::from_str(&resp)?;
     // A project on a personal process: only this machine has the process to compare with (FEAT-170).

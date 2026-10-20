@@ -30,6 +30,7 @@ pub mod eventing;
 pub mod export;
 pub mod gantt;
 pub mod git;
+pub mod gitdrift;
 pub mod gitmodel;
 pub mod graph;
 pub mod hash;
@@ -2521,6 +2522,35 @@ requirements:
 
     /// A project with releases on, v0.1.0 and v0.2.0 planned, and three items in v0.1.0: one
     /// already Completed, one Scheduled with everything `finish` asks, one still Planned.
+    /// FEAT-185: the cut-preview route answers what the cut's own rule says, and writes nothing.
+    #[test]
+    fn cut_preview_route_matches_the_cut_rule() {
+        let (store, _d, codes) = release_board();
+        crate::releases::plan(&store, "demo", "v0.1.0", &codes).unwrap();
+        let before =
+            std::fs::read_to_string(store.project_dir("demo").join("releases.yaml")).unwrap();
+        let routed: serde_json::Value = serde_json::from_str(
+            &crate::dispatch::dispatch(
+                &store,
+                "GET",
+                "/projects/demo/releases/v0.1.0/cut-preview",
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let direct =
+            serde_json::to_value(crate::releases::cut_preview(&store, "demo", "v0.1.0").unwrap())
+                .unwrap();
+        assert_eq!(routed, direct);
+        assert_eq!(routed.as_array().unwrap().len(), codes.len(), "{routed}");
+        assert_eq!(
+            std::fs::read_to_string(store.project_dir("demo").join("releases.yaml")).unwrap(),
+            before,
+            "a preview writes nothing"
+        );
+    }
+
     fn release_board() -> (Store, tempdir::TempDirLike, [String; 3]) {
         use crate::models::{FeatureDefinition, Requirement, TestRef, TestState, Zachman};
         use serde_json::json;

@@ -15,6 +15,11 @@ binds localhost by default.
 | `GET /api/projects/:p/activity` | recent activity (the changelog) |
 | `GET /api/projects/:p/events` · `GET /api/events` | SSE change streams |
 
+The daemon sends permissive CORS headers, so a monitor served from another origin, such as the
+standalone bundle each release attaches, can read the API and its SSE streams. CORS is not access
+control: anyone who can reach the daemon can read the board. See
+[Hosting the monitor elsewhere](../using/the-monitor.md#hosting-the-monitor-elsewhere).
+
 ### Writes happen in the CLI (`dispatch`)
 
 All mutations go through `kanbanr-core::dispatch` from the CLI (and the same `(method, path,

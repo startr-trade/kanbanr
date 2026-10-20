@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import mermaid from "mermaid";
 import DOMPurify from "dompurify";
 import { markdownToSafeHtml, safeSvg } from "../markdownHtml";
+import { appHref } from "../runtimeConfig";
 import { useBoardIndex } from "../useBoardIndex";
 
 // Unique-per-render id source for mermaid (ids must be stable strings, unique across renders).
@@ -30,8 +31,15 @@ export default function Markdown({
   const { project } = useParams();
   const index = useBoardIndex(project);
   const navigate = useNavigate();
+  // A board link written as a path (`/p/x/feature/Y`) is an in-app route. Under hash routing — the
+  // standalone bundle on a plain static host (FEAT-178) — it must become `#/p/…`, or it would ask
+  // the host for a file that is not there; the hash router then follows it.
   const html = useMemo(
-    () => markdownToSafeHtml(source, resolveImage, DOMPurify, index),
+    () =>
+      markdownToSafeHtml(source, resolveImage, DOMPurify, index).replace(
+        /(<a\b[^>]*?\bhref=")(\/(?:p\/|portfolio\b)[^"]*)(")/g,
+        (_m, pre, path, post) => pre + appHref(path) + post,
+      ),
     [source, resolveImage, index],
   );
   const follow = (e: MouseEvent<HTMLDivElement>) => {

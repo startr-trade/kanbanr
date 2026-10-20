@@ -300,6 +300,25 @@ pub fn is_integrated(config: &ProjectConfig, status: &str) -> bool {
         || (crate::graph::is_terminal_status(config, status) && !config.is_no_op(status))
 }
 
+/// Is an item at `status` finished (FEAT-191)? Done by the workflow's rule, or at the release-role
+/// stage.
+pub fn is_finished(config: &ProjectConfig, status: &str) -> bool {
+    config.counts_as_done(status) || config.roles().status(Role::Release) == Some(status)
+}
+
+/// Is an item at `status` parked (FEAT-191)? A no-op status, or a status before the build stage —
+/// work that has stopped, or never started.
+pub fn is_parked(config: &ProjectConfig, status: &str) -> bool {
+    if config.is_no_op(status) {
+        return true;
+    }
+    let position = |s: &str| config.statuses.iter().position(|x| x == s);
+    match (config.roles().status(Role::Build), position(status)) {
+        (Some(build), Some(at)) => position(build).is_some_and(|b| at < b),
+        _ => false,
+    }
+}
+
 /// What starting a sprint did.
 #[derive(Debug, Clone, Serialize)]
 pub struct SprintStarted {
