@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 const RELEASES_FILE: &str = "releases.yaml";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ReleaseState {
     #[default]
@@ -31,6 +32,11 @@ pub enum ReleaseState {
 
 /// A planned item that did not ship, and where it went.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "schema",
+    derive(schemars::JsonSchema),
+    schemars(rename = "ReleaseCarry")
+)]
 pub struct Carry {
     pub code: String,
     /// The release it moved to, or `unplanned`.
@@ -41,6 +47,7 @@ pub struct Carry {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Release {
     pub version: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -76,12 +83,14 @@ pub struct Release {
     /// Keys this version does not know, kept and written back unchanged, so an older binary never
     /// deletes what a newer one recorded (as `Cadence` does, FEAT-151).
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: Extra,
 }
 
 /// One move of a release between stages: where to, who moved it, and when (FEAT-183). A move back
 /// carries the reason it was made.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct StageChange {
     pub stage: String,
     pub by: String,
@@ -93,6 +102,7 @@ pub struct StageChange {
 /// A release with what it holds and how much of that is finished, as the monitor shows it
 /// (FEAT-138). Derived, never stored.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ReleaseReport {
     #[serde(flatten)]
     pub release: Release,
@@ -422,6 +432,7 @@ fn cut_with(store: &Store, id: &str, version: &str, change: Option<StageChange>)
 
 /// What a cut would do with one planned item, worked out without writing anything (FEAT-183).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CutPreview {
     pub code: String,
     /// It ships; otherwise it is carried over, for `why`.

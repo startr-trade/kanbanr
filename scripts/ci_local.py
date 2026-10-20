@@ -49,6 +49,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Build the monitor (web/dist)": LOCAL,
             "Check formatting (ubuntu only)": LOCAL,
             "Clippy (ubuntu only)": LOCAL,
+            "The published OpenAPI matches the code": LOCAL,
             "Test": LOCAL,
         },
         "definition": {
@@ -64,6 +65,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The monitor's markdown cannot run script": LOCAL,
             "Every request goes to the configured API base": LOCAL,
             "The standalone monitor is read-only": LOCAL,
+            "The monitor's types match the published API": LOCAL,
         },
         "vscode": {
             "Install the extension's dependencies": LOCAL,

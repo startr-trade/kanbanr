@@ -21,6 +21,7 @@ pub const CHARTER_FILE: &str = "charter.yaml";
 
 /// The reasoning root of a project.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Charter {
     /// Why the project exists — the problem or opportunity.
     #[serde(default)]
@@ -49,11 +50,13 @@ pub struct Charter {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
 /// An outcome the project commits to, not an output it produces.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Goal {
     /// `G-1`, `G-2`, … Assigned on save when left blank.
     #[serde(default)]
@@ -71,10 +74,12 @@ pub struct Goal {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Stakeholder {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -89,6 +94,7 @@ pub struct Stakeholder {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 

@@ -18,7 +18,7 @@ that makes this promise checkable — no new features.
 | **The `.kanbanr` marker** | Its fields (`project`, `data_dir`) and how the board is found from it. |
 | **CLI commands and flags** | Every documented command and flag keeps its name and meaning. Exit status: `0` on success and non-zero on failure, with `kanbanr check` (and `check --file`) exiting non-zero when something is missing, so scripts and CI can rely on it. |
 | **`--json` output** | Every field a command's `--json` prints keeps its name, type and meaning. |
-| **The monitor's read API** | The `/api/…` endpoints `kanbanr serve` answers, and the fields they return. |
+| **The read API** | Version 1 of the public read routes `kanbanr serve` answers: the routes, parameters, media types, fields and documented values that its [OpenAPI document](../reference/http-api.md#the-openapi-document) (`GET /api/openapi.json`) describes. A breaking change is published as v2 under `/api/v2/…`, with v1 kept for a deprecation period. |
 | **The Claude Code integration** | The commit trailer (`Refs: kanbanr:FEAT-…`), the hook commands the skill and plugin register, and `kanbanr skill install` / `hooks install` writing them where Claude Code finds them. |
 
 ## Not covered
@@ -26,6 +26,8 @@ that makes this promise checkable — no new features.
 - **Human-readable output** — the wording, layout and colour of what commands print for people.
   Parse `--json`, not the text.
 - **The monitor's look** — its pages, layout and URLs other than `/api/…`.
+- **The daemon's internal routes** — the reads it answers that the OpenAPI document does not
+  list (see [HTTP API](../reference/http-api.md#internal-routes)), and its write routes.
 - **The skill's wording** — how SKILL.md phrases its guidance to Claude, as long as the commands it
   drives keep working.
 - **Internal crates** — `kanbanr-core`, `kanbanr-server` and `kanbanr-cli` are not libraries;
