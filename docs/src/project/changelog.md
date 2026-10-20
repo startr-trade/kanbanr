@@ -6,6 +6,18 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **The monitor as a standalone static bundle (FEAT-178).** Each release attaches
+  `kanbanr-monitor-<tag>.tar.gz`, the monitor the binary embeds, for collaborators and reviewers to
+  view a board from any static web host without running kanbanr. Unpack it, set `apiBase` in its
+  `config.json` to a daemon's read API, and serve the folder. The bundle uses hash routing, so it
+  needs no rewrite rule, and it is read-only: every decision shows its CLI command instead, and no
+  write route is called. The embedded monitor reads the same `config.json` with defaults that keep
+  today's behaviour. `kanbanr serve --ui-dir` now serves every file in the folder, so the favicon no
+  longer falls back to the index. `make monitor-bundle` packs and checks the bundle locally. See
+  [Hosting the monitor elsewhere](https://kanbanr.startr.trade/using/the-monitor.html#hosting-the-monitor-elsewhere).
+
 ## [0.1.7] - 2026-10-07
 
 Your own process, designed with Claude and shared on the board.
