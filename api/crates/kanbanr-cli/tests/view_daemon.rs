@@ -748,3 +748,155 @@ fn promote_through_the_daemon_uses_the_repository_it_was_started_in() {
     }
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A scratch code repository with its own board, releases on and `v1.0.0` planned (FEAT-185). Under
+/// the system temp folder, never inside this repository. Returns the home, the code folder, and the
+/// board folder.
+fn release_scratch(base: &std::path::Path) -> (PathBuf, PathBuf, PathBuf) {
+    let _ = std::fs::remove_dir_all(base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .output()
+            .expect("run git");
+        assert!(
+            o.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.name", "T"]);
+    git(&["config", "user.email", "t@x"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "[no-ref] base"]);
+    let run = |args: &[&str]| release_cli(&home, &work, args);
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    let board = PathBuf::from(run(&["where"]));
+    assert!(
+        board.starts_with(base),
+        "the scratch board must be the test's own, not {}",
+        board.display()
+    );
+    run(&["config", "cadence", "--releases", "on"]);
+    run(&["release", "add", "v1.0.0"]);
+    (home, work, board)
+}
+
+fn release_cli(home: &std::path::Path, work: &std::path::Path, args: &[&str]) -> String {
+    let o = Command::new(cli())
+        .args(args)
+        .current_dir(work)
+        .env("HOME", home)
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .env_remove("KANBANR_SERVER_URL")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run cli");
+    assert!(
+        o.status.success(),
+        "cmd {args:?}: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    String::from_utf8_lossy(&o.stdout).trim().to_string()
+}
+
+/// A board's releases.yaml, with each stage change's time cleared: two promotions made a moment
+/// apart are the same promotion.
+fn releases_yaml(board: &std::path::Path) -> serde_yaml::Value {
+    let text = std::fs::read_to_string(board.join("projects").join("shop").join("releases.yaml"))
+        .expect("releases.yaml");
+    let mut v: serde_yaml::Value = serde_yaml::from_str(&text).unwrap();
+    for release in v.as_sequence_mut().unwrap() {
+        if let Some(stages) = release.get_mut("stages").and_then(|s| s.as_sequence_mut()) {
+            for change in stages {
+                change["at"] = serde_yaml::Value::String(String::new());
+            }
+        }
+    }
+    v
+}
+
+/// FEAT-185 R-2: the monitor's Promote, posted to a writes-enabled daemon started in the code
+/// repository, makes the release branch and leaves releases.yaml exactly as `kanbanr release
+/// promote` leaves it on a twin board.
+#[test]
+fn monitor_promote_matches_cli() {
+    let root = std::env::temp_dir().join(format!("kanbanr-monitor-promote-{}", std::process::id()));
+    let (home, work, board) = release_scratch(&root.join("monitor"));
+    let (twin_home, twin_work, twin_board) = release_scratch(&root.join("cli"));
+
+    // The CLI, on the twin.
+    release_cli(&twin_home, &twin_work, &["release", "promote", "v1.0.0"]);
+
+    // The monitor: the Promote button posts the next stage, as the board's identity.
+    let port = free_port();
+    let child = Command::new(cli())
+        .args([
+            "serve",
+            "--allow-writes",
+            "--bind",
+            &format!("127.0.0.1:{port}"),
+        ])
+        .current_dir(&work)
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &board)
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let _daemon = Daemon(child);
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        assert!(Instant::now() < deadline, "daemon did not become ready");
+        match ureq::get(&format!("{url}/api/projects")).call() {
+            Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    let made = match ureq::post(&format!(
+        "{url}/api/write/projects/shop/releases/v1.0.0/promote"
+    ))
+    .set("content-type", "application/json")
+    .send_string(r#"{"stage": "candidate", "by": "A"}"#)
+    {
+        Ok(r) => r.into_string().unwrap(),
+        Err(e) => panic!("promote through the daemon: {e}"),
+    };
+    assert!(
+        made.contains("\"branch_created\":\"release/v1.0.0\""),
+        "{made}"
+    );
+    let branch = Command::new("git")
+        .args(["rev-parse", "--verify", "-q", "release/v1.0.0"])
+        .current_dir(&work)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(
+        branch.status.success(),
+        "the release branch is made in the daemon's repository"
+    );
+
+    let monitor = releases_yaml(&board);
+    assert_eq!(monitor[0]["stage"], "candidate", "{monitor:?}");
+    assert_eq!(
+        monitor,
+        releases_yaml(&twin_board),
+        "the monitor's promotion is the CLI's"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

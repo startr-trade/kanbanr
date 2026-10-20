@@ -6454,16 +6454,57 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 print!("{}", kanbanr_core::export::definition_brief(feature));
                 println!();
             }
-            if *pending {
+            // Agreed items whose one open question is which release they ship in (FEAT-185):
+            // answered by planning them into a release, not by an approval.
+            let which_release: Vec<&Value> = queue
+                .iter()
+                .filter(|v| v["approval"] == "release")
+                .collect();
+            let to_agree: Vec<&kanbanr_core::FeatureItem> = features
+                .iter()
+                .filter(|f| {
+                    !which_release
+                        .iter()
+                        .any(|v| v["code"].as_str() == Some(f.code.as_str()))
+                })
+                .collect();
+            if *pending && !to_agree.is_empty() {
                 println!(
                     "{} item(s) awaiting agreement. Approve the ones you accept:\n\n    {}\n\n\
                      Leaving one unapproved is an answer. To change a definition first: \
                      `kanbanr feature define <CODE> --file …` — the approval stays off until you \
                      agree to the new version.",
-                    features.len(),
-                    features
+                    to_agree.len(),
+                    to_agree
                         .iter()
                         .map(|f| format!("kanbanr approve {}", f.code))
+                        .collect::<Vec<_>>()
+                        .join("\n    ")
+                );
+            }
+            if *pending && !which_release.is_empty() {
+                println!(
+                    "{} item(s) ready for release and in none. Plan each into one:\n\n    {}",
+                    which_release.len(),
+                    which_release
+                        .iter()
+                        .map(|v| {
+                            let choices: Vec<&str> = v["release_choices"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|c| c.as_str())
+                                .collect();
+                            format!(
+                                "kanbanr release plan {} {}",
+                                if choices.is_empty() {
+                                    "<VERSION>".to_string()
+                                } else {
+                                    choices.join("|")
+                                },
+                                v["code"].as_str().unwrap_or_default()
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join("\n    ")
                 );

@@ -88,6 +88,26 @@ export const api = {
     }
     return res.json();
   },
+  /** Plan an item into a release (FEAT-185), through the route `kanbanr release plan` uses. */
+  planIntoRelease: (id: string, version: string, code: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/plan`,
+      { items: [code] },
+      "plan into a release",
+    ),
+  /** Add a planned release (FEAT-185), as `kanbanr release add` does. */
+  addRelease: (id: string, version: string, target: string, name = "") =>
+    writePost(`/projects/${encodeURIComponent(id)}/releases`, { version, target, name }, "add a release"),
+  /**
+   * Move a release to its next stage, or the named one (FEAT-183, FEAT-185): the same core
+   * promotion as `kanbanr release promote`, recorded as `by`. The last stage is the cut.
+   */
+  promoteRelease: (id: string, version: string, by: string, stage?: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/promote`,
+      stage ? { by, stage } : { by },
+      "promote a release",
+    ),
   /** Every architecture decision on the board, newest first (FEAT-057). */
   getAdrs: (id: string) => getJson<Adr[]>(`/api/projects/${encodeURIComponent(id)}/adrs`),
   /** The user's verdict on a proposed decision (FEAT-153), through the route `kanbanr adr accept`
@@ -171,6 +191,26 @@ async function verdict(
       body: JSON.stringify(body),
     },
   );
+  if (!res.ok) {
+    throw new Error(
+      res.status === 404 || res.status === 405
+        ? `This monitor is read-only. Start it with \`kanbanr review --ui\` to ${verb} from here.`
+        : `${verb} failed: ${res.status} ${await res.text()}`,
+    );
+  }
+  return res.json();
+}
+
+/**
+ * Post to a daemon write route (FEAT-185). A read-only daemon has none, so a 404 or 405 says which
+ * monitor can; any other refusal is the daemon's own message, shown as it gave it.
+ */
+async function writePost(path: string, body: unknown, verb: string) {
+  const res = await fetch(`/api/write${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
   if (!res.ok) {
     throw new Error(
       res.status === 404 || res.status === 405

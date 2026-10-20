@@ -3479,6 +3479,100 @@ requirements:
         assert_eq!(offered(&store, &code), vec!["design-review".to_string()]);
     }
 
+    /// FEAT-185 R-1: an item whose next stage is the end, with releases on and in no release, is
+    /// asked which planned release it belongs to; planned, it drops out; releases off, it is absent.
+    #[test]
+    fn review_queue_asks_release_for_ready_item() {
+        use serde_json::json;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/workflow",
+            Some(&json!({"preset": "togaf"})),
+        )
+        .unwrap();
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&json!({"releases": true})),
+        )
+        .unwrap();
+        let add = |title: &str| {
+            let f = store.add_feature("demo", title, "", "M", None).unwrap();
+            store
+                .set_feature_definition("demo", &f.code, Some(full_definition(title)))
+                .unwrap();
+            store.approve_feature("demo", &f.code, "Ada L").unwrap();
+            f.code
+        };
+        let to_migration = |code: &str| {
+            for stage in [
+                "Business Arch",
+                "System Design",
+                "Implementation",
+                "Migration",
+            ] {
+                store.move_feature("demo", code, stage).unwrap();
+            }
+        };
+        let ready = add("Ready");
+        let early = add("Early");
+        to_migration(&ready);
+        // At Implementation the next stage is Migration, not the end: not asked yet.
+        for stage in ["Business Arch", "System Design", "Implementation"] {
+            store.move_feature("demo", &early, stage).unwrap();
+        }
+        let queue = || -> Vec<serde_json::Value> {
+            serde_json::from_str(
+                &crate::dispatch::dispatch(&store, "GET", "/projects/demo/review", None).unwrap(),
+            )
+            .unwrap()
+        };
+        let entry = |code: &str| queue().into_iter().find(|e| e["code"] == code);
+
+        // No release yet: asked, with only a new release to choose.
+        let asked = entry(&ready).expect("the ready item is asked which release");
+        assert_eq!(asked["approval"], "release");
+        assert_eq!(asked["release_choices"], json!([]));
+        assert!(entry(&early).is_none(), "{:?}", queue());
+
+        // The planned releases, in file order; a shipped one is not a choice.
+        for v in ["1.0", "1.1", "2.0"] {
+            crate::releases::add(&store, "demo", v, "", "").unwrap();
+        }
+        let mut releases = crate::releases::load(&store, "demo").unwrap();
+        releases[1].state = crate::releases::ReleaseState::Shipped;
+        std::fs::write(
+            store.project_dir("demo").join("releases.yaml"),
+            serde_yaml::to_string(&releases).unwrap(),
+        )
+        .unwrap();
+        let asked = entry(&ready).unwrap();
+        assert_eq!(asked["approval"], "release");
+        assert_eq!(asked["release_choices"], json!(["1.0", "2.0"]));
+
+        // Planned into one, it is no longer a question.
+        crate::releases::plan(&store, "demo", "2.0", std::slice::from_ref(&ready)).unwrap();
+        assert!(entry(&ready).is_none(), "{:?}", queue());
+
+        // Releases off: never asked.
+        let other = add("Other");
+        to_migration(&other);
+        assert_eq!(entry(&other).unwrap()["approval"], "release");
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&json!({"releases": false})),
+        )
+        .unwrap();
+        assert!(entry(&other).is_none(), "{:?}", queue());
+    }
+
     /// FEAT-182: giving and withdrawing a sign-off are events, with who and why.
     #[test]
     fn signoff_events_are_recorded() {
