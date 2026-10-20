@@ -425,6 +425,12 @@ verdicts that item can take — from the table above — plus **"Change it"** an
 - **Approve / Ratify / Sign off \<name\>** → record it at once:
   `kanbanr approve|ratify <CODE> --rev <rev>` · `kanbanr signoff <CODE> <name> --rev <rev>`.
 - **Accept / Reject** a proposed decision → `kanbanr adr accept|reject <ADR> [--reason "…"]`.
+- **Which release?** An entry with `"approval": "release"` (or any entry that has
+  `release_choices`) is an item ready for release and in none. Ask which planned release it
+  belongs to. The options are each version in `release_choices`, plus **New release…**, the same
+  choices the monitor's Review page offers. Then run `kanbanr release plan <VERSION> <CODE>`. For a
+  new release, ask its version and target date, then run
+  `kanbanr release add <VERSION> --target YYYY-MM-DD` before the plan.
 - **Change it** → ask what, revise the definition; it returns to the queue (its approval lapses).
 - **Skip** → leave it, and move to the next.
 

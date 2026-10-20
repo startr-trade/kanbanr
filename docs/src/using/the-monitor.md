@@ -250,6 +250,28 @@ opens on the running sprint, and Releases and the Gantt show the cadence:
 | ![A running sprint and its burndown](../images/sprint.png) | ![Releases](../images/releases.png) | ![The Gantt with sprints and releases](../images/gantt-sprints.png) |
 | **A sprint** — goal, days left, burndown | **Releases** — scope, progress, notes | **Gantt** with sprints and releases |
 
+### Release actions
+
+With releases on, two release decisions can be made from the monitor started with writes on
+(`kanbanr review --ui`). Each uses the same operation as its CLI command, so the board ends up the
+same whichever you use. A read-only monitor shows the command instead.
+
+- **Which release?** When an item's next stage is the end (for example Migration → Operations in
+  TOGAF), or a stage that asks for `in_release`, and the item is in no release, the Review page
+  asks which planned release it belongs to. There is one button per planned release, plus **New
+  release…**, which takes a version and a target date, adds the release, and plans the item into
+  it. This is `kanbanr release plan <VERSION> <CODE>`, plus `kanbanr release add` for a new one.
+  The question comes after any approval or sign-off the item is waiting on. Once the item is in a
+  release, it leaves the queue.
+- **Promote.** Each release on the Releases page shows its stage, with the stage history on hover,
+  and a **Promote to \<next stage\>** button until it reaches the last stage. This is
+  `kanbanr release promote <VERSION>`. Promoting to the last stage (production) is the cut, so the
+  page asks you to confirm first. It lists the release's items (the finished ones ship, the rest
+  are carried over), the tag `<VERSION>`, and the merge `release/<VERSION> → main`. The first
+  stage and the cut act on the code repository. The monitor uses the repository it was started in.
+  Started anywhere else, it refuses those two and names the CLI command to run from the project
+  folder.
+
 Across several projects ([Portfolio](portfolio.md)):
 
 ![The portfolio: rollups and cross-project lanes](../images/portfolio.png)

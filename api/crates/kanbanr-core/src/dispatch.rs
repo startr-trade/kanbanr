@@ -943,6 +943,11 @@ pub fn dispatch_in(
         ("POST", ["projects", p, "releases", version, "cut"]) => {
             ser(&crate::releases::cut(store, p, &percent_decode(version))?)
         }
+        // What cutting a release now would ship and carry over, by the cut's own rule, with nothing
+        // written (FEAT-185): the monitor's production confirmation lists exactly this.
+        ("GET", ["projects", p, "releases", version, "cut-preview"]) => ser(
+            &crate::releases::cut_preview(store, p, &percent_decode(version))?,
+        ),
         // FEAT-183: `{stage?, by, reason?}` — the next stage, or the named one.
         ("POST", ["projects", p, "releases", version, "promote"]) => {
             ser(&crate::releases::promote(
@@ -1289,6 +1294,18 @@ pub fn dispatch_in(
             let project = store.load_for_gates(p)?;
             let charter = crate::charter::load(store, p)?;
             let ctx = crate::readiness::Context::load(store, p, &project.config);
+            // The planned releases, in file order: the choices of the which-release question
+            // (FEAT-185). Only loaded when the project works in releases.
+            let release_choices: Vec<String> = if project.config.cadence.releases {
+                crate::releases::load(store, p)?
+                    .into_iter()
+                    .filter(|r| r.state == crate::releases::ReleaseState::Planned)
+                    .map(|r| r.version)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let gates = project.config.effective_gates();
             // Whether an approval is current or has lapsed depends on a hash of the definition's
             // content, so it is decided here rather than in each caller: the CLI, the monitor and
             // any future client all get the same answer to "is this agreed?".
@@ -1315,14 +1332,27 @@ pub fn dispatch_in(
                     // the item reaches next, not every stage it could skip to, and only once that
                     // stage's other requirements are met (FEAT-182): a sign-off offered before the
                     // work exists records agreement to work that has not happened.
-                    let signoffs_needed: Vec<String> = if live {
+                    let next = if live {
                         crate::readiness::immediate_next_gate(&project, Some(&charter), f, &ctx)
-                            .filter(|n| n.requires_gaps.is_empty())
-                            .map(|n| n.signoffs_needed)
-                            .unwrap_or_default()
                     } else {
-                        Vec::new()
+                        None
                     };
+                    // Which release it ships in (FEAT-185): asked of live work not yet planned
+                    // into one, once the stage it reaches next is the end, or asks for a release.
+                    let asks_release = project.config.cadence.releases
+                        && f.release.as_deref().is_none_or(|r| r.trim().is_empty())
+                        && next.as_ref().is_some_and(|n| {
+                            project.config.is_terminal(&n.status)
+                                || gates.get(&n.status).is_some_and(|g| {
+                                    g.requires.contains(&crate::readiness::Condition::Check(
+                                        crate::readiness::Check::InRelease,
+                                    ))
+                                })
+                        });
+                    let signoffs_needed: Vec<String> = next
+                        .filter(|n| n.requires_gaps.is_empty())
+                        .map(|n| n.signoffs_needed)
+                        .unwrap_or_default();
                     let state = match definition.approval_state() {
                         _ if unratified => "unratified",
                         // Agreed is agreed, however late — a ratified item is not still a
@@ -1333,11 +1363,15 @@ pub fn dispatch_in(
                         {
                             "signoff"
                         }
+                        // Agreed, and nothing to sign: the one question left is the release.
+                        ApprovalState::Current | ApprovalState::Ratified if asks_release => {
+                            "release"
+                        }
                         ApprovalState::Current | ApprovalState::Ratified => return None,
                         ApprovalState::Missing => "missing",
                         ApprovalState::Lapsed => "lapsed",
                     };
-                    Some(json!({
+                    let mut entry = json!({
                         "code": f.code,
                         "title": f.title,
                         "status": f.status,
@@ -1349,13 +1383,21 @@ pub fn dispatch_in(
                         "rev": definition.content_rev(),
                         // What the ordering below keys on, and useful to a client besides.
                         "in_progress": f.status != project.config.default_state,
-                    }))
+                    });
+                    // Present whenever the release question is due, so a surface asking another
+                    // question first can ask this one too. Empty: only a new release to choose.
+                    if asks_release {
+                        entry["release_choices"] = json!(release_choices);
+                    }
+                    Some(entry)
                 })
                 .collect();
             // Work already built without agreement comes first (FEAT-109), then work being built
-            // without it, then work that has not started (FEAT-078 R-2).
+            // without it, then work that has not started (FEAT-078 R-2). The release question
+            // comes after every approval and sign-off (FEAT-185).
             pending.sort_by_key(|v| {
                 (
+                    v["approval"] == "release",
                     v["approval"] != "unratified",
                     !v["in_progress"].as_bool().unwrap_or(false),
                     v["code"].as_str().unwrap_or_default().to_string(),

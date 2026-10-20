@@ -226,9 +226,13 @@ export interface PendingReview {
   title: string;
   status: string;
   /** `unratified`: finished under a recorded bypass and never agreed to (FEAT-109). */
-  approval: "missing" | "lapsed" | "unratified" | "signoff";
+  /** `release`: agreed, and its next stage is the end — which planned release is it in (FEAT-185)? */
+  approval: "missing" | "lapsed" | "unratified" | "signoff" | "release";
   /** Sign-offs the item's next stage is waiting on (FEAT-117). */
   signoffs_needed?: string[];
+  /** Present when the item is ready for release and in none: the planned releases, in file order
+   * (FEAT-185). Empty means there is none yet, and only a new release can be chosen. */
+  release_choices?: string[];
   /** The definition revision this brief shows; a verdict sent with it is refused if it moved on (FEAT-159). */
   rev?: string;
   started_unapproved?: string;
@@ -382,6 +386,14 @@ export interface Release {
 export type Condition = string | { zachman: string[] } | { spec_sections: string[] };
 
 /** What entering a status asks for (FEAT-113, FEAT-114). */
+/** What a cut would do with one planned item (FEAT-183, FEAT-185). */
+export interface CutPreview {
+  code: string;
+  ships: boolean;
+  to?: string;
+  why?: string;
+}
+
 export interface Gate {
   purpose?: string;
   requires?: Condition[];

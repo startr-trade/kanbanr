@@ -8,6 +8,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Release actions in the monitor (FEAT-185).** With releases on, the review queue asks which
+  planned release an item belongs to once its next stage is the end (or a stage that asks for
+  `in_release`) and it is in none. The Review page offers one button per planned release and
+  **New release…**; `kanbanr review --pending` lists the matching `kanbanr release plan` command,
+  and the skill has Claude ask the same question. The Releases page shows each release's stage and
+  its history, and a **Promote to \<next stage\>** button, which asks for confirmation before the
+  production cut, listing exactly what ships and what carries over (tag, and main fast-forwarded). Both use the same operations as the CLI, through the
+  writes-enabled monitor.
 - **The monitor as a standalone static bundle (FEAT-178).** Each release attaches
   `kanbanr-monitor-<tag>.tar.gz`, the monitor the binary embeds, for collaborators and reviewers to
   view a board from any static web host without running kanbanr. Unpack it, set `apiBase` in its
