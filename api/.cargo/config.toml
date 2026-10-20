@@ -1,0 +1,7 @@
+# Every process cargo starts from this workspace — every test, and every `kanbanr` a test spawns —
+# can only touch boards inside the system temporary directory (FEAT-195). A test that drifted onto
+# a real board once created a project on it and the board's auto-push published it; this makes that
+# impossible rather than unlikely. `cargo run` here is fenced too: run the built binary
+# (target/debug/kanbanr) against a real board.
+[env]
+KANBANR_BOARD_FENCE = "temp"

@@ -22,17 +22,21 @@ gates:
     purpose: Who it is for, what it must do, and why — the behaviour, as requirements.
     requires: [statement, goals, {zachman: [who, what, why]}, requirements, ears, approved]
   System Design:
+    roles: [design]
     purpose: How and where it will be built, and the quality it must reach.
     requires: [{zachman: [how, where]}, approved]
     warns: [quality]
   Implementation:
+    roles: [build]
     purpose: Build it, with a test named for every requirement.
     requires: [tests_named, approved]
     on_enter: [branch]
   Migration:
+    roles: [integrate]
     purpose: Move it into use, with the evidence that it works.
     requires: [tests_green]
   Operations:
+    roles: [release]
     purpose: Released and running.
     requires: [tests_green]
     signoffs: [release]

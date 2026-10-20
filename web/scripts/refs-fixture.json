@@ -1,0 +1,176 @@
+{
+  "index": {
+    "project": "shop",
+    "items": {
+      "FEAT-012": [
+        "R-1",
+        "R-2"
+      ],
+      "FEAT-013": []
+    },
+    "milestones": [
+      "MS-004"
+    ],
+    "adrs": {
+      "ADR-0005": "decisions/0005-carts.md"
+    },
+    "goals": [
+      "G-1",
+      "G-2"
+    ],
+    "docs": [
+      "architecture/data.md",
+      "decisions/0005-carts.md"
+    ]
+  },
+  "cases": [
+    {
+      "name": "prose references of each kind",
+      "markdown": "FEAT-012 serves G-2 in MS-004, decided by ADR-0005.\nSee architecture/data.md and FEAT-012/R-2.",
+      "expect": [
+        [
+          "item",
+          "FEAT-012",
+          1,
+          false,
+          false
+        ],
+        [
+          "goal",
+          "G-2",
+          1,
+          false,
+          false
+        ],
+        [
+          "milestone",
+          "MS-004",
+          1,
+          false,
+          false
+        ],
+        [
+          "adr",
+          "ADR-0005",
+          1,
+          false,
+          false
+        ],
+        [
+          "doc",
+          "architecture/data.md",
+          2,
+          false,
+          false
+        ],
+        [
+          "item",
+          "FEAT-012/R-2",
+          2,
+          false,
+          false
+        ]
+      ]
+    },
+    {
+      "name": "broken references with this board's shape",
+      "markdown": "FEAT-999 and FEAT-012/R-7, ADR-9999, G-9, MS-099.",
+      "expect": [
+        [
+          "item",
+          "FEAT-999",
+          1,
+          false,
+          true
+        ],
+        [
+          "item",
+          "FEAT-012/R-7",
+          1,
+          false,
+          true
+        ],
+        [
+          "adr",
+          "ADR-9999",
+          1,
+          false,
+          true
+        ],
+        [
+          "goal",
+          "G-9",
+          1,
+          false,
+          true
+        ],
+        [
+          "milestone",
+          "MS-099",
+          1,
+          false,
+          true
+        ]
+      ]
+    },
+    {
+      "name": "tokens that are not this board's",
+      "markdown": "UTF-8, ISO-9001, RUSTSEC-2024-0449, e-mail, X-1, MS-DOS, notes/readme.md",
+      "expect": []
+    },
+    {
+      "name": "code and comments are skipped",
+      "markdown": "`FEAT-012` in a span\n```\nFEAT-012 in a fence\n```\n<!-- FEAT-012 in a comment -->\nafter: FEAT-013",
+      "expect": [
+        [
+          "item",
+          "FEAT-013",
+          6,
+          false,
+          false
+        ]
+      ]
+    },
+    {
+      "name": "explicit links are read by their target, once",
+      "markdown": "[the cart](/p/shop/feature/FEAT-012#R-1), [data](architecture/data.md), [gone](/p/shop/docs/file/missing.md), [web](https://example.com/FEAT-999), [goal](/p/shop/charter#G-1), [other](/p/other/feature/FEAT-1), [repo](/p/shop/docs/file/docs/src/guide.md)",
+      "expect": [
+        [
+          "item",
+          "FEAT-012/R-1",
+          1,
+          true,
+          false
+        ],
+        [
+          "doc",
+          "architecture/data.md",
+          1,
+          true,
+          false
+        ],
+        [
+          "doc",
+          "missing.md",
+          1,
+          true,
+          true
+        ],
+        [
+          "goal",
+          "G-1",
+          1,
+          true,
+          false
+        ],
+        [
+          "doc",
+          "docs/src/guide.md",
+          1,
+          true,
+          true
+        ]
+      ]
+    }
+  ]
+}

@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, type MouseEvent } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import mermaid from "mermaid";
+import DOMPurify from "dompurify";
 import { markdownToSafeHtml, safeSvg } from "../markdownHtml";
 import { appHref } from "../runtimeConfig";
+import { useBoardIndex } from "../useBoardIndex";
 
 // Unique-per-render id source for mermaid (ids must be stable strings, unique across renders).
 let mermaidSeq = 0;
@@ -15,6 +18,8 @@ let mermaidSeq = 0;
  *   relative image name is meaningful in *any* docs folder (it resolves to `<that-folder>/<name>`),
  *   served by the view daemon's `/docs/raw` endpoint.
  * - Fenced ```mermaid blocks are rendered to SVG diagrams (flowcharts, sequence, etc.).
+ * - References to the board (`FEAT-012`, `ADR-0005`, a doc path…) link to their pages, and a link
+ *   into the monitor navigates in place rather than reloading it (FEAT-181).
  */
 export default function Markdown({
   source,
@@ -23,17 +28,28 @@ export default function Markdown({
   source: string;
   resolveImage?: (src: string) => string;
 }) {
+  const { project } = useParams();
+  const index = useBoardIndex(project);
+  const navigate = useNavigate();
   // A board link written as a path (`/p/x/feature/Y`) is an in-app route. Under hash routing — the
   // standalone bundle on a plain static host (FEAT-178) — it must become `#/p/…`, or it would ask
-  // the host for a file that is not there.
+  // the host for a file that is not there; the hash router then follows it.
   const html = useMemo(
     () =>
-      markdownToSafeHtml(source, resolveImage).replace(
+      markdownToSafeHtml(source, resolveImage, DOMPurify, index).replace(
         /(<a\b[^>]*?\bhref=")(\/(?:p\/|portfolio\b)[^"]*)(")/g,
         (_m, pre, path, post) => pre + appHref(path) + post,
       ),
-    [source, resolveImage],
+    [source, resolveImage, index],
   );
+  const follow = (e: MouseEvent<HTMLDivElement>) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = (e.target as HTMLElement).closest?.("a");
+    const target = a?.getAttribute("href");
+    if (!target || !target.startsWith("/p/")) return;
+    e.preventDefault();
+    navigate(target);
+  };
 
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -82,5 +98,5 @@ export default function Markdown({
     });
   }, [html]);
 
-  return <div className="markdown" ref={ref} dangerouslySetInnerHTML={{ __html: html }} />;
+  return <div className="markdown" ref={ref} onClick={follow} dangerouslySetInnerHTML={{ __html: html }} />;
 }

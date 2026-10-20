@@ -60,7 +60,11 @@ pub struct Store {
 
 impl Store {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Store { root: root.into() }
+        let root = root.into();
+        // Every read and write of a board starts here: under test, one outside the temporary
+        // directory stops the run before anything is touched (FEAT-195).
+        crate::project::assert_inside_fence(&root);
+        Store { root }
     }
 
     /// The data folder this store owns. The activity and events logs live beside the projects
@@ -311,6 +315,21 @@ impl Store {
             features,
             milestones,
         })
+    }
+
+    /// Load a project for judging its gates: metadata only, unless a gate reads spec bodies
+    /// (`spec_sections`, FEAT-179), which a metadata-only load leaves empty.
+    pub fn load_for_gates(&self, id: &str) -> Result<Project> {
+        let project = self.load_meta(id)?;
+        if project
+            .config
+            .effective_gates()
+            .values()
+            .any(|g| g.reads_spec())
+        {
+            return self.load(id);
+        }
+        Ok(project)
     }
 
     /// Load a single feature's specification body on demand. Scans the configured status folders
@@ -963,6 +982,23 @@ impl Store {
         definition: Option<crate::models::FeatureDefinition>,
     ) -> Result<FeatureItem> {
         let previous = project.feature(code)?.definition.clone();
+        // Declared docs are board paths (FEAT-180): `.md` appended, and nothing that could name a
+        // file outside the doc tree.
+        let mut definition = definition;
+        if let Some(def) = definition.as_mut() {
+            for doc in &mut def.affects_docs {
+                let path = std::path::Path::new(doc.trim());
+                if doc.trim().is_empty()
+                    || path.is_absolute()
+                    || path
+                        .components()
+                        .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                {
+                    return Err(CoreError::InvalidDocPath(doc.clone()));
+                }
+                *doc = crate::refs::doc_key(doc);
+            }
+        }
         let definition = definition.map(|mut def| {
             assign_requirement_ids(&mut def);
             // Carry the approval record forward: a redefinition must LAPSE the approval, not erase
@@ -1187,6 +1223,13 @@ impl Store {
         by: &str,
         reason: &str,
     ) -> Result<FeatureItem> {
+        // Taking an agreement back needs a reason, wherever it is asked from (FEAT-182 R-5): the
+        // monitor's button enforced this, the store did not.
+        if reason.trim().is_empty() {
+            return Err(CoreError::Unsupported(
+                "withdrawing an approval needs a reason — say why it no longer stands".into(),
+            ));
+        }
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let feature = project.feature_mut(code)?;
@@ -1263,6 +1306,69 @@ impl Store {
             note: note.trim().to_string(),
             doc: doc.trim().to_string(),
             status,
+            ..Default::default()
+        });
+        feature.updated_at = at;
+        let updated = feature.clone();
+        pending.persist_features.insert(updated.code.clone());
+        self.flush(id, &project, &pending)?;
+        Ok(updated)
+    }
+
+    /// Withdraw sign-off `signoff` on an item (FEAT-182): appends a withdrawal, keeping the earlier
+    /// entry as history, after which the sign-off no longer counts. Needs a reason. A lapsed
+    /// sign-off can be withdrawn too — that records that the agreement was wrong, not merely old.
+    pub fn withdraw_signoff(
+        &self,
+        id: &str,
+        code: &str,
+        signoff: &str,
+        by: &str,
+        reason: &str,
+    ) -> Result<FeatureItem> {
+        let signoff = signoff.trim();
+        if reason.trim().is_empty() {
+            return Err(CoreError::Unsupported(
+                "withdrawing a sign-off needs a reason — say why it no longer stands".into(),
+            ));
+        }
+        if by.trim().is_empty() {
+            return Err(CoreError::Unsupported(
+                "a withdrawal must say who made it — set a commit identity with `kanbanr identity`"
+                    .into(),
+            ));
+        }
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let feature = project.feature_mut(code)?;
+        let status = feature.status.clone();
+        let definition = feature
+            .definition
+            .as_mut()
+            .ok_or_else(|| CoreError::Unsupported(format!("{code} has no definition")))?;
+        match definition.signoff_latest(signoff) {
+            None => {
+                return Err(CoreError::Unsupported(format!(
+                    "{code} has no sign-off '{signoff}' to withdraw"
+                )));
+            }
+            Some(s) if !s.verdict.is_given() => {
+                return Err(CoreError::Unsupported(format!(
+                    "sign-off '{signoff}' on {code} is already withdrawn"
+                )));
+            }
+            Some(_) => {}
+        }
+        let at = now_rfc3339();
+        definition.signoffs.push(crate::models::Signoff {
+            id: signoff.to_string(),
+            by: by.trim().to_string(),
+            at: at.clone(),
+            rev: String::new(),
+            status,
+            verdict: crate::models::SignoffVerdict::Withdrawn,
+            reason: reason.trim().to_string(),
+            ..Default::default()
         });
         feature.updated_at = at;
         let updated = feature.clone();
@@ -1301,6 +1407,33 @@ impl Store {
             Self::gated_move_on(&mut project, &mut pending, &charter, &ctx, code, to, reason)?;
         self.flush(id, &project, &pending)?;
         Ok((f, warnings))
+    }
+
+    /// What moving `code` to `to` would meet, without moving it (FEAT-190): the status, the edge
+    /// and the gate, judged exactly as the move judges them. A move that would merge a branch first
+    /// asks this, so a refused move never leaves a merge behind.
+    pub fn gate_preview(
+        &self,
+        id: &str,
+        code: &str,
+        to: &str,
+        reason: Option<&str>,
+    ) -> Result<Vec<crate::readiness::Gap>> {
+        let project = self.load(id)?;
+        if !project.config.has_status(to) {
+            return Err(CoreError::UnknownStatus(to.to_string()));
+        }
+        let from = project.feature(code)?.status.clone();
+        if !project.config.transition_allowed(&from, to) {
+            return Err(CoreError::TransitionNotAllowed {
+                from,
+                to: to.to_string(),
+            });
+        }
+        let charter = crate::charter::load(self, id)?;
+        let ctx = crate::readiness::Context::load(self, id, &project.config);
+        let reason = reason.map(str::trim).filter(|r| !r.is_empty());
+        Ok(Self::check_gate(&project, &charter, &ctx, code, to, reason)?.warnings)
     }
 
     /// The one gated move, shared by the route and the batch path — the batch is the primary way
@@ -1629,6 +1762,18 @@ impl Store {
         } else {
             None
         };
+        // A finish that would merge the item's branch is a move made from the code repository,
+        // never a side effect of a task write (FEAT-190, Q5).
+        let target = match target {
+            Some(to) if crate::gitmodel::move_would_merge(&config, &from, &to) => {
+                held = Some(format!(
+                    "all tasks are done, but it stays in {from}: finishing it merges its branch — \
+                     run `kanbanr move {feature} {to}` from the project folder to integrate it"
+                ));
+                None
+            }
+            other => other,
+        };
         let target = match target {
             Some(to) => match Self::check_gate(project, charter, ctx, feature, &to, None) {
                 Ok(_) => match Self::unproven(project, charter, ctx, feature)? {
@@ -1682,7 +1827,7 @@ impl Store {
         ctx: &crate::readiness::Context,
         feature: &str,
     ) -> Result<Option<String>> {
-        if !project.config.gates.is_empty() || charter.adopted_at.trim().is_empty() {
+        if project.config.declares_gates() || charter.adopted_at.trim().is_empty() {
             return Ok(None);
         }
         let f = project.feature(feature)?;
@@ -2084,12 +2229,22 @@ impl Store {
                     if skipped.contains(&code) {
                         return Ok(skip("feature.move", &code));
                     }
+                    let code = resolve(&aliases, &code);
+                    // A move that integrates merges a branch, which a batch cannot undo: it runs
+                    // on its own (FEAT-190).
+                    if let Ok(f) = project.feature(&code)
+                        && crate::gitmodel::move_would_merge(&project.config, &f.status, &to)
+                    {
+                        return Err(CoreError::Unsupported(format!(
+                            "move {code} on its own: integrating it merges its branch"
+                        )));
+                    }
                     let (f, warnings) = Self::gated_move_on(
                         &mut project,
                         &mut pending,
                         &charter,
                         &ctx,
-                        &resolve(&aliases, &code),
+                        &code,
                         &to,
                         unapproved.as_deref(),
                     )?;
@@ -2550,15 +2705,61 @@ impl Store {
         gates: std::collections::BTreeMap<String, crate::config::Gate>,
     ) -> Result<ProjectConfig> {
         let mut project = self.load(id)?;
-        if let Some(problem) = crate::config::gate_problems(&project.config.statuses, &gates)
-            .into_iter()
-            .next()
+        if let Some(problem) = crate::config::gate_problems(
+            &project.config.statuses,
+            &project.config.no_op_states,
+            &project.config.terminal_states,
+            &gates,
+        )
+        .into_iter()
+        .next()
         {
             return Err(problem);
         }
         project.config.gates = gates;
         self.save_config(id, &project.config)?;
         Ok(project.config)
+    }
+
+    /// Turn parts of the method on or off for a project (FEAT-193). Off takes their fragments out
+    /// of the workflow and records the choice, so applying or updating a process keeps them out;
+    /// on puts them back. A workflow that matched its saved process still does afterwards — its
+    /// record is re-stamped — and one already edited stays edited. Nothing is written if the result
+    /// does not check. Returns the config and a note for each part that had nowhere to go.
+    pub fn set_method(
+        &self,
+        id: &str,
+        on: bool,
+        parts: &[crate::method::Part],
+    ) -> Result<(ProjectConfig, Vec<String>)> {
+        let mut config = self.load_meta(id)?.config;
+        let mut wf = crate::config::WorkflowFile::from_config(&config);
+        let was_current = config
+            .process
+            .as_ref()
+            .is_some_and(|s| s.rev == wf.content_rev());
+        let notes = if on {
+            let notes = crate::method::add(&mut wf, parts);
+            config.method.off.retain(|p| !parts.contains(p));
+            notes
+        } else {
+            crate::method::remove(&mut wf, parts);
+            config.method.off.extend_from_slice(parts);
+            config.method.off.sort();
+            config.method.off.dedup();
+            Vec::new()
+        };
+        if let Some(problem) = wf.problems().into_iter().next() {
+            return Err(problem);
+        }
+        config.method.chosen_at = crate::now_rfc3339();
+        config.gates = wf.gates;
+        let rev = crate::config::WorkflowFile::from_config(&config).content_rev();
+        if was_current && let Some(source) = config.process.as_mut() {
+            source.rev = rev;
+        }
+        self.save_config(id, &config)?;
+        Ok((config, notes))
     }
 
     /// The statuses a workflow of `statuses` would remove while items still sit in them, with how
@@ -2641,6 +2842,8 @@ impl Store {
                 "release cadence '{release}' is not one of per_sprint, every_n, on_demand"
             )));
         }
+        crate::config::Cadence::validate_stages(&cadence.release_stages)
+            .map_err(CoreError::Unsupported)?;
         if let Some(unit) = unit {
             project.config.estimate_unit = unit;
         }

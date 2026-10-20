@@ -465,6 +465,10 @@ input:focus-visible,
   opacity: 0; transition: opacity 0.15s;
 }
 .markdown pre:hover .code-copy { opacity: 1; }
+/* Links into the board (FEAT-181): dotted, so they read differently from links out of it; one that
+   points at nothing the board has is struck through. */
+.markdown a.board-ref { text-decoration: underline dotted; text-underline-offset: 2px; }
+.markdown a.board-ref.broken { color: var(--warn); text-decoration: line-through; }
 .code-copy:hover { color: var(--text); border-color: var(--accent); }
 /* On touch devices there is no hover — keep the copy button visible. */
 @media (hover: none) {

@@ -121,3 +121,13 @@ counting as done (an end status, or one whose gate says `done`, like Scrum's Don
 from the sprints that closed. `release cut` ships what is finished, writes the notes as a board
 document, and carries the rest to the next release, recording that it did.
 
+A release also has a **stage** (`cadence.release_stages`, by default candidate → test → staging →
+production) and the history of its moves, each with who and when. `release promote` moves it
+(`releases::promote`). The first and last stages act on the project's **code** repository through
+`coderepo`, which shells out to the developer's own `git`: the first makes `release/<VERSION>`, the
+last is the cut. The cut checks everything it can first — no uncommitted changes, the branch
+present, the tag absent, main an ancestor of the release — then tags the release tip and
+fast-forwards main to it, then cuts the board; if the board step fails, the tag is deleted and main
+put back. The CLI passes the repository it runs in, the daemon the one it was started in when that
+folder's marker names the project; without one, those two stages are refused. Nothing is pushed.
+

@@ -21,7 +21,10 @@ use std::collections::BTreeMap;
 /// 3 — the config may declare `gates` (FEAT-113). A board is stamped 3 only when it
 /// declares gates, so an older binary refuses it instead of silently ignoring its guardrails; a
 /// board without gates stays at [`BASE_SCHEMA_VERSION`] and remains readable by older binaries.
-pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+///
+/// 4 — gates may only label stage roles, or be addressed to a role (`@build`) (FEAT-188). Stamped
+/// only then: an older reader would take the labels for declared gates, or never match `@build`.
+pub const CURRENT_SCHEMA_VERSION: u32 = 4;
 
 /// What a board with no gates is stamped with: the storage layout of FEAT-071/FEAT-066.
 pub const BASE_SCHEMA_VERSION: u32 = 2;
@@ -76,6 +79,13 @@ pub struct ProjectConfig {
     /// measured against. An older kanbanr keeps it through `extra`, so it needs no schema bump.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<ProcessSource>,
+    /// Which parts of the method this project turned off, and when it chose (FEAT-193). Absent:
+    /// never chosen, everything on.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::method::MethodChoice::is_default"
+    )]
+    pub method: crate::method::MethodChoice,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -160,6 +170,20 @@ pub struct Cadence {
     /// How often a release is cut: `per_sprint`, `every_n` sprints, or `on_demand`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release: Option<String>,
+    /// The environments a release moves through, in order (FEAT-183). The last one is the cut.
+    /// Empty means [`DEFAULT_RELEASE_STAGES`]; read it through [`Cadence::stages`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub release_stages: Vec<String>,
+    /// The branch a release branch is made from. Unset: the code repository's default branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration_branch: Option<String>,
+    /// The branch production is fast-forwarded onto. Unset: the code repository's default branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_branch: Option<String>,
+    /// Branching follows the derived git model (FEAT-189): where `start` branches, sprint
+    /// branches, and lines of integration taking merges only. Off by default, so no board changes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub git_model: bool,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -170,9 +194,41 @@ pub struct Cadence {
     pub extra: crate::models::Extra,
 }
 
+/// The stages a release moves through when a project names none (FEAT-183).
+pub const DEFAULT_RELEASE_STAGES: [&str; 4] = ["candidate", "test", "staging", "production"];
+
 impl Cadence {
     pub fn is_off(&self) -> bool {
         *self == Cadence::default()
+    }
+
+    /// The release stages in force: the project's own list, else the default. The first makes the
+    /// release branch, the last is the cut (FEAT-183).
+    pub fn stages(&self) -> Vec<String> {
+        if self.release_stages.is_empty() {
+            DEFAULT_RELEASE_STAGES
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        } else {
+            self.release_stages.clone()
+        }
+    }
+
+    /// A stage list must name each stage once, and none blank. An empty list is not checked here:
+    /// it means the default, and refusing an explicitly empty one is the caller's (FEAT-183).
+    pub fn validate_stages(stages: &[String]) -> Result<(), String> {
+        let mut seen = std::collections::BTreeSet::new();
+        for stage in stages {
+            let stage = stage.trim();
+            if stage.is_empty() {
+                return Err("a release stage cannot be blank".into());
+            }
+            if !seen.insert(stage) {
+                return Err(format!("release stage '{stage}' is listed twice"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -199,6 +255,17 @@ pub enum Action {
     Branch,
 }
 
+impl Gate {
+    /// Whether judging this gate reads spec bodies (FEAT-179), so a metadata-only load would
+    /// report every spec section as missing.
+    pub fn reads_spec(&self) -> bool {
+        self.requires
+            .iter()
+            .chain(&self.warns)
+            .any(crate::readiness::Condition::reads_spec)
+    }
+}
+
 /// The entry criteria of one status. Every field is optional; an empty gate asks nothing.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Gate {
@@ -223,6 +290,11 @@ pub struct Gate {
     pub kinds: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub on_enter: Vec<Action>,
+    /// The stage roles this status holds (FEAT-188): `design`, `build`, `integrate`, `release`. The
+    /// method and git automation find their stage by role, so they behave the same in every
+    /// process. Kept as names, so an unknown one is a reported problem, not a parse failure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<String>,
     /// Reaching this stage finishes an item for the cadence views — the sprint burndown, its done
     /// total, what a closing sprint carries over (FEAT-137). Scrum's Definition of Done is the Done
     /// column, not the release that ships it, and a burndown that waited for the release dropped in
@@ -240,6 +312,25 @@ pub struct Gate {
 }
 
 impl Gate {
+    /// A gate that only names roles and asks nothing (FEAT-188). It labels a stage; it does not
+    /// declare a guardrail, so a workflow whose gates are all labels keeps the built-in rule.
+    pub fn is_role_label(&self) -> bool {
+        !self.roles.is_empty()
+            && self.purpose.is_empty()
+            && self.requires.is_empty()
+            && self.warns.is_empty()
+            && self.signoffs.is_empty()
+            && self.enforce.is_block()
+            && self.kinds.is_empty()
+            && self.on_enter.is_empty()
+            && !self.done
+    }
+
+    /// Does this gate ask for anything (beyond naming roles)?
+    pub fn declares_rules(&self) -> bool {
+        !self.requires.is_empty() || !self.warns.is_empty() || !self.signoffs.is_empty()
+    }
+
     /// Does this gate apply to an item of `kind`?
     pub fn applies_to(&self, kind: Option<&str>) -> bool {
         let kind = kind
@@ -247,6 +338,82 @@ impl Gate {
             .filter(|k| !k.is_empty())
             .unwrap_or("feature");
         self.kinds.is_empty() || self.kinds.iter().any(|k| k.eq_ignore_ascii_case(kind))
+    }
+}
+
+/// What a stage is for, in any process (FEAT-188). Each role belongs to at most one status; a
+/// status may hold several (a small process can integrate and release in one step).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Role {
+    Design,
+    Build,
+    Integrate,
+    Release,
+}
+
+impl Role {
+    pub const ALL: [Role; 4] = [Role::Design, Role::Build, Role::Integrate, Role::Release];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Role::Design => "design",
+            Role::Build => "build",
+            Role::Integrate => "integrate",
+            Role::Release => "release",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Role> {
+        let s = s.trim();
+        Role::ALL
+            .into_iter()
+            .find(|r| r.name().eq_ignore_ascii_case(s))
+    }
+
+    /// What the role means, in a sentence.
+    pub fn means(self) -> &'static str {
+        match self {
+            Role::Design => "the item's design is written and agreed: how and where, before build",
+            Role::Build => "code is written on the item's branch",
+            Role::Integrate => "the item's work joins its line of integration and the docs fold in",
+            Role::Release => "the work ships, and the item is finished",
+        }
+    }
+}
+
+impl serde::Serialize for Role {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.name())
+    }
+}
+
+/// A gate key that addresses a role rather than a status: `"@build"` (FEAT-188).
+pub const ROLE_KEY_PREFIX: &str = "@";
+
+/// The role a gate key addresses, for `"@<role>"` keys.
+pub fn role_key(key: &str) -> Option<Role> {
+    key.strip_prefix(ROLE_KEY_PREFIX).and_then(Role::parse)
+}
+
+/// Which status holds each role, and whether the workflow declared them or they were inferred
+/// from what it already does (FEAT-188).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct StageRoles {
+    pub by_role: BTreeMap<Role, String>,
+    pub declared: bool,
+}
+
+impl StageRoles {
+    pub fn status(&self, role: Role) -> Option<&str> {
+        self.by_role.get(&role).map(String::as_str)
+    }
+
+    /// The roles `status` holds, in role order.
+    pub fn of(&self, status: &str) -> Vec<Role> {
+        Role::ALL
+            .into_iter()
+            .filter(|r| self.status(*r) == Some(status))
+            .collect()
     }
 }
 
@@ -383,8 +550,18 @@ pub fn versioned(
     Ok((new, changed))
 }
 
-/// A preset by name, or an error that lists the ones there are.
+/// A built-in process as it applies: the file as written, with the method merged in (FEAT-193) —
+/// design before build, and living documentation, at the stages holding the build and integrate
+/// roles. A project that turned parts off has them taken out again where it applies a process.
 pub fn preset(name: &str) -> crate::Result<WorkflowFile> {
+    let mut file = preset_bare(name)?;
+    crate::method::add(&mut file, &crate::method::Part::GATES);
+    Ok(file)
+}
+
+/// A preset by name exactly as its file is written, without the method; or an error that lists
+/// the ones there are.
+pub fn preset_bare(name: &str) -> crate::Result<WorkflowFile> {
     let key = name.trim().to_ascii_lowercase();
     let text = PRESETS
         .iter()
@@ -420,6 +597,7 @@ impl WorkflowFile {
             estimate_unit: self.estimate_unit,
             cadence: self.cadence,
             process: None,
+            method: Default::default(),
         };
         config.schema_version = config.required_schema_version();
         config
@@ -501,7 +679,7 @@ pub fn check_workflow(
     for s in &terminals {
         unknown(s, &mut problems);
     }
-    problems.extend(gate_problems(&statuses, &gates));
+    problems.extend(gate_problems(&statuses, &no_ops, &terminals, &gates));
     let file = WorkflowFile {
         statuses,
         default_state,
@@ -518,12 +696,18 @@ pub fn check_workflow(
 /// What is wrong with a workflow's gates (FEAT-113): each must name a status of the workflow, name
 /// its sign-offs, and ask only for real Zachman columns. A gate that can never match is a guardrail
 /// that silently isn't there.
-pub fn gate_problems(statuses: &[String], gates: &BTreeMap<String, Gate>) -> Vec<crate::CoreError> {
+pub fn gate_problems(
+    statuses: &[String],
+    no_ops: &[String],
+    terminals: &[String],
+    gates: &BTreeMap<String, Gate>,
+) -> Vec<crate::CoreError> {
     use crate::CoreError;
     use crate::readiness::{Check, Condition};
     let mut problems = Vec::new();
     for (status, gate) in gates {
-        if !statuses.iter().any(|s| s == status) {
+        // A key addressed to a role (`@build`) is checked by `role_problems` (FEAT-188).
+        if !status.starts_with(ROLE_KEY_PREFIX) && !statuses.iter().any(|s| s == status) {
             problems.push(CoreError::UnknownStatus(status.clone()));
         }
         if gate.signoffs.iter().any(|s| s.trim().is_empty()) {
@@ -542,6 +726,131 @@ pub fn gate_problems(statuses: &[String], gates: &BTreeMap<String, Gate>) -> Vec
                 problems.push(CoreError::Unsupported(format!(
                     "the gate on '{status}' names '{column}', which is not a Zachman column \
                      (what, how, where, when, who, why)"
+                )));
+            }
+        }
+    }
+    problems.extend(role_problems(statuses, no_ops, terminals, gates));
+    problems
+}
+
+/// Merge a role-addressed gate into the gate of the status that holds the role (FEAT-188): lists
+/// are unioned, the status's own entries first; the status's purpose wins unless it has none.
+/// Conflicting `enforce` or `kinds` are refused when the workflow is saved, so they never get here.
+fn merge_gate(target: &mut Gate, from: &Gate) {
+    fn union<T: Clone + PartialEq>(into: &mut Vec<T>, more: &[T]) {
+        for x in more {
+            if !into.contains(x) {
+                into.push(x.clone());
+            }
+        }
+    }
+    union(&mut target.requires, &from.requires);
+    union(&mut target.warns, &from.warns);
+    union(&mut target.signoffs, &from.signoffs);
+    union(&mut target.on_enter, &from.on_enter);
+    if target.purpose.is_empty() {
+        target.purpose = from.purpose.clone();
+    }
+    target.done |= from.done;
+    if target.kinds.is_empty() {
+        target.kinds = from.kinds.clone();
+    }
+    if target.enforce.is_block() {
+        target.enforce = from.enforce;
+    }
+}
+
+/// What is wrong with a workflow's stage roles (FEAT-188), in the order they are reported.
+pub fn role_problems(
+    statuses: &[String],
+    no_ops: &[String],
+    terminals: &[String],
+    gates: &BTreeMap<String, Gate>,
+) -> Vec<crate::CoreError> {
+    use crate::CoreError;
+    let known = "design, build, integrate, release";
+    let mut problems = Vec::new();
+    let mut holders: BTreeMap<Role, Vec<String>> = BTreeMap::new();
+    for status in statuses {
+        let Some(g) = gates.get(status) else { continue };
+        for name in &g.roles {
+            match Role::parse(name) {
+                None => problems.push(CoreError::Unsupported(format!(
+                    "'{name}' on '{status}' is not a stage role ({known})"
+                ))),
+                Some(r) => holders.entry(r).or_default().push(status.clone()),
+            }
+        }
+    }
+    for key in gates.keys().filter(|k| k.starts_with(ROLE_KEY_PREFIX)) {
+        if role_key(key).is_none() {
+            problems.push(CoreError::Unsupported(format!(
+                "the gate '{key}' does not name a stage role ({known})"
+            )));
+        }
+    }
+    for (role, at) in &holders {
+        if at.len() > 1 {
+            problems.push(CoreError::Unsupported(format!(
+                "the role '{}' is held by both '{}' and '{}'; give it to one",
+                role.name(),
+                at[0],
+                at[1]
+            )));
+        }
+    }
+    for (role, at) in &holders {
+        let status = &at[0];
+        if no_ops.contains(status) {
+            problems.push(CoreError::Unsupported(format!(
+                "'{status}' is a no-op status, so it cannot hold the role '{}'",
+                role.name()
+            )));
+        }
+        if *role == Role::Release && !terminals.is_empty() && !terminals.contains(status) {
+            problems.push(CoreError::Unsupported(format!(
+                "the release role belongs on an end status, and '{status}' is not one"
+            )));
+        }
+    }
+    let declared = !holders.is_empty();
+    if declared {
+        for key in gates.keys() {
+            if let Some(role) = role_key(key)
+                && !holders.contains_key(&role)
+            {
+                problems.push(CoreError::Unsupported(format!(
+                    "the gate '{key}' names a role no status holds"
+                )));
+            }
+        }
+        let build = holders.get(&Role::Build).map(|v| v[0].clone());
+        for (key, g) in gates {
+            if g.on_enter.contains(&Action::Branch)
+                && !key.starts_with(ROLE_KEY_PREFIX)
+                && build.as_deref() != Some(key.as_str())
+            {
+                problems.push(CoreError::Unsupported(format!(
+                    "the branch is made where the build role is; '{key}' does not hold it"
+                )));
+            }
+        }
+    }
+    for (key, g) in gates {
+        let Some(role) = role_key(key) else { continue };
+        let Some(status) = holders.get(&role).map(|v| &v[0]) else {
+            continue;
+        };
+        if let Some(own) = gates.get(status) {
+            if g.enforce != own.enforce && g.declares_rules() && own.declares_rules() {
+                problems.push(CoreError::Unsupported(format!(
+                    "the gate '{key}' and the gate on '{status}' disagree on enforce"
+                )));
+            }
+            if !g.kinds.is_empty() && !own.kinds.is_empty() && g.kinds != own.kinds {
+                problems.push(CoreError::Unsupported(format!(
+                    "the gate '{key}' and the gate on '{status}' apply to different kinds"
                 )));
             }
         }
@@ -607,20 +916,37 @@ pub fn working_agreement(project: &str, config: &ProjectConfig) -> String {
             .and_then(|v| v.as_str().map(|s| s.replace('_', " ")))
             .unwrap_or_default(),
         Condition::Zachman { zachman } => format!("zachman: {}", zachman.join(", ")),
+        Condition::SpecSections { spec_sections } => {
+            format!("spec sections: {}", spec_sections.join(", "))
+        }
     };
     let gates = config.effective_gates();
+    let roles = config.roles();
     for status in &config.statuses {
         if config.is_no_op(status) {
             continue;
         }
         out.push_str(&format!("## {status}\n\n"));
+        // What the stage is for in any process (FEAT-188), after its own purpose.
+        let role_lines = |out: &mut String| {
+            for role in roles.of(status) {
+                out.push_str(&format!(
+                    "_Role: {} — {}.{}_\n\n",
+                    role.name(),
+                    role.means(),
+                    if roles.declared { "" } else { " (inferred)" }
+                ));
+            }
+        };
         let Some(gate) = gates.get(status) else {
+            role_lines(&mut out);
             out.push_str("Nothing is asked to enter.\n\n");
             continue;
         };
         if !gate.purpose.trim().is_empty() {
             out.push_str(&format!("{}\n\n", gate.purpose.trim()));
         }
+        role_lines(&mut out);
         let mut asks: Vec<String> = gate.requires.iter().map(text).collect();
         asks.extend(gate.signoffs.iter().map(|s| format!("sign-off: {s}")));
         if asks.is_empty() {
@@ -693,16 +1019,25 @@ impl ProjectConfig {
     /// The `scheduled` preset — kanbanr's original default (Planned → Scheduled → Completed). What
     /// the tests build on; a new project gets [`ProjectConfig::for_new_project`] instead.
     pub fn default_for(name: &str) -> ProjectConfig {
-        preset("scheduled")
+        let mut config = preset("scheduled")
             .expect("the built-in scheduled preset parses")
-            .into_config(name)
+            .into_config(name);
+        // The fixture the test suites are written against predates stage roles (FEAT-188): keep it
+        // as it was, with no gates at all, so their meaning does not drift.
+        config.gates.clear();
+        config.schema_version = config.required_schema_version();
+        config
     }
 
     /// The workflow a new project gets when it names none: the `default` preset (FEAT-116).
     pub fn for_new_project(name: &str) -> ProjectConfig {
-        preset("default")
-            .expect("the built-in default preset parses")
-            .into_config(name)
+        let file = preset("default").expect("the built-in default preset parses");
+        // Recorded as coming from the built-in default, so a later change to it — the method
+        // included — is reported like any process's (FEAT-193, Q3).
+        let source = file.source("default", Library::Builtin);
+        let mut config = file.into_config(name);
+        config.process = Some(source);
+        config
     }
 
     /// Is this status an explicit terminal (end) state of the workflow?
@@ -731,7 +1066,7 @@ impl ProjectConfig {
     /// not a no-op does, as it always has; so does any stage whose gate says `done: true`.
     pub fn counts_as_done(&self, status: &str) -> bool {
         (crate::graph::is_terminal_status(self, status) && !self.is_no_op(status))
-            || self.gates.get(status).is_some_and(|g| g.done)
+            || self.effective_gates().get(status).is_some_and(|g| g.done)
     }
 
     /// Is moving from `from` to `to` allowed by the workflow? (Same-status is always allowed.)
@@ -749,9 +1084,83 @@ impl ProjectConfig {
     pub fn required_schema_version(&self) -> u32 {
         if self.gates.is_empty() {
             BASE_SCHEMA_VERSION
+        } else if !self.declares_gates()
+            || self.gates.keys().any(|k| k.starts_with(ROLE_KEY_PREFIX))
+        {
+            // Role labels alone, or a gate addressed to a role (FEAT-188): an older reader would
+            // take the labels for declared gates (losing the built-in rule) or never match the
+            // `@role` key — a guardrail silently gone either way, so it must refuse the board.
+            4
         } else {
-            CURRENT_SCHEMA_VERSION
+            3
         }
+    }
+
+    /// Does the workflow declare gates of its own (FEAT-188)? Gates that only label roles do not:
+    /// such a workflow keeps the built-in rule, as one with no gates at all does.
+    pub fn declares_gates(&self) -> bool {
+        // A gate addressed to a role (`"@build"`) adds to whatever the stage enforces; it does not
+        // replace the built-in rule. Counting it here once made the default process drop its
+        // start rule the moment anything was addressed to a role (FEAT-193).
+        self.gates
+            .iter()
+            .any(|(k, g)| !k.starts_with(ROLE_KEY_PREFIX) && !g.is_role_label())
+    }
+
+    /// The roles declared on status-keyed gates, if any are.
+    fn declared_roles(&self) -> Option<StageRoles> {
+        let mut by_role = BTreeMap::new();
+        for status in &self.statuses {
+            if let Some(g) = self.gates.get(status) {
+                for r in g.roles.iter().filter_map(|n| Role::parse(n)) {
+                    by_role.entry(r).or_insert_with(|| status.clone());
+                }
+            }
+        }
+        (!by_role.is_empty()).then_some(StageRoles {
+            by_role,
+            declared: true,
+        })
+    }
+
+    /// Which status holds each stage role (FEAT-188). Declared on the gates, or — when nothing
+    /// declares them — inferred from what the workflow already does: build where the branch is
+    /// made, release at the first end status. Design and integrate are never inferred, so nothing
+    /// that keys on them acts on a board that did not opt in.
+    pub fn roles(&self) -> StageRoles {
+        if let Some(declared) = self.declared_roles() {
+            return declared;
+        }
+        let gates = self.base_gates(None);
+        let mut by_role = BTreeMap::new();
+        if let Some(build) = self.statuses.iter().find(|s| {
+            gates
+                .get(*s)
+                .is_some_and(|g| g.on_enter.contains(&Action::Branch))
+        }) {
+            by_role.insert(Role::Build, build.clone());
+        }
+        if let Some(release) = self
+            .statuses
+            .iter()
+            .find(|s| crate::graph::is_terminal_status(self, s) && !self.is_no_op(s))
+        {
+            by_role.insert(Role::Release, release.clone());
+        }
+        StageRoles {
+            by_role,
+            declared: false,
+        }
+    }
+
+    /// The status that holds `role`.
+    pub fn role_status(&self, role: Role) -> Option<String> {
+        self.roles().status(role).map(String::from)
+    }
+
+    /// Where `start` makes the item's branch: the build role's status.
+    pub fn branch_status(&self) -> Option<String> {
+        self.role_status(Role::Build)
     }
 
     /// The gates this workflow enforces: the declared ones, or — when none are declared — today's
@@ -762,10 +1171,61 @@ impl ProjectConfig {
     /// and a current agreement. Parking, closing and dispositioning are never gated — you can
     /// always stop work (L-19). The first such status is where `start` creates the branch.
     pub fn effective_gates(&self) -> BTreeMap<String, Gate> {
-        if !self.gates.is_empty() {
-            return self.gates.clone();
+        let declared = self.declared_roles();
+        let mut gates = self.base_gates(declared.as_ref());
+        // Role labels travel onto the gates (FEAT-188). A workflow that declares its own gates gives
+        // every role stage one; a label-only workflow keeps exactly its built-in gates, so its
+        // behaviour is unchanged, and its roles are read from `roles()`.
+        let declares = self.declares_gates();
+        for (key, g) in &self.gates {
+            if g.roles.is_empty() || key.starts_with(ROLE_KEY_PREFIX) {
+                continue;
+            }
+            if declares {
+                gates.entry(key.clone()).or_default().roles = g.roles.clone();
+            } else if let Some(gate) = gates.get_mut(key) {
+                gate.roles = g.roles.clone();
+            }
+        }
+        if let Some(build) = declared.as_ref().and_then(|r| r.status(Role::Build)) {
+            let gate = gates.entry(build.to_string()).or_default();
+            if !gate.on_enter.contains(&Action::Branch) {
+                gate.on_enter.push(Action::Branch);
+            }
+        }
+        // A gate addressed to a role joins the gate of the status that holds it.
+        let holders = declared.unwrap_or_else(|| self.roles());
+        for (key, g) in &self.gates {
+            let Some(role) = role_key(key) else { continue };
+            let Some(status) = holders.status(role) else {
+                continue;
+            };
+            let target = gates.entry(status.to_string()).or_default();
+            merge_gate(target, g);
+        }
+        gates
+    }
+
+    /// Step one of [`ProjectConfig::effective_gates`]: the declared status-keyed gates, or —
+    /// when the workflow declares none of its own — today's rules, synthesised so that no existing
+    /// board changes behaviour (FEAT-113).
+    ///
+    /// The synthesis is exactly the old start gate: entering a status the board displays as work in
+    /// flight (displayed, not the default backlog, not terminal, not a no-op) needs a definition
+    /// and a current agreement. Parking, closing and dispositioning are never gated — you can
+    /// always stop work (L-19). The branch is made at the declared build role, else at the first
+    /// such status.
+    fn base_gates(&self, declared: Option<&StageRoles>) -> BTreeMap<String, Gate> {
+        if self.declares_gates() {
+            return self
+                .gates
+                .iter()
+                .filter(|(k, _)| !k.starts_with(ROLE_KEY_PREFIX))
+                .map(|(k, g)| (k.clone(), g.clone()))
+                .collect();
         }
         use crate::readiness::{Check, Condition};
+        let build = declared.and_then(|r| r.status(Role::Build));
         let mut gates = BTreeMap::new();
         let mut first = true;
         for status in self.displayed_states.iter().filter(|s| {
@@ -773,6 +1233,10 @@ impl ProjectConfig {
                 && !crate::graph::is_terminal_status(self, s)
                 && !self.is_no_op(s)
         }) {
+            let branch = match build {
+                Some(b) => b == status,
+                None => first,
+            };
             gates.insert(
                 status.clone(),
                 Gate {
@@ -780,7 +1244,7 @@ impl ProjectConfig {
                         Condition::Check(Check::Definition),
                         Condition::Check(Check::Approved),
                     ],
-                    on_enter: if first { vec![Action::Branch] } else { vec![] },
+                    on_enter: if branch { vec![Action::Branch] } else { vec![] },
                     ..Gate::default()
                 },
             );
@@ -802,6 +1266,229 @@ impl ProjectConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn config_of(name: &str) -> ProjectConfig {
+        preset_bare(name).unwrap().into_config("p")
+    }
+
+    /// FEAT-188 R-1: each role resolves to one status; a status may hold several.
+    #[test]
+    fn roles_assigned_once() {
+        let roles = config_of("default").roles();
+        assert!(roles.declared);
+        assert_eq!(roles.status(Role::Build), Some("In Progress"));
+        assert_eq!(roles.of("Completed"), vec![Role::Integrate, Role::Release]);
+        let togaf = config_of("togaf").roles();
+        for role in Role::ALL {
+            let at = togaf.status(role).unwrap();
+            assert_eq!(togaf.of(at), vec![role], "{at} holds only {}", role.name());
+        }
+    }
+
+    /// FEAT-188 R-2: every built-in process declares all four roles, the branch is made at build,
+    /// release is an end status, and each preset still checks clean.
+    #[test]
+    fn presets_declare_roles() {
+        for (name, _) in presets() {
+            let file = preset(name).unwrap();
+            assert!(file.problems().is_empty(), "{name}: {:?}", file.problems());
+            let config = file.into_config("p");
+            let roles = config.roles();
+            assert!(roles.declared, "{name}");
+            for role in Role::ALL {
+                assert!(
+                    roles.status(role).is_some(),
+                    "{name} has no {}",
+                    role.name()
+                );
+            }
+            let gates = config.effective_gates();
+            let branch: Vec<&String> = config
+                .statuses
+                .iter()
+                .filter(|s| {
+                    gates
+                        .get(*s)
+                        .is_some_and(|g| g.on_enter.contains(&Action::Branch))
+                })
+                .collect();
+            assert_eq!(
+                branch,
+                vec![roles.status(Role::Build).unwrap()],
+                "{name}: the branch is made at build, and only there"
+            );
+            assert!(
+                config.is_terminal(roles.status(Role::Release).unwrap()),
+                "{name}"
+            );
+        }
+    }
+
+    /// FEAT-188 R-4: one role on two statuses is refused, naming both.
+    #[test]
+    fn duplicate_role_refused() {
+        let mut file = preset("pdca").unwrap();
+        file.gates.get_mut("Check").unwrap().roles = vec!["build".into()];
+        let problems: Vec<String> = file.problems().iter().map(|e| e.to_string()).collect();
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.contains("'build' is held by both 'Do' and 'Check'")),
+            "{problems:?}"
+        );
+    }
+
+    /// FEAT-188: a workflow that declares no roles gets build where the branch is made and release
+    /// at the first end status, and its gates are exactly what they were.
+    #[test]
+    fn legacy_roles_follow_the_branch() {
+        let config = ProjectConfig::default_for("p");
+        let roles = config.roles();
+        assert!(!roles.declared);
+        assert_eq!(roles.status(Role::Build), Some("Scheduled"));
+        assert_eq!(roles.status(Role::Release), Some("Completed"));
+        assert_eq!(roles.status(Role::Design), None, "never inferred");
+        assert_eq!(roles.status(Role::Integrate), None, "never inferred");
+        assert_eq!(config.branch_status().as_deref(), Some("Scheduled"));
+    }
+
+    /// FEAT-193 R-1: every built-in process carries the method — the build-role stage asks for the
+    /// design and its review, the integrate-role stage for the docs and their sign-off — and still
+    /// checks clean.
+    #[test]
+    fn presets_include_method_gates() {
+        use crate::readiness::{Check, Condition};
+        for (name, _) in presets() {
+            let file = preset(name).unwrap();
+            assert!(file.problems().is_empty(), "{name}: {:?}", file.problems());
+            let config = file.into_config("p");
+            let gates = config.effective_gates();
+            let build = config.role_status(Role::Build).expect(name);
+            let integrate = config.role_status(Role::Integrate).expect(name);
+            let b = gates.get(&build).unwrap();
+            assert!(
+                b.requires.contains(&Condition::SpecSections {
+                    spec_sections: vec!["Design".into()]
+                }),
+                "{name} {build}"
+            );
+            assert!(b.signoffs.contains(&"design-review".to_string()), "{name}");
+            let i = gates.get(&integrate).unwrap();
+            assert!(
+                i.requires.contains(&Condition::Check(Check::DocsUpdated)),
+                "{name}"
+            );
+            assert!(i.signoffs.contains(&"docs-folded".to_string()), "{name}");
+        }
+    }
+
+    /// FEAT-188: role labels alone keep the built-in rule — In Progress still asks for a definition
+    /// and an approval, and the branch is made there.
+    #[test]
+    fn role_labels_keep_the_builtin_rule() {
+        let config = config_of("default");
+        assert!(!config.declares_gates());
+        let gates = config.effective_gates();
+        let wip = gates.get("In Progress").unwrap();
+        assert_eq!(wip.requires.len(), 2);
+        assert!(wip.on_enter.contains(&Action::Branch));
+        assert_eq!(wip.roles, vec!["build".to_string()]);
+        assert!(
+            !gates.contains_key("Planned"),
+            "no gate where there was none"
+        );
+    }
+
+    /// FEAT-188: every role problem is reported, in order.
+    #[test]
+    fn role_problems_reported() {
+        let mut file = preset("togaf").unwrap();
+        file.gates.get_mut("Vision").unwrap().roles = vec!["review".into()];
+        file.gates.insert(
+            "No Action".into(),
+            Gate {
+                roles: vec!["integrate".into()],
+                ..Default::default()
+            },
+        );
+        file.gates.get_mut("Migration").unwrap().roles = vec![];
+        file.gates.get_mut("Operations").unwrap().roles = vec!["release".into()];
+        file.gates.get_mut("Business Arch").unwrap().on_enter = vec![Action::Branch];
+        file.gates.insert("@nothing".into(), Gate::default());
+        file.gates.insert(
+            "@build".into(),
+            Gate {
+                requires: vec![crate::readiness::Condition::Check(
+                    crate::readiness::Check::TestsGreen,
+                )],
+                enforce: Enforce::Warn,
+                ..Default::default()
+            },
+        );
+        let problems: Vec<String> = file.problems().iter().map(|e| e.to_string()).collect();
+        let has = |needle: &str| problems.iter().any(|p| p.contains(needle));
+        assert!(
+            has("'review' on 'Vision' is not a stage role"),
+            "{problems:?}"
+        );
+        assert!(
+            has("no-op status, so it cannot hold the role 'integrate'"),
+            "{problems:?}"
+        );
+        assert!(has("'Business Arch' does not hold it"), "{problems:?}");
+        assert!(has("'@nothing' does not name a stage role"), "{problems:?}");
+        assert!(has("disagree on enforce"), "{problems:?}");
+        // A release role off an end status.
+        let mut f2 = preset("pdca").unwrap();
+        f2.gates.get_mut("Act").unwrap().roles = vec![];
+        f2.gates.get_mut("Check").unwrap().roles = vec!["integrate".into(), "release".into()];
+        let p2: Vec<String> = f2.problems().iter().map(|e| e.to_string()).collect();
+        assert!(
+            p2.iter().any(|p| p.contains("'Check' is not one")),
+            "{p2:?}"
+        );
+    }
+
+    /// FEAT-188: labels only, or a role-addressed gate, need a reader that knows roles.
+    #[test]
+    fn schema_four_for_role_labels() {
+        assert_eq!(config_of("default").required_schema_version(), 4);
+        assert_eq!(
+            config_of("togaf").required_schema_version(),
+            3,
+            "roles beside real gates"
+        );
+        let mut config = config_of("togaf");
+        config.gates.insert(
+            "@build".into(),
+            Gate {
+                signoffs: vec!["design-review".into()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(config.required_schema_version(), 4);
+        assert_eq!(
+            ProjectConfig::default_for("p").required_schema_version(),
+            BASE_SCHEMA_VERSION
+        );
+    }
+
+    /// FEAT-188: the working agreement says what each stage is for.
+    #[test]
+    fn working_agreement_names_roles() {
+        let text = working_agreement("p", &config_of("togaf"));
+        let section = text.split("## Implementation").nth(1).unwrap();
+        let section = section.split("\n## ").next().unwrap();
+        assert!(
+            section.contains("_Role: build — code is written on the item's branch._"),
+            "{text}"
+        );
+        let legacy = working_agreement("p", &ProjectConfig::default_for("p"));
+        assert!(
+            legacy.contains("_Role: build — code is written on the item's branch. (inferred)_"),
+            "{legacy}"
+        );
+    }
 
     /// FEAT-137: Scrum's Definition of Done is the Done column, so that is what finishes an item for
     /// a sprint; Released still does too, and a no-op disposition never does.

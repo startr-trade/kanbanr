@@ -257,6 +257,11 @@ pub struct FeatureDefinition {
     /// Appended, never overwritten — each pinned to the definition it covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signoffs: Vec<Signoff>,
+    /// Board docs this item changes (FEAT-180), e.g. "architecture/data.md". Declared at the design
+    /// stage; `docs_updated` checks each was changed before the item moves on. Declared last, so a
+    /// board where it is the only key an older binary does not know reads back byte for byte.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub affects_docs: Vec<String>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -287,6 +292,14 @@ pub struct Signoff {
     /// The status the item was in when it was given.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub status: String,
+    /// `given`, or `withdrawn` (FEAT-182). A withdrawal is its own entry, appended like any other,
+    /// with an empty `rev`: an older kanbanr, which does not know this field, then reads the
+    /// latest entry as lapsed and stops counting the sign-off too.
+    #[serde(default, skip_serializing_if = "SignoffVerdict::is_given")]
+    pub verdict: SignoffVerdict,
+    /// Why it was withdrawn. Giving a sign-off needs no reason; taking one back does.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -295,6 +308,21 @@ pub struct Signoff {
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
     pub extra: crate::models::Extra,
+}
+
+/// Whether a sign-off entry gives the sign-off or takes it back (FEAT-182).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignoffVerdict {
+    #[default]
+    Given,
+    Withdrawn,
+}
+
+impl SignoffVerdict {
+    pub fn is_given(&self) -> bool {
+        *self == Self::Given
+    }
 }
 
 /// Agreement to a definition, pinned to its content (FEAT-048).
@@ -383,6 +411,9 @@ impl FeatureDefinition {
         bare.started_unapproved = String::new();
         // Sign-offs are verdicts about the content, not part of it (FEAT-114).
         bare.signoffs = Vec::new();
+        // Which docs the work touches is design, written after the definition was agreed: naming
+        // them does not reopen the agreement (FEAT-180, Q1).
+        bare.affects_docs = Vec::new();
         for requirement in &mut bare.requirements {
             for test in &mut requirement.tests {
                 test.state = TestState::default();
@@ -403,14 +434,17 @@ impl FeatureDefinition {
         }
     }
 
-    /// Is sign-off `id` recorded against the definition as it now stands? The latest one counts.
+    /// The latest entry for sign-off `id`, given or withdrawn (FEAT-182).
+    pub fn signoff_latest(&self, id: &str) -> Option<&Signoff> {
+        self.signoffs.iter().rev().find(|s| s.id == id)
+    }
+
+    /// Is sign-off `id` recorded against the definition as it now stands? The latest entry counts,
+    /// and only if it gives the sign-off: a withdrawal after it takes it back (FEAT-182).
     pub fn signoff_current(&self, id: &str) -> Option<&Signoff> {
         let rev = self.content_rev();
-        self.signoffs
-            .iter()
-            .rev()
-            .find(|s| s.id == id)
-            .filter(|s| s.rev == rev)
+        self.signoff_latest(id)
+            .filter(|s| s.verdict.is_given() && s.rev == rev)
     }
 
     /// Was the standing agreement given after the fact? Read from the log's last verdict rather
@@ -685,6 +719,18 @@ pub struct IssueLink {
 }
 
 impl FeatureItem {
+    /// When the item entered its current status: the last move into it, else its creation
+    /// (FEAT-180). A board edited by hand can carry a status no move led to; creation is then the
+    /// honest answer, since nothing says when it got there.
+    pub fn entered_status_at(&self) -> &str {
+        self.history
+            .iter()
+            .rev()
+            .find(|t| t.to == self.status)
+            .map(|t| t.at.as_str())
+            .unwrap_or(self.created_at.as_str())
+    }
+
     /// Iterate over every task across all todo-lists.
     pub fn all_tasks(&self) -> impl Iterator<Item = &Task> {
         self.todo_lists.iter().flat_map(|l| l.tasks.iter())

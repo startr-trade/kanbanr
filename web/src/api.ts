@@ -1,5 +1,5 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -30,6 +30,9 @@ export const api = {
   getProcess: (id: string) =>
     getJson<ProcessStatus>(apiUrl(`/projects/${encodeURIComponent(id)}/process`)),
   getCharter: (id: string) => getJson<Charter>(apiUrl(`/projects/${encodeURIComponent(id)}/charter`)),
+  /** The gates moves are judged by, per status: role-addressed gates resolved, the built-in rule included (FEAT-199). */
+  getGates: (id: string) =>
+    getJson<Record<string, Gate>>(apiUrl(`/projects/${encodeURIComponent(id)}/gates`)),
   /** A project's sprints (FEAT-119); only projects that switch them on have any. */
   getSprints: (id: string) => getJson<Sprint[]>(apiUrl(`/projects/${encodeURIComponent(id)}/sprints`)),
   /** One sprint with its burndown — `active` names the running one. */
@@ -77,6 +80,22 @@ export const api = {
         res.status === 404 || res.status === 405
           ? "This monitor is read-only. Start it with `kanbanr review --ui` to sign off from here."
           : `sign-off failed: ${res.status} ${await res.text()}`,
+      );
+    }
+    return res.json();
+  },
+  /** Take back a sign-off given in error, saying why (FEAT-182). */
+  withdrawSignoff: async (id: string, code: string, name: string, by: string, reason: string) => {
+    const res = await postWrite(
+      apiUrl(`/write/projects/${encodeURIComponent(id)}/features/${encodeURIComponent(code)}/signoff/${encodeURIComponent(name)}/withdraw`),
+      { by, reason },
+      `kanbanr signoff ${code} ${name} --withdraw --reason "…"`,
+    );
+    if (!res.ok) {
+      throw new Error(
+        res.status === 404 || res.status === 405
+          ? "This monitor is read-only. Start it with `kanbanr review --ui` to withdraw a sign-off from here."
+          : `withdrawal failed: ${res.status} ${await res.text()}`,
       );
     }
     return res.json();

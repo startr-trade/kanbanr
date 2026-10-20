@@ -57,6 +57,10 @@ pub enum EventKind {
     /// An approval was taken back (FEAT-077). The one that matters: work already in flight has just
     /// lost its mandate, and until this existed the only trace was inside the item's own file.
     ApprovalWithdrawn,
+    /// A named sign-off was recorded (FEAT-182): a person's agreement a stage asks for.
+    SignoffRecorded,
+    /// A sign-off was taken back (FEAT-182), with the reason.
+    SignoffWithdrawn,
 }
 
 /// A single notification event. Mirrors the shape of an activity entry, plus structured detail.
@@ -334,6 +338,41 @@ pub fn compute_events(store: &Store, method: &str, path: &str, result: &str) -> 
                     format!("{by} approved {code}")
                 },
                 json!({ "by": by, "reason": reason, "status": status }),
+            ));
+        }
+        // A sign-off given or withdrawn (FEAT-182), read back from the entry just appended.
+        ["features", code, "signoff", name, rest @ ..]
+            if m == "POST" && (rest.is_empty() || rest == ["withdraw"]) =>
+        {
+            let withdrawn = !rest.is_empty();
+            let last = parsed
+                .get("definition")
+                .and_then(|d| d.get("signoffs"))
+                .and_then(|a| a.as_array())
+                .and_then(|a| a.last());
+            let by = last
+                .and_then(|e| e.get("by").and_then(|v| v.as_str()))
+                .unwrap_or("someone");
+            let reason = last
+                .and_then(|e| e.get("reason").and_then(|v| v.as_str()))
+                .unwrap_or_default();
+            let name = last
+                .and_then(|e| e.get("id").and_then(|v| v.as_str()))
+                .unwrap_or(name);
+            events.push(Event::new(
+                &project,
+                if withdrawn {
+                    EventKind::SignoffWithdrawn
+                } else {
+                    EventKind::SignoffRecorded
+                },
+                Some(code.to_string()),
+                if withdrawn {
+                    format!("{by} withdrew sign-off {name} on {code} — {reason}")
+                } else {
+                    format!("{by} signed off {name} on {code}")
+                },
+                json!({ "by": by, "signoff": name, "reason": reason }),
             ));
         }
         // Move a feature: POST /projects/<id>/features/<code>/move

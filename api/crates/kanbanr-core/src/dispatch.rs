@@ -344,6 +344,7 @@ fn build_project_config(store: &Store, name: &str, body: &Value) -> Result<Proje
                 estimate_unit: Default::default(),
                 cadence: Default::default(),
                 process: None,
+                method: Default::default(),
             }
         }
         None => {
@@ -388,6 +389,9 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
     let base = match preset {
         Some(name) => {
             let (file, library) = store.resolve_process(&name)?;
+            // Shaped by the project's own choice, so a part it turned off stays off (FEAT-193).
+            let choice = store.load_meta(p)?.config.method;
+            let file = crate::method::shaped(file, &choice);
             source = Some(file.source(&name, library));
             Some(file.into_config(p))
         }
@@ -529,6 +533,20 @@ fn list_processes(store: &Store) -> Result<Value> {
 /// alike — the caller (e.g. the CLI's local backend) decides whether to commit afterwards based on
 /// the HTTP method.
 pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -> Result<String> {
+    dispatch_in(store, method, path, body, None)
+}
+
+/// [`dispatch`], with the project's code repository when the caller has one (FEAT-183). Only
+/// release promotion reaches it: the CLI passes the repository it runs in, the daemon the one it
+/// was started in when that folder's marker names the project. Without one, the promotions that
+/// need it — the first stage and the cut — are refused, never guessed.
+pub fn dispatch_in(
+    store: &Store,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    repo: Option<&std::path::Path>,
+) -> Result<String> {
     let (path_only, query) = match path.split_once('?') {
         Some((p, q)) => (p, Some(q)),
         None => (path, None),
@@ -718,17 +736,34 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             // `unapproved` reason is recorded rather than silently allowed.
             // `override` is the name since gates became declarable (FEAT-113); `unapproved` stays.
             let reason = str_field(b, "override").or_else(|| str_field(b, "unapproved"));
-            let (feature, warnings) = store.move_feature_gated(
+            // With the git model on, a move that integrates merges the item's branch (FEAT-190).
+            let moved = crate::gitmodel::move_item(
+                store,
                 p,
                 code,
                 &str_field(b, "to").unwrap_or_default(),
                 reason.as_deref(),
+                repo,
             )?;
-            let mut out = serde_json::to_value(&feature)
+            let mut out = serde_json::to_value(&moved.feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
-            if !warnings.is_empty() {
-                out["gate_warnings"] =
-                    json!(warnings.iter().map(|g| &g.message).collect::<Vec<_>>());
+            if !moved.warnings.is_empty() {
+                out["gate_warnings"] = json!(
+                    moved
+                        .warnings
+                        .iter()
+                        .map(|g| &g.message)
+                        .collect::<Vec<_>>()
+                );
+            }
+            if let Some(merged) = &moved.merged {
+                out["merged"] = json!(merged);
+            }
+            if let Some(v) = &moved.forward_needed {
+                out["forward_needed"] = json!(v);
+            }
+            if let Some(note) = &moved.note {
+                out["note"] = json!(note);
             }
             ser(&out)
         }
@@ -768,6 +803,15 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             shown_rev(store, p, code, b)?;
             ser(&store.approve_feature(p, code, &approver(b)?)?)
         }
+        // Withdraw a sign-off given in error (FEAT-182). Matched before the sign-off route.
+        ("POST", ["projects", p, "features", code, "signoff", name, "withdraw"]) => ser(&store
+            .withdraw_signoff(
+                p,
+                code,
+                &percent_decode(name),
+                &approver(b)?,
+                &str_field(b, "reason").unwrap_or_default(),
+            )?),
         ("POST", ["projects", p, "features", code, "signoff", name]) => ser(&{
             shown_rev(store, p, code, b)?;
             store.signoff_feature(
@@ -849,13 +893,26 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("PUT", ["projects", p, "config", "workflow"]) => apply_workflow(store, p, b),
         // ---- releases (FEAT-120) ----
         ("GET", ["projects", p, "releases"]) => ser(&crate::releases::report_all(store, p)?),
-        ("POST", ["projects", p, "releases"]) => ser(&crate::releases::add(
-            store,
-            p,
-            &str_field(b, "version").unwrap_or_default(),
-            &str_field(b, "target").unwrap_or_default(),
-            &str_field(b, "name").unwrap_or_default(),
-        )?),
+        // `patch_of`: a patch of a cut release, branched from its tag (FEAT-184).
+        ("POST", ["projects", p, "releases"]) => match str_field(b, "patch_of") {
+            Some(parent) => ser(&crate::releases::add_patch(
+                store,
+                p,
+                &str_field(b, "version").unwrap_or_default(),
+                &str_field(b, "target").unwrap_or_default(),
+                &str_field(b, "name").unwrap_or_default(),
+                &parent,
+                &str_field(b, "by").unwrap_or_default(),
+                repo,
+            )?),
+            None => ser(&crate::releases::add(
+                store,
+                p,
+                &str_field(b, "version").unwrap_or_default(),
+                &str_field(b, "target").unwrap_or_default(),
+                &str_field(b, "name").unwrap_or_default(),
+            )?),
+        },
         ("POST", ["projects", p, "releases", version, "plan"]) => {
             let items = vec_field(b, "items").unwrap_or_default();
             ser(&crate::releases::plan(
@@ -867,6 +924,18 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         }
         ("POST", ["projects", p, "releases", version, "cut"]) => {
             ser(&crate::releases::cut(store, p, &percent_decode(version))?)
+        }
+        // FEAT-183: `{stage?, by, reason?}` — the next stage, or the named one.
+        ("POST", ["projects", p, "releases", version, "promote"]) => {
+            ser(&crate::releases::promote(
+                store,
+                p,
+                &percent_decode(version),
+                str_field(b, "stage").as_deref(),
+                &str_field(b, "by").unwrap_or_default(),
+                &str_field(b, "reason").unwrap_or_default(),
+                repo,
+            )?)
         }
         // ---- sprints (FEAT-119) ----
         ("GET", ["projects", p, "sprints"]) => ser(&crate::sprints::load(store, p)?),
@@ -899,15 +968,87 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             let items = vec_field(b, "items").unwrap_or_default();
             ser(&crate::sprints::plan(store, p, code, &items)?)
         }
+        // With the git model on, starting a sprint makes its branch (FEAT-189).
         ("POST", ["projects", p, "sprints", code, "start"]) => {
-            ser(&crate::sprints::start(store, p, code)?)
+            ser(&crate::gitmodel::sprint_start(store, p, code, repo)?)
         }
-        ("POST", ["projects", p, "sprints", code, "close"]) => ser(&crate::sprints::close(
-            store,
-            p,
-            code,
-            str_field(b, "carry_to").as_deref(),
-        )?),
+        // The git model the cadence implies (FEAT-189): always derivable, with the repository's
+        // facts when there is one to read.
+        ("GET", ["projects", p, "git", "model"]) => {
+            let repo = repo.ok_or_else(|| {
+                CoreError::Unsupported(
+                    "the git model reads the code repository: run it from the project folder"
+                        .into(),
+                )
+            })?;
+            let (model, facts) = crate::gitmodel::load(store, p, repo)?;
+            // `?item=CODE`: where that item's branch starts (FEAT-189, R-2).
+            let start = match query_param(query, "item") {
+                Some(code) => {
+                    let project = store.load_meta(p)?;
+                    let item = project.feature(&code)?;
+                    let releases = crate::releases::load(store, p).unwrap_or_default();
+                    let sprints = crate::sprints::load(store, p)?;
+                    Some(crate::gitmodel::start_base(
+                        &model, &facts, item, &releases, &sprints,
+                    ))
+                }
+                None => None,
+            };
+            ser(&serde_json::json!({ "model": model, "facts": facts, "start": start }))
+        }
+        // With the git model on, a sprints-only close moves production (FEAT-190).
+        ("POST", ["projects", p, "sprints", code, "close"]) => {
+            let closed = crate::gitmodel::sprint_close(
+                store,
+                p,
+                code,
+                str_field(b, "carry_to").as_deref(),
+                repo,
+            )?;
+            let mut out = serde_json::to_value(&closed.sprint)
+                .map_err(|e| CoreError::Unsupported(e.to_string()))?;
+            if let Some(tag) = &closed.tagged {
+                out["tagged"] = json!(tag);
+            }
+            if !closed.catch_up.is_empty() {
+                out["catch_up"] = json!(closed.catch_up);
+            }
+            ser(&out)
+        }
+        // A release's fixes merged forward into the line, on request (FEAT-190).
+        ("POST", ["projects", p, "git", "forward", version]) => {
+            let repo = repo.ok_or_else(|| {
+                CoreError::Unsupported(
+                    "a forward merge acts on the code repository: run it from the project folder"
+                        .into(),
+                )
+            })?;
+            ser(&crate::gitmodel::forward(
+                store,
+                p,
+                &percent_decode(version),
+                repo,
+            )?)
+        }
+        // The gates moves are judged by (FEAT-199): role-addressed gates on their stage, and the
+        // built-in rule where a workflow declares none. The monitor's Workflow page reads these.
+        ("GET", ["projects", p, "gates"]) => ser(&store.load_meta(p)?.config.effective_gates()),
+        // The method, on by default (FEAT-193): which parts a project keeps.
+        ("GET", ["projects", p, "config", "method"]) => {
+            ser(&crate::method::status(&store.load_meta(p)?.config))
+        }
+        ("PUT", ["projects", p, "config", "method"]) => {
+            let on = bool_field(b, "on").ok_or_else(|| {
+                CoreError::Unsupported("say whether to turn the parts on or off: `on`".into())
+            })?;
+            let parts = crate::method::parse_parts(&vec_field(b, "parts").unwrap_or_default())?;
+            let (config, notes) = store.set_method(p, on, &parts)?;
+            ser(&serde_json::json!({
+                "parts": crate::method::status(&config),
+                "notes": notes,
+            }))
+        }
         ("PUT", ["projects", p, "config", "cadence"]) => {
             let unit = match str_field(b, "estimate_unit").as_deref() {
                 None => None,
@@ -930,6 +1071,28 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                     .map(|d| d as u32)
                     .or(current.sprint_length_days),
                 release: str_field(b, "release").or(current.release),
+                // FEAT-183. A list given empty is refused rather than read as "the default": the
+                // last stage is the cut, so a project with none could never ship.
+                release_stages: match vec_field(b, "release_stages") {
+                    Some(stages) if stages.is_empty() => {
+                        return Err(CoreError::Unsupported(
+                            "a release needs at least one stage — the last one is the cut".into(),
+                        ));
+                    }
+                    Some(stages) => stages.iter().map(|s| s.trim().to_string()).collect(),
+                    None => current.release_stages,
+                },
+                // An empty string clears the branch back to the repository's default.
+                integration_branch: match str_field(b, "integration_branch") {
+                    Some(name) => Some(name.trim().to_string()).filter(|n| !n.is_empty()),
+                    None => current.integration_branch,
+                },
+                main_branch: match str_field(b, "main_branch") {
+                    Some(name) => Some(name.trim().to_string()).filter(|n| !n.is_empty()),
+                    None => current.main_branch,
+                },
+                // FEAT-189: branching follows the git model only when switched on.
+                git_model: bool_field(b, "git_model").unwrap_or(current.git_model),
             };
             ser(&store.set_cadence(p, unit, cadence)?)
         }
@@ -1047,7 +1210,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             let subject =
                 crate::trace::parse_subject(&subject, item.as_deref()).ok_or_else(|| {
                     CoreError::Unsupported(
-                    "trace what? a goal (G-2), an item (FEAT-046) or a requirement (FEAT-046/R-2)"
+                    "trace what? a goal (G-2), an item (FEAT-046), a requirement (FEAT-046/R-2) or a doc (architecture/data.md)"
                         .to_string(),
                 )
                 })?;
@@ -1061,7 +1224,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         // ---- what is waiting for agreement (FEAT-067) ----
         // What an item is missing, from the one engine every surface uses (FEAT-112).
         ("GET", ["projects", p, "features", code, "readiness"]) => {
-            let project = store.load_meta(p)?;
+            let project = store.load_for_gates(p)?;
             let feature = project.feature(code)?;
             let charter = crate::charter::load(store, p)?;
             let goal_ids = charter.goal_ids();
@@ -1083,7 +1246,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         // The board's cards, in one request: gaps per live item, keyed by code. Finished and
         // parked items are left out, as doctor leaves them out — they are history, not work.
         ("GET", ["projects", p, "readiness"]) => {
-            let project = store.load_meta(p)?;
+            let project = store.load_for_gates(p)?;
             let charter = crate::charter::load(store, p)?;
             let ctx = crate::readiness::Context::load(store, p, &project.config);
             let cards: serde_json::Map<String, Value> = project
@@ -1105,7 +1268,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         }
         ("GET", ["projects", p, "review"]) => {
             use crate::models::ApprovalState;
-            let project = store.load_meta(p)?;
+            let project = store.load_for_gates(p)?;
             let charter = crate::charter::load(store, p)?;
             let ctx = crate::readiness::Context::load(store, p, &project.config);
             // Whether an approval is current or has lapsed depends on a hash of the definition's
@@ -1130,12 +1293,15 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                         return None;
                     }
                     // Sign-offs the next stage asks for are the same kind of question: a person's
-                    // agreement, recorded before the item can move on (FEAT-117).
+                    // agreement, recorded before the item can move on (FEAT-117). Only the stage
+                    // the item reaches next, not every stage it could skip to, and only once that
+                    // stage's other requirements are met (FEAT-182): a sign-off offered before the
+                    // work exists records agreement to work that has not happened.
                     let signoffs_needed: Vec<String> = if live {
-                        crate::readiness::next_gates(&project, Some(&charter), f, &ctx)
-                            .into_iter()
-                            .flat_map(|n| n.signoffs_needed)
-                            .collect()
+                        crate::readiness::immediate_next_gate(&project, Some(&charter), f, &ctx)
+                            .filter(|n| n.requires_gaps.is_empty())
+                            .map(|n| n.signoffs_needed)
+                            .unwrap_or_default()
                     } else {
                         Vec::new()
                     };
@@ -1316,6 +1482,17 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "features", c] => format!("edit feature {c}"),
         ["projects", _p, "features", c, "move"] => format!("move feature {c}"),
         ["projects", _p, "features", c, "approve"] => format!("approve definition of {c}"),
+        ["projects", _p, "features", c, "signoff", name, "withdraw"] => {
+            let reason = body
+                .and_then(|b| b.get("reason"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            format!(
+                "withdraw sign-off {} on {c}: {}",
+                percent_decode(name),
+                reason.trim()
+            )
+        }
         ["projects", _p, "features", c, "signoff", name] => {
             format!("sign off {} on {c}", percent_decode(name))
         }
@@ -1345,9 +1522,33 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "milestones"] => "add milestone".into(),
         ["projects", _p, "milestones", c] if del => format!("delete milestone {c}"),
         ["projects", _p, "milestones", c] => format!("edit milestone {c}"),
+        ["projects", p, "config", "method"] => {
+            let on = body
+                .and_then(|b| b.get("on"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let parts: Vec<String> = body
+                .and_then(|b| b.get("parts"))
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .filter(|v: &Vec<String>| !v.is_empty())
+                .unwrap_or_else(|| vec!["all".to_string()]);
+            format!(
+                "method {} {} for {p}",
+                parts.join(", "),
+                if on { "on" } else { "off" }
+            )
+        }
         ["projects", _p, "config", what] => format!("update config: {what}"),
         ["projects", _p, "sprints"] => "add a sprint".into(),
         ["projects", _p, "releases"] => "add a release".into(),
+        // FEAT-183: the stage it went to, which a request for "the next one" does not name.
+        ["projects", _p, "releases", v, "promote"] => format!(
+            "promote release {} to {}",
+            percent_decode(v),
+            body.and_then(|b| str_field(b, "stage"))
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "its next stage".into())
+        ),
         ["projects", _p, "releases", v, what] => format!("{what} release {}", percent_decode(v)),
         ["projects", _p, "sprints", c, what] => format!("{what} sprint {c}"),
         ["projects", _p, "docs", "folder"] => "configure doc folder".into(),

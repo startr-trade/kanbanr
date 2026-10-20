@@ -476,12 +476,101 @@ def uses_equivalents() -> None:
     not_verified.append("docs.yml deploy: publishing to GitHub Pages")
 
 
+# A person's verdict on the board (FEAT-198): what the monitor or the CLI commits when someone
+# approves, ratifies, signs off or withdraws one. Tests cannot make these — the board fence stops
+# them reaching the board — so one made during a run is someone at work, not a leak.
+VERDICT_SUBJECTS = (
+    "approve definition of ",
+    "ratify ",
+    "withdraw the approval of ",
+    "sign off ",
+    "withdraw sign-off ",
+)
+VERDICT_PATHS = ("features/", "activity/", "events/")
+
+
+def is_verdict_path(path: str) -> bool:
+    """`projects/<id>/features/…`, `…/activity/…` or `…/events/…`, and nothing else."""
+    parts = path.split("/", 2)
+    return len(parts) == 3 and parts[0] == "projects" and parts[2].startswith(VERDICT_PATHS)
+
+
+def verdict_only(board: Path, before: str, after: str) -> list[str] | None:
+    """The subjects of the commits `after` has beyond `before`, when every one is a verdict that
+    touches only feature, activity and event files; None when any is not, or history was rewritten."""
+    if not sh(["git", "merge-base", "--is-ancestor", before, after], board)[0]:
+        return None
+    ok, shas = sh(["git", "rev-list", "--reverse", f"{before}..{after}"], board)
+    if not ok:
+        return None
+    subjects = []
+    for sha in shas.split():
+        ok, subject = sh(["git", "log", "-1", "--format=%s", sha], board)
+        ok2, files = sh(["git", "diff-tree", "--no-commit-id", "--name-only", "-r", sha], board)
+        subject = subject.strip()
+        if not (ok and ok2 and subject.startswith(VERDICT_SUBJECTS)):
+            return None
+        if not all(is_verdict_path(f) for f in files.split("\n") if f.strip()):
+            return None
+        subjects.append(subject)
+    return subjects
+
+
+def board_state() -> tuple[Path, str, str] | None:
+    """The real board this checkout uses, its HEAD and its uncommitted changes (FEAT-195).
+
+    None when there is no board to protect: no `kanbanr` on PATH, no marker, or a board that is not
+    a git repository (a runner, a fresh clone)."""
+    exe = shutil.which("kanbanr")
+    if not exe:
+        return None
+    env = {k: v for k, v in os.environ.items() if k not in ("KANBANR_BOARD_FENCE", "KANBANR_DATA_DIR")}
+    ok, out = sh([exe, "where", "--json"], ROOT, env)
+    if not ok:
+        return None
+    try:
+        import json
+
+        board = Path(json.loads(out)["data_dir"])
+    except (ValueError, KeyError, TypeError):
+        return None
+    head_ok, head = sh(["git", "rev-parse", "HEAD"], board)
+    status_ok, status = sh(["git", "status", "--porcelain"], board)
+    if not (board.is_dir() and head_ok and status_ok):
+        return None
+    return board, head.strip(), status
+
+
 def main() -> int:
     print(f"make ci: a clean copy of the tracked tree at {TREE}\n", flush=True)
+    # A test that reaches the real board writes to someone's data, and its push publishes it.
+    # The fence (api/.cargo/config.toml) stops that; this proves it held for the whole run.
+    board_before = board_state()
+    ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_ci_local.py"], ROOT)
+    say("make ci: verdicts on the board are told apart from other changes", ok, out)
     fresh_tree()
     lint_workflows()
     run_workflow_steps()
     uses_equivalents()
+    if board_before is None:
+        not_verified.append("the real board stayed untouched: no board found for this checkout")
+    else:
+        board, head, status = board_before
+        after = board_state()
+        verdicts: list[str] | None = []
+        if after is None or after[2] != status:
+            verdicts = None
+        elif after[1] != head:
+            verdicts = verdict_only(board, head, after[1])
+        say(
+            "make ci: the real board did not move during the run",
+            verdicts is not None,
+            f"{board} changed while make ci ran: a test reached it, or it was written to meanwhile "
+            "(then rerun).\nbefore:\n" + head + "\n" + status + "\nafter:\n"
+            + ("\n".join(after[1:]) if after else "unreadable"),
+        )
+        if verdicts:
+            print(f"    the real board took {len(verdicts)} verdict(s) during the run: " + "; ".join(verdicts))
     failed = [name for name, ok, _ in results if not ok]
     print("\nNot verified locally (runs only on GitHub):")
     for item in not_verified:

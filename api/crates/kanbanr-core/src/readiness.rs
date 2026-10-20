@@ -56,13 +56,19 @@ pub enum Check {
     /// A named sign-off is recorded against the current definition. Asked for through a gate's
     /// `signoffs: [name]`, never listed on its own — it needs the name.
     Signoff,
+    /// The spec has each named section, with content (FEAT-179). A design stage asks for the
+    /// design itself, not a promise of one: `{spec_sections: [Design]}`.
+    SpecSections,
+    /// Every doc the item declares in `affects_docs` has changed since it entered its current
+    /// stage (FEAT-180) — the design was folded into the docs it said it would change.
+    DocsUpdated,
 }
 
 impl Check {
     /// Every check a gate can name, in the order the guide lists them (FEAT-168). `signoff` is not
     /// one: a gate asks for a sign-off by its name, under `signoffs`. A new check must be added
     /// here, and [`Check::passes_when`] will not compile until it says what the check means.
-    pub const GATEABLE: [Check; 16] = [
+    pub const GATEABLE: [Check; 18] = [
         Check::Definition,
         Check::Statement,
         Check::Goals,
@@ -79,6 +85,8 @@ impl Check {
         Check::Estimated,
         Check::InSprint,
         Check::InRelease,
+        Check::SpecSections,
+        Check::DocsUpdated,
     ];
 
     /// The name a gate uses for this check.
@@ -118,6 +126,14 @@ impl Check {
             Check::InSprint => "planned into the active sprint (projects with sprints switched on)",
             Check::InRelease => "planned into a release (projects with releases switched on)",
             Check::Signoff => "a named sign-off is recorded; a gate names it under `signoffs`",
+            Check::SpecSections => {
+                "the spec has each named section, with content; plain `spec_sections` asks for \
+                 `Design`"
+            }
+            Check::DocsUpdated => {
+                "every board doc the item names in `affects_docs` has changed since it entered its \
+                 current stage"
+            }
         }
     }
 
@@ -125,6 +141,9 @@ impl Check {
     pub fn parameters(self) -> Option<&'static str> {
         match self {
             Check::Zachman => Some("zachman: [what, how, where, when, who, why] (any of the six)"),
+            Check::SpecSections => {
+                Some("spec_sections: [Design, …] (the spec's headings, any level)")
+            }
             _ => None,
         }
     }
@@ -146,6 +165,7 @@ impl Check {
 pub enum Condition {
     Check(Check),
     Zachman { zachman: Vec<String> },
+    SpecSections { spec_sections: Vec<String> },
 }
 
 /// Read by hand so a misspelt check is named, with the ones there are (FEAT-168): the derived
@@ -157,9 +177,11 @@ impl<'de> Deserialize<'de> for Condition {
         enum Raw {
             Name(String),
             Zachman { zachman: Vec<String> },
+            SpecSections { spec_sections: Vec<String> },
         }
         match Raw::deserialize(d)? {
             Raw::Zachman { zachman } => Ok(Condition::Zachman { zachman }),
+            Raw::SpecSections { spec_sections } => Ok(Condition::SpecSections { spec_sections }),
             Raw::Name(name) => serde_json::from_value(serde_json::Value::String(name.clone()))
                 .map(Condition::Check)
                 .map_err(|_| {
@@ -183,8 +205,17 @@ impl Condition {
                 .iter()
                 .find(|c| !COLUMNS.contains(&c.trim().to_ascii_lowercase().as_str()))
                 .cloned(),
-            Condition::Check(_) => None,
+            Condition::Check(_) | Condition::SpecSections { .. } => None,
         }
+    }
+
+    /// Whether evaluating this condition reads the spec body, which a metadata-only load leaves
+    /// empty.
+    pub fn reads_spec(&self) -> bool {
+        matches!(
+            self,
+            Condition::SpecSections { .. } | Condition::Check(Check::SpecSections)
+        )
     }
 }
 
@@ -194,10 +225,21 @@ pub fn signoff_gaps(feature: &FeatureItem, names: &[String]) -> Vec<Gap> {
     names
         .iter()
         .filter_map(|name| {
-            let latest = def.and_then(|d| d.signoffs.iter().rev().find(|s| &s.id == name));
+            let latest = def.and_then(|d| d.signoff_latest(name));
             let current = def.and_then(|d| d.signoff_current(name));
             match (latest, current) {
                 (_, Some(_)) => None,
+                // Taken back (FEAT-182): say so, with the reason, rather than "lapsed".
+                (Some(w), None) if !w.verdict.is_given() => Some(gap(
+                    Check::Signoff,
+                    None,
+                    &format!("sign-off '{name}' withdrawn"),
+                    format!(
+                        "sign-off '{name}' was withdrawn: {} — `kanbanr signoff {} {name}` to give \
+                         it again",
+                        w.reason, feature.code
+                    ),
+                )),
                 (Some(_), None) => Some(gap(
                     Check::Signoff,
                     None,
@@ -229,6 +271,9 @@ pub struct Context {
     pub unit: crate::config::EstimateUnit,
     /// The sprint currently active, if the project uses sprints and one is.
     pub active_sprint: Option<String>,
+    /// The project's doc folder, for [`Check::DocsUpdated`] (FEAT-180). Its history is read only
+    /// when that check is evaluated, and only for items that declare docs.
+    pub docs_dir: Option<std::path::PathBuf>,
 }
 
 impl Context {
@@ -243,6 +288,7 @@ impl Context {
             } else {
                 None
             },
+            docs_dir: Some(store.project_dir(id).join("docs")),
         }
     }
 }
@@ -257,15 +303,25 @@ pub fn evaluate_conditions(
         .iter()
         .filter_map(|c| match c {
             Condition::Check(c) => Some(*c),
-            Condition::Zachman { .. } => None,
+            Condition::Zachman { .. } | Condition::SpecSections { .. } => None,
         })
         .collect();
     let mut gaps = evaluate_in(feature, goal_ids, &checks, ctx);
+    let sections: Vec<String> = conditions
+        .iter()
+        .flat_map(|c| match c {
+            Condition::SpecSections { spec_sections } => spec_sections.clone(),
+            _ => vec![],
+        })
+        .collect();
+    if !sections.is_empty() && !is_exempt(feature) {
+        gaps.extend(spec_section_gaps(&feature.specification, &sections));
+    }
     let columns: Vec<String> = conditions
         .iter()
         .flat_map(|c| match c {
             Condition::Zachman { zachman } => zachman.clone(),
-            Condition::Check(_) => vec![],
+            Condition::Check(_) | Condition::SpecSections { .. } => vec![],
         })
         .map(|c| c.trim().to_ascii_lowercase())
         .collect();
@@ -296,6 +352,9 @@ pub struct NextGate {
     pub enforce: crate::config::Enforce,
     /// What `requires` and `signoffs` still lack.
     pub gaps: Vec<Gap>,
+    /// What `requires` alone still lacks, without the sign-offs (FEAT-182): a sign-off is offered
+    /// only once this is empty, so nobody signs off work that has not happened yet.
+    pub requires_gaps: Vec<Gap>,
     /// What `warns` lacks — said, never enforced.
     pub warnings: Vec<Gap>,
     /// The sign-offs this gate still needs, by name, so a surface can offer to record them.
@@ -331,7 +390,9 @@ pub fn next_gates(
             if !gate.applies_to(feature.kind.as_deref()) {
                 return None;
             }
-            let mut gaps = evaluate_conditions(feature, goal_ids.as_ref(), &gate.requires, ctx);
+            let requires_gaps =
+                evaluate_conditions(feature, goal_ids.as_ref(), &gate.requires, ctx);
+            let mut gaps = requires_gaps.clone();
             let signoffs = signoff_gaps(feature, &gate.signoffs);
             let signoffs_needed = gate
                 .signoffs
@@ -351,11 +412,27 @@ pub fn next_gates(
                 purpose: gate.purpose.clone(),
                 enforce: gate.enforce,
                 gaps,
+                requires_gaps,
                 warnings: evaluate_conditions(feature, goal_ids.as_ref(), &gate.warns, ctx),
                 signoffs_needed,
             })
         })
         .collect()
+}
+
+/// The gate of the stage an item reaches next in the workflow's own order (FEAT-182): of the
+/// stages it can move to in one step, the earliest. A workflow that lets an item skip ahead
+/// (Implementation → Operations) still has one next stage, and only its sign-offs are due.
+pub fn immediate_next_gate(
+    project: &crate::store::Project,
+    charter: Option<&crate::Charter>,
+    feature: &FeatureItem,
+    ctx: &Context,
+) -> Option<NextGate> {
+    let position = |s: &str| project.config.statuses.iter().position(|x| x == s);
+    next_gates(project, charter, feature, ctx)
+        .into_iter()
+        .min_by_key(|g| position(&g.status).unwrap_or(usize::MAX))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -494,6 +571,18 @@ pub fn evaluate_in(
             ));
         }
     }
+    if checks.contains(&Check::SpecSections) && !exempt {
+        gaps.extend(spec_section_gaps(
+            &feature.specification,
+            &["Design".to_string()],
+        ));
+    }
+    if checks.contains(&Check::DocsUpdated)
+        && !exempt
+        && let Some(docs) = ctx.docs_dir.as_deref()
+    {
+        gaps.extend(docs_updated_gaps(feature, docs));
+    }
     if checks.contains(&Check::InRelease) && !exempt && feature.release.is_none() {
         gaps.push(gap(
             Check::InRelease,
@@ -551,6 +640,8 @@ pub fn evaluate_definition(
                     | Check::InSprint
                     | Check::InRelease
                     | Check::Signoff
+                    | Check::SpecSections
+                    | Check::DocsUpdated
             )
         });
         if reads_definition {
@@ -703,8 +794,128 @@ fn item_level(
         | Check::Estimated
         | Check::InSprint
         | Check::InRelease
-        | Check::Signoff => {}
+        | Check::Signoff
+        | Check::SpecSections
+        | Check::DocsUpdated => {}
     }
+}
+
+/// A declared doc as the board stores it: under `docs/`, `.md` appended when missing.
+pub fn affects_doc_key(path: &str) -> String {
+    crate::refs::doc_key(path)
+}
+
+/// The docs an item declares that have not changed since it entered its stage (FEAT-180). An item
+/// that declares none passes — not every item touches an architecture doc; doctor says so when the
+/// next stage asks. A board with no history to judge by passes too: nothing can be shown either way.
+fn docs_updated_gaps(feature: &FeatureItem, docs: &std::path::Path) -> Vec<Gap> {
+    let declared = feature
+        .definition
+        .as_ref()
+        .map(|d| d.affects_docs.as_slice())
+        .unwrap_or(&[]);
+    let since = feature.entered_status_at();
+    let mut gaps = Vec::new();
+    for doc in declared {
+        let key = affects_doc_key(doc);
+        let path = docs.join(&key);
+        let changed = crate::git::doc_changed_since(&path, since);
+        if !path.is_file() && changed != Some(true) {
+            gaps.push(Gap {
+                level: Level::Error,
+                ..gap(
+                    Check::DocsUpdated,
+                    None,
+                    &format!("unknown doc {key}"),
+                    format!("{key} is declared in affects_docs but is not on the board"),
+                )
+            });
+        } else if changed == Some(false) {
+            gaps.push(gap(
+                Check::DocsUpdated,
+                None,
+                &format!("{key} not updated"),
+                format!(
+                    "{key} has not changed since {} entered {} — fold the design into it",
+                    feature.code, feature.status
+                ),
+            ));
+        }
+    }
+    gaps
+}
+
+fn is_exempt(feature: &FeatureItem) -> bool {
+    feature
+        .definition
+        .as_ref()
+        .is_some_and(|d| !d.exempt.trim().is_empty())
+}
+
+/// The spec's headings, as (level, text, has content). A section's content runs to the next
+/// heading of the same or a higher level, so a `## Design` holding only `### Data model` and its
+/// text has content. Headings inside fenced code are not headings.
+fn spec_headings(spec: &str) -> Vec<(usize, String, bool)> {
+    let mut headings: Vec<(usize, String, bool)> = Vec::new();
+    let mut fenced = false;
+    for line in spec.lines() {
+        let t = line.trim();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fenced = !fenced;
+        }
+        let level = t.chars().take_while(|c| *c == '#').count();
+        let heading = !fenced && (1..=6).contains(&level) && t[level..].starts_with(' ');
+        if heading {
+            let text = t[level..].trim().trim_end_matches('#').trim().to_string();
+            headings.push((level, text, false));
+            continue;
+        }
+        let content = !t.is_empty() && !(t.starts_with("<!--") && t.ends_with("-->"));
+        if content {
+            // Content belongs to every open section it sits under: the nearest heading and each
+            // enclosing one of a lower level.
+            let mut floor = usize::MAX;
+            for h in headings.iter_mut().rev() {
+                if h.0 < floor {
+                    h.2 = true;
+                    floor = h.0;
+                }
+            }
+        }
+    }
+    headings
+}
+
+/// What `{spec_sections: […]}` lacks: each named section that is absent or empty.
+fn spec_section_gaps(spec: &str, names: &[String]) -> Vec<Gap> {
+    let headings = spec_headings(spec);
+    names
+        .iter()
+        .map(|n| n.trim())
+        .filter(|n| !n.is_empty())
+        .filter_map(
+            |name| match headings.iter().find(|h| h.1.eq_ignore_ascii_case(name)) {
+                Some((_, _, true)) => None,
+                Some((level, text, false)) => Some(gap(
+                    Check::SpecSections,
+                    None,
+                    &format!("empty section '{name}'"),
+                    format!(
+                        "the spec's '{} {text}' section is empty — write it before moving on",
+                        "#".repeat(*level)
+                    ),
+                )),
+                None => Some(gap(
+                    Check::SpecSections,
+                    None,
+                    &format!("no section '{name}'"),
+                    format!(
+                        "the spec has no '{name}' section — add it as a heading, with its content"
+                    ),
+                )),
+            },
+        )
+        .collect()
 }
 
 /// A requirement's name for a message: its id, or the start of its text when it has none yet (a
@@ -814,6 +1025,164 @@ fn requirement_level(check: Check, r: &Requirement, gaps: &mut Vec<Gap>) {
 mod tests {
     use super::*;
     use crate::models::{Requirement, TestRef};
+
+    /// A board in a temp git repository with one item declaring `architecture/data.md` (FEAT-180).
+    fn docs_board(tag: &str) -> (crate::Store, std::path::PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-docs-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = crate::Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let item = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &item.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    affects_docs: vec!["architecture/data".into()],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv1\n")
+            .unwrap();
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "board"));
+        (store, dir, item.code)
+    }
+
+    fn docs_gaps(store: &crate::Store, code: &str) -> Vec<Gap> {
+        let project = store.load("demo").unwrap();
+        let ctx = Context::load(store, "demo", &project.config);
+        evaluate_conditions(
+            project.feature(code).unwrap(),
+            None,
+            &[Condition::Check(Check::DocsUpdated)],
+            &ctx,
+        )
+    }
+
+    /// Commit times are whole seconds: keep "entered the stage" and "changed the doc" apart.
+    fn next_second() {
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+    }
+
+    /// FEAT-180 R-2: `affects_docs` is kept, does not reopen the agreement, and reads back the same
+    /// through an older binary that keeps it as an unknown key.
+    #[test]
+    fn affects_docs_round_trips() {
+        let (store, dir, code) = docs_board("roundtrip");
+        let def = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        // Stored as the board path, `.md` appended.
+        assert_eq!(def.affects_docs, vec!["architecture/data.md".to_string()]);
+
+        let mut bare = def.clone();
+        bare.affects_docs.clear();
+        assert_eq!(
+            def.content_rev(),
+            bare.content_rev(),
+            "naming the docs does not lapse the approval (Q1)"
+        );
+
+        // An older binary keeps the key in `extra`, which is written last: the same bytes.
+        let mut older = bare.clone();
+        older.extra.insert(
+            "affects_docs".into(),
+            serde_yaml::to_value(vec!["architecture/data.md"]).unwrap(),
+        );
+        assert_eq!(
+            serde_yaml::to_string(&def).unwrap(),
+            serde_yaml::to_string(&older).unwrap()
+        );
+        let back: FeatureDefinition =
+            serde_yaml::from_str(&serde_yaml::to_string(&older).unwrap()).unwrap();
+        assert_eq!(back.affects_docs, def.affects_docs);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-180 R-3: a declared doc must change after the item entered its stage. Unchanged
+    /// blocks; changed before entry still blocks; an uncommitted change and a committed one after
+    /// entry pass.
+    #[test]
+    fn docs_updated_gate() {
+        let (store, dir, code) = docs_board("gate");
+        next_second();
+        store.move_feature("demo", &code, "Scheduled").unwrap();
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "move"));
+        next_second();
+
+        let gaps = docs_gaps(&store, &code);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert!(
+            gaps[0]
+                .message
+                .contains("architecture/data.md has not changed since"),
+            "{}",
+            gaps[0].message
+        );
+        assert_eq!(gaps[0].level, Level::Warning);
+
+        // Written, not yet committed: counts.
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv2\n")
+            .unwrap();
+        assert!(docs_gaps(&store, &code).is_empty());
+        // Committed after entry: still counts.
+        assert!(crate::git::commit(
+            &dir,
+            "Ada",
+            "ada@example.com",
+            "fold design"
+        ));
+        assert!(docs_gaps(&store, &code).is_empty());
+
+        // Entering the next stage resets the clock: the change was before it.
+        next_second();
+        store.move_feature("demo", &code, "Planned").unwrap();
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "move"));
+        assert_eq!(docs_gaps(&store, &code).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-180 R-4: a declared doc the board does not have is an error, not a pending change.
+    #[test]
+    fn affects_docs_unknown_is_error() {
+        let (store, dir, code) = docs_board("unknown");
+        let mut def = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        def.affects_docs.push("architecture/nope.md".into());
+        store
+            .set_feature_definition("demo", &code, Some(def))
+            .unwrap();
+        let gaps = docs_gaps(&store, &code);
+        let unknown: Vec<&Gap> = gaps.iter().filter(|g| g.level == Level::Error).collect();
+        assert_eq!(unknown.len(), 1, "{gaps:?}");
+        assert_eq!(
+            unknown[0].message,
+            "architecture/nope.md is declared in affects_docs but is not on the board"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn requirement(id: &str, text: &str, tests: &[(&str, TestState)]) -> Requirement {
         Requirement {
@@ -992,6 +1361,93 @@ mod tests {
             .map(|c| (c.name(), c.passes_when().to_string()))
             .collect();
         assert_eq!(rows, want);
+    }
+
+    /// FEAT-179 R-2: a design stage asks for the design itself. A missing section and an empty
+    /// one are both gaps; nested content counts; a heading in a code fence is not a heading; an
+    /// exempt item has no gaps.
+    #[test]
+    fn spec_sections_gate() {
+        let with_spec = |spec: &str| {
+            let mut f = item(Some(FeatureDefinition {
+                statement: "s".into(),
+                ..Default::default()
+            }));
+            f.specification = spec.into();
+            f
+        };
+        let ask = |names: &[&str]| {
+            vec![Condition::SpecSections {
+                spec_sections: names.iter().map(|n| n.to_string()).collect(),
+            }]
+        };
+        let ctx = Context::default();
+        let gaps =
+            |f: &FeatureItem, names: &[&str]| evaluate_conditions(f, None, &ask(names), &ctx);
+
+        let none = with_spec("# Title\n\nWhy it exists.\n");
+        let g = gaps(&none, &["Design"]);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].check, Check::SpecSections);
+        assert_eq!(g[0].label, "no section 'Design'");
+
+        let empty = with_spec("# Title\n\n## Design\n\n<!-- to do -->\n\n## Tests\n\nt\n");
+        assert_eq!(gaps(&empty, &["Design"])[0].label, "empty section 'Design'");
+
+        let nested = with_spec("# T\n\n## design\n\n### Data model\n\nstruct Shard { .. }\n");
+        assert!(
+            gaps(&nested, &["Design"]).is_empty(),
+            "case-insensitive, nested content counts"
+        );
+
+        let fenced = with_spec("# T\n\n```md\n## Design\ntext\n```\n");
+        assert_eq!(
+            gaps(&fenced, &["Design"]).len(),
+            1,
+            "a fenced heading is not a section"
+        );
+
+        let two = with_spec("## Design\n\nx\n");
+        let g = gaps(&two, &["Design", "Test plan"]);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].label, "no section 'Test plan'");
+
+        // Plain `spec_sections` asks for Design.
+        let plain = vec![Condition::Check(Check::SpecSections)];
+        assert_eq!(evaluate_conditions(&none, None, &plain, &ctx).len(), 1);
+        assert!(evaluate_conditions(&nested, None, &plain, &ctx).is_empty());
+
+        let mut exempt = with_spec("");
+        exempt.definition.as_mut().unwrap().exempt = "predates the method".into();
+        assert!(gaps(&exempt, &["Design"]).is_empty());
+    }
+
+    /// FEAT-179 R-3: `spec_sections` is in the gate vocabulary, reads from a gate both ways, and
+    /// shows in the working agreement. A gate that reads specs says so, so readers load them.
+    #[test]
+    fn spec_sections_in_vocabulary() {
+        assert!(Check::GATEABLE.contains(&Check::SpecSections));
+        assert_eq!(Check::SpecSections.name(), "spec_sections");
+        assert!(Check::SpecSections.parameters().is_some());
+        let gate: crate::config::Gate = serde_yaml::from_str(
+            "requires:\n  - spec_sections\n  - spec_sections: [Design, Test plan]\n",
+        )
+        .expect("both forms read");
+        assert_eq!(gate.requires[0], Condition::Check(Check::SpecSections));
+        assert_eq!(
+            gate.requires[1],
+            Condition::SpecSections {
+                spec_sections: vec!["Design".into(), "Test plan".into()]
+            }
+        );
+        assert!(gate.reads_spec());
+        let mut config = crate::ProjectConfig::default_for("demo");
+        config.gates.insert("Scheduled".into(), gate);
+        let agreement = crate::config::working_agreement("demo", &config);
+        assert!(
+            agreement.contains("spec sections: Design, Test plan"),
+            "{agreement}"
+        );
     }
 
     #[test]

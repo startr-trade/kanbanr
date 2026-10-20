@@ -136,6 +136,7 @@ pub fn ensure_repo(dir: &Path) {
 /// authored by it (FEAT-128). With no identity anywhere, the repository is created without a
 /// commit; the first write that has an author makes it.
 pub fn ensure_repo_as(dir: &Path, identity: Option<(&str, &str)>) {
+    crate::project::assert_inside_fence(dir); // FEAT-195
     let fresh = !dir.join(".git").exists();
     let repo = if fresh {
         match Repository::init(dir) {
@@ -177,6 +178,7 @@ pub fn ensure_repo_as(dir: &Path, identity: Option<(&str, &str)>) {
 
 /// Set the repo-local commit identity (used by local mode: `kanbanr identity --name --email`).
 pub fn set_identity(dir: &Path, name: &str, email: &str) -> Result<(), String> {
+    crate::project::assert_inside_fence(dir); // FEAT-195
     let repo = Repository::open(dir).map_err(|e| e.message().to_string())?;
     let mut cfg = repo.config().map_err(|e| e.message().to_string())?;
     cfg.set_str("user.name", name)
@@ -228,6 +230,7 @@ fn do_commit(repo: &Repository, sig: &Signature, message: &str) -> Result<bool, 
 /// Stage everything and commit authored as `name <email>` with `message`. Returns true if a commit
 /// was made (false if nothing changed or on error).
 pub fn commit(dir: &Path, name: &str, email: &str, message: &str) -> bool {
+    crate::project::assert_inside_fence(dir); // FEAT-195
     let Ok(repo) = Repository::open(dir) else {
         return false;
     };
@@ -240,6 +243,7 @@ pub fn commit(dir: &Path, name: &str, email: &str, message: &str) -> bool {
 /// Stage everything and commit using the repo's configured identity (local mode). Returns true if
 /// a commit was made.
 pub fn commit_local(dir: &Path, message: &str) -> bool {
+    crate::project::assert_inside_fence(dir); // FEAT-195
     let Ok(repo) = Repository::open(dir) else {
         return false;
     };
@@ -394,6 +398,7 @@ pub struct SyncOutcome {
 /// creates the branch; only a failed push is surfaced.)
 #[must_use]
 pub fn sync_all(dir: &Path) -> SyncOutcome {
+    crate::project::assert_inside_fence(dir); // FEAT-195
     let mut outcome = SyncOutcome::default();
     let Ok(repo) = Repository::open(dir) else {
         return outcome;
@@ -554,6 +559,7 @@ pub fn push_setting(dir: &Path) -> Option<String> {
 
 /// Record the board's push policy in its own git config.
 pub fn set_push_setting(dir: &Path, policy: PushPolicy) -> Result<(), String> {
+    crate::project::assert_inside_fence(dir); // FEAT-195
     let repo = Repository::open(dir).map_err(|e| e.message().to_string())?;
     let mut cfg = repo.config().map_err(|e| e.message().to_string())?;
     cfg.set_str(PUSH_SETTING, &policy.to_string())
@@ -623,6 +629,40 @@ pub fn remove_remote(dir: &Path, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Has the board file at `path` changed since `t` (RFC 3339) (FEAT-180)? Compares the file now —
+/// the working tree, so a doc written in the same batch as a move still counts — with its blob in
+/// the newest commit at or before `t`. Absent then and present now counts as changed; present then
+/// and absent now does too. `None` when the board is not a git repository or `t` is not a time.
+pub fn doc_changed_since(path: &Path, t: &str) -> Option<bool> {
+    use time::OffsetDateTime;
+    use time::format_description::well_known::Rfc3339;
+    let since = OffsetDateTime::parse(t.trim(), &Rfc3339)
+        .ok()?
+        .unix_timestamp();
+    let repo = Repository::discover(path.parent()?).ok()?;
+    let workdir = repo.workdir()?.canonicalize().ok()?;
+    let full = path.parent()?.canonicalize().ok()?.join(path.file_name()?);
+    let rel = full.strip_prefix(&workdir).ok()?;
+
+    // The baseline: the newest commit at or before `t`. None before the first commit.
+    let mut walk = repo.revwalk().ok()?;
+    if walk.push_head().is_err() {
+        // No commits at all: anything on disk is new.
+        return Some(full.exists());
+    }
+    walk.set_sorting(git2::Sort::TIME).ok()?;
+    let baseline = walk
+        .flatten()
+        .filter_map(|oid| repo.find_commit(oid).ok())
+        .find(|c| c.time().seconds() <= since);
+    let then = baseline.and_then(|c| c.tree().ok()?.get_path(rel).ok().map(|entry| entry.id()));
+    let now = full
+        .is_file()
+        .then(|| git2::Oid::hash_file(git2::ObjectType::Blob, &full).ok())
+        .flatten();
+    Some(then != now)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,6 +673,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// FEAT-180: a doc is judged against the board as it stood when the item entered its stage.
+    #[test]
+    fn doc_changed_since_compares_with_the_commit_at_entry() {
+        let dir = temp("docchanged");
+        ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let doc = dir.join("docs").join("data.md");
+        std::fs::create_dir_all(doc.parent().unwrap()).unwrap();
+        std::fs::write(&doc, "v1").unwrap();
+        assert!(commit(&dir, "Ada", "ada@example.com", "v1"));
+        let future = "2999-01-01T00:00:00Z";
+        let past = "2000-01-01T00:00:00Z";
+
+        // Unchanged since the latest commit: not changed.
+        assert_eq!(doc_changed_since(&doc, future), Some(false));
+        // An uncommitted edit counts.
+        std::fs::write(&doc, "v2").unwrap();
+        assert_eq!(doc_changed_since(&doc, future), Some(true));
+        // Before any commit held it, the doc was absent: it changed.
+        assert_eq!(doc_changed_since(&doc, past), Some(true));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn doc_changed_since_absent_and_deleted() {
+        let dir = temp("docabsent");
+        ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let future = "2999-01-01T00:00:00Z";
+        let missing = dir.join("docs").join("never.md");
+        std::fs::create_dir_all(missing.parent().unwrap()).unwrap();
+        // Absent then and absent now: nothing changed.
+        assert_eq!(doc_changed_since(&missing, future), Some(false));
+        let doc = dir.join("docs").join("gone.md");
+        std::fs::write(&doc, "here").unwrap();
+        assert!(commit(&dir, "Ada", "ada@example.com", "add"));
+        std::fs::remove_file(&doc).unwrap();
+        assert_eq!(
+            doc_changed_since(&doc, future),
+            Some(true),
+            "a deletion is a change"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn doc_changed_since_without_a_repository() {
+        let dir = temp("docnorepo");
+        let doc = dir.join("data.md");
+        std::fs::write(&doc, "x").unwrap();
+        // A temp folder outside any repository: there is no history to judge by.
+        if Repository::discover(&dir).is_err() {
+            assert_eq!(doc_changed_since(&doc, "2999-01-01T00:00:00Z"), None);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FEAT-128: every new board's first commit was authored `kanbanr <kanbanr@local>`, because

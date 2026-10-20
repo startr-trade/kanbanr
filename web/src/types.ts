@@ -121,7 +121,7 @@ export interface Source {
 export interface ApprovalEvent {
   at: string;
   by: string;
-  verdict: "approved" | "withdrawn";
+  verdict: "approved" | "ratified" | "withdrawn";
   reason?: string;
   rev?: string;
 }
@@ -132,6 +132,8 @@ export interface FeatureDefinition {
   goals?: string[];
   zachman?: Zachman;
   design_doc?: string;
+  /** Board docs this item's design changes (FEAT-180); `docs_updated` checks each changed. */
+  affects_docs?: string[];
   requirements?: Requirement[];
   approval?: Approval | null;
   /** Every agreement and withdrawal, oldest first (FEAT-069). Nothing is ever removed. */
@@ -140,6 +142,23 @@ export interface FeatureDefinition {
   started_unapproved?: string;
   /** A recorded reason this item is exempt from gap reporting. */
   exempt?: string;
+  /** Named sign-offs, given and withdrawn, oldest first (FEAT-114, FEAT-182). */
+  signoffs?: Signoff[];
+}
+
+/** One sign-off entry: given, or a withdrawal of it (FEAT-182). The latest per name decides. */
+export interface Signoff {
+  id: string;
+  by: string;
+  at: string;
+  /** The definition content it covered; empty on a withdrawal. */
+  rev: string;
+  note?: string;
+  doc?: string;
+  status?: string;
+  /** Absent means given. */
+  verdict?: "given" | "withdrawn";
+  reason?: string;
 }
 
 /** The six completeness dimensions, one line each. */
@@ -301,7 +320,16 @@ export interface ProjectConfig {
   /** Days or story points (FEAT-121). */
   estimate_unit?: "days" | "points";
   /** Whether the project uses sprints and releases at all (FEAT-121). */
-  cadence?: { sprints?: boolean; releases?: boolean; sprint_length_days?: number; release?: string };
+  cadence?: {
+    sprints?: boolean;
+    releases?: boolean;
+    sprint_length_days?: number;
+    release?: string;
+    /** The stages a release moves through; the last is the cut (FEAT-183). */
+    release_stages?: string[];
+    integration_branch?: string;
+    main_branch?: string;
+  };
 }
 
 /** A timebox (FEAT-119). */
@@ -341,10 +369,17 @@ export interface Release {
   items?: string[];
   /** How many of `items` are finished — by the daemon's rule, the same as the sprint's. */
   finished?: number;
+  /** Where it is now, from the project's release stages; absent until first promoted (FEAT-183). */
+  stage?: string;
+  /** Every stage change, oldest first. A move back carries its reason. */
+  stages?: { stage: string; by: string; at: string; reason?: string }[];
+  /** The code branch, made on entering the first stage. */
+  branch?: string;
 }
 
-/** A check a gate names, or the Zachman check narrowed to some columns. */
-export type Condition = string | { zachman: string[] };
+/** A check a gate names, the Zachman check narrowed to some columns, or the spec's named sections
+ * (FEAT-179). */
+export type Condition = string | { zachman: string[] } | { spec_sections: string[] };
 
 /** What entering a status asks for (FEAT-113, FEAT-114). */
 export interface Gate {
@@ -355,11 +390,17 @@ export interface Gate {
   enforce?: "block" | "warn";
   kinds?: string[];
   on_enter?: string[];
+  /** The stage roles this status holds: design, build, integrate, release (FEAT-188). */
+  roles?: string[];
 }
 
 /** Readable text for a gate condition. */
 export function conditionText(c: Condition): string {
-  return typeof c === "string" ? c.replace(/_/g, " ") : `zachman ${c.zachman.join("/")}`;
+  if (typeof c === "string") return c.replace(/_/g, " ");
+  if ("spec_sections" in c) return `spec sections ${c.spec_sections.join(", ")}`;
+  if ("zachman" in c) return `zachman ${c.zachman.join("/")}`;
+  // A condition a newer kanbanr writes: shown as it is rather than breaking the page (FEAT-199).
+  return JSON.stringify(c);
 }
 
 export interface Project {

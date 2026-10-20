@@ -268,6 +268,10 @@ fn definition_sections(def: &crate::models::FeatureDefinition) -> String {
     if !def.design_doc.trim().is_empty() {
         out.push_str(&format!("- **Design:** `{}`\n", def.design_doc.trim()));
     }
+    if !def.affects_docs.is_empty() {
+        let docs: Vec<String> = def.affects_docs.iter().map(|d| format!("`{d}`")).collect();
+        out.push_str(&format!("- **Affects docs:** {}\n", docs.join(", ")));
+    }
     match def.approval_state() {
         // Said differently on purpose: agreement after the fact is a real resolution and not the
         // same claim as agreement before the work (FEAT-080).
@@ -314,6 +318,17 @@ fn definition_sections(def: &crate::models::FeatureDefinition) -> String {
             continue;
         }
         named.push(&s.id);
+        // The latest entry is a withdrawal (FEAT-182): say who took it back and why.
+        if !s.verdict.is_given() {
+            out.push_str(&format!(
+                "- **Sign-off `{}` withdrawn** by {} on {} — {}\n",
+                s.id,
+                s.by,
+                s.at.get(..10).unwrap_or(&s.at),
+                s.reason
+            ));
+            continue;
+        }
         let current = def.signoff_current(&s.id).is_some();
         out.push_str(&format!(
             "- **Signed off `{}`** by {} on {}{}{}{}\n",

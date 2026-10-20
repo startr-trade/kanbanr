@@ -105,14 +105,15 @@ pub fn block(store: &Store, project: &str) -> Result<Option<String>> {
     // item's definition one stage at a time instead of filling everything in up front. Only a
     // workflow that declares its gates has stages to describe.
     if let Ok(config) = store.load_meta(project).map(|p| p.config)
-        && !config.gates.is_empty()
+        && config.declares_gates()
     {
         out.push_str(
             "**How work moves here** — each stage asks only for what it needs; \
              `kanbanr check <CODE>` names what the next one still lacks:\n\n",
         );
+        let gates = config.effective_gates();
         for status in &config.statuses {
-            if let Some(gate) = config.gates.get(status)
+            if let Some(gate) = gates.get(status)
                 && !gate.purpose.trim().is_empty()
             {
                 out.push_str(&format!("- **{status}** — {}\n", gate.purpose.trim()));

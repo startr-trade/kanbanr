@@ -14,7 +14,8 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr whoami` / `kanbanr identity` | the commit identity this data folder writes as |
 | `kanbanr config show / set-transition / displayed-states / default-state / no-op-states / workflow` | the workflow; `config workflow --preset <name>`, `--from-file`, `--export`, `--write-agreement` ([Processes](../using/processes.md)) |
 | `kanbanr config rename-status <OLD> <NEW>` | rename a status and move every item in it |
-| `kanbanr config cadence [--sprints on\|off] [--releases on\|off] [--unit points\|days]` | switch sprints, releases and the estimate unit on or off for a project |
+| `kanbanr config cadence [--sprints on\|off] [--releases on\|off] [--unit points\|days] [--release-stages a,b,c] [--integration-branch B] [--main-branch B] [--git-model on\|off]` | switch sprints, releases and the estimate unit on or off for a project; name the stages a release moves through (the last is the cut) and the branches promotion uses; let the git model drive branching |
+| `kanbanr config method [--on\|--off] [part…]` | the method — design before build, docs kept current, broken references reported — part by part: shown, turned off, or back on |
 | `kanbanr hooks install / status / uninstall` | the Claude Code hooks (session start, stop nudge, test capture, commit guard) |
 | `kanbanr serve [--ui-dir …]` | the read-only monitor over this board |
 | `kanbanr open` | open the running monitor in a browser |
@@ -43,6 +44,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr charter show / set` | why the project exists: purpose, goals, non-goals, constraints |
 | `kanbanr feature define <CODE> [--file …] [--template]` | an item's definition: statement, goals, Zachman, requirements and their tests |
 | `kanbanr signoff <CODE> <name>` | record a named sign-off a stage's gate asks for, pinned to the current definition |
+| `kanbanr signoff <CODE> <name> --withdraw --reason "…"` | takes a sign-off back; the earlier one stays on the record and stops counting |
 | `kanbanr ratify <CODE>` | agree after the fact to work started under a recorded override |
 | `kanbanr test <CODE> <R-n> <test> planned\|red\|green` / `kanbanr tests` | move a test along its lifecycle; list tracked tests and check each still exists |
 | `kanbanr defect <CODE> …` | what a defect cost and where it came from |
@@ -52,7 +54,8 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | Command | What it does |
 |---|---|
 | `kanbanr sprint add / list / show / plan / start / close` | timeboxes: add one, list them, see one with its burndown, plan items in, start, close (carrying unfinished work) |
-| `kanbanr release add / list / plan / cut` | releases: add one, list them, plan items in, cut it (ship what is finished, write notes, carry the rest) |
+| `kanbanr release add / list / plan / cut` | releases: add one (`--branch` also promotes it to its first stage; `--patch-of <V>` makes a patch of a cut release, branched from its tag), list them with their stage, plan items in, cut it (ship what is finished, write notes, carry the rest; `--tag` is promotion to production) |
+| `kanbanr release promote <VERSION> [<STAGE>] [--reason …]` | move a release to its next stage or the one named ([Release stages](../using/processes.md#release-stages)): the first makes `release/<VERSION>`, the last is the cut — it tags the version and fast-forwards main, refusing and changing nothing if main has commits the release lacks. Back a stage needs `--reason`; nothing moves back from production. Run it from the project folder; nothing is pushed |
 | `kanbanr retro --sprint <SP-…>` | how a sprint went |
 
 **Dependencies and scheduling**
@@ -69,11 +72,11 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 
 | Command | What it does |
 |---|---|
-| `kanbanr doctor` | every broken reference and every gap, across the board |
+| `kanbanr doctor` | every broken reference and every gap, across the board — including links in specs and docs to items, requirements, ADRs, goals or docs the board does not have |
 | `kanbanr check [CODE]` | what one item has not said, and what it cannot yet show |
 | `kanbanr review [CODE] [--pending] [--ui]` | the decision brief — one item, all of them, or in the browser |
 | `kanbanr approve <CODE> [--by …]` | records agreement, attributed to the board's commit identity |
-| `kanbanr unapprove <CODE> --reason "…"` | takes an agreement back; the record of having given it stays |
+| `kanbanr unapprove <CODE> --reason "…"` | takes an agreement back, with a reason it refuses to go without; the record of having given it stays |
 | `kanbanr capture` | reads a test run's output (run by the hook; you never call it) |
 | `kanbanr split-from <CODE> <PARENT>` | records that an item was sliced out of another |
 | `kanbanr sources [--write]` | imported items whose source file has gone |
@@ -84,7 +87,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | Command | What it does |
 |---|---|
 | `kanbanr why <file>:<line>` | the item, requirement and goal behind a line of code |
-| `kanbanr trace <G-…\|CODE\|CODE/R-n>` | what hangs off a goal, an item or a requirement, and what is missing |
+| `kanbanr trace <G-…\|CODE\|CODE/R-n\|doc.md>` | what hangs off a goal, an item, a requirement or a doc, the specs and docs that link to it, and what is missing |
 | `kanbanr adr new / list / supersede / history` | architecture decisions, linked to the items they affect |
 | `kanbanr adr accept / reject --reason` | the user's verdict on a proposed decision |
 | `kanbanr lessons [--for CODE]` / `kanbanr lesson add / affirm / contradict` | what the project has learned, and judging it |
@@ -95,6 +98,8 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | Command | What it does |
 |---|---|
 | `kanbanr git install-hooks / uninstall-hooks / status` | the commit hooks that require each commit to name its item |
+| `kanbanr git forward <VERSION>` | merge a release's fixes forward into the current line, naming the items they serve |
+| `kanbanr git model [--json]` | the git model the cadence implies: main, the line finished items integrate into, item branches, and the lines that take merges only |
 | `kanbanr commit -m "…"` | commit with the board reference filled in from the branch |
 | `kanbanr claude sync` | write the project's charter and stages into `CLAUDE.md` |
 | `kanbanr git guard` / `kanbanr claude guard` / `kanbanr git check-msg` / `kanbanr git check-branch` | the checks the hooks run (you never call them) |

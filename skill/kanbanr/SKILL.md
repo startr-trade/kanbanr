@@ -327,19 +327,68 @@ organisation's own process file changes what you ask with nothing changed here:
 
 | Check | What you do |
 |---|---|
-| `definition`, `statement`, `goals`, `goals_known`, `zachman` (its named columns), `requirements`, `ears`, `quality`, `tests_named`, `small` | **draft it into the plan**; ask only what you cannot work out from the charter and the code |
+| `definition`, `statement`, `goals`, `goals_known`, `zachman` (its named columns), `requirements`, `ears`, `quality`, `tests_named`, `small`, `spec_sections` (its named sections; `Design` is the build-ready design) | **draft it into the plan**; ask only what you cannot work out from the charter and the code |
 | `approved` | the user's **acceptance of the plan**; with nothing to draft, an **Approve** question |
 | `bypass` | a **Ratify** question |
 | `signoff` (a name in `signoffs_needed`) | a **"Sign off \<name\>"** question |
 | `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; the active sprint; planned releases) |
 | `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
+| `docs_updated` | **never a question** — fold the design into each doc in `affects_docs` and say which you changed; if the item names none, ask whether it really changes no architecture doc |
 
 Warnings go into the plan with a choice: fix it, or go ahead with the warning on record. When more
 than one next stage is possible, ask which. Head the plan with the stage's own `purpose`.
 
+**Stages have roles** (`kanbanr process checks` lists them): design, build, integrate, release.
+Whatever a process calls its stages, the design is due before the build role's stage, and code is
+written there, on the item's branch. Say which stage holds which role when you plan work.
+
 **The purpose is a question too.** A stage's `purpose` can name something no check measures — "the
 quality it must reach", "when it happens". If the definition does not yet address it, ask (with
 options, e.g. a latency target, or "no target"), rather than noting its absence afterwards.
+
+### The design stage: the spec carries the build-ready design
+
+When an item reaches a stage whose purpose is *how and where* (System Design, Design, or the
+equivalent in the project's process), its **spec** gains a `## Design` section written at
+implementation level. A reviewer or another session should be able to build from it without
+guessing:
+- components, modules and files;
+- public interfaces with signatures, and what each must do;
+- the data model and on-disk or wire formats;
+- algorithms and edge cases, and control flow (a diagram where it helps);
+- concurrency, transactions and failure handling;
+- configuration and its defaults (with how each default was chosen);
+- dependencies;
+- security and privacy;
+- performance budgets that name their benchmark;
+- a test plan mapping each requirement to its tests;
+- compatibility and migration;
+- links to ADRs, and open questions stated as questions;
+- **Affects docs**: links to the board docs this change touches. Mirror the same paths into the
+  definition's `affects_docs`, which a `docs_updated` gate checks.
+
+The definition's `how` and `where` lines are one-line summaries of this section, never a
+substitute for it. A section that does not apply says "n/a" and why. A spec that stays
+non-technical at this stage leaves implementation decisions unreviewed, which is the failure the
+gate exists to prevent.
+
+**Write it for hand-off.** The design is the point where a capable model does the thinking, so
+that cheaper models can do the building. End the section with an **implementation task list** a
+lower-cost subagent can carry out one task at a time, without making a design decision. Each task
+names:
+- the files it creates or changes;
+- the exact signatures;
+- the behaviour, including errors;
+- the tests that prove it, by name, and the requirement each serves;
+- the tasks it depends on.
+
+Leave nothing open inside a task. A question still undecided goes to the user before the design is
+signed off, never to the subagent. Mirror the tasks into the item's todo-list, so each one can be
+handed out and tracked.
+
+A project makes the section a condition of moving on with
+`spec_sections: [Design]` in the build stage's `requires`. If it also wants a person to review the
+design before build, it adds `signoffs: [design-review]` to the same gate.
 
 ### A new item: scope it in plan mode
 
@@ -383,7 +432,13 @@ verdicts that item can take — from the table above — plus **"Change it"** an
 inferred from the conversation, never from "sounds good", never by you on your own.** Always pass
 `--rev`: if the definition changed after you showed it, the command refuses and records nothing;
 show the brief again and ask again. Recording a verdict nobody chose is the failure this exists to
-prevent — if it ever happens, say so and withdraw it (`kanbanr unapprove <CODE> --reason "…"`).
+prevent — if it ever happens, say so and withdraw it (`kanbanr unapprove <CODE> --reason "…"`, or
+`kanbanr signoff <CODE> <name> --withdraw --reason "…"` for a sign-off). A withdrawal always needs
+the reason the user gives; never invent one.
+
+The queue offers a sign-off only for the stage the item reaches **next**, and only once that
+stage's other requirements are met. A sign-off for a later stage, or for work not done yet, is not
+asked for, so don't ask for it either.
 
 **A decision you draft is asked about at once.** After `kanbanr adr new`, fill its sections, show it
 in a few lines, and ask Accept / Reject (with a reason) / Later — never end by telling the user to
@@ -521,7 +576,7 @@ renamed or deleted — and `--write` returns it to `planned`. Mark a check a per
 
 ## Every change points back at the reason for it
 
-`kanbanr trace <G-2 | FEAT-046 | FEAT-046/R-2>` goes **down** — requirements, tests, documents,
+`kanbanr trace <G-2 | FEAT-046 | FEAT-046/R-2 | doc.md>` goes **down** — requirements, tests, documents,
 decisions — and ends with the gaps, which are the point of it. `kanbanr why <file>:<line>` goes
 **up**: the annotation on the line, else the trailer of the commit that wrote it, then requirement
 → goal → charter purpose. A line nobody claimed is reported as exactly that.
@@ -545,6 +600,22 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
 - A commit may add `Docs: design/mirror.md` and `ADR: ADR-0003`; both are checked against the
   board like any other reference.
 - `kanbanr trace <MS-006> --zachman` reports which of the six columns nothing in scope addresses.
+- **The method is on by default.** Every built-in process asks for the Design and its
+  `design-review` at the build stage, and `docs_updated` with `docs-folded` at the integrate stage
+  (`kanbanr config method` shows where). Never turn a part off yourself: it is the user's choice,
+  through `kanbanr config method --off <part>`.
+- **Architecture docs stay as built.** Keep one board doc per component, describing it as it is,
+  with front matter `items`, `adrs` and `covers`. Before an item is released, fold its Design into
+  each doc in its `affects_docs`; a `docs_updated` gate refuses the move until each changed since
+  the item entered its stage. End each milestone with an architecture compliance review.
+- **Every reference in a spec, doc or ADR is a live link** — the board checks them:
+  `[FEAT-012](/p/<project>/feature/FEAT-012)` (a requirement: `…/feature/FEAT-012#R-2`),
+  `/p/<project>/milestone/MS-004`, `/p/<project>/charter#G-1`, and
+  `/p/<project>/docs/file/<path>` for an ADR or a doc. A code in prose is linked too, but a link
+  says you mean it. A file in the code repository is not a board doc: name it as a code path
+  (`docs/src/using/processes.md`), never as a `/docs/file/` link. A design's **Affects docs** list
+  is made of these links. `kanbanr doctor` reports any that point at nothing — fix them before
+  calling the item done. `kanbanr trace <doc.md>` shows what a doc names and what links to it.
 
 ## Where the rules live
 
@@ -793,7 +864,7 @@ kanbanr retro [MS-006] [--since 14d] [--label x] [--write] | --due
 kanbanr claude sync [--show]                    # refresh the generated block in CLAUDE.md
 kanbanr hooks install [--global] | status | uninstall   # per project unless --global
 kanbanr review --pending                        # every item awaiting agreement, in one pass
-kanbanr trace [G-2|FEAT-001|FEAT-001/R-2] [--zachman]   # down the chain, ending in the gaps
+kanbanr trace [G-2|FEAT-001|FEAT-001/R-2|doc.md] [--zachman]   # down the chain, ending in the gaps
 kanbanr why src/cart.rs:42                      # up: annotation or trailer -> requirement -> goal
 kanbanr adr new "…" [--affects …] [--driven-by FEAT-001/R-2] [--quality Reliability] [--zachman How]
 kanbanr adr list [--for FEAT-001] | supersede ADR-0007 --replaces ADR-0003 | history ADR-0007
@@ -806,9 +877,12 @@ kanbanr start FEAT-001 [--to STATUS] [--no-branch] [--override "<reason>"]
 kanbanr commit -m "…" [--ref R-2] [--ref TL-001/T3] [-a]   # trailer filled from the branch
 kanbanr finish [FEAT-001]         # gated: tasks complete, requirements proven
 kanbanr git install-hooks [--force] | uninstall-hooks | status
+kanbanr git model [--json]                       # main, the line, item branches, protected lines
+kanbanr git forward <VERSION>                    # merge a release's fixes forward into the line
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
 kanbanr approve FEAT-001 --rev <rev>   # only after the user chose Approve in a plan or question
 kanbanr signoff FEAT-001 design-review [--note …] [--doc path]   # a named sign-off a stage asks for — the user's, never Claude's
+kanbanr signoff FEAT-001 design-review --withdraw --reason "…"     # take one back; the earlier entry stays as history
 kanbanr move FEAT-001 Scheduled [--override \"<reason>\"]     # gated; the override is recorded
 kanbanr batch --dry-run --file b.json   # preview a bundle (e.g. an import) without writing
 kanbanr sources [--write]         # imported items' sources; --write records ones that are gone
@@ -830,6 +904,9 @@ kanbanr sprint start SP-001 | show [SP-001] | list | close SP-001 --carry-to SP-
 kanbanr retro --sprint SP-001                     # the sprint's items, what it carried, its burndown
 kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # ship the finished items, write notes, carry the rest
+kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # next or named stage (default candidate → test → staging → production): the first makes release/<V>; the last is the cut — tags and fast-forwards main, refuses if main has commits the release lacks; back a stage needs --reason. Run from the project folder; never pushes
+kanbanr release add v0.2.0 --branch               # add it and promote it to the first stage
+kanbanr config cadence --release-stages candidate,qa,live [--integration-branch develop] [--main-branch main]
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a shipped release
 kanbanr config workflow --export > process.yaml   # this project's workflow, gates included
 kanbanr process check process.yaml|-              # check a process without applying it (- reads stdin): every problem, then its agreement and diagram
