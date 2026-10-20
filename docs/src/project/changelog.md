@@ -99,6 +99,8 @@ All notable changes to kanbanr are documented here. The format follows
   `api/` is fenced to the system temporary directory (`KANBANR_BOARD_FENCE`), so a test that
   drifts onto a real board stops before touching it, and `make ci` fails if your board changed
   during the run. Test scratch folders moved out of the build tree.
+- **`make ci` lets your verdicts through (FEAT-198).** Approving, ratifying or signing off items
+  on the board while `make ci` runs no longer fails its board check; any other change still does.
 
 ### Fixed
 
