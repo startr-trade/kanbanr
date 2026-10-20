@@ -13,6 +13,7 @@ unsafe extern "system" {}
 pub mod activity;
 pub mod adr;
 pub mod batch;
+pub mod boardreadme;
 pub mod charter;
 pub mod claude;
 pub mod coderepo;

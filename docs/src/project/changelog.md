@@ -17,6 +17,11 @@ All notable changes to kanbanr are documented here. The format follows
   every public route against it, and the monitor's types are checked against it too. A breaking
   change to a public route would be published as v2 under `/api/v2/`. Other read routes stay
   served, as internal.
+- **Every board explains how to view it (FEAT-201).** A board's `README.md` says what the repository
+  is, lists its projects, and walks a reader from nothing to the board: install kanbanr, clone,
+  `kanbanr serve --data-dir <clone>`, open the page. It is written with the board's first project
+  and kept current as projects change; text outside its markers is never touched. `kanbanr readme`
+  writes it on an existing board, and `kanbanr doctor` reminds you until then.
 - **Release actions in the monitor (FEAT-185).** With releases on, the review queue asks which
   planned release an item belongs to once its next stage is the end (or a stage that asks for
   `in_release`) and it is in none. The Review page offers one button per planned release and
