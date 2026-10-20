@@ -8,6 +8,15 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **A versioned read API, described in OpenAPI 3.1 (FEAT-177).** The daemon's public read routes —
+  the ones the monitor uses, plus the obvious reads — are now version 1 of a documented contract
+  for integrators and tools built on the board. `kanbanr serve` serves the description at
+  `GET /api/openapi.json`; the [HTTP API](https://kanbanr.startr.trade/reference/http-api.html)
+  page lists the public routes, the internal ones, errors, live updates and versioning, and
+  includes the document. It is generated from the Rust response types, a contract test checks
+  every public route against it, and the monitor's types are checked against it too. A breaking
+  change to a public route would be published as v2 under `/api/v2/`. Other read routes stay
+  served, as internal.
 - **Every board explains how to view it (FEAT-201).** A board's `README.md` says what the repository
   is, lists its projects, and walks a reader from nothing to the board: install kanbanr, clone,
   `kanbanr serve --data-dir <clone>`, open the page. It is written with the board's first project
@@ -121,6 +130,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Changed
 
+- **The daemon's answers say what they are (FEAT-177).** A `GET` under `/api` that no route answers
+  is now a `404`, not a `400` "unsupported operation". Mermaid diagrams (`workflow`, `gantt`) and
+  the DOT graph are sent as `text/plain` and the project export as `text/markdown`, where they
+  were labelled `application/json`.
 - **Tests cannot reach a real board (FEAT-195).** For contributors: every process cargo runs in
   `api/` is fenced to the system temporary directory (`KANBANR_BOARD_FENCE`), so a test that
   drifts onto a real board stops before touching it, and `make ci` fails if your board changed
@@ -133,6 +146,17 @@ All notable changes to kanbanr are documented here. The format follows
 - **A sign-off that lifts the last hold finishes the item (FEAT-204).** An item whose tasks were all
   done but whose end stage waited for a sign-off stayed in progress after the sign-off was given;
   it now finishes then, through the same gates as ticking the last task.
+- **Board cards say plainly what an item needs next (FEAT-205).** A card's next-stage pill read
+  "→ In Progress ✓", which looked like the item's status and claimed ready while its tasks or a
+  sign-off were still outstanding. A card now says "In Progress needs 2", "waiting for sign-off
+  docs-folded", "ready for In Progress" or "ready to complete", and nothing while its tasks are
+  open. The readiness route's next stages gain `signoffs`, `tasks_open` and `ends`; `missing`
+  keeps its meaning.
+- **A cached build no longer ships without the monitor or the skill (FEAT-202).** The build
+  scripts found `web/dist` and `skill/kanbanr` through the folder they were compiled in; a build
+  cache (sccache) reused one compiled in a deleted worktree, and the binary had neither. They now
+  read the folder when they run, and a release build of a full checkout without a built monitor
+  fails, naming the fix (`KANBANR_ALLOW_BARE_BUILD=1` builds without it; `make cli` does).
 - **The Workflow page shows the method again (FEAT-199).** Its diagram failed ("No such shape") and
   its Stages panel showed no gates on projects with role-addressed gates; both now show the gates
   moves are judged by. A stage asking for `spec_sections` no longer crashes the page.

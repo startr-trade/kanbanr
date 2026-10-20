@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 /// A condition an item can be checked against. The vocabulary is closed on purpose: a workflow can
 /// only require what kanbanr knows how to evaluate from the board.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Check {
     /// The item has a definition at all.
@@ -161,6 +162,7 @@ impl Check {
 /// (`{zachman: [what, who, why]}`), which is how a process asks for the six dimensions a stage at a
 /// time rather than all at once.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum Condition {
     Check(Check),
@@ -345,6 +347,7 @@ pub fn evaluate_conditions(
 
 /// What moving an item on to one next status would ask, and what it still lacks (FEAT-117).
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NextGate {
     pub status: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -359,6 +362,132 @@ pub struct NextGate {
     pub warnings: Vec<Gap>,
     /// The sign-offs this gate still needs, by name, so a surface can offer to record them.
     pub signoffs_needed: Vec<String>,
+}
+
+/// What one item is missing, and what its next stage asks (FEAT-112, FEAT-117):
+/// `GET /projects/{p}/features/{code}/readiness`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ReadinessView {
+    pub code: String,
+    /// The definition's revision: a verdict given with `rev` is refused if it moved on
+    /// (FEAT-159). Null when the item has no definition.
+    pub rev: Option<String>,
+    /// What `kanbanr check` reports.
+    pub gaps: Vec<Gap>,
+    /// What each next stage asks, and what it still lacks.
+    pub next: Vec<NextGate>,
+}
+
+impl ReadinessView {
+    pub fn load(store: &crate::Store, p: &str, code: &str) -> crate::Result<Self> {
+        let project = store.load_for_gates(p)?;
+        let feature = project.feature(code)?;
+        let charter = crate::charter::load(store, p)?;
+        let goal_ids = charter.goal_ids();
+        Ok(Self {
+            code: feature.code.clone(),
+            rev: feature.definition.as_ref().map(|d| d.content_rev()),
+            gaps: evaluate(feature, Some(&goal_ids), CHECK),
+            next: next_gates(
+                &project,
+                Some(&charter),
+                feature,
+                &Context::load(store, p, &project.config),
+            ),
+        })
+    }
+}
+
+/// A next stage on a card: its status, how many things it still lacks, which of those are
+/// sign-offs, and how many of the item's tasks are open (FEAT-205) — so a card never reads as
+/// ready while a sign-off or work is outstanding.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct NextStage {
+    pub status: String,
+    /// Everything the stage still lacks, its sign-offs included (as before FEAT-205).
+    pub missing: usize,
+    /// The sign-offs among `missing`.
+    pub signoffs: Vec<String>,
+    pub tasks_open: usize,
+    /// The stage ends the work (an end status that is not a no-op): "ready to complete".
+    pub ends: bool,
+}
+
+/// One card's readiness: its gaps, and its next stages.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CardReadiness {
+    pub gaps: Vec<Gap>,
+    pub next: Vec<NextStage>,
+}
+
+/// The board's cards in one answer, keyed by item code, in board order:
+/// `GET /projects/{p}/readiness`. Finished and parked items are left out, as doctor leaves them
+/// out — they are history, not work.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ProjectReadiness(pub Vec<(String, CardReadiness)>);
+
+impl ProjectReadiness {
+    pub fn load(store: &crate::Store, p: &str) -> crate::Result<Self> {
+        let project = store.load_for_gates(p)?;
+        let charter = crate::charter::load(store, p)?;
+        let ctx = Context::load(store, p, &project.config);
+        Ok(Self(
+            project
+                .features
+                .iter()
+                .filter(|f| crate::graph::is_live_work(&project.config, &f.status))
+                .map(|f| {
+                    let card = CardReadiness {
+                        gaps: evaluate(f, None, CARD),
+                        // The next stage, with how much it still lacks (FEAT-117).
+                        next: next_gates(&project, Some(&charter), f, &ctx)
+                            .into_iter()
+                            .map(|n| NextStage {
+                                ends: crate::graph::is_terminal_status(&project.config, &n.status)
+                                    && !project.config.is_no_op(&n.status),
+                                status: n.status,
+                                missing: n.gaps.len(),
+                                signoffs: n.signoffs_needed,
+                                tasks_open: f
+                                    .all_tasks()
+                                    .filter(|t| t.state != crate::models::TaskState::Completed)
+                                    .count(),
+                            })
+                            .collect(),
+                    };
+                    (f.code.clone(), card)
+                })
+                .collect(),
+        ))
+    }
+}
+
+impl Serialize for ProjectReadiness {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = s.serialize_map(Some(self.0.len()))?;
+        for (code, card) in &self.0 {
+            map.serialize_entry(code, card)?;
+        }
+        map.end()
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for ProjectReadiness {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "ProjectReadiness".into()
+    }
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "description": "The board's live cards, keyed by item code, in board order.",
+            "additionalProperties": generator.subschema_for::<CardReadiness>(),
+        })
+    }
 }
 
 /// The gates an item meets next: the statuses it can move on to in one step — forward in the
@@ -436,6 +565,7 @@ pub fn immediate_next_gate(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Level {
     Warning,
@@ -445,6 +575,7 @@ pub enum Level {
 
 /// One thing an item is missing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Gap {
     pub check: Check,
     /// The requirement the gap is about, for per-requirement checks.
@@ -1072,6 +1203,75 @@ mod tests {
     /// Commit times are whole seconds: keep "entered the stage" and "changed the doc" apart.
     fn next_second() {
         std::thread::sleep(std::time::Duration::from_millis(1100));
+    }
+
+    /// FEAT-205 R-1: a card's next stage names the sign-offs it still needs and the tasks still
+    /// open, apart from its unmet conditions — so "ready" can only mean ready.
+    #[test]
+    fn next_stage_names_signoffs_and_open_tasks() {
+        let (store, dir, code) = docs_board("next-stage");
+        let gate = crate::config::Gate {
+            requires: vec![Condition::Check(Check::Definition)],
+            signoffs: vec!["docs-folded".into()],
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Scheduled".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        let list = store.add_todo_list("demo", &code, "work", None).unwrap();
+        store
+            .add_task("demo", &code, &list.code, "one", None)
+            .unwrap();
+        store
+            .add_task("demo", &code, &list.code, "two", None)
+            .unwrap();
+        store
+            .set_task_state(
+                "demo",
+                &code,
+                &list.code,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        let card = |store: &crate::Store| {
+            ProjectReadiness::load(store, "demo")
+                .unwrap()
+                .0
+                .into_iter()
+                .find(|(c, _)| c == &code)
+                .unwrap()
+                .1
+        };
+        let next = &card(&store).next;
+        assert_eq!(next.len(), 1, "{next:?}");
+        assert_eq!(next[0].status, "Scheduled");
+        assert_eq!(
+            next[0].missing, 1,
+            "the definition is there; the sign-off is not"
+        );
+        assert_eq!(next[0].signoffs, vec!["docs-folded".to_string()]);
+        assert_eq!(next[0].tasks_open, 1);
+
+        store
+            .signoff_feature("demo", &code, "docs-folded", "Ada", "", "")
+            .unwrap();
+        store
+            .set_task_state(
+                "demo",
+                &code,
+                &list.code,
+                "T2",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        let next = &card(&store).next;
+        assert!(
+            next.iter()
+                .all(|n| n.signoffs.is_empty() && n.tasks_open == 0),
+            "{next:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FEAT-180 R-2: `affects_docs` is kept, does not reopen the agreement, and reads back the same
