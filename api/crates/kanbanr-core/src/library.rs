@@ -91,6 +91,7 @@ pub fn pick(
 
 /// How a project's workflow stands against the saved process it was applied from (FEAT-170).
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Drift {
     /// What the project was given.
     pub source: crate::config::ProcessSource,
@@ -142,6 +143,35 @@ impl Drift {
         }
         out
     }
+}
+
+/// How a project stands against its saved process (FEAT-170): `GET /projects/{p}/process`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ProcessStatus {
+    /// The process the project's workflow was applied from; null when none was.
+    pub source: Option<crate::config::ProcessSource>,
+    /// How it has moved apart from that process; null when there is nothing to compare, or the
+    /// process is a personal one, which only the user's own kanbanr can see.
+    pub drift: Option<Drift>,
+    /// [`Drift::messages`]: one sentence per thing to report.
+    pub messages: Vec<String>,
+}
+
+/// One process the board can apply (FEAT-169): `GET /processes`. A personal process is known
+/// here only by name and the projects that use it, so it carries no version, description or rev.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ProcessListing {
+    pub name: String,
+    pub library: Library,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+    pub used_by: Vec<String>,
 }
 
 /// Compare a project's workflow with the process it came from, given that process's current

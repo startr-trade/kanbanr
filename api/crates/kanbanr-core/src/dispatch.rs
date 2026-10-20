@@ -225,17 +225,23 @@ fn build_query(project: Option<&str>, query: Option<&str>) -> crate::query::Quer
 
 // ---- project summaries (mirrors the server's home-tile shape, sans user filtering) ----------
 
-#[derive(Serialize)]
-struct ProjectSummary {
-    id: String,
-    name: String,
-    description: String,
-    displayed_states: Vec<String>,
-    other_states: Vec<String>,
-    no_op_states: Vec<String>,
-    counts: BTreeMap<String, usize>,
-    total_features: usize,
-    has_docs: bool,
+/// One project on the board, as the home page lists it: `GET /projects`.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ProjectSummary {
+    pub id: String,
+    /// The project's name; its id when it has none.
+    pub name: String,
+    pub description: String,
+    /// The statuses shown as board columns.
+    pub displayed_states: Vec<String>,
+    /// The statuses that are not columns.
+    pub other_states: Vec<String>,
+    pub no_op_states: Vec<String>,
+    /// Items per status, for every status.
+    pub counts: BTreeMap<String, usize>,
+    pub total_features: usize,
+    pub has_docs: bool,
 }
 
 fn list_summaries(store: &Store) -> Result<Vec<ProjectSummary>> {
@@ -482,8 +488,9 @@ fn process_source(body: &Value) -> Result<Option<crate::config::ProcessSource>> 
 
 /// The processes this board can apply (FEAT-169): its own library, then the built-in ones, each
 /// with the projects on the board that use it.
-fn list_processes(store: &Store) -> Result<Value> {
+fn list_processes(store: &Store) -> Result<Vec<crate::library::ProcessListing>> {
     use crate::config::Library;
+    use crate::library::ProcessListing;
     let mut used: BTreeMap<(String, Library), Vec<String>> = BTreeMap::new();
     for id in store.list_projects()? {
         if let Some(src) = store.load(&id)?.config.process {
@@ -491,14 +498,17 @@ fn list_processes(store: &Store) -> Result<Value> {
         }
     }
     let row = |name: &str, library: Library, file: &crate::config::WorkflowFile, about: String| {
-        json!({
-            "name": name,
-            "library": library,
-            "version": file.version(),
-            "description": about,
-            "rev": file.content_rev(),
-            "used_by": used.get(&(name.to_string(), library)).cloned().unwrap_or_default(),
-        })
+        ProcessListing {
+            name: name.to_string(),
+            library,
+            version: Some(file.version()),
+            description: Some(about),
+            rev: Some(file.content_rev()),
+            used_by: used
+                .get(&(name.to_string(), library))
+                .cloned()
+                .unwrap_or_default(),
+        }
     };
     let mut out = Vec::new();
     for (name, file) in store.list_processes()? {
@@ -521,13 +531,46 @@ fn list_processes(store: &Store) -> Result<Value> {
     // use one, and which version they applied. The CLI fills in the user's own.
     for ((name, library), projects) in &used {
         if *library == Library::Personal {
-            out.push(json!({ "name": name, "library": library, "used_by": projects }));
+            out.push(ProcessListing {
+                name: name.clone(),
+                library: *library,
+                version: None,
+                description: None,
+                rev: None,
+                used_by: projects.clone(),
+            });
         }
     }
-    Ok(Value::Array(out))
+    Ok(out)
 }
 
 // ---- the dispatcher ------------------------------------------------------------------------
+
+/// The media type of what a successful `GET` of `path` (with its query) answers with (FEAT-177):
+/// JSON, unless the route renders text — a diagram, a document, a Markdown export. The daemon
+/// labels its bodies with this, so a body labelled JSON is JSON.
+pub fn read_media_type(path: &str) -> &'static str {
+    const TEXT: &str = "text/plain; charset=utf-8";
+    const MARKDOWN: &str = "text/markdown; charset=utf-8";
+    const JSON: &str = "application/json";
+    let (path_only, query) = match path.split_once('?') {
+        Some((p, q)) => (p, Some(q)),
+        None => (path, None),
+    };
+    let segs: Vec<&str> = path_only.split('/').filter(|s| !s.is_empty()).collect();
+    let format = query_param(query, "format");
+    match segs.as_slice() {
+        ["projects", _, "workflow"] | ["projects", _, "gantt"] | ["gantt"] => TEXT,
+        ["projects", _, "graph"] | ["graph"] if format.as_deref() == Some("dot") => TEXT,
+        ["projects", _, "export"] | ["projects", _, "features", _, "export"]
+            if format.as_deref() != Some("json") =>
+        {
+            MARKDOWN
+        }
+        ["projects", _, "docs", "content"] => MARKDOWN,
+        _ => JSON,
+    }
+}
 
 /// Apply a data operation against the store, returning the response body string. Reads and writes
 /// alike — the caller (e.g. the CLI's local backend) decides whether to commit afterwards based on
@@ -595,11 +638,11 @@ pub fn dispatch_in(
         ("GET", ["projects", p, "process"]) => {
             let project = store.load(p)?;
             let drift = store.process_drift(&project)?;
-            ser(&json!({
-                "source": project.config.process,
-                "drift": drift,
-                "messages": drift.as_ref().map(|d| d.messages()).unwrap_or_default(),
-            }))
+            ser(&crate::library::ProcessStatus {
+                source: project.config.process,
+                messages: drift.as_ref().map(|d| d.messages()).unwrap_or_default(),
+                drift,
+            })
         }
 
         // ---- portfolio / program hierarchy (FEAT-030) ----
@@ -1245,164 +1288,14 @@ pub fn dispatch_in(
         // ---- what is waiting for agreement (FEAT-067) ----
         // What an item is missing, from the one engine every surface uses (FEAT-112).
         ("GET", ["projects", p, "features", code, "readiness"]) => {
-            let project = store.load_for_gates(p)?;
-            let feature = project.feature(code)?;
-            let charter = crate::charter::load(store, p)?;
-            let goal_ids = charter.goal_ids();
-            ser(&json!({
-                "code": feature.code,
-                // The definition's revision: a verdict given with `rev` is refused if it moved on
-                // (FEAT-159).
-                "rev": feature.definition.as_ref().map(|d| d.content_rev()),
-                "gaps": crate::readiness::evaluate(feature, Some(&goal_ids), crate::readiness::CHECK),
-                // What the next stage asks, and what it still lacks (FEAT-117).
-                "next": crate::readiness::next_gates(
-                    &project,
-                    Some(&charter),
-                    feature,
-                    &crate::readiness::Context::load(store, p, &project.config),
-                ),
-            }))
+            ser(&crate::readiness::ReadinessView::load(store, p, code)?)
         }
         // The board's cards, in one request: gaps per live item, keyed by code. Finished and
         // parked items are left out, as doctor leaves them out — they are history, not work.
         ("GET", ["projects", p, "readiness"]) => {
-            let project = store.load_for_gates(p)?;
-            let charter = crate::charter::load(store, p)?;
-            let ctx = crate::readiness::Context::load(store, p, &project.config);
-            let cards: serde_json::Map<String, Value> = project
-                .features
-                .iter()
-                .filter(|f| crate::graph::is_live_work(&project.config, &f.status))
-                .map(|f| {
-                    let gaps = crate::readiness::evaluate(f, None, crate::readiness::CARD);
-                    // The next stage, with how much it still lacks (FEAT-117).
-                    let next: Vec<Value> =
-                        crate::readiness::next_gates(&project, Some(&charter), f, &ctx)
-                            .into_iter()
-                            .map(|n| json!({"status": n.status, "missing": n.gaps.len()}))
-                            .collect();
-                    (f.code.clone(), json!({ "gaps": gaps, "next": next }))
-                })
-                .collect();
-            ser(&cards)
+            ser(&crate::readiness::ProjectReadiness::load(store, p)?)
         }
-        ("GET", ["projects", p, "review"]) => {
-            use crate::models::ApprovalState;
-            let project = store.load_for_gates(p)?;
-            let charter = crate::charter::load(store, p)?;
-            let ctx = crate::readiness::Context::load(store, p, &project.config);
-            // The planned releases, in file order: the choices of the which-release question
-            // (FEAT-185). Only loaded when the project works in releases.
-            let release_choices: Vec<String> = if project.config.cadence.releases {
-                crate::releases::load(store, p)?
-                    .into_iter()
-                    .filter(|r| r.state == crate::releases::ReleaseState::Planned)
-                    .map(|r| r.version)
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            let gates = project.config.effective_gates();
-            // Whether an approval is current or has lapsed depends on a hash of the definition's
-            // content, so it is decided here rather than in each caller: the CLI, the monitor and
-            // any future client all get the same answer to "is this agreed?".
-            let mut pending: Vec<Value> = project
-                .features
-                .iter()
-                // Only where agreement can still change what happens (FEAT-078). Approving a
-                // Completed item records a signature, pinned to a definition hash, for work already
-                // merged; a deliberately Deferred one is not going to start. The same gate the
-                // doctor applies, so the two surfaces cannot give different answers to one question.
-                .filter_map(|f| {
-                    let definition = f.definition.as_ref()?;
-                    let live = crate::graph::is_live_work(&project.config, &f.status);
-                    // Work finished under a recorded bypass and never agreed to is still a
-                    // question for a person, however done it is — the one the doctor reports.
-                    // It is asked here too (FEAT-109), with the predicate the doctor uses, so the
-                    // two surfaces cannot disagree about which items need a ratification.
-                    let unratified = !live && crate::doctor::unreconciled_bypass(definition);
-                    if !live && !unratified {
-                        return None;
-                    }
-                    // Sign-offs the next stage asks for are the same kind of question: a person's
-                    // agreement, recorded before the item can move on (FEAT-117). Only the stage
-                    // the item reaches next, not every stage it could skip to, and only once that
-                    // stage's other requirements are met (FEAT-182): a sign-off offered before the
-                    // work exists records agreement to work that has not happened.
-                    let next = if live {
-                        crate::readiness::immediate_next_gate(&project, Some(&charter), f, &ctx)
-                    } else {
-                        None
-                    };
-                    // Which release it ships in (FEAT-185): asked of live work not yet planned
-                    // into one, once the stage it reaches next is the end, or asks for a release.
-                    let asks_release = project.config.cadence.releases
-                        && f.release.as_deref().is_none_or(|r| r.trim().is_empty())
-                        && next.as_ref().is_some_and(|n| {
-                            project.config.is_terminal(&n.status)
-                                || gates.get(&n.status).is_some_and(|g| {
-                                    g.requires.contains(&crate::readiness::Condition::Check(
-                                        crate::readiness::Check::InRelease,
-                                    ))
-                                })
-                        });
-                    let signoffs_needed: Vec<String> = next
-                        .filter(|n| n.requires_gaps.is_empty())
-                        .map(|n| n.signoffs_needed)
-                        .unwrap_or_default();
-                    let state = match definition.approval_state() {
-                        _ if unratified => "unratified",
-                        // Agreed is agreed, however late — a ratified item is not still a
-                        // decision waiting to be made, so it leaves the queue (FEAT-080) — unless
-                        // its next stage is waiting on a sign-off.
-                        ApprovalState::Current | ApprovalState::Ratified
-                            if !signoffs_needed.is_empty() =>
-                        {
-                            "signoff"
-                        }
-                        // Agreed, and nothing to sign: the one question left is the release.
-                        ApprovalState::Current | ApprovalState::Ratified if asks_release => {
-                            "release"
-                        }
-                        ApprovalState::Current | ApprovalState::Ratified => return None,
-                        ApprovalState::Missing => "missing",
-                        ApprovalState::Lapsed => "lapsed",
-                    };
-                    let mut entry = json!({
-                        "code": f.code,
-                        "title": f.title,
-                        "status": f.status,
-                        "approval": state,
-                        "signoffs_needed": signoffs_needed,
-                        "started_unapproved": definition.started_unapproved,
-                        "definition": definition,
-                        // What a verdict given from this brief is pinned to (FEAT-159).
-                        "rev": definition.content_rev(),
-                        // What the ordering below keys on, and useful to a client besides.
-                        "in_progress": f.status != project.config.default_state,
-                    });
-                    // Present whenever the release question is due, so a surface asking another
-                    // question first can ask this one too. Empty: only a new release to choose.
-                    if asks_release {
-                        entry["release_choices"] = json!(release_choices);
-                    }
-                    Some(entry)
-                })
-                .collect();
-            // Work already built without agreement comes first (FEAT-109), then work being built
-            // without it, then work that has not started (FEAT-078 R-2). The release question
-            // comes after every approval and sign-off (FEAT-185).
-            pending.sort_by_key(|v| {
-                (
-                    v["approval"] == "release",
-                    v["approval"] != "unratified",
-                    !v["in_progress"].as_bool().unwrap_or(false),
-                    v["code"].as_str().unwrap_or_default().to_string(),
-                )
-            });
-            ser(&pending)
-        }
+        ("GET", ["projects", p, "review"]) => ser(&crate::review::pending(store, p)?),
         ("GET", ["projects", p, "adrs"]) => ser(&crate::adr::list(store, p)?),
         ("GET", ["projects", p, "claude-block"]) => ser(&crate::claude::block(store, p)?),
         ("POST", ["projects", p, "adrs"]) => {
@@ -1493,7 +1386,7 @@ pub fn dispatch_in(
             Ok(json!({ "results": results }).to_string())
         }
 
-        _ => Err(CoreError::Unsupported(format!("{method} {path_only}"))),
+        _ => Err(CoreError::NoSuchRoute(format!("{method} {path_only}"))),
     }
 }
 

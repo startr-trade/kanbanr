@@ -1,0 +1,4094 @@
+{
+  "components": {
+    "responses": {
+      "E400": {
+        "content": {
+          "text/plain; charset=utf-8": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "The request is malformed: a missing or invalid parameter, or an unsupported format."
+      },
+      "E404": {
+        "content": {
+          "text/plain; charset=utf-8": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "No such project, item, sprint or document."
+      },
+      "E409": {
+        "content": {
+          "text/plain; charset=utf-8": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "The board was written by a newer kanbanr than this daemon; upgrade it."
+      },
+      "E500": {
+        "content": {
+          "text/plain; charset=utf-8": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "The board could not be read."
+      }
+    },
+    "schemas": {
+      "Action": {
+        "description": "Something that happens when an item enters a status.",
+        "oneOf": [
+          {
+            "const": "branch",
+            "description": "`kanbanr start` creates the item's branch here (where the project is a git repository).",
+            "type": "string"
+          }
+        ]
+      },
+      "Activity": {
+        "properties": {
+          "actor": {
+            "description": "Who made the change (the commit identity name).",
+            "type": "string"
+          },
+          "item": {
+            "description": "The work item (feature code) this change touched, when applicable — enables per-item and\nper-kind activity streams. Serialized as `item`.",
+            "type": "string"
+          },
+          "message": {
+            "description": "A short human description of the change.",
+            "type": "string"
+          },
+          "time": {
+            "description": "RFC3339 timestamp.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "time",
+          "actor",
+          "message"
+        ],
+        "type": "object"
+      },
+      "Adr": {
+        "additionalProperties": true,
+        "description": "An architecture decision record: front-matter plus the prose it belongs to.",
+        "properties": {
+          "affects": {
+            "description": "Items resting on this decision.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "body": {
+            "description": "Everything below the front-matter.",
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "decided": {
+            "description": "When the decider accepted or rejected it (FEAT-153). `date` is when it was proposed.",
+            "type": "string"
+          },
+          "deciders": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "driven_by": {
+            "description": "The requirements that forced it, usually quality ones: `FEAT-046/R-2`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "default": "",
+            "description": "`ADR-0003`.",
+            "type": "string"
+          },
+          "layer": {
+            "description": "conceptual | logical | physical.",
+            "type": "string"
+          },
+          "missing": {
+            "description": "The scaffolded sections it leaves unanswered, as `list` reports them — so the Review page\ncan say why Accept is refused without a second copy of the rule (FEAT-153). Never stored.",
+            "items": {
+              "type": "string"
+            },
+            "readOnly": true,
+            "type": "array"
+          },
+          "path": {
+            "description": "Where it lives in the doc tree.",
+            "type": "string"
+          },
+          "quality": {
+            "description": "ISO/IEC 25010 characteristics at stake — the shared vocabulary with NFRs.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "description": "Why it was rejected: a rejected decision is still a record, and its reason is the record.",
+            "type": "string"
+          },
+          "status": {
+            "default": "",
+            "description": "proposed | accepted | rejected | superseded.",
+            "type": "string"
+          },
+          "superseded_by": {
+            "description": "Written by `adr supersede`, never by hand.",
+            "type": "string"
+          },
+          "supersedes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "description": "The document's first heading.",
+            "type": "string"
+          },
+          "trade_offs": {
+            "description": "The machine-readable summary of the Consequences prose.",
+            "items": {
+              "$ref": "#/components/schemas/TradeOff"
+            },
+            "type": "array"
+          },
+          "zachman": {
+            "description": "Which Zachman columns it answers.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "Approval": {
+        "additionalProperties": true,
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "rev": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "by",
+          "at",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "ApprovalEvent": {
+        "additionalProperties": true,
+        "description": "Agreement to a definition, pinned to its content (FEAT-048).\n\n`rev` is a hash of the definition as approved. If the definition changes afterwards the hash no\nlonger matches and the approval has **lapsed** — so scope cannot drift silently past a \"yes\",\nwhich is exactly how work gets built and then rejected.\nOne agreement, or one withdrawal of it (FEAT-069). Append-only: an approval that was given and\nlater taken back is more informative than no record at all, and the charter constraint says raw\ndata is never discarded.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why it was withdrawn. An agreement needs no reason; taking one back does.",
+            "type": "string"
+          },
+          "rev": {
+            "description": "The definition content this verdict was about.",
+            "type": "string"
+          },
+          "status": {
+            "description": "The status the item was in when the verdict was given (FEAT-114), so a definition that grows\nstage by stage leaves a readable trail: approved at Vision, again at System Design.",
+            "type": "string"
+          },
+          "verdict": {
+            "description": "`approved` | `ratified` | `withdrawn`.\n\n`ratified` is agreement given **after** the work was built, under a recorded\n`--unapproved` start (FEAT-080). It is a separate verdict from `approved` because the\nwhole point of the gate is to distinguish \"we agreed, then built\" from \"we built, then\nagreed\" — and with one verdict the record could not tell them apart. Twenty-nine items on\nthis board were reconciled that way before the distinction existed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "by",
+          "verdict"
+        ],
+        "type": "object"
+      },
+      "ApprovalKind": {
+        "description": "The question a review entry asks.",
+        "oneOf": [
+          {
+            "const": "unratified",
+            "description": "Finished under a recorded bypass and never agreed to (FEAT-109): ratify it.",
+            "type": "string"
+          },
+          {
+            "const": "signoff",
+            "description": "Agreed; the stage it reaches next waits on a sign-off (FEAT-117).",
+            "type": "string"
+          },
+          {
+            "const": "release",
+            "description": "Agreed, and nothing to sign: which release it ships in (FEAT-185).",
+            "type": "string"
+          },
+          {
+            "const": "missing",
+            "description": "Defined, never approved.",
+            "type": "string"
+          },
+          {
+            "const": "lapsed",
+            "description": "Approved, then the definition changed.",
+            "type": "string"
+          }
+        ]
+      },
+      "BoardCard": {
+        "description": "A single feature as it appears on the cross-project board.",
+        "properties": {
+          "assignee": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "code": {
+            "type": "string"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/Disposition"
+          },
+          "milestone": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "status": {
+            "description": "The feature's native (per-project) status — kept for display, since lanes are normalized.",
+            "type": "string"
+          },
+          "tasks_done": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tasks_total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "team": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "code",
+          "title",
+          "status",
+          "milestone",
+          "assignee",
+          "team",
+          "tasks_done",
+          "tasks_total",
+          "disposition"
+        ],
+        "type": "object"
+      },
+      "BoardLane": {
+        "description": "One normalized lane plus its cards (across all projects).",
+        "properties": {
+          "cards": {
+            "items": {
+              "$ref": "#/components/schemas/BoardCard"
+            },
+            "type": "array"
+          },
+          "disposition": {
+            "$ref": "#/components/schemas/Disposition"
+          }
+        },
+        "required": [
+          "disposition",
+          "cards"
+        ],
+        "type": "object"
+      },
+      "BoardReport": {
+        "description": "The cross-project board: every feature in the portfolio grouped into the normalized lanes\n{not-started, in-progress, done}. Robust to differing per-project workflows because grouping is\nderived from each project's own config (Completed-name / no-op) + task activity, not a shared\nstatus vocabulary.",
+        "properties": {
+          "lanes": {
+            "items": {
+              "$ref": "#/components/schemas/BoardLane"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "lanes"
+        ],
+        "type": "object"
+      },
+      "BurndownDay": {
+        "description": "One day of a burndown: what was still to do at the end of it.",
+        "properties": {
+          "date": {
+            "type": "string"
+          },
+          "remaining": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "date",
+          "remaining"
+        ],
+        "type": "object"
+      },
+      "Cadence": {
+        "additionalProperties": true,
+        "description": "A project's rhythm (FEAT-121): whether it has sprints and releases, and their defaults.",
+        "properties": {
+          "git_model": {
+            "description": "Branching follows the derived git model (FEAT-189): where `start` branches, sprint\nbranches, and lines of integration taking merges only. Off by default, so no board changes.",
+            "type": "boolean"
+          },
+          "integration_branch": {
+            "description": "The branch a release branch is made from. Unset: the code repository's default branch.",
+            "type": "string"
+          },
+          "main_branch": {
+            "description": "The branch production is fast-forwarded onto. Unset: the code repository's default branch.",
+            "type": "string"
+          },
+          "release": {
+            "description": "How often a release is cut: `per_sprint`, `every_n` sprints, or `on_demand`.",
+            "type": "string"
+          },
+          "release_stages": {
+            "description": "The environments a release moves through, in order (FEAT-183). The last one is the cut.\nEmpty means [`DEFAULT_RELEASE_STAGES`]; read it through [`Cadence::stages`].",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "releases": {
+            "default": false,
+            "type": "boolean"
+          },
+          "sprint_length_days": {
+            "description": "The length `sprint add` uses when none is given.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sprints": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "sprints",
+          "releases"
+        ],
+        "type": "object"
+      },
+      "CardReadiness": {
+        "description": "One card's readiness: its gaps, and its next stages.",
+        "properties": {
+          "gaps": {
+            "items": {
+              "$ref": "#/components/schemas/Gap"
+            },
+            "type": "array"
+          },
+          "next": {
+            "items": {
+              "$ref": "#/components/schemas/NextStage"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "gaps",
+          "next"
+        ],
+        "type": "object"
+      },
+      "Charter": {
+        "additionalProperties": true,
+        "description": "The reasoning root of a project.",
+        "properties": {
+          "adopted_at": {
+            "description": "When the charter was first written. Gap reporting ignores items created before this, so\nadopting the method never floods the report with pre-existing work.",
+            "type": "string"
+          },
+          "constraints": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "goals": {
+            "default": [],
+            "description": "Outcomes this project commits to. Work items link these by id.",
+            "items": {
+              "$ref": "#/components/schemas/Goal"
+            },
+            "type": "array"
+          },
+          "non_goals": {
+            "description": "What this project deliberately will not do — often the most useful section.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "purpose": {
+            "default": "",
+            "description": "Why the project exists — the problem or opportunity.",
+            "type": "string"
+          },
+          "stakeholders": {
+            "items": {
+              "$ref": "#/components/schemas/Stakeholder"
+            },
+            "type": "array"
+          },
+          "vision": {
+            "description": "Optional one-line statement of the desired end state.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "purpose",
+          "goals"
+        ],
+        "type": "object"
+      },
+      "Check": {
+        "description": "A condition an item can be checked against. The vocabulary is closed on purpose: a workflow can\nonly require what kanbanr knows how to evaluate from the board.",
+        "oneOf": [
+          {
+            "const": "definition",
+            "description": "The item has a definition at all.",
+            "type": "string"
+          },
+          {
+            "const": "statement",
+            "description": "A one-sentence statement: what, for whom, why.",
+            "type": "string"
+          },
+          {
+            "const": "zachman",
+            "description": "All six Zachman dimensions answered.",
+            "type": "string"
+          },
+          {
+            "const": "goals",
+            "description": "Linked to at least one charter goal.",
+            "type": "string"
+          },
+          {
+            "const": "goals_known",
+            "description": "Every linked goal exists in the charter (needs the charter; an error, not a warning).",
+            "type": "string"
+          },
+          {
+            "const": "approved",
+            "description": "Agreement is current: approved, or ratified after the fact.",
+            "type": "string"
+          },
+          {
+            "const": "bypass",
+            "description": "A recorded bypass has been answered (approved or ratified).",
+            "type": "string"
+          },
+          {
+            "const": "requirements",
+            "description": "At least one requirement.",
+            "type": "string"
+          },
+          {
+            "const": "ears",
+            "description": "Every requirement is in EARS form.",
+            "type": "string"
+          },
+          {
+            "const": "tests_named",
+            "description": "Every requirement names a test.",
+            "type": "string"
+          },
+          {
+            "const": "tests_green",
+            "description": "Every requirement has a green test.",
+            "type": "string"
+          },
+          {
+            "const": "quality",
+            "description": "Quality requirements carry a valid ISO 25010 tag and a scenario whose measure names its test.",
+            "type": "string"
+          },
+          {
+            "const": "small",
+            "description": "INVEST \"Small\": not estimated above three days.",
+            "type": "string"
+          },
+          {
+            "const": "estimated",
+            "description": "Estimated in the project's unit — story points or days (FEAT-121). A Definition of Ready\nusually asks for it.",
+            "type": "string"
+          },
+          {
+            "const": "in_sprint",
+            "description": "Planned into the project's active sprint (FEAT-119).",
+            "type": "string"
+          },
+          {
+            "const": "in_release",
+            "description": "Planned into a release (FEAT-120).",
+            "type": "string"
+          },
+          {
+            "const": "signoff",
+            "description": "A named sign-off is recorded against the current definition. Asked for through a gate's\n`signoffs: [name]`, never listed on its own — it needs the name.",
+            "type": "string"
+          },
+          {
+            "const": "spec_sections",
+            "description": "The spec has each named section, with content (FEAT-179). A design stage asks for the\ndesign itself, not a promise of one: `{spec_sections: [Design]}`.",
+            "type": "string"
+          },
+          {
+            "const": "docs_updated",
+            "description": "Every doc the item declares in `affects_docs` has changed since it entered its current\nstage (FEAT-180) — the design was folded into the docs it said it would change.",
+            "type": "string"
+          }
+        ]
+      },
+      "Condition": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/Check"
+          },
+          {
+            "properties": {
+              "zachman": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "zachman"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "spec_sections": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "spec_sections"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "One condition a gate can name: a check, or the Zachman check narrowed to some columns\n(`{zachman: [what, who, why]}`), which is how a process asks for the six dimensions a stage at a\ntime rather than all at once."
+      },
+      "Counts": {
+        "description": "Feature-completion counts + a derived percentage. Completion is **status-aware**: a feature in a\nterminal status (Completed / no-op) counts as fully done even if it tracks no tasks (many\nfeatures are completed by a status move, not by checking off tasks); a non-terminal feature with\ntasks gets partial credit (`done/total`); otherwise it's 0. `percent` is the mean per-feature\ncompletion across the group (rounded), or `0` when there are no features. `tasks_*` are retained\nfor display (how many checklist items exist/are done) but no longer drive the percentage.",
+        "properties": {
+          "features": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "percent": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tasks_done": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tasks_total": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "features",
+          "tasks_total",
+          "tasks_done",
+          "percent"
+        ],
+        "type": "object"
+      },
+      "Defect": {
+        "additionalProperties": true,
+        "description": "What a defect cost and where it came from (FEAT-053).\n\n`escaped` is the field that earns its keep: a defect found after the work was called done is a\ndifferent animal from one caught during it, and the ratio between them is the one quality\nnumber a board can honestly produce.",
+        "properties": {
+          "escaped": {
+            "default": false,
+            "description": "Found after the work was called done.",
+            "type": "boolean"
+          },
+          "fixed_by": {
+            "description": "The commit or test that proves it is fixed.",
+            "type": "string"
+          },
+          "found_in": {
+            "description": "Where it was found: a status, an environment, or \"production\".",
+            "type": "string"
+          },
+          "introduced_by": {
+            "description": "The item or commit that introduced it. A defect caused by a fix points at that fix, which\nis how fix-induced chains become visible.",
+            "type": "string"
+          },
+          "root_cause": {
+            "type": "string"
+          },
+          "severity": {
+            "description": "Free text, like `kind` and `priority`: low | medium | high | critical.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "escaped"
+        ],
+        "type": "object"
+      },
+      "Disposition": {
+        "description": "A project-independent lane a feature falls into, since statuses are per-project (no shared\nvocabulary). Computed from the project config + the feature's task activity.",
+        "oneOf": [
+          {
+            "const": "done",
+            "description": "Terminal: a \"Completed\"-named status OR a no-op disposition.",
+            "type": "string"
+          },
+          {
+            "const": "in-progress",
+            "description": "Active and has some task activity (at least one task, not all done).",
+            "type": "string"
+          },
+          {
+            "const": "not-started",
+            "description": "Active but no task activity yet.",
+            "type": "string"
+          }
+        ]
+      },
+      "DocFile": {
+        "description": "A documentation file leaf.",
+        "properties": {
+          "path": {
+            "description": "Path relative to the project docs root (forward-slashed), e.g. `design/customer/overview.md`.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Display title (derived from the file name).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "title"
+        ],
+        "type": "object"
+      },
+      "DocFolder": {
+        "description": "A documentation folder node (renders as a tile with sub-folders + documents as links).",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "docs": {
+            "items": {
+              "$ref": "#/components/schemas/DocFile"
+            },
+            "type": "array"
+          },
+          "folders": {
+            "items": {
+              "$ref": "#/components/schemas/DocFolder"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "description": "Path relative to the docs root (empty string for the root), forward-slashed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "name",
+          "description",
+          "folders",
+          "docs"
+        ],
+        "type": "object"
+      },
+      "Drift": {
+        "description": "How a project's workflow stands against the saved process it was applied from (FEAT-170).",
+        "properties": {
+          "edited": {
+            "description": "The project's workflow no longer matches what was applied: someone edited it since.",
+            "type": "boolean"
+          },
+          "gone": {
+            "description": "The saved process is no longer in its library.",
+            "type": "boolean"
+          },
+          "newer": {
+            "description": "The saved process has changed since: its current version, when it has one.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/ProcessSource",
+            "description": "What the project was given."
+          }
+        },
+        "required": [
+          "source",
+          "edited",
+          "newer",
+          "gone"
+        ],
+        "type": "object"
+      },
+      "Enforce": {
+        "description": "Whether a failed gate stops the move or only reports.",
+        "enum": [
+          "block",
+          "warn"
+        ],
+        "type": "string"
+      },
+      "EstimateUnit": {
+        "description": "The unit a project estimates in.",
+        "enum": [
+          "days",
+          "points"
+        ],
+        "type": "string"
+      },
+      "FeatureDefinition": {
+        "additionalProperties": true,
+        "description": "Why a work item exists, what must be true, and how that is verified (FEAT-047).\n\nThe prose case *for* the work stays in the item's specification markdown — this block holds the\nshort, checkable parts: one-line answers, ids that link to the charter, and requirements each\ncarrying the tests that verify them. Keeping it one-line-per-field is deliberate: a structured\ncopy of the spec would rot into a second, disagreeing version of the same argument.",
+        "properties": {
+          "affects_docs": {
+            "description": "Board docs this item changes (FEAT-180), e.g. \"architecture/data.md\". Declared at the design\nstage; `docs_updated` checks each was changed before the item moves on. Declared last, so a\nboard where it is the only key an older binary does not know reads back byte for byte.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "approval": {
+            "$ref": "#/components/schemas/Approval",
+            "description": "Who agreed to this definition, when, and what exactly they agreed to (FEAT-048)."
+          },
+          "approvals": {
+            "description": "Every agreement and withdrawal, oldest first (FEAT-069). `approval` is the current one, or\nabsent when the last verdict was a withdrawal.",
+            "items": {
+              "$ref": "#/components/schemas/ApprovalEvent"
+            },
+            "type": "array"
+          },
+          "design_doc": {
+            "description": "Optional pointer into the board's doc tree (a design note), rather than an inline diagram.",
+            "type": "string"
+          },
+          "exempt": {
+            "description": "A recorded reason this item is exempt from gap reporting. An escape hatch that is visible\nbeats one that is habitual (`--no-verify` teaches itself).",
+            "type": "string"
+          },
+          "goals": {
+            "default": [],
+            "description": "Charter goal ids this item serves — the link that makes \"why\" checkable rather than prose.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "requirements": {
+            "items": {
+              "$ref": "#/components/schemas/Requirement"
+            },
+            "type": "array"
+          },
+          "signoffs": {
+            "description": "Named agreements a stage can require (FEAT-114): \"design review held\", \"release approved\".\nAppended, never overwritten — each pinned to the definition it covered.",
+            "items": {
+              "$ref": "#/components/schemas/Signoff"
+            },
+            "type": "array"
+          },
+          "started_unapproved": {
+            "description": "A recorded reason work started without approval. An escape hatch that leaves a trace beats\none that is silent — an unrecorded bypass just teaches itself.",
+            "type": "string"
+          },
+          "statement": {
+            "default": "",
+            "description": "One sentence: what, for whom, and why.",
+            "type": "string"
+          },
+          "zachman": {
+            "$ref": "#/components/schemas/Zachman",
+            "default": {
+              "how": "",
+              "what": "",
+              "when": "",
+              "where": "",
+              "who": "",
+              "why": ""
+            },
+            "description": "The six completeness dimensions, one line each."
+          }
+        },
+        "required": [
+          "statement",
+          "goals",
+          "zachman"
+        ],
+        "type": "object"
+      },
+      "FeatureExport": {
+        "additionalProperties": true,
+        "description": "An item as `GET /projects/{p}/features/{code}/export?format=json` gives it: the item, and its\nmilestone resolved.",
+        "properties": {
+          "assignee": {
+            "default": null,
+            "description": "Optional assignee (the person/agent owning this feature); free text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "code": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "defect": {
+            "$ref": "#/components/schemas/Defect",
+            "description": "For a defect: what it cost and where it came from (FEAT-053)."
+          },
+          "definition": {
+            "$ref": "#/components/schemas/FeatureDefinition",
+            "description": "Why this item exists, what must be true, and how it is verified (FEAT-047)."
+          },
+          "depends_on": {
+            "default": [],
+            "description": "Other feature codes this one is blocked by (a cross-feature DAG; cycles are rejected).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "due": {
+            "default": null,
+            "description": "Optional due date (e.g. an ISO date).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "estimate_days": {
+            "default": null,
+            "description": "Optional estimated effort, in days (used as the task duration for scheduling/Gantt;\ndefaults to 1 day when absent). Kept as a float so half-days etc. are expressible.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "history": {
+            "description": "Every status change, appended (FEAT-053). Cycle time, time-in-status, WIP aging and rework\nare all derived from this; without it the board records where work IS but never how it got\nthere.",
+            "items": {
+              "$ref": "#/components/schemas/Transition"
+            },
+            "type": "array"
+          },
+          "issue": {
+            "$ref": "#/components/schemas/IssueLink",
+            "description": "The external issue this feature is mirrored to, if any (FEAT-043)."
+          },
+          "kind": {
+            "default": null,
+            "description": "Work kind (feature / chore / bug / refactor / docs / recurring …); free text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "labels": {
+            "default": [],
+            "description": "Free-form labels/tags.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "milestone": {
+            "description": "The milestone this feature belongs to (required).",
+            "type": "string"
+          },
+          "milestone_detail": {
+            "$ref": "#/components/schemas/Milestone"
+          },
+          "points": {
+            "description": "Optional estimate in story points (FEAT-121). Which of the two a project plans in is its\n`estimate_unit`; absent stays absent on disk.",
+            "format": "double",
+            "type": "number"
+          },
+          "priority": {
+            "default": null,
+            "description": "Priority (low / medium / high …); free text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "release": {
+            "description": "The release this item is planned into (FEAT-120), for projects that use releases.",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source",
+            "description": "Where this feature was imported from, if it was (FEAT-042)."
+          },
+          "specification": {
+            "default": "",
+            "type": "string"
+          },
+          "split_from": {
+            "description": "The item this was sliced out of (FEAT-054). A wave grows for three reasons — a defect, a\nsplit, or newly discovered work — and only this one leaves no other trace, so a retro that\ntried to infer it would be guessing.",
+            "type": "string"
+          },
+          "sprint": {
+            "description": "The sprint this item is planned into (FEAT-119), for projects that use sprints.",
+            "type": "string"
+          },
+          "start": {
+            "default": null,
+            "description": "Optional planned start date (an ISO date, e.g. \"2026-07-01\"). Used by scheduling/Gantt.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "team": {
+            "default": null,
+            "description": "Optional owning team; free text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "todo_lists": {
+            "default": [],
+            "description": "Persistent todo-lists (newest-first ordering is applied by callers when displaying).",
+            "items": {
+              "$ref": "#/components/schemas/TodoList"
+            },
+            "type": "array"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "title",
+          "specification",
+          "status",
+          "milestone",
+          "kind",
+          "priority",
+          "start",
+          "due",
+          "estimate_days",
+          "assignee",
+          "team",
+          "labels",
+          "depends_on",
+          "todo_lists",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "FeatureItem": {
+        "additionalProperties": true,
+        "description": "A feature item: the unit Claude develops. Holds the spec and its todo list.",
+        "properties": {
+          "assignee": {
+            "default": null,
+            "description": "Optional assignee (the person/agent owning this feature); free text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "code": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "defect": {
+            "$ref": "#/components/schemas/Defect",
+            "description": "For a defect: what it cost and where it came from (FEAT-053)."
+          },
+          "definition": {
+            "$ref": "#/components/schemas/FeatureDefinition",
+            "description": "Why this item exists, what must be true, and how it is verified (FEAT-047)."
+          },
+          "depends_on": {
+            "default": [],
+            "description": "Other feature codes this one is blocked by (a cross-feature DAG; cycles are rejected).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "due": {
+            "default": null,
+            "description": "Optional due date (e.g. an ISO date).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "estimate_days": {
+            "default": null,
+            "description": "Optional estimated effort, in days (used as the task duration for scheduling/Gantt;\ndefaults to 1 day when absent). Kept as a float so half-days etc. are expressible.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "history": {
+            "description": "Every status change, appended (FEAT-053). Cycle time, time-in-status, WIP aging and rework\nare all derived from this; without it the board records where work IS but never how it got\nthere.",
+            "items": {
+              "$ref": "#/components/schemas/Transition"
+            },
+            "type": "array"
+          },
+          "issue": {
+            "$ref": "#/components/schemas/IssueLink",
+            "description": "The external issue this feature is mirrored to, if any (FEAT-043)."
+          },
+          "kind": {
+            "default": null,
+            "description": "Work kind (feature / chore / bug / refactor / docs / recurring …); free text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "labels": {
+            "default": [],
+            "description": "Free-form labels/tags.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "milestone": {
+            "description": "The milestone this feature belongs to (required).",
+            "type": "string"
+          },
+          "points": {
+            "description": "Optional estimate in story points (FEAT-121). Which of the two a project plans in is its\n`estimate_unit`; absent stays absent on disk.",
+            "format": "double",
+            "type": "number"
+          },
+          "priority": {
+            "default": null,
+            "description": "Priority (low / medium / high …); free text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "release": {
+            "description": "The release this item is planned into (FEAT-120), for projects that use releases.",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source",
+            "description": "Where this feature was imported from, if it was (FEAT-042)."
+          },
+          "specification": {
+            "default": "",
+            "type": "string"
+          },
+          "split_from": {
+            "description": "The item this was sliced out of (FEAT-054). A wave grows for three reasons — a defect, a\nsplit, or newly discovered work — and only this one leaves no other trace, so a retro that\ntried to infer it would be guessing.",
+            "type": "string"
+          },
+          "sprint": {
+            "description": "The sprint this item is planned into (FEAT-119), for projects that use sprints.",
+            "type": "string"
+          },
+          "start": {
+            "default": null,
+            "description": "Optional planned start date (an ISO date, e.g. \"2026-07-01\"). Used by scheduling/Gantt.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "team": {
+            "default": null,
+            "description": "Optional owning team; free text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "todo_lists": {
+            "default": [],
+            "description": "Persistent todo-lists (newest-first ordering is applied by callers when displaying).",
+            "items": {
+              "$ref": "#/components/schemas/TodoList"
+            },
+            "type": "array"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "title",
+          "specification",
+          "status",
+          "milestone",
+          "kind",
+          "priority",
+          "start",
+          "due",
+          "estimate_days",
+          "assignee",
+          "team",
+          "labels",
+          "depends_on",
+          "todo_lists",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "Gap": {
+        "description": "One thing an item is missing.",
+        "properties": {
+          "check": {
+            "$ref": "#/components/schemas/Check"
+          },
+          "label": {
+            "description": "Short form, for a one-line list (`[MISSING: What]`, `no goal link`).",
+            "type": "string"
+          },
+          "level": {
+            "$ref": "#/components/schemas/Level"
+          },
+          "message": {
+            "description": "What is missing and what to do about it.",
+            "type": "string"
+          },
+          "requirement": {
+            "description": "The requirement the gap is about, for per-requirement checks.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "check",
+          "level",
+          "label",
+          "message"
+        ],
+        "type": "object"
+      },
+      "Gate": {
+        "additionalProperties": true,
+        "description": "The entry criteria of one status. Every field is optional; an empty gate asks nothing.",
+        "properties": {
+          "done": {
+            "description": "Reaching this stage finishes an item for the cadence views — the sprint burndown, its done\ntotal, what a closing sprint carries over (FEAT-137). Scrum's Definition of Done is the Done\ncolumn, not the release that ships it, and a burndown that waited for the release dropped in\none step on release day.",
+            "type": "boolean"
+          },
+          "enforce": {
+            "$ref": "#/components/schemas/Enforce",
+            "description": "`block` (the default) refuses the move; `warn` allows it and reports what `requires` lacks."
+          },
+          "kinds": {
+            "description": "When set, the gate applies only to items of these kinds (an item with no kind is a\n`feature`).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "on_enter": {
+            "items": {
+              "$ref": "#/components/schemas/Action"
+            },
+            "type": "array"
+          },
+          "purpose": {
+            "description": "What this stage is for, in a sentence — shown to Claude and in the monitor.",
+            "type": "string"
+          },
+          "requires": {
+            "description": "Conditions that must hold to enter.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "roles": {
+            "description": "The stage roles this status holds (FEAT-188): `design`, `build`, `integrate`, `release`. The\nmethod and git automation find their stage by role, so they behave the same in every\nprocess. Kept as names, so an unknown one is a reported problem, not a parse failure.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "signoffs": {
+            "description": "Named sign-offs that must be recorded against the current definition (FEAT-114).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "warns": {
+            "description": "Conditions reported, never enforced.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "Goal": {
+        "additionalProperties": true,
+        "description": "An outcome the project commits to, not an output it produces.",
+        "properties": {
+          "horizon": {
+            "type": "string"
+          },
+          "id": {
+            "default": "",
+            "description": "`G-1`, `G-2`, … Assigned on save when left blank.",
+            "type": "string"
+          },
+          "measure": {
+            "description": "How we would know it happened.",
+            "type": "string"
+          },
+          "statement": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "statement"
+        ],
+        "type": "object"
+      },
+      "Health": {
+        "description": "The liveness probe's answer: `GET /healthz`.",
+        "properties": {
+          "status": {
+            "description": "Always `ok`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "Identity": {
+        "description": "A git identity.",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "email"
+        ],
+        "type": "object"
+      },
+      "IssueLink": {
+        "additionalProperties": true,
+        "description": "A link from a feature to the external issue it is mirrored to (FEAT-043).",
+        "properties": {
+          "number": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "repo": {
+            "description": "`owner/repo`.",
+            "type": "string"
+          },
+          "synced_at": {
+            "type": "string"
+          },
+          "synced_hash": {
+            "description": "Hash of the issue content kanbanr last pushed; `None` until the first push.",
+            "type": "string"
+          },
+          "system": {
+            "description": "Tracker kind; currently `github`.",
+            "type": "string"
+          },
+          "url": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "system",
+          "repo",
+          "number",
+          "url"
+        ],
+        "type": "object"
+      },
+      "Judgement": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "verdict": {
+            "description": "`affirmed` | `contradicted`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "verdict"
+        ],
+        "type": "object"
+      },
+      "Lesson": {
+        "properties": {
+          "at": {
+            "default": "",
+            "type": "string"
+          },
+          "confidence": {
+            "default": 0.0,
+            "description": "How much it was believed at `last_affirmed`. What is *reported* decays from here.",
+            "format": "double",
+            "type": "number"
+          },
+          "evidence": {
+            "description": "What actually happened — the part that makes it a lesson rather than an opinion.",
+            "type": "string"
+          },
+          "from_item": {
+            "description": "The item that taught it.",
+            "type": "string"
+          },
+          "from_retro": {
+            "description": "The retrospective that promoted it.",
+            "type": "string"
+          },
+          "goals": {
+            "description": "Charter goals it bears on.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "history": {
+            "description": "Every affirmation and contradiction, so the number can be explained rather than trusted.",
+            "items": {
+              "$ref": "#/components/schemas/Judgement"
+            },
+            "type": "array"
+          },
+          "id": {
+            "default": "",
+            "description": "`L-1`, `L-2`, … assigned on save.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/LessonKind",
+            "default": "pitfall"
+          },
+          "last_affirmed": {
+            "type": "string"
+          },
+          "lesson": {
+            "description": "The lesson itself, in one sentence a person can act on.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/LessonStatus",
+            "default": "candidate"
+          },
+          "tags": {
+            "description": "Labels it applies to, so it can be offered to the right work.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "lesson",
+          "kind",
+          "at",
+          "confidence",
+          "status"
+        ],
+        "type": "object"
+      },
+      "LessonKind": {
+        "oneOf": [
+          {
+            "const": "practice",
+            "description": "Something that worked and is worth repeating.",
+            "type": "string"
+          },
+          {
+            "const": "pitfall",
+            "description": "Something that cost us, and how to avoid it.",
+            "type": "string"
+          },
+          {
+            "const": "decision",
+            "description": "A choice made once that later work should not relitigate.",
+            "type": "string"
+          }
+        ]
+      },
+      "LessonStatus": {
+        "oneOf": [
+          {
+            "const": "candidate",
+            "description": "Recorded, not yet confirmed by anything else.",
+            "type": "string"
+          },
+          {
+            "const": "active",
+            "description": "Confirmed at least once.",
+            "type": "string"
+          },
+          {
+            "const": "retired",
+            "description": "Fell below the threshold, or was contradicted. Kept, not surfaced.",
+            "type": "string"
+          }
+        ]
+      },
+      "Level": {
+        "oneOf": [
+          {
+            "enum": [
+              "warning"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "error",
+            "description": "A broken reference, not a judgement: someone can fix it by editing a name.",
+            "type": "string"
+          }
+        ]
+      },
+      "Library": {
+        "description": "Where a saved process lives (FEAT-169), in the order a name is looked up.",
+        "oneOf": [
+          {
+            "const": "board",
+            "description": "`<board>/processes/`: shared with everyone who has the board, through its remote.",
+            "type": "string"
+          },
+          {
+            "const": "personal",
+            "description": "`~/.kanbanr/processes/`: this user's, on any board.",
+            "type": "string"
+          },
+          {
+            "const": "builtin",
+            "description": "Carried by the binary.",
+            "type": "string"
+          }
+        ]
+      },
+      "Meta": {
+        "description": "What this daemon can do: `GET /api/meta`. The monitor asks before offering an action.",
+        "properties": {
+          "identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Identity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who an approval recorded here would be attributed to (FEAT-077): the board's git\nidentity. Null when there is none, and the monitor then refuses to offer the action."
+          },
+          "schema_version": {
+            "description": "The board schema this build understands (FEAT-072).",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "writes": {
+            "description": "Whether the write routes are mounted (`serve --allow-writes`, FEAT-034).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "writes",
+          "identity",
+          "schema_version"
+        ],
+        "type": "object"
+      },
+      "MethodChoice": {
+        "description": "What a project chose. Absent on disk means never chosen: everything on.",
+        "properties": {
+          "chosen_at": {
+            "description": "When the project last chose (RFC 3339); empty when it never has.",
+            "type": "string"
+          },
+          "off": {
+            "description": "The parts switched off, sorted and unique.",
+            "items": {
+              "$ref": "#/components/schemas/Part"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "Milestone": {
+        "additionalProperties": true,
+        "description": "A milestone groups feature items and may depend on other milestones (the DAG).",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "depends_on": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": {
+            "default": "",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "description",
+          "depends_on"
+        ],
+        "type": "object"
+      },
+      "MilestoneRollup": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "counts"
+        ],
+        "type": "object"
+      },
+      "NextGate": {
+        "description": "What moving an item on to one next status would ask, and what it still lacks (FEAT-117).",
+        "properties": {
+          "enforce": {
+            "$ref": "#/components/schemas/Enforce"
+          },
+          "gaps": {
+            "description": "What `requires` and `signoffs` still lack.",
+            "items": {
+              "$ref": "#/components/schemas/Gap"
+            },
+            "type": "array"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "requires_gaps": {
+            "description": "What `requires` alone still lacks, without the sign-offs (FEAT-182): a sign-off is offered\nonly once this is empty, so nobody signs off work that has not happened yet.",
+            "items": {
+              "$ref": "#/components/schemas/Gap"
+            },
+            "type": "array"
+          },
+          "signoffs_needed": {
+            "description": "The sign-offs this gate still needs, by name, so a surface can offer to record them.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          },
+          "warnings": {
+            "description": "What `warns` lacks — said, never enforced.",
+            "items": {
+              "$ref": "#/components/schemas/Gap"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "status",
+          "enforce",
+          "gaps",
+          "requires_gaps",
+          "warnings",
+          "signoffs_needed"
+        ],
+        "type": "object"
+      },
+      "NextStage": {
+        "description": "A next stage on a card: its status, and how many things it still lacks.",
+        "properties": {
+          "missing": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "missing"
+        ],
+        "type": "object"
+      },
+      "Part": {
+        "description": "One part of the method.",
+        "oneOf": [
+          {
+            "const": "design",
+            "description": "The spec has a Design section before build.",
+            "type": "string"
+          },
+          {
+            "const": "design-review",
+            "description": "A person signs off the design before build.",
+            "type": "string"
+          },
+          {
+            "const": "docs",
+            "description": "The docs the item names were updated before it integrates.",
+            "type": "string"
+          },
+          {
+            "const": "docs-folded",
+            "description": "A person signs off that the design was folded into the docs.",
+            "type": "string"
+          },
+          {
+            "const": "links",
+            "description": "Doctor reports references to things the board does not have.",
+            "type": "string"
+          }
+        ]
+      },
+      "PortfolioView": {
+        "description": "The portfolio index as a serializable view: the workspace metadata + programs, with the implicit\ndefault program materialized when none are declared (so callers always see a consistent shape).",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "programs": {
+            "items": {
+              "$ref": "#/components/schemas/ProgramView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "programs"
+        ],
+        "type": "object"
+      },
+      "ProcessSource": {
+        "description": "Which saved process a project's workflow came from, and which version of it (FEAT-169).",
+        "properties": {
+          "library": {
+            "$ref": "#/components/schemas/Library"
+          },
+          "name": {
+            "type": "string"
+          },
+          "rev": {
+            "description": "The content rev of what was applied ([`WorkflowFile::content_rev`]).",
+            "type": "string"
+          },
+          "version": {
+            "default": 0,
+            "description": "The process's version when it was applied; 0 for a built-in one.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "library",
+          "version",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "ProcessStatus": {
+        "description": "How a project stands against its saved process (FEAT-170): `GET /projects/{p}/process`.",
+        "properties": {
+          "drift": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Drift"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How it has moved apart from that process; null when there is nothing to compare, or the\nprocess is a personal one, which only the user's own kanbanr can see."
+          },
+          "messages": {
+            "description": "[`Drift::messages`]: one sentence per thing to report.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessSource"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The process the project's workflow was applied from; null when none was."
+          }
+        },
+        "required": [
+          "source",
+          "drift",
+          "messages"
+        ],
+        "type": "object"
+      },
+      "ProgramRollup": {
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "projects": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectRollup"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "counts",
+          "projects"
+        ],
+        "type": "object"
+      },
+      "ProgramView": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "implicit": {
+            "description": "True when this is the synthesized implicit default program (no workspace.yaml programs).",
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "projects": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "projects",
+          "implicit"
+        ],
+        "type": "object"
+      },
+      "Project": {
+        "description": "A fully-loaded project (config + all entities).",
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/ProjectConfig"
+          },
+          "features": {
+            "items": {
+              "$ref": "#/components/schemas/FeatureItem"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "milestones": {
+            "items": {
+              "$ref": "#/components/schemas/Milestone"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "config",
+          "features",
+          "milestones"
+        ],
+        "type": "object"
+      },
+      "ProjectConfig": {
+        "additionalProperties": true,
+        "properties": {
+          "branch_pattern": {
+            "description": "How `kanbanr start` names a branch (FEAT-056): `{code}` and `{slug}`. Absent means the\ndefault, and absent stays absent on disk so an existing config is not rewritten.",
+            "type": "string"
+          },
+          "cadence": {
+            "$ref": "#/components/schemas/Cadence",
+            "description": "Whether this project works in sprints and releases at all (FEAT-121). Off unless switched\non: many projects follow a different workflow, and data nobody asked for is clutter."
+          },
+          "default_state": {
+            "default": "",
+            "description": "The status assigned to a newly-created feature item. Must be one of `statuses`.",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "type": "string"
+          },
+          "displayed_states": {
+            "default": [],
+            "description": "Ordered subset of `statuses` shown on the dashboard.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "estimate_unit": {
+            "$ref": "#/components/schemas/EstimateUnit",
+            "description": "What this project estimates in (FEAT-121): days, or story points."
+          },
+          "gates": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Gate"
+            },
+            "description": "Entry criteria per status (FEAT-113): what an item must show before it may move into that\nstatus, and what happens when it does. Absent means today's rules, synthesised by\n[`ProjectConfig::effective_gates`]; absent stays absent on disk.",
+            "type": "object"
+          },
+          "method": {
+            "$ref": "#/components/schemas/MethodChoice",
+            "description": "Which parts of the method this project turned off, and when it chose (FEAT-193). Absent:\nnever chosen, everything on."
+          },
+          "name": {
+            "default": "",
+            "type": "string"
+          },
+          "no_op_states": {
+            "default": [],
+            "description": "Subset of `statuses` that are functionally inert dispositions (e.g. \"No Action\",\n\"Not Applicable\", \"Out-of-Scope\"). No-op states are always non-displayed, and a feature\nin a no-op state does not auto-advance to \"Completed\" when its tasks finish.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "process": {
+            "$ref": "#/components/schemas/ProcessSource",
+            "description": "The saved process this workflow was applied from, if it was (FEAT-169): what drift is\nmeasured against. An older kanbanr keeps it through `extra`, so it needs no schema bump."
+          },
+          "schema_version": {
+            "default": 0,
+            "description": "On-disk schema version. Absent in legacy configs (defaults to 0); forward-stamped to\n`CURRENT_SCHEMA_VERSION` whenever the config is written.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "statuses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "terminal_states": {
+            "default": [],
+            "description": "Subset of `statuses` that are explicit terminal (end) states of the workflow — a feature\nhere is considered \"done\". Absent in legacy configs (defaults to empty), in which case\n`graph::is_terminal_status` falls back to its built-in heuristic (Completed / no-op).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "transitions": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "default": {},
+            "description": "Map of from-status -> list of allowed to-statuses.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "schema_version",
+          "name",
+          "description",
+          "statuses",
+          "default_state",
+          "transitions",
+          "displayed_states",
+          "no_op_states",
+          "terminal_states"
+        ],
+        "type": "object"
+      },
+      "ProjectReadiness": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/CardReadiness"
+        },
+        "description": "The board's live cards, keyed by item code, in board order.",
+        "type": "object"
+      },
+      "ProjectRollup": {
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "id": {
+            "type": "string"
+          },
+          "milestones": {
+            "items": {
+              "$ref": "#/components/schemas/MilestoneRollup"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "counts",
+          "milestones"
+        ],
+        "type": "object"
+      },
+      "ProjectSummary": {
+        "description": "One project on the board, as the home page lists it: `GET /projects`.",
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": "Items per status, for every status.",
+            "type": "object"
+          },
+          "description": {
+            "type": "string"
+          },
+          "displayed_states": {
+            "description": "The statuses shown as board columns.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "has_docs": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "description": "The project's name; its id when it has none.",
+            "type": "string"
+          },
+          "no_op_states": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "other_states": {
+            "description": "The statuses that are not columns.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "total_features": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "displayed_states",
+          "other_states",
+          "no_op_states",
+          "counts",
+          "total_features",
+          "has_docs"
+        ],
+        "type": "object"
+      },
+      "QualityScenario": {
+        "additionalProperties": true,
+        "description": "Stimulus / environment / response / measure — what turns \"it should be fast\" into something\ncheckable. The `measure` names the test or benchmark that checks it; a number with nothing\nbehind it is reported as an unsupported claim.",
+        "properties": {
+          "environment": {
+            "default": "",
+            "type": "string"
+          },
+          "measure": {
+            "default": "",
+            "type": "string"
+          },
+          "response": {
+            "default": "",
+            "type": "string"
+          },
+          "stimulus": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stimulus",
+          "environment",
+          "response",
+          "measure"
+        ],
+        "type": "object"
+      },
+      "ReadinessView": {
+        "description": "What one item is missing, and what its next stage asks (FEAT-112, FEAT-117):\n`GET /projects/{p}/features/{code}/readiness`.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "gaps": {
+            "description": "What `kanbanr check` reports.",
+            "items": {
+              "$ref": "#/components/schemas/Gap"
+            },
+            "type": "array"
+          },
+          "next": {
+            "description": "What each next stage asks, and what it still lacks.",
+            "items": {
+              "$ref": "#/components/schemas/NextGate"
+            },
+            "type": "array"
+          },
+          "rev": {
+            "description": "The definition's revision: a verdict given with `rev` is refused if it moved on\n(FEAT-159). Null when the item has no definition.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "rev",
+          "gaps",
+          "next"
+        ],
+        "type": "object"
+      },
+      "ReleaseCarry": {
+        "description": "A planned item that did not ship, and where it went.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "to": {
+            "description": "The release it moved to, or `unplanned`.",
+            "type": "string"
+          },
+          "why": {
+            "description": "Why it did not ship.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "to"
+        ],
+        "type": "object"
+      },
+      "ReleaseReport": {
+        "additionalProperties": true,
+        "description": "A release with what it holds and how much of that is finished, as the monitor shows it\n(FEAT-138). Derived, never stored.",
+        "properties": {
+          "branch": {
+            "description": "The code branch, set when promoted to the first stage (`release/<V>`).",
+            "type": "string"
+          },
+          "carried": {
+            "items": {
+              "$ref": "#/components/schemas/ReleaseCarry"
+            },
+            "type": "array"
+          },
+          "finished": {
+            "description": "How many of `items` are finished, by the same rule as the sprint's: an end status, or a stage\nmarked `done` (FEAT-137). The page used to keep its own copy of the rule, counting only the\nend status — a Done item in a planned scrum release read as unfinished.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "included": {
+            "description": "For a patch: what its parent shipped, which the patch keeps (FEAT-184).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "items": {
+            "description": "Planned into it, or shipped in it.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "notes_doc": {
+            "description": "The board doc holding its release notes.",
+            "type": "string"
+          },
+          "parent": {
+            "description": "The cut release this patches (FEAT-184); empty for an ordinary release.",
+            "type": "string"
+          },
+          "shipped": {
+            "description": "What shipped in it.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "shipped_at": {
+            "type": "string"
+          },
+          "stage": {
+            "description": "Where the release is now, from `cadence.release_stages` (FEAT-183). Empty until first\npromoted: a release added before stages existed reads as \"not yet a candidate\".",
+            "type": "string"
+          },
+          "stages": {
+            "description": "Every stage change, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/StageChange"
+            },
+            "type": "array"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReleaseState",
+            "default": "planned"
+          },
+          "target": {
+            "description": "Target date, `YYYY-MM-DD`.",
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "state",
+          "items",
+          "finished"
+        ],
+        "type": "object"
+      },
+      "ReleaseState": {
+        "enum": [
+          "planned",
+          "shipped"
+        ],
+        "type": "string"
+      },
+      "Requirement": {
+        "additionalProperties": true,
+        "description": "One requirement: a single behaviour, stated so it can be tested.",
+        "properties": {
+          "id": {
+            "default": "",
+            "description": "`R-1`, `R-2`, … assigned when left blank.",
+            "type": "string"
+          },
+          "iso25010": {
+            "description": "ISO/IEC 25010 characteristics, for NFRs.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RequirementKind",
+            "default": "functional"
+          },
+          "scenario": {
+            "$ref": "#/components/schemas/QualityScenario",
+            "description": "The quality attribute scenario behind an NFR."
+          },
+          "tests": {
+            "description": "How this requirement is verified. A requirement with no test is not ready.",
+            "items": {
+              "$ref": "#/components/schemas/TestRef"
+            },
+            "type": "array"
+          },
+          "text": {
+            "description": "The requirement itself, ideally in EARS form. Stored verbatim: the EARS pattern is derived\nwhen rendering or checking, never persisted, so stored text cannot disagree with the\nclassifier.",
+            "type": "string"
+          },
+          "violates": {
+            "description": "For a defect: the requirement it violates (`FEAT-046/R-2`), or blank when the defect\nreveals that no requirement covered the case — which is itself the finding.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "text"
+        ],
+        "type": "object"
+      },
+      "RequirementKind": {
+        "description": "Functional behaviour, or a quality the system must exhibit.",
+        "enum": [
+          "functional",
+          "nfr"
+        ],
+        "type": "string"
+      },
+      "ReviewEntry": {
+        "description": "One item waiting for agreement.",
+        "properties": {
+          "approval": {
+            "$ref": "#/components/schemas/ApprovalKind",
+            "description": "What is being asked."
+          },
+          "code": {
+            "type": "string"
+          },
+          "definition": {
+            "$ref": "#/components/schemas/FeatureDefinition"
+          },
+          "in_progress": {
+            "description": "What the ordering keys on, and useful to a client besides.",
+            "type": "boolean"
+          },
+          "release_choices": {
+            "description": "The planned releases it could ship in, in file order (FEAT-185). Present whenever the\nrelease question is due, so a surface asking another question first can ask this one too.\nEmpty: only a new release to choose.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rev": {
+            "description": "What a verdict given from this brief is pinned to (FEAT-159).",
+            "type": "string"
+          },
+          "signoffs_needed": {
+            "description": "The sign-offs the next stage still needs, by name; empty unless `approval` is `signoff`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "started_unapproved": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "title",
+          "status",
+          "approval",
+          "signoffs_needed",
+          "started_unapproved",
+          "definition",
+          "rev",
+          "in_progress"
+        ],
+        "type": "object"
+      },
+      "RollupReport": {
+        "description": "The full rollup tree: milestone% → project% → program% → portfolio%.",
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "portfolio": {
+            "type": "string"
+          },
+          "programs": {
+            "items": {
+              "$ref": "#/components/schemas/ProgramRollup"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "portfolio",
+          "counts",
+          "programs"
+        ],
+        "type": "object"
+      },
+      "Signoff": {
+        "additionalProperties": true,
+        "description": "A named agreement, recorded by a person against the definition as it stood (FEAT-114).\n\nLike an approval it carries the definition's `rev`, so changing the definition afterwards lapses\nit: a design review of a different design is not a review of this one.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "doc": {
+            "description": "A board doc holding the record — minutes, a checklist.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The name a gate asks for (`design-review`).",
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why it was withdrawn. Giving a sign-off needs no reason; taking one back does.",
+            "type": "string"
+          },
+          "rev": {
+            "description": "The definition content it covered.",
+            "type": "string"
+          },
+          "status": {
+            "description": "The status the item was in when it was given.",
+            "type": "string"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/SignoffVerdict",
+            "description": "`given`, or `withdrawn` (FEAT-182). A withdrawal is its own entry, appended like any other,\nwith an empty `rev`: an older kanbanr, which does not know this field, then reads the\nlatest entry as lapsed and stops counting the sign-off too."
+          }
+        },
+        "required": [
+          "id",
+          "by",
+          "at",
+          "rev"
+        ],
+        "type": "object"
+      },
+      "SignoffVerdict": {
+        "description": "Whether a sign-off entry gives the sign-off or takes it back (FEAT-182).",
+        "enum": [
+          "given",
+          "withdrawn"
+        ],
+        "type": "string"
+      },
+      "Source": {
+        "additionalProperties": true,
+        "description": "Where an imported feature came from (FEAT-042). This is a record of history, not a live\npointer: the original text is preserved in the feature's spec, so nothing depends on the\nsource still existing (a deleted file, rewritten git history, a removed issue).",
+        "properties": {
+          "imported_at": {
+            "default": "",
+            "description": "When it was imported (RFC 3339); stamped by kanbanr.",
+            "type": "string"
+          },
+          "key": {
+            "default": "",
+            "description": "Stable identity used to skip re-imports; derived by kanbanr when not given.",
+            "type": "string"
+          },
+          "missing_since": {
+            "description": "When the source was found to be gone (set by `kanbanr sources --write`).",
+            "type": "string"
+          },
+          "ref": {
+            "default": "",
+            "description": "Location in that tracker, for humans: `TODO.md:14`, `owner/repo#123`, `PROJ-45`.",
+            "type": "string"
+          },
+          "revision": {
+            "description": "Project repo commit at import time (file sources).",
+            "type": "string"
+          },
+          "system": {
+            "description": "Tracker kind: `file`, `github`, `gitlab`, `jira`, `linear`, …",
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "system",
+          "ref",
+          "imported_at",
+          "key"
+        ],
+        "type": "object"
+      },
+      "Sprint": {
+        "properties": {
+          "capacity": {
+            "description": "What the sprint can take, in the project's estimate unit.",
+            "format": "double",
+            "type": "number"
+          },
+          "carried": {
+            "description": "What left unfinished, and where it went — the record a retro reads.",
+            "items": {
+              "$ref": "#/components/schemas/SprintCarry"
+            },
+            "type": "array"
+          },
+          "closed_at": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "end": {
+            "description": "Last day, `YYYY-MM-DD`, inclusive.",
+            "type": "string"
+          },
+          "goal": {
+            "description": "What this sprint is for, in a sentence.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "start": {
+            "description": "First day, `YYYY-MM-DD`.",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SprintState",
+            "default": "planned"
+          }
+        },
+        "required": [
+          "code",
+          "start",
+          "end",
+          "state"
+        ],
+        "type": "object"
+      },
+      "SprintCarry": {
+        "description": "An item that left a sprint unfinished, and where it went.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "to": {
+            "description": "The sprint it moved to, or `backlog`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "to"
+        ],
+        "type": "object"
+      },
+      "SprintReport": {
+        "description": "A sprint as a report: its record, what it holds, and how it burned down.",
+        "properties": {
+          "burndown": {
+            "items": {
+              "$ref": "#/components/schemas/BurndownDay"
+            },
+            "type": "array"
+          },
+          "capacity": {
+            "description": "What the sprint can take, in the project's estimate unit.",
+            "format": "double",
+            "type": "number"
+          },
+          "carried": {
+            "description": "What left unfinished, and where it went — the record a retro reads.",
+            "items": {
+              "$ref": "#/components/schemas/SprintCarry"
+            },
+            "type": "array"
+          },
+          "closed_at": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "committed": {
+            "format": "double",
+            "type": "number"
+          },
+          "days_left": {
+            "description": "Days left, counting today; 0 once the sprint is over.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "done": {
+            "format": "double",
+            "type": "number"
+          },
+          "end": {
+            "description": "Last day, `YYYY-MM-DD`, inclusive.",
+            "type": "string"
+          },
+          "goal": {
+            "description": "What this sprint is for, in a sentence.",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "start": {
+            "description": "First day, `YYYY-MM-DD`.",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SprintState",
+            "default": "planned"
+          },
+          "unestimated": {
+            "description": "Items with no estimate in the project's unit: they count as nothing, which is said, not hidden.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "start",
+          "end",
+          "state",
+          "unit",
+          "items",
+          "committed",
+          "done",
+          "unestimated",
+          "days_left",
+          "burndown"
+        ],
+        "type": "object"
+      },
+      "SprintState": {
+        "description": "Where a sprint is in its life.",
+        "enum": [
+          "planned",
+          "active",
+          "closed"
+        ],
+        "type": "string"
+      },
+      "StageChange": {
+        "description": "One move of a release between stages: where to, who moved it, and when (FEAT-183). A move back\ncarries the reason it was made.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage",
+          "by",
+          "at"
+        ],
+        "type": "object"
+      },
+      "Stakeholder": {
+        "additionalProperties": true,
+        "properties": {
+          "interest": {
+            "description": "What they need from this project, and why they care.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "Task": {
+        "additionalProperties": true,
+        "description": "A todo item belonging to a todo-list. `key` is short and unique within its todo-list.",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TaskState"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "text",
+          "state"
+        ],
+        "type": "object"
+      },
+      "TaskState": {
+        "description": "Tri-state for a feature's todo items.",
+        "enum": [
+          "NotStarted",
+          "InProgress",
+          "Completed"
+        ],
+        "type": "string"
+      },
+      "TestRef": {
+        "additionalProperties": true,
+        "description": "A test that verifies a requirement, and where it currently stands.",
+        "properties": {
+          "checked_rev": {
+            "description": "The project revision at which this was last observed green. A green older than HEAD is\nstale rather than trustworthy.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "unit | integration | e2e | manual | property — free text, like `kind` elsewhere.",
+            "type": "string"
+          },
+          "name": {
+            "description": "The test's name as it appears in the codebase, so it can be checked for existence.",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TestState",
+            "default": "planned"
+          }
+        },
+        "required": [
+          "name",
+          "state"
+        ],
+        "type": "object"
+      },
+      "TestState": {
+        "description": "The TDD lifecycle of a test: written but not yet run, failing, passing.\n\nSerialized lowercase (`state: green`) because that is how it is written in definition files and\non the command line; the aliases keep hand-written YAML forgiving.",
+        "enum": [
+          "planned",
+          "red",
+          "green"
+        ],
+        "type": "string"
+      },
+      "TodoList": {
+        "additionalProperties": true,
+        "description": "A persistent todo-list attached to a feature item. A feature (acting as an epic) can hold\nmany of these — e.g. one added per working session — so the work survives across sessions.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "type": "string"
+          },
+          "tasks": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Task"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "description",
+          "tasks",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "TradeOff": {
+        "properties": {
+          "cost": {
+            "description": "The quality spent for it. A decision with no cost is usually one nobody examined.",
+            "type": "string"
+          },
+          "gain": {
+            "description": "The quality bought.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "gain",
+          "cost"
+        ],
+        "type": "object"
+      },
+      "Transition": {
+        "additionalProperties": true,
+        "description": "One status change. Append-only: the board's memory of how work actually moved.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "override": {
+            "description": "Why a gate was passed over, when it was (FEAT-113). Absent on an ordinary move.",
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "from",
+          "to"
+        ],
+        "type": "object"
+      },
+      "Zachman": {
+        "additionalProperties": true,
+        "description": "The six completeness dimensions. Answers are one line; anything longer belongs in the spec.",
+        "properties": {
+          "how": {
+            "default": "",
+            "type": "string"
+          },
+          "what": {
+            "default": "",
+            "type": "string"
+          },
+          "when": {
+            "default": "",
+            "type": "string"
+          },
+          "where": {
+            "default": "",
+            "type": "string"
+          },
+          "who": {
+            "default": "",
+            "type": "string"
+          },
+          "why": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "what",
+          "how",
+          "where",
+          "when",
+          "who",
+          "why"
+        ],
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "The read-only routes `kanbanr serve` answers for the monitor and for tools built on the board. Version 1 stays at `/api/...`; a breaking change would be published as v2 under `/api/v2/...`, with v1 kept for a deprecation period. Routes the daemon serves that are not listed here are internal and may change. Write routes (`serve --allow-writes`) are not part of this contract. Errors are `text/plain`. CORS is permissive; there is no authentication.",
+    "license": {
+      "identifier": "MIT OR Apache-2.0",
+      "name": "MIT OR Apache-2.0"
+    },
+    "summary": "The view daemon's public read routes.",
+    "title": "kanbanr read API",
+    "version": "1"
+  },
+  "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/events": {
+      "get": {
+        "operationId": "getEvents",
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "A stream of server-sent events. Each is `event: changed`, with `data:` the id of the project that changed, or `*` for a change to the board as a whole."
+          }
+        },
+        "summary": "Server-sent events: `changed` whenever anything on the board changes"
+      }
+    },
+    "/api/meta": {
+      "get": {
+        "operationId": "getMeta",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Meta"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "What this daemon can do, and who an approval here would be attributed to"
+      }
+    },
+    "/api/openapi.json": {
+      "get": {
+        "operationId": "getOpenapiJson",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "An OpenAPI 3.1 document: this one.",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "This description of the public read API"
+      }
+    },
+    "/api/portfolio": {
+      "get": {
+        "operationId": "getPortfolio",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortfolioView"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The workspace: its programs and their projects"
+      }
+    },
+    "/api/portfolio/board": {
+      "get": {
+        "operationId": "getPortfolioBoard",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardReport"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "Every project's items on one board, in normalized lanes"
+      }
+    },
+    "/api/portfolio/rollups": {
+      "get": {
+        "operationId": "getPortfolioRollups",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RollupReport"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "Progress rolled up by program and project"
+      }
+    },
+    "/api/projects": {
+      "get": {
+        "operationId": "getProjects",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "The projects on the board"
+      }
+    },
+    "/api/projects/{project}": {
+      "get": {
+        "operationId": "getProjectsOne",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "A project: its configuration, milestones and items"
+      }
+    },
+    "/api/projects/{project}/activity": {
+      "get": {
+        "operationId": "getProjectsActivity",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the changes to this item.",
+            "in": "query",
+            "name": "ref",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only changes to items in a status that is not a board column.",
+            "in": "query",
+            "name": "ongoing",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "At most this many entries; 25 when absent.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Activity"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "Recent changes to the project, newest first"
+      }
+    },
+    "/api/projects/{project}/adrs": {
+      "get": {
+        "operationId": "getProjectsAdrs",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Adr"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The project's architecture decision records"
+      }
+    },
+    "/api/projects/{project}/charter": {
+      "get": {
+        "operationId": "getProjectsCharter",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Charter"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The project's charter: purpose, goals, scope and constraints"
+      }
+    },
+    "/api/projects/{project}/docs": {
+      "get": {
+        "operationId": "getProjectsDocs",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocFolder"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The project's documentation tree"
+      }
+    },
+    "/api/projects/{project}/docs/content": {
+      "get": {
+        "operationId": "getProjectsDocsContent",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The document's path under the project's docs, forward-slashed.",
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/markdown; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "A document's text"
+      }
+    },
+    "/api/projects/{project}/docs/raw": {
+      "get": {
+        "operationId": "getProjectsDocsRaw",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The document's path under the project's docs, forward-slashed.",
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "contentMediaType": "application/octet-stream",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The file's bytes; the media type follows its extension (png, jpg, gif, svg, webp, pdf; md and txt as text/plain), application/octet-stream otherwise."
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "A documentation file's bytes, such as an image"
+      }
+    },
+    "/api/projects/{project}/events": {
+      "get": {
+        "operationId": "getProjectsEvents",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "A stream of server-sent events. Each is `event: changed`, with `data:` the id of the project that changed, or `*` for a change to the board as a whole."
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "Server-sent events: `changed` whenever this project changes"
+      }
+    },
+    "/api/projects/{project}/features/{code}/export": {
+      "get": {
+        "operationId": "getProjectsFeaturesExport",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The item's code, such as FEAT-001.",
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`json` for JSON; `md`, or none, for Markdown.",
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "enum": [
+                "md",
+                "json"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeatureExport"
+                }
+              },
+              "text/markdown; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OK: Markdown, or JSON with `?format=json`."
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "One item, as Markdown, or as JSON with `?format=json`"
+      }
+    },
+    "/api/projects/{project}/features/{code}/readiness": {
+      "get": {
+        "operationId": "getProjectsFeaturesReadiness",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The item's code, such as FEAT-001.",
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessView"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "What one item is missing, and what its next stages ask"
+      }
+    },
+    "/api/projects/{project}/gantt": {
+      "get": {
+        "operationId": "getProjectsGantt",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The schedule as a Mermaid gantt diagram, by milestone"
+      }
+    },
+    "/api/projects/{project}/lessons": {
+      "get": {
+        "operationId": "getProjectsLessons",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the lessons that bear on this item.",
+            "in": "query",
+            "name": "for",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Present: every lesson, retired ones included.",
+            "in": "query",
+            "name": "all",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Lesson"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The lessons worth showing, most believed first"
+      }
+    },
+    "/api/projects/{project}/process": {
+      "get": {
+        "operationId": "getProjectsProcess",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessStatus"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "How the project's workflow stands against the process it was applied from"
+      }
+    },
+    "/api/projects/{project}/readiness": {
+      "get": {
+        "operationId": "getProjectsReadiness",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectReadiness"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "What each live item is missing, and its next stages, keyed by code"
+      }
+    },
+    "/api/projects/{project}/releases": {
+      "get": {
+        "operationId": "getProjectsReleases",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ReleaseReport"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The project's releases, each with what it ships"
+      }
+    },
+    "/api/projects/{project}/review": {
+      "get": {
+        "operationId": "getProjectsReview",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ReviewEntry"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "What is waiting for a person's agreement, in the order to ask it"
+      }
+    },
+    "/api/projects/{project}/sprints": {
+      "get": {
+        "operationId": "getProjectsSprints",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Sprint"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The project's sprints"
+      }
+    },
+    "/api/projects/{project}/sprints/{sprint}": {
+      "get": {
+        "operationId": "getProjectsSprintsOne",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The sprint's code, or `active` for the sprint in progress.",
+            "in": "path",
+            "name": "sprint",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SprintReport"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "One sprint's report"
+      }
+    },
+    "/api/projects/{project}/workflow": {
+      "get": {
+        "operationId": "getProjectsWorkflow",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The diagram language; only `mermaid`.",
+            "in": "query",
+            "name": "format",
+            "required": true,
+            "schema": {
+              "enum": [
+                "mermaid"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The workflow as a Mermaid state diagram"
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "getHealthz",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Liveness probe"
+      }
+    }
+  }
+}

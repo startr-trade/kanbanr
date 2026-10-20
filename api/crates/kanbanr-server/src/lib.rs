@@ -91,7 +91,8 @@ pub async fn run(
         .route("/projects/:project/docs/raw", get(routes::get_doc_raw))
         .route("/projects/:project/activity", get(routes::project_activity))
         .route("/projects/:project/events", get(routes::project_events))
-        .route("/events", get(routes::all_events));
+        .route("/events", get(routes::all_events))
+        .route("/openapi.json", get(routes::openapi));
 
     if allow_writes {
         // Single-writer daemon (FEAT-034): a dedicated write prefix carries any mutation to the
@@ -127,21 +128,18 @@ pub async fn run(
         .route(
             "/api/meta",
             get(move || async move {
-                axum::Json(serde_json::json!({
-                    "writes": allow_writes,
-                    // Who an approval recorded here would be attributed to (FEAT-077). The CLI
-                    // defaults `--by` to this same identity; the monitor was instead recording the
-                    // string "reviewed in the monitor", which names the place rather than the
-                    // person — twenty-eight times on this project's own board before anyone
-                    // noticed. An approval that cannot say who agreed is not evidence of
-                    // agreement, so when this is null the monitor refuses to offer the action.
-                    "identity": kanbanr_core::git::identity(&meta_dir)
-                        .map(|(name, email)| serde_json::json!({ "name": name, "email": email })),
-                    // The schema this build understands (FEAT-072). A monitor that receives an
-                    // empty board can compare it with the board's own version and say "upgrade"
-                    // rather than leaving the reader to conclude their data is gone.
-                    "schema_version": kanbanr_core::config::CURRENT_SCHEMA_VERSION,
-                }))
+                // `identity` is who an approval recorded here would be attributed to (FEAT-077).
+                // The CLI defaults `--by` to this same identity; the monitor was instead recording
+                // the string "reviewed in the monitor", which names the place rather than the
+                // person — twenty-eight times on this project's own board before anyone noticed.
+                // An approval that cannot say who agreed is not evidence of agreement, so when it
+                // is null the monitor refuses to offer the action. `schema_version` lets a monitor
+                // that receives an empty board say "upgrade" rather than leave the reader to
+                // conclude their data is gone (FEAT-072).
+                axum::Json(kanbanr_core::server::Meta::for_board(
+                    &meta_dir,
+                    allow_writes,
+                ))
             }),
         )
         .nest("/api", api)
@@ -289,7 +287,7 @@ fn ui_file(root: &std::path::Path, path: &str) -> Option<(String, Vec<u8>)> {
 
 /// Liveness/readiness probe.
 async fn healthz() -> impl IntoResponse {
-    axum::Json(serde_json::json!({ "status": "ok" }))
+    axum::Json(kanbanr_core::server::Health::ok())
 }
 
 /// One concise access-log line per request: method, path, status, latency.
