@@ -1204,6 +1204,21 @@ enum ReleaseCmd {
         #[arg(required = true)]
         items: Vec<String>,
     },
+    /// A release's notes as they are on its branch `release/<VERSION>`, and where they are; with
+    /// --file or --edit, commit new text there — nothing checked out — until the release is cut
+    /// (FEAT-216). Run it from the project folder: the notes are in the code repository there.
+    Notes {
+        version: String,
+        /// Commit this file's text as the notes (`-` for stdin).
+        #[arg(long, value_name = "FILE", conflicts_with = "edit")]
+        file: Option<String>,
+        /// Open `$VISUAL` (or `$EDITOR`) on a copy of the notes, and commit it if it changed.
+        #[arg(long)]
+        edit: bool,
+        /// Who edited them (default: the board's commit identity).
+        #[arg(long)]
+        by: Option<String>,
+    },
     /// Cut a release: ship its finished items, write its notes, carry the rest.
     Cut {
         version: String,
@@ -8418,6 +8433,20 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             )?;
         }
         ReleaseCmd::Stages => print_release_stages(cli, client, &p)?,
+        ReleaseCmd::Notes {
+            version,
+            file,
+            edit,
+            by,
+        } => release_notes(
+            cli,
+            client,
+            &p,
+            version,
+            file.as_deref(),
+            *edit,
+            by.as_ref(),
+        )?,
         ReleaseCmd::Promote {
             version,
             stage,
@@ -8522,6 +8551,129 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             }
         }
     }
+    Ok(())
+}
+
+/// Where a release's notes are, as `release notes` heads them: `release/v0.3.0 @ 8f995e1:
+/// docs/src/releases/v0.3.0.md`.
+fn notes_where(notes: &Value) -> String {
+    format!(
+        "{} @ {}: {}",
+        notes["branch"].as_str().unwrap_or_default(),
+        notes["at"].as_str().unwrap_or_default(),
+        notes["path"].as_str().unwrap_or_default()
+    )
+}
+
+/// The text the person wrote in their editor, started on a copy of `text` (FEAT-216): `$VISUAL`,
+/// then `$EDITOR`, then `vi`. The command may carry its own arguments (`code --wait`).
+fn edit_in_editor(version: &str, text: &str) -> anyhow::Result<String> {
+    let editor = ["VISUAL", "EDITOR"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .find(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "vi".to_string());
+    let dir = std::env::temp_dir().join(format!("kanbanr-notes-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let copy = dir.join(format!("{version}.md"));
+    std::fs::write(&copy, text)?;
+    let mut words = editor.split_whitespace();
+    let program = words.next().unwrap_or("vi");
+    let status = std::process::Command::new(program)
+        .args(words)
+        .arg(&copy)
+        .status()
+        .map_err(|e| anyhow::anyhow!("could not start the editor `{editor}`: {e}"));
+    let edited = status.and_then(|s| {
+        if s.success() {
+            Ok(std::fs::read_to_string(&copy)?)
+        } else {
+            Err(anyhow::anyhow!(
+                "the editor `{editor}` exited with {s}: nothing was saved"
+            ))
+        }
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+    edited
+}
+
+/// `release notes` (FEAT-216): show the notes on `release/<V>`, or commit new text there.
+#[allow(clippy::too_many_arguments)]
+fn release_notes(
+    cli: &Cli,
+    client: &Backend,
+    p: &str,
+    version: &str,
+    file: Option<&str>,
+    edit: bool,
+    by: Option<&String>,
+) -> anyhow::Result<()> {
+    let route = format!(
+        "/projects/{p}/releases/{}/notes",
+        urlencode_segment(version)
+    );
+    let repo = code_repo();
+    let current = || -> anyhow::Result<Value> {
+        Ok(serde_json::from_str(
+            &client.get_in(&route, repo.as_deref())?,
+        )?)
+    };
+    let text = match (file, edit) {
+        (None, false) => {
+            let notes = current()?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&notes)?);
+            } else {
+                println!("{}", notes_where(&notes));
+                if let Some(why) = notes["why_not"].as_str().filter(|w| !w.is_empty()) {
+                    println!("({why})");
+                }
+                println!();
+                print!("{}", notes["text"].as_str().unwrap_or_default());
+            }
+            return Ok(());
+        }
+        (Some("-"), _) => {
+            use std::io::Read;
+            let mut s = String::new();
+            std::io::stdin().read_to_string(&mut s)?;
+            s
+        }
+        (Some(f), _) => {
+            std::fs::read_to_string(f).map_err(|e| anyhow::anyhow!("could not read {f}: {e}"))?
+        }
+        (None, true) => {
+            let notes = current()?;
+            if !notes["editable"].as_bool().unwrap_or(false) {
+                anyhow::bail!("{}", notes["why_not"].as_str().unwrap_or("not editable"));
+            }
+            let before = notes["text"].as_str().unwrap_or_default().to_string();
+            let after = edit_in_editor(version, &before)?;
+            if after == before {
+                println!("unchanged: nothing committed to {}", notes_where(&notes));
+                return Ok(());
+            }
+            after
+        }
+    };
+    let by = verdict_author(cli, by)?;
+    let resp = client.write_in(
+        Method::Put,
+        &route,
+        Some(json!({ "text": text, "by": by })),
+        repo.as_deref(),
+    )?;
+    let v: Value = serde_json::from_str(&resp)?;
+    let sha = v["sha"].as_str().unwrap_or_default();
+    print_write(
+        cli,
+        &resp,
+        format!(
+            "{version}'s notes at {}; {}",
+            sha.get(..7).unwrap_or(sha),
+            notes_where(&v["notes"])
+        ),
+    );
     Ok(())
 }
 

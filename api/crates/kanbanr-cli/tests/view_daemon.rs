@@ -1295,3 +1295,82 @@ fn release_plan_route_matches_promote() {
     }
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// FEAT-216: a write-enabled daemon started in the project folder reads a release's notes from
+/// its repository and commits the text the monitor saves onto release/<V>, nothing checked out.
+#[test]
+fn release_notes_route_reads_and_saves_with_the_daemons_repository() {
+    let root = std::env::temp_dir().join(format!("kanbanr-notes-route-{}", std::process::id()));
+    // The board is asserted to be the scratch one by `release_scratch`.
+    let (home, work, board) = release_scratch(&root);
+    let run = |args: &[&str]| release_cli(&home, &work, args);
+    run(&[
+        "config",
+        "release-stage",
+        "candidate",
+        "--on-enter",
+        "branch,prepare",
+    ]);
+    run(&[
+        "config",
+        "release-prepare",
+        "--notes",
+        "docs/releases/{version}.md",
+    ]);
+    run(&["release", "promote", "v1.0.0"]);
+    let port = free_port();
+    let child = Command::new(cli())
+        .args([
+            "serve",
+            "--allow-writes",
+            "--bind",
+            &format!("127.0.0.1:{port}"),
+        ])
+        .current_dir(&work)
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &board)
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let _daemon = Daemon(child);
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        assert!(Instant::now() < deadline, "daemon did not become ready");
+        match ureq::get(&format!("{url}/api/projects")).call() {
+            Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    let notes_url = format!("{url}/api/projects/shop/releases/v1.0.0/notes");
+    let notes: serde_json::Value = match ureq::get(&notes_url).call() {
+        Ok(r) => serde_json::from_str(&r.into_string().unwrap()).unwrap(),
+        Err(e) => panic!("no notes from the daemon: {e}"),
+    };
+    assert_eq!(notes["path"], "docs/releases/v1.0.0.md", "{notes}");
+    assert_eq!(notes["editable"], true, "{notes}");
+    assert!(notes["text"].as_str().unwrap().contains("# v1.0.0"));
+
+    let body = serde_json::json!({ "text": "# v1.0.0\n\nFrom the monitor.\n", "by": "A" });
+    let saved: serde_json::Value = match ureq::put(&format!(
+        "{url}/api/write/projects/shop/releases/v1.0.0/notes"
+    ))
+    .set("content-type", "application/json")
+    .send_string(&body.to_string())
+    {
+        Ok(r) => serde_json::from_str(&r.into_string().unwrap()).unwrap(),
+        Err(e) => panic!("save through the daemon: {e}"),
+    };
+    let tip = Command::new("git")
+        .args(["rev-parse", "release/v1.0.0"])
+        .current_dir(&work)
+        .output()
+        .unwrap();
+    let tip = String::from_utf8(tip.stdout).unwrap();
+    assert_eq!(saved["sha"], tip.trim(), "{saved}");
+    assert_eq!(saved["notes"]["text"], "# v1.0.0\n\nFrom the monitor.\n");
+    assert!(
+        !work.join("docs/releases/v1.0.0.md").exists(),
+        "nothing checked out"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
