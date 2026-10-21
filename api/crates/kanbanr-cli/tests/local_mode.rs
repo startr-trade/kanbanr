@@ -3461,6 +3461,105 @@ fn where_names_the_questions_setup_must_ask() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// FEAT-194 R-2: setup asks the cadence third, after the process, and names the preview; the
+/// preview runs before there is a board, each cadence gives its own model, and the model the board
+/// then follows is the one previewed.
+#[test]
+fn setup_asks_cadence_and_shows_git_model() {
+    let (base, work) = togaf_scratch("cadence-ask");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ],
+    ));
+    let json = |args: &[&str]| -> serde_json::Value {
+        serde_json::from_slice(&ok(run_in(&base, &work, args)).stdout).unwrap()
+    };
+
+    let asked = json(&["where", "--json"]);
+    let questions = asked["ask_the_user"].as_array().unwrap();
+    assert_eq!(questions.len(), 4, "{questions:?}");
+    let cadence = questions[2].as_str().unwrap();
+    assert!(
+        cadence.contains("sprints and releases")
+            && cadence.contains("after the process")
+            && cadence.contains("kanbanr git model"),
+        "{cadence}"
+    );
+
+    // No board yet: the preview still answers.
+    let preview = json(&[
+        "git",
+        "model",
+        "--sprints",
+        "on",
+        "--releases",
+        "off",
+        "--json",
+    ]);
+    assert_eq!(preview["line"], "sprint/<SP>");
+    assert_eq!(preview["branch_from"], "sprint/<SP>");
+    assert_eq!(preview["production_at"], "sprint_close");
+    assert_eq!(preview["pushes"], "you");
+    assert!(
+        !work.join("data").exists(),
+        "a preview must not make a board"
+    );
+
+    let mut seen = std::collections::BTreeSet::new();
+    for s in ["on", "off"] {
+        for r in ["on", "off"] {
+            let v = json(&["git", "model", "--sprints", s, "--releases", r, "--json"]);
+            seen.insert(v.to_string());
+        }
+    }
+    assert_eq!(seen.len(), 4, "each cadence gives its own model");
+
+    // Applied: the board's model is the one previewed.
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--sprints", "on"],
+    ));
+    let applied = json(&["git", "model", "--json"]);
+    for k in [
+        "topology",
+        "line",
+        "branch_from",
+        "production_at",
+        "kanbanr_merges",
+        "automated",
+        "pushes",
+    ] {
+        assert_eq!(applied[k], preview[k], "{k}");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-182: a sign-off can be withdrawn from the CLI with a reason, never without one, and the
 /// brief then says it was withdrawn and why.
 #[test]

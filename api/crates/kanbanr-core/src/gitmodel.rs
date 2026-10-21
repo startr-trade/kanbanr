@@ -157,6 +157,106 @@ pub fn load(store: &Store, id: &str, repo: &Path) -> Result<(GitModel, BranchFac
     Ok((derive(&config, &sprints, &facts), facts))
 }
 
+/// Who pushes the code repository: always the person, never kanbanr (FEAT-189 R-5).
+pub const PUSHES: &str = "you";
+
+/// A model in the words setup shows before it is applied (FEAT-194 R-2): where an item branches
+/// from and merges into, where production moves, what kanbanr merges, and who pushes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ModelSummary {
+    pub topology: Topology,
+    /// Where finished items are merged: `sprint/<SP>` stands for the running sprint's branch.
+    pub line: String,
+    /// Where an item branch is made.
+    pub branch_from: String,
+    pub production_at: Production,
+    /// The merges kanbanr makes in this model. They happen only when `automated` is on; off,
+    /// kanbanr merges nothing and the model is a description.
+    pub kanbanr_merges: Vec<String>,
+    pub automated: bool,
+    pub pushes: &'static str,
+}
+
+/// The summary of `model` (FEAT-194 R-2). The same function serves the preview and the applied
+/// model, so what setup shows is what the board then follows.
+pub fn summary(model: &GitModel) -> ModelSummary {
+    let line = model.line.clone().unwrap_or_else(|| sprint_branch("<SP>"));
+    let main = &model.main;
+    let mut merges = vec![format!(
+        "each item branch into {line} when the item enters the integrate stage (--no-ff, naming \
+         the item)"
+    )];
+    match model.topology {
+        Topology::Trunk => {}
+        Topology::Sprints => merges.push(format!(
+            "{line} into {main} when the sprint closes (a fast-forward, tagged with the sprint's \
+             code)"
+        )),
+        Topology::Releases | Topology::SprintsAndReleases => merges.push(format!(
+            "{RELEASE_PREFIX}<V> into {main} at the release's last stage (tagged <V>, a \
+             fast-forward)"
+        )),
+    }
+    if matches!(
+        model.topology,
+        Topology::Sprints | Topology::SprintsAndReleases
+    ) {
+        merges.push(format!(
+            "{line} into each item branch carried into that sprint (a catch-up merge; a conflict \
+             is reported for that item)"
+        ));
+    }
+    ModelSummary {
+        topology: model.topology,
+        branch_from: line.clone(),
+        line,
+        production_at: model.production,
+        kanbanr_merges: merges,
+        automated: model.automated,
+        pushes: PUSHES,
+    }
+}
+
+/// The model a cadence would give, before it is applied (FEAT-194 R-2): `config` (the board's,
+/// or [`ProjectConfig::default_for`] when there is no board) with `sprints_on` and `releases_on`
+/// put into its cadence. Reads the repository's branches when there is one, so the preview names
+/// the main the board will; with none, or none readable yet, main is `main`.
+pub fn preview(
+    mut config: ProjectConfig,
+    sprints_on: Option<bool>,
+    releases_on: Option<bool>,
+    sprints: &[Sprint],
+    repo: Option<&Path>,
+) -> GitModel {
+    if let Some(on) = sprints_on {
+        config.cadence.sprints = on;
+    }
+    if let Some(on) = releases_on {
+        config.cadence.releases = on;
+    }
+    let main = config
+        .cadence
+        .main_branch
+        .clone()
+        .filter(|m| !m.trim().is_empty())
+        .or_else(|| repo.map(crate::coderepo::default_branch))
+        .unwrap_or_else(|| "main".to_string());
+    let facts = repo
+        .and_then(|r| crate::coderepo::branch_facts(r, &main).ok())
+        .unwrap_or_else(|| BranchFacts {
+            main: main.clone(),
+            ..Default::default()
+        });
+    derive(&config, sprints, &facts)
+}
+
+/// `git model --json`'s body (FEAT-194 R-2): the summary's fields, and the model under `model`.
+pub fn view(model: &GitModel) -> serde_json::Value {
+    let mut out = serde_json::to_value(summary(model)).unwrap_or_default();
+    out["model"] = serde_json::to_value(model).unwrap_or_default();
+    out
+}
+
 /// The line an item integrates into: its release's branch when it is planned into an unshipped
 /// release that has one (a fix during test), else the current line.
 pub fn line_for(model: &GitModel, item: &FeatureItem, releases: &[Release]) -> Option<String> {

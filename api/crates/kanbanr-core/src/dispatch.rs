@@ -1014,6 +1014,17 @@ pub fn dispatch_in(
         // The git model the cadence implies (FEAT-189): always derivable, with the repository's
         // facts when there is one to read.
         ("GET", ["projects", p, "git", "model"]) => {
+            // `?sprints=on|off&releases=on|off`: the model that cadence would give, over this
+            // board's (FEAT-194 R-2). A preview, so it needs no repository.
+            let on = |k: &str| query_param(query, k).map(|v| v == "on");
+            let (sprints_on, releases_on) = (on("sprints"), on("releases"));
+            if sprints_on.is_some() || releases_on.is_some() {
+                let config = store.load_meta(p)?.config;
+                let sprints = crate::sprints::load(store, p)?;
+                let model =
+                    crate::gitmodel::preview(config, sprints_on, releases_on, &sprints, repo);
+                return ser(&crate::gitmodel::view(&model));
+            }
             let repo = repo.ok_or_else(|| {
                 CoreError::Unsupported(
                     "the git model reads the code repository: run it from the project folder"
@@ -1034,7 +1045,10 @@ pub fn dispatch_in(
                 }
                 None => None,
             };
-            ser(&serde_json::json!({ "model": model, "facts": facts, "start": start }))
+            let mut out = crate::gitmodel::view(&model);
+            out["facts"] = serde_json::to_value(&facts).unwrap_or_default();
+            out["start"] = serde_json::to_value(&start).unwrap_or_default();
+            ser(&out)
         }
         // With the git model on, a sprints-only close moves production (FEAT-190).
         ("POST", ["projects", p, "sprints", code, "close"]) => {
