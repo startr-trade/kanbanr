@@ -3103,36 +3103,9 @@ fn scm_context_in(dir: &Path) -> anyhow::Result<Context> {
     })
 }
 
-/// The item the current branch is about. This is the whole reason the branch rule exists: with it,
-/// nothing else has to ask what is being worked on.
-/// The git model the hooks judge by, when the project has it on (FEAT-189). Which branches take
-/// merges only does not depend on the running sprint, so it is derived here without reading one.
-fn line_model(ctx: &Context) -> Option<kanbanr_core::gitmodel::GitModel> {
-    let config = &ctx.project.config;
-    if !config.cadence.git_model {
-        return None;
-    }
-    let main = config
-        .cadence
-        .main_branch
-        .clone()
-        .filter(|m| !m.trim().is_empty())
-        .unwrap_or_else(|| coderepo::default_branch(&ctx.root));
-    let facts = kanbanr_core::gitmodel::BranchFacts {
-        main,
-        ..Default::default()
-    };
-    Some(kanbanr_core::gitmodel::derive(config, &[], &facts))
-}
-
+/// The item the current branch is about (FEAT-056): core's rule, for this context.
 fn branch_item(ctx: &Context) -> Option<String> {
-    let pattern = ctx.project.config.branch_pattern();
-    let code = kanbanr_core::scm::item_code_from_branch(pattern, ctx.branch.as_deref()?)?;
-    ctx.project
-        .features
-        .iter()
-        .any(|f| f.code == code)
-        .then_some(code)
+    kanbanr_core::scm::branch_item(&ctx.project, ctx.branch.as_deref())
 }
 
 fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
@@ -3364,59 +3337,11 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     let Ok(ctx) = ctx else {
         return Ok(()); // not a kanbanr project: not this guard's business
     };
-    // A line of integration takes merges only (FEAT-189).
-    if let Some(branch) = &ctx.branch
-        && let Some(model) = line_model(&ctx)
-        && !coderepo::merge_in_progress(&ctx.root)
-        && coderepo::has_commits(&ctx.root)
-        && let kanbanr_core::gitmodel::LineVerdict::Refused(why) =
-            kanbanr_core::gitmodel::line_commit_verdict(&model, branch, false, None)
-    {
-        deny(why);
-        return Ok(());
-    }
-    // Completing a merge is the intended way work reaches the default branch (FEAT-094).
-    // So is a repository's first commit (FEAT-105): nothing can branch from a repo with none.
-    if let Some(branch) = &ctx.branch
-        && branch == &coderepo::default_branch(&ctx.root)
-        && !coderepo::merge_in_progress(&ctx.root)
-        && coderepo::has_commits(&ctx.root)
-    {
-        deny(format!(
-            "This would commit straight to {branch}. Work belongs on a branch for its item: run \
-             `kanbanr start <CODE>` first."
-        ));
-        return Ok(());
-    }
     // The message is only visible when it is given inline; a commit that opens an editor is
     // checked by the commit-msg hook instead.
-    let Some(message) = inline_message(command) else {
-        return Ok(());
-    };
-    if kanbanr_core::scm::is_generated_commit(&message) {
-        return Ok(());
-    }
-    let refs = kanbanr_core::scm::parse_refs(&message);
-    if refs.is_empty() {
-        if kanbanr_core::scm::escape_reason(&message).is_some() {
-            return Ok(());
-        }
-        let suggestion = branch_item(&ctx)
-            .map(|code| format!("Refs: kanbanr:{code}"))
-            .unwrap_or_else(|| "Refs: kanbanr:<CODE>".to_string());
-        deny(format!(
-            "This commit does not say which item it serves. Add the trailer `{suggestion}` (a \
-             requirement is better: `kanbanr:<CODE>/R-2`), or run `kanbanr commit -m \"…\"`, \
-             which fills it in from the branch."
-        ));
-        return Ok(());
-    }
-    let problems = kanbanr_core::scm::validate_refs(&ctx.project, &refs);
-    if !problems.is_empty() {
-        deny(format!(
-            "This commit references something that is not on the board:\n{}",
-            problems.join("\n")
-        ));
+    let facts = coderepo::repo_facts(&ctx.root, inline_message(command));
+    if let Some(why) = kanbanr_core::scm::commit_verdict(&facts, &ctx.project).refusal {
+        deny(why);
     }
     Ok(())
 }
@@ -3766,7 +3691,6 @@ fn closing_quoted(body: &str, quote: char) -> Option<String> {
 /// The commit-msg hook. Every exit here is a decision about whether a commit happens, so each
 /// refusal says what to write instead — a guardrail that only says "no" gets bypassed.
 fn run_check_msg(cli: &Cli, client: &Backend, file: &Path) -> anyhow::Result<()> {
-    use kanbanr_core::scm;
     let message = std::fs::read_to_string(file)
         .map_err(|e| anyhow::anyhow!("could not read the commit message ({e})"))?;
     // Comment lines are git's own; they are not part of the message.
@@ -3777,101 +3701,47 @@ fn run_check_msg(cli: &Cli, client: &Backend, file: &Path) -> anyhow::Result<()>
         .join("\n");
 
     // Not a kanbanr project (or no board reachable): say nothing, block nothing.
-    let ctx = scm_context(cli, client).ok();
-    // A merge into a line of integration says which items it brings, generated message or not
-    // (FEAT-189): a line is where "which items reached it" is read from.
-    if let Some(ctx) = &ctx
-        && let Some(model) = line_model(ctx)
-        && let Some(branch) = ctx.branch.as_deref()
-        && let kanbanr_core::gitmodel::LineVerdict::Refused(why) =
-            kanbanr_core::gitmodel::line_commit_verdict(
-                &model,
-                branch,
-                coderepo::merge_in_progress(&ctx.root),
-                Some(&message),
-            )
-    {
-        anyhow::bail!("{why}");
-    }
-    if scm::is_generated_commit(&message) {
-        return Ok(()); // git wrote it; there is no author to ask for a reference
-    }
-    let Some(ctx) = ctx else {
+    let Ok(ctx) = scm_context(cli, client) else {
         return Ok(());
     };
-    // References are read before the escape is considered: a message that carries both is a
-    // referenced commit that happens to mention the escape, not an escape.
-    let refs = scm::parse_refs(&message);
-    if refs.is_empty() {
-        if let Some(reason) = scm::escape_reason(&message) {
-            eprintln!("kanbanr: committing with no reference — recorded reason: {reason}");
-            return Ok(());
-        }
-        let suggestion = branch_item(&ctx)
-            .map(|code| format!("Refs: kanbanr:{code}"))
-            .unwrap_or_else(|| "Refs: kanbanr:FEAT-001".to_string());
-        anyhow::bail!(
-            "this commit says which code changed but not which item it serves.\n\
-             Add a trailer:\n\n    {suggestion}\n\n\
-             or `kanbanr commit -m \"…\"`, which fills it in from the branch.\n\
-             If it genuinely serves no item, say so on the record: `[no-ref] <why>`."
-        );
-    }
-    let mut problems = scm::validate_refs(&ctx.project, &refs);
-    problems.extend(validate_doc_and_adr_refs(client, &message)?);
-    if !problems.is_empty() {
-        anyhow::bail!(
-            "this commit references something that is not on the board:\n  {}",
-            problems.join("\n  ")
-        );
-    }
-    Ok(())
-}
-
-/// `Docs:` and `ADR:` trailers resolve against the board too (FEAT-057). A stale document path or
-/// an invented decision id is a broken link, exactly like a dangling dependency — and the kind
-/// that is hardest to notice later, because it still reads as a reference.
-fn validate_doc_and_adr_refs(client: &Backend, message: &str) -> anyhow::Result<Vec<String>> {
+    let facts = coderepo::repo_facts(&ctx.root, Some(message));
+    // What `Docs:` and `ADR:` trailers resolve against (FEAT-057), fetched only if one names them.
     let p = require_project_quiet();
-    let (docs, adrs) = (
-        kanbanr_core::scm::parse_doc_refs(message),
-        kanbanr_core::scm::parse_adr_refs(message),
-    );
-    if docs.is_empty() && adrs.is_empty() {
-        return Ok(Vec::new());
-    }
-    let Some(p) = p else { return Ok(Vec::new()) };
-    let mut problems = Vec::new();
-    if !docs.is_empty() {
-        let tree = client
-            .get(&format!("/projects/{p}/docs"))
-            .unwrap_or_default();
-        for path in docs {
-            if !tree.contains(&path) {
-                problems.push(format!("Docs: {path} is not a document on this board"));
-            }
-        }
-    }
-    if !adrs.is_empty() {
-        let listed: Vec<kanbanr_core::adr::Adr> = client
-            .get(&format!("/projects/{p}/adrs"))
+    let tree = std::cell::OnceCell::new();
+    let doc_on_board = |path: &str| {
+        tree.get_or_init(|| {
+            client
+                .get(&format!(
+                    "/projects/{}/docs",
+                    p.as_deref().unwrap_or_default()
+                ))
+                .unwrap_or_default()
+        })
+        .contains(path)
+    };
+    let adrs = || -> Vec<kanbanr_core::adr::Adr> {
+        client
+            .get(&format!(
+                "/projects/{}/adrs",
+                p.as_deref().unwrap_or_default()
+            ))
             .ok()
             .and_then(|r| serde_json::from_str(&r).ok())
-            .unwrap_or_default();
-        for id in adrs {
-            match listed.iter().find(|a| a.id.eq_ignore_ascii_case(&id)) {
-                None => problems.push(format!("ADR: {id} is not a decision on this board")),
-                // Not a refusal: sometimes the commit IS the one replacing it. Saying so beats
-                // blocking, because a rule that blocks legitimate work gets bypassed wholesale.
-                Some(adr) if adr.is_superseded() => eprintln!(
-                    "kanbanr: {id} was superseded by {} — make sure this is deliberate",
-                    adr.superseded_by
-                ),
-                Some(_) => {}
-            }
-        }
+            .unwrap_or_default()
+    };
+    let board = kanbanr_core::scm::BoardRefs {
+        doc_on_board: &doc_on_board,
+        adrs: &adrs,
+    };
+    let verdict =
+        kanbanr_core::scm::message_verdict(&facts, &ctx.project, p.as_ref().map(|_| &board));
+    for note in &verdict.notes {
+        eprintln!("kanbanr: {note}");
     }
-    Ok(problems)
+    if let Some(why) = verdict.refusal {
+        anyhow::bail!("{why}");
+    }
+    Ok(())
 }
 
 /// The active project, or `None` — used where a missing project means "not our business" rather
@@ -3885,48 +3755,9 @@ fn run_check_branch(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     let Ok(ctx) = scm_context(cli, client) else {
         return Ok(());
     };
-    let Some(branch) = ctx.branch.clone() else {
-        return Ok(()); // detached head: a rebase or a bisect, not a place for a policy argument
-    };
-    // A commit completing a merge is how an item's branch is SUPPOSED to arrive (FEAT-094), and
-    // every branch rule below is about where new work is written — none of them applies to it.
-    // The first fix exempted only the default-branch check, and the very next check then refused
-    // the same commit because `master` names no item; running the recovery for real caught that.
-    if coderepo::merge_in_progress(&ctx.root) {
-        return Ok(());
-    }
-    if branch.starts_with(kanbanr_core::scm::SPIKE_PREFIX) {
-        return Ok(()); // a spike is allowed to exist; `finish` is where it is refused
-    }
-    // The root commit has nowhere else to go: an item branch needs a commit to branch from, so a
-    // new repository's first commit lands on its default branch (FEAT-105). Its message is still
-    // checked by commit-msg, so it names an item or says `[no-ref] <why>` on the record.
-    if !coderepo::has_commits(&ctx.root) && branch == coderepo::default_branch(&ctx.root) {
-        return Ok(());
-    }
-    // A line of integration takes merges only (FEAT-189).
-    if let Some(model) = line_model(&ctx) {
-        use kanbanr_core::gitmodel::LineVerdict;
-        match kanbanr_core::gitmodel::line_commit_verdict(&model, &branch, false, None) {
-            LineVerdict::Refused(why) => anyhow::bail!("{why}"),
-            LineVerdict::Allowed => return Ok(()),
-            LineVerdict::NotALine => {}
-        }
-    }
-    // The commit completing a merge is how an item's branch is SUPPOSED to arrive here (FEAT-094).
-    if branch == coderepo::default_branch(&ctx.root) {
-        anyhow::bail!(
-            "this is {branch}, the default branch. Work belongs on a branch for its item:\n\n    \
-             kanbanr start <CODE>\n\n\
-             (or `spike/<name>` to explore — spikes produce a definition change, not merged code.)"
-        );
-    }
-    if branch_item(&ctx).is_none() {
-        anyhow::bail!(
-            "the branch '{branch}' does not name an item on the board, so nothing here can be \
-             traced back to a reason. Use `kanbanr start <CODE>` (pattern: {}), or `spike/<name>`.",
-            ctx.project.config.branch_pattern()
-        );
+    let facts = coderepo::repo_facts(&ctx.root, None);
+    if let Some(why) = kanbanr_core::scm::branch_verdict(&facts, &ctx.project).refusal {
+        anyhow::bail!("{why}");
     }
     Ok(())
 }

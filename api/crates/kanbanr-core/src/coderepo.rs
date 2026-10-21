@@ -115,6 +115,18 @@ pub fn default_branch(root: &Path) -> String {
     configured.unwrap_or_else(|| "main".to_string())
 }
 
+/// What the commit and branch rules read from the repository at `root`, with the commit's
+/// `message` where the caller knows it (FEAT-176): the facts `scm`'s verdicts decide on.
+pub fn repo_facts(root: &Path, message: Option<String>) -> crate::scm::RepoFacts {
+    crate::scm::RepoFacts {
+        branch: current_branch(root),
+        default_branch: default_branch(root),
+        merging: merge_in_progress(root),
+        has_commits: has_commits(root),
+        message,
+    }
+}
+
 /// The commit a revision names.
 pub fn rev_parse(root: &Path, rev: &str) -> Result<String> {
     git(

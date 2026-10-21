@@ -8,8 +8,12 @@
 //! `finish` knows which definition to check the work against.
 //!
 //! Nothing here touches git. It parses text and validates ids against a loaded board, so the CLI
-//! hooks, the daemon and the tests all agree on what a reference means.
+//! hooks, the daemon and the tests all agree on what a reference means. The commit and branch
+//! rules are here too (FEAT-176), as verdicts over [`RepoFacts`] the front end collected: core
+//! decides, the front end reads the repository and says the verdict its own way.
 
+use crate::config::ProjectConfig;
+use crate::gitmodel::{BranchFacts, GitModel, LineVerdict, line_commit_verdict};
 use crate::store::Project;
 
 /// A reference from a commit to somewhere on the board, at the level the author chose.
@@ -317,6 +321,298 @@ fn code_prefix(rest: &str) -> Option<String> {
     (!digits.is_empty()).then(|| format!("{prefix}-{digits}"))
 }
 
+// ---- commit and branch policy (FEAT-176) -------------------------------------------------
+
+/// What the commit rules read from the code repository, collected by the front end (the CLI's
+/// hooks and guard) so that the rules themselves stay pure and the same everywhere
+/// ([`crate::coderepo::repo_facts`] reads them from a working tree).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RepoFacts {
+    /// The checked-out branch; `None` when the head is detached (a rebase, a bisect).
+    pub branch: Option<String>,
+    /// The branch work is not supposed to land on directly.
+    pub default_branch: String,
+    /// A merge is waiting to be committed (FEAT-094).
+    pub merging: bool,
+    /// The repository has a commit yet: a fresh `git init` has none (FEAT-105).
+    pub has_commits: bool,
+    /// The commit message, where it is known: the commit-msg hook reads the real one, the guard
+    /// only an inline `-m`; `None` where there is none to read.
+    pub message: Option<String>,
+}
+
+/// What a commit rule says: whether the commit may happen, and what the person should hear
+/// either way. Every refusal says what to do instead — a guardrail that only says "no" gets
+/// bypassed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Verdict {
+    /// Why the commit may not happen, in words to show as they are; `None` lets it through.
+    pub refusal: Option<String>,
+    /// Said whether or not it is refused: a recorded escape, a superseded decision.
+    pub notes: Vec<String>,
+}
+
+impl Verdict {
+    pub fn allow() -> Verdict {
+        Verdict::default()
+    }
+
+    pub fn refuse(why: impl Into<String>) -> Verdict {
+        Verdict {
+            refusal: Some(why.into()),
+            notes: Vec::new(),
+        }
+    }
+
+    pub fn is_allowed(&self) -> bool {
+        self.refusal.is_none()
+    }
+}
+
+/// The board's documents and decisions, as a commit message's `Docs:` and `ADR:` trailers are
+/// checked against them. Asked for only when a trailer needs them: the front end may have to
+/// fetch them from a server.
+pub struct BoardRefs<'a> {
+    /// Is this path a document on the board?
+    pub doc_on_board: &'a dyn Fn(&str) -> bool,
+    /// The board's decisions.
+    pub adrs: &'a dyn Fn() -> Vec<crate::adr::Adr>,
+}
+
+/// What is wrong with a message's trailers, and what is worth saying about them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TrailerReport {
+    /// References that resolve to nothing on the board, as sentences a person can act on.
+    pub problems: Vec<String>,
+    /// Not refusals: a decision referenced after it was superseded.
+    pub notes: Vec<String>,
+}
+
+/// The item a branch names, if it is an item on this board. This is the whole reason the branch
+/// rule exists: with it, nothing else has to ask what is being worked on.
+pub fn branch_item(project: &Project, branch: Option<&str>) -> Option<String> {
+    let code = item_code_from_branch(project.config.branch_pattern(), branch?)?;
+    project
+        .features
+        .iter()
+        .any(|f| f.code == code)
+        .then_some(code)
+}
+
+/// The git model the hooks judge by, when the project has it on (FEAT-189). Which branches take
+/// merges only does not depend on the running sprint, so it is derived without reading one.
+pub fn line_model(config: &ProjectConfig, default_branch: &str) -> Option<GitModel> {
+    if !config.cadence.git_model {
+        return None;
+    }
+    let facts = BranchFacts {
+        main: default_branch.to_string(),
+        ..Default::default()
+    };
+    Some(crate::gitmodel::derive(config, &[], &facts))
+}
+
+/// The Claude Code guard's rules (FEAT-056): the same as the git hooks', but answered *before* the
+/// command runs, with the reference to use. Feedback that arrives as a failed command teaches
+/// avoidance; feedback that arrives with the fix teaches the rule.
+///
+/// `facts.message` is the inline `-m` the front end could read, or `None` for a commit that opens
+/// an editor — that one is left to the commit-msg hook, which reads the real message.
+pub fn commit_verdict(facts: &RepoFacts, project: &Project) -> Verdict {
+    // A line of integration takes merges only (FEAT-189).
+    if let Some(branch) = &facts.branch
+        && let Some(model) = line_model(&project.config, &facts.default_branch)
+        && !facts.merging
+        && facts.has_commits
+        && let LineVerdict::Refused(why) = line_commit_verdict(&model, branch, false, None)
+    {
+        return Verdict::refuse(why);
+    }
+    // Completing a merge is the intended way work reaches the default branch (FEAT-094).
+    // So is a repository's first commit (FEAT-105): nothing can branch from a repo with none.
+    if let Some(branch) = &facts.branch
+        && branch == &facts.default_branch
+        && !facts.merging
+        && facts.has_commits
+    {
+        return Verdict::refuse(format!(
+            "This would commit straight to {branch}. Work belongs on a branch for its item: run \
+             `kanbanr start <CODE>` first."
+        ));
+    }
+    let Some(message) = facts.message.as_deref() else {
+        return Verdict::allow();
+    };
+    if is_generated_commit(message) {
+        return Verdict::allow();
+    }
+    let refs = parse_refs(message);
+    if refs.is_empty() {
+        if escape_reason(message).is_some() {
+            return Verdict::allow();
+        }
+        let suggestion = branch_item(project, facts.branch.as_deref())
+            .map(|code| format!("Refs: kanbanr:{code}"))
+            .unwrap_or_else(|| "Refs: kanbanr:<CODE>".to_string());
+        return Verdict::refuse(format!(
+            "This commit does not say which item it serves. Add the trailer `{suggestion}` (a \
+             requirement is better: `kanbanr:<CODE>/R-2`), or run `kanbanr commit -m \"…\"`, \
+             which fills it in from the branch."
+        ));
+    }
+    let problems = validate_refs(project, &refs);
+    if !problems.is_empty() {
+        return Verdict::refuse(format!(
+            "This commit references something that is not on the board:\n{}",
+            problems.join("\n")
+        ));
+    }
+    Verdict::allow()
+}
+
+/// The commit-msg hook's rules: the message git is about to record names the item it serves, or
+/// says on the record why it serves none. `facts.message` is that message, git's comment lines
+/// already removed; `board` is where `Docs:` and `ADR:` trailers resolve, `None` where there is
+/// no board to ask.
+pub fn message_verdict(facts: &RepoFacts, project: &Project, board: Option<&BoardRefs>) -> Verdict {
+    let message = facts.message.as_deref().unwrap_or_default();
+    // A merge into a line of integration says which items it brings, generated message or not
+    // (FEAT-189): a line is where "which items reached it" is read from.
+    if let Some(model) = line_model(&project.config, &facts.default_branch)
+        && let Some(branch) = facts.branch.as_deref()
+        && let LineVerdict::Refused(why) =
+            line_commit_verdict(&model, branch, facts.merging, Some(message))
+    {
+        return Verdict::refuse(why);
+    }
+    if is_generated_commit(message) {
+        return Verdict::allow(); // git wrote it; there is no author to ask for a reference
+    }
+    // References are read before the escape is considered: a message that carries both is a
+    // referenced commit that happens to mention the escape, not an escape.
+    if parse_refs(message).is_empty() {
+        if let Some(reason) = escape_reason(message) {
+            return Verdict {
+                refusal: None,
+                notes: vec![format!(
+                    "committing with no reference — recorded reason: {reason}"
+                )],
+            };
+        }
+        let suggestion = branch_item(project, facts.branch.as_deref())
+            .map(|code| format!("Refs: kanbanr:{code}"))
+            .unwrap_or_else(|| "Refs: kanbanr:FEAT-001".to_string());
+        return Verdict::refuse(format!(
+            "this commit says which code changed but not which item it serves.\n\
+             Add a trailer:\n\n    {suggestion}\n\n\
+             or `kanbanr commit -m \"…\"`, which fills it in from the branch.\n\
+             If it genuinely serves no item, say so on the record: `[no-ref] <why>`."
+        ));
+    }
+    let report = validate_trailers(project, message, board);
+    Verdict {
+        refusal: (!report.problems.is_empty()).then(|| {
+            format!(
+                "this commit references something that is not on the board:\n  {}",
+                report.problems.join("\n  ")
+            )
+        }),
+        notes: report.notes,
+    }
+}
+
+/// Every trailer of a message resolved against the board: `Refs:` against its items,
+/// requirements and tasks, and — where `board` is given — `Docs:` and `ADR:` against its documents
+/// and decisions (FEAT-057). A stale document path or an invented decision id is a broken link,
+/// exactly like a dangling dependency, and the kind that is hardest to notice later, because it
+/// still reads as a reference.
+pub fn validate_trailers(
+    project: &Project,
+    message: &str,
+    board: Option<&BoardRefs>,
+) -> TrailerReport {
+    let mut report = TrailerReport {
+        problems: validate_refs(project, &parse_refs(message)),
+        notes: Vec::new(),
+    };
+    let Some(board) = board else {
+        return report;
+    };
+    for path in parse_doc_refs(message) {
+        if !(board.doc_on_board)(&path) {
+            report
+                .problems
+                .push(format!("Docs: {path} is not a document on this board"));
+        }
+    }
+    let adrs = parse_adr_refs(message);
+    if !adrs.is_empty() {
+        let listed = (board.adrs)();
+        for id in adrs {
+            match listed.iter().find(|a| a.id.eq_ignore_ascii_case(&id)) {
+                None => report
+                    .problems
+                    .push(format!("ADR: {id} is not a decision on this board")),
+                // Not a refusal: sometimes the commit IS the one replacing it. Saying so beats
+                // blocking, because a rule that blocks legitimate work gets bypassed wholesale.
+                Some(adr) if adr.is_superseded() => report.notes.push(format!(
+                    "{id} was superseded by {} — make sure this is deliberate",
+                    adr.superseded_by
+                )),
+                Some(_) => {}
+            }
+        }
+    }
+    report
+}
+
+/// The pre-commit hook's rules: work belongs on a branch that names the item it serves.
+pub fn branch_verdict(facts: &RepoFacts, project: &Project) -> Verdict {
+    // Detached head: a rebase or a bisect, not a place for a policy argument.
+    let Some(branch) = facts.branch.as_deref() else {
+        return Verdict::allow();
+    };
+    // A commit completing a merge is how an item's branch is SUPPOSED to arrive (FEAT-094), and
+    // every branch rule below is about where new work is written — none of them applies to it.
+    // The first fix exempted only the default-branch check, and the very next check then refused
+    // the same commit because `master` names no item; running the recovery for real caught that.
+    if facts.merging {
+        return Verdict::allow();
+    }
+    if branch.starts_with(SPIKE_PREFIX) {
+        return Verdict::allow(); // a spike is allowed to exist; `finish` is where it is refused
+    }
+    // The root commit has nowhere else to go: an item branch needs a commit to branch from, so a
+    // new repository's first commit lands on its default branch (FEAT-105). Its message is still
+    // checked by commit-msg, so it names an item or says `[no-ref] <why>` on the record.
+    if !facts.has_commits && branch == facts.default_branch {
+        return Verdict::allow();
+    }
+    // A line of integration takes merges only (FEAT-189).
+    if let Some(model) = line_model(&project.config, &facts.default_branch) {
+        match line_commit_verdict(&model, branch, false, None) {
+            LineVerdict::Refused(why) => return Verdict::refuse(why),
+            LineVerdict::Allowed => return Verdict::allow(),
+            LineVerdict::NotALine => {}
+        }
+    }
+    if branch == facts.default_branch {
+        return Verdict::refuse(format!(
+            "this is {branch}, the default branch. Work belongs on a branch for its item:\n\n    \
+             kanbanr start <CODE>\n\n\
+             (or `spike/<name>` to explore — spikes produce a definition change, not merged code.)"
+        ));
+    }
+    if branch_item(project, Some(branch)).is_none() {
+        return Verdict::refuse(format!(
+            "the branch '{branch}' does not name an item on the board, so nothing here can be \
+             traced back to a reason. Use `kanbanr start <CODE>` (pattern: {}), or `spike/<name>`.",
+            project.config.branch_pattern()
+        ));
+    }
+    Verdict::allow()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,6 +737,153 @@ mod tests {
         assert_eq!(
             code_from_branch(DEFAULT_BRANCH_PATTERN, "spike/try-git2"),
             None
+        );
+    }
+
+    // ---- commit and branch policy (FEAT-176) ---------------------------------------------
+
+    fn board(git_model: bool) -> Project {
+        let mut config = ProjectConfig::default_for("p");
+        config.cadence.git_model = git_model;
+        let item: crate::FeatureItem = serde_json::from_value(serde_json::json!({
+            "code": "FEAT-001", "title": "t", "status": "Planned", "milestone": "MS-001",
+            "created_at": "2026-10-21T00:00:00Z", "updated_at": "2026-10-21T00:00:00Z"
+        }))
+        .unwrap();
+        Project {
+            id: "p".into(),
+            config,
+            features: vec![item],
+            milestones: Vec::new(),
+        }
+    }
+
+    fn on(branch: Option<&str>, message: Option<&str>) -> RepoFacts {
+        RepoFacts {
+            branch: branch.map(String::from),
+            default_branch: "main".into(),
+            merging: false,
+            has_commits: true,
+            message: message.map(String::from),
+        }
+    }
+
+    fn refusal(v: Verdict) -> String {
+        v.refusal.unwrap_or_default()
+    }
+
+    /// The pre-commit rules: an item's branch, a spike, a merge being completed and a new repo's
+    /// first commit pass; the default branch and a branch naming no item are refused.
+    #[test]
+    fn branch_verdict_wants_a_branch_for_an_item() {
+        let p = board(false);
+        let feat = Some("feat/FEAT-001-t");
+        assert!(branch_verdict(&on(feat, None), &p).is_allowed());
+        assert!(branch_verdict(&on(None, None), &p).is_allowed(), "detached");
+        assert!(branch_verdict(&on(Some("spike/try"), None), &p).is_allowed());
+        let mut merging = on(Some("main"), None);
+        merging.merging = true;
+        assert!(branch_verdict(&merging, &p).is_allowed(), "FEAT-094");
+        let mut unborn = on(Some("main"), None);
+        unborn.has_commits = false;
+        assert!(branch_verdict(&unborn, &p).is_allowed(), "FEAT-105");
+        assert!(refusal(branch_verdict(&on(Some("main"), None), &p)).contains("default branch"));
+        assert!(
+            refusal(branch_verdict(&on(Some("feat/FEAT-999-x"), None), &p))
+                .contains("does not name an item")
+        );
+    }
+
+    /// FEAT-189: with the git model on, a line of integration takes merges only.
+    #[test]
+    fn a_line_takes_merges_only() {
+        let p = board(true);
+        let sprint = Some("sprint/SP-001");
+        assert!(refusal(branch_verdict(&on(sprint, None), &p)).contains("line of integration"));
+        assert!(
+            refusal(commit_verdict(&on(sprint, Some("x")), &p)).contains("line of integration")
+        );
+        let mut merge = on(sprint, Some("Merge feat/FEAT-001-t"));
+        merge.merging = true;
+        assert!(refusal(message_verdict(&merge, &p, None)).contains("must say which items"));
+        merge.message = Some("Merge feat/FEAT-001-t\n\nRefs: kanbanr:FEAT-001".into());
+        assert!(message_verdict(&merge, &p, None).is_allowed());
+    }
+
+    /// The guard's rules: the default branch is refused before the commit runs, and a message
+    /// it can read must name an item that is on the board.
+    #[test]
+    fn commit_verdict_refuses_with_the_fix() {
+        let p = board(false);
+        let feat = Some("feat/FEAT-001-t");
+        assert!(
+            refusal(commit_verdict(&on(Some("main"), Some("x")), &p)).contains("straight to main")
+        );
+        let mut merging = on(Some("main"), None);
+        merging.merging = true;
+        assert!(commit_verdict(&merging, &p).is_allowed());
+        assert!(
+            commit_verdict(&on(feat, None), &p).is_allowed(),
+            "no inline message"
+        );
+        assert!(
+            refusal(commit_verdict(&on(feat, Some("wip")), &p)).contains("Refs: kanbanr:FEAT-001")
+        );
+        assert!(commit_verdict(&on(feat, Some("[no-ref] typo")), &p).is_allowed());
+        assert!(commit_verdict(&on(feat, Some("x\n\nRefs: kanbanr:FEAT-001")), &p).is_allowed());
+        assert!(
+            refusal(commit_verdict(
+                &on(feat, Some("x\n\nRefs: kanbanr:FEAT-404")),
+                &p
+            ))
+            .contains("not on the board")
+        );
+    }
+
+    /// The commit-msg rules: an escape passes and is said, documents and decisions resolve against
+    /// the board, and a superseded decision is mentioned rather than refused.
+    #[test]
+    fn message_verdict_checks_every_trailer() {
+        let p = board(false);
+        let feat = Some("feat/FEAT-001-t");
+        let escaped = message_verdict(&on(feat, Some("[no-ref] typo")), &p, None);
+        assert!(escaped.is_allowed());
+        assert_eq!(
+            escaped.notes,
+            vec!["committing with no reference — recorded reason: typo"]
+        );
+        assert!(message_verdict(&on(feat, Some("Merge branch x")), &p, None).is_allowed());
+        assert!(
+            refusal(message_verdict(&on(feat, Some("wip")), &p, None))
+                .contains("not which item it serves")
+        );
+
+        let docs = |path: &str| path == "design/a.md";
+        let adrs = || {
+            vec![crate::adr::Adr {
+                id: "ADR-0001".into(),
+                superseded_by: "ADR-0002".into(),
+                ..Default::default()
+            }]
+        };
+        let refs = BoardRefs {
+            doc_on_board: &docs,
+            adrs: &adrs,
+        };
+        let message = "x\n\nRefs: kanbanr:FEAT-001\nDocs: design/b.md\nADR: ADR-0001\n";
+        let v = message_verdict(&on(feat, Some(message)), &p, Some(&refs));
+        assert!(refusal(v.clone()).contains("Docs: design/b.md is not a document"));
+        assert_eq!(v.notes.len(), 1, "{:?}", v.notes);
+        assert!(v.notes[0].contains("superseded by ADR-0002"));
+        // No board to ask: documents and decisions are not checked.
+        assert!(message_verdict(&on(feat, Some(message)), &p, None).is_allowed());
+        assert_eq!(
+            validate_trailers(
+                &p,
+                "x\n\nRefs: kanbanr:FEAT-001\nDocs: design/a.md\n",
+                Some(&refs)
+            ),
+            TrailerReport::default()
         );
     }
 }
