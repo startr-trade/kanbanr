@@ -15,8 +15,10 @@ lic_src=web/node_modules/pele/LICENSE
 lic_dst=docs/pele.LICENSE
 [ -f "$src" ] || { echo "no $src — run npm install in web/ first" >&2; exit 1; }
 if [ "${1:-}" = "--check" ]; then
-  cmp -s "$src" "$dst" && cmp -s "$lic_src" "$lic_dst" \
-    || { echo "$dst or $lic_dst is not the pinned Pele's — run tools/docs/pele.sh" >&2; exit 1; }
+  if ! cmp -s "$src" "$dst" || ! cmp -s "$lic_src" "$lic_dst"; then
+    echo "$dst or $lic_dst is not the pinned Pele's — run tools/docs/pele.sh" >&2
+    exit 1
+  fi
   echo "$dst is the pinned Pele's build"
 else
   cp "$src" "$dst"
