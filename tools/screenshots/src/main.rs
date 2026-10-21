@@ -173,8 +173,8 @@ async fn capture(driver: &WebDriver, url: &str, path: &str, theme: Option<&str>,
     // Let React render and async work settle (docs tree, first SSE tick).
     tokio::time::sleep(Duration::from_millis(1600)).await;
 
-    // Mermaid renders asynchronously (it lazily loads diagram-type chunks, then produces SVG). Poll
-    // until every ```mermaid code block has been replaced — rather than guessing a fixed delay.
+    // Diagrams are drawn after the page renders (the monitor loads Pele on demand, then draws).
+    // Poll until every ```mermaid code block has been replaced — rather than guessing a fixed delay.
     for _ in 0..50 {
         let pending = match driver
             .execute("return document.querySelectorAll('code.language-mermaid').length;", Vec::new())

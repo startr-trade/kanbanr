@@ -35,8 +35,18 @@ From the repo root (the `Makefile` wraps the common flows):
 ```bash
 make build          # cargo build --release (api/) + web build
 make test           # cargo test --workspace (unit + Docker-less integration)
+make install-cli    # build the monitor, then install the CLI with it and the skill baked in
 make itest          # packaging smoke: build the image + testcontainers test (needs Docker)
 ```
+
+**Tests never touch a real board.** Cargo sets `KANBANR_BOARD_FENCE=temp` for everything it runs
+in `api/` (`api/.cargo/config.toml`), and any board outside the system temporary directory stops
+the process before it is read or written. Keep every test's scratch folder in
+`std::env::temp_dir()`; the build tree is inside this repository, under its `.kanbanr` marker, and
+a test there would find the real board. `make ci` also checks that your board did not change while
+it ran — apart from approvals and sign-offs you give in the meantime, which it reports and lets
+through. The fence covers `cargo run` in `api/` too: run `target/debug/kanbanr` against a real
+board instead.
 
 Run the same checks CI runs before opening a PR — all of them, in one command:
 
@@ -49,7 +59,7 @@ cache) and runs every CI check that can run off GitHub, reading each step's scri
 workflow file itself, plus actionlint and a check that every action the workflows use exists. It
 ends by listing what only GitHub can verify: the macOS and Windows legs, uploads and publishing.
 It needs Docker (for actionlint and PowerShell), an authenticated `gh`, `shellcheck`, and the
-`mdbook` / `mdbook-mermaid` versions pinned in `docs.yml`, and `cargo-deny` + `cargo-audit`
+`mdbook` version pinned in `docs.yml`, and `cargo-deny` + `cargo-audit`
 (`cargo install cargo-deny cargo-audit --locked`). The individual checks, if you want one:
 
 ```bash
@@ -64,6 +74,20 @@ Run the app locally to try your change:
 ```bash
 make serve          # builds the SPA + serves the read-only monitor on http://localhost:8080
 ```
+
+### Diagrams
+
+Diagrams are ```` ```mermaid ```` blocks, drawn by [Pele](https://pele.run) in the reader's
+browser: the book loads the committed `docs/pele.global.js`, and the monitor bundles the same
+version. Both colour a diagram from the current theme (`docs/pele-theme.css` for the book's five
+themes, the `.mermaid-diagram` rule in `web/src/styles.css` for the monitor's light and dark), so
+switching theme needs no re-render. `npm run check:docs` draws every diagram in the docs, the
+README and the skill with that Pele and fails on one it cannot draw.
+
+Pele is pinned to an exact version in `web/package.json`. To update it, change the pin, run
+`npm install` in `web/`, then `tools/docs/pele.sh` to copy its build into the book, and check every
+diagram again (`npm run check:docs`, and a look at the book and the monitor in light and dark).
+`check:docs` fails while the book's copy differs from the pinned package.
 
 ## Coding conventions
 

@@ -14,8 +14,10 @@ pub mod activity;
 pub mod adr;
 mod architecture;
 pub mod batch;
+pub mod boardreadme;
 pub mod charter;
 pub mod claude;
+pub mod coderepo;
 pub mod config;
 pub mod daylog;
 pub mod dispatch;
@@ -30,21 +32,29 @@ pub mod eventing;
 pub mod export;
 pub mod gantt;
 pub mod git;
+pub mod gitdrift;
+pub mod gitmodel;
 pub mod graph;
 pub mod hash;
 pub mod lessons;
 pub mod library;
 pub mod mermaid;
+pub mod method;
 pub mod mirror;
 pub mod models;
+#[cfg(feature = "schema")]
+pub mod openapi;
 pub mod portfolio;
 pub mod project;
 pub mod query;
 pub mod readiness;
+pub mod refs;
 pub mod releases;
 pub mod report;
 pub mod retro;
+pub mod review;
 pub mod scm;
+pub mod server;
 pub mod sprints;
 pub mod store;
 pub mod trace;
@@ -1672,6 +1682,183 @@ requirements:
         assert_eq!((f.status.as_str(), held), ("Completed", None));
     }
 
+    /// FEAT-193: the method joins the built-in rule instead of replacing it. A process with only
+    /// role labels (scheduled, default) still asks for a definition and an approval to start, makes
+    /// the branch there, and still holds the last task of an item whose requirement is unproven
+    /// (FEAT-156) — now with the design asked for as well.
+    #[test]
+    fn builtin_rule_kept_with_method() {
+        use crate::readiness::{Check, Condition};
+        let (store, _d) = temp_store();
+        let config = crate::config::preset("scheduled")
+            .unwrap()
+            .into_config("demo");
+        assert!(
+            !config.declares_gates(),
+            "role-addressed gates add, they do not declare"
+        );
+        let gates = config.effective_gates();
+        let start = gates.get("Scheduled").unwrap();
+        for c in [
+            Condition::Check(Check::Definition),
+            Condition::Check(Check::Approved),
+            Condition::SpecSections {
+                spec_sections: vec!["Design".into()],
+            },
+        ] {
+            assert!(start.requires.contains(&c), "{c:?}: {start:?}");
+        }
+        assert!(start.signoffs.contains(&"design-review".to_string()));
+        assert!(start.on_enter.contains(&crate::config::Action::Branch));
+        let end = gates.get("Completed").unwrap();
+        assert!(end.requires.contains(&Condition::Check(Check::DocsUpdated)));
+        assert!(end.signoffs.contains(&"docs-folded".to_string()));
+
+        // The method's end gate holds a finish without the docs folded in.
+        store.init_project("demo", config).unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let (code, list) = defined_in_progress(&store, "Unfolded");
+        let (f, held) = store
+            .set_task_state_reported(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        assert_eq!(f.status, "Scheduled");
+        let held = held.expect("and says why");
+        assert!(held.contains("docs-folded"), "{held}");
+
+        // With the docs parts off, FEAT-156's own rule is still there underneath.
+        let (store, _d) = temp_store();
+        let mut file = crate::config::preset("scheduled").unwrap();
+        crate::method::remove(
+            &mut file,
+            &[crate::method::Part::Docs, crate::method::Part::DocsFolded],
+        );
+        store
+            .init_project("demo", file.into_config("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let (code, list) = defined_in_progress(&store, "Unproven");
+        let (f, held) = store
+            .set_task_state_reported(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        assert_eq!(f.status, "Scheduled", "it stays where it is");
+        let held = held.expect("and says why");
+        assert!(held.contains("R-1"), "{held}");
+    }
+
+    /// FEAT-190 Q5: with the git model on, ticking the last task does not complete an item whose
+    /// completion would merge its branch — it holds and says which move to make.
+    #[test]
+    fn auto_complete_holds_when_it_would_merge() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let (code, list) = defined_in_progress(&store, "Merges");
+        let mut cadence = store.load("demo").unwrap().config.cadence;
+        cadence.git_model = true;
+        store.set_cadence("demo", None, cadence).unwrap();
+        let (f, held) = store
+            .set_task_state_reported(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        assert_eq!(f.status, "Scheduled", "it stays where it is");
+        let held = held.expect("and says why");
+        assert!(
+            held.contains(&format!("kanbanr move {code} Completed")),
+            "{held}"
+        );
+    }
+
+    /// FEAT-204 R-1: a sign-off that lifts the last hold finishes an item whose work is done; one
+    /// that does not (another sign-off still due, or an open task) leaves it where it is.
+    #[test]
+    fn signoff_completes_a_held_item() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let gate = crate::config::Gate {
+            signoffs: vec!["docs-folded".into(), "release".into()],
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Completed".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        let (code, list) = defined_in_progress(&store, "Held");
+        store
+            .set_test_state(
+                "demo",
+                &code,
+                "R-1",
+                "t::x",
+                crate::models::TestState::Green,
+                None,
+            )
+            .unwrap();
+        let (f, held) = store
+            .set_task_state_reported(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        assert_eq!(f.status, "Scheduled");
+        assert!(held.unwrap().contains("docs-folded"));
+
+        let f = store
+            .signoff_feature("demo", &code, "docs-folded", "Ada", "", "")
+            .unwrap();
+        assert_eq!(f.status, "Scheduled", "release is still due");
+        let f = store
+            .signoff_feature("demo", &code, "release", "Ada", "", "")
+            .unwrap();
+        assert_eq!(f.status, "Completed", "the last hold lifted, it finishes");
+        let project = store.load("demo").unwrap();
+        let history = &project.feature(&code).unwrap().history;
+        assert_eq!(history.last().map(|t| t.to.as_str()), Some("Completed"));
+
+        // Work still open: a sign-off finishes nothing.
+        let (open, list) = defined_in_progress(&store, "Open");
+        store.add_task("demo", &open, &list, "two", None).unwrap();
+        store
+            .set_task_state(
+                "demo",
+                &open,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        for s in ["docs-folded", "release"] {
+            store
+                .signoff_feature("demo", &open, s, "Ada", "", "")
+                .unwrap();
+        }
+        assert_eq!(
+            store.load("demo").unwrap().feature(&open).unwrap().status,
+            "Scheduled"
+        );
+    }
+
     /// FEAT-156 R-2: a batch is judged when it ends — ticking the last task and then adding an
     /// open one leaves the item where it was.
     #[test]
@@ -1913,6 +2100,14 @@ requirements:
 
     /// Adopt the method: the start gate only applies to projects that have a charter, and only to
     /// items created after it was adopted — so upgrading never breaks an existing board.
+    /// Take the method (FEAT-193) off a test project, for tests about other gates.
+    fn without_method(store: &Store, project: &str) {
+        let config = store.load(project).unwrap().config;
+        let mut wf = crate::config::WorkflowFile::from_config(&config);
+        crate::method::remove(&mut wf, &crate::method::Part::ALL);
+        store.set_gates(project, wf.gates).unwrap();
+    }
+
     fn adopt_charter(store: &Store, id: &str) {
         crate::charter::save(
             store,
@@ -2219,8 +2414,9 @@ requirements:
         // The Mermaid export names each gate, and a note never carries a `;` (L-10).
         let diagram = crate::mermaid::to_state_diagram(&config);
         assert!(
-            diagram
-                .contains("note left of Verification: needs tests named, sign-off design-review"),
+            diagram.contains(
+                "note left of Verification: needs tests named, sign-off verification-review"
+            ),
             "{diagram}"
         );
         assert!(
@@ -2404,6 +2600,35 @@ requirements:
 
     /// A project with releases on, v0.1.0 and v0.2.0 planned, and three items in v0.1.0: one
     /// already Completed, one Scheduled with everything `finish` asks, one still Planned.
+    /// FEAT-185: the cut-preview route answers what the cut's own rule says, and writes nothing.
+    #[test]
+    fn cut_preview_route_matches_the_cut_rule() {
+        let (store, _d, codes) = release_board();
+        crate::releases::plan(&store, "demo", "v0.1.0", &codes).unwrap();
+        let before =
+            std::fs::read_to_string(store.project_dir("demo").join("releases.yaml")).unwrap();
+        let routed: serde_json::Value = serde_json::from_str(
+            &crate::dispatch::dispatch(
+                &store,
+                "GET",
+                "/projects/demo/releases/v0.1.0/cut-preview",
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let direct =
+            serde_json::to_value(crate::releases::cut_preview(&store, "demo", "v0.1.0").unwrap())
+                .unwrap();
+        assert_eq!(routed, direct);
+        assert_eq!(routed.as_array().unwrap().len(), codes.len(), "{routed}");
+        assert_eq!(
+            std::fs::read_to_string(store.project_dir("demo").join("releases.yaml")).unwrap(),
+            before,
+            "a preview writes nothing"
+        );
+    }
+
     fn release_board() -> (Store, tempdir::TempDirLike, [String; 3]) {
         use crate::models::{FeatureDefinition, Requirement, TestRef, TestState, Zachman};
         use serde_json::json;
@@ -2555,6 +2780,166 @@ requirements:
         assert!(err.contains("--releases on"), "{err}");
     }
 
+    /// FEAT-183 R-1: a release's stage comes from the project's list, and every move is kept with
+    /// who made it and when — through a save and a load, and alongside keys this build does not know.
+    #[test]
+    fn release_stage_recorded_with_history() {
+        use serde_json::json;
+        let (store, _d, _) = release_board();
+        // A release's first promotion makes its branch (FEAT-184), so these run with a repository.
+        let repo = crate::coderepo::tests::scratch_repo("stage-history");
+        let cadence = |body: serde_json::Value| {
+            crate::dispatch::dispatch(&store, "PUT", "/projects/demo/config/cadence", Some(&body))
+        };
+        // The default list, until the project names its own.
+        let project = store.load("demo").unwrap();
+        assert_eq!(
+            project.config.cadence.stages(),
+            ["candidate", "test", "staging", "production"]
+        );
+        // A list must name each stage once, and have one at least.
+        let twice = cadence(json!({"release_stages": ["qa", "qa", "live"]}))
+            .unwrap_err()
+            .to_string();
+        assert!(twice.contains("listed twice"), "{twice}");
+        let none = cadence(json!({"release_stages": []}))
+            .unwrap_err()
+            .to_string();
+        assert!(none.contains("at least one stage"), "{none}");
+        cadence(json!({"release_stages": ["candidate", "qa", "uat", "live"]})).unwrap();
+
+        // A release with no branch gets one before any stage, so even a middle stage needs the
+        // repository the first time (FEAT-184, R-4); an unknown stage is named as such.
+        let needs =
+            crate::releases::promote(&store, "demo", "v0.1.0", Some("qa"), "Ada L", "", None)
+                .unwrap_err()
+                .to_string();
+        assert!(needs.contains("needs the code repository"), "{needs}");
+        let unknown = crate::releases::promote(
+            &store,
+            "demo",
+            "v0.1.0",
+            Some("test"),
+            "Ada L",
+            "",
+            Some(&repo),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(unknown.contains("candidate, qa, uat, live"), "{unknown}");
+        let qa = crate::releases::promote(
+            &store,
+            "demo",
+            "v0.1.0",
+            Some("qa"),
+            "Ada L",
+            "",
+            Some(&repo),
+        )
+        .unwrap();
+        assert_eq!((qa.from.as_str(), qa.to.as_str()), ("", "qa"));
+        // With no stage named, the next one.
+        crate::releases::promote(&store, "demo", "v0.1.0", None, "Bo K", "", Some(&repo)).unwrap();
+        // Nobody to attribute a move to: refused.
+        assert!(
+            crate::releases::promote(&store, "demo", "v0.2.0", Some("qa"), " ", "", Some(&repo))
+                .is_err()
+        );
+
+        // Survives a round trip, with a key from a newer build kept.
+        let path = store.project_dir("demo").join("releases.yaml");
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(
+            &path,
+            text.replacen("- version: v0.1.0", "- version: v0.1.0\n  future: kept", 1),
+        )
+        .unwrap();
+        crate::releases::plan(&store, "demo", "v0.2.0", &[]).unwrap();
+        crate::releases::promote(
+            &store,
+            "demo",
+            "v0.2.0",
+            Some("qa"),
+            "Ada L",
+            "",
+            Some(&repo),
+        )
+        .unwrap();
+        let releases = crate::releases::load(&store, "demo").unwrap();
+        let r = &releases[0];
+        assert_eq!(r.stage, "uat");
+        let moves: Vec<(&str, &str)> = r
+            .stages
+            .iter()
+            .map(|c| (c.stage.as_str(), c.by.as_str()))
+            .collect();
+        assert_eq!(moves, [("qa", "Ada L"), ("uat", "Bo K")]);
+        assert!(
+            r.stages
+                .iter()
+                .all(|c| crate::cmp_instants(&c.at, "2026-01-01T00:00:00Z")
+                    == std::cmp::Ordering::Greater)
+        );
+        assert!(r.extra.contains_key("future"), "{:?}", r.extra);
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("future: kept")
+        );
+        // The release report carries the stage to the monitor.
+        let report = crate::releases::report_all(&store, "demo").unwrap();
+        let shown = serde_json::to_value(&report[0]).unwrap();
+        assert_eq!(shown["stage"], "uat");
+        assert_eq!(shown["stages"].as_array().unwrap().len(), 2);
+    }
+
+    /// FEAT-183 R-5: moving back a stage needs a reason, which is kept; nothing moves back from
+    /// production.
+    #[test]
+    fn promote_back_requires_reason_and_not_from_production() {
+        let (store, _d, _) = release_board();
+        let repo = crate::coderepo::tests::scratch_repo("promote-back");
+        let promote = |to: &str, reason: &str| {
+            crate::releases::promote(
+                &store,
+                "demo",
+                "v0.1.0",
+                Some(to),
+                "Ada L",
+                reason,
+                Some(&repo),
+            )
+        };
+        promote("test", "").unwrap();
+        promote("staging", "").unwrap();
+        let err = promote("test", "  ").unwrap_err().to_string();
+        assert!(err.contains("needs a reason"), "{err}");
+        let r = crate::releases::load(&store, "demo").unwrap();
+        assert_eq!(r[0].stage, "staging", "a refused move changes nothing");
+        let back = promote("test", "the payment check failed on staging").unwrap();
+        assert_eq!(back.release.stage, "test");
+        let last = back.release.stages.last().unwrap();
+        assert_eq!(
+            (last.stage.as_str(), last.reason.as_str()),
+            ("test", "the payment check failed on staging")
+        );
+
+        // Cut: the release is in production, and stays there.
+        crate::releases::cut(&store, "demo", "v0.1.0").unwrap();
+        assert_eq!(
+            crate::releases::load(&store, "demo").unwrap()[0].stage,
+            "production"
+        );
+        let err = promote("staging", "rolled back in prod")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("never moves back from production"), "{err}");
+        assert_eq!(
+            crate::releases::load(&store, "demo").unwrap()[0].stage,
+            "production"
+        );
+    }
+
     /// FEAT-122 R-3: the processes that work in sprints bring sprints, releases and their unit with
     /// them; the others leave a project's cadence as it was.
     #[test]
@@ -2613,6 +2998,8 @@ requirements:
             Some(&json!({"name": "team", "workflow": "scrum"})),
         )
         .unwrap();
+        // This is about the sprint gate, not the method (FEAT-193).
+        without_method(&store, "team");
         adopt_charter(&store, "team");
         store
             .add_milestone("team", "M", "", vec![], Some("M".into()))
@@ -3016,6 +3403,64 @@ requirements:
             .unwrap_or_default()
     }
 
+    /// FEAT-188 R-3: a gate addressed to a role joins the gate of the status holding it — in TOGAF
+    /// and in PDCA alike — and a move into that stage is refused without what it asks.
+    #[test]
+    fn role_addressed_gates_apply() {
+        use crate::config::{Gate, Role};
+        use crate::readiness::{Check, Condition};
+        let extra = Gate {
+            requires: vec![Condition::Check(Check::TestsGreen)],
+            signoffs: vec!["design-review".into()],
+            ..Default::default()
+        };
+        for (preset, build) in [("togaf", "Implementation"), ("pdca", "Do")] {
+            let mut config = crate::config::preset(preset).unwrap().into_config("p");
+            config.gates.insert("@build".into(), extra.clone());
+            assert_eq!(config.role_status(Role::Build).as_deref(), Some(build));
+            let gates = config.effective_gates();
+            let gate = gates.get(build).unwrap();
+            assert!(
+                gate.requires.contains(&Condition::Check(Check::TestsGreen)),
+                "{preset}"
+            );
+            assert!(
+                gate.signoffs.contains(&"design-review".to_string()),
+                "{preset}"
+            );
+            assert!(
+                gates.keys().all(|k| !k.starts_with('@')),
+                "role keys are resolved away"
+            );
+        }
+        // Enforced on a real move: PDCA, an approved item at Plan, moving to Do.
+        let (store, _d) = temp_store();
+        crate::dispatch::dispatch(
+            &store,
+            "POST",
+            "/projects",
+            Some(&serde_json::json!({ "name": "demo", "workflow": "pdca" })),
+        )
+        .unwrap();
+        adopt_charter(&store, "demo");
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let mut gates = store.load("demo").unwrap().config.gates;
+        gates.insert("@build".into(), extra);
+        store.set_gates("demo", gates).unwrap();
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition("demo", &f.code, Some(full_definition("Keep carts 7 days")))
+            .unwrap();
+        store.approve_feature("demo", &f.code, "Ada L").unwrap();
+        let err = store
+            .move_feature_approved("demo", &f.code, "Do", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("design-review"), "{err}");
+    }
+
     /// FEAT-182 R-1: a withdrawn sign-off stops counting; the earlier one stays as history; and an
     /// older kanbanr, which does not know `verdict`, reads the withdrawal as lapsed and agrees.
     #[test]
@@ -3140,6 +3585,100 @@ requirements:
             )
             .unwrap();
         assert_eq!(offered(&store, &code), vec!["design-review".to_string()]);
+    }
+
+    /// FEAT-185 R-1: an item whose next stage is the end, with releases on and in no release, is
+    /// asked which planned release it belongs to; planned, it drops out; releases off, it is absent.
+    #[test]
+    fn review_queue_asks_release_for_ready_item() {
+        use serde_json::json;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/workflow",
+            Some(&json!({"preset": "togaf"})),
+        )
+        .unwrap();
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&json!({"releases": true})),
+        )
+        .unwrap();
+        let add = |title: &str| {
+            let f = store.add_feature("demo", title, "", "M", None).unwrap();
+            store
+                .set_feature_definition("demo", &f.code, Some(full_definition(title)))
+                .unwrap();
+            store.approve_feature("demo", &f.code, "Ada L").unwrap();
+            f.code
+        };
+        let to_migration = |code: &str| {
+            for stage in [
+                "Business Arch",
+                "System Design",
+                "Implementation",
+                "Migration",
+            ] {
+                store.move_feature("demo", code, stage).unwrap();
+            }
+        };
+        let ready = add("Ready");
+        let early = add("Early");
+        to_migration(&ready);
+        // At Implementation the next stage is Migration, not the end: not asked yet.
+        for stage in ["Business Arch", "System Design", "Implementation"] {
+            store.move_feature("demo", &early, stage).unwrap();
+        }
+        let queue = || -> Vec<serde_json::Value> {
+            serde_json::from_str(
+                &crate::dispatch::dispatch(&store, "GET", "/projects/demo/review", None).unwrap(),
+            )
+            .unwrap()
+        };
+        let entry = |code: &str| queue().into_iter().find(|e| e["code"] == code);
+
+        // No release yet: asked, with only a new release to choose.
+        let asked = entry(&ready).expect("the ready item is asked which release");
+        assert_eq!(asked["approval"], "release");
+        assert_eq!(asked["release_choices"], json!([]));
+        assert!(entry(&early).is_none(), "{:?}", queue());
+
+        // The planned releases, in file order; a shipped one is not a choice.
+        for v in ["1.0", "1.1", "2.0"] {
+            crate::releases::add(&store, "demo", v, "", "").unwrap();
+        }
+        let mut releases = crate::releases::load(&store, "demo").unwrap();
+        releases[1].state = crate::releases::ReleaseState::Shipped;
+        std::fs::write(
+            store.project_dir("demo").join("releases.yaml"),
+            serde_yaml::to_string(&releases).unwrap(),
+        )
+        .unwrap();
+        let asked = entry(&ready).unwrap();
+        assert_eq!(asked["approval"], "release");
+        assert_eq!(asked["release_choices"], json!(["1.0", "2.0"]));
+
+        // Planned into one, it is no longer a question.
+        crate::releases::plan(&store, "demo", "2.0", std::slice::from_ref(&ready)).unwrap();
+        assert!(entry(&ready).is_none(), "{:?}", queue());
+
+        // Releases off: never asked.
+        let other = add("Other");
+        to_migration(&other);
+        assert_eq!(entry(&other).unwrap()["approval"], "release");
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&json!({"releases": false})),
+        )
+        .unwrap();
+        assert!(entry(&other).is_none(), "{:?}", queue());
     }
 
     /// FEAT-182: giving and withdrawing a sign-off are events, with who and why.
@@ -3380,7 +3919,10 @@ requirements:
         for config in [
             ProjectConfig::default_for("d"),
             togaf,
-            ProjectConfig::for_new_project("n"),
+            // The built-in rule itself; the method on top of it is FEAT-193's test.
+            crate::config::preset_bare("default")
+                .unwrap()
+                .into_config("n"),
         ] {
             let gates = config.effective_gates();
             let first_active = config.displayed_states.iter().find(|s| {
@@ -4099,7 +4641,6 @@ requirements:
 
     #[test]
     fn config_schema_version_defaults_and_stamps() {
-        use crate::config::CURRENT_SCHEMA_VERSION;
         let (store, d) = temp_store();
         // A freshly-init project carries the schema its content needs (stamped on save): the base
         // layout, as it declares no gates.
@@ -4134,10 +4675,8 @@ requirements:
         let mut gates = std::collections::BTreeMap::new();
         gates.insert("Scheduled".to_string(), crate::config::Gate::default());
         store.set_gates("demo", gates).unwrap();
-        assert_eq!(
-            store.load("demo").unwrap().config.schema_version,
-            CURRENT_SCHEMA_VERSION
-        );
+        // Declared gates need schema 3; 4 is for role labels and role-addressed gates (FEAT-188).
+        assert_eq!(store.load("demo").unwrap().config.schema_version, 3);
         store.set_gates("demo", Default::default()).unwrap();
         assert_eq!(
             store.load("demo").unwrap().config.schema_version,
@@ -4422,11 +4961,11 @@ requirements:
             commit_message("POST", "/projects/demo/features", None),
             "add feature item"
         );
-        // Unknown route -> Unsupported.
-        assert!(matches!(
-            dispatch(&store, "GET", "/nope", None).unwrap_err(),
-            CoreError::Unsupported(_)
-        ));
+        // Unknown route -> NoSuchRoute, the daemon's 404 (FEAT-177; it was Unsupported, a 400),
+        // worded as before.
+        let unknown = dispatch(&store, "GET", "/nope", None).unwrap_err();
+        assert_eq!(unknown.to_string(), "unsupported operation: GET /nope");
+        assert!(matches!(unknown, CoreError::NoSuchRoute(_)));
     }
 
     #[test]
@@ -5718,5 +6257,105 @@ requirements:
             .unwrap();
         assert!(cleared.start.is_none());
         assert!(cleared.estimate_days.is_none());
+    }
+
+    /// FEAT-177 task 1: the responses that were assembled with `json!` are named types now, and
+    /// what they put on the wire is byte for byte what they did before. The expected bodies were
+    /// captured from the `json!` code this replaced, on this fixture; dates are masked.
+    fn typed_response_fixture() -> (Store, tempdir::TempDirLike) {
+        use serde_json::json;
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        for (path, body) in [
+            ("/projects/demo/config/workflow", json!({"preset": "togaf"})),
+            ("/projects/demo/config/cadence", json!({"releases": true})),
+        ] {
+            crate::dispatch::dispatch(&store, "PUT", path, Some(&body)).unwrap();
+        }
+        crate::releases::add(&store, "demo", "1.0", "", "").unwrap();
+        let add = |title: &str| {
+            let f = store.add_feature("demo", title, "", "M", None).unwrap();
+            store
+                .set_feature_definition("demo", &f.code, Some(full_definition(title)))
+                .unwrap();
+            f.code
+        };
+        // Missing: defined, never approved, not started.
+        add("Unagreed");
+        // Lapsed: approved, then its definition moved on.
+        let lapsed = add("Moved on");
+        store.approve_feature("demo", &lapsed, "Ada L").unwrap();
+        let mut def = full_definition("Moved on, and then some");
+        def.statement.push('!');
+        store
+            .set_feature_definition("demo", &lapsed, Some(def))
+            .unwrap();
+        // At Migration with its test green: the release sign-off and the release question are due.
+        let ready = add("Ready to ship");
+        store.approve_feature("demo", &ready, "Ada L").unwrap();
+        for stage in [
+            "Business Arch",
+            "System Design",
+            "Implementation",
+            "Migration",
+        ] {
+            store.move_feature("demo", &ready, stage).unwrap();
+        }
+        store
+            .set_test_state(
+                "demo",
+                &ready,
+                "R-1",
+                "core::does_the_thing",
+                crate::models::TestState::Green,
+                None,
+            )
+            .unwrap();
+        (store, d)
+    }
+
+    /// Dates and times change from run to run; everything else in these bodies does not.
+    fn mask_dates(body: &str) -> String {
+        let chars: Vec<char> = body.chars().collect();
+        let mut out = String::new();
+        let mut i = 0;
+        while i < chars.len() {
+            let looks_like_date = i + 10 <= chars.len()
+                && chars[i..i + 10].iter().enumerate().all(|(k, c)| match k {
+                    4 | 7 => *c == '-',
+                    _ => c.is_ascii_digit(),
+                });
+            if looks_like_date {
+                out.push_str("<date>");
+                i += 10;
+                while i < chars.len() && chars[i] != '"' {
+                    i += 1;
+                }
+            } else {
+                out.push(chars[i]);
+                i += 1;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn typed_responses_put_the_same_bytes_on_the_wire() {
+        let (store, _d) = typed_response_fixture();
+        let expected = include_str!("testdata/typed_responses.txt");
+        let mut checked = 0;
+        for block in expected.split("\n\n") {
+            let (path, want) = block.trim().split_once('\n').unwrap();
+            let body = mask_dates(&crate::dispatch::dispatch(&store, "GET", path, None).unwrap());
+            if path == "/processes" {
+                // Only the row this board uses: the built-in descriptions are not this test's.
+                assert!(body.contains(want), "{path}:\n{body}\nhas no\n{want}");
+            } else {
+                assert_eq!(body, want, "{path}");
+            }
+            checked += 1;
+        }
+        assert_eq!(checked, 6);
     }
 }

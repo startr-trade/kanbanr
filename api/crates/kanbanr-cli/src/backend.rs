@@ -93,6 +93,13 @@ impl Backend {
         }
     }
 
+    /// A read that needs the project's code repository (FEAT-189: the git model reads its
+    /// branches).
+    pub fn get_in(&self, path: &str, repo: Option<&std::path::Path>) -> Result<String> {
+        dispatch::dispatch_in(&self.store, "GET", path, None, repo)
+            .map_err(|e| anyhow!(e.to_string()))
+    }
+
     /// A read.
     pub fn get(&self, path: &str) -> Result<String> {
         let bare = path.split('?').next().unwrap_or(path);
@@ -154,8 +161,20 @@ impl Backend {
     /// A write: git remotes act on the local repo; data routes dispatch + log + commit. Serialized
     /// against other writers by an advisory lock on the data dir.
     pub fn write(&self, method: Method, path: &str, body: Option<Value>) -> Result<String> {
+        self.write_in(method, path, body, None)
+    }
+
+    /// [`Backend::write`], with the project's code repository for the routes that act on it —
+    /// release promotion (FEAT-183).
+    pub fn write_in(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        repo: Option<&std::path::Path>,
+    ) -> Result<String> {
         let dry_run = dispatch::is_dry_run(body.as_ref());
-        let out = self.write_unlocked(method, path, body)?;
+        let out = self.write_unlocked(method, path, body, repo)?;
         if let (false, Some(project)) = (dry_run, project_of(path)) {
             self.auto_mirror(&project);
         }
@@ -211,8 +230,15 @@ impl Backend {
     }
 
     /// Git remotes act on the local repo under the lock; data routes go through core's one write
-    /// recipe (FEAT-176), which takes the lock itself.
-    fn write_unlocked(&self, method: Method, path: &str, body: Option<Value>) -> Result<String> {
+    /// recipe (FEAT-176), which takes the lock itself. `repo` is the project's code repository, for
+    /// the routes that act on it (FEAT-183).
+    fn write_unlocked(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        repo: Option<&std::path::Path>,
+    ) -> Result<String> {
         let bare = path.split('?').next().unwrap_or(path);
         if bare == "/remotes" || bare.starts_with("/remotes/") {
             return self.with_write_lock(|| {
@@ -234,6 +260,7 @@ impl Backend {
             method_str(method),
             path,
             body.as_ref(),
+            repo,
             &UreqSender,
         )
         .map_err(|e| anyhow!(e))?;

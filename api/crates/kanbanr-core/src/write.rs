@@ -43,6 +43,7 @@ pub fn with_lock<T>(data_dir: &Path, f: impl FnOnce() -> T) -> std::io::Result<T
 /// Apply one data-route write: the whole recipe, under the lock. `method` is POST/PUT/PATCH/DELETE;
 /// a dry run (a batch with `dry_run: true`) dispatches and records nothing. Errors are the
 /// dispatcher's, or the lock's, as text for the front end to render.
+#[allow(clippy::too_many_arguments)]
 pub fn apply(
     store: &Store,
     data_dir: &Path,
@@ -50,6 +51,7 @@ pub fn apply(
     method: &str,
     path: &str,
     body: Option<&Value>,
+    repo: Option<&Path>,
     sender: &dyn eventing::WebhookSender,
 ) -> Result<Applied, String> {
     with_lock(data_dir, || {
@@ -58,7 +60,8 @@ pub fn apply(
         if records {
             git::require_identity(data_dir)?;
         }
-        let out = dispatch::dispatch(store, method, path, body).map_err(|e| e.to_string())?;
+        let out =
+            dispatch::dispatch_in(store, method, path, body, repo).map_err(|e| e.to_string())?;
         let mut applied = Applied {
             body: out,
             ..Default::default()

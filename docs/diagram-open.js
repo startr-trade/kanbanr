@@ -6,11 +6,12 @@
 // other "open image in new tab" does.
 //
 // The tab is built from a Blob, so it needs no server and works from a file:// copy of the
-// book. The click handler is DELEGATED from the document, so it does not care when mermaid
-// finishes rendering: a diagram is clickable the moment it exists.
+// book. The click handler is DELEGATED from the document, so it does not care when a diagram
+// is drawn: it is clickable the moment it exists.
 //
-// The SVG mermaid emits carries its own <style>, which is why the copy in the new tab keeps
-// the colours of the theme it was rendered in.
+// Pele's SVG takes its colours from CSS variables set on the page (`pele-theme.css`). The new
+// tab has none of the page's styles, so the copy carries the values they have right now, and
+// keeps the colours of the theme the reader is in.
 
 (() => {
     const openDiagram = (svg, pre) => {
@@ -28,6 +29,11 @@
         clone.removeAttribute('style');
         clone.setAttribute('preserveAspectRatio', 'xMidYMid meet');
         clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        const vars = getComputedStyle(pre);
+        for (const name of PELE_VARS) {
+            const value = vars.getPropertyValue(name).trim();
+            if (value) clone.style.setProperty(name, value);
+        }
 
         // Carry the reader's current theme across, so a diagram opened from the dark book
         // does not land on a white page.
@@ -77,11 +83,14 @@
         setTimeout(() => URL.revokeObjectURL(url), 60_000);
     };
 
+    const PELE_VARS = ['--pele-bg', '--pele-fg', '--pele-muted', '--pele-line', '--pele-surface',
+        '--pele-surface-alt', '--pele-border', '--pele-accent', '--pele-font', '--pele-font-mono'];
+
     const escapeHtml = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
     const escapeAttr = (s) => escapeHtml(s).replace(/"/g, '&quot;');
 
     document.addEventListener('click', (e) => {
-        const pre = e.target.closest && e.target.closest('pre.mermaid');
+        const pre = e.target.closest && e.target.closest('div.diagram');
         if (!pre) return;
         const svg = pre.querySelector('svg');
         if (svg) openDiagram(svg, pre);
@@ -91,15 +100,15 @@
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' && e.key !== ' ') return;
         const pre = document.activeElement;
-        if (!pre?.matches?.('pre.mermaid')) return;
+        if (!pre?.matches?.('div.diagram')) return;
         const svg = pre.querySelector('svg');
         if (svg) { e.preventDefault(); openDiagram(svg, pre); }
     });
 
-    // Mark rendered diagrams focusable and announce what activating them does. Mermaid
-    // renders asynchronously, so this runs again whenever the DOM changes.
+    // Mark drawn diagrams focusable and announce what activating them does. They are drawn
+    // after the page loads, so this runs again whenever the DOM changes.
     const mark = () => {
-        for (const pre of document.querySelectorAll('pre.mermaid:not([data-openable])')) {
+        for (const pre of document.querySelectorAll('div.diagram:not([data-openable])')) {
             pre.setAttribute('data-openable', '');
             pre.tabIndex = 0;
             pre.setAttribute('role', 'button');

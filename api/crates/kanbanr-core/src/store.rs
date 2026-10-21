@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 /// A fully-loaded project (config + all entities).
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Project {
     pub id: String,
     pub config: ProjectConfig,
@@ -60,7 +61,11 @@ pub struct Store {
 
 impl Store {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Store { root: root.into() }
+        let root = root.into();
+        // Every read and write of a board starts here: under test, one outside the temporary
+        // directory stops the run before anything is touched (FEAT-195).
+        crate::project::assert_inside_fence(&root);
+        Store { root }
     }
 
     /// The data folder this store owns. The activity and events logs live beside the projects
@@ -428,6 +433,8 @@ impl Store {
             std::fs::create_dir_all(self.features_dir(id).join(status))?;
         }
         self.save_config(id, &config)?;
+        // The board says what it holds and how to see it (FEAT-201); in the same commit.
+        crate::boardreadme::write(self)?;
         self.load(id)
     }
 
@@ -978,6 +985,23 @@ impl Store {
         definition: Option<crate::models::FeatureDefinition>,
     ) -> Result<FeatureItem> {
         let previous = project.feature(code)?.definition.clone();
+        // Declared docs are board paths (FEAT-180): `.md` appended, and nothing that could name a
+        // file outside the doc tree.
+        let mut definition = definition;
+        if let Some(def) = definition.as_mut() {
+            for doc in &mut def.affects_docs {
+                let path = std::path::Path::new(doc.trim());
+                if doc.trim().is_empty()
+                    || path.is_absolute()
+                    || path
+                        .components()
+                        .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                {
+                    return Err(CoreError::InvalidDocPath(doc.clone()));
+                }
+                *doc = crate::refs::doc_key(doc);
+            }
+        }
         let definition = definition.map(|mut def| {
             assign_requirement_ids(&mut def);
             // Carry the approval record forward: a redefinition must LAPSE the approval, not erase
@@ -1288,8 +1312,15 @@ impl Store {
             ..Default::default()
         });
         feature.updated_at = at;
-        let updated = feature.clone();
+        let mut updated = feature.clone();
         pending.persist_features.insert(updated.code.clone());
+        // The sign-off may have been the last thing holding finished work (FEAT-204): finish it as
+        // the last task would have, through the same gates and holds.
+        if updated.all_tasks_completed() {
+            let charter = crate::charter::load(self, id)?;
+            let ctx = crate::readiness::Context::load(self, id, &project.config);
+            updated = Self::auto_advance_on(&mut project, &mut pending, &charter, &ctx, code)?.0;
+        }
         self.flush(id, &project, &pending)?;
         Ok(updated)
     }
@@ -1386,6 +1417,33 @@ impl Store {
             Self::gated_move_on(&mut project, &mut pending, &charter, &ctx, code, to, reason)?;
         self.flush(id, &project, &pending)?;
         Ok((f, warnings))
+    }
+
+    /// What moving `code` to `to` would meet, without moving it (FEAT-190): the status, the edge
+    /// and the gate, judged exactly as the move judges them. A move that would merge a branch first
+    /// asks this, so a refused move never leaves a merge behind.
+    pub fn gate_preview(
+        &self,
+        id: &str,
+        code: &str,
+        to: &str,
+        reason: Option<&str>,
+    ) -> Result<Vec<crate::readiness::Gap>> {
+        let project = self.load(id)?;
+        if !project.config.has_status(to) {
+            return Err(CoreError::UnknownStatus(to.to_string()));
+        }
+        let from = project.feature(code)?.status.clone();
+        if !project.config.transition_allowed(&from, to) {
+            return Err(CoreError::TransitionNotAllowed {
+                from,
+                to: to.to_string(),
+            });
+        }
+        let charter = crate::charter::load(self, id)?;
+        let ctx = crate::readiness::Context::load(self, id, &project.config);
+        let reason = reason.map(str::trim).filter(|r| !r.is_empty());
+        Ok(Self::check_gate(&project, &charter, &ctx, code, to, reason)?.warnings)
     }
 
     /// The one gated move, shared by the route and the batch path — the batch is the primary way
@@ -1714,6 +1772,18 @@ impl Store {
         } else {
             None
         };
+        // A finish that would merge the item's branch is a move made from the code repository,
+        // never a side effect of a task write (FEAT-190, Q5).
+        let target = match target {
+            Some(to) if crate::gitmodel::move_would_merge(&config, &from, &to) => {
+                held = Some(format!(
+                    "all tasks are done, but it stays in {from}: finishing it merges its branch — \
+                     run `kanbanr move {feature} {to}` from the project folder to integrate it"
+                ));
+                None
+            }
+            other => other,
+        };
         let target = match target {
             Some(to) => match Self::check_gate(project, charter, ctx, feature, &to, None) {
                 Ok(_) => match Self::unproven(project, charter, ctx, feature)? {
@@ -1767,7 +1837,7 @@ impl Store {
         ctx: &crate::readiness::Context,
         feature: &str,
     ) -> Result<Option<String>> {
-        if !project.config.gates.is_empty() || charter.adopted_at.trim().is_empty() {
+        if project.config.declares_gates() || charter.adopted_at.trim().is_empty() {
             return Ok(None);
         }
         let f = project.feature(feature)?;
@@ -2169,12 +2239,22 @@ impl Store {
                     if skipped.contains(&code) {
                         return Ok(skip("feature.move", &code));
                     }
+                    let code = resolve(&aliases, &code);
+                    // A move that integrates merges a branch, which a batch cannot undo: it runs
+                    // on its own (FEAT-190).
+                    if let Ok(f) = project.feature(&code)
+                        && crate::gitmodel::move_would_merge(&project.config, &f.status, &to)
+                    {
+                        return Err(CoreError::Unsupported(format!(
+                            "move {code} on its own: integrating it merges its branch"
+                        )));
+                    }
                     let (f, warnings) = Self::gated_move_on(
                         &mut project,
                         &mut pending,
                         &charter,
                         &ctx,
-                        &resolve(&aliases, &code),
+                        &code,
                         &to,
                         unapproved.as_deref(),
                     )?;
@@ -2521,6 +2601,7 @@ impl Store {
             ));
         }
         std::fs::remove_dir_all(self.project_dir(id))?;
+        crate::boardreadme::write(self)?;
         Ok(())
     }
 
@@ -2635,15 +2716,61 @@ impl Store {
         gates: std::collections::BTreeMap<String, crate::config::Gate>,
     ) -> Result<ProjectConfig> {
         let mut project = self.load(id)?;
-        if let Some(problem) = crate::config::gate_problems(&project.config.statuses, &gates)
-            .into_iter()
-            .next()
+        if let Some(problem) = crate::config::gate_problems(
+            &project.config.statuses,
+            &project.config.no_op_states,
+            &project.config.terminal_states,
+            &gates,
+        )
+        .into_iter()
+        .next()
         {
             return Err(problem);
         }
         project.config.gates = gates;
         self.save_config(id, &project.config)?;
         Ok(project.config)
+    }
+
+    /// Turn parts of the method on or off for a project (FEAT-193). Off takes their fragments out
+    /// of the workflow and records the choice, so applying or updating a process keeps them out;
+    /// on puts them back. A workflow that matched its saved process still does afterwards — its
+    /// record is re-stamped — and one already edited stays edited. Nothing is written if the result
+    /// does not check. Returns the config and a note for each part that had nowhere to go.
+    pub fn set_method(
+        &self,
+        id: &str,
+        on: bool,
+        parts: &[crate::method::Part],
+    ) -> Result<(ProjectConfig, Vec<String>)> {
+        let mut config = self.load_meta(id)?.config;
+        let mut wf = crate::config::WorkflowFile::from_config(&config);
+        let was_current = config
+            .process
+            .as_ref()
+            .is_some_and(|s| s.rev == wf.content_rev());
+        let notes = if on {
+            let notes = crate::method::add(&mut wf, parts);
+            config.method.off.retain(|p| !parts.contains(p));
+            notes
+        } else {
+            crate::method::remove(&mut wf, parts);
+            config.method.off.extend_from_slice(parts);
+            config.method.off.sort();
+            config.method.off.dedup();
+            Vec::new()
+        };
+        if let Some(problem) = wf.problems().into_iter().next() {
+            return Err(problem);
+        }
+        config.method.chosen_at = crate::now_rfc3339();
+        config.gates = wf.gates;
+        let rev = crate::config::WorkflowFile::from_config(&config).content_rev();
+        if was_current && let Some(source) = config.process.as_mut() {
+            source.rev = rev;
+        }
+        self.save_config(id, &config)?;
+        Ok((config, notes))
     }
 
     /// The statuses a workflow of `statuses` would remove while items still sit in them, with how
@@ -2726,6 +2853,8 @@ impl Store {
                 "release cadence '{release}' is not one of per_sprint, every_n, on_demand"
             )));
         }
+        crate::config::Cadence::validate_stages(&cadence.release_stages)
+            .map_err(CoreError::Unsupported)?;
         if let Some(unit) = unit {
             project.config.estimate_unit = unit;
         }
@@ -3065,6 +3194,7 @@ impl Store {
             project.config.description = d;
         }
         self.save_config(id, &project.config)?;
+        crate::boardreadme::write(self)?; // a renamed or re-described project (FEAT-201)
         Ok(project.config)
     }
 }

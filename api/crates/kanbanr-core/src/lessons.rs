@@ -31,6 +31,7 @@ const AFFIRM: f64 = 0.15;
 const CONTRADICT: f64 = 0.45;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum LessonKind {
     /// Something that worked and is worth repeating.
@@ -43,6 +44,7 @@ pub enum LessonKind {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum LessonStatus {
     /// Recorded, not yet confirmed by anything else.
@@ -55,6 +57,7 @@ pub enum LessonStatus {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Lesson {
     /// `L-1`, `L-2`, … assigned on save.
     #[serde(default)]
@@ -93,6 +96,7 @@ pub struct Lesson {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Judgement {
     pub at: String,
     /// `affirmed` | `contradicted`.

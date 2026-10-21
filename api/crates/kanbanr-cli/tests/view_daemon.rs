@@ -42,8 +42,7 @@ impl Drop for Daemon {
 
 #[test]
 fn view_daemon_serves_local_data_without_auth() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("view-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-view-{}", std::process::id()));
     let data = base.join("data");
     let home = base.join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -152,8 +151,7 @@ fn view_daemon_serves_local_data_without_auth() {
 /// Reviewing and approving through the daemon (FEAT-067).
 #[test]
 fn review_and_approve_through_the_daemon() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("review-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-review-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let data = base.join("data");
     let home = base.join("home");
@@ -178,6 +176,8 @@ fn review_and_approve_through_the_daemon() {
 
     run(&["identity", "--name", "Tester", "--email", "t@example.com"]);
     run(&[&p[..], &["project", "init", "demo"][..]].concat());
+    // Approval is the subject here; the method's sign-offs would join the queue (FEAT-193).
+    run(&[&p[..], &["config", "method", "--off"][..]].concat());
     run(&[
         &p[..],
         &["milestone", "add", "--name", "M", "--code", "MS-1"][..],
@@ -371,8 +371,7 @@ fn review_and_approve_through_the_daemon() {
 /// it was reported: "the diagrams are not rendering".
 #[test]
 fn a_rebuilt_ui_is_served_without_restarting_the_daemon() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("ui-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-ui-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let data = base.join("data");
     let home = base.join("home");
@@ -452,8 +451,7 @@ fn a_rebuilt_ui_is_served_without_restarting_the_daemon() {
 /// conclude their data is gone, which is what happened.
 #[test]
 fn daemon_reports_the_schema_version_it_understands() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("schema-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-schema-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     let data = base.join("data");
     let home = base.join("home");
@@ -506,8 +504,7 @@ fn daemon_reports_the_schema_version_it_understands() {
 /// `--ui-dir` at all, and pointing at a directory still overrides it so developing is unchanged.
 #[test]
 fn the_monitor_is_served_from_the_binary_with_no_ui_dir() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("embed-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-embed-{}", std::process::id()));
     let data = base.join("data");
     let home = base.join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -603,4 +600,476 @@ fn the_monitor_is_served_from_the_binary_with_no_ui_dir() {
         served.contains("OVERRIDDEN"),
         "--ui-dir must win over the embedded monitor, got: {served}"
     );
+}
+
+/// A scratch folder under the system temp dir, emptied first (FEAT-178's tests keep out of the
+/// repository and its target dir).
+fn scratch(name: &str) -> PathBuf {
+    let base = std::env::temp_dir().join(format!("kanbanr-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("home")).unwrap();
+    std::fs::create_dir_all(base.join("data")).unwrap();
+    base
+}
+
+/// Start `kanbanr serve` over `base`'s data, with `--ui-dir` when given, and wait until it answers.
+fn serve_ui(base: &std::path::Path, ui: Option<&std::path::Path>) -> (Daemon, String) {
+    let port = free_port();
+    let mut cmd = Command::new(cli());
+    cmd.args(["serve", "--bind", &format!("127.0.0.1:{port}")]);
+    if let Some(dir) = ui {
+        cmd.args(["--ui-dir", dir.to_str().unwrap()]);
+    }
+    let mut child = cmd
+        .env("HOME", base.join("home"))
+        .env("KANBANR_DATA_DIR", base.join("data"))
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if Instant::now() > deadline {
+            panic!("daemon did not become ready");
+        }
+        match ureq::get(&format!("{url}/api/projects")).call() {
+            Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    if let Ok(Some(status)) = child.try_wait() {
+        panic!("this test's daemon exited ({status}) — something else answered on port {port}");
+    }
+    (Daemon(child), url)
+}
+
+/// FEAT-178: the monitor is built with relative asset paths so one build works from any folder of a
+/// static host. Under `--ui-dir`, a deep link must still load them from the root, so the index the
+/// daemon serves carries `<base href="/">`.
+#[test]
+fn a_deep_link_under_ui_dir_loads_relative_assets_from_the_root() {
+    let base = scratch("deeplink");
+    let ui = base.join("dist");
+    std::fs::create_dir_all(ui.join("assets")).unwrap();
+    std::fs::write(
+        ui.join("index.html"),
+        "<!doctype html><html><head><script type=\"module\" src=\"./assets/app.js\"></script></head><body></body></html>",
+    )
+    .unwrap();
+    std::fs::write(ui.join("assets/app.js"), "console.log(1)").unwrap();
+    let (d, url) = serve_ui(&base, Some(&ui));
+
+    let page = ureq::get(&format!("{url}/p/demo/feature/FEAT-1"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(
+        page.contains("<head><base href=\"/\">"),
+        "a deep link's index must resolve ./assets from the root: {page}"
+    );
+    assert!(page.contains("./assets/app.js"), "the index itself: {page}");
+    // The relative asset, resolved against that base, is served.
+    let asset = ureq::get(&format!("{url}/assets/app.js")).call().unwrap();
+    assert_eq!(asset.status(), 200);
+    // Asked for by name, the index is still the copy with its base.
+    let named = ureq::get(&format!("{url}/index.html"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(
+        named.contains("<base href=\"/\">"),
+        "index.html by name: {named}"
+    );
+    drop(d);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-178: under `--ui-dir` the favicon (and the runtime config.json) used to fall back to
+/// index.html, because only `/assets` was served from the dir. Any file the build puts there is
+/// served as itself; a path that does not exist, or reaches outside the dir, is still the app's.
+#[test]
+fn the_favicon_and_config_are_served_under_ui_dir_not_the_index() {
+    let base = scratch("favicon");
+    let ui = base.join("dist");
+    std::fs::create_dir_all(ui.join("assets")).unwrap();
+    std::fs::write(
+        ui.join("index.html"),
+        "<!doctype html><html><head></head>APP</html>",
+    )
+    .unwrap();
+    std::fs::write(
+        ui.join("favicon.svg"),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+    )
+    .unwrap();
+    std::fs::write(ui.join("config.json"), "{\"apiBase\": \"/api\"}").unwrap();
+    std::fs::write(base.join("secret.txt"), "outside").unwrap();
+    let (d, url) = serve_ui(&base, Some(&ui));
+
+    let icon = ureq::get(&format!("{url}/favicon.svg")).call().unwrap();
+    assert_eq!(icon.header("content-type"), Some("image/svg+xml"));
+    let body = icon.into_string().unwrap();
+    assert!(
+        body.starts_with("<svg"),
+        "the favicon, not the index: {body}"
+    );
+
+    let config = ureq::get(&format!("{url}/config.json")).call().unwrap();
+    assert!(
+        config.header("content-type").unwrap_or("").contains("json"),
+        "config.json's type: {:?}",
+        config.header("content-type")
+    );
+    assert!(config.into_string().unwrap().contains("apiBase"));
+
+    // Not a file in the dir: the app's route, as before.
+    let missing = ureq::get(&format!("{url}/no-such.png"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(
+        missing.contains("APP"),
+        "an unknown path is the app's: {missing}"
+    );
+    let escape = ureq::get(&format!("{url}/%2e%2e/secret.txt"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(
+        !escape.contains("outside"),
+        "a path must not leave the ui dir: {escape}"
+    );
+    drop(d);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-178: the embedded monitor is the relative build too, so its index also gets the root base,
+/// and the shipped config.json (the embedded defaults) is served beside it.
+#[test]
+fn the_embedded_index_carries_a_root_base_and_its_config() {
+    let base = scratch("embedbase");
+    let (d, url) = serve_ui(&base, None);
+    let page = match ureq::get(&format!("{url}/p/demo/feature/FEAT-1")).call() {
+        Ok(resp) => resp.into_string().unwrap(),
+        Err(e) => panic!("no embedded monitor (build web/dist first): {e}"),
+    };
+    assert!(
+        page.contains("<base href=\"/\">"),
+        "the embedded index must carry a root base: {page}"
+    );
+    let config: serde_json::Value = serde_json::from_str(
+        &ureq::get(&format!("{url}/config.json"))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap(),
+    )
+    .expect("config.json is JSON, not the index");
+    assert_eq!(config["apiBase"], "/api", "the embedded defaults: {config}");
+    assert_eq!(config["readOnly"], false, "the embedded defaults: {config}");
+    drop(d);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-183 (Q1): the daemon promotes with the code repository it was started in, when that
+/// folder's marker names the project; started anywhere else, the promotions that need the
+/// repository are refused and the board does not move.
+#[test]
+fn promote_through_the_daemon_uses_the_repository_it_was_started_in() {
+    // Outside the build tree, never under CARGO_TARGET_TMPDIR: that is inside this repository,
+    // whose own marker `init` and the daemon would find by walking up — and the test would write
+    // to the real board.
+    let base = std::env::temp_dir().join(format!("kanbanr-promote-daemon-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .output()
+            .expect("run git");
+        assert!(
+            o.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    let kanbanr = |args: &[&str]| {
+        let o = Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_SERVER_URL")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run cli");
+        assert!(
+            o.status.success(),
+            "cmd {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.name", "T"]);
+    git(&["config", "user.email", "t@x"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "[no-ref] base"]);
+    kanbanr(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    let board = kanbanr(&["where"]);
+    assert!(
+        std::path::Path::new(&board).starts_with(&base),
+        "the scratch board must be the test's own, not {board}"
+    );
+    kanbanr(&["config", "cadence", "--releases", "on"]);
+    kanbanr(&["release", "add", "v1.0.0"]);
+    kanbanr(&["release", "add", "v2.0.0"]);
+
+    let start = |dir: &std::path::Path| -> (Daemon, String) {
+        let port = free_port();
+        let child = Command::new(cli())
+            .args([
+                "serve",
+                "--allow-writes",
+                "--bind",
+                &format!("127.0.0.1:{port}"),
+            ])
+            .current_dir(dir)
+            .env("HOME", &home)
+            .env("KANBANR_DATA_DIR", &board)
+            .spawn()
+            .expect("spawn kanbanr serve");
+        let daemon = Daemon(child);
+        let url = format!("http://127.0.0.1:{port}");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if Instant::now() > deadline {
+                panic!("daemon did not become ready");
+            }
+            match ureq::get(&format!("{url}/api/projects")).call() {
+                Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+                Err(_) => std::thread::sleep(Duration::from_millis(100)),
+            }
+        }
+        (daemon, url)
+    };
+    // The status and body of a promotion, whichever way it went.
+    let promote = |url: &str, version: &str| -> (u16, String) {
+        match ureq::post(&format!(
+            "{url}/api/write/projects/shop/releases/{version}/promote"
+        ))
+        .set("content-type", "application/json")
+        .send_string(r#"{"stage": "candidate", "by": "A"}"#)
+        {
+            Ok(r) => (r.status(), r.into_string().unwrap()),
+            Err(ureq::Error::Status(code, r)) => (code, r.into_string().unwrap()),
+            Err(e) => panic!("no answer from the daemon: {e}"),
+        }
+    };
+
+    // Started in the project folder: the branch is made in that repository.
+    {
+        let (_daemon, url) = start(&work);
+        let (status, made) = promote(&url, "v1.0.0");
+        assert_eq!(status, 200, "promote through the daemon: {made}");
+        assert!(
+            made.contains("\"branch_created\":\"release/v1.0.0\""),
+            "{made}"
+        );
+        assert_eq!(
+            git(&["rev-parse", "release/v1.0.0"]),
+            git(&["rev-parse", "main"])
+        );
+    }
+
+    // Started elsewhere: refused, saying where to run it, and nothing moves.
+    {
+        let (_daemon, url) = start(&base);
+        let (status, why) = promote(&url, "v2.0.0");
+        assert_eq!(
+            status, 400,
+            "a promotion with no code repository is refused"
+        );
+        assert!(why.contains("use the CLI from the project folder"), "{why}");
+        let releases = ureq::get(&format!("{url}/api/projects/shop/releases"))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let releases: serde_json::Value = serde_json::from_str(&releases).unwrap();
+        assert_eq!(releases[1]["version"], "v2.0.0");
+        assert!(releases[1].get("stage").is_none(), "{releases}");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A scratch code repository with its own board, releases on and `v1.0.0` planned (FEAT-185). Under
+/// the system temp folder, never inside this repository. Returns the home, the code folder, and the
+/// board folder.
+fn release_scratch(base: &std::path::Path) -> (PathBuf, PathBuf, PathBuf) {
+    let _ = std::fs::remove_dir_all(base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .output()
+            .expect("run git");
+        assert!(
+            o.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.name", "T"]);
+    git(&["config", "user.email", "t@x"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "[no-ref] base"]);
+    let run = |args: &[&str]| release_cli(&home, &work, args);
+    run(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    let board = PathBuf::from(run(&["where"]));
+    assert!(
+        board.starts_with(base),
+        "the scratch board must be the test's own, not {}",
+        board.display()
+    );
+    run(&["config", "cadence", "--releases", "on"]);
+    run(&["release", "add", "v1.0.0"]);
+    (home, work, board)
+}
+
+fn release_cli(home: &std::path::Path, work: &std::path::Path, args: &[&str]) -> String {
+    let o = Command::new(cli())
+        .args(args)
+        .current_dir(work)
+        .env("HOME", home)
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .env_remove("KANBANR_SERVER_URL")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run cli");
+    assert!(
+        o.status.success(),
+        "cmd {args:?}: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    String::from_utf8_lossy(&o.stdout).trim().to_string()
+}
+
+/// A board's releases.yaml, with each stage change's time cleared: two promotions made a moment
+/// apart are the same promotion.
+fn releases_yaml(board: &std::path::Path) -> serde_yaml::Value {
+    let text = std::fs::read_to_string(board.join("projects").join("shop").join("releases.yaml"))
+        .expect("releases.yaml");
+    let mut v: serde_yaml::Value = serde_yaml::from_str(&text).unwrap();
+    for release in v.as_sequence_mut().unwrap() {
+        if let Some(stages) = release.get_mut("stages").and_then(|s| s.as_sequence_mut()) {
+            for change in stages {
+                change["at"] = serde_yaml::Value::String(String::new());
+            }
+        }
+    }
+    v
+}
+
+/// FEAT-185 R-2: the monitor's Promote, posted to a writes-enabled daemon started in the code
+/// repository, makes the release branch and leaves releases.yaml exactly as `kanbanr release
+/// promote` leaves it on a twin board.
+#[test]
+fn monitor_promote_matches_cli() {
+    let root = std::env::temp_dir().join(format!("kanbanr-monitor-promote-{}", std::process::id()));
+    let (home, work, board) = release_scratch(&root.join("monitor"));
+    let (twin_home, twin_work, twin_board) = release_scratch(&root.join("cli"));
+
+    // The CLI, on the twin.
+    release_cli(&twin_home, &twin_work, &["release", "promote", "v1.0.0"]);
+
+    // The monitor: the Promote button posts the next stage, as the board's identity.
+    let port = free_port();
+    let child = Command::new(cli())
+        .args([
+            "serve",
+            "--allow-writes",
+            "--bind",
+            &format!("127.0.0.1:{port}"),
+        ])
+        .current_dir(&work)
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &board)
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let _daemon = Daemon(child);
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        assert!(Instant::now() < deadline, "daemon did not become ready");
+        match ureq::get(&format!("{url}/api/projects")).call() {
+            Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    let made = match ureq::post(&format!(
+        "{url}/api/write/projects/shop/releases/v1.0.0/promote"
+    ))
+    .set("content-type", "application/json")
+    .send_string(r#"{"stage": "candidate", "by": "A"}"#)
+    {
+        Ok(r) => r.into_string().unwrap(),
+        Err(e) => panic!("promote through the daemon: {e}"),
+    };
+    assert!(
+        made.contains("\"branch_created\":\"release/v1.0.0\""),
+        "{made}"
+    );
+    let branch = Command::new("git")
+        .args(["rev-parse", "--verify", "-q", "release/v1.0.0"])
+        .current_dir(&work)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(
+        branch.status.success(),
+        "the release branch is made in the daemon's repository"
+    );
+
+    let monitor = releases_yaml(&board);
+    assert_eq!(monitor[0]["stage"], "candidate", "{monitor:?}");
+    assert_eq!(
+        monitor,
+        releases_yaml(&twin_board),
+        "the monitor's promotion is the CLI's"
+    );
+    let _ = std::fs::remove_dir_all(&root);
 }

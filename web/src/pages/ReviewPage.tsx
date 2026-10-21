@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
@@ -38,7 +39,9 @@ export default function ReviewPage() {
   // `kanbanr approve` defaults it — not the string "reviewed in the monitor", which named the place
   // the click happened and left twenty-eight approvals on this board attributable to nobody.
   const who = api.approver(meta.data ?? null);
-  const writable = meta.data?.writes === true && who != null;
+  // A monitor configured read-only (the standalone bundle, FEAT-178) offers no decision at all; each
+  // brief shows the CLI command that records it instead.
+  const writable = !isReadOnly() && meta.data?.writes === true && who != null;
 
   // One verdict per item, and which one follows from how it got here: work built under a recorded
   // bypass is ratified — agreed after the fact, and recorded as such (FEAT-109) — anything else is
@@ -93,6 +96,35 @@ export default function ReviewPage() {
     }
   };
 
+  // Which release a ready item ships in (FEAT-185): the same plan route `kanbanr release plan` uses.
+  const planRelease = async (item: PendingReview, version: string) => {
+    const code = item.code;
+    setBusy(code);
+    try {
+      await api.planIntoRelease(project, version, code);
+      setDone((d) => ({ ...d, [code]: `planned into ${version}` }));
+    } catch (e) {
+      setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // A release that does not exist yet: added, as `kanbanr release add` adds it, then planned into.
+  const newRelease = async (item: PendingReview, version: string, target: string) => {
+    const code = item.code;
+    setBusy(code);
+    try {
+      await api.addRelease(project, version, target);
+      await api.planIntoRelease(project, version, code);
+      setDone((d) => ({ ...d, [code]: `planned into ${version}` }));
+    } catch (e) {
+      setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="review-page">
       <div className="page-head">
@@ -115,7 +147,13 @@ export default function ReviewPage() {
           {items.some((i) => i.approval === "unratified")
             ? " Work already finished under a recorded bypass is listed first, to ratify."
             : null}
-          {meta.data?.writes !== true ? (
+          {isReadOnly() ? (
+            <>
+              {" "}
+              This copy of the monitor is <strong>read-only</strong> — record a verdict in Claude
+              Code, or run <code>kanbanr approve &lt;CODE&gt;</code>.
+            </>
+          ) : meta.data?.writes !== true ? (
             <>
               {" "}
               This monitor is <strong>read-only</strong> — restart it with{" "}
@@ -151,6 +189,8 @@ export default function ReviewPage() {
           defaultOpen={i === 0}
           onApprove={() => agree(item)}
           onSignoff={(name) => signoff(item, name)}
+          onRelease={(version) => planRelease(item, version)}
+          onNewRelease={(version, target) => newRelease(item, version, target)}
         />
       ))}
 
@@ -283,6 +323,8 @@ function Brief({
   defaultOpen,
   onApprove,
   onSignoff,
+  onRelease,
+  onNewRelease,
 }: {
   project: string;
   item: PendingReview;
@@ -292,15 +334,26 @@ function Brief({
   defaultOpen: boolean;
   onApprove: () => void;
   onSignoff: (name: string) => void;
+  onRelease: (version: string) => void;
+  onNewRelease: (version: string, target: string) => void;
 }) {
+  const [adding, setAdding] = useState(false);
+  const [version, setVersion] = useState("");
+  const [target, setTarget] = useState("");
   const def = item.definition ?? {};
   const requirements = def.requirements ?? [];
   const dimensions = zachmanColumns(def.zachman).filter((d) => d.answer.trim());
   const ratify = item.approval === "unratified";
   const waitingOnSignoff = item.approval === "signoff";
+  // Ready for release and in none (FEAT-185); asked beside any other question this item has.
+  const releaseChoices = item.release_choices;
+  const whichRelease = item.approval === "release";
   const verb = ratify ? "Ratify" : "Approve";
   const approved =
-    outcome === "approved" || outcome === "ratified" || (outcome ?? "").startsWith("signed off");
+    outcome === "approved" ||
+    outcome === "ratified" ||
+    (outcome ?? "").startsWith("signed off") ||
+    (outcome ?? "").startsWith("planned into");
   const signoffs = item.signoffs_needed ?? [];
 
   return (
@@ -314,6 +367,8 @@ function Brief({
             ? `${item.status} without agreement`
             : waitingOnSignoff
               ? `waiting on sign-off: ${signoffs.join(", ")}`
+              : whichRelease
+                ? "ready for release: which one?"
               : item.approval === "lapsed"
                 ? "approval lapsed"
                 : "never approved"}
@@ -394,7 +449,7 @@ function Brief({
           <span className="chip done">{outcome} — it leaves this list on the next refresh</span>
         ) : writable ? (
           <>
-            {waitingOnSignoff ? null : (
+            {waitingOnSignoff || whichRelease ? null : (
               <button className="btn btn-primary" onClick={onApprove} disabled={busy}>
                 {busy ? "recording…" : `${verb} ${item.code}`}
               </button>
@@ -409,12 +464,68 @@ function Brief({
                 {busy ? "recording…" : `Sign off ${name}`}
               </button>
             ))}
+            {releaseChoices
+              ? releaseChoices.map((v) => (
+                  <button
+                    key={v}
+                    className={`btn ${whichRelease ? "btn-primary" : ""}`}
+                    onClick={() => onRelease(v)}
+                    disabled={busy}
+                  >
+                    {busy ? "recording…" : `In release ${v}`}
+                  </button>
+                ))
+              : null}
+            {releaseChoices && !adding ? (
+              <button className="btn" onClick={() => setAdding(true)} disabled={busy}>
+                New release…
+              </button>
+            ) : null}
+            {releaseChoices && adding ? (
+              <>
+                <input
+                  className="review-reason"
+                  placeholder="Version, e.g. v0.2.0"
+                  value={version}
+                  onChange={(e) => setVersion(e.target.value)}
+                  aria-label={`Version of the new release for ${item.code}`}
+                />
+                <input
+                  className="review-reason"
+                  type="date"
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                  aria-label={`Target date of the new release for ${item.code}`}
+                />
+                <button
+                  className="btn btn-primary"
+                  onClick={() => onNewRelease(version.trim(), target)}
+                  disabled={busy || version.trim() === ""}
+                >
+                  {busy ? "recording…" : `Add ${version.trim() || "release"} with ${item.code}`}
+                </button>
+                <button className="btn" onClick={() => setAdding(false)} disabled={busy}>
+                  Cancel
+                </button>
+              </>
+            ) : null}
           </>
         ) : (
           <code>
-            {waitingOnSignoff
-              ? signoffs.map((n) => `kanbanr signoff ${item.code} ${n}`).join("  ·  ")
-              : `kanbanr ${verb.toLowerCase()} ${item.code}`}
+            {[
+              ...(waitingOnSignoff
+                ? signoffs.map((n) => `kanbanr signoff ${item.code} ${n}`)
+                : whichRelease
+                  ? []
+                  : [`kanbanr ${verb.toLowerCase()} ${item.code}`]),
+              ...(releaseChoices
+                ? [
+                    releaseChoices.length > 0
+                      ? `kanbanr release plan ${releaseChoices.join("|")} ${item.code}`
+                      : `kanbanr release add <VERSION> --target YYYY-MM-DD && kanbanr release plan <VERSION> ${item.code}`,
+                  ]
+                : []),
+            ].join("  ·  ")}
           </code>
         )}
         {outcome && !approved ? <span className="chip warn">{outcome}</span> : null}

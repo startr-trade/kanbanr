@@ -229,6 +229,31 @@ pub const DEFAULT_BRANCH_PATTERN: &str = "feat/{code}-{slug}";
 /// definition change, never merged code.
 pub const SPIKE_PREFIX: &str = "spike/";
 
+/// A sprint's line of integration, `sprint/SP-001` (FEAT-189).
+pub const SPRINT_PREFIX: &str = "sprint/";
+/// A release's branch, `release/1.2.0` (FEAT-183, FEAT-189).
+pub const RELEASE_PREFIX: &str = "release/";
+
+/// The `fix/` twin of a pattern that starts `feat/`: where a defect's branch goes (FEAT-189, Q3).
+pub fn fix_twin(pattern: &str) -> Option<String> {
+    let pattern = if pattern.trim().is_empty() {
+        DEFAULT_BRANCH_PATTERN
+    } else {
+        pattern
+    };
+    pattern
+        .strip_prefix("feat/")
+        .map(|rest| format!("fix/{rest}"))
+}
+
+/// The item a branch names, through the project's pattern or its `fix/` twin (FEAT-189).
+pub fn item_code_from_branch(pattern: &str, branch: &str) -> Option<String> {
+    code_from_branch(pattern, branch).or_else(|| {
+        let twin = fix_twin(pattern)?;
+        code_from_branch(&twin, branch)
+    })
+}
+
 /// A git-safe, readable form of a title: lowercase words joined by `-`, cut to a sane length.
 pub fn slug(title: &str) -> String {
     let mut out = String::new();
@@ -295,6 +320,22 @@ fn code_prefix(rest: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FEAT-189: a defect's `fix/` branch names its item as its `feat/` twin does; a custom
+    /// pattern has no twin.
+    #[test]
+    fn fix_twin_names_the_item() {
+        assert_eq!(
+            item_code_from_branch("", "fix/FEAT-012-cart-loses-items").as_deref(),
+            Some("FEAT-012")
+        );
+        assert_eq!(
+            item_code_from_branch("feat/{code}-{slug}", "feat/FEAT-012-cart").as_deref(),
+            Some("FEAT-012")
+        );
+        assert_eq!(item_code_from_branch("work/{code}", "fix/FEAT-012-x"), None);
+        assert_eq!(fix_twin("work/{code}"), None);
+    }
 
     #[test]
     fn a_trailer_may_name_a_document_or_a_decision() {

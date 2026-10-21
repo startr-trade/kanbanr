@@ -21,13 +21,16 @@ kanbanr project init shop --workflow pdca      # choose at creation
 
 | Preset | Stages | Gates |
 |---|---|---|
-| `default` | Planned → In Progress → Completed, plus Deferred and Ongoing | none declared: the built-in rule |
-| `scheduled` | Planned → Scheduled → Completed | none declared: the built-in rule |
+| `default` | Planned → In Progress → Completed, plus Deferred and Ongoing | the built-in rule, plus the method |
+| `scheduled` | Planned → Scheduled → Completed | the built-in rule, plus the method |
 | `togaf` | Vision → Business Arch → System Design → Implementation → Migration → Operations | the definition grows phase by phase |
 | `pdca` | Plan → Do → Check → Act | agreement to start, evidence to check, a review sign-off to act |
 | `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs at review and validation |
 | `scrum` | Backlog → Ready → In Progress → Review → Testing → Done → Released | Definition of Ready and of Done; work starts in the sprint; sprints, releases and points on |
 | `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on |
+
+Every built-in process also carries [the method](#the-method-on-by-default): a design before
+build, and the docs it changes kept current.
 
 `design-control` is **modelled on** the design-and-development controls of ISO 9001 clause 8.3.
 That is not a claim of compliance: only a certification body can make that.
@@ -36,7 +39,8 @@ A preset is copied into the project when you choose it. From then on the project
 `config.yaml` is what counts, and editing it never changes the preset. New projects get
 `default`. Existing boards keep whatever workflow they have.
 
-**The built-in rule.** A workflow that declares no gates still has one: moving an item into a
+**The built-in rule.** A workflow that declares no gates of its own still has one (a gate
+addressed to a role, such as the method's, adds to it rather than replacing it): moving an item into a
 status that means work has started needs an approved definition. That is a status the board
 displays, that is not where items start, and that is neither an end state nor a no-op. `start`
 makes the branch at the first such status. And finishing an item's last task completes it only when
@@ -97,6 +101,7 @@ board.
 | `in_sprint` | planned into the active sprint (projects with sprints switched on) |
 | `in_release` | planned into a release (projects with releases switched on) |
 | `spec_sections` | the spec has each named section, with content; plain `spec_sections` asks for `Design` |
+| `docs_updated` | every board doc the item names in `affects_docs` has changed since it entered its current stage |
 
 An unknown check, an unknown status or an unknown Zachman column is refused when the workflow is
 saved. A gate that could never match is a guardrail that silently isn't there.
@@ -111,6 +116,74 @@ saved. A gate that could never match is a guardrail that silently isn't there.
   met — and, on a workflow with no gates, only if every requirement has a green test. Otherwise
   it stays, and `kanbanr task state` says why. A batch is judged after its last operation, so one
   that ticks the last task and then adds another never completes the item.
+
+## Stage roles
+
+Every process, whatever its stages are called, has four kinds of stage. A gate says which ones its
+status holds:
+
+| Role | What the stage is for |
+|---|---|
+| `design` | the item's design is written and agreed: how and where, before build |
+| `build` | code is written on the item's branch |
+| `integrate` | the item's work joins its line of integration and the docs fold in |
+| `release` | the work ships, and the item is finished |
+
+```yaml
+gates:
+  Implementation:
+    requires: [tests_named, approved]
+    roles: [build]          # the branch is made here
+  "@build":                 # a gate addressed to a role, whichever status holds it
+    signoffs: [design-review]
+```
+
+- **One holder per role.** Each role belongs to one status; a status can hold several (the
+  default process's Completed integrates and releases). Saving a workflow that gives one role to
+  two statuses is refused, and so is a release role on a status that isn't an end.
+- **Role-addressed gates.** A gate keyed `"@build"` joins the gate of whichever status holds the
+  build role. A rule written once then works in every process: kanbanr's method and its git
+  automation find their stage this way.
+- **Every built-in process declares its roles.** `kanbanr process checks` lists them, and the
+  working agreement names each stage's role.
+- **Boards without roles** get build where the branch is made and release at the first end status,
+  marked "(inferred)". Design and integrate are never guessed. Nothing behaves differently.
+- **Older kanbanr versions:** a workflow whose gates only name roles, or that addresses a gate to a
+  role, is stamped schema 4, so an older kanbanr refuses the board rather than misread it.
+
+## The method, on by default
+
+Every built-in process asks for the same two disciplines, at whichever stages hold the roles:
+
+| Part | Where | What it asks |
+|---|---|---|
+| `design` | the build stage | `spec_sections: [Design]`: the spec has its build-ready Design ([below](#the-design-stage-a-build-ready-design-in-the-spec)) |
+| `design-review` | the build stage | the `design-review` sign-off: a person reviewed that design |
+| `docs` | the integrate stage | `docs_updated`: each doc in `affects_docs` changed ([Living architecture docs](living-docs.md)) |
+| `docs-folded` | the integrate stage | the `docs-folded` sign-off: the design was folded into those docs |
+| `links` | everywhere | `kanbanr doctor` reports references to things the board does not have |
+
+It is written as two role-addressed gates, `"@build"` and `"@integrate"`, so you see it in your
+exported workflow and in the working agreement, and it adds to each stage's own rules.
+
+```bash
+kanbanr config method                       # each part, on or off, and where it is in force
+kanbanr config method --off                 # all of it off
+kanbanr config method --off docs docs-folded   # just those parts
+kanbanr config method --on design           # one part back
+```
+
+Turning a part off takes its gates out and records the choice: applying a built-in process, or
+`kanbanr process update`, keeps it off, and drift does not report it as an edit. Saved processes
+of your own are never added to; they are only shaped by the choice.
+
+**Projects from before the method** keep their workflow as it is. `kanbanr doctor` asks once —
+"this project predates the method" — until you choose either way. A project that recorded a
+built-in process sees it reported as changed (`kanbanr process diff`), and `kanbanr process update`
+brings the method in.
+
+**Upgrading:** every machine that shares a board should run a kanbanr that knows these gates
+(`docs_updated` and role-addressed gates); an older one refuses the board rather than misread it.
 
 ## Sign-offs
 
@@ -173,8 +246,8 @@ At a design stage, the item's **spec** carries the technical design at implement
 - a test plan that maps each requirement to its tests;
 - compatibility, ADR links and open questions.
 
-The definition's `how` and `where` lines summarise it. To make the section a condition of
-leaving the design stage, and to have a person review it before build, ask for both:
+The definition's `how` and `where` lines summarise it. Every built-in process asks for both
+through [the method](#the-method-on-by-default). In a process of your own, write it as:
 
 ```yaml
 gates:
@@ -226,8 +299,11 @@ kanbanr retro --sprint SP-001
 
 kanbanr release add v0.1.0 --target 2026-10-18
 kanbanr release plan v0.1.0 FEAT-001 FEAT-002
-kanbanr release list                            # every release, planned or shipped
-kanbanr release cut v0.1.0 --tag                # ship what is finished, write notes, carry the rest
+kanbanr release list                            # every release, its state and its stage
+kanbanr release promote v0.1.0                  # candidate: makes the branch release/v0.1.0
+kanbanr release promote v0.1.0 staging          # a named stage; a middle one changes only the board
+kanbanr release promote v0.1.0 test --reason "the payment check failed on staging"   # back a stage
+kanbanr release promote v0.1.0 production       # the cut: ship, notes, tag, fast-forward main
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a release
 ```
 
@@ -246,6 +322,111 @@ once cut; the Gantt adds the sprints as a lane and the releases as milestones:
 ![The Releases page: a shipped release and a planned one](../images/releases.png)
 
 ![The Gantt with a sprint lane and release milestones](../images/gantt-sprints.png)
+
+### Release stages
+
+A release moves through the environments it is deployed to before production. By default they are
+`candidate → test → staging → production`; a project names its own with
+`kanbanr config cadence --release-stages candidate,qa,uat,live`. Each stage must appear once, and
+the **last one is always the cut**. Every move is recorded on the release with who made it and when.
+
+- **The first stage** makes the branch `release/<VERSION>` from the integration branch, without
+  checking it out. `kanbanr release add v0.1.0 --branch` adds a release and promotes it there in one
+  step.
+- **A middle stage** is a board change only.
+- **Back a stage** — staging to test after a failed check — needs `--reason`, which is recorded.
+  Nothing moves back from production.
+- **The last stage** is the cut. It ships the finished items, writes the notes, tags the code
+  repository with the version and **fast-forwards the main branch** to the release, so main's tip
+  is exactly the tagged commit. Before anything changes it checks that the working tree has no
+  uncommitted changes, that the release branch exists, that the tag does not, and that main has no
+  commits the release lacks; any failure refuses with its reason and **changes nothing**. If main
+  has moved on, merge main into the release branch and promote again. If the board step fails after
+  the tag and the fast-forward, both are undone. `kanbanr release cut <VERSION> --tag` is the same
+  as promoting to the last stage; a plain `release cut` changes only the board.
+
+A release that has no branch yet gets `release/<VERSION>` made first whichever stage it is promoted
+to, so a process with a single stage (both first and the cut) works, and so does a promotion that
+skips the first stage.
+
+### Patch releases
+
+A fix to a release already in production gets a release of its own, a **patch**:
+
+```bash
+kanbanr release add v1.0.1 --patch-of v1.0.0
+```
+
+The patch records its parent, which must have been cut and tagged — any cut release, an older
+supported one included. `release/v1.0.1` is made from the parent's tag, not from where main has
+since gone, and the patch starts at the first stage. It goes through the same stages. Its notes say
+"Patch of v1.0.0", list what the patch adds, and what it keeps from the parent.
+
+At production the patch is tagged. Main fast-forwards to it when it can; when main has moved on
+past the parent, main is left where it is. The patch's commits that the integration branch does
+not have yet are listed — in the output and in the notes, under "To merge forward" — so the next
+release keeps the fix. kanbanr does not merge them for you: `kanbanr git forward <VERSION>` does it
+when the git model is on, or merge them by hand.
+
+The integration branch and the main branch are both the repository's default branch unless the
+project names them: `kanbanr config cadence --integration-branch develop --main-branch main`.
+
+The first and last stages act on the code repository, so run them from the project folder. The
+monitor (`kanbanr serve --allow-writes`) uses the repository it was started in, when that folder's
+marker names the project; otherwise it refuses them with "use the CLI from the project folder".
+Nothing is pushed: publishing the tag and main is whoever pushes.
+
+Items reach the project's end status through the production stage of a release they are planned
+into: the cut moves them there, and a gate asking for `in_release` stops them getting there any
+other way.
+
+### The git model
+
+The cadence also says how the code repository is laid out. `kanbanr git model` shows it:
+
+| Cadence | Line of integration | Production moves at |
+|---|---|---|
+| neither (trunk) | main | the merge of each finished item |
+| sprints only | `sprint/<SP>` of the running sprint | the sprint's close |
+| releases only | the integration branch (`integration` unless named) | the release cut |
+| sprints and releases | `sprint/<SP>` of the running sprint | the release cut |
+
+Items are built on `feat/<CODE>-<slug>` (a defect on `fix/<CODE>-<slug>` when the pattern is the
+default) or `spike/*`. A release is branched as `release/<VERSION>` when it reaches its first
+stage. main, the integration branch, `sprint/*` and `release/*` are **lines**: they take merges
+only, and a merge into one must say which items it brings (`Refs: kanbanr:<CODE>`, or `[no-ref]
+<why>` on the record).
+
+The model is always shown; it drives the work only when you switch it on:
+
+```bash
+kanbanr config cadence --git-model on
+```
+
+Then `start` branches an item from its line (making the integration branch from main the first
+time), and a fix for a release under test from that release's branch. `sprint start` makes
+`sprint/<SP>` from the newest sprint main does not have yet, else from main. A release's branch is
+made from the line its cadence says. The commit hooks refuse plain commits on a line, and a
+generated merge message that names no item. kanbanr never pushes: the code repository refuses a
+push from it outright.
+
+With the model on, the board makes the merges:
+
+- **Integrating an item merges it.** Moving an item into the integrate stage (or past it) merges
+  its branch into its line with a merge commit naming the item (`Refs: kanbanr:<CODE>`). If the
+  merge would conflict, the move is refused before anything changes, naming the files: merge the
+  line into the item branch, resolve, commit, and move again. The item branch is kept. A batch
+  cannot integrate an item; move it on its own.
+- **A sprint's close is production** when there are sprints but no releases: main fast-forwards to
+  `sprint/<SP>` and is tagged with the sprint's code. If main has commits the sprint lacks, the
+  close is refused and nothing changes.
+- **Carried items catch up.** When the sprint they were carried into starts (or the close names
+  one that already has a branch), its branch is merged into each carried item's branch — never a
+  rebase. One that would conflict is reported with its files and left as it was.
+- **A fix to a release under test** integrates into `release/<VERSION>`, and the move says the line
+  lacks it. `kanbanr git forward <VERSION>` merges the release forward into the line, naming every
+  item its commits name. It is never done for you.
+
 `kanbanr config workflow --write-agreement` writes the team's working agreement to the board,
 generated from the gates. Under Scrum that is the Definition of Ready and of Done. Because it is
 generated, it can't drift from what is enforced.

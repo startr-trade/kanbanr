@@ -333,9 +333,14 @@ organisation's own process file changes what you ask with nothing changed here:
 | `signoff` (a name in `signoffs_needed`) | a **"Sign off \<name\>"** question |
 | `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; the active sprint; planned releases) |
 | `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
+| `docs_updated` | **never a question** — fold the design into each doc in `affects_docs` and say which you changed; if the item names none, ask whether it really changes no architecture doc |
 
 Warnings go into the plan with a choice: fix it, or go ahead with the warning on record. When more
 than one next stage is possible, ask which. Head the plan with the stage's own `purpose`.
+
+**Stages have roles** (`kanbanr process checks` lists them): design, build, integrate, release.
+Whatever a process calls its stages, the design is due before the build role's stage, and code is
+written there, on the item's branch. Say which stage holds which role when you plan work.
 
 **The purpose is a question too.** A stage's `purpose` can name something no check measures — "the
 quality it must reach", "when it happens". If the definition does not yet address it, ask (with
@@ -358,7 +363,9 @@ guessing:
 - performance budgets that name their benchmark;
 - a test plan mapping each requirement to its tests;
 - compatibility and migration;
-- links to ADRs, and open questions stated as questions.
+- links to ADRs, and open questions stated as questions;
+- **Affects docs**: links to the board docs this change touches. Mirror the same paths into the
+  definition's `affects_docs`, which a `docs_updated` gate checks.
 
 The definition's `how` and `where` lines are one-line summaries of this section, never a
 substitute for it. A section that does not apply says "n/a" and why. A spec that stays
@@ -418,6 +425,12 @@ verdicts that item can take — from the table above — plus **"Change it"** an
 - **Approve / Ratify / Sign off \<name\>** → record it at once:
   `kanbanr approve|ratify <CODE> --rev <rev>` · `kanbanr signoff <CODE> <name> --rev <rev>`.
 - **Accept / Reject** a proposed decision → `kanbanr adr accept|reject <ADR> [--reason "…"]`.
+- **Which release?** An entry with `"approval": "release"` (or any entry that has
+  `release_choices`) is an item ready for release and in none. Ask which planned release it
+  belongs to. The options are each version in `release_choices`, plus **New release…**, the same
+  choices the monitor's Review page offers. Then run `kanbanr release plan <VERSION> <CODE>`. For a
+  new release, ask its version and target date, then run
+  `kanbanr release add <VERSION> --target YYYY-MM-DD` before the plan.
 - **Change it** → ask what, revise the definition; it returns to the queue (its approval lapses).
 - **Skip** → leave it, and move to the next.
 
@@ -569,7 +582,7 @@ renamed or deleted — and `--write` returns it to `planned`. Mark a check a per
 
 ## Every change points back at the reason for it
 
-`kanbanr trace <G-2 | FEAT-046 | FEAT-046/R-2>` goes **down** — requirements, tests, documents,
+`kanbanr trace <G-2 | FEAT-046 | FEAT-046/R-2 | doc.md>` goes **down** — requirements, tests, documents,
 decisions — and ends with the gaps, which are the point of it. `kanbanr why <file>:<line>` goes
 **up**: the annotation on the line, else the trailer of the commit that wrote it, then requirement
 → goal → charter purpose. A line nobody claimed is reported as exactly that.
@@ -593,6 +606,22 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
 - A commit may add `Docs: design/mirror.md` and `ADR: ADR-0003`; both are checked against the
   board like any other reference.
 - `kanbanr trace <MS-006> --zachman` reports which of the six columns nothing in scope addresses.
+- **The method is on by default.** Every built-in process asks for the Design and its
+  `design-review` at the build stage, and `docs_updated` with `docs-folded` at the integrate stage
+  (`kanbanr config method` shows where). Never turn a part off yourself: it is the user's choice,
+  through `kanbanr config method --off <part>`.
+- **Architecture docs stay as built.** Keep one board doc per component, describing it as it is,
+  with front matter `items`, `adrs` and `covers`. Before an item is released, fold its Design into
+  each doc in its `affects_docs`; a `docs_updated` gate refuses the move until each changed since
+  the item entered its stage. End each milestone with an architecture compliance review.
+- **Every reference in a spec, doc or ADR is a live link** — the board checks them:
+  `[FEAT-012](/p/<project>/feature/FEAT-012)` (a requirement: `…/feature/FEAT-012#R-2`),
+  `/p/<project>/milestone/MS-004`, `/p/<project>/charter#G-1`, and
+  `/p/<project>/docs/file/<path>` for an ADR or a doc. A code in prose is linked too, but a link
+  says you mean it. A file in the code repository is not a board doc: name it as a code path
+  (`docs/src/using/processes.md`), never as a `/docs/file/` link. A design's **Affects docs** list
+  is made of these links. `kanbanr doctor` reports any that point at nothing — fix them before
+  calling the item done. `kanbanr trace <doc.md>` shows what a doc names and what links to it.
 
 ## Where the rules live
 
@@ -841,7 +870,7 @@ kanbanr retro [MS-006] [--since 14d] [--label x] [--write] | --due
 kanbanr claude sync [--show]                    # refresh the generated block in CLAUDE.md
 kanbanr hooks install [--global] | status | uninstall   # per project unless --global
 kanbanr review --pending                        # every item awaiting agreement, in one pass
-kanbanr trace [G-2|FEAT-001|FEAT-001/R-2] [--zachman]   # down the chain, ending in the gaps
+kanbanr trace [G-2|FEAT-001|FEAT-001/R-2|doc.md] [--zachman]   # down the chain, ending in the gaps
 kanbanr why src/cart.rs:42                      # up: annotation or trailer -> requirement -> goal
 kanbanr adr new "…" [--affects …] [--driven-by FEAT-001/R-2] [--quality Reliability] [--zachman How]
 kanbanr adr list [--for FEAT-001] | supersede ADR-0007 --replaces ADR-0003 | history ADR-0007
@@ -854,6 +883,9 @@ kanbanr start FEAT-001 [--to STATUS] [--no-branch] [--override "<reason>"]
 kanbanr commit -m "…" [--ref R-2] [--ref TL-001/T3] [-a]   # trailer filled from the branch
 kanbanr finish [FEAT-001]         # gated: tasks complete, requirements proven
 kanbanr git install-hooks [--force] | uninstall-hooks | status
+kanbanr git model [--json]                       # main, the line, item branches, protected lines
+kanbanr git forward <VERSION>                    # merge a release's fixes forward into the line
+kanbanr git doctor [--json]                      # board vs branches; read-only, exits 1 on an error
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
 kanbanr approve FEAT-001 --rev <rev>   # only after the user chose Approve in a plan or question
 kanbanr signoff FEAT-001 design-review [--note …] [--doc path]   # a named sign-off a stage asks for — the user's, never Claude's
@@ -879,6 +911,9 @@ kanbanr sprint start SP-001 | show [SP-001] | list | close SP-001 --carry-to SP-
 kanbanr retro --sprint SP-001                     # the sprint's items, what it carried, its burndown
 kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # ship the finished items, write notes, carry the rest
+kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # next or named stage (default candidate → test → staging → production): the first makes release/<V>; the last is the cut — tags and fast-forwards main, refuses if main has commits the release lacks; back a stage needs --reason. Run from the project folder; never pushes
+kanbanr release add v0.2.0 --branch               # add it and promote it to the first stage
+kanbanr config cadence --release-stages candidate,qa,live [--integration-branch develop] [--main-branch main]
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a shipped release
 kanbanr config workflow --export > process.yaml   # this project's workflow, gates included
 kanbanr process check process.yaml|-              # check a process without applying it (- reads stdin): every problem, then its agreement and diagram

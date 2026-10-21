@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { createBrowserRouter, createHashRouter, RouterProvider, type RouteObject } from "react-router-dom";
 import "./styles.css";
 import App from "./App";
 import HomePage from "./pages/HomePage";
@@ -18,8 +18,9 @@ import WorkflowPage from "./pages/WorkflowPage";
 import DocsPage from "./pages/DocsPage";
 import DocPage from "./pages/DocPage";
 import ReleasesPage from "./pages/ReleasesPage";
+import { loadConfig, routing } from "./runtimeConfig";
 
-const router = createBrowserRouter([
+const routes: RouteObject[] = [
   {
     path: "/",
     element: <App />,
@@ -42,11 +43,16 @@ const router = createBrowserRouter([
       { path: "p/:project/docs/file/*", element: <DocPage /> },
     ],
   },
-]);
+];
 
+// The runtime configuration comes first (FEAT-178): it says where the API is and which router a
+// static host can support. A missing config.json means the embedded defaults, so this never blocks.
 // No auth: the monitor is a read-only view of your local folder.
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <RouterProvider router={router} />
-  </React.StrictMode>
-);
+loadConfig().then(() => {
+  const router = routing() === "hash" ? createHashRouter(routes) : createBrowserRouter(routes);
+  ReactDOM.createRoot(document.getElementById("root")!).render(
+    <React.StrictMode>
+      <RouterProvider router={router} />
+    </React.StrictMode>
+  );
+});

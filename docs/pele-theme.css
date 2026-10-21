@@ -1,0 +1,18 @@
+/* Pele's colours from mdBook's theme (FEAT-203).
+ *
+ * Pele colours every diagram through CSS variables. Pointing them at mdBook's own variables makes
+ * a diagram follow whichever of the five themes (light, rust, coal, navy, ayu) the reader picks,
+ * the moment it is picked: nothing is re-rendered. */
+
+.diagram {
+    --pele-bg: var(--bg);
+    --pele-fg: var(--fg);
+    --pele-muted: var(--icons);
+    --pele-line: var(--fg);
+    --pele-surface: var(--quote-bg);
+    --pele-surface-alt: var(--table-alternate-bg);
+    --pele-border: var(--table-border-color);
+    --pele-accent: var(--links);
+    --pele-font: "Open Sans", "Segoe UI", system-ui, sans-serif;
+    --pele-font-mono: var(--mono-font, monospace);
+}

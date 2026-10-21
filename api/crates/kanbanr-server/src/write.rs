@@ -25,7 +25,8 @@ pub struct WriteOutcome {
 
 /// The data-route write: core's one write recipe (FEAT-176), the same the CLI runs. The daemon has
 /// no HTTP client, so events are recorded and not delivered; webhook delivery stays the CLI's.
-/// Returns the dispatcher's error text on failure (the caller maps it to an HTTP status).
+/// Returns the dispatcher's error text on failure (the caller maps it to an HTTP status). `repo` is
+/// the project's code repository, when the daemon has one for this project (FEAT-183).
 pub fn write(
     store: &Store,
     data_dir: &Path,
@@ -33,6 +34,7 @@ pub fn write(
     method: &str,
     path: &str,
     body: Option<&Value>,
+    repo: Option<&Path>,
 ) -> Result<WriteOutcome, String> {
     let applied = kanbanr_core::write::apply(
         store,
@@ -41,6 +43,7 @@ pub fn write(
         method,
         path,
         body,
+        repo,
         &eventing::NullSender,
     )?;
     Ok(WriteOutcome {
@@ -88,6 +91,7 @@ mod tests {
             "POST",
             "/projects",
             Some(&serde_json::json!({ "name": "demo" })),
+            None,
         )
         .expect("daemon write should succeed");
         assert!(out.body.contains("demo"), "response echoes the new project");
@@ -118,6 +122,7 @@ mod tests {
             "POST",
             "/projects",
             Some(&serde_json::json!({ "name": "demo" })),
+            None,
         )
         .unwrap();
         assert!(git::has_unpushed(&dir));

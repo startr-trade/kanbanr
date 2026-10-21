@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
+import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
+import { useScrollToHash } from "../useBoardIndex";
 import Markdown from "../components/Markdown";
 import { ErrorBox, FeatureBadges, Loading, LiveDot, TaskBadge, progress } from "../components/bits";
 import {
@@ -17,6 +19,7 @@ export default function FeaturePage() {
   const { project = "", code = "" } = useParams();
   const tick = useLiveTick(api.projectEvents(project));
   const { data, error, loading } = useAsync(() => api.getProject(project), [project, tick]);
+  useScrollToHash(!!data);
 
   if (loading && !data) return <Loading />;
   if (error) return <ErrorBox error={error} />;
@@ -233,7 +236,25 @@ function Definition({ feature, project }: { feature: Feature; project: string })
           ) : null}
           {def.exempt?.trim() ? <span className="chip">exempt: {def.exempt}</span> : null}
         </div>
-        {def.approval != null && meta.data?.writes === true && !done ? (
+        {(def.affects_docs ?? []).length ? (
+          // The docs this item's design changes (FEAT-180); a `docs_updated` gate checks each.
+          <div className="provenance">
+            <span className="muted">Affects docs</span>
+            {(def.affects_docs ?? []).map((d) => (
+              <Link key={d} className="chip" to={`/p/${encodeURIComponent(project)}/docs/file/${d}`}>
+                {d}
+              </Link>
+            ))}
+          </div>
+        ) : null}
+        {/* Read-only copy of the monitor (FEAT-178): the command that withdraws, not a button. */}
+        {def.approval != null && isReadOnly() ? (
+          <p className="muted small">
+            To withdraw this approval, run{" "}
+            <code>kanbanr unapprove {feature.code} --reason "…"</code>.
+          </p>
+        ) : null}
+        {def.approval != null && !isReadOnly() && meta.data?.writes === true && !done ? (
           <div className="review-actions">
             {asking ? (
               <>
@@ -335,7 +356,7 @@ function Definition({ feature, project }: { feature: Feature; project: string })
 function RequirementTile({ requirement: r }: { requirement: Requirement }) {
   const tests = r.tests ?? [];
   return (
-    <section className="todo-tile">
+    <section className="todo-tile" id={r.id}>
       <div className="todo-tile-head">
         <code className="taskkey">{r.id}</code>
         <span className="badge kind">{r.kind}</span>

@@ -6,12 +6,18 @@ use serde::{Deserialize, Serialize};
 /// `docs/src/project/stability.md`: reading a newer board is safe, and so is rewriting it.
 pub type Extra = std::collections::BTreeMap<String, serde_yaml::Value>;
 
+/// How [`Extra`] is described in the published API (FEAT-177): keys a newer kanbanr wrote, of any
+/// shape. A YAML value always has a JSON form, so any JSON value is what a client can receive.
+#[cfg(feature = "schema")]
+pub type ExtraSchema = std::collections::BTreeMap<String, serde_json::Value>;
+
 /// A status is a configurable label (e.g. "Planned"). Kept as a free string so the
 /// workflow can be reconfigured per project without code changes.
 pub type Status = String;
 
 /// Tri-state for a feature's todo items.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum TaskState {
     NotStarted,
     InProgress,
@@ -31,6 +37,7 @@ impl TaskState {
 
 /// A todo item belonging to a todo-list. `key` is short and unique within its todo-list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Task {
     pub key: String,
     pub text: String,
@@ -42,12 +49,14 @@ pub struct Task {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
 /// A persistent todo-list attached to a feature item. A feature (acting as an epic) can hold
 /// many of these — e.g. one added per working session — so the work survives across sessions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TodoList {
     pub code: String,
     #[serde(default)]
@@ -62,6 +71,7 @@ pub struct TodoList {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
@@ -80,6 +90,7 @@ impl TodoList {
 
 /// A feature item: the unit Claude develops. Holds the spec and its todo list.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FeatureItem {
     pub code: String,
     pub title: String,
@@ -160,6 +171,7 @@ pub struct FeatureItem {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
@@ -167,6 +179,7 @@ pub struct FeatureItem {
 /// pointer: the original text is preserved in the feature's spec, so nothing depends on the
 /// source still existing (a deleted file, rewritten git history, a removed issue).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Source {
     /// Tracker kind: `file`, `github`, `gitlab`, `jira`, `linear`, …
     pub system: String,
@@ -194,6 +207,7 @@ pub struct Source {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
@@ -223,6 +237,7 @@ impl Source {
 /// carrying the tests that verify them. Keeping it one-line-per-field is deliberate: a structured
 /// copy of the spec would rot into a second, disagreeing version of the same argument.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct FeatureDefinition {
     /// One sentence: what, for whom, and why.
     #[serde(default)]
@@ -257,6 +272,11 @@ pub struct FeatureDefinition {
     /// Appended, never overwritten — each pinned to the definition it covered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signoffs: Vec<Signoff>,
+    /// Board docs this item changes (FEAT-180), e.g. "architecture/data.md". Declared at the design
+    /// stage; `docs_updated` checks each was changed before the item moves on. Declared last, so a
+    /// board where it is the only key an older binary does not know reads back byte for byte.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub affects_docs: Vec<String>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -264,6 +284,7 @@ pub struct FeatureDefinition {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
@@ -272,6 +293,7 @@ pub struct FeatureDefinition {
 /// Like an approval it carries the definition's `rev`, so changing the definition afterwards lapses
 /// it: a design review of a different design is not a review of this one.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Signoff {
     /// The name a gate asks for (`design-review`).
     pub id: String,
@@ -302,11 +324,13 @@ pub struct Signoff {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
 /// Whether a sign-off entry gives the sign-off or takes it back (FEAT-182).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum SignoffVerdict {
     #[default]
@@ -329,6 +353,7 @@ impl SignoffVerdict {
 /// later taken back is more informative than no record at all, and the charter constraint says raw
 /// data is never discarded.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ApprovalEvent {
     pub at: String,
     pub by: String,
@@ -357,10 +382,12 @@ pub struct ApprovalEvent {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Approval {
     pub by: String,
     pub at: String,
@@ -372,6 +399,7 @@ pub struct Approval {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
@@ -406,6 +434,9 @@ impl FeatureDefinition {
         bare.started_unapproved = String::new();
         // Sign-offs are verdicts about the content, not part of it (FEAT-114).
         bare.signoffs = Vec::new();
+        // Which docs the work touches is design, written after the definition was agreed: naming
+        // them does not reopen the agreement (FEAT-180, Q1).
+        bare.affects_docs = Vec::new();
         for requirement in &mut bare.requirements {
             for test in &mut requirement.tests {
                 test.state = TestState::default();
@@ -452,6 +483,7 @@ impl FeatureDefinition {
 
 /// The six completeness dimensions. Answers are one line; anything longer belongs in the spec.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Zachman {
     #[serde(default)]
     pub what: String,
@@ -472,6 +504,7 @@ pub struct Zachman {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
@@ -514,6 +547,7 @@ impl Zachman {
 
 /// Functional behaviour, or a quality the system must exhibit.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum RequirementKind {
     #[default]
@@ -523,6 +557,7 @@ pub enum RequirementKind {
 
 /// One requirement: a single behaviour, stated so it can be tested.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Requirement {
     /// `R-1`, `R-2`, … assigned when left blank.
     #[serde(default)]
@@ -553,6 +588,7 @@ pub struct Requirement {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
@@ -560,6 +596,7 @@ pub struct Requirement {
 /// checkable. The `measure` names the test or benchmark that checks it; a number with nothing
 /// behind it is reported as an unsupported claim.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct QualityScenario {
     #[serde(default)]
     pub stimulus: String,
@@ -576,11 +613,13 @@ pub struct QualityScenario {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
 /// A test that verifies a requirement, and where it currently stands.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TestRef {
     /// The test's name as it appears in the codebase, so it can be checked for existence.
     pub name: String,
@@ -600,6 +639,7 @@ pub struct TestRef {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
@@ -608,6 +648,7 @@ pub struct TestRef {
 /// Serialized lowercase (`state: green`) because that is how it is written in definition files and
 /// on the command line; the aliases keep hand-written YAML forgiving.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum TestState {
     #[default]
@@ -633,6 +674,7 @@ impl TestState {
 
 /// One status change. Append-only: the board's memory of how work actually moved.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Transition {
     pub at: String,
     pub from: String,
@@ -647,6 +689,7 @@ pub struct Transition {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
@@ -656,6 +699,7 @@ pub struct Transition {
 /// different animal from one caught during it, and the ratio between them is the one quality
 /// number a board can honestly produce.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Defect {
     /// Free text, like `kind` and `priority`: low | medium | high | critical.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -682,11 +726,13 @@ pub struct Defect {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
 /// A link from a feature to the external issue it is mirrored to (FEAT-043).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct IssueLink {
     /// Tracker kind; currently `github`.
     pub system: String,
@@ -707,10 +753,23 @@ pub struct IssueLink {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 
 impl FeatureItem {
+    /// When the item entered its current status: the last move into it, else its creation
+    /// (FEAT-180). A board edited by hand can carry a status no move led to; creation is then the
+    /// honest answer, since nothing says when it got there.
+    pub fn entered_status_at(&self) -> &str {
+        self.history
+            .iter()
+            .rev()
+            .find(|t| t.to == self.status)
+            .map(|t| t.at.as_str())
+            .unwrap_or(self.created_at.as_str())
+    }
+
     /// Iterate over every task across all todo-lists.
     pub fn all_tasks(&self) -> impl Iterator<Item = &Task> {
         self.todo_lists.iter().flat_map(|l| l.tasks.iter())
@@ -928,6 +987,7 @@ impl IndexEntry {
 
 /// A milestone groups feature items and may depend on other milestones (the DAG).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Milestone {
     pub code: String,
     pub name: String,
@@ -942,6 +1002,7 @@ pub struct Milestone {
         default,
         skip_serializing_if = "crate::models::Extra::is_empty"
     )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
 }
 

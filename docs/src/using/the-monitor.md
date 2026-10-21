@@ -97,6 +97,48 @@ server {
 The proxy enforces who gets in and encrypts the connection; kanbanr behind it stays read-only, so an
 authenticated viewer still can't mutate your board — writes only ever happen through the local CLI.
 
+### Hosting the monitor elsewhere
+
+Each release attaches the monitor as a plain static bundle, `kanbanr-monitor-<tag>.tar.gz`. It is
+the same build the binary embeds, so collaborators and reviewers can view a board from any static
+web host without installing kanbanr. Hosting it takes three steps:
+
+1. **Unpack** the archive into a folder your host serves. It holds `index.html`, `config.json` and
+   `assets/`, all with relative paths, so any folder works, not only the site root.
+2. **Edit `config.json`** to point at a monitor's read API:
+
+   ```json
+   {
+     "apiBase": "https://board.example.com/api",
+     "routing": "hash",
+     "readOnly": true
+   }
+   ```
+
+   - `apiBase` is where `kanbanr serve` answers `/api`. The shipped value is
+     `http://localhost:8080/api`.
+   - `routing: "hash"` gives addresses like `#/p/<project>/feature/<CODE>`, which a plain static
+     host serves with no rewrite rule. Use `"browser"` only if your host answers every path with
+     `index.html`.
+   - `readOnly: true` hides every decision (approve, ratify, sign off, withdraw, accept or reject a
+     decision) and shows the CLI command instead. The bundle never calls a write route. Decisions
+     happen in Claude Code, or in a local monitor started with `--allow-writes`.
+3. **Serve** the folder, for example with `python3 -m http.server` or any static host.
+
+The bundle contains no secrets. The daemon it reads stays the access boundary:
+
+- it is read-only unless started with `--allow-writes`;
+- it binds to localhost by default;
+- it sends permissive CORS headers, so a monitor on another origin can read it and receive live
+  updates. Anyone who can reach the daemon can read the board.
+
+To publish a board, put the daemon behind a reverse proxy with TLS and authentication, as above,
+and set `apiBase` to the proxy's address. If you serve the bundle and the API from the same origin,
+`"apiBase": "/api"` avoids cross-origin requests entirely.
+
+The monitor the binary serves reads the same `config.json`, with the defaults: `/api`, browser
+routing, and decisions offered when the daemon allows writes.
+
 ### Mirroring to GitHub issues
 
 If collaborators follow your GitHub issues, kanbanr can keep issues in step with the board using
@@ -182,6 +224,11 @@ The board — kanbanr's own, as it is developed — and, in dark mode:
 An item: why it exists, the goals it serves, its requirements and the tests that proved them, its
 todo-lists and its history.
 
+In every spec, doc and charter, a reference to the board — `FEAT-012`, `FEAT-012/R-2`, `MS-004`,
+`ADR-0005`, `G-1`, `architecture/data.md` — is a link to its page, underlined dotted so it reads
+differently from a link out of the board. One that points at nothing the board has is struck
+through; `kanbanr doctor` lists the same ones. A requirement link lands on that requirement.
+
 ![An item's page](../images/feature.png)
 
 | | | |
@@ -202,6 +249,28 @@ opens on the running sprint, and Releases and the Gantt show the cadence:
 |---|---|---|
 | ![A running sprint and its burndown](../images/sprint.png) | ![Releases](../images/releases.png) | ![The Gantt with sprints and releases](../images/gantt-sprints.png) |
 | **A sprint** — goal, days left, burndown | **Releases** — scope, progress, notes | **Gantt** with sprints and releases |
+
+### Release actions
+
+With releases on, two release decisions can be made from the monitor started with writes on
+(`kanbanr review --ui`). Each uses the same operation as its CLI command, so the board ends up the
+same whichever you use. A read-only monitor shows the command instead.
+
+- **Which release?** When an item's next stage is the end (for example Migration → Operations in
+  TOGAF), or a stage that asks for `in_release`, and the item is in no release, the Review page
+  asks which planned release it belongs to. There is one button per planned release, plus **New
+  release…**, which takes a version and a target date, adds the release, and plans the item into
+  it. This is `kanbanr release plan <VERSION> <CODE>`, plus `kanbanr release add` for a new one.
+  The question comes after any approval or sign-off the item is waiting on. Once the item is in a
+  release, it leaves the queue.
+- **Promote.** Each release on the Releases page shows its stage, with the stage history on hover,
+  and a **Promote to \<next stage\>** button until it reaches the last stage. This is
+  `kanbanr release promote <VERSION>`. Promoting to the last stage (production) is the cut, so the
+  page asks you to confirm first. It lists the release's items (the finished ones ship, the rest
+  are carried over), the tag `<VERSION>`, and the merge `release/<VERSION> → main`. The first
+  stage and the cut act on the code repository. The monitor uses the repository it was started in.
+  Started anywhere else, it refuses those two and names the CLI command to run from the project
+  folder.
 
 Across several projects ([Portfolio](portfolio.md)):
 

@@ -119,6 +119,7 @@ pub fn add_program(
 /// A project-independent lane a feature falls into, since statuses are per-project (no shared
 /// vocabulary). Computed from the project config + the feature's task activity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum Disposition {
     /// Terminal: a "Completed"-named status OR a no-op disposition.
@@ -178,6 +179,7 @@ fn disposition(project: &Project, f: &crate::FeatureItem) -> Disposition {
 /// completion across the group (rounded), or `0` when there are no features. `tasks_*` are retained
 /// for display (how many checklist items exist/are done) but no longer drive the percentage.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Counts {
     pub features: usize,
     pub tasks_total: usize,
@@ -219,6 +221,7 @@ impl Counts {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MilestoneRollup {
     pub code: String,
     pub name: String,
@@ -226,6 +229,7 @@ pub struct MilestoneRollup {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ProjectRollup {
     pub id: String,
     pub name: String,
@@ -234,6 +238,7 @@ pub struct ProjectRollup {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ProgramRollup {
     pub id: String,
     pub name: String,
@@ -243,6 +248,7 @@ pub struct ProgramRollup {
 
 /// The full rollup tree: milestone% → project% → program% → portfolio%.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RollupReport {
     pub portfolio: String,
     pub counts: Counts,
@@ -336,6 +342,7 @@ fn project_rollup(project: &Project) -> ProjectRollup {
 
 /// A single feature as it appears on the cross-project board.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct BoardCard {
     pub project: String,
     pub code: String,
@@ -352,6 +359,7 @@ pub struct BoardCard {
 
 /// One normalized lane plus its cards (across all projects).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct BoardLane {
     pub disposition: Disposition,
     pub cards: Vec<BoardCard>,
@@ -362,6 +370,7 @@ pub struct BoardLane {
 /// derived from each project's own config (Completed-name / no-op) + task activity, not a shared
 /// status vocabulary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct BoardReport {
     pub lanes: Vec<BoardLane>,
 }
@@ -466,6 +475,7 @@ fn resolve_programs(store: &Store, ws: &Workspace) -> Result<Vec<ResolvedProgram
 /// The portfolio index as a serializable view: the workspace metadata + programs, with the implicit
 /// default program materialized when none are declared (so callers always see a consistent shape).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PortfolioView {
     pub name: String,
     pub description: String,
@@ -473,6 +483,7 @@ pub struct PortfolioView {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ProgramView {
     pub id: String,
     pub name: String,

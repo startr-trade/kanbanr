@@ -36,6 +36,8 @@ fn core_err(e: kanbanr_core::CoreError) -> (StatusCode, String) {
         | MilestoneInUse(_, _)
         | StatusInUse(_, _)
         | ProjectNotEmpty(_, _, _) => StatusCode::CONFLICT,
+        // No route answers this path (FEAT-177): it was a 400, "unsupported operation".
+        NoSuchRoute(_) => StatusCode::NOT_FOUND,
         InvalidDocPath(_)
         | InvalidName(_)
         | UnknownStatus(_)
@@ -49,9 +51,22 @@ fn core_err(e: kanbanr_core::CoreError) -> (StatusCode, String) {
         | BatchOpFailed(_, _)
         | InvalidMermaid(_)
         | Unsupported(_) => StatusCode::BAD_REQUEST,
+        // The code repository refused a release promotion (FEAT-183): the request was well formed,
+        // the repository's state is what stood in the way.
+        Git(_) => StatusCode::CONFLICT,
         Io(_) | Yaml(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (code, e.to_string())
+}
+
+/// The published description of the public read API (FEAT-177), as committed: generated from the
+/// response types by `cargo run -p kanbanr-core --features schema --example openapi`, and checked
+/// against them by the contract test, so these bytes are what the code describes.
+pub const OPENAPI_JSON: &str = include_str!("../../../../docs/src/reference/openapi.json");
+
+/// `GET /api/openapi.json`.
+pub async fn openapi() -> impl IntoResponse {
+    ([("content-type", "application/json")], OPENAPI_JSON)
 }
 
 /// Return a dispatcher result as a JSON response.
@@ -82,7 +97,11 @@ pub async fn read_passthrough(
     // OriginalUri keeps the `/api` prefix + query string; dispatch wants the path without `/api`.
     let pq = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
     let dpath = pq.strip_prefix("/api").unwrap_or(pq);
-    json_body(dispatch::dispatch(&st.store, "GET", dpath, None))
+    // Labelled with what the route renders (FEAT-177): a diagram or a document is not JSON.
+    match dispatch::dispatch(&st.store, "GET", dpath, None) {
+        Ok(body) => ([("content-type", dispatch::read_media_type(dpath))], body).into_response(),
+        Err(e) => core_err(e).into_response(),
+    }
 }
 
 pub async fn list_projects(State(st): State<AppState>) -> impl IntoResponse {
@@ -318,6 +337,13 @@ fn run_write(
     dispatch_path: &str,
     body: Option<&serde_json::Value>,
 ) -> axum::response::Response {
+    // The code repository the daemon was started in, for its own project only (FEAT-183): any
+    // other project's promotions that need one are refused, never run against the wrong code.
+    let repo = st
+        .code_repo
+        .as_ref()
+        .filter(|(project, _)| project_id(dispatch_path).as_deref() == Some(project.as_str()))
+        .map(|(_, root)| root.as_path());
     let outcome = crate::write::write(
         &st.store,
         &st.data_dir,
@@ -325,6 +351,7 @@ fn run_write(
         method.as_str(),
         dispatch_path,
         body,
+        repo,
     );
     match outcome {
         Ok(out) => {

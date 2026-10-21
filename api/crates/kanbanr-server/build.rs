@@ -20,19 +20,35 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
+    // Where this crate is *now*, read when the script runs. `env!` would fix the folder the script
+    // was compiled in, and a build cache (sccache) can reuse a script compiled in another folder —
+    // one since deleted shipped a binary with no monitor (FEAT-202).
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let repo = manifest.join("../../..");
     let dist = std::env::var("KANBANR_UI_DIST")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            // api/crates/kanbanr-server -> repo root -> web/dist
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/dist")
-        });
+        .unwrap_or_else(|_| repo.join("web/dist"));
     println!("cargo:rerun-if-env-changed=KANBANR_UI_DIST");
+    println!("cargo:rerun-if-env-changed=KANBANR_ALLOW_BARE_BUILD");
     println!("cargo:rerun-if-changed={}", dist.display());
 
     let mut entries = Vec::new();
     if dist.is_dir() {
         collect(&dist, &dist, &mut entries);
         entries.sort_by(|a: &(String, PathBuf), b| a.0.cmp(&b.0));
+    }
+    // A release build of a full checkout ships the monitor, or does not build (FEAT-202). A debug
+    // build, a crate outside the repository, or an explicit opt-out still builds without it, and
+    // the daemon says so at startup (R-3).
+    let release = std::env::var("PROFILE").as_deref() == Ok("release");
+    let full_checkout = repo.join("web/package.json").is_file();
+    let bare_ok = std::env::var("KANBANR_ALLOW_BARE_BUILD").is_ok_and(|v| v == "1");
+    if entries.is_empty() && release && full_checkout && !bare_ok {
+        panic!(
+            "no built monitor at {}: build it first (`npm --prefix web run build`, or `make \
+             install-cli`), or set KANBANR_ALLOW_BARE_BUILD=1 to build without it",
+            dist.display()
+        );
     }
 
     // One blob per file, gzipped into OUT_DIR and referenced by include_bytes!.

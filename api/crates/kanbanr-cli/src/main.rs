@@ -178,9 +178,11 @@ enum Command {
         #[arg(long)]
         rev: Option<String>,
     },
-    /// What hangs off a goal, an item or a requirement — and what is missing from it. (FEAT-057)
+    /// What hangs off a goal, an item, a requirement or a doc — and what is missing from it.
+    /// (FEAT-057, FEAT-181)
     Trace {
-        /// `G-2`, `FEAT-046`, `FEAT-046/R-2`, or `R-2` when the branch says which item.
+        /// `G-2`, `FEAT-046`, `FEAT-046/R-2`, `architecture/data.md`, or `R-2` when the branch says
+        /// which item.
         subject: Option<String>,
         /// Render the derived Zachman view for a milestone or item instead.
         #[arg(long)]
@@ -508,6 +510,9 @@ enum Command {
         #[arg(long)]
         all_projects: bool,
     },
+    /// Write or refresh the board's README: what this repository is, its projects, and how to
+    /// install kanbanr and see it as a board (FEAT-201). Text outside its markers is kept.
+    Readme,
     /// Scan for integrity problems (dangling deps, unknown milestones, outdated schema). (FEAT-037)
     /// Defaults to the current/selected project; pass --all-projects for the whole portfolio.
     Doctor {
@@ -901,6 +906,19 @@ enum MilestoneCmd {
 #[derive(Subcommand)]
 enum ConfigCmd {
     Show,
+    /// The method, on by default in every built-in process (FEAT-193): design before build, the
+    /// docs it changes updated before it integrates, and broken references reported. With no flag,
+    /// shows each part and where it is in force.
+    Method {
+        /// Turn the named parts (default: all) back on.
+        #[arg(long, conflicts_with = "off")]
+        on: bool,
+        /// Turn the named parts (default: all) off; applying or updating a process keeps them off.
+        #[arg(long)]
+        off: bool,
+        /// design | design-review | docs | docs-folded | links.
+        parts: Vec<String>,
+    },
     /// Whether this project works in sprints and releases, and what it estimates in (FEAT-121).
     /// Both are off unless switched on — most projects follow a different rhythm.
     Cadence {
@@ -919,6 +937,22 @@ enum ConfigCmd {
         /// How often a release is cut: per_sprint | every_n | on_demand.
         #[arg(long)]
         release: Option<String>,
+        /// The stages a release moves through, in order; the last is the cut (FEAT-183). Default:
+        /// candidate,test,staging,production.
+        #[arg(long, value_delimiter = ',')]
+        release_stages: Option<Vec<String>>,
+        /// The branch a release branch is made from. Default: the repository's default branch
+        /// (pass "" to go back to it).
+        #[arg(long)]
+        integration_branch: Option<String>,
+        /// The branch production fast-forwards. Default: the repository's default branch (pass ""
+        /// to go back to it).
+        #[arg(long)]
+        main_branch: Option<String>,
+        /// Branch by the git model the cadence implies (FEAT-189): where `start` branches, sprint
+        /// branches, lines taking merges only. on | off; off by default.
+        #[arg(long, value_parser = ["on", "off"])]
+        git_model: Option<String>,
     },
     SetTransition(SetTransitionArgs),
     DisplayedStates {
@@ -999,9 +1033,33 @@ enum ReleaseCmd {
         target: Option<String>,
         #[arg(long)]
         name: Option<String>,
+        /// Also promote it to its first stage, which makes the branch `release/<VERSION>` from
+        /// the integration branch in the code repository this runs in (FEAT-183).
+        #[arg(long)]
+        branch: bool,
+        /// A patch of this cut release: `release/<VERSION>` is made from its tag, and the patch
+        /// starts at the first stage (FEAT-184). Run it from the project folder.
+        #[arg(long, conflicts_with = "branch")]
+        patch_of: Option<String>,
     },
     /// List the project's releases.
     List,
+    /// Move a release to its next stage, or to the one named (FEAT-183). The first stage makes the
+    /// branch `release/<VERSION>`; the last is the cut — it ships the finished items, tags the code
+    /// repository with the version and fast-forwards the main branch to the release, refusing
+    /// (and changing nothing) if main has commits the release lacks. Run it from the project
+    /// folder: those two stages act on the code repository there. Nothing is pushed.
+    Promote {
+        version: String,
+        /// The stage to move to (default: the next one). An earlier stage needs --reason.
+        stage: Option<String>,
+        /// Why the release moves back a stage (required for that, and recorded).
+        #[arg(long)]
+        reason: Option<String>,
+        /// Who moved it (default: the board's commit identity).
+        #[arg(long)]
+        by: Option<String>,
+    },
     /// Plan items into a release.
     Plan {
         version: String,
@@ -1011,7 +1069,8 @@ enum ReleaseCmd {
     /// Cut a release: ship its finished items, write its notes, carry the rest.
     Cut {
         version: String,
-        /// Also tag the code repository with the version.
+        /// Also tag the code repository with the version: the same as `release promote <VERSION>
+        /// production` (its last stage), so main is fast-forwarded to the release too (FEAT-183).
         #[arg(long)]
         tag: bool,
     },
@@ -1302,6 +1361,16 @@ enum GitCmd {
     /// Check a `git commit` before it is attempted (run by the Claude Code PreToolUse hook).
     /// Reads the tool payload on stdin and answers with a decision and a reason.
     Guard,
+    /// The git model this project's cadence implies (FEAT-189): main, the line finished items
+    /// integrate into, item branches, and the branches that take merges only.
+    Model,
+    /// Merge a release's fixes forward into the current line, naming the items they serve
+    /// (FEAT-190). Never automatic: the move that integrated the fix says when it is needed.
+    Forward { version: String },
+    /// Compare the board with the branches (FEAT-191): integrated items not merged, commits on a
+    /// line for unfinished work, branches naming nothing, release fixes not merged forward.
+    /// Read-only; exits 1 when it finds an error.
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -1450,8 +1519,31 @@ fn run_serve(
             .ok()
             .filter(|s| !s.is_empty())
     });
+    // The code repository it is started in, when that folder's marker names a project (FEAT-183,
+    // decided 19 Oct 2026): release promotion from the monitor acts on it for that project only.
+    // A path in the project's config was the alternative, but a path belongs to one machine and
+    // the config travels with the board.
+    let code_repo = std::env::current_dir().ok().and_then(|cwd| {
+        let project = project::find_marker(&cwd, project::home_dir().as_deref())?
+            .marker
+            .project?;
+        let root = kanbanr_core::coderepo::repo_root_in(&cwd)?;
+        Some((project, root))
+    });
+    if allow_writes && let Some((project, root)) = &code_repo {
+        eprintln!(
+            "kanbanr: release promotion for {project} uses the code repository {}",
+            root.display()
+        );
+    }
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(kanbanr_server::run(dir, bind, ui_dir, allow_writes))
+    rt.block_on(kanbanr_server::run(
+        dir,
+        bind,
+        ui_dir,
+        allow_writes,
+        code_repo,
+    ))
 }
 
 /// `kanbanr skill …` (FEAT-141): needs no board — it is about this machine's Claude Code.
@@ -2063,8 +2155,29 @@ fn run_trace(
     if !t.documents.is_empty() {
         println!("documents: {}", t.documents.join(", "));
     }
+    if !t.links_out.is_empty() {
+        let out: Vec<String> = t.links_out.iter().map(ref_label).collect();
+        println!("links to:  {}", out.join(", "));
+    }
+    if !t.links_in.is_empty() {
+        println!("linked from: {}", t.links_in.join(", "));
+    }
     print_gaps(&t.gaps);
     Ok(())
+}
+
+/// A reference as a person would write it: `FEAT-012/R-1`, `ADR-0005`, `architecture/data.md`.
+fn ref_label(r: &kanbanr_core::refs::Ref) -> String {
+    use kanbanr_core::refs::Ref;
+    match r {
+        Ref::Item {
+            code,
+            requirement: Some(req),
+        } => format!("{code}/{req}"),
+        Ref::Item { code, .. } | Ref::Milestone { code } => code.clone(),
+        Ref::Adr { id } | Ref::Goal { id } => id.clone(),
+        Ref::Doc { path } => path.clone(),
+    }
 }
 
 fn print_gaps(gaps: &[String]) {
@@ -2144,6 +2257,9 @@ fn run_why(cli: &Cli, client: &Backend, target: &str) -> anyhow::Result<()> {
                 }
                 if !t.decisions.is_empty() {
                     println!("  decisions    {}", t.decisions.join(", "));
+                }
+                if !t.documents.is_empty() {
+                    println!("  Documented in: {}", t.documents.join(", "));
                 }
             }
             Err(e) => println!("  {reference}: {e}"),
@@ -2988,9 +3104,29 @@ fn scm_context_in(dir: &Path) -> anyhow::Result<Context> {
 
 /// The item the current branch is about. This is the whole reason the branch rule exists: with it,
 /// nothing else has to ask what is being worked on.
+/// The git model the hooks judge by, when the project has it on (FEAT-189). Which branches take
+/// merges only does not depend on the running sprint, so it is derived here without reading one.
+fn line_model(ctx: &Context) -> Option<kanbanr_core::gitmodel::GitModel> {
+    let config = &ctx.project.config;
+    if !config.cadence.git_model {
+        return None;
+    }
+    let main = config
+        .cadence
+        .main_branch
+        .clone()
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| scm::default_branch(&ctx.root));
+    let facts = kanbanr_core::gitmodel::BranchFacts {
+        main,
+        ..Default::default()
+    };
+    Some(kanbanr_core::gitmodel::derive(config, &[], &facts))
+}
+
 fn branch_item(ctx: &Context) -> Option<String> {
     let pattern = ctx.project.config.branch_pattern();
-    let code = kanbanr_core::scm::code_from_branch(pattern, ctx.branch.as_deref()?)?;
+    let code = kanbanr_core::scm::item_code_from_branch(pattern, ctx.branch.as_deref()?)?;
     ctx.project
         .features
         .iter()
@@ -3021,6 +3157,125 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
         GitCmd::CheckMsg { file } => run_check_msg(cli, client, file),
         GitCmd::Guard => run_guard(cli, Some(client)),
         GitCmd::CheckBranch => run_check_branch(cli, client),
+        GitCmd::Doctor => {
+            let p = require_project(cli)?;
+            let root =
+                scm::repo_root().ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
+            let resp = client.get_in(&format!("/projects/{p}/git/doctor"), Some(&root))?;
+            let issues: Vec<Value> = serde_json::from_str(&resp)?;
+            let has_error = issues.iter().any(|i| i["severity"] == "error");
+            if cli.json {
+                println!("{}", pretty(&resp));
+            } else {
+                let model: Value = serde_json::from_str(
+                    &client.get_in(&format!("/projects/{p}/git/model"), Some(&root))?,
+                )?;
+                let automated = model["model"]["automated"].as_bool().unwrap_or(false);
+                println!(
+                    "topology: {}; {}",
+                    model["model"]["topology"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .replace('_', " "),
+                    if automated {
+                        "the git model is on"
+                    } else {
+                        "the git model is off: these findings are against the derived model"
+                    }
+                );
+                for (label, severity) in [("Errors", "error"), ("Warnings", "warning")] {
+                    let found: Vec<&Value> = issues
+                        .iter()
+                        .filter(|i| i["severity"] == severity)
+                        .collect();
+                    if found.is_empty() {
+                        continue;
+                    }
+                    println!("{label} ({}):", found.len());
+                    for i in found {
+                        let code = i["code"]
+                            .as_str()
+                            .map(|c| format!("{c}: "))
+                            .unwrap_or_default();
+                        println!("  {code}{}", i["message"].as_str().unwrap_or_default());
+                    }
+                }
+                if issues.is_empty() {
+                    println!("clean: the board and the branches agree");
+                }
+            }
+            if has_error {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        GitCmd::Forward { version } => {
+            let p = require_project(cli)?;
+            let root =
+                scm::repo_root().ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
+            let resp = client.write_in(
+                Method::Post,
+                &format!("/projects/{p}/git/forward/{}", urlencode(version)),
+                Some(json!({})),
+                Some(&root),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            let (from, into) = (
+                v["from"].as_str().unwrap_or_default(),
+                v["into"].as_str().unwrap_or_default(),
+            );
+            let said = match v["sha"].as_str() {
+                None => format!("{into} already has everything in {from}: nothing to forward"),
+                Some(sha) => format!(
+                    "merged {from} forward into {into} ({})",
+                    &sha[..sha.len().min(12)]
+                ),
+            };
+            print_write(cli, &resp, said);
+            Ok(())
+        }
+        GitCmd::Model => {
+            let p = require_project(cli)?;
+            let root =
+                scm::repo_root().ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
+            let resp = client.get_in(&format!("/projects/{p}/git/model"), Some(&root))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let v: Value = serde_json::from_str(&resp)?;
+            let m = &v["model"];
+            let s = |k: &str| m[k].as_str().unwrap_or_default().to_string();
+            let list = |k: &str| -> String {
+                m[k].as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|x| x.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            println!("topology:   {}", s("topology").replace('_', " "));
+            println!("main:       {}", s("main"));
+            println!(
+                "line:       {}",
+                m["line"]
+                    .as_str()
+                    .unwrap_or("none — start a sprint to have one")
+            );
+            println!("production: at the {}", s("production").replace('_', " "));
+            println!("items:      {}", list("item_patterns"));
+            println!("protected:  {}", list("protected"));
+            println!("pushing:    never automatic");
+            println!(
+                "automation: {}",
+                if m["automated"].as_bool().unwrap_or(false) {
+                    "on — start, sprints and the hooks follow this model"
+                } else {
+                    "off — a description only (`kanbanr config cadence --git-model on`)"
+                }
+            );
+            Ok(())
+        }
         GitCmd::Status => {
             let ctx = scm_context(cli, client)?;
             let item = branch_item(&ctx);
@@ -3108,6 +3363,17 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     let Ok(ctx) = ctx else {
         return Ok(()); // not a kanbanr project: not this guard's business
     };
+    // A line of integration takes merges only (FEAT-189).
+    if let Some(branch) = &ctx.branch
+        && let Some(model) = line_model(&ctx)
+        && !scm::merge_in_progress(&ctx.root)
+        && scm::has_commits(&ctx.root)
+        && let kanbanr_core::gitmodel::LineVerdict::Refused(why) =
+            kanbanr_core::gitmodel::line_commit_verdict(&model, branch, false, None)
+    {
+        deny(why);
+        return Ok(());
+    }
     // Completing a merge is the intended way work reaches the default branch (FEAT-094).
     // So is a repository's first commit (FEAT-105): nothing can branch from a repo with none.
     if let Some(branch) = &ctx.branch
@@ -3509,11 +3775,27 @@ fn run_check_msg(cli: &Cli, client: &Backend, file: &Path) -> anyhow::Result<()>
         .collect::<Vec<_>>()
         .join("\n");
 
+    // Not a kanbanr project (or no board reachable): say nothing, block nothing.
+    let ctx = scm_context(cli, client).ok();
+    // A merge into a line of integration says which items it brings, generated message or not
+    // (FEAT-189): a line is where "which items reached it" is read from.
+    if let Some(ctx) = &ctx
+        && let Some(model) = line_model(ctx)
+        && let Some(branch) = ctx.branch.as_deref()
+        && let kanbanr_core::gitmodel::LineVerdict::Refused(why) =
+            kanbanr_core::gitmodel::line_commit_verdict(
+                &model,
+                branch,
+                crate::scm::merge_in_progress(&ctx.root),
+                Some(&message),
+            )
+    {
+        anyhow::bail!("{why}");
+    }
     if scm::is_generated_commit(&message) {
         return Ok(()); // git wrote it; there is no author to ask for a reference
     }
-    // Not a kanbanr project (or no board reachable): say nothing, block nothing.
-    let Ok(ctx) = scm_context(cli, client) else {
+    let Some(ctx) = ctx else {
         return Ok(());
     };
     // References are read before the escape is considered: a message that carries both is a
@@ -3621,6 +3903,15 @@ fn run_check_branch(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     if !scm::has_commits(&ctx.root) && branch == scm::default_branch(&ctx.root) {
         return Ok(());
     }
+    // A line of integration takes merges only (FEAT-189).
+    if let Some(model) = line_model(&ctx) {
+        use kanbanr_core::gitmodel::LineVerdict;
+        match kanbanr_core::gitmodel::line_commit_verdict(&model, &branch, false, None) {
+            LineVerdict::Refused(why) => anyhow::bail!("{why}"),
+            LineVerdict::Allowed => return Ok(()),
+            LineVerdict::NotALine => {}
+        }
+    }
     // The commit completing a merge is how an item's branch is SUPPOSED to arrive here (FEAT-094).
     if branch == scm::default_branch(&ctx.root) {
         anyhow::bail!(
@@ -3681,16 +3972,46 @@ fn run_start(
                 scm::default_branch(&root)
             );
         }
-        let branch =
-            kanbanr_core::scm::branch_for(project.config.branch_pattern(), code, &feature.title);
+        // A defect goes on the pattern's `fix/` twin when the pattern is the default (FEAT-189, Q3).
+        let pattern = project.config.branch_pattern();
+        let pattern = match kanbanr_core::scm::fix_twin(pattern) {
+            Some(twin)
+                if matches!(feature.kind.as_deref(), Some("defect" | "bug"))
+                    && pattern == kanbanr_core::scm::DEFAULT_BRANCH_PATTERN =>
+            {
+                twin
+            }
+            _ => pattern.to_string(),
+        };
+        let branch = kanbanr_core::scm::branch_for(&pattern, code, &feature.title);
         if scm::current_branch(&root).as_deref() == Some(branch.as_str()) {
             println!("already on {branch}");
         } else if scm::git(&root, &["rev-parse", "--verify", "--quiet", &branch]).is_ok() {
             scm::git(&root, &["checkout", "-q", &branch])?;
             println!("switched to {branch}");
         } else {
-            // Branch from the default branch, not from wherever you happen to be standing.
-            let base = scm::default_branch(&root);
+            // Branch from the line the git model says (FEAT-189), else the default branch — never
+            // from wherever you happen to be standing.
+            let base = if project.config.cadence.git_model {
+                let resp = client.get_in(
+                    &format!("/projects/{p}/git/model?item={}", urlencode(code)),
+                    Some(&root),
+                )?;
+                let v: Value = serde_json::from_str(&resp)?;
+                let start = &v["start"];
+                let base = start["base"].as_str().unwrap_or_default().to_string();
+                if start["create_from_main"].as_bool().unwrap_or(false) {
+                    let main = v["model"]["main"].as_str().unwrap_or_default();
+                    scm::git(&root, &["branch", &base, main])?;
+                    println!("created {base} from {main}");
+                }
+                if let Some(note) = start["note"].as_str() {
+                    println!("note: {note}");
+                }
+                base
+            } else {
+                scm::default_branch(&root)
+            };
             scm::git(&root, &["checkout", "-q", "-b", &branch, &base])
                 .or_else(|_| scm::git(&root, &["checkout", "-q", "-b", &branch]))?;
             println!("created {branch} from {base}");
@@ -3705,14 +4026,81 @@ fn run_start(
     if let Some(reason) = unapproved {
         body["unapproved"] = json!(reason);
     }
-    let resp = client.write(
+    let resp = client.write_in(
         Method::Post,
         &format!("/projects/{p}/features/{code}/move"),
         Some(body),
+        code_repo().as_deref(),
     )?;
     print_write(cli, &resp, format!("{code} -> {status}"));
+    print_merge(cli, &resp);
     print_gate_warnings(cli, &resp);
     Ok(())
+}
+
+/// The code repository this command runs in, if any: what the routes that merge, branch or tag
+/// act on (FEAT-183, FEAT-189, FEAT-190).
+fn code_repo() -> Option<PathBuf> {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| kanbanr_core::coderepo::repo_root_in(&cwd))
+}
+
+/// What integrating an item merged, and whether its fix needs forwarding (FEAT-190).
+fn print_merge(cli: &Cli, resp: &str) {
+    if cli.json {
+        return;
+    }
+    let Ok(v) = serde_json::from_str::<Value>(resp) else {
+        return;
+    };
+    let m = &v["merged"];
+    if let (Some(branch), Some(into)) = (m["branch"].as_str(), m["into"].as_str()) {
+        if m["already"].as_bool().unwrap_or(false) {
+            println!("{into} already has {branch}: nothing to merge");
+        } else {
+            let sha = m["sha"].as_str().unwrap_or_default();
+            println!(
+                "merged {branch} into {into} ({})",
+                &sha[..sha.len().min(12)]
+            );
+        }
+    }
+    if let Some(note) = v["note"].as_str() {
+        println!("note: {note}");
+    }
+    if let Some(version) = v["forward_needed"].as_str() {
+        println!("release/{version} has a fix the line lacks: kanbanr git forward {version}");
+    }
+}
+
+/// Carried items brought up to date with a sprint's branch (FEAT-190).
+fn print_catch_up(v: &Value) {
+    for c in v["catch_up"].as_array().into_iter().flatten() {
+        let code = c["code"].as_str().unwrap_or_default();
+        let branch = c["branch"].as_str().unwrap_or_default();
+        let detail = &c["outcome"]["detail"];
+        match c["outcome"]["outcome"].as_str().unwrap_or_default() {
+            "merged" => println!("caught up {branch} ({code})"),
+            "up_to_date" => println!("{branch} ({code}) is up to date"),
+            "conflicts" => {
+                let paths: Vec<&str> = detail
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p.as_str())
+                    .collect();
+                println!(
+                    "{branch} ({code}) conflicts in {}: resolve by hand with `git checkout                      {branch} && git merge <the sprint branch>`",
+                    paths.join(", ")
+                );
+            }
+            _ => println!(
+                "{branch} ({code}) not caught up: {}",
+                detail.as_str().unwrap_or_default()
+            ),
+        }
+    }
 }
 
 /// What a gate let through but reported (FEAT-113): its `warns`, a `warn` gate's gaps, or what an
@@ -3750,16 +4138,8 @@ fn first_active_status(project: &Project) -> anyhow::Result<String> {
 
 /// The status whose gate creates the item's branch, in workflow order (FEAT-115).
 fn branch_status(config: &kanbanr_core::ProjectConfig) -> Option<String> {
-    let gates = config.effective_gates();
-    config
-        .statuses
-        .iter()
-        .find(|s| {
-            gates
-                .get(*s)
-                .is_some_and(|g| g.on_enter.contains(&kanbanr_core::config::Action::Branch))
-        })
-        .cloned()
+    // The build role's status (FEAT-188), declared or inferred from where the branch is made.
+    config.branch_status()
 }
 
 /// The shortest chain of allowed transitions from one status to another, both ends included.
@@ -3864,7 +4244,7 @@ fn run_finish(cli: &Cli, client: &Backend, code: Option<&str>) -> anyhow::Result
     // Everything that makes "done" mean something, checked before it is claimed. A workflow that
     // declares its gates says that itself, on the end status, and the move below enforces it; one
     // that does not keeps the rules `check` reports.
-    let gaps: Vec<String> = if config.gates.is_empty() {
+    let gaps: Vec<String> = if !config.declares_gates() {
         check_report(feature)["gaps"]
             .as_array()
             .map(|a| {
@@ -3895,16 +4275,20 @@ fn run_finish(cli: &Cli, client: &Backend, code: Option<&str>) -> anyhow::Result
         );
     }
 
-    let resp = client.write(
+    let resp = client.write_in(
         Method::Post,
         &format!("/projects/{p}/features/{code}/move"),
         Some(json!({ "to": terminal })),
+        code_repo().as_deref(),
     )?;
-    print_write(
-        cli,
-        &resp,
-        format!("{code} -> {terminal}. Merge when you are ready; the branch is not the archive."),
-    );
+    let merged = serde_json::from_str::<Value>(&resp).is_ok_and(|v| v.get("merged").is_some());
+    let done = if merged {
+        format!("{code} -> {terminal}")
+    } else {
+        format!("{code} -> {terminal}. Merge when you are ready; the branch is not the archive.")
+    };
+    print_write(cli, &resp, done);
+    print_merge(cli, &resp);
     Ok(())
 }
 
@@ -4125,6 +4509,8 @@ zachman:
   when:  \"\"            # trigger, frequency, timing
   who:   \"\"            # stakeholder role
   why:   \"\"            # the problem or goal served
+affects_docs: []      # board docs the design changes, e.g. [architecture/data.md]: named at the
+                      # design stage; a `docs_updated` gate checks each changed before moving on
 ";
     let requirements = match kind.trim().to_ascii_lowercase().as_str() {
         "defect" | "bug" => {
@@ -4932,11 +5318,16 @@ fn run_process_checks(cli: &Cli) -> anyhow::Result<()> {
                 json!({ "check": c.name(), "passes_when": c.passes_when(), "parameters": c.parameters() })
             })
             .collect();
+        let roles: Vec<Value> = kanbanr_core::config::Role::ALL
+            .iter()
+            .map(|r| json!({ "role": r.name(), "means": r.means() }))
+            .collect();
         println!(
             "{}",
             serde_json::to_string_pretty(&json!({
                 "checks": checks,
                 "signoffs": "anything kanbanr cannot see is a named sign-off: `signoffs: [design-review]`",
+                "roles": roles,
             }))?
         );
         return Ok(());
@@ -4951,6 +5342,11 @@ fn run_process_checks(cli: &Cli) -> anyhow::Result<()> {
         "\nAnything kanbanr cannot judge from the board is a named sign-off, recorded by a person: \
          `signoffs: [design-review]` in the stage's gate."
     );
+    // The stage roles a gate can hold, or be addressed by (`@build`) (FEAT-188).
+    println!("\nStage roles (`roles: [build]` on a gate, or a gate keyed `@build`):");
+    for r in kanbanr_core::config::Role::ALL {
+        println!("{:<14} {}", r.name(), r.means());
+    }
     Ok(())
 }
 
@@ -5352,9 +5748,13 @@ fn projects_behind(
 /// by lookup order: an update brings a project its own process's new version (FEAT-170).
 fn current_copy(
     client: &Backend,
+    config: &kanbanr_core::config::ProjectConfig,
     source: &kanbanr_core::config::ProcessSource,
 ) -> anyhow::Result<Option<kanbanr_core::config::WorkflowFile>> {
     use kanbanr_core::config::Library;
+    // As this project would have it: the parts of the method it turned off stay off (FEAT-193).
+    let shape =
+        |f: kanbanr_core::config::WorkflowFile| kanbanr_core::method::shaped(f, &config.method);
     Ok(match source.library {
         Library::Board => board_process(client, &source.name),
         Library::Personal => match personal_processes() {
@@ -5362,7 +5762,8 @@ fn current_copy(
             None => None,
         },
         Library::Builtin => kanbanr_core::config::preset(&source.name).ok(),
-    })
+    }
+    .map(shape))
 }
 
 /// How a project stands against its saved process, the personal case included — which only this
@@ -5374,7 +5775,7 @@ fn project_drift(
     let Some(source) = &project.config.process else {
         return Ok(None);
     };
-    let current = current_copy(client, source)?;
+    let current = current_copy(client, &project.config, source)?;
     Ok(kanbanr_core::library::drift(
         &project.config,
         current.as_ref(),
@@ -5435,7 +5836,7 @@ fn run_process_drift(cli: &Cli, client: &Backend, cmd: &ProcessCmd) -> anyhow::R
                              `kanbanr process diff <name>`"
                         )
                     })?;
-                    let file = current_copy(client, source)?.ok_or_else(|| {
+                    let file = current_copy(client, &project.config, source)?.ok_or_else(|| {
                         anyhow::anyhow!(
                             "'{}' is no longer in the {} library",
                             source.name,
@@ -5471,7 +5872,7 @@ fn run_process_drift(cli: &Cli, client: &Backend, cmd: &ProcessCmd) -> anyhow::R
                     "{p} uses no saved process; adopt one with `kanbanr config workflow --preset <name>`"
                 )
             })?;
-            let file = current_copy(client, &source)?.ok_or_else(|| {
+            let file = current_copy(client, &project.config, &source)?.ok_or_else(|| {
                 anyhow::anyhow!(
                     "'{}' is no longer in the {} library",
                     source.name,
@@ -5689,12 +6090,14 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             if let Some(reason) = unapproved {
                 body["unapproved"] = json!(reason);
             }
-            let resp = client.write(
+            let resp = client.write_in(
                 Method::Post,
                 &format!("/projects/{p}/features/{code}/move"),
                 Some(body),
+                code_repo().as_deref(),
             )?;
             print_write(cli, &resp, format!("{code} -> {}", field(&resp, "status")));
+            print_merge(cli, &resp);
             print_gate_warnings(cli, &resp);
             Ok(())
         }
@@ -6110,16 +6513,57 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 print!("{}", kanbanr_core::export::definition_brief(feature));
                 println!();
             }
-            if *pending {
+            // Agreed items whose one open question is which release they ship in (FEAT-185):
+            // answered by planning them into a release, not by an approval.
+            let which_release: Vec<&Value> = queue
+                .iter()
+                .filter(|v| v["approval"] == "release")
+                .collect();
+            let to_agree: Vec<&kanbanr_core::FeatureItem> = features
+                .iter()
+                .filter(|f| {
+                    !which_release
+                        .iter()
+                        .any(|v| v["code"].as_str() == Some(f.code.as_str()))
+                })
+                .collect();
+            if *pending && !to_agree.is_empty() {
                 println!(
                     "{} item(s) awaiting agreement. Approve the ones you accept:\n\n    {}\n\n\
                      Leaving one unapproved is an answer. To change a definition first: \
                      `kanbanr feature define <CODE> --file …` — the approval stays off until you \
                      agree to the new version.",
-                    features.len(),
-                    features
+                    to_agree.len(),
+                    to_agree
                         .iter()
                         .map(|f| format!("kanbanr approve {}", f.code))
+                        .collect::<Vec<_>>()
+                        .join("\n    ")
+                );
+            }
+            if *pending && !which_release.is_empty() {
+                println!(
+                    "{} item(s) ready for release and in none. Plan each into one:\n\n    {}",
+                    which_release.len(),
+                    which_release
+                        .iter()
+                        .map(|v| {
+                            let choices: Vec<&str> = v["release_choices"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|c| c.as_str())
+                                .collect();
+                            format!(
+                                "kanbanr release plan {} {}",
+                                if choices.is_empty() {
+                                    "<VERSION>".to_string()
+                                } else {
+                                    choices.join("|")
+                                },
+                                v["code"].as_str().unwrap_or_default()
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join("\n    ")
                 );
@@ -6388,6 +6832,22 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Doctor { all_projects } => run_doctor(cli, &client, *all_projects),
+        Command::Readme => {
+            let resp = client.write(Method::Post, "/readme", Some(json!({})))?;
+            let changed = serde_json::from_str::<Value>(&resp)?["changed"]
+                .as_bool()
+                .unwrap_or(false);
+            print_write(
+                cli,
+                &resp,
+                if changed {
+                    "wrote the board README".to_string()
+                } else {
+                    "the board README is up to date".to_string()
+                },
+            );
+            Ok(())
+        }
         Command::Index { all_projects } => run_index(cli, &client, *all_projects),
         Command::Query(args) => run_query(cli, &client, args),
     }
@@ -6540,7 +7000,11 @@ fn run_doctor(cli: &Cli, client: &Backend, all_projects: bool) -> anyhow::Result
         (client.get("/doctor")?, ids)
     } else {
         let p = require_project(cli)?;
-        (client.get(&format!("/projects/{p}/doctor"))?, vec![p])
+        // With the git model on, doctor checks the branches too, in this repository (FEAT-191).
+        (
+            client.get_in(&format!("/projects/{p}/doctor"), code_repo().as_deref())?,
+            vec![p],
+        )
     };
     let mut report: Value = serde_json::from_str(&resp)?;
     // A project on a personal process: only this machine has the process to compare with (FEAT-170).
@@ -7253,19 +7717,79 @@ fn run_milestone(cli: &Cli, client: &Backend, cmd: &MilestoneCmd) -> anyhow::Res
 fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     match cmd {
+        ConfigCmd::Method { on, off, parts } => {
+            let resp = if *on || *off {
+                client.write(
+                    Method::Put,
+                    &format!("/projects/{p}/config/method"),
+                    Some(json!({ "on": *on, "parts": parts })),
+                )?
+            } else {
+                let parts = client.get(&format!("/projects/{p}/config/method"))?;
+                format!("{{\"parts\": {parts}, \"notes\": []}}")
+            };
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let v: Value = serde_json::from_str(&resp)?;
+            for note in v["notes"].as_array().into_iter().flatten() {
+                println!("note: {}", note.as_str().unwrap_or_default());
+            }
+            for part in v["parts"].as_array().into_iter().flatten() {
+                let name = part["part"].as_str().unwrap_or_default();
+                let means = part["means"].as_str().unwrap_or_default();
+                let line = match (
+                    part["on"].as_bool().unwrap_or(true),
+                    part["status"].as_str(),
+                ) {
+                    (false, _) => "off".to_string(),
+                    (true, Some(status)) => format!("on: {status} {means}"),
+                    (true, None) if name == "links" => format!("on: {means}"),
+                    (true, None) => {
+                        "on, but not in this workflow — `kanbanr config method --on` adds it"
+                            .to_string()
+                    }
+                };
+                println!("{name:<13} {line}");
+            }
+            Ok(())
+        }
         ConfigCmd::Cadence {
             sprints,
             releases,
             unit,
             sprint_length,
             release,
+            release_stages,
+            integration_branch,
+            main_branch,
+            git_model,
         } => {
             let body = obj(vec![
+                ("git_model", git_model.as_deref().map(|v| json!(v == "on"))),
                 ("sprints", sprints.as_deref().map(|v| json!(v == "on"))),
                 ("releases", releases.as_deref().map(|v| json!(v == "on"))),
                 ("estimate_unit", unit.clone().map(|u| json!(u))),
                 ("sprint_length_days", sprint_length.map(|d| json!(d))),
                 ("release", release.clone().map(|r| json!(r))),
+                (
+                    "release_stages",
+                    release_stages.as_ref().map(|s| {
+                        // `--release-stages ""` arrives as one blank entry: an empty list, which
+                        // the route refuses by name.
+                        if s.iter().all(|x| x.trim().is_empty()) {
+                            json!([])
+                        } else {
+                            json!(s)
+                        }
+                    }),
+                ),
+                (
+                    "integration_branch",
+                    integration_branch.clone().map(|b| json!(b)),
+                ),
+                ("main_branch", main_branch.clone().map(|b| json!(b))),
             ]);
             let resp = client.write(
                 Method::Put,
@@ -7583,17 +8107,58 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             target,
             name,
+            branch,
+            patch_of,
         } => {
-            let resp = client.write(
+            let by = match patch_of {
+                Some(_) => Some(verdict_author(cli, None)?),
+                None => None,
+            };
+            let resp = client.write_in(
                 Method::Post,
                 &format!("/projects/{p}/releases"),
                 Some(obj(vec![
                     ("version", Some(json!(version))),
                     ("target", target.clone().map(|t| json!(t))),
                     ("name", name.clone().map(|n| json!(n))),
+                    ("patch_of", patch_of.clone().map(|v| json!(v))),
+                    ("by", by.map(|b| json!(b))),
                 ])),
+                code_repo().as_deref(),
             )?;
-            print_write(cli, &resp, format!("added release {version}"));
+            let said = match patch_of {
+                Some(parent) => {
+                    let v: Value = serde_json::from_str(&resp)?;
+                    format!(
+                        "added {version}, a patch of {parent}: {} made from the {parent} tag, at {}",
+                        v["branch"].as_str().unwrap_or_default(),
+                        v["stage"].as_str().unwrap_or_default()
+                    )
+                }
+                None => format!("added release {version}"),
+            };
+            print_write(cli, &resp, said);
+            if *branch {
+                let project = get_project(client, &p)?;
+                let first = project.config.cadence.stages().first().cloned();
+                promote_release(cli, client, &p, version, first.as_deref(), None, None)?;
+            }
+        }
+        ReleaseCmd::Promote {
+            version,
+            stage,
+            reason,
+            by,
+        } => {
+            promote_release(
+                cli,
+                client,
+                &p,
+                version,
+                stage.as_deref(),
+                reason.as_deref(),
+                by.as_ref(),
+            )?;
         }
         ReleaseCmd::List => {
             let resp = client.get(&format!("/projects/{p}/releases"))?;
@@ -7613,10 +8178,13 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                     .iter()
                     .filter(|f| f.release.as_deref() == Some(version))
                     .count();
+                // The stage it is at (FEAT-183); none yet reads as not yet a candidate.
+                let stage = r["stage"].as_str().filter(|s| !s.is_empty()).unwrap_or("—");
                 println!(
-                    "{:<12} {:<8} target {:<10}  {planned} item(s)",
+                    "{:<12} {:<8} {:<12} target {:<10}  {planned} item(s)",
                     version,
                     r["state"].as_str().unwrap_or(""),
+                    stage,
                     r["target"].as_str().unwrap_or("—")
                 );
             }
@@ -7633,7 +8201,17 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 format!("planned {} into {version}", items.join(", ")),
             );
         }
-        ReleaseCmd::Cut { version, tag } => {
+        // `cut --tag` is promotion to the last stage (FEAT-183): the tag comes with the main branch
+        // fast-forwarded to the release, through the same preflight and rollback.
+        ReleaseCmd::Cut { version, tag: true } => {
+            let project = get_project(client, &p)?;
+            let last = project.config.cadence.stages().last().cloned();
+            promote_release(cli, client, &p, version, last.as_deref(), None, None)?;
+        }
+        ReleaseCmd::Cut {
+            version,
+            tag: false,
+        } => {
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/releases/{}/cut", urlencode_segment(version)),
@@ -7666,16 +8244,118 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                     );
                 }
             }
-            if *tag {
-                let root = scm::repo_root()
-                    .ok_or_else(|| anyhow::anyhow!("not a git repository — nothing to tag"))?;
-                scm::git(
-                    &root,
-                    &["tag", "-a", version, "-m", &format!("Release {version}")],
-                )?;
-                println!("tagged {version}");
+        }
+    }
+    Ok(())
+}
+
+/// Promote a release (FEAT-183), with the code repository this command runs in. The stage is
+/// worked out here when none is named, so the board's commit says where the release went.
+fn promote_release(
+    cli: &Cli,
+    client: &Backend,
+    p: &str,
+    version: &str,
+    stage: Option<&str>,
+    reason: Option<&str>,
+    by: Option<&String>,
+) -> anyhow::Result<()> {
+    let by = verdict_author(cli, by)?;
+    let stage = match stage {
+        Some(s) => s.to_string(),
+        None => {
+            let stages = get_project(client, p)?.config.cadence.stages();
+            let releases: Vec<Value> =
+                serde_json::from_str(&client.get(&format!("/projects/{p}/releases"))?)?;
+            let current = releases
+                .iter()
+                .find(|r| r["version"] == version)
+                .and_then(|r| r["stage"].as_str())
+                .unwrap_or("");
+            let next = stages
+                .iter()
+                .position(|s| s == current)
+                .map_or(0, |i| i + 1);
+            stages.get(next).cloned().ok_or_else(|| {
+                anyhow::anyhow!("{version} is at {current}, the last stage — there is no next one")
+            })?
+        }
+    };
+    let repo = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| kanbanr_core::coderepo::repo_root_in(&cwd));
+    let resp = client.write_in(
+        Method::Post,
+        &format!(
+            "/projects/{p}/releases/{}/promote",
+            urlencode_segment(version)
+        ),
+        Some(obj(vec![
+            ("stage", Some(json!(stage))),
+            ("by", Some(json!(by))),
+            ("reason", reason.map(|r| json!(r))),
+        ])),
+        repo.as_deref(),
+    )?;
+    let v: Value = serde_json::from_str(&resp)?;
+    let mut said = format!("{version} -> {stage}");
+    if let Some(b) = v["branch_created"].as_str() {
+        said.push_str(&format!("; created {b}"));
+    }
+    if let Some(t) = v["tagged"].as_str() {
+        match v["main_branch"].as_str() {
+            Some(main) => said.push_str(&format!("; tagged {t}, {main} fast-forwarded to it")),
+            // A patch of an older release leaves main where it is (FEAT-184).
+            None => said.push_str(&format!(
+                "; tagged {t}; main has moved on, so it was left as it is"
+            )),
+        }
+    }
+    print_write(cli, &resp, said);
+    if !cli.json && v["tagged"].is_string() {
+        let release = &v["release"];
+        let shipped = release["shipped"].as_array().map_or(0, Vec::len);
+        println!(
+            "  shipped {shipped} item(s); notes in {}",
+            release["notes_doc"].as_str().unwrap_or("")
+        );
+        for c in release["carried"].as_array().into_iter().flatten() {
+            println!(
+                "  carried {} → {} ({})",
+                c["code"].as_str().unwrap_or(""),
+                c["to"].as_str().unwrap_or(""),
+                c["why"].as_str().unwrap_or("")
+            );
+        }
+        let forward: Vec<&Value> = v["forward_merge"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .collect();
+        if !forward.is_empty() {
+            println!(
+                "  merge these forward into {} (`kanbanr git forward {version}` with the git model \
+                 on, or by hand):",
+                v["forward_into"]
+                    .as_str()
+                    .unwrap_or("the integration branch")
+            );
+            for c in forward {
+                let sha = c["sha"].as_str().unwrap_or_default();
+                println!(
+                    "    {} {}",
+                    &sha[..sha.len().min(12)],
+                    c["subject"].as_str().unwrap_or_default()
+                );
             }
         }
+        println!(
+            "  nothing was pushed: push the tag{} when you are ready",
+            v["main_branch"]
+                .as_str()
+                .map(|m| format!(" and {m}"))
+                .unwrap_or_default()
+        );
     }
     Ok(())
 }
@@ -7817,18 +8497,37 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
             }
         }
         SprintCmd::Start { code } => {
-            let resp = client.write(
+            // With the git model on, the sprint's branch is made in this repository (FEAT-189).
+            let repo = std::env::current_dir()
+                .ok()
+                .and_then(|cwd| kanbanr_core::coderepo::repo_root_in(&cwd));
+            let resp = client.write_in(
                 Method::Post,
                 &format!("/projects/{p}/sprints/{code}/start"),
                 Some(json!({})),
+                repo.as_deref(),
             )?;
-            print_write(cli, &resp, format!("{code} is the active sprint"));
+            let v: Value = serde_json::from_str(&resp)?;
+            let branch = match (v["branch"].as_array(), v["reused"].as_str()) {
+                (Some(b), _) => format!(
+                    "; created {} from {}",
+                    b[0].as_str().unwrap_or_default(),
+                    b[1].as_str().unwrap_or_default()
+                ),
+                (None, Some(name)) => format!("; {name} already exists"),
+                _ => String::new(),
+            };
+            print_write(cli, &resp, format!("{code} is the active sprint{branch}"));
+            if !cli.json {
+                print_catch_up(&v);
+            }
         }
         SprintCmd::Close { code, carry_to } => {
-            let resp = client.write(
+            let resp = client.write_in(
                 Method::Post,
                 &format!("/projects/{p}/sprints/{code}/close"),
                 Some(obj(vec![("carry_to", carry_to.clone().map(|c| json!(c)))])),
+                code_repo().as_deref(),
             )?;
             let v: Value = serde_json::from_str(&resp)?;
             let carried: Vec<String> = v["carried"]
@@ -7853,6 +8552,10 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
                 },
             );
             if !cli.json {
+                if let Some(tag) = v["tagged"].as_str() {
+                    println!("tagged {tag} and fast-forwarded main to sprint/{code}");
+                }
+                print_catch_up(&v);
                 println!("  look back on it: `kanbanr retro --sprint {code}`");
             }
         }

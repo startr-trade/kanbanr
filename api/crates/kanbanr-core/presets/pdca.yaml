@@ -15,14 +15,18 @@ transitions:
   Out-of-Scope: [Plan]
 gates:
   Plan:
+    roles: [design]
     purpose: State the change, why, and how you will know it worked.
   Do:
+    roles: [build]
     purpose: Make the change as planned.
     requires: [statement, goals, requirements, tests_named, approved]
     on_enter: [branch]
   Check:
+    roles: [integrate]
     purpose: Measure the result against the plan.
     requires: [tests_green]
   Act:
+    roles: [release]
     purpose: Keep what worked, and say what the next cycle should change.
     signoffs: [review]

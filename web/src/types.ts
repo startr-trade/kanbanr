@@ -132,6 +132,8 @@ export interface FeatureDefinition {
   goals?: string[];
   zachman?: Zachman;
   design_doc?: string;
+  /** Board docs this item's design changes (FEAT-180); `docs_updated` checks each changed. */
+  affects_docs?: string[];
   requirements?: Requirement[];
   approval?: Approval | null;
   /** Every agreement and withdrawal, oldest first (FEAT-069). Nothing is ever removed. */
@@ -224,9 +226,13 @@ export interface PendingReview {
   title: string;
   status: string;
   /** `unratified`: finished under a recorded bypass and never agreed to (FEAT-109). */
-  approval: "missing" | "lapsed" | "unratified" | "signoff";
+  /** `release`: agreed, and its next stage is the end — which planned release is it in (FEAT-185)? */
+  approval: "missing" | "lapsed" | "unratified" | "signoff" | "release";
   /** Sign-offs the item's next stage is waiting on (FEAT-117). */
   signoffs_needed?: string[];
+  /** Present when the item is ready for release and in none: the planned releases, in file order
+   * (FEAT-185). Empty means there is none yet, and only a new release can be chosen. */
+  release_choices?: string[];
   /** The definition revision this brief shows; a verdict sent with it is refused if it moved on (FEAT-159). */
   rev?: string;
   started_unapproved?: string;
@@ -244,7 +250,10 @@ export interface Gap {
 }
 
 /** Per live item, keyed by code: what its card counts, and the next stage with how much it lacks. */
-export type Readiness = Record<string, { gaps: Gap[]; next: { status: string; missing: number }[] }>;
+export type Readiness = Record<
+  string,
+  { gaps: Gap[]; next: { status: string; missing: number; signoffs: string[]; tasks_open: number; ends: boolean }[] }
+>;
 
 /** A mirrored external issue (e.g. a GitHub issue kept in step with this feature). */
 export interface IssueLink {
@@ -318,7 +327,16 @@ export interface ProjectConfig {
   /** Days or story points (FEAT-121). */
   estimate_unit?: "days" | "points";
   /** Whether the project uses sprints and releases at all (FEAT-121). */
-  cadence?: { sprints?: boolean; releases?: boolean; sprint_length_days?: number; release?: string };
+  cadence?: {
+    sprints?: boolean;
+    releases?: boolean;
+    sprint_length_days?: number;
+    release?: string;
+    /** The stages a release moves through; the last is the cut (FEAT-183). */
+    release_stages?: string[];
+    integration_branch?: string;
+    main_branch?: string;
+  };
 }
 
 /** A timebox (FEAT-119). */
@@ -358,12 +376,27 @@ export interface Release {
   items?: string[];
   /** How many of `items` are finished — by the daemon's rule, the same as the sprint's. */
   finished?: number;
+  /** Where it is now, from the project's release stages; absent until first promoted (FEAT-183). */
+  stage?: string;
+  /** Every stage change, oldest first. A move back carries its reason. */
+  stages?: { stage: string; by: string; at: string; reason?: string }[];
+  /** The code branch, made on entering the first stage. */
+  branch?: string;
 }
 
-/** A check a gate names, or the Zachman check narrowed to some columns. */
-export type Condition = string | { zachman: string[] };
+/** A check a gate names, the Zachman check narrowed to some columns, or the spec's named sections
+ * (FEAT-179). */
+export type Condition = string | { zachman: string[] } | { spec_sections: string[] };
 
 /** What entering a status asks for (FEAT-113, FEAT-114). */
+/** What a cut would do with one planned item (FEAT-183, FEAT-185). */
+export interface CutPreview {
+  code: string;
+  ships: boolean;
+  to?: string;
+  why?: string;
+}
+
 export interface Gate {
   purpose?: string;
   requires?: Condition[];
@@ -372,11 +405,17 @@ export interface Gate {
   enforce?: "block" | "warn";
   kinds?: string[];
   on_enter?: string[];
+  /** The stage roles this status holds: design, build, integrate, release (FEAT-188). */
+  roles?: string[];
 }
 
 /** Readable text for a gate condition. */
 export function conditionText(c: Condition): string {
-  return typeof c === "string" ? c.replace(/_/g, " ") : `zachman ${c.zachman.join("/")}`;
+  if (typeof c === "string") return c.replace(/_/g, " ");
+  if ("spec_sections" in c) return `spec sections ${c.spec_sections.join(", ")}`;
+  if ("zachman" in c) return `zachman ${c.zachman.join("/")}`;
+  // A condition a newer kanbanr writes: shown as it is rather than breaking the page (FEAT-199).
+  return JSON.stringify(c);
 }
 
 export interface Project {

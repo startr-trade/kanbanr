@@ -16,7 +16,7 @@ DATA_DIR ?= $(shell kanbanr where 2>/dev/null || echo $(CURDIR)/../$(notdir $(CU
 SKILLS_DIR ?= $(HOME)/.claude/skills
 IMAGE ?= kanbanr:latest
 
-.PHONY: help build test itest ci audit scan-deps scan-image codeql cli web check-docs install-cli install-skill install serve docker-build docker-up docker-down screenshots clean
+.PHONY: help build test itest ci audit scan-deps scan-image codeql cli web monitor-bundle check-docs install-cli install-skill install serve docker-build docker-up docker-down screenshots clean
 
 help:
 	@echo "Targets:"
@@ -31,14 +31,15 @@ help:
 	@echo "  install-cli   cargo install the one 'kanbanr' binary onto your PATH"
 	@echo "  install-skill Symlink skill/kanbanr into ~/.claude/skills/"
 	@echo "  install       install-cli + install-skill"
+	@echo "  monitor-bundle Pack web/dist as the standalone monitor bundle a release attaches, and check it"
 	@echo "  serve         Run the read-only view daemon (serves API + built SPA) on :8080"
 	@echo "  docker-build  Build the single Docker image (runs 'kanbanr serve')"
 	@echo "  docker-up     Build & run the view daemon container via docker compose"
 	@echo "  docker-down   Stop the docker container"
 
 build:
-	cd api && cargo build --release
 	cd web && npm install && npm run build
+	cd api && cargo build --release
 
 test:
 	cd api && cargo test
@@ -50,11 +51,20 @@ itest: docker-build
 	docker build -f docker/Dockerfile -t kanbanr:itest .
 	cd api && cargo test -p kanbanr-cli -- --ignored
 
+# The CLI alone, without the monitor baked in (`make install-cli` builds the monitor first).
 cli:
-	cd api && cargo build --release -p kanbanr-cli
+	cd api && KANBANR_ALLOW_BARE_BUILD=1 cargo build --release -p kanbanr-cli
 
 web:
 	cd web && npm install && npm run build
+
+# The standalone monitor bundle a release attaches (FEAT-178): web/dist with the standalone
+# config.json, packed and then checked as release.yml checks it. Packs the dist already built
+# (`make web` first); TAG names the archive.
+TAG ?= v$(shell node -p "require('./web/package.json').version" 2>/dev/null)
+monitor-bundle:
+	scripts/pack-monitor-bundle.sh web/dist "kanbanr-monitor-$(TAG).tar.gz"
+	scripts/check-monitor-bundle.sh "kanbanr-monitor-$(TAG).tar.gz"
 
 # Every CI check that can run off GitHub, on a clean copy of the tracked tree, read from the
 # workflow files themselves (FEAT-131). Run it before every push; it ends by listing what only
@@ -79,8 +89,9 @@ scan-image:
 codeql:
 	scripts/security-scan.sh codeql
 
-# Every mermaid diagram in the docs parses with the library the monitor renders them with. A
-# diagram that fails renders as nothing, which reads as a missing image rather than an error.
+# Every diagram in the docs is drawn by the pinned Pele the book and the monitor use, and the book's
+# copy of Pele is that build (FEAT-203). A diagram that fails renders as nothing, which reads as a
+# missing image rather than an error.
 check-docs:
 	cd web && npm install && npm run check:docs
 	tools/docs/sync.sh

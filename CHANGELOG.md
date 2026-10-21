@@ -8,6 +8,118 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Diagrams drawn by Pele, in the colours of the theme you read in (FEAT-203).** The book and the
+  monitor draw ```` ```mermaid ```` blocks with [Pele](https://pele.run) 1.7.0 instead of Mermaid. A
+  diagram takes its colours from the current theme — each of the book's five, and the monitor's
+  light and dark — and follows a theme switch without a reload. The book no longer needs the
+  `mdbook-mermaid` preprocessor, and loads one 680 kB script instead of Mermaid's 2.5 MB; the
+  monitor loads Pele only on a page that has a diagram.
+  `check:docs` draws every diagram with the same Pele.
+- **A versioned read API, described in OpenAPI 3.1 (FEAT-177).** The daemon's public read routes —
+  the ones the monitor uses, plus the obvious reads — are now version 1 of a documented contract
+  for integrators and tools built on the board. `kanbanr serve` serves the description at
+  `GET /api/openapi.json`; the [HTTP API](https://kanbanr.startr.trade/reference/http-api.html)
+  page lists the public routes, the internal ones, errors, live updates and versioning, and
+  includes the document. It is generated from the Rust response types, a contract test checks
+  every public route against it, and the monitor's types are checked against it too. A breaking
+  change to a public route would be published as v2 under `/api/v2/`. Other read routes stay
+  served, as internal.
+- **Every board explains how to view it (FEAT-201).** A board's `README.md` says what the repository
+  is, lists its projects, and walks a reader from nothing to the board: install kanbanr, clone,
+  `kanbanr serve --data-dir <clone>`, open the page. It is written with the board's first project
+  and kept current as projects change; text outside its markers is never touched. `kanbanr readme`
+  writes it on an existing board, and `kanbanr doctor` reminds you until then.
+- **Release actions in the monitor (FEAT-185).** With releases on, the review queue asks which
+  planned release an item belongs to once its next stage is the end (or a stage that asks for
+  `in_release`) and it is in none. The Review page offers one button per planned release and
+  **New release…**; `kanbanr review --pending` lists the matching `kanbanr release plan` command,
+  and the skill has Claude ask the same question. The Releases page shows each release's stage and
+  its history, and a **Promote to \<next stage\>** button, which asks for confirmation before the
+  production cut, listing exactly what ships and what carries over (tag, and main fast-forwarded). Both use the same operations as the CLI, through the
+  writes-enabled monitor.
+- **The monitor as a standalone static bundle (FEAT-178).** Each release attaches
+  `kanbanr-monitor-<tag>.tar.gz`, the monitor the binary embeds, for collaborators and reviewers to
+  view a board from any static web host without running kanbanr. Unpack it, set `apiBase` in its
+  `config.json` to a daemon's read API, and serve the folder. The bundle uses hash routing, so it
+  needs no rewrite rule, and it is read-only: every decision shows its CLI command instead, and no
+  write route is called. The embedded monitor reads the same `config.json` with defaults that keep
+  today's behaviour. `kanbanr serve --ui-dir` now serves every file in the folder, so the favicon no
+  longer falls back to the index. `make monitor-bundle` packs and checks the bundle locally. See
+  [Hosting the monitor elsewhere](https://kanbanr.startr.trade/using/the-monitor.html#hosting-the-monitor-elsewhere).
+- **`kanbanr git doctor`: the board and the branches agree (FEAT-191).** It reports integrated items
+  whose branch never reached its line, commits on a line for unfinished work, branches that name
+  nothing on the board, and release fixes not merged forward. It only reads, and exits 1 on an
+  error. With the git model on, `kanbanr doctor` includes these findings.
+- **Patch releases (FEAT-184).** `kanbanr release add v1.0.1 --patch-of v1.0.0` makes a patch of a
+  cut release: `release/v1.0.1` from the parent's tag, starting at the first stage. Its notes name
+  the parent, what the patch adds and what it keeps. At production a patch of an older release is
+  tagged without moving main, and its commits the integration branch lacks are listed to merge
+  forward. A release with no branch now gets one before any promotion, so a one-stage process and
+  a skipped first stage both work.
+- **The board makes the merges (FEAT-190).** With the git model on, moving an item into its
+  integrate stage merges its branch into its line, with a merge commit naming it; a merge that
+  would conflict refuses the move, naming the files, and changes nothing. In the sprints topology,
+  `sprint close` fast-forwards main to the sprint and tags it with the sprint's code. Items carried
+  into a sprint are brought up to date with its branch when it starts (a merge, never a rebase;
+  conflicts are reported and left alone). A fix integrated into a release under test is flagged,
+  and `kanbanr git forward <VERSION>` merges it forward into the line. Releases promoted to their
+  first stage make the integration line from main when it is not there yet. Ticking an item's last task
+  does not complete it when completing would merge its branch: the task write says which move to
+  make from the project folder.
+- **The git model follows the cadence (FEAT-189).** `kanbanr git model` shows how the code
+  repository is laid out: main, the line finished items integrate into (main; `sprint/<SP>`; or an
+  `integration` branch), item branches (`feat/`, `fix/` for defects, `spike/`), and the lines that
+  take merges only. With `kanbanr config cadence --git-model on`, `start` branches from the line,
+  `sprint start` makes the sprint's branch, a release branches from the line its cadence says, and
+  the hooks refuse plain commits on a line and merges into one that name no item. Off by default.
+  kanbanr's code-repository calls refuse to push.
+- **The method, on by default in every built-in process (FEAT-193).** Design before build: the
+  build stage asks for the spec's Design section and a `design-review` sign-off. Living docs: the
+  integrate stage asks for `docs_updated` and a `docs-folded` sign-off. And `doctor` reports broken
+  references. `kanbanr config method` shows each part and where it applies; `--off [part…]` and
+  `--on [part…]` choose, and applying or updating a process honours the choice without reporting
+  it as drift. Projects that predate it are unchanged until they choose; `doctor` asks once. New
+  projects record that they use the built-in `default` process. A gate addressed to a role now adds
+  to the built-in rule instead of replacing it. design-control's Verification sign-off is renamed
+  `verification-review`, so `design-review` means the pre-build review everywhere. Upgrade every
+  machine that shares a board.
+- **Living architecture docs (FEAT-180).** An item can name the board docs its design changes,
+  in `affects_docs`. A new gate check, `docs_updated`, passes once each has changed since the item
+  entered its stage, judged from the board's git history (an uncommitted change counts). Naming the
+  docs does not reopen the approval. `feature show` and the monitor list them; `doctor` reports a
+  named doc the board does not have, and an item whose next stage asks for `docs_updated` but names
+  none. A new chapter, "Living architecture docs", sets out the architecture repository, and the
+  skill folds each design into its docs before release.
+- **References between specs, docs and decisions are live and checked (FEAT-181).** In the
+  monitor, `FEAT-012`, `FEAT-012/R-2`, `MS-004`, `ADR-0005`, `G-1` and doc paths in any spec or doc
+  link to their pages, and a link into the monitor no longer reloads it. Only codes with this
+  board's prefixes count, and code is never read. `kanbanr doctor` reports a reference to
+  something the board does not have: an error for a link, a warning for prose. `kanbanr trace`
+  follows these links both ways and takes a doc (`kanbanr trace architecture/data.md`);
+  `kanbanr why` adds **Documented in**. The skill now asks for every reference to be written as a
+  link.
+- **Stage roles (FEAT-188).** A gate can say what its stage is for in any process: `roles:
+  [design | build | integrate | release]`. A gate keyed `"@build"` applies to whichever status
+  holds that role, so one rule works in every process. Every built-in process declares its roles,
+  `process checks` lists them, and the working agreement names them. Boards without roles infer
+  build and release from what they already do, and behave exactly as before. A board whose gates
+  only name roles, or that addresses a gate to a role, is schema 4. Projects using a built-in
+  process will see that process as changed (`kanbanr process diff`); take it with `process update`.
+- **Release stages: a release moves through environments, and production is the cut (FEAT-183).**
+  A release now has a stage — by default `candidate → test → staging → production`, or the
+  project's own list from `kanbanr config cadence --release-stages …` — and every move is recorded
+  with who made it and when. `kanbanr release promote <VERSION> [<stage>]` moves it. The first
+  stage makes the branch `release/<VERSION>` from the integration branch (`release add --branch`
+  does both). The last stage is the cut: it ships the finished items and writes the notes, tags the
+  code repository with the version, and fast-forwards the main branch to the release. If main has
+  commits the release lacks, or the tree has uncommitted changes, or the tag exists, it refuses and
+  changes nothing; if the board step fails afterwards, the tag and main are put back. Moving back a
+  stage needs `--reason`; nothing moves back from production. `release cut --tag` is now the same
+  as promoting to production. The integration and main branches default to the repository's
+  default branch (`--integration-branch`, `--main-branch`). The monitor's daemon promotes with the
+  code repository it was started in, when that folder's marker names the project. Nothing is
+  pushed. A 0.1.7 binary that rewrites `releases.yaml` drops the new `stage`, `stages` and `branch`
+  fields.
 - **A sign-off can be withdrawn, and is offered only when it means something (FEAT-182).**
   `kanbanr signoff <CODE> <name> --withdraw --reason "…"`, or **Withdraw** on the item's page, takes
   back a sign-off given in error. The earlier one stays on the record and stops counting. The
@@ -23,8 +135,51 @@ All notable changes to kanbanr are documented here. The format follows
   with a task list that a lower-cost subagent can build from without making design decisions. Pair
   the check with `signoffs: [design-review]` to have a person review the design before build.
 
+### Changed
+
+- **The daemon's answers say what they are (FEAT-177).** A `GET` under `/api` that no route answers
+  is now a `404`, not a `400` "unsupported operation". Mermaid diagrams (`workflow`, `gantt`) and
+  the DOT graph are sent as `text/plain` and the project export as `text/markdown`, where they
+  were labelled `application/json`.
+- **Tests cannot reach a real board (FEAT-195).** For contributors: every process cargo runs in
+  `api/` is fenced to the system temporary directory (`KANBANR_BOARD_FENCE`), so a test that
+  drifts onto a real board stops before touching it, and `make ci` fails if your board changed
+  during the run. Test scratch folders moved out of the build tree.
+- **`make ci` lets your verdicts through (FEAT-198).** Approving, ratifying or signing off items
+  on the board while `make ci` runs no longer fails its board check; any other change still does.
+
+### Fixed
+
+- **A sign-off that lifts the last hold finishes the item (FEAT-204).** An item whose tasks were all
+  done but whose end stage waited for a sign-off stayed in progress after the sign-off was given;
+  it now finishes then, through the same gates as ticking the last task.
+- **Board cards say plainly what an item needs next (FEAT-205).** A card's next-stage pill read
+  "→ In Progress ✓", which looked like the item's status and claimed ready while its tasks or a
+  sign-off were still outstanding. A card now says "In Progress needs 2", "waiting for sign-off
+  docs-folded", "ready for In Progress" or "ready to complete", and nothing while its tasks are
+  open. The readiness route's next stages gain `signoffs`, `tasks_open` and `ends`; `missing`
+  keeps its meaning.
+- **A cached build no longer ships without the monitor or the skill (FEAT-202).** The build
+  scripts found `web/dist` and `skill/kanbanr` through the folder they were compiled in; a build
+  cache (sccache) reused one compiled in a deleted worktree, and the binary had neither. They now
+  read the folder when they run, and a release build of a full checkout without a built monitor
+  fails, naming the fix (`KANBANR_ALLOW_BARE_BUILD=1` builds without it; `make cli` does).
+- **The Workflow page shows the method again (FEAT-199).** Its diagram failed ("No such shape") and
+  its Stages panel showed no gates on projects with role-addressed gates; both now show the gates
+  moves are judged by. A stage asking for `spec_sections` no longer crashes the page.
+- **Deleting a project removes its folder for good (FEAT-196).** The delete's own activity entry
+  recreated `projects/<id>/` and committed it; a log no longer writes into a project that is gone.
+- **The board is found from inside a git worktree (FEAT-192).** A linked worktree inside the
+  repository (`.claude/worktrees/w1`) has its own copy of the `.kanbanr` marker, so a relative board
+  path pointed nowhere and commands needed `KANBANR_DATA_DIR`. When that path doesn't exist and
+  the marker is in a linked worktree, kanbanr now resolves it from the main worktree.
+
 ### Security
 
+- **Distrusted emSign intermediates no longer trusted (FEAT-206).** `webpki-roots` goes to 1.0.10
+  (RUSTSEC-2026-0381) and `rustls-webpki` to 0.103.16 (RUSTSEC-2026-0382): the certificate checks
+  behind kanbanr's self-update and release check could accept a path through intermediates whose
+  private keys are now public.
 - **rustls advisories; an unmaintained YAML parser recorded (FEAT-186).** rustls goes to 0.23.46
   (RUSTSEC-2026-0346, RUSTSEC-2026-0348). `unsafe-libyaml`, which `serde_yaml` uses to read and
   write every board file, is unmaintained with no safe upgrade (RUSTSEC-2024-0449); it is listed

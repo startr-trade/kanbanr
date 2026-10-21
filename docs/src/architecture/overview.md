@@ -47,6 +47,16 @@ for data operations). The **CLI** links it to write the folder directly; the **v
 (`kanbanr-server`, a library run by `kanbanr serve`) links it to read. Both go through `dispatch`,
 so they agree by construction. It's all one binary.
 
+The daemon's **public read routes** are a versioned contract, v1 (FEAT-177). Their response types
+live in `kanbanr-core` and derive a JSON Schema behind the crate's `schema` feature, which the
+shipped binary does not enable; `kanbanr_core::openapi` lists the public routes and builds an
+OpenAPI 3.1 document from those schemas. The document is generated into
+`docs/src/reference/openapi.json`, committed, and served as those bytes at `/api/openapi.json`. A
+contract test runs a daemon on a fixture board and validates every public route against it, and
+fails when the committed document and the code disagree; the monitor's TypeScript types are
+checked against the same document. Every other read route is internal. See
+[HTTP API](../reference/http-api.md).
+
 
 ## Runtime: one writer, a read-only view, git
 
@@ -120,4 +130,14 @@ moves items recorded — each day's remaining is the sprint's scope less what ha
 counting as done (an end status, or one whose gate says `done`, like Scrum's Done) — and velocity
 from the sprints that closed. `release cut` ships what is finished, writes the notes as a board
 document, and carries the rest to the next release, recording that it did.
+
+A release also has a **stage** (`cadence.release_stages`, by default candidate → test → staging →
+production) and the history of its moves, each with who and when. `release promote` moves it
+(`releases::promote`). The first and last stages act on the project's **code** repository through
+`coderepo`, which shells out to the developer's own `git`: the first makes `release/<VERSION>`, the
+last is the cut. The cut checks everything it can first — no uncommitted changes, the branch
+present, the tag absent, main an ancestor of the release — then tags the release tip and
+fast-forwards main to it, then cuts the board; if the board step fails, the tag is deleted and main
+put back. The CLI passes the repository it runs in, the daemon the one it was started in when that
+folder's marker names the project; without one, those two stages are refused. Nothing is pushed.
 

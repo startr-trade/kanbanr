@@ -59,6 +59,9 @@ COPY --from=web /web/dist /web/dist
 # which from /api/crates/kanbanr-cli is /skill. Without it the image's kanbanr carries none and is
 # not the program the archives ship (FEAT-145).
 COPY skill/ /skill/
+# The read API's published description (FEAT-177) is served as committed, embedded from
+# ../../../../docs/src/reference/openapi.json, which from /api/crates/kanbanr-server/src is this.
+COPY docs/src/reference/openapi.json /docs/src/reference/openapi.json
 ENV KANBANR_UI_DIST=/web/dist
 # The build context has no .git (.dockerignore), so the commit and its date come in as arguments,
 # or `--version` says `unknown` (FEAT-144). Declared here, after the cooked dependencies, so a new

@@ -10,8 +10,7 @@ fn cli() -> PathBuf {
 
 #[test]
 fn cli_local_mode_without_a_server() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("local-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-local-{}", std::process::id()));
     let data = base.join("data");
     let home = base.join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -160,8 +159,7 @@ fn cli_local_mode_without_a_server() {
 
 #[test]
 fn cli_init_scaffolds_a_local_project() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("init-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-init-{}", std::process::id()));
     let data = base.join("data");
     let home = base.join("home");
     let work = base.join("work"); // cwd for the .kanbanr marker
@@ -799,8 +797,8 @@ fn cli_feature_define_templates_writes_and_clears() {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&work).unwrap();
 
-    let run = |args: &[&str]| -> String {
-        let o = Command::new(cli())
+    let exec = |args: &[&str]| -> Output {
+        Command::new(cli())
             .args(args)
             .current_dir(&work)
             .env("HOME", &home)
@@ -809,7 +807,10 @@ fn cli_feature_define_templates_writes_and_clears() {
             .env_remove("KANBANR_PROJECT")
             .stdin(std::process::Stdio::null())
             .output()
-            .expect("run kanbanr CLI");
+            .expect("run kanbanr CLI")
+    };
+    let run = |args: &[&str]| -> String {
+        let o = exec(args);
         assert!(
             o.status.success(),
             "cmd {args:?} failed: {}",
@@ -857,6 +858,44 @@ fn cli_feature_define_templates_writes_and_clears() {
     ]);
     assert!(defect.contains("violates:"), "{defect}");
     assert!(defect.contains("state: red"), "{defect}");
+    assert!(chore.contains("affects_docs:"), "FEAT-180: {chore}");
+
+    // The docs an item declares it changes (FEAT-180): stored as board paths, shown on the item,
+    // and nothing outside the doc tree accepted.
+    let docs_def = base.join("docs-def.yaml");
+    std::fs::write(
+        &docs_def,
+        "statement: Keep a cart\naffects_docs: [architecture/data]\n",
+    )
+    .unwrap();
+    run(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        docs_def.to_str().unwrap(),
+    ]);
+    let shown = run(&["feature", "show", "FEAT-001"]);
+    assert!(
+        shown.contains("**Affects docs:** `architecture/data.md`"),
+        "{shown}"
+    );
+    std::fs::write(
+        &docs_def,
+        "statement: Keep a cart\naffects_docs: [../secrets]\n",
+    )
+    .unwrap();
+    let refused = exec(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        docs_def.to_str().unwrap(),
+    ]);
+    assert!(
+        !refused.status.success(),
+        "a path out of the doc tree is refused"
+    );
 
     // A definition with a deliberate gap: `how` is left blank rather than invented.
     let def = base.join("def.yaml");
@@ -1774,6 +1813,8 @@ fn cli_trace_and_why_follow_the_chain_in_both_directions() {
         "a@x",
         "--no-hooks",
     ]);
+    // The trace is the subject here, not the method (FEAT-193).
+    run(&["config", "method", "--off"]);
     run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
     let charter = base.join("charter.yaml");
     std::fs::write(
@@ -1857,7 +1898,19 @@ fn cli_trace_and_why_follow_the_chain_in_both_directions() {
         "R-1",
     ]);
 
+    // A doc that names the item in its text is an edge too (FEAT-181), followed both ways.
+    run(&[
+        "doc",
+        "add",
+        "design/cart.md",
+        "--content",
+        "# Cart\n\nHow FEAT-001 keeps a cart.\n",
+    ]);
+    let doc = run(&["trace", "design/cart.md"]);
+    assert!(doc.contains("FEAT-001"), "{doc}");
+
     let why = run(&["why", "src/cart.rs:2"]);
+    assert!(why.contains("Documented in: design/cart.md"), "{why}");
     assert!(why.contains("FEAT-001/R-1"), "{why}");
     assert!(
         why.contains("THE SYSTEM SHALL retain it for 7 days"),
@@ -2310,8 +2363,7 @@ requirements:
 /// unconditionally, not a helper returning the wrong answer.
 #[test]
 fn init_refuses_to_repoint_a_folder_that_already_has_a_board() {
-    let base =
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("repoint-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("kanbanr-repoint-{}", std::process::id()));
     let home = base.join("home");
     let work = base.join("work");
     let first = base.join("first-board");
@@ -3459,4 +3511,1719 @@ fn cli_signoff_withdraw_round_trip() {
         "{shown}"
     );
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-192 R-1: inside a linked git worktree (`.claude/worktrees/w1`), the committed marker's
+/// relative board path is resolved from the main worktree, so commands find the board with no
+/// extra environment variables.
+#[test]
+fn marker_resolves_from_linked_worktree() {
+    let (base, work) = togaf_scratch("worktree");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    // The marker is committed, as in a real repository, so the worktree checks out its own copy.
+    ok(git_in(&base, &work, &["add", ".kanbanr"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["commit", "-q", "-m", "[no-ref] marker"],
+    ));
+    let main_board = String::from_utf8(ok(run_in(&base, &work, &["where"])).stdout).unwrap();
+    ok(git_in(
+        &base,
+        &work,
+        &["worktree", "add", "-q", ".claude/worktrees/w1", "-b", "w1"],
+    ));
+    let wt = work.join(".claude").join("worktrees").join("w1");
+    assert!(
+        wt.join(".kanbanr").is_file(),
+        "the worktree has its own marker"
+    );
+
+    let from_wt = String::from_utf8(ok(run_in(&base, &wt, &["where"])).stdout).unwrap();
+    assert_eq!(
+        from_wt.trim(),
+        main_board.trim(),
+        "the main board, found from the worktree"
+    );
+    let board = String::from_utf8(ok(run_in(&base, &wt, &["board"])).stdout).unwrap();
+    assert!(
+        board.contains("# shop board") || board.contains("board"),
+        "{board}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-188: `process checks` lists the stage roles a gate can hold or be addressed by, in text and
+/// JSON, without a board.
+#[test]
+fn process_checks_lists_roles() {
+    let (base, _work) = togaf_scratch("checks-roles");
+    let empty = base.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let out = run_in(&base, &empty, &["process", "checks"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    for role in ["design", "build", "integrate", "release"] {
+        assert!(text.contains(&format!("\n{role}")), "{role}: {text}");
+    }
+    let json = run_in(&base, &empty, &["process", "checks", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(v["roles"].as_array().unwrap().len(), 4);
+    assert_eq!(v["roles"][1]["role"], "build");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A code repository on `main` with one commit and its own commit identity, beside a board with
+/// releases on and `v1.0.0` added — the shape FEAT-183's promotions act on.
+fn release_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (base, work) = togaf_scratch(tag);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    // The tag is made by the person's own git, so the repository needs someone to author it.
+    ok(git_in(&base, &work, &["config", "user.name", "T"]));
+    ok(git_in(&base, &work, &["config", "user.email", "t@x"]));
+    std::fs::write(work.join("app.txt"), "v0\n").unwrap();
+    ok(git_in(&base, &work, &["add", "app.txt"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["commit", "-q", "-m", "[no-ref] base"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--releases", "on"],
+    ));
+    ok(run_in(&base, &work, &["release", "add", "v1.0.0"]));
+    (base, work)
+}
+
+/// The commit a name points at in the scratch repository, or "" when it names none.
+fn rev(base: &std::path::Path, work: &std::path::Path, name: &str) -> String {
+    let o = git_in(base, work, &["rev-parse", "--verify", "--quiet", name]);
+    String::from_utf8_lossy(&o.stdout).trim().to_string()
+}
+
+/// Commit a change to `app.txt` on `branch`, leaving `main` checked out afterwards.
+fn commit_on(base: &std::path::Path, work: &std::path::Path, branch: &str, content: &str) {
+    assert!(
+        git_in(base, work, &["checkout", "-q", branch])
+            .status
+            .success()
+    );
+    std::fs::write(work.join("app.txt"), content).unwrap();
+    assert!(
+        git_in(base, work, &["commit", "-q", "-am", "[no-ref] change"])
+            .status
+            .success()
+    );
+    assert!(
+        git_in(base, work, &["checkout", "-q", "main"])
+            .status
+            .success()
+    );
+}
+
+fn release_json(
+    base: &std::path::Path,
+    work: &std::path::Path,
+    version: &str,
+) -> serde_json::Value {
+    let o = run_in(base, work, &["--json", "release", "list"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let all: Vec<serde_json::Value> = serde_json::from_slice(&o.stdout).unwrap();
+    all.into_iter()
+        .find(|r| r["version"] == version)
+        .expect("the release is listed")
+}
+
+/// FEAT-183 R-2: promoting a release to candidate makes `release/<VERSION>` from the integration
+/// branch — the repository's default when the project names none — without checking it out.
+#[test]
+fn promote_candidate_creates_branch() {
+    let (base, work) = release_scratch("promote-candidate");
+    let o = run_in(&base, &work, &["release", "promote", "v1.0.0"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let said = String::from_utf8_lossy(&o.stdout);
+    assert!(said.contains("v1.0.0 -> candidate"), "{said}");
+    assert!(said.contains("created release/v1.0.0"), "{said}");
+    assert_eq!(
+        rev(&base, &work, "release/v1.0.0"),
+        rev(&base, &work, "main")
+    );
+    let head = git_in(&base, &work, &["symbolic-ref", "--short", "HEAD"]);
+    assert_eq!(String::from_utf8_lossy(&head.stdout).trim(), "main");
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(r["stage"], "candidate");
+    assert_eq!(r["branch"], "release/v1.0.0");
+    assert_eq!(
+        r["stages"][0]["by"], "A",
+        "the board's commit identity moved it"
+    );
+
+    // A named integration branch is where the next one comes from.
+    assert!(
+        git_in(&base, &work, &["branch", "develop"])
+            .status
+            .success()
+    );
+    commit_on(&base, &work, "develop", "on develop\n");
+    let o = run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--integration-branch", "develop"],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let o = run_in(&base, &work, &["release", "add", "v1.1.0", "--branch"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(
+        rev(&base, &work, "release/v1.1.0"),
+        rev(&base, &work, "develop")
+    );
+
+    // An existing branch of that name is refused, and the board does not move.
+    assert!(
+        git_in(&base, &work, &["branch", "release/v2.0.0"])
+            .status
+            .success()
+    );
+    assert!(
+        run_in(&base, &work, &["release", "add", "v2.0.0"])
+            .status
+            .success()
+    );
+    let o = run_in(&base, &work, &["release", "promote", "v2.0.0", "candidate"]);
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("already exists"));
+    assert!(release_json(&base, &work, "v2.0.0").get("stage").is_none());
+
+    // Outside any code repository, the stage that needs one is refused, saying why.
+    let board = String::from_utf8(run_in(&base, &work, &["where"]).stdout).unwrap();
+    let elsewhere = base.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(
+        elsewhere.join(".kanbanr"),
+        format!("project: shop\ndata_dir: {}\n", board.trim()),
+    )
+    .unwrap();
+    let o = run_in(&base, &elsewhere, &["release", "add", "v3.0.0", "--branch"]);
+    assert!(!o.status.success());
+    let why = String::from_utf8_lossy(&o.stderr);
+    assert!(why.contains("needs the code repository"), "{why}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-183 R-3: promoting to production cuts the release, tags its tip with the version and
+/// brings main to exactly that commit; `cut --tag` does the same.
+#[test]
+fn promote_production_cuts_tags_merges() {
+    let (base, work) = release_scratch("promote-production");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    commit_on(&base, &work, "release/v1.0.0", "fixed on the release\n");
+    ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "staging"],
+    ));
+    let o = ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "production"],
+    ));
+    let said = String::from_utf8_lossy(&o.stdout);
+    assert!(
+        said.contains("tagged v1.0.0, main fast-forwarded to it"),
+        "{said}"
+    );
+    let tip = rev(&base, &work, "release/v1.0.0");
+    assert_eq!(rev(&base, &work, "v1.0.0^{commit}"), tip);
+    assert_eq!(rev(&base, &work, "main"), tip);
+    assert_eq!(
+        std::fs::read_to_string(work.join("app.txt")).unwrap(),
+        "fixed on the release\n",
+        "the checked-out main moved with its files"
+    );
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(
+        (r["state"].as_str(), r["stage"].as_str()),
+        (Some("shipped"), Some("production"))
+    );
+    assert_eq!(r["notes_doc"], "releases/v1.0.0.md");
+    let docs = ok(run_in(&base, &work, &["doc", "list"]));
+    assert!(String::from_utf8_lossy(&docs.stdout).contains("releases/v1.0.0.md"));
+    let moves: Vec<&str> = r["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| c["stage"].as_str())
+        .collect();
+    assert_eq!(moves, ["candidate", "staging", "production"]);
+
+    // `cut --tag` is the same promotion.
+    ok(run_in(
+        &base,
+        &work,
+        &["release", "add", "v1.1.0", "--branch"],
+    ));
+    commit_on(&base, &work, "release/v1.1.0", "v1.1\n");
+    ok(run_in(&base, &work, &["release", "cut", "v1.1.0", "--tag"]));
+    assert_eq!(
+        rev(&base, &work, "main"),
+        rev(&base, &work, "release/v1.1.0")
+    );
+    assert_eq!(
+        rev(&base, &work, "v1.1.0^{commit}"),
+        rev(&base, &work, "main")
+    );
+    assert_eq!(release_json(&base, &work, "v1.1.0")["state"], "shipped");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-183 R-4: when main has commits the release lacks — here, a conflicting change to the same
+/// file — production is refused and nothing changes: not the board, not a tag, not main.
+#[test]
+fn promote_production_refuses_unclean_merge() {
+    let (base, work) = release_scratch("promote-unclean");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    commit_on(&base, &work, "release/v1.0.0", "the release's line\n");
+    commit_on(&base, &work, "main", "main's line\n");
+    let main_before = rev(&base, &work, "main");
+    let board = std::path::PathBuf::from(
+        String::from_utf8(ok(run_in(&base, &work, &["where"])).stdout)
+            .unwrap()
+            .trim(),
+    );
+    let shop = board.join("projects").join("shop");
+    let releases = || std::fs::read_to_string(shop.join("releases.yaml")).unwrap();
+    let before = releases();
+
+    let o = run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "production"],
+    );
+    assert!(
+        !o.status.success(),
+        "a release missing main's commits is refused"
+    );
+    let why = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        why.contains("main has commits release/v1.0.0 lacks"),
+        "{why}"
+    );
+    assert!(why.contains("nothing was changed"), "{why}");
+    assert_eq!(rev(&base, &work, "main"), main_before, "main did not move");
+    assert_eq!(rev(&base, &work, "v1.0.0"), "", "no tag was made");
+    assert_eq!(releases(), before, "the board's releases are untouched");
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(
+        (r["state"].as_str(), r["stage"].as_str()),
+        (Some("planned"), Some("candidate"))
+    );
+    let notes = ok(run_in(&base, &work, &["doc", "list"]));
+    assert!(
+        !String::from_utf8_lossy(&notes.stdout).contains("v1.0.0"),
+        "no notes were written"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Every file under `dir`, with its bytes, to show nothing was written.
+fn snapshot(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                out.push((p.clone(), std::fs::read(&p).unwrap()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// FEAT-195 R-1: under the fence, a board outside the temporary directory is refused before it is
+/// read or written. The board here is made with plain file writes, never through kanbanr, in the
+/// build tree — exactly where the test that reached the real board kept its scratch folder.
+#[test]
+fn board_outside_the_fence_is_refused() {
+    let outside = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("fenced-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&outside);
+    let data = outside.join("data");
+    std::fs::create_dir_all(data.join("projects").join("shop")).unwrap();
+    std::fs::write(
+        data.join("projects").join("shop").join("config.yaml"),
+        "name: shop\n",
+    )
+    .unwrap();
+    let before = snapshot(&outside);
+
+    for args in [
+        vec!["board", "--project", "shop"],
+        vec![
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+        vec!["identity", "--name", "A", "--email", "a@x"],
+    ] {
+        let mut full: Vec<&str> = args.clone();
+        full.extend(["--data-dir", data.to_str().unwrap()]);
+        let out = Command::new(cli())
+            .args(&full)
+            .current_dir(&outside)
+            .env("KANBANR_BOARD_FENCE", "temp")
+            .env_remove("KANBANR_DATA_DIR")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{args:?} ran outside the fence");
+        assert!(
+            err.contains("outside KANBANR_BOARD_FENCE"),
+            "{args:?}: {err}"
+        );
+    }
+    assert_eq!(
+        snapshot(&outside),
+        before,
+        "nothing outside the fence was touched"
+    );
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
+/// FEAT-195 R-2: every test runs fenced to the temporary directory (api/.cargo/config.toml), and
+/// no test keeps its scratch folder in the build tree, which sits under this repository's marker.
+#[test]
+fn tests_run_inside_the_fence() {
+    assert_eq!(
+        std::env::var("KANBANR_BOARD_FENCE").as_deref(),
+        Ok("temp"),
+        "cargo sets the fence for every test"
+    );
+    let (base, work) = togaf_scratch("fence-check");
+    assert!(work.starts_with(std::env::temp_dir()), "{}", work.display());
+    let _ = std::fs::remove_dir_all(&base);
+
+    // Only the refusal test above may name the build tree, and only to stand outside the fence.
+    let in_tree = concat!("env!(\"CARGO_TARGET", "_TMPDIR\")");
+    for (name, source) in [
+        ("local_mode.rs", include_str!("local_mode.rs")),
+        ("view_daemon.rs", include_str!("view_daemon.rs")),
+        ("integration.rs", include_str!("integration.rs")),
+    ] {
+        let uses = source.matches(in_tree).count();
+        let allowed = usize::from(name == "local_mode.rs");
+        assert_eq!(
+            uses, allowed,
+            "{name} keeps a scratch folder in the build tree"
+        );
+    }
+}
+
+/// FEAT-193 R-2: the method is on in a built-in process and can be turned off, all of it or part
+/// by part. Off, an item with no Design section enters the build stage; the project's record of
+/// its process stays current, because opting out is a choice, not an edit; and turning one part
+/// back on brings back that part alone.
+#[test]
+fn method_gates_opt_out() {
+    let (base, work) = togaf_scratch("method-opt-out");
+    togaf_board(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "workflow", "--preset", "togaf"],
+    ));
+    let shown = ok(run_in(&base, &work, &["config", "method"]));
+    assert!(
+        shown.contains("design        on: Implementation"),
+        "{shown}"
+    );
+    assert!(shown.contains("docs          on: Migration"), "{shown}");
+    for phase in ["Business Arch", "System Design"] {
+        ok(run_in(
+            &base,
+            &work,
+            &[
+                "move",
+                "FEAT-001",
+                phase,
+                "--override",
+                "not what this test is about",
+            ],
+        ));
+    }
+    let refused = run_in(&base, &work, &["move", "FEAT-001", "Implementation"]);
+    assert!(!refused.status.success());
+    let why = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        why.contains("no 'Design' section") && why.contains("design-review"),
+        "{why}"
+    );
+
+    ok(run_in(&base, &work, &["config", "method", "--off"]));
+    let parts: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "config", "method"]))).unwrap();
+    let parts = parts["parts"].as_array().unwrap();
+    assert_eq!(parts.len(), 5);
+    assert!(parts.iter().all(|p| p["on"] == false), "{parts:?}");
+    let status = ok(run_in(&base, &work, &["process", "status"]));
+    assert!(
+        !status.contains("edited"),
+        "an opt-out is not an edit: {status}"
+    );
+    ok(run_in(
+        &base,
+        &work,
+        &["move", "FEAT-001", "Implementation"],
+    ));
+
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "method", "--on", "design"],
+    ));
+    let shown = ok(run_in(&base, &work, &["config", "method"]));
+    assert!(
+        shown.contains("design        on: Implementation"),
+        "{shown}"
+    );
+    assert!(shown.contains("design-review off"), "{shown}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-189: a code repository with a first commit, a default-process board with its charter
+/// adopted, the cadence given, the git model on and the hooks installed, and one approved item.
+fn git_model_board(base: &std::path::Path, work: &std::path::Path, sprints: bool, releases: bool) {
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(base, work, &["init", "--initial-branch=main"]));
+    ok(git_in(base, work, &["config", "user.name", "T"]));
+    ok(git_in(base, work, &["config", "user.email", "t@x"]));
+    ok(git_in(
+        base,
+        work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ],
+    ));
+    ok(run_in(
+        base,
+        work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    // The method is not what these tests are about (FEAT-193).
+    ok(run_in(base, work, &["config", "method", "--off"]));
+    let on_off = |b: bool| if b { "on" } else { "off" };
+    ok(run_in(
+        base,
+        work,
+        &[
+            "config",
+            "cadence",
+            "--sprints",
+            on_off(sprints),
+            "--releases",
+            on_off(releases),
+            "--git-model",
+            "on",
+        ],
+    ));
+    ok(run_in(base, work, &["git", "install-hooks"]));
+    let charter = base.join("charter.yaml");
+    std::fs::write(
+        &charter,
+        "purpose: p\ngoals:\n  - statement: g\n    measure: m\n",
+    )
+    .unwrap();
+    ok(run_in(
+        base,
+        work,
+        &["charter", "set", "--file", charter.to_str().unwrap()],
+    ));
+    ok(run_in(
+        base,
+        work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    ok(run_in(
+        base,
+        work,
+        &["feature", "add", "--title", "Cart", "--milestone", "MS-001"],
+    ));
+    let def = base.join("def.yaml");
+    std::fs::write(&def, "statement: Keep a cart\n").unwrap();
+    ok(run_in(
+        base,
+        work,
+        &[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    ok(run_in(base, work, &["approve", "FEAT-001"]));
+}
+
+fn branches(base: &std::path::Path, work: &std::path::Path) -> String {
+    String::from_utf8_lossy(&git_in(base, work, &["branch", "--format=%(refname:short)"]).stdout)
+        .to_string()
+}
+
+/// FEAT-189 R-2: with releases on, `start` branches from the integration line, making it from
+/// main the first time.
+#[test]
+fn start_branches_from_integration_line() {
+    let (base, work) = togaf_scratch("gm-start");
+    git_model_board(&base, &work, false, true);
+    let model = run_in(&base, &work, &["git", "model"]);
+    let said = String::from_utf8_lossy(&model.stdout);
+    assert!(said.contains("line:       integration"), "{said}");
+    assert!(said.contains("pushing:    never automatic"), "{said}");
+
+    let started = run_in(&base, &work, &["start", "FEAT-001"]);
+    let out = String::from_utf8_lossy(&started.stdout);
+    assert!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    assert!(out.contains("created integration from main"), "{out}");
+    assert!(out.contains("from integration"), "{out}");
+    let merge_base = git_in(
+        &base,
+        &work,
+        &["merge-base", "--is-ancestor", "integration", "HEAD"],
+    );
+    assert!(
+        merge_base.status.success(),
+        "the item branch grows from integration"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-189 R-3: starting a sprint makes its branch — the first from main, the next from the
+/// sprint that has not shipped, and from main again once main holds it.
+#[test]
+fn sprint_start_creates_branch() {
+    let (base, work) = togaf_scratch("gm-sprint");
+    // Sprints and releases: closing a sprint leaves main alone (production is the release cut), so
+    // the next sprint has an unshipped one to build on. Sprints alone, the close moves main
+    // (FEAT-190).
+    git_model_board(&base, &work, true, true);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    for start in ["2026-10-05", "2026-10-19", "2026-11-02"] {
+        ok(run_in(&base, &work, &["sprint", "add", "--start", start]));
+    }
+    let said = ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    assert!(said.contains("created sprint/SP-001 from main"), "{said}");
+    // Work lands on the sprint, so the next sprint has something main does not.
+    ok(git_in(&base, &work, &["checkout", "-q", "sprint/SP-001"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "--allow-unrelated-histories",
+            "main",
+            "-m",
+            "x\n\nRefs: kanbanr:FEAT-001",
+        ],
+    ));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "--no-verify",
+            "-m",
+            "sprint work",
+        ],
+    ));
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    ok(run_in(&base, &work, &["sprint", "close", "SP-001"]));
+    let said = ok(run_in(&base, &work, &["sprint", "start", "SP-002"]));
+    assert!(
+        said.contains("created sprint/SP-002 from sprint/SP-001"),
+        "{said}"
+    );
+
+    // Once main holds both, the next sprint starts from main.
+    ok(git_in(
+        &base,
+        &work,
+        &["merge", "-q", "--ff-only", "sprint/SP-002"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "close", "SP-002"]));
+    let said = ok(run_in(&base, &work, &["sprint", "start", "SP-003"]));
+    assert!(said.contains("created sprint/SP-003 from main"), "{said}");
+    assert!(branches(&base, &work).contains("sprint/SP-003"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-189 R-4: on a line of integration a plain commit is refused, and a merge must say which
+/// items it brings; item, fix and spike branches commit as before.
+#[test]
+fn hook_guards_integration_lines() {
+    let (base, work) = togaf_scratch("gm-hooks");
+    git_model_board(&base, &work, true, false);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    // Real commits through the real hooks: the hooks run `kanbanr`, so put this build on PATH.
+    let path = format!(
+        "{}:{}",
+        cli().parent().unwrap().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let git_in = |base: &std::path::Path, work: &std::path::Path, args: &[&str]| -> Output {
+        Command::new("git")
+            .args(args)
+            .current_dir(work)
+            .env("HOME", base.join("home"))
+            .env("PATH", &path)
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .output()
+            .expect("run git")
+    };
+    let commit = |msg: &str| git_in(&base, &work, &["commit", "-q", "--allow-empty", "-m", msg]);
+
+    for line in ["main", "sprint/SP-001"] {
+        ok(git_in(&base, &work, &["checkout", "-q", line]));
+        let refused = commit("work\n\nRefs: kanbanr:FEAT-001");
+        assert!(
+            !refused.status.success(),
+            "a plain commit on {line} is refused"
+        );
+        assert!(
+            String::from_utf8_lossy(&refused.stderr).contains("line of integration"),
+            "{}",
+            String::from_utf8_lossy(&refused.stderr)
+        );
+    }
+
+    // An item branch takes work; a merge into the line must name the item.
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "checkout",
+            "-q",
+            "-b",
+            "feat/FEAT-001-cart",
+            "sprint/SP-001",
+        ],
+    ));
+    ok(commit("feat: cart\n\nRefs: kanbanr:FEAT-001"));
+    ok(git_in(&base, &work, &["checkout", "-q", "sprint/SP-001"]));
+    let generated = git_in(
+        &base,
+        &work,
+        &["merge", "--no-ff", "--no-edit", "feat/FEAT-001-cart"],
+    );
+    assert!(
+        !generated.status.success(),
+        "a generated merge message names no item"
+    );
+    let _ = git_in(&base, &work, &["merge", "--abort"]);
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "merge",
+            "--no-ff",
+            "feat/FEAT-001-cart",
+            "-m",
+            "Merge FEAT-001\n\nRefs: kanbanr:FEAT-001",
+        ],
+    ));
+
+    // fix/ and spike/ branches commit as item branches do.
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "checkout",
+            "-q",
+            "-b",
+            "fix/FEAT-001-crash",
+            "sprint/SP-001",
+        ],
+    ));
+    ok(commit("fix: crash\n\nRefs: kanbanr:FEAT-001"));
+    ok(git_in(
+        &base,
+        &work,
+        &["checkout", "-q", "-b", "spike/try", "sprint/SP-001"],
+    ));
+    ok(commit("spike\n\n[no-ref] exploring"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-190: add a defined, approved item — a defect when `kind` says so.
+fn approved_item(
+    base: &std::path::Path,
+    work: &std::path::Path,
+    code: &str,
+    title: &str,
+    kind: Option<&str>,
+) {
+    let ok = |o: Output| assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let mut add = vec!["feature", "add", "--title", title, "--milestone", "MS-001"];
+    if let Some(k) = kind {
+        add.extend(["--kind", k]);
+    }
+    ok(run_in(base, work, &add));
+    let def = base.join(format!("{code}.yaml"));
+    std::fs::write(&def, format!("statement: {title}\n")).unwrap();
+    ok(run_in(
+        base,
+        work,
+        &["feature", "define", code, "--file", def.to_str().unwrap()],
+    ));
+    ok(run_in(base, work, &["approve", code]));
+}
+
+/// Commit a file on whatever is checked out, past the hooks (they are not what these test).
+fn commit_file_in(
+    base: &std::path::Path,
+    work: &std::path::Path,
+    file: &str,
+    content: &str,
+    msg: &str,
+) {
+    std::fs::write(work.join(file), content).unwrap();
+    for args in [
+        &["add", file][..],
+        &["commit", "-q", "--no-verify", "-m", msg],
+    ] {
+        let o = git_in(base, work, args);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    }
+}
+
+fn tip(base: &std::path::Path, work: &std::path::Path, rev: &str) -> String {
+    String::from_utf8_lossy(&git_in(base, work, &["rev-parse", rev]).stdout)
+        .trim()
+        .to_string()
+}
+
+/// FEAT-190 R-1: entering the integrate stage merges the item's branch into its line, with a merge
+/// commit that names the item — main in trunk, the sprint's branch with sprints.
+#[test]
+fn integrate_merges_item_branch() {
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // Trunk: into main.
+    let (base, work) = togaf_scratch("gm-integrate-trunk");
+    git_model_board(&base, &work, false, false);
+    ok(run_in(&base, &work, &["start", "FEAT-001"]));
+    commit_file_in(
+        &base,
+        &work,
+        "cart.txt",
+        "cart\n",
+        "feat: cart\n\nRefs: kanbanr:FEAT-001",
+    );
+    let said = ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
+    assert!(
+        said.contains("merged feat/FEAT-001-cart into main"),
+        "{said}"
+    );
+    let message = String::from_utf8_lossy(
+        &git_in(&base, &work, &["log", "-1", "--format=%B", "main"]).stdout,
+    )
+    .to_string();
+    assert!(message.contains("Refs: kanbanr:FEAT-001"), "{message}");
+    let parents = String::from_utf8_lossy(
+        &git_in(&base, &work, &["rev-list", "--parents", "-n1", "main"]).stdout,
+    )
+    .to_string();
+    assert_eq!(
+        parents.split_whitespace().count(),
+        3,
+        "a merge commit: {parents}"
+    );
+    assert!(
+        branches(&base, &work).contains("feat/FEAT-001-cart"),
+        "the branch is kept (Q3)"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+
+    // Sprints: into the running sprint's branch, and main is untouched until the close.
+    let (base, work) = togaf_scratch("gm-integrate-sprint");
+    git_model_board(&base, &work, true, false);
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    let main = tip(&base, &work, "main");
+    ok(run_in(&base, &work, &["start", "FEAT-001"]));
+    commit_file_in(
+        &base,
+        &work,
+        "cart.txt",
+        "cart\n",
+        "feat: cart\n\nRefs: kanbanr:FEAT-001",
+    );
+    let said = ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
+    assert!(said.contains("into sprint/SP-001"), "{said}");
+    assert_eq!(tip(&base, &work, "main"), main);
+    let in_sprint = git_in(
+        &base,
+        &work,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "feat/FEAT-001-cart",
+            "sprint/SP-001",
+        ],
+    );
+    assert!(in_sprint.status.success());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-190 R-2: a merge that would conflict refuses the move, names the paths, and changes
+/// nothing — the item's status, the line's tip and the working tree.
+#[test]
+fn integrate_merge_conflict_refused() {
+    let (base, work) = togaf_scratch("gm-conflict");
+    git_model_board(&base, &work, false, false);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(&base, &work, &["start", "FEAT-001"]));
+    commit_file_in(
+        &base,
+        &work,
+        "a.txt",
+        "the item's\n",
+        "feat: a\n\nRefs: kanbanr:FEAT-001",
+    );
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    commit_file_in(
+        &base,
+        &work,
+        "a.txt",
+        "main's\n",
+        "x\n\n[no-ref] a test of a conflict",
+    );
+    ok(git_in(
+        &base,
+        &work,
+        &["checkout", "-q", "feat/FEAT-001-cart"],
+    ));
+    let main = tip(&base, &work, "main");
+
+    let refused = run_in(&base, &work, &["move", "FEAT-001", "Completed"]);
+    assert!(!refused.status.success());
+    let why = String::from_utf8_lossy(&refused.stderr);
+    assert!(why.contains("conflicts in: a.txt"), "{why}");
+    assert_eq!(tip(&base, &work, "main"), main, "the line did not move");
+    let shown = ok(run_in(&base, &work, &["feature", "show", "FEAT-001"]));
+    assert!(shown.contains("**Status:** In Progress"), "{shown}");
+    let status = ok(git_in(&base, &work, &["status", "--porcelain"]));
+    assert!(
+        status.trim().is_empty() || !status.contains("a.txt"),
+        "{status}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-190: in the sprints topology a sprint's close is production — main fast-forwards to the
+/// sprint and is tagged with its code — and it refuses, changing nothing, when main has moved on.
+#[test]
+fn sprints_close_fast_forwards_and_tags() {
+    let (base, work) = togaf_scratch("gm-close");
+    git_model_board(&base, &work, true, false);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    for start in ["2026-10-05", "2026-10-19"] {
+        ok(run_in(&base, &work, &["sprint", "add", "--start", start]));
+    }
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    ok(git_in(&base, &work, &["checkout", "-q", "sprint/SP-001"]));
+    commit_file_in(&base, &work, "s.txt", "s\n", "x\n\n[no-ref] sprint work");
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    let said = ok(run_in(&base, &work, &["sprint", "close", "SP-001"]));
+    assert!(said.contains("tagged SP-001"), "{said}");
+    assert_eq!(
+        tip(&base, &work, "main"),
+        tip(&base, &work, "sprint/SP-001")
+    );
+    assert_eq!(
+        tip(&base, &work, "SP-001^{commit}"),
+        tip(&base, &work, "main")
+    );
+
+    // Main moves on by itself: the next close is not a fast-forward, and nothing changes.
+    ok(run_in(&base, &work, &["sprint", "start", "SP-002"]));
+    commit_file_in(
+        &base,
+        &work,
+        "hotfix.txt",
+        "h\n",
+        "x\n\n[no-ref] a hotfix on main",
+    );
+    let main = tip(&base, &work, "main");
+    let refused = run_in(&base, &work, &["sprint", "close", "SP-002"]);
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("cannot fast-forward"));
+    assert_eq!(tip(&base, &work, "main"), main);
+    let tags = ok(git_in(&base, &work, &["tag"]));
+    assert!(!tags.contains("SP-002"), "{tags}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-190 R-3: items carried into the next sprint are brought up to date with its branch by a
+/// merge into theirs — never a rebase, the branch kept — and one that would conflict is reported
+/// and left alone.
+#[test]
+fn carry_over_catch_up_merge() {
+    let (base, work) = togaf_scratch("gm-carry");
+    git_model_board(&base, &work, true, false);
+    approved_item(&base, &work, "FEAT-002", "Checkout", None);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    for start in ["2026-10-05", "2026-10-19"] {
+        ok(run_in(&base, &work, &["sprint", "add", "--start", start]));
+    }
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "plan", "SP-001", "FEAT-001", "FEAT-002"],
+    ));
+    ok(run_in(&base, &work, &["start", "FEAT-001"]));
+    commit_file_in(
+        &base,
+        &work,
+        "cart.txt",
+        "cart\n",
+        "wip\n\nRefs: kanbanr:FEAT-001",
+    );
+    ok(run_in(&base, &work, &["start", "FEAT-002"]));
+    commit_file_in(
+        &base,
+        &work,
+        "shared.txt",
+        "the item's\n",
+        "wip\n\nRefs: kanbanr:FEAT-002",
+    );
+    let feat2 = tip(&base, &work, "feat/FEAT-002-checkout");
+    // The sprint moves on underneath both.
+    ok(git_in(&base, &work, &["checkout", "-q", "sprint/SP-001"]));
+    commit_file_in(
+        &base,
+        &work,
+        "shared.txt",
+        "the sprint's\n",
+        "x\n\n[no-ref] other work",
+    );
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "close", "SP-001", "--carry-to", "SP-002"],
+    ));
+    let said = ok(run_in(&base, &work, &["sprint", "start", "SP-002"]));
+    assert!(said.contains("caught up feat/FEAT-001-cart"), "{said}");
+    assert!(
+        said.contains("feat/FEAT-002-checkout (FEAT-002) conflicts in shared.txt"),
+        "{said}"
+    );
+    let caught = git_in(
+        &base,
+        &work,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "sprint/SP-002",
+            "feat/FEAT-001-cart",
+        ],
+    );
+    assert!(
+        caught.status.success(),
+        "the sprint is in the carried branch"
+    );
+    assert_eq!(
+        tip(&base, &work, "feat/FEAT-002-checkout"),
+        feat2,
+        "the conflicting one is untouched"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-190 R-4: a fix planned into a release under test integrates into the release's branch, the
+/// move says the line lacks it, and `git forward` merges it there naming the fix — once.
+#[test]
+fn fixes_forward_merged() {
+    let (base, work) = togaf_scratch("gm-forward");
+    git_model_board(&base, &work, false, true);
+    approved_item(&base, &work, "FEAT-002", "Cart loses items", Some("bug"));
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(&base, &work, &["release", "add", "v1"]));
+    ok(run_in(&base, &work, &["release", "promote", "v1"]));
+    assert!(branches(&base, &work).contains("release/v1"));
+    ok(run_in(&base, &work, &["release", "plan", "v1", "FEAT-002"]));
+    let started = ok(run_in(&base, &work, &["start", "FEAT-002"]));
+    assert!(
+        started.contains("fix/FEAT-002-"),
+        "a bug gets the fix/ twin: {started}"
+    );
+    assert!(started.contains("from release/v1"), "{started}");
+    commit_file_in(
+        &base,
+        &work,
+        "fix.txt",
+        "fixed\n",
+        "fix: cart\n\nRefs: kanbanr:FEAT-002",
+    );
+    let said = ok(run_in(&base, &work, &["move", "FEAT-002", "Completed"]));
+    assert!(said.contains("into release/v1"), "{said}");
+    assert!(said.contains("kanbanr git forward v1"), "{said}");
+
+    let forwarded = ok(run_in(&base, &work, &["git", "forward", "v1"]));
+    assert!(
+        forwarded.contains("merged release/v1 forward into integration"),
+        "{forwarded}"
+    );
+    let message = ok(git_in(
+        &base,
+        &work,
+        &["log", "-1", "--format=%B", "integration"],
+    ));
+    assert!(message.contains("Refs: kanbanr:FEAT-002"), "{message}");
+    let again = ok(run_in(&base, &work, &["git", "forward", "v1"]));
+    assert!(again.contains("nothing to forward"), "{again}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-196 R-1: deleting a project leaves no folder for it, and nothing for the board to commit
+/// afterwards — the delete's own activity entry used to bring the folder back.
+#[test]
+fn project_delete_leaves_no_folder() {
+    let (base, work) = togaf_scratch("delete-project");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    let where_json: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "where"]))).unwrap();
+    let board = std::path::PathBuf::from(where_json["data_dir"].as_str().unwrap());
+    assert!(board.join("projects").join("shop").is_dir());
+    ok(run_in(&base, &work, &["project", "delete", "shop"]));
+    assert!(
+        !board.join("projects").join("shop").exists(),
+        "the project's folder stays gone"
+    );
+    let status = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&board)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+        "{}",
+        String::from_utf8_lossy(&status.stdout)
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-184: cut v1.0.0 through its stages, so there is a tagged release to patch.
+fn cut_first_release(base: &std::path::Path, work: &std::path::Path) {
+    for args in [
+        &["release", "promote", "v1.0.0"][..],
+        &["release", "promote", "v1.0.0", "production"],
+    ] {
+        let o = run_in(base, work, args);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    }
+}
+
+/// FEAT-184 R-1: a patch names a cut release, is branched from its tag — not from where main has
+/// since gone — and starts at the first stage; a release that was never cut cannot be patched.
+#[test]
+fn patch_release_branches_from_parent_tag() {
+    let (base, work) = release_scratch("patch-branch");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let refused = run_in(
+        &base,
+        &work,
+        &["release", "add", "v1.0.1", "--patch-of", "v1.0.0"],
+    );
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("has not been cut"));
+
+    cut_first_release(&base, &work);
+    commit_on(&base, &work, "main", "work for the next release\n");
+    let said = ok(run_in(
+        &base,
+        &work,
+        &["release", "add", "v1.0.1", "--patch-of", "v1.0.0"],
+    ));
+    assert!(said.contains("a patch of v1.0.0"), "{said}");
+    assert_eq!(
+        rev(&base, &work, "release/v1.0.1"),
+        rev(&base, &work, "v1.0.0^{commit}")
+    );
+    assert_ne!(
+        rev(&base, &work, "release/v1.0.1"),
+        rev(&base, &work, "main")
+    );
+    let r = release_json(&base, &work, "v1.0.1");
+    assert_eq!(r["parent"], "v1.0.0");
+    assert_eq!(r["stage"], "candidate");
+    assert_eq!(r["branch"], "release/v1.0.1");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-184 R-5: a patch of a release main has moved past is tagged at production and leaves main
+/// where it is; an ordinary release in that state is still refused.
+#[test]
+fn patch_production_tags_without_moving_main() {
+    let (base, work) = release_scratch("patch-production");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    cut_first_release(&base, &work);
+    commit_on(&base, &work, "main", "work for the next release\n");
+    let main = rev(&base, &work, "main");
+    ok(run_in(
+        &base,
+        &work,
+        &["release", "add", "v1.0.1", "--patch-of", "v1.0.0"],
+    ));
+    commit_on(&base, &work, "release/v1.0.1", "the fix\n");
+    let said = ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.1", "production"],
+    ));
+    assert!(said.contains("main has moved on"), "{said}");
+    assert_eq!(
+        rev(&base, &work, "v1.0.1^{commit}"),
+        rev(&base, &work, "release/v1.0.1")
+    );
+    assert_eq!(rev(&base, &work, "main"), main, "main is left where it was");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-184 R-3: at production a patch lists its commits the integration branch lacks; with
+/// main as the integration branch and main moving to the patch, there is nothing to list.
+#[test]
+fn patch_release_reports_forward_merge() {
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let (base, work) = release_scratch("patch-forward");
+    cut_first_release(&base, &work);
+    ok(git_in(&base, &work, &["branch", "develop", "main"]));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--integration-branch", "develop"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["release", "add", "v1.0.1", "--patch-of", "v1.0.0"],
+    ));
+    commit_on(&base, &work, "release/v1.0.1", "the fix\n");
+    let said = ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.1", "production"],
+    ));
+    assert!(said.contains("merge these forward into develop"), "{said}");
+    assert!(said.contains("[no-ref] change"), "{said}");
+    let notes = ok(run_in(&base, &work, &["doc", "show", "releases/v1.0.1.md"]));
+    assert!(notes.contains("To merge forward into develop"), "{notes}");
+    let _ = std::fs::remove_dir_all(&base);
+
+    let (base, work) = release_scratch("patch-forward-main");
+    cut_first_release(&base, &work);
+    ok(run_in(
+        &base,
+        &work,
+        &["release", "add", "v1.0.1", "--patch-of", "v1.0.0"],
+    ));
+    commit_on(&base, &work, "release/v1.0.1", "the fix\n");
+    let said = ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.1", "production"],
+    ));
+    assert!(!said.contains("merge these forward"), "{said}");
+    assert_eq!(
+        rev(&base, &work, "main"),
+        rev(&base, &work, "release/v1.0.1")
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-184 R-4: a release with no branch gets one before any promotion — in a process whose one
+/// stage is the cut, and when the first stage is skipped.
+#[test]
+fn promote_without_branch_makes_it_first() {
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let (base, work) = release_scratch("one-stage");
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--release-stages", "live"],
+    ));
+    let said = ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    assert!(said.contains("created release/v1.0.0"), "{said}");
+    assert!(said.contains("tagged v1.0.0"), "{said}");
+    assert_eq!(release_json(&base, &work, "v1.0.0")["state"], "shipped");
+    let _ = std::fs::remove_dir_all(&base);
+
+    let (base, work) = release_scratch("skip-first");
+    let said = ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "staging"],
+    ));
+    assert!(said.contains("created release/v1.0.0"), "{said}");
+    assert_eq!(
+        release_json(&base, &work, "v1.0.0")["branch"],
+        "release/v1.0.0"
+    );
+    assert!(!rev(&base, &work, "release/v1.0.0").is_empty());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-191 R-1: an integrated item whose branch never reached its line is an error in `git
+/// doctor` and in `doctor` with the git model on; once merged, it is a reminder to delete the
+/// branch, not an error. With the model off, `doctor` leaves branches alone.
+#[test]
+fn git_doctor_unmerged_integrated_items() {
+    let (base, work) = togaf_scratch("gd-unmerged");
+    git_model_board(&base, &work, false, false);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // Completed with the model off: nothing merged it.
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--git-model", "off"],
+    ));
+    ok(run_in(&base, &work, &["start", "FEAT-001"]));
+    commit_file_in(
+        &base,
+        &work,
+        "cart.txt",
+        "cart\n",
+        "feat: cart\n\nRefs: kanbanr:FEAT-001",
+    );
+    ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
+    let doctor_off = ok(run_in(&base, &work, &["doctor"]));
+    assert!(!doctor_off.contains("not merged into"), "{doctor_off}");
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--git-model", "on"],
+    ));
+
+    let found = run_in(&base, &work, &["git", "doctor"]);
+    assert_eq!(found.status.code(), Some(1), "an error exits 1");
+    let said = String::from_utf8_lossy(&found.stdout);
+    assert!(
+        said.contains("FEAT-001: FEAT-001 is Completed (integrated) but feat/FEAT-001-cart is not merged into main"),
+        "{said}"
+    );
+    let doctor = ok(run_in(&base, &work, &["doctor"]));
+    assert!(doctor.contains("is not merged into main"), "{doctor}");
+
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "--no-verify",
+            "feat/FEAT-001-cart",
+            "-m",
+            "Merge FEAT-001\n\nRefs: kanbanr:FEAT-001",
+        ],
+    ));
+    let clean = ok(run_in(&base, &work, &["git", "doctor"]));
+    assert!(
+        clean.contains("FEAT-001 is finished and feat/FEAT-001-cart is merged"),
+        "{clean}"
+    );
+    assert!(!clean.contains("Errors"), "{clean}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-191 R-2: commits on a line for work that is not integrated are errors, counted with the
+/// newest named; a commit that also serves an integrated item is justified.
+#[test]
+fn git_doctor_unfinished_commits_on_line() {
+    let (base, work) = togaf_scratch("gd-line");
+    git_model_board(&base, &work, true, false);
+    approved_item(&base, &work, "FEAT-002", "Checkout", None);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    // FEAT-001 is integrated (it has no branch, so nothing to merge).
+    ok(run_in(&base, &work, &["move", "FEAT-001", "In Progress"]));
+    ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
+    ok(run_in(&base, &work, &["start", "FEAT-002"]));
+    commit_file_in(
+        &base,
+        &work,
+        "pay.txt",
+        "pay\n",
+        "wip\n\nRefs: kanbanr:FEAT-002",
+    );
+    // Merged into the sprint by hand while FEAT-002 is still In Progress.
+    ok(git_in(&base, &work, &["checkout", "-q", "sprint/SP-001"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "--no-verify",
+            "feat/FEAT-002-checkout",
+            "-m",
+            "Merge FEAT-002\n\nRefs: kanbanr:FEAT-002",
+        ],
+    ));
+    commit_file_in(
+        &base,
+        &work,
+        "both.txt",
+        "b\n",
+        "shared\n\nRefs: kanbanr:FEAT-001, kanbanr:FEAT-002",
+    );
+    let newest_for_2 = String::from_utf8_lossy(
+        &git_in(&base, &work, &["rev-parse", "--short=7", "sprint/SP-001^"]).stdout,
+    )
+    .trim()
+    .to_string();
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+
+    let found = run_in(&base, &work, &["git", "doctor"]);
+    assert_eq!(found.status.code(), Some(1));
+    let said = String::from_utf8_lossy(&found.stdout);
+    assert!(
+        said.contains(&format!(
+            "sprint/SP-001 has 2 commits serving FEAT-002 (newest {newest_for_2}), which is In Progress, not integrated"
+        )),
+        "{said}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-191 R-3: branches that name nothing on the board, and a release fix the line lacks, are
+/// warnings; a forward merge clears the latter; spikes are never reported.
+#[test]
+fn git_doctor_orphans_and_forward_merges() {
+    let (base, work) = togaf_scratch("gd-orphans");
+    git_model_board(&base, &work, false, true);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    for b in [
+        "wip",
+        "feat/FEAT-999-x",
+        "sprint/SP-099",
+        "release/v9",
+        "spike/x",
+    ] {
+        ok(git_in(&base, &work, &["branch", b, "main"]));
+    }
+    ok(run_in(&base, &work, &["release", "add", "v1"]));
+    ok(run_in(&base, &work, &["release", "promote", "v1"]));
+    ok(git_in(&base, &work, &["checkout", "-q", "release/v1"]));
+    commit_file_in(
+        &base,
+        &work,
+        "fix.txt",
+        "fixed\n",
+        "fix: on the release\n\n[no-ref] a test fix",
+    );
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+
+    let said = ok(run_in(&base, &work, &["git", "doctor"]));
+    for want in [
+        "wip names no item",
+        "feat/FEAT-999-x names FEAT-999, which is not on the board",
+        "sprint/SP-099 names no sprint",
+        "release/v9 names no release",
+        "release/v1 has 1 commit integration lacks",
+    ] {
+        assert!(said.contains(want), "missing {want:?} in {said}");
+    }
+    assert!(!said.contains("spike/x"), "{said}");
+    ok(run_in(&base, &work, &["git", "forward", "v1"]));
+    let after = ok(run_in(&base, &work, &["git", "doctor"]));
+    assert!(!after.contains("release/v1 has"), "{after}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-191: `git doctor` only reads — the repository's refs and the board's files are the same
+/// after it as before.
+#[test]
+fn git_doctor_is_read_only() {
+    let (base, work) = togaf_scratch("gd-readonly");
+    git_model_board(&base, &work, true, true);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    ok(git_in(&base, &work, &["branch", "wip", "main"]));
+    let where_json: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "where"]))).unwrap();
+    let board = std::path::PathBuf::from(where_json["data_dir"].as_str().unwrap());
+    let refs = || ok(git_in(&base, &work, &["for-each-ref"]));
+    let (refs_before, board_before) = (refs(), snapshot(&board));
+    let _ = run_in(&base, &work, &["git", "doctor"]);
+    let _ = run_in(&base, &work, &["doctor"]);
+    assert_eq!(refs(), refs_before, "no ref moved");
+    assert_eq!(snapshot(&board), board_before, "no board file changed");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-201 R-3: a new board's README is committed with its first project and follows its
+/// projects; a board without one is told how to get it, and `kanbanr readme` writes it.
+#[test]
+fn new_board_has_a_readme() {
+    let (base, work) = togaf_scratch("board-readme");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    let where_json: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "where"]))).unwrap();
+    let board = std::path::PathBuf::from(where_json["data_dir"].as_str().unwrap());
+    let board_git = |args: &[&str]| -> String {
+        String::from_utf8_lossy(
+            &Command::new("git")
+                .args(args)
+                .current_dir(&board)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .to_string()
+    };
+    assert_eq!(
+        board_git(&["ls-files", "README.md"]).trim(),
+        "README.md",
+        "committed"
+    );
+    assert!(board_git(&["status", "--porcelain"]).trim().is_empty());
+    let readme = std::fs::read_to_string(board.join("README.md")).unwrap();
+    assert!(
+        readme.contains("`shop`") && readme.contains("kanbanr serve --data-dir"),
+        "{readme}"
+    );
+
+    ok(run_in(&base, &work, &["project", "init", "ops"]));
+    let readme = std::fs::read_to_string(board.join("README.md")).unwrap();
+    assert!(
+        readme.contains("`ops`"),
+        "a new project joins the list:\n{readme}"
+    );
+
+    // A board from before: no README. Doctor says how to get one, and `kanbanr readme` writes it.
+    std::fs::remove_file(board.join("README.md")).unwrap();
+    board_git(&["commit", "-qam", "an older board"]);
+    let doctor = ok(run_in(&base, &work, &["doctor"]));
+    assert!(doctor.contains("`kanbanr readme` writes one"), "{doctor}");
+    let said = ok(run_in(&base, &work, &["readme"]));
+    assert!(said.contains("wrote the board README"), "{said}");
+    assert_eq!(board_git(&["ls-files", "README.md"]).trim(), "README.md");
+    let doctor = ok(run_in(&base, &work, &["doctor"]));
+    assert!(!doctor.contains("kanbanr readme"), "{doctor}");
+    let again = ok(run_in(&base, &work, &["readme"]));
+    assert!(again.contains("up to date"), "{again}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-202 R-1: the build scripts find the monitor and the skill from where the crate is when the
+/// script runs. `env!` would fix the folder the script was compiled in, and a build cache reused one
+/// compiled in a deleted worktree: the installed binary had no monitor and no skill.
+#[test]
+fn build_scripts_read_the_manifest_dir_at_run_time() {
+    let compiled_in = concat!("env!(\"CARGO_MANIFEST", "_DIR\")");
+    for (name, source) in [
+        ("kanbanr-cli/build.rs", include_str!("../build.rs")),
+        (
+            "kanbanr-server/build.rs",
+            include_str!("../../kanbanr-server/build.rs"),
+        ),
+    ] {
+        assert!(
+            !source.contains(compiled_in),
+            "{name} fixes the folder at compile time"
+        );
+        assert!(
+            source.contains("std::env::var(\"CARGO_MANIFEST_DIR\")"),
+            "{name} reads the folder when it runs"
+        );
+    }
 }

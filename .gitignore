@@ -3,6 +3,8 @@
 # Node / web
 /web/node_modules
 /web/dist
+# The standalone monitor bundle `make monitor-bundle` packs (FEAT-178)
+/kanbanr-monitor-*.tar.gz
 # VS Code extension (editor/vscode): build output + deps
 /editor/vscode/node_modules
 /editor/vscode/out

@@ -225,17 +225,23 @@ fn build_query(project: Option<&str>, query: Option<&str>) -> crate::query::Quer
 
 // ---- project summaries (mirrors the server's home-tile shape, sans user filtering) ----------
 
-#[derive(Serialize)]
-struct ProjectSummary {
-    id: String,
-    name: String,
-    description: String,
-    displayed_states: Vec<String>,
-    other_states: Vec<String>,
-    no_op_states: Vec<String>,
-    counts: BTreeMap<String, usize>,
-    total_features: usize,
-    has_docs: bool,
+/// One project on the board, as the home page lists it: `GET /projects`.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ProjectSummary {
+    pub id: String,
+    /// The project's name; its id when it has none.
+    pub name: String,
+    pub description: String,
+    /// The statuses shown as board columns.
+    pub displayed_states: Vec<String>,
+    /// The statuses that are not columns.
+    pub other_states: Vec<String>,
+    pub no_op_states: Vec<String>,
+    /// Items per status, for every status.
+    pub counts: BTreeMap<String, usize>,
+    pub total_features: usize,
+    pub has_docs: bool,
 }
 
 fn list_summaries(store: &Store) -> Result<Vec<ProjectSummary>> {
@@ -344,6 +350,7 @@ fn build_project_config(store: &Store, name: &str, body: &Value) -> Result<Proje
                 estimate_unit: Default::default(),
                 cadence: Default::default(),
                 process: None,
+                method: Default::default(),
             }
         }
         None => {
@@ -388,6 +395,9 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
     let base = match preset {
         Some(name) => {
             let (file, library) = store.resolve_process(&name)?;
+            // Shaped by the project's own choice, so a part it turned off stays off (FEAT-193).
+            let choice = store.load_meta(p)?.config.method;
+            let file = crate::method::shaped(file, &choice);
             source = Some(file.source(&name, library));
             Some(file.into_config(p))
         }
@@ -478,8 +488,9 @@ fn process_source(body: &Value) -> Result<Option<crate::config::ProcessSource>> 
 
 /// The processes this board can apply (FEAT-169): its own library, then the built-in ones, each
 /// with the projects on the board that use it.
-fn list_processes(store: &Store) -> Result<Value> {
+fn list_processes(store: &Store) -> Result<Vec<crate::library::ProcessListing>> {
     use crate::config::Library;
+    use crate::library::ProcessListing;
     let mut used: BTreeMap<(String, Library), Vec<String>> = BTreeMap::new();
     for id in store.list_projects()? {
         if let Some(src) = store.load(&id)?.config.process {
@@ -487,14 +498,17 @@ fn list_processes(store: &Store) -> Result<Value> {
         }
     }
     let row = |name: &str, library: Library, file: &crate::config::WorkflowFile, about: String| {
-        json!({
-            "name": name,
-            "library": library,
-            "version": file.version(),
-            "description": about,
-            "rev": file.content_rev(),
-            "used_by": used.get(&(name.to_string(), library)).cloned().unwrap_or_default(),
-        })
+        ProcessListing {
+            name: name.to_string(),
+            library,
+            version: Some(file.version()),
+            description: Some(about),
+            rev: Some(file.content_rev()),
+            used_by: used
+                .get(&(name.to_string(), library))
+                .cloned()
+                .unwrap_or_default(),
+        }
     };
     let mut out = Vec::new();
     for (name, file) in store.list_processes()? {
@@ -517,18 +531,65 @@ fn list_processes(store: &Store) -> Result<Value> {
     // use one, and which version they applied. The CLI fills in the user's own.
     for ((name, library), projects) in &used {
         if *library == Library::Personal {
-            out.push(json!({ "name": name, "library": library, "used_by": projects }));
+            out.push(ProcessListing {
+                name: name.clone(),
+                library: *library,
+                version: None,
+                description: None,
+                rev: None,
+                used_by: projects.clone(),
+            });
         }
     }
-    Ok(Value::Array(out))
+    Ok(out)
 }
 
 // ---- the dispatcher ------------------------------------------------------------------------
+
+/// The media type of what a successful `GET` of `path` (with its query) answers with (FEAT-177):
+/// JSON, unless the route renders text — a diagram, a document, a Markdown export. The daemon
+/// labels its bodies with this, so a body labelled JSON is JSON.
+pub fn read_media_type(path: &str) -> &'static str {
+    const TEXT: &str = "text/plain; charset=utf-8";
+    const MARKDOWN: &str = "text/markdown; charset=utf-8";
+    const JSON: &str = "application/json";
+    let (path_only, query) = match path.split_once('?') {
+        Some((p, q)) => (p, Some(q)),
+        None => (path, None),
+    };
+    let segs: Vec<&str> = path_only.split('/').filter(|s| !s.is_empty()).collect();
+    let format = query_param(query, "format");
+    match segs.as_slice() {
+        ["projects", _, "workflow"] | ["projects", _, "gantt"] | ["gantt"] => TEXT,
+        ["projects", _, "graph"] | ["graph"] if format.as_deref() == Some("dot") => TEXT,
+        ["projects", _, "export"] | ["projects", _, "features", _, "export"]
+            if format.as_deref() != Some("json") =>
+        {
+            MARKDOWN
+        }
+        ["projects", _, "docs", "content"] => MARKDOWN,
+        _ => JSON,
+    }
+}
 
 /// Apply a data operation against the store, returning the response body string. Reads and writes
 /// alike — the caller (e.g. the CLI's local backend) decides whether to commit afterwards based on
 /// the HTTP method.
 pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -> Result<String> {
+    dispatch_in(store, method, path, body, None)
+}
+
+/// [`dispatch`], with the project's code repository when the caller has one (FEAT-183). Only
+/// release promotion reaches it: the CLI passes the repository it runs in, the daemon the one it
+/// was started in when that folder's marker names the project. Without one, the promotions that
+/// need it — the first stage and the cut — are refused, never guessed.
+pub fn dispatch_in(
+    store: &Store,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    repo: Option<&std::path::Path>,
+) -> Result<String> {
     let (path_only, query) = match path.split_once('?') {
         Some((p, q)) => (p, Some(q)),
         None => (path, None),
@@ -541,7 +602,25 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
     match (m.as_str(), segs.as_slice()) {
         // ---- doctor (portfolio integrity) ----
         ("GET", ["doctor"]) => ser(&crate::doctor::run(store)?),
-        ("GET", ["projects", p, "doctor"]) => ser(&crate::doctor::run_project(store, p)?),
+        // The board's README (FEAT-201): written now, keeping its owner's text.
+        ("POST", ["readme"]) => ser(&json!({ "changed": crate::boardreadme::write(store)? })),
+        ("GET", ["projects", p, "doctor"]) => {
+            let mut report = crate::doctor::run_project(store, p)?;
+            // With the git model on, the branches are checked against the board too (FEAT-191).
+            if store.load_meta(p)?.config.cadence.git_model {
+                report.issues.extend(git_drift(store, p, repo));
+            }
+            ser(&report)
+        }
+        // Drift between the board and the branches (FEAT-191), on demand.
+        ("GET", ["projects", p, "git", "doctor"]) => {
+            let repo = repo.ok_or_else(|| {
+                CoreError::Unsupported(
+                    "git doctor reads the code repository: run it from the project folder".into(),
+                )
+            })?;
+            ser(&crate::gitdrift::scan(store, p, repo)?)
+        }
 
         // ---- the board's process library (FEAT-169) ----
         ("GET", ["processes"]) => ser(&list_processes(store)?),
@@ -561,11 +640,11 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("GET", ["projects", p, "process"]) => {
             let project = store.load(p)?;
             let drift = store.process_drift(&project)?;
-            ser(&json!({
-                "source": project.config.process,
-                "drift": drift,
-                "messages": drift.as_ref().map(|d| d.messages()).unwrap_or_default(),
-            }))
+            ser(&crate::library::ProcessStatus {
+                source: project.config.process,
+                messages: drift.as_ref().map(|d| d.messages()).unwrap_or_default(),
+                drift,
+            })
         }
 
         // ---- portfolio / program hierarchy (FEAT-030) ----
@@ -718,17 +797,34 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             // `unapproved` reason is recorded rather than silently allowed.
             // `override` is the name since gates became declarable (FEAT-113); `unapproved` stays.
             let reason = str_field(b, "override").or_else(|| str_field(b, "unapproved"));
-            let (feature, warnings) = store.move_feature_gated(
+            // With the git model on, a move that integrates merges the item's branch (FEAT-190).
+            let moved = crate::gitmodel::move_item(
+                store,
                 p,
                 code,
                 &str_field(b, "to").unwrap_or_default(),
                 reason.as_deref(),
+                repo,
             )?;
-            let mut out = serde_json::to_value(&feature)
+            let mut out = serde_json::to_value(&moved.feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
-            if !warnings.is_empty() {
-                out["gate_warnings"] =
-                    json!(warnings.iter().map(|g| &g.message).collect::<Vec<_>>());
+            if !moved.warnings.is_empty() {
+                out["gate_warnings"] = json!(
+                    moved
+                        .warnings
+                        .iter()
+                        .map(|g| &g.message)
+                        .collect::<Vec<_>>()
+                );
+            }
+            if let Some(merged) = &moved.merged {
+                out["merged"] = json!(merged);
+            }
+            if let Some(v) = &moved.forward_needed {
+                out["forward_needed"] = json!(v);
+            }
+            if let Some(note) = &moved.note {
+                out["note"] = json!(note);
             }
             ser(&out)
         }
@@ -858,13 +954,26 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         ("PUT", ["projects", p, "config", "workflow"]) => apply_workflow(store, p, b),
         // ---- releases (FEAT-120) ----
         ("GET", ["projects", p, "releases"]) => ser(&crate::releases::report_all(store, p)?),
-        ("POST", ["projects", p, "releases"]) => ser(&crate::releases::add(
-            store,
-            p,
-            &str_field(b, "version").unwrap_or_default(),
-            &str_field(b, "target").unwrap_or_default(),
-            &str_field(b, "name").unwrap_or_default(),
-        )?),
+        // `patch_of`: a patch of a cut release, branched from its tag (FEAT-184).
+        ("POST", ["projects", p, "releases"]) => match str_field(b, "patch_of") {
+            Some(parent) => ser(&crate::releases::add_patch(
+                store,
+                p,
+                &str_field(b, "version").unwrap_or_default(),
+                &str_field(b, "target").unwrap_or_default(),
+                &str_field(b, "name").unwrap_or_default(),
+                &parent,
+                &str_field(b, "by").unwrap_or_default(),
+                repo,
+            )?),
+            None => ser(&crate::releases::add(
+                store,
+                p,
+                &str_field(b, "version").unwrap_or_default(),
+                &str_field(b, "target").unwrap_or_default(),
+                &str_field(b, "name").unwrap_or_default(),
+            )?),
+        },
         ("POST", ["projects", p, "releases", version, "plan"]) => {
             let items = vec_field(b, "items").unwrap_or_default();
             ser(&crate::releases::plan(
@@ -876,6 +985,23 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         }
         ("POST", ["projects", p, "releases", version, "cut"]) => {
             ser(&crate::releases::cut(store, p, &percent_decode(version))?)
+        }
+        // What cutting a release now would ship and carry over, by the cut's own rule, with nothing
+        // written (FEAT-185): the monitor's production confirmation lists exactly this.
+        ("GET", ["projects", p, "releases", version, "cut-preview"]) => ser(
+            &crate::releases::cut_preview(store, p, &percent_decode(version))?,
+        ),
+        // FEAT-183: `{stage?, by, reason?}` — the next stage, or the named one.
+        ("POST", ["projects", p, "releases", version, "promote"]) => {
+            ser(&crate::releases::promote(
+                store,
+                p,
+                &percent_decode(version),
+                str_field(b, "stage").as_deref(),
+                &str_field(b, "by").unwrap_or_default(),
+                &str_field(b, "reason").unwrap_or_default(),
+                repo,
+            )?)
         }
         // ---- sprints (FEAT-119) ----
         ("GET", ["projects", p, "sprints"]) => ser(&crate::sprints::load(store, p)?),
@@ -908,15 +1034,87 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             let items = vec_field(b, "items").unwrap_or_default();
             ser(&crate::sprints::plan(store, p, code, &items)?)
         }
+        // With the git model on, starting a sprint makes its branch (FEAT-189).
         ("POST", ["projects", p, "sprints", code, "start"]) => {
-            ser(&crate::sprints::start(store, p, code)?)
+            ser(&crate::gitmodel::sprint_start(store, p, code, repo)?)
         }
-        ("POST", ["projects", p, "sprints", code, "close"]) => ser(&crate::sprints::close(
-            store,
-            p,
-            code,
-            str_field(b, "carry_to").as_deref(),
-        )?),
+        // The git model the cadence implies (FEAT-189): always derivable, with the repository's
+        // facts when there is one to read.
+        ("GET", ["projects", p, "git", "model"]) => {
+            let repo = repo.ok_or_else(|| {
+                CoreError::Unsupported(
+                    "the git model reads the code repository: run it from the project folder"
+                        .into(),
+                )
+            })?;
+            let (model, facts) = crate::gitmodel::load(store, p, repo)?;
+            // `?item=CODE`: where that item's branch starts (FEAT-189, R-2).
+            let start = match query_param(query, "item") {
+                Some(code) => {
+                    let project = store.load_meta(p)?;
+                    let item = project.feature(&code)?;
+                    let releases = crate::releases::load(store, p).unwrap_or_default();
+                    let sprints = crate::sprints::load(store, p)?;
+                    Some(crate::gitmodel::start_base(
+                        &model, &facts, item, &releases, &sprints,
+                    ))
+                }
+                None => None,
+            };
+            ser(&serde_json::json!({ "model": model, "facts": facts, "start": start }))
+        }
+        // With the git model on, a sprints-only close moves production (FEAT-190).
+        ("POST", ["projects", p, "sprints", code, "close"]) => {
+            let closed = crate::gitmodel::sprint_close(
+                store,
+                p,
+                code,
+                str_field(b, "carry_to").as_deref(),
+                repo,
+            )?;
+            let mut out = serde_json::to_value(&closed.sprint)
+                .map_err(|e| CoreError::Unsupported(e.to_string()))?;
+            if let Some(tag) = &closed.tagged {
+                out["tagged"] = json!(tag);
+            }
+            if !closed.catch_up.is_empty() {
+                out["catch_up"] = json!(closed.catch_up);
+            }
+            ser(&out)
+        }
+        // A release's fixes merged forward into the line, on request (FEAT-190).
+        ("POST", ["projects", p, "git", "forward", version]) => {
+            let repo = repo.ok_or_else(|| {
+                CoreError::Unsupported(
+                    "a forward merge acts on the code repository: run it from the project folder"
+                        .into(),
+                )
+            })?;
+            ser(&crate::gitmodel::forward(
+                store,
+                p,
+                &percent_decode(version),
+                repo,
+            )?)
+        }
+        // The gates moves are judged by (FEAT-199): role-addressed gates on their stage, and the
+        // built-in rule where a workflow declares none. The monitor's Workflow page reads these.
+        ("GET", ["projects", p, "gates"]) => ser(&store.load_meta(p)?.config.effective_gates()),
+        // The method, on by default (FEAT-193): which parts a project keeps.
+        ("GET", ["projects", p, "config", "method"]) => {
+            ser(&crate::method::status(&store.load_meta(p)?.config))
+        }
+        ("PUT", ["projects", p, "config", "method"]) => {
+            let on = bool_field(b, "on").ok_or_else(|| {
+                CoreError::Unsupported("say whether to turn the parts on or off: `on`".into())
+            })?;
+            let parts = crate::method::parse_parts(&vec_field(b, "parts").unwrap_or_default())?;
+            let (config, notes) = store.set_method(p, on, &parts)?;
+            ser(&serde_json::json!({
+                "parts": crate::method::status(&config),
+                "notes": notes,
+            }))
+        }
         ("PUT", ["projects", p, "config", "cadence"]) => {
             let unit = match str_field(b, "estimate_unit").as_deref() {
                 None => None,
@@ -939,6 +1137,28 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
                     .map(|d| d as u32)
                     .or(current.sprint_length_days),
                 release: str_field(b, "release").or(current.release),
+                // FEAT-183. A list given empty is refused rather than read as "the default": the
+                // last stage is the cut, so a project with none could never ship.
+                release_stages: match vec_field(b, "release_stages") {
+                    Some(stages) if stages.is_empty() => {
+                        return Err(CoreError::Unsupported(
+                            "a release needs at least one stage — the last one is the cut".into(),
+                        ));
+                    }
+                    Some(stages) => stages.iter().map(|s| s.trim().to_string()).collect(),
+                    None => current.release_stages,
+                },
+                // An empty string clears the branch back to the repository's default.
+                integration_branch: match str_field(b, "integration_branch") {
+                    Some(name) => Some(name.trim().to_string()).filter(|n| !n.is_empty()),
+                    None => current.integration_branch,
+                },
+                main_branch: match str_field(b, "main_branch") {
+                    Some(name) => Some(name.trim().to_string()).filter(|n| !n.is_empty()),
+                    None => current.main_branch,
+                },
+                // FEAT-189: branching follows the git model only when switched on.
+                git_model: bool_field(b, "git_model").unwrap_or(current.git_model),
             };
             ser(&store.set_cadence(p, unit, cadence)?)
         }
@@ -1056,7 +1276,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             let subject =
                 crate::trace::parse_subject(&subject, item.as_deref()).ok_or_else(|| {
                     CoreError::Unsupported(
-                    "trace what? a goal (G-2), an item (FEAT-046) or a requirement (FEAT-046/R-2)"
+                    "trace what? a goal (G-2), an item (FEAT-046), a requirement (FEAT-046/R-2) or a doc (architecture/data.md)"
                         .to_string(),
                 )
                 })?;
@@ -1070,127 +1290,14 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
         // ---- what is waiting for agreement (FEAT-067) ----
         // What an item is missing, from the one engine every surface uses (FEAT-112).
         ("GET", ["projects", p, "features", code, "readiness"]) => {
-            let project = store.load_for_gates(p)?;
-            let feature = project.feature(code)?;
-            let charter = crate::charter::load(store, p)?;
-            let goal_ids = charter.goal_ids();
-            ser(&json!({
-                "code": feature.code,
-                // The definition's revision: a verdict given with `rev` is refused if it moved on
-                // (FEAT-159).
-                "rev": feature.definition.as_ref().map(|d| d.content_rev()),
-                "gaps": crate::readiness::evaluate(feature, Some(&goal_ids), crate::readiness::CHECK),
-                // What the next stage asks, and what it still lacks (FEAT-117).
-                "next": crate::readiness::next_gates(
-                    &project,
-                    Some(&charter),
-                    feature,
-                    &crate::readiness::Context::load(store, p, &project.config),
-                ),
-            }))
+            ser(&crate::readiness::ReadinessView::load(store, p, code)?)
         }
         // The board's cards, in one request: gaps per live item, keyed by code. Finished and
         // parked items are left out, as doctor leaves them out — they are history, not work.
         ("GET", ["projects", p, "readiness"]) => {
-            let project = store.load_for_gates(p)?;
-            let charter = crate::charter::load(store, p)?;
-            let ctx = crate::readiness::Context::load(store, p, &project.config);
-            let cards: serde_json::Map<String, Value> = project
-                .features
-                .iter()
-                .filter(|f| crate::graph::is_live_work(&project.config, &f.status))
-                .map(|f| {
-                    let gaps = crate::readiness::evaluate(f, None, crate::readiness::CARD);
-                    // The next stage, with how much it still lacks (FEAT-117).
-                    let next: Vec<Value> =
-                        crate::readiness::next_gates(&project, Some(&charter), f, &ctx)
-                            .into_iter()
-                            .map(|n| json!({"status": n.status, "missing": n.gaps.len()}))
-                            .collect();
-                    (f.code.clone(), json!({ "gaps": gaps, "next": next }))
-                })
-                .collect();
-            ser(&cards)
+            ser(&crate::readiness::ProjectReadiness::load(store, p)?)
         }
-        ("GET", ["projects", p, "review"]) => {
-            use crate::models::ApprovalState;
-            let project = store.load_for_gates(p)?;
-            let charter = crate::charter::load(store, p)?;
-            let ctx = crate::readiness::Context::load(store, p, &project.config);
-            // Whether an approval is current or has lapsed depends on a hash of the definition's
-            // content, so it is decided here rather than in each caller: the CLI, the monitor and
-            // any future client all get the same answer to "is this agreed?".
-            let mut pending: Vec<Value> = project
-                .features
-                .iter()
-                // Only where agreement can still change what happens (FEAT-078). Approving a
-                // Completed item records a signature, pinned to a definition hash, for work already
-                // merged; a deliberately Deferred one is not going to start. The same gate the
-                // doctor applies, so the two surfaces cannot give different answers to one question.
-                .filter_map(|f| {
-                    let definition = f.definition.as_ref()?;
-                    let live = crate::graph::is_live_work(&project.config, &f.status);
-                    // Work finished under a recorded bypass and never agreed to is still a
-                    // question for a person, however done it is — the one the doctor reports.
-                    // It is asked here too (FEAT-109), with the predicate the doctor uses, so the
-                    // two surfaces cannot disagree about which items need a ratification.
-                    let unratified = !live && crate::doctor::unreconciled_bypass(definition);
-                    if !live && !unratified {
-                        return None;
-                    }
-                    // Sign-offs the next stage asks for are the same kind of question: a person's
-                    // agreement, recorded before the item can move on (FEAT-117). Only the stage
-                    // the item reaches next, not every stage it could skip to, and only once that
-                    // stage's other requirements are met (FEAT-182): a sign-off offered before the
-                    // work exists records agreement to work that has not happened.
-                    let signoffs_needed: Vec<String> = if live {
-                        crate::readiness::immediate_next_gate(&project, Some(&charter), f, &ctx)
-                            .filter(|n| n.requires_gaps.is_empty())
-                            .map(|n| n.signoffs_needed)
-                            .unwrap_or_default()
-                    } else {
-                        Vec::new()
-                    };
-                    let state = match definition.approval_state() {
-                        _ if unratified => "unratified",
-                        // Agreed is agreed, however late — a ratified item is not still a
-                        // decision waiting to be made, so it leaves the queue (FEAT-080) — unless
-                        // its next stage is waiting on a sign-off.
-                        ApprovalState::Current | ApprovalState::Ratified
-                            if !signoffs_needed.is_empty() =>
-                        {
-                            "signoff"
-                        }
-                        ApprovalState::Current | ApprovalState::Ratified => return None,
-                        ApprovalState::Missing => "missing",
-                        ApprovalState::Lapsed => "lapsed",
-                    };
-                    Some(json!({
-                        "code": f.code,
-                        "title": f.title,
-                        "status": f.status,
-                        "approval": state,
-                        "signoffs_needed": signoffs_needed,
-                        "started_unapproved": definition.started_unapproved,
-                        "definition": definition,
-                        // What a verdict given from this brief is pinned to (FEAT-159).
-                        "rev": definition.content_rev(),
-                        // What the ordering below keys on, and useful to a client besides.
-                        "in_progress": f.status != project.config.default_state,
-                    }))
-                })
-                .collect();
-            // Work already built without agreement comes first (FEAT-109), then work being built
-            // without it, then work that has not started (FEAT-078 R-2).
-            pending.sort_by_key(|v| {
-                (
-                    v["approval"] != "unratified",
-                    !v["in_progress"].as_bool().unwrap_or(false),
-                    v["code"].as_str().unwrap_or_default().to_string(),
-                )
-            });
-            ser(&pending)
-        }
+        ("GET", ["projects", p, "review"]) => ser(&crate::review::pending(store, p)?),
         ("GET", ["projects", p, "adrs"]) => ser(&crate::adr::list(store, p)?),
         ("GET", ["projects", p, "claude-block"]) => ser(&crate::claude::block(store, p)?),
         ("POST", ["projects", p, "adrs"]) => {
@@ -1281,7 +1388,7 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
             Ok(json!({ "results": results }).to_string())
         }
 
-        _ => Err(CoreError::Unsupported(format!("{method} {path_only}"))),
+        _ => Err(CoreError::NoSuchRoute(format!("{method} {path_only}"))),
     }
 }
 
@@ -1300,11 +1407,30 @@ pub fn is_mutation(method: &str) -> bool {
 
 /// A meaningful commit message for a data write, derived from the route (mirrors the server). For
 /// a batch, an explicit `message` in the body wins.
+/// The git drift findings for a project's doctor (FEAT-191): what `gitdrift::scan` finds, or one
+/// warning saying why it could not look. Never a failed doctor.
+fn git_drift(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Vec<crate::doctor::Issue> {
+    let warn = |message: String| crate::doctor::Issue {
+        severity: crate::doctor::Severity::Warning,
+        project: p.to_string(),
+        code: None,
+        message,
+    };
+    match repo {
+        None => vec![warn(
+            "git drift not checked: run from the project folder".to_string(),
+        )],
+        Some(repo) => crate::gitdrift::scan(store, p, repo)
+            .unwrap_or_else(|e| vec![warn(format!("git drift not checked: {e}"))]),
+    }
+}
+
 pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String {
     let path_only = path.split('?').next().unwrap_or(path);
     let s: Vec<&str> = path_only.split('/').filter(|x| !x.is_empty()).collect();
     let del = method.eq_ignore_ascii_case("DELETE");
     match s.as_slice() {
+        ["readme"] => "write the board README".to_string(),
         ["portfolio", "programs"] => body
             .and_then(|b| b.get("id").and_then(|v| v.as_str()))
             .map(|id| format!("add program {id}"))
@@ -1368,9 +1494,33 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "milestones"] => "add milestone".into(),
         ["projects", _p, "milestones", c] if del => format!("delete milestone {c}"),
         ["projects", _p, "milestones", c] => format!("edit milestone {c}"),
+        ["projects", p, "config", "method"] => {
+            let on = body
+                .and_then(|b| b.get("on"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let parts: Vec<String> = body
+                .and_then(|b| b.get("parts"))
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .filter(|v: &Vec<String>| !v.is_empty())
+                .unwrap_or_else(|| vec!["all".to_string()]);
+            format!(
+                "method {} {} for {p}",
+                parts.join(", "),
+                if on { "on" } else { "off" }
+            )
+        }
         ["projects", _p, "config", what] => format!("update config: {what}"),
         ["projects", _p, "sprints"] => "add a sprint".into(),
         ["projects", _p, "releases"] => "add a release".into(),
+        // FEAT-183: the stage it went to, which a request for "the next one" does not name.
+        ["projects", _p, "releases", v, "promote"] => format!(
+            "promote release {} to {}",
+            percent_decode(v),
+            body.and_then(|b| str_field(b, "stage"))
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "its next stage".into())
+        ),
         ["projects", _p, "releases", v, what] => format!("{what} release {}", percent_decode(v)),
         ["projects", _p, "sprints", c, what] => format!("{what} sprint {c}"),
         ["projects", _p, "docs", "folder"] => "configure doc folder".into(),

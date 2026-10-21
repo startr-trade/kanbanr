@@ -37,3 +37,9 @@ flate2 = "1"
 [dev-dependencies]
 # FEAT-034 write-path tests inspect the data repo's commit log directly (matches kanbanr-core).
 git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2", "vendored-openssl"] }
+# FEAT-177: the contract test regenerates the OpenAPI document from the response types (core's
+# `schema` feature), and validates every public route's body against it. jsonschema (MIT) without
+# its default features: no remote-reference fetching, so no HTTP client or TLS stack in the build.
+kanbanr-core = { workspace = true, features = ["schema"] }
+jsonschema = { version = "0.59", default-features = false }
+ureq = { version = "2", default-features = false }
