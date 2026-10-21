@@ -211,6 +211,10 @@ jobs:
       # A card never reads as a status, and never says ready while work is open (FEAT-205).
       - name: Board cards say what is next in plain words
         run: npm run check:card-text
+      # The Workflow page shows the cadence, the git model and every guard rail, each with the
+      # command that changes it, and changes nothing itself (FEAT-213).
+      - name: The Workflow page shows the cadence, the git model and the guard rails
+        run: npm run check:workflow
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.

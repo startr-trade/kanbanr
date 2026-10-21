@@ -1110,6 +1110,9 @@ fn dispatch_routes(
         // The gates moves are judged by (FEAT-199): role-addressed gates on their stage, and the
         // built-in rule where a workflow declares none. The monitor's Workflow page reads these.
         ("GET", ["projects", p, "gates"]) => ser(&store.load_meta(p)?.config.effective_gates()),
+        // Every guard rail the project has on, in one read (FEAT-213): the monitor's Workflow page
+        // lists them. Internal, not in the published API.
+        ("GET", ["projects", p, "guards"]) => ser(&crate::guards::report(store, p, repo)?),
         // The method, on by default (FEAT-193): which parts a project keeps.
         ("GET", ["projects", p, "config", "method"]) => {
             ser(&crate::method::status(&store.load_meta(p)?.config))
@@ -1686,6 +1689,126 @@ mod tests {
         assert_eq!(r[0]["diagram_warnings"][0]["file"], "FEAT-002 spec");
         assert!(r[1].get("diagram_warnings").is_none());
         assert_eq!(r[2]["diagram_warnings"][0]["rule"], "unknown_statement");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-213 R-1: one read reports the method's parts, the commit rules, diagram strictness,
+    /// each coverage rule with what it leaves uncovered, and the board's push policy.
+    #[test]
+    fn guards_route_reports_every_guard_rail() {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-dispatch-guards-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let call = |method: &str, path: &str, body: Value| -> Value {
+            serde_json::from_str(&dispatch(&store, method, path, Some(&body)).unwrap()).unwrap()
+        };
+        call(
+            "PUT",
+            "/projects/demo/config/cadence",
+            json!({ "sprints": true, "releases": true, "git_model": true }),
+        );
+        call(
+            "POST",
+            "/projects/demo/sprints",
+            json!({ "start": "2026-10-19", "length_days": 14 }),
+        );
+        call(
+            "POST",
+            "/projects/demo/releases",
+            json!({ "version": "v1.0.0" }),
+        );
+        call(
+            "PUT",
+            "/projects/demo/config/diagrams",
+            json!({ "strict": true }),
+        );
+        call(
+            "POST",
+            "/projects/demo/features",
+            json!({ "title": "T", "milestone": "M" }),
+        );
+        call(
+            "PUT",
+            "/projects/demo/coverage",
+            json!({ "text": "- id: listed\n  every: item\n  lists: architecture/index.md\n" }),
+        );
+
+        let g = call("GET", "/projects/demo/guards", Value::Null);
+
+        let parts: Vec<&str> = g["method"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["part"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            parts,
+            ["design", "design-review", "docs", "docs-folded", "links"],
+            "{g}"
+        );
+        assert!(
+            g["method"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|p| p["on"].is_boolean())
+        );
+
+        let commits = &g["commits"];
+        assert_eq!(commits["item_branch"], true);
+        assert_eq!(commits["trailer"], "Refs");
+        assert_eq!(commits["branch_pattern"], "feat/{code}-{slug}");
+        assert!(commits["escape"].as_str().unwrap().contains("[no-ref]"));
+        let protected: Vec<&str> = commits["protected"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b.as_str().unwrap())
+            .collect();
+        for branch in ["main", "sprint/*", "release/*"] {
+            assert!(
+                protected.contains(&branch),
+                "{branch} is protected: {protected:?}"
+            );
+        }
+        assert!(
+            commits["hooks_installed"].is_null(),
+            "core cannot tell whether the CLI's hooks are installed"
+        );
+
+        assert_eq!(g["diagrams"]["strict"], true);
+        assert_eq!(g["diagrams"]["lint_on_write"], true);
+
+        let coverage = g["coverage"].as_array().unwrap();
+        assert_eq!(coverage.len(), 1, "{g}");
+        assert_eq!(coverage[0]["id"], "listed");
+        assert_eq!(coverage[0]["subjects"], 1, "{g}");
+        assert_eq!(coverage[0]["uncovered"], 1, "the one item lists no doc");
+
+        let (policy, _) = crate::git::PushPolicy::for_board(&dir);
+        assert_eq!(g["push_policy"]["policy"], policy.to_string());
+        assert!(
+            ["environment", "board", "default"]
+                .contains(&g["push_policy"]["source"].as_str().unwrap())
+        );
+        assert_eq!(g["code_pushes"], "you");
+
+        // With the git model off, only the main branch refuses commits.
+        call(
+            "PUT",
+            "/projects/demo/config/cadence",
+            json!({ "git_model": false }),
+        );
+        let off = call("GET", "/projects/demo/guards", Value::Null);
+        assert_eq!(off["commits"]["protected"], json!(["main"]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

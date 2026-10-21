@@ -258,6 +258,36 @@ opens on the running sprint, and Releases and the Gantt show the cadence:
 | ![A running sprint and its burndown](../images/sprint.png) | ![Releases](../images/releases.png) | ![The Gantt with sprints and releases](../images/gantt-sprints.png) |
 | **A sprint** — goal, days left, burndown | **Releases** — scope, progress, notes | **Gantt** with sprints and releases |
 
+### The Workflow page
+
+The Workflow page shows, in one place, how work moves from an item branch to a tagged release and
+every guard rail that refuses a step on the way (FEAT-213). Its sections, top to bottom:
+
+- **Process** and the **diagram**: the saved process the workflow came from, and the workflow
+  drawn with its gates as notes.
+- **Stages**: what entering each stage asks for: conditions, sign-offs, warnings, roles.
+- **Cadence**, only when sprints or releases are on: the sprint length and the running sprint with
+  its dates (linked to the board, which opens on it); how often a release is cut, the release
+  stages in order with the last marked *the cut*, and each unshipped release at its stage (linked
+  to Releases).
+- **Git model**: the topology, main, the line of integration and where item branches start, where
+  production moves, item branch names, the protected branches that take merges only, what kanbanr
+  merges and when, and that pushing the code is yours. Whether automation is on, and the command
+  that switches it. When `kanbanr git doctor` finds problems, a warning box gives their count and
+  the first few.
+- **Guard rails**: the method's parts (`config method`); the commit rules (only on an item branch,
+  a `Refs:` trailer naming the item, never on a protected branch) and whether the hooks are
+  installed; diagram linting and strictness (`config diagrams`); each coverage rule and how many
+  subjects it leaves uncovered (`config coverage`); the board's push policy (`remote push-policy`),
+  and that kanbanr never pushes code.
+
+Every line shows its state and the CLI command that changes it. The page changes nothing itself.
+
+The git model and git doctor read the code repository. Start `kanbanr serve` in the project folder
+and the page shows the branches it found there. A monitor started anywhere else shows the model
+from the cadence alone, without git doctor, and says so. Whether the git hooks are installed is the
+CLI's to read: the page shows it as not known and names `kanbanr git status`, which tells.
+
 ### Release actions
 
 With releases on, two release decisions can be made from the monitor started with writes on

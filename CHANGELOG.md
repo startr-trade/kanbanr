@@ -6,6 +6,19 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **The Workflow page shows the cadence, the git model and every guard rail (FEAT-213).** Below
+  the stages: the sprint length and the running sprint; how often releases are cut, their stages
+  with the cut marked, and each unshipped release at its stage; the git model in words (main, the
+  line of integration, where items branch from, where production moves, protected branches, what
+  kanbanr merges, and that pushing is yours), with what `git doctor` finds as a warning; and every
+  guard rail: the method's parts, the commit rules and hooks, diagram strictness, coverage rules
+  and the board's push policy. Each line names the command that changes it; the page stays
+  read-only. A new internal read, `GET /api/projects/{project}/guards`, gives the guard rails in
+  one answer. A monitor started in the project folder now answers the git model and git doctor
+  from that repository; started elsewhere, the page shows the model from the cadence alone.
+
 ## [0.2.1] - 2026-10-21
 
 ### Added

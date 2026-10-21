@@ -39,6 +39,7 @@ pub mod git;
 pub mod gitdrift;
 pub mod gitmodel;
 pub mod graph;
+pub mod guards;
 pub mod hash;
 pub mod lessons;
 pub mod library;

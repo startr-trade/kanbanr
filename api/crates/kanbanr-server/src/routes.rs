@@ -59,8 +59,14 @@ pub async fn read_passthrough(
     // OriginalUri keeps the `/api` prefix + query string; dispatch wants the path without `/api`.
     let pq = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
     let dpath = pq.strip_prefix("/api").unwrap_or(pq);
+    // The reads that look at the code repository get the one the daemon was started in, as
+    // release promotion does (FEAT-213): the git model, git doctor and the guard rails. Every
+    // other read answers from the board alone, as before.
+    let repo = reads_code_repo(dpath)
+        .then(|| repo_for(&st, dpath))
+        .flatten();
     // Labelled with what the route renders (FEAT-177): a diagram or a document is not JSON.
-    match dispatch::dispatch(&st.store, "GET", dpath, None) {
+    match dispatch::dispatch_in(&st.store, "GET", dpath, None, repo) {
         Ok(body) => ([("content-type", dispatch::read_media_type(dpath))], body).into_response(),
         Err(e) => core_err(e).into_response(),
     }
@@ -230,6 +236,29 @@ fn project_id(path: &str) -> Option<String> {
     segs.next().map(|s| s.to_string())
 }
 
+/// The code repository the daemon was started in, for its own project only (FEAT-183): any
+/// other project's requests that need one answer as they do without one, never against the wrong
+/// code.
+fn repo_for<'a>(st: &'a AppState, dispatch_path: &str) -> Option<&'a std::path::Path> {
+    st.code_repo
+        .as_ref()
+        .filter(|(project, _)| project_id(dispatch_path).as_deref() == Some(project.as_str()))
+        .map(|(_, root)| root.as_path())
+}
+
+/// The reads that answer from the code repository (FEAT-213): `…/git/model`, `…/git/doctor` and
+/// `…/guards`, query string aside.
+fn reads_code_repo(dispatch_path: &str) -> bool {
+    let path = dispatch_path.split('?').next().unwrap_or(dispatch_path);
+    let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    matches!(
+        segs.as_slice(),
+        ["projects", _, "git", "model"]
+            | ["projects", _, "git", "doctor"]
+            | ["projects", _, "guards"]
+    )
+}
+
 /// Run a daemon write through the shared dispatch+commit+push path, then notify SSE listeners.
 /// `dispatch_path` is the reconstructed real route (e.g. `/projects/X/features`).
 fn run_write(
@@ -238,13 +267,7 @@ fn run_write(
     dispatch_path: &str,
     body: Option<&serde_json::Value>,
 ) -> axum::response::Response {
-    // The code repository the daemon was started in, for its own project only (FEAT-183): any
-    // other project's promotions that need one are refused, never run against the wrong code.
-    let repo = st
-        .code_repo
-        .as_ref()
-        .filter(|(project, _)| project_id(dispatch_path).as_deref() == Some(project.as_str()))
-        .map(|(_, root)| root.as_path());
+    let repo = repo_for(st, dispatch_path);
     let outcome = crate::write::write(
         &st.store,
         &st.data_dir,

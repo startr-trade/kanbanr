@@ -106,7 +106,7 @@ dependency views (`/ready`, `/blocked`, `/graph`, `/critical-path`, `/features/{
 their portfolio-wide forms), the portfolio Gantt (`/api/gantt`), trace and Zachman coverage, the
 retrospective and report, the issue mirror's settings, the CLAUDE.md block, the process library
 (`/api/processes`), the project-wide export (`/api/projects/{project}/export`), `/git/model`,
-`/git/doctor` and `/config/method`. Each answers JSON, except the DOT graph (`?format=dot`) and the Markdown
+`/git/doctor`, `/config/method` and the guard rails (`/api/projects/{project}/guards`). Each answers JSON, except the DOT graph (`?format=dot`) and the Markdown
 project export, which are text.
 
 ## Writes happen in the CLI (`dispatch`)
