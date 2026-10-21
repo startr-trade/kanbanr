@@ -22,6 +22,21 @@ fn ser<T: Serialize>(v: &T) -> Result<String> {
     serde_json::to_string(v).map_err(|e| CoreError::Unsupported(format!("serialize: {e}")))
 }
 
+/// A write's response with the diagram lint's findings added as `diagram_warnings` (FEAT-200),
+/// only when there are any; the body is returned as it was otherwise.
+fn with_diagram_warnings(
+    body: String,
+    warnings: &[crate::diagrams::DiagramFinding],
+) -> Result<String> {
+    if warnings.is_empty() {
+        return Ok(body);
+    }
+    let mut v: Value = serde_json::from_str(&body)
+        .map_err(|e| CoreError::Unsupported(format!("serialize: {e}")))?;
+    v["diagram_warnings"] = json!(warnings);
+    ser(&v)
+}
+
 /// Who is recording this verdict — required, never defaulted (FEAT-077).
 ///
 /// This used to fall back to the string "unknown", and the monitor sent "reviewed in the monitor":
@@ -699,27 +714,31 @@ pub fn dispatch_in(
             }
         }
         ("POST", ["projects", p, "features"]) => {
+            let spec = str_field(b, "specification").unwrap_or_default();
             let f = store.add_feature(
                 p,
                 &str_field(b, "title").unwrap_or_default(),
-                &str_field(b, "specification").unwrap_or_default(),
+                &spec,
                 &str_field(b, "milestone").unwrap_or_default(),
                 str_field(b, "code"),
             )?;
+            let warnings = crate::diagrams::lint_markdown(&format!("{} spec", f.code), &spec);
             let attrs = maybe_apply_attrs(store, p, &f.code, b)?;
             // Feedback on a release says where it was found, the way a defect does (FEAT-120):
             // recorded with the item, in the same write.
-            if let Some(version) = str_field(b, "found_in") {
+            let body = if let Some(version) = str_field(b, "found_in") {
                 let defect = crate::models::Defect {
                     found_in: version,
                     ..Default::default()
                 };
-                return ser(&store.set_defect(p, &f.code, Some(defect))?);
-            }
-            match attrs {
-                Some(json) => Ok(json),
-                None => ser(&f),
-            }
+                ser(&store.set_defect(p, &f.code, Some(defect))?)?
+            } else {
+                match attrs {
+                    Some(json) => json,
+                    None => ser(&f)?,
+                }
+            };
+            with_diagram_warnings(body, &warnings)
         }
         ("PATCH", ["projects", p, "features", code]) => {
             let milestone = if bool_field(b, "clear_milestone").unwrap_or(false) {
@@ -727,19 +746,24 @@ pub fn dispatch_in(
             } else {
                 str_field(b, "milestone").map(Some)
             };
+            let spec = str_field(b, "specification");
             let edited = store.edit_feature(
                 p,
                 code,
                 str_field(b, "title"),
-                str_field(b, "specification"),
+                spec.clone(),
                 milestone,
                 str_field(b, "new_code"),
             )?;
+            let warnings = spec
+                .map(|s| crate::diagrams::lint_markdown(&format!("{} spec", edited.code), &s))
+                .unwrap_or_default();
             // new_code may have renamed it; attrs apply to the (possibly new) code.
-            match maybe_apply_attrs(store, p, &edited.code, b)? {
-                Some(json) => Ok(json),
-                None => ser(&edited),
-            }
+            let body = match maybe_apply_attrs(store, p, &edited.code, b)? {
+                Some(json) => json,
+                None => ser(&edited)?,
+            };
+            with_diagram_warnings(body, &warnings)
         }
         ("POST", ["projects", p, "features", code, "move"]) => {
             // Entering an active status needs a current approval (FEAT-048); an explicit
@@ -1155,12 +1179,21 @@ pub fn dispatch_in(
             store.read_doc(p, &rel)
         }
         ("PUT", ["projects", p, "docs", "content"]) => {
-            let saved = store.write_doc(
-                p,
-                &str_field(b, "path").unwrap_or_default(),
-                &str_field(b, "content").unwrap_or_default(),
-            )?;
-            Ok(json!({ "path": saved }).to_string())
+            let path = str_field(b, "path").unwrap_or_default();
+            let content = str_field(b, "content").unwrap_or_default();
+            // FEAT-200: a markdown doc's diagrams are linted before it is written — refused on a
+            // strict project, reported as warnings otherwise.
+            let warnings = if crate::diagrams::is_markdown_path(&path) {
+                crate::diagrams::guard(
+                    &store.read_project_config(p)?.diagrams,
+                    &format!("docs/{path}"),
+                    &content,
+                )?
+            } else {
+                Vec::new()
+            };
+            let saved = store.write_doc(p, &path, &content)?;
+            with_diagram_warnings(json!({ "path": saved }).to_string(), &warnings)
         }
         ("DELETE", ["projects", p, "docs", "content"]) => {
             let rel = query_param(query, "path").unwrap_or_default();
@@ -1494,5 +1527,97 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
             .and_then(|b| b.get("message").and_then(|m| m.as_str()).map(String::from))
             .unwrap_or_else(|| "batch update".into()),
         _ => format!("{method} {path_only}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FEAT-200 R-1 and R-2: with strict off (the default), a spec or markdown doc whose diagram
+    /// fails the lint is written, and the response names each finding as `diagram_warnings` —
+    /// file, block, file line, rule and message; a clean write carries no such key.
+    #[test]
+    fn write_reports_diagram_warnings() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-dispatch-dw-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let call = |method: &str, path: &str, body: Value| -> Value {
+            serde_json::from_str(&dispatch(&store, method, path, Some(&body)).unwrap()).unwrap()
+        };
+        let spec = "# Spec\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n```mermaid\n\
+                    flowchart LR\n  A[f(x)] --> end\n```\n";
+
+        let added = call(
+            "POST",
+            "/projects/demo/features",
+            json!({ "title": "T", "milestone": "M", "specification": spec }),
+        );
+        assert_eq!(added["code"], "FEAT-001", "the item is written");
+        let w = added["diagram_warnings"].as_array().expect("warnings");
+        assert_eq!(w.len(), 1, "one finding per statement: {w:?}");
+        assert_eq!(w[0]["file"], "FEAT-001 spec");
+        assert_eq!(w[0]["block"], 2);
+        assert_eq!(w[0]["line"], 10);
+        assert_eq!(w[0]["rule"], "label_punctuation");
+        assert!(w[0]["message"].as_str().unwrap().contains("quotes"));
+        assert_eq!(store.feature_spec("demo", "FEAT-001").unwrap(), spec);
+
+        let edited = call(
+            "PATCH",
+            "/projects/demo/features/FEAT-001",
+            json!({ "specification": "```mermaid\nsequenceDiagram\n  A->>end: hi\n```\n" }),
+        );
+        assert_eq!(edited["diagram_warnings"][0]["rule"], "end_as_id");
+        assert_eq!(edited["diagram_warnings"][0]["line"], 3);
+        let titled = call(
+            "PATCH",
+            "/projects/demo/features/FEAT-001",
+            json!({ "title": "Only the title" }),
+        );
+        assert!(titled.get("diagram_warnings").is_none(), "no spec, no lint");
+
+        let doc = call(
+            "PUT",
+            "/projects/demo/docs/content",
+            json!({ "path": "arch/flow.md", "content": "```mermaid\nflowchrt\n```\n" }),
+        );
+        assert_eq!(doc["path"], "arch/flow.md");
+        assert_eq!(doc["diagram_warnings"][0]["file"], "docs/arch/flow.md");
+        assert_eq!(doc["diagram_warnings"][0]["rule"], "unknown_type");
+        assert!(
+            store.read_doc("demo", "arch/flow.md").is_ok(),
+            "the doc is written"
+        );
+        let clean = call(
+            "PUT",
+            "/projects/demo/docs/content",
+            json!({ "path": "arch/ok.md", "content": "```mermaid\npie\n```\n" }),
+        );
+        assert!(clean.get("diagram_warnings").is_none());
+
+        let batch = call(
+            "POST",
+            "/projects/demo/batch",
+            json!({ "operations": [
+                { "op": "feature.add", "ref": "x", "title": "B", "milestone": "M",
+                  "spec": "```mermaid\n```\n" },
+                { "op": "feature.edit", "code": "x", "spec": "```mermaid\nflowchart LR\n  A\n```\n" },
+                { "op": "doc.write", "path": "b.md", "content": "```mermaid\nsequenceDiagram\n  junk\n```\n" },
+            ]}),
+        );
+        let r = batch["results"].as_array().unwrap();
+        assert_eq!(r[0]["diagram_warnings"][0]["rule"], "empty_block");
+        assert_eq!(r[0]["diagram_warnings"][0]["file"], "FEAT-002 spec");
+        assert!(r[1].get("diagram_warnings").is_none());
+        assert_eq!(r[2]["diagram_warnings"][0]["rule"], "unknown_statement");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

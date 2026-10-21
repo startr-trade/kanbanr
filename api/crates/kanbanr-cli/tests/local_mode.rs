@@ -5289,3 +5289,39 @@ fn cli_config_diagrams_strict_toggles() {
     assert_eq!(ok(&["config", "diagrams"]).trim(), "strict: off");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-200 R-2: strict off, `feature add` writes the item and prints each diagram problem on
+/// stderr; `--json` carries them as `diagram_warnings` instead.
+#[test]
+fn cli_feature_add_prints_diagram_warning() {
+    let (base, work) = diagram_scratch("diagrams-warn");
+    let spec = "# Spec\n\n```mermaid\nsequenceDiagram\n  A->>B: one; two\n```\n";
+    let add = [
+        "feature",
+        "add",
+        "--milestone",
+        "MS-1",
+        "--spec",
+        spec,
+        "--title",
+    ];
+    let out = run_in(&base, &work, &[&add[..], &["Broken"]].concat());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("created FEAT-001"),
+        "the write succeeds"
+    );
+    assert!(
+        stderr.contains("diagram: FEAT-001 spec, diagram #1, line 5:")
+            && stderr.contains("(semicolon_in_text)"),
+        "{stderr}"
+    );
+
+    let out = run_in(&base, &work, &[&["--json"], &add[..], &["Again"]].concat());
+    assert!(out.status.success());
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("diagram:"));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["diagram_warnings"][0]["rule"], "semicolon_in_text");
+    let _ = std::fs::remove_dir_all(&base);
+}
