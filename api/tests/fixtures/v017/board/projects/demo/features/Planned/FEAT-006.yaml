@@ -1,0 +1,53 @@
+code: FEAT-006
+title: Approved again after an edit
+status: Planned
+milestone: MS-001
+kind: null
+priority: null
+start: null
+due: null
+estimate_days: null
+assignee: null
+team: null
+labels: []
+depends_on: []
+todo_lists: []
+definition:
+  statement: Approved again after an edit, second wording
+  goals: []
+  zachman:
+    what: The thing
+    how: 'By doing it: carefully'
+    where: crates/x
+    when: Now
+    who: Everyone
+    why: Because
+  requirements:
+  - id: R-1
+    kind: functional
+    text: THE SYSTEM SHALL do the thing.
+    tests:
+    - name: does_the_thing
+      kind: unit
+      state: planned
+  - id: R-2
+    kind: functional
+    text: |-
+      WHEN asked, THE SYSTEM SHALL answer
+      on two lines.
+    tests:
+    - name: answers_when_asked
+      kind: integration
+      state: planned
+  approval:
+    by: Fixture Maker
+    at: 2026-10-21T10:56:03.691963855Z
+    rev: 90adb9f56a9590eb
+  approvals:
+  - at: 2026-10-21T10:56:03.691963855Z
+    by: Fixture Maker
+    verdict: approved
+    rev: 90adb9f56a9590eb
+    status: Planned
+created_at: 2026-10-21T10:56:03.602641302Z
+updated_at: 2026-10-21T10:56:03.691963855Z

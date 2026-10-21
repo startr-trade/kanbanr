@@ -1,0 +1,248 @@
+- time: 2026-10-21T10:56:03.196687516Z
+  project: demo
+  kind: feature_added
+  feature: FEAT-001
+  message: feature FEAT-001 added
+  detail:
+    status: Planned
+- time: 2026-10-21T10:56:03.233827352Z
+  project: demo
+  kind: approval_recorded
+  feature: FEAT-001
+  message: Fixture Maker approved FEAT-001
+  detail:
+    by: Fixture Maker
+    reason: ''
+    status: Planned
+- time: 2026-10-21T10:56:03.251133735Z
+  project: demo
+  kind: feature_added
+  feature: FEAT-002
+  message: feature FEAT-002 added
+  detail:
+    status: Planned
+- time: 2026-10-21T10:56:03.289341831Z
+  project: demo
+  kind: approval_recorded
+  feature: FEAT-002
+  message: Fixture Maker approved FEAT-002
+  detail:
+    by: Fixture Maker
+    reason: ''
+    status: Planned
+- time: 2026-10-21T10:56:03.326922533Z
+  project: demo
+  kind: feature_added
+  feature: FEAT-003
+  message: feature FEAT-003 added
+  detail:
+    status: Planned
+- time: 2026-10-21T10:56:03.366870786Z
+  project: demo
+  kind: approval_recorded
+  feature: FEAT-003
+  message: Fixture Maker approved FEAT-003
+  detail:
+    by: Fixture Maker
+    reason: ''
+    status: Planned
+- time: 2026-10-21T10:56:03.386401657Z
+  project: demo
+  kind: approval_withdrawn
+  feature: FEAT-003
+  message: Fixture Maker withdrew the approval of FEAT-003 — scope is wrong
+  detail:
+    by: Fixture Maker
+    reason: scope is wrong
+    status: Planned
+- time: 2026-10-21T10:56:03.405514067Z
+  project: demo
+  kind: feature_added
+  feature: FEAT-004
+  message: feature FEAT-004 added
+  detail:
+    status: Planned
+- time: 2026-10-21T10:56:03.45132516Z
+  project: demo
+  kind: feature_moved
+  feature: FEAT-004
+  message: feature FEAT-004 moved to In Progress
+  detail:
+    status: In Progress
+    terminal: false
+- time: 2026-10-21T10:56:03.491185062Z
+  project: demo
+  kind: feature_added
+  feature: FEAT-005
+  message: feature FEAT-005 added
+  detail:
+    status: Planned
+- time: 2026-10-21T10:56:03.540208468Z
+  project: demo
+  kind: feature_moved
+  feature: FEAT-005
+  message: feature FEAT-005 moved to In Progress
+  detail:
+    status: In Progress
+    terminal: false
+- time: 2026-10-21T10:56:03.604704279Z
+  project: demo
+  kind: feature_added
+  feature: FEAT-006
+  message: feature FEAT-006 added
+  detail:
+    status: Planned
+- time: 2026-10-21T10:56:03.650010906Z
+  project: demo
+  kind: approval_recorded
+  feature: FEAT-006
+  message: Fixture Maker approved FEAT-006
+  detail:
+    by: Fixture Maker
+    reason: ''
+    status: Planned
+- time: 2026-10-21T10:56:03.69479628Z
+  project: demo
+  kind: approval_recorded
+  feature: FEAT-006
+  message: Fixture Maker approved FEAT-006
+  detail:
+    by: Fixture Maker
+    reason: ''
+    status: Planned
+- time: 2026-10-21T10:56:03.717839584Z
+  project: demo
+  kind: feature_added
+  feature: FEAT-007
+  message: feature FEAT-007 added
+  detail:
+    status: Planned
+- time: 2026-10-21T10:56:03.764919579Z
+  project: demo
+  kind: approval_recorded
+  feature: FEAT-007
+  message: Fixture Maker approved FEAT-007
+  detail:
+    by: Fixture Maker
+    reason: ''
+    status: Planned
+- time: 2026-10-21T10:56:03.808816083Z
+  project: demo
+  kind: feature_added
+  feature: FEAT-008
+  message: feature FEAT-008 added
+  detail:
+    status: Planned
+- time: 2026-10-21T10:56:03.903675853Z
+  project: demo
+  kind: approval_recorded
+  feature: FEAT-008
+  message: Fixture Maker approved FEAT-008
+  detail:
+    by: Fixture Maker
+    reason: ''
+    status: Planned
+- time: 2026-10-21T10:56:03.927749516Z
+  project: demo
+  kind: feature_added
+  feature: FEAT-009
+  message: feature FEAT-009 added
+  detail:
+    status: Planned
+- time: 2026-10-21T10:56:03.978236613Z
+  project: demo
+  kind: feature_added
+  feature: FEAT-010
+  message: feature FEAT-010 added
+  detail:
+    status: Planned
+- time: 2026-10-21T10:56:04.02949398Z
+  project: demo
+  kind: approval_recorded
+  feature: FEAT-010
+  message: Fixture Maker approved FEAT-010
+  detail:
+    by: Fixture Maker
+    reason: ''
+    status: Planned
+- time: 2026-10-21T10:56:04.102524648Z
+  project: demo
+  kind: feature_added
+  feature: FEAT-011
+  message: feature FEAT-011 added
+  detail:
+    status: Planned
+- time: 2026-10-21T10:56:04.156938525Z
+  project: demo
+  kind: approval_recorded
+  feature: FEAT-011
+  message: Fixture Maker approved FEAT-011
+  detail:
+    by: Fixture Maker
+    reason: ''
+    status: Planned
+- time: 2026-10-21T10:56:04.182994918Z
+  project: demo
+  kind: approval_withdrawn
+  feature: FEAT-011
+  message: Fixture Maker withdrew the approval of FEAT-011 — not yet
+  detail:
+    by: Fixture Maker
+    reason: not yet
+    status: Planned
+- time: 2026-10-21T10:56:04.209044734Z
+  project: demo
+  kind: approval_recorded
+  feature: FEAT-011
+  message: Fixture Maker approved FEAT-011
+  detail:
+    by: Fixture Maker
+    reason: ''
+    status: Planned
+- time: 2026-10-21T10:56:04.235200199Z
+  project: demo
+  kind: feature_added
+  feature: FEAT-012
+  message: feature FEAT-012 added
+  detail:
+    status: Planned
+- time: 2026-10-21T10:56:04.262257268Z
+  project: demo
+  kind: feature_added
+  feature: FEAT-013
+  message: feature FEAT-013 added
+  detail:
+    status: Planned
+- time: 2026-10-21T10:56:04.317155157Z
+  project: demo
+  kind: approval_recorded
+  feature: FEAT-013
+  message: Fixture Maker approved FEAT-013
+  detail:
+    by: Fixture Maker
+    reason: ''
+    status: Planned
+- time: 2026-10-21T10:56:04.371351973Z
+  project: demo
+  kind: feature_moved
+  feature: FEAT-013
+  message: feature FEAT-013 moved to In Progress
+  detail:
+    status: In Progress
+    terminal: false
+- time: 2026-10-21T10:56:04.408389806Z
+  project: demo
+  kind: feature_added
+  feature: FEAT-014
+  message: feature FEAT-014 added
+  detail:
+    status: Planned
+- time: 2026-10-21T10:56:04.569222722Z
+  project: demo
+  kind: approval_recorded
+  feature: FEAT-014
+  message: Fixture Maker approved FEAT-014
+  detail:
+    by: Fixture Maker
+    reason: ''
+    status: Planned

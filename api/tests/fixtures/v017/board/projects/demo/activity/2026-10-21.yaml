@@ -1,0 +1,225 @@
+- time: 2026-10-21T10:56:03.179940992Z
+  actor: Fixture Maker
+  message: add milestone
+- time: 2026-10-21T10:56:03.196417654Z
+  actor: Fixture Maker
+  message: add feature item
+- time: 2026-10-21T10:56:03.216274703Z
+  actor: Fixture Maker
+  message: define feature FEAT-001
+  item: FEAT-001
+- time: 2026-10-21T10:56:03.233439912Z
+  actor: Fixture Maker
+  message: approve definition of FEAT-001
+  item: FEAT-001
+- time: 2026-10-21T10:56:03.250809004Z
+  actor: Fixture Maker
+  message: add feature item
+- time: 2026-10-21T10:56:03.271507505Z
+  actor: Fixture Maker
+  message: define feature FEAT-002
+  item: FEAT-002
+- time: 2026-10-21T10:56:03.288881315Z
+  actor: Fixture Maker
+  message: approve definition of FEAT-002
+  item: FEAT-002
+- time: 2026-10-21T10:56:03.309283701Z
+  actor: Fixture Maker
+  message: define feature FEAT-002
+  item: FEAT-002
+- time: 2026-10-21T10:56:03.326372748Z
+  actor: Fixture Maker
+  message: add feature item
+- time: 2026-10-21T10:56:03.347966538Z
+  actor: Fixture Maker
+  message: define feature FEAT-003
+  item: FEAT-003
+- time: 2026-10-21T10:56:03.366121236Z
+  actor: Fixture Maker
+  message: approve definition of FEAT-003
+  item: FEAT-003
+- time: 2026-10-21T10:56:03.385689079Z
+  actor: Fixture Maker
+  message: withdraw the approval of FEAT-003
+  item: FEAT-003
+- time: 2026-10-21T10:56:03.40482178Z
+  actor: Fixture Maker
+  message: add feature item
+- time: 2026-10-21T10:56:03.427291354Z
+  actor: Fixture Maker
+  message: define feature FEAT-004
+  item: FEAT-004
+- time: 2026-10-21T10:56:03.447778446Z
+  actor: Fixture Maker
+  message: move feature FEAT-004
+  item: FEAT-004
+- time: 2026-10-21T10:56:03.471523195Z
+  actor: Fixture Maker
+  message: ratify FEAT-004 — built under a recorded bypass, agreed to after the fact
+  item: FEAT-004
+- time: 2026-10-21T10:56:03.490239103Z
+  actor: Fixture Maker
+  message: add feature item
+- time: 2026-10-21T10:56:03.513706577Z
+  actor: Fixture Maker
+  message: define feature FEAT-005
+  item: FEAT-005
+- time: 2026-10-21T10:56:03.535863481Z
+  actor: Fixture Maker
+  message: move feature FEAT-005
+  item: FEAT-005
+- time: 2026-10-21T10:56:03.561058491Z
+  actor: Fixture Maker
+  message: ratify FEAT-005 — built under a recorded bypass, agreed to after the fact
+  item: FEAT-005
+- time: 2026-10-21T10:56:03.583748724Z
+  actor: Fixture Maker
+  message: define feature FEAT-005
+  item: FEAT-005
+- time: 2026-10-21T10:56:03.603412844Z
+  actor: Fixture Maker
+  message: add feature item
+- time: 2026-10-21T10:56:03.628004171Z
+  actor: Fixture Maker
+  message: define feature FEAT-006
+  item: FEAT-006
+- time: 2026-10-21T10:56:03.648673152Z
+  actor: Fixture Maker
+  message: approve definition of FEAT-006
+  item: FEAT-006
+- time: 2026-10-21T10:56:03.672893064Z
+  actor: Fixture Maker
+  message: define feature FEAT-006
+  item: FEAT-006
+- time: 2026-10-21T10:56:03.693228516Z
+  actor: Fixture Maker
+  message: approve definition of FEAT-006
+  item: FEAT-006
+- time: 2026-10-21T10:56:03.716328484Z
+  actor: Fixture Maker
+  message: add feature item
+- time: 2026-10-21T10:56:03.741907111Z
+  actor: Fixture Maker
+  message: define feature FEAT-007
+  item: FEAT-007
+- time: 2026-10-21T10:56:03.763207263Z
+  actor: Fixture Maker
+  message: approve definition of FEAT-007
+  item: FEAT-007
+- time: 2026-10-21T10:56:03.786395694Z
+  actor: Fixture Maker
+  message: sign off design-review on FEAT-007
+  item: FEAT-007
+- time: 2026-10-21T10:56:03.807155359Z
+  actor: Fixture Maker
+  message: add feature item
+- time: 2026-10-21T10:56:03.833288581Z
+  actor: Fixture Maker
+  message: define feature FEAT-008
+  item: FEAT-008
+- time: 2026-10-21T10:56:03.85478004Z
+  actor: Fixture Maker
+  message: sign off design-review on FEAT-008
+  item: FEAT-008
+- time: 2026-10-21T10:56:03.87897179Z
+  actor: Fixture Maker
+  message: define feature FEAT-008
+  item: FEAT-008
+- time: 2026-10-21T10:56:03.901753047Z
+  actor: Fixture Maker
+  message: approve definition of FEAT-008
+  item: FEAT-008
+- time: 2026-10-21T10:56:03.925704793Z
+  actor: Fixture Maker
+  message: add feature item
+- time: 2026-10-21T10:56:03.953057027Z
+  actor: Fixture Maker
+  message: define feature FEAT-009
+  item: FEAT-009
+- time: 2026-10-21T10:56:03.976188994Z
+  actor: Fixture Maker
+  message: add feature item
+- time: 2026-10-21T10:56:04.004181569Z
+  actor: Fixture Maker
+  message: define feature FEAT-010
+  item: FEAT-010
+- time: 2026-10-21T10:56:04.027317998Z
+  actor: Fixture Maker
+  message: approve definition of FEAT-010
+  item: FEAT-010
+- time: 2026-10-21T10:56:04.052708945Z
+  actor: Fixture Maker
+  message: test does_the_thing of FEAT-010/R-1 is now green
+  item: FEAT-010
+- time: 2026-10-21T10:56:04.075901499Z
+  actor: Fixture Maker
+  message: test answers_when_asked of FEAT-010/R-2 is now red
+  item: FEAT-010
+- time: 2026-10-21T10:56:04.100173843Z
+  actor: Fixture Maker
+  message: add feature item
+- time: 2026-10-21T10:56:04.130525505Z
+  actor: Fixture Maker
+  message: define feature FEAT-011
+  item: FEAT-011
+- time: 2026-10-21T10:56:04.154626767Z
+  actor: Fixture Maker
+  message: approve definition of FEAT-011
+  item: FEAT-011
+- time: 2026-10-21T10:56:04.180622873Z
+  actor: Fixture Maker
+  message: withdraw the approval of FEAT-011
+  item: FEAT-011
+- time: 2026-10-21T10:56:04.206465511Z
+  actor: Fixture Maker
+  message: approve definition of FEAT-011
+  item: FEAT-011
+- time: 2026-10-21T10:56:04.232741251Z
+  actor: Fixture Maker
+  message: add feature item
+- time: 2026-10-21T10:56:04.259640121Z
+  actor: Fixture Maker
+  message: add feature item
+- time: 2026-10-21T10:56:04.289386987Z
+  actor: Fixture Maker
+  message: define feature FEAT-013
+  item: FEAT-013
+- time: 2026-10-21T10:56:04.31435941Z
+  actor: Fixture Maker
+  message: approve definition of FEAT-013
+  item: FEAT-013
+- time: 2026-10-21T10:56:04.354077562Z
+  actor: Fixture Maker
+  message: move feature FEAT-013
+  item: FEAT-013
+- time: 2026-10-21T10:56:04.405698574Z
+  actor: Fixture Maker
+  message: add feature item
+- time: 2026-10-21T10:56:04.436419193Z
+  actor: Fixture Maker
+  message: define feature FEAT-014
+  item: FEAT-014
+- time: 2026-10-21T10:56:04.462772122Z
+  actor: Fixture Maker
+  message: sign off design-review on FEAT-014
+  item: FEAT-014
+- time: 2026-10-21T10:56:04.48805994Z
+  actor: Fixture Maker
+  message: sign off release on FEAT-014
+  item: FEAT-014
+- time: 2026-10-21T10:56:04.515478429Z
+  actor: Fixture Maker
+  message: define feature FEAT-014
+  item: FEAT-014
+- time: 2026-10-21T10:56:04.540696249Z
+  actor: Fixture Maker
+  message: sign off release on FEAT-014
+  item: FEAT-014
+- time: 2026-10-21T10:56:04.56612999Z
+  actor: Fixture Maker
+  message: approve definition of FEAT-014
+  item: FEAT-014
+- time: 2026-10-21T10:56:04.602381328Z
+  actor: Fixture Maker
+  message: edit feature FEAT-012
+  item: FEAT-012

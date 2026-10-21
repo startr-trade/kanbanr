@@ -1,0 +1,55 @@
+code: FEAT-010
+title: Tests green after approval
+status: Planned
+milestone: MS-001
+kind: null
+priority: null
+start: null
+due: null
+estimate_days: null
+assignee: null
+team: null
+labels: []
+depends_on: []
+todo_lists: []
+definition:
+  statement: Tests green after approval
+  goals: []
+  zachman:
+    what: The thing
+    how: 'By doing it: carefully'
+    where: crates/x
+    when: Now
+    who: Everyone
+    why: Because
+  requirements:
+  - id: R-1
+    kind: functional
+    text: THE SYSTEM SHALL do the thing.
+    tests:
+    - name: does_the_thing
+      kind: unit
+      state: green
+      checked_rev: 0123456789abcdef0123456789abcdef01234567
+  - id: R-2
+    kind: functional
+    text: |-
+      WHEN asked, THE SYSTEM SHALL answer
+      on two lines.
+    tests:
+    - name: answers_when_asked
+      kind: integration
+      state: red
+      checked_rev: 0123456789abcdef0123456789abcdef01234567
+  approval:
+    by: Fixture Maker
+    at: 2026-10-21T10:56:04.025834366Z
+    rev: 5951150ba3000504
+  approvals:
+  - at: 2026-10-21T10:56:04.025834366Z
+    by: Fixture Maker
+    verdict: approved
+    rev: 5951150ba3000504
+    status: Planned
+created_at: 2026-10-21T10:56:03.975119384Z
+updated_at: 2026-10-21T10:56:04.074367169Z

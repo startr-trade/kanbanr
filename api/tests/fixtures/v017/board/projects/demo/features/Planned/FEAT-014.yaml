@@ -1,0 +1,59 @@
+code: FEAT-014
+title: Two sign-offs
+status: Planned
+milestone: MS-001
+kind: null
+priority: null
+start: null
+due: null
+estimate_days: null
+assignee: null
+team: null
+labels: []
+depends_on: []
+todo_lists: []
+definition:
+  statement: Two sign-offs, after an edit
+  goals: []
+  zachman:
+    what: The thing
+    how: 'By doing it: carefully'
+    where: crates/x
+    when: Now
+    who: Everyone
+    why: Because
+  requirements:
+  - id: R-1
+    kind: functional
+    text: THE SYSTEM SHALL do the thing.
+    tests:
+    - name: does_the_thing
+      kind: unit
+      state: planned
+  - id: R-2
+    kind: functional
+    text: |-
+      WHEN asked, THE SYSTEM SHALL answer
+      on two lines.
+    tests:
+    - name: answers_when_asked
+      kind: integration
+      state: planned
+  approval:
+    by: Fixture Maker
+    at: 2026-10-21T10:56:04.56411456Z
+    rev: 2b7467a652b92e68
+  approvals:
+  - at: 2026-10-21T10:56:04.56411456Z
+    by: Fixture Maker
+    verdict: approved
+    rev: 2b7467a652b92e68
+    status: Planned
+  signoffs:
+  - id: release
+    by: Fixture Maker
+    at: 2026-10-21T10:56:04.538941969Z
+    rev: 2b7467a652b92e68
+    status: Planned
+created_at: 2026-10-21T10:56:04.404292004Z
+updated_at: 2026-10-21T10:56:04.56411456Z

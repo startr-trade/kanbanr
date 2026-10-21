@@ -1,0 +1,60 @@
+schema_version: 2
+name: behind
+description: uses other-flow v1
+statuses:
+- Deferred
+- Planned
+- In Progress
+- Completed
+- Ongoing
+- No Action
+- Not Applicable
+- Out-of-Scope
+default_state: Planned
+transitions:
+  Completed:
+  - In Progress
+  Deferred:
+  - Planned
+  - Ongoing
+  - No Action
+  - Not Applicable
+  - Out-of-Scope
+  In Progress:
+  - Completed
+  - Planned
+  - Ongoing
+  - No Action
+  - Not Applicable
+  - Out-of-Scope
+  No Action:
+  - Planned
+  Not Applicable:
+  - Planned
+  Ongoing:
+  - In Progress
+  - Planned
+  Out-of-Scope:
+  - Planned
+  Planned:
+  - In Progress
+  - Deferred
+  - Ongoing
+  - No Action
+  - Not Applicable
+  - Out-of-Scope
+displayed_states:
+- Planned
+- In Progress
+- Completed
+no_op_states:
+- No Action
+- Not Applicable
+- Out-of-Scope
+terminal_states:
+- Completed
+process:
+  name: other-flow
+  library: board
+  version: 1
+  rev: 8fc6e10f1abfd210
