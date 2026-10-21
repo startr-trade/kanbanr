@@ -138,8 +138,10 @@ The same scope is checked where writes do not go through `write::apply`: the CLI
 classifies every command (an exhaustive match) and refuses, in an agent's worktree, those that
 change kanbanr itself or write outside the board's write path; the commit-msg and pre-commit hooks
 and the Claude Code guard hold commits to the scope's branch and item; the pre-push hook, the guard
-and the board sync refuse every push. A board inside the system temporary directory is never
-governed, so the test suite runs in an agent's worktree as anywhere else.
+and the board sync refuse every push. A board that holds scopes is always governed, wherever it
+is; only a board in the system temporary directory that holds none is exempt, so the test suite
+runs in an agent's worktree as anywhere else, and pointing `TMPDIR` at the real board does not
+lift its scopes.
 
 ## The rules: one engine for what is missing
 

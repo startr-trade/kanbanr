@@ -166,6 +166,8 @@ Scopes guard against mistakes and casual crossings, not a hostile process: the a
 with your file permissions. A script that leaves the worktree, a commit with its hooks switched off
 inside a script, or a hand edit to the board's `scopes.yaml` is not stopped, though every scoped
 write carries its agent and a trailer, so an unattributed change stands out in the history.
+A board that holds scopes is governed wherever it is, so setting `TMPDIR` does not make it look
+like a test board; only a board in the temporary directory that holds no scopes is exempt.
 
 ## Why it asks what it asks
 
