@@ -25,7 +25,7 @@ pub struct WriteOutcome {
 
 /// The data-route write: core's one write recipe (FEAT-176), the same the CLI runs. The daemon has
 /// no HTTP client, so events are recorded and not delivered; webhook delivery stays the CLI's.
-/// Returns the dispatcher's error text on failure (the caller maps it to an HTTP status). `repo` is
+/// On failure, core's error, which carries its HTTP status. `repo` is
 /// the project's code repository, when the daemon has one for this project (FEAT-183).
 pub fn write(
     store: &Store,
@@ -35,7 +35,7 @@ pub fn write(
     path: &str,
     body: Option<&Value>,
     repo: Option<&Path>,
-) -> Result<WriteOutcome, String> {
+) -> Result<WriteOutcome, kanbanr_core::write::WriteError> {
     let applied = kanbanr_core::write::apply(
         store,
         data_dir,

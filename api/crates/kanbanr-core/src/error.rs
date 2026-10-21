@@ -82,3 +82,71 @@ pub enum CoreError {
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
+
+impl CoreError {
+    /// The HTTP status this error answers with (FEAT-176). One mapping for every front end that
+    /// speaks HTTP, so a read and a write that fail the same way say so with the same code; the
+    /// daemon used to guess a write's code from the words in its message.
+    pub fn status(&self) -> u16 {
+        use CoreError::*;
+        match self {
+            ProjectNotFound(_)
+            | FeatureNotFound(_)
+            | MilestoneNotFound(_)
+            | TaskNotFound(_, _)
+            | TodoListNotFound(_, _)
+            | DocNotFound(_) => 404,
+            // The board is newer than this binary: the daemon cannot serve it correctly and says so
+            // rather than returning an empty board (FEAT-072). 409 is the honest code — the request
+            // is fine, the server's state is what conflicts.
+            SchemaTooNew { .. } => 409,
+            ProjectExists(_)
+            | FeatureExists(_)
+            | MilestoneExists(_)
+            | TaskExists(_, _)
+            | TodoListExists(_, _)
+            | MilestoneInUse(_, _)
+            | StatusInUse(_, _)
+            | ProjectNotEmpty(_, _, _) => 409,
+            // No route answers this path (FEAT-177): it was a 400, "unsupported operation".
+            NoSuchRoute(_) => 404,
+            InvalidDocPath(_)
+            | InvalidName(_)
+            | UnknownStatus(_)
+            | TransitionNotAllowed { .. }
+            | InvalidTaskState(_)
+            | DependencyCycle(_)
+            | UnknownDependency(_)
+            | MilestoneRequired
+            | NoStatuses
+            | DisplayedNoOp(_)
+            | BatchOpFailed(_, _)
+            | InvalidMermaid(_)
+            | Unsupported(_) => 400,
+            // The code repository refused a release promotion (FEAT-183): the request was well
+            // formed, the repository's state is what stood in the way.
+            Git(_) => 409,
+            Io(_) | Yaml(_) => 500,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn errors_answer_with_their_http_status() {
+        assert_eq!(CoreError::FeatureNotFound("F".into()).status(), 404);
+        assert_eq!(CoreError::NoSuchRoute("x".into()).status(), 404);
+        assert_eq!(CoreError::FeatureExists("F".into()).status(), 409);
+        let too_new = CoreError::SchemaTooNew {
+            found: 9,
+            understood: 1,
+        };
+        assert_eq!(too_new.status(), 409);
+        assert_eq!(CoreError::Unsupported("x".into()).status(), 400);
+        assert_eq!(CoreError::Git("x".into()).status(), 409);
+        assert_eq!(CoreError::Io(std::io::Error::other("disk")).status(), 500);
+    }
+}

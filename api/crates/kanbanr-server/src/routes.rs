@@ -9,53 +9,15 @@ use axum::http::{Method, StatusCode};
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures::stream::StreamExt;
-use kanbanr_core::{dispatch, export};
+use kanbanr_core::dispatch;
 use std::convert::Infallible;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::BroadcastStream;
 
-/// Map a CoreError to an HTTP status + message.
+/// Map a CoreError to an HTTP status + message. The mapping is core's (FEAT-176), so a read and
+/// a write that fail the same way answer with the same code.
 fn core_err(e: kanbanr_core::CoreError) -> (StatusCode, String) {
-    use kanbanr_core::CoreError::*;
-    let code = match &e {
-        ProjectNotFound(_)
-        | FeatureNotFound(_)
-        | MilestoneNotFound(_)
-        | TaskNotFound(_, _)
-        | TodoListNotFound(_, _)
-        | DocNotFound(_) => StatusCode::NOT_FOUND,
-        // The board is newer than this binary: the daemon cannot serve it correctly and says so
-        // rather than returning an empty board (FEAT-072). 409 is the honest code — the request is
-        // fine, the server's state is what conflicts.
-        SchemaTooNew { .. } => StatusCode::CONFLICT,
-        ProjectExists(_)
-        | FeatureExists(_)
-        | MilestoneExists(_)
-        | TaskExists(_, _)
-        | TodoListExists(_, _)
-        | MilestoneInUse(_, _)
-        | StatusInUse(_, _)
-        | ProjectNotEmpty(_, _, _) => StatusCode::CONFLICT,
-        // No route answers this path (FEAT-177): it was a 400, "unsupported operation".
-        NoSuchRoute(_) => StatusCode::NOT_FOUND,
-        InvalidDocPath(_)
-        | InvalidName(_)
-        | UnknownStatus(_)
-        | TransitionNotAllowed { .. }
-        | InvalidTaskState(_)
-        | DependencyCycle(_)
-        | UnknownDependency(_)
-        | MilestoneRequired
-        | NoStatuses
-        | DisplayedNoOp(_)
-        | BatchOpFailed(_, _)
-        | InvalidMermaid(_)
-        | Unsupported(_) => StatusCode::BAD_REQUEST,
-        // The code repository refused a release promotion (FEAT-183): the request was well formed,
-        // the repository's state is what stood in the way.
-        Git(_) => StatusCode::CONFLICT,
-        Io(_) | Yaml(_) => StatusCode::INTERNAL_SERVER_ERROR,
-    };
+    let code = StatusCode::from_u16(e.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     (code, e.to_string())
 }
 
@@ -142,37 +104,15 @@ pub async fn get_project(State(st): State<AppState>, Path(p): Path<String>) -> i
     ))
 }
 
-#[derive(serde::Deserialize)]
-pub struct ExportQuery {
-    #[serde(default)]
-    format: Option<String>,
-}
-
+/// `GET /projects/:project/features/:code/export` — through core's dispatch, as the CLI exports
+/// (FEAT-176): one rendering of an item, labelled with what it rendered (Markdown, or JSON for
+/// `?format=json`).
 pub async fn export_feature(
-    State(st): State<AppState>,
-    Path((project, code)): Path<(String, String)>,
-    Query(q): Query<ExportQuery>,
-) -> impl IntoResponse {
-    let project = match st.store.load(&project) {
-        Ok(p) => p,
-        Err(e) => return core_err(e).into_response(),
-    };
-    let feature = match project.feature(&code) {
-        Ok(f) => f,
-        Err(e) => return core_err(e).into_response(),
-    };
-    let ms = project.milestone(&feature.milestone).ok();
-    match q.format.as_deref() {
-        Some("json") => match export::to_json(feature, ms) {
-            Ok(s) => ([("content-type", "application/json")], s).into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        },
-        _ => (
-            [("content-type", "text/markdown; charset=utf-8")],
-            export::to_markdown(feature, ms),
-        )
-            .into_response(),
-    }
+    st: State<AppState>,
+    method: Method,
+    uri: OriginalUri,
+) -> axum::response::Response {
+    read_passthrough(st, method, uri).await
 }
 
 pub async fn list_docs(State(st): State<AppState>, Path(p): Path<String>) -> impl IntoResponse {
@@ -200,25 +140,6 @@ pub async fn get_doc(
     }
 }
 
-fn content_type_for(path: &str) -> &'static str {
-    match path
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "svg" => "image/svg+xml",
-        "webp" => "image/webp",
-        "pdf" => "application/pdf",
-        "md" | "markdown" | "txt" => "text/plain; charset=utf-8",
-        _ => "application/octet-stream",
-    }
-}
-
 /// Serve a documentation file's RAW bytes with a content-type (binary assets like images).
 pub async fn get_doc_raw(
     State(st): State<AppState>,
@@ -226,7 +147,11 @@ pub async fn get_doc_raw(
     Query(q): Query<DocQuery>,
 ) -> impl IntoResponse {
     match st.store.read_doc_bytes(&p, &q.path) {
-        Ok(bytes) => ([("content-type", content_type_for(&q.path))], bytes).into_response(),
+        Ok(bytes) => (
+            [("content-type", kanbanr_core::docs::content_type(&q.path))],
+            bytes,
+        )
+            .into_response(),
         Err(e) => core_err(e).into_response(),
     }
 }
@@ -364,16 +289,11 @@ fn run_write(
                 .send(project_id(dispatch_path).unwrap_or_else(|| "*".to_string()));
             ([("content-type", "application/json")], out.body).into_response()
         }
-        // The dispatch error text mirrors the read path; map structurally to a 400/conflict bucket.
+        // The same status a read failing the same way answers with (FEAT-176): core's mapping, not
+        // a guess from the words of the message.
         Err(e) => {
-            let code = if e.contains("not found") {
-                StatusCode::NOT_FOUND
-            } else if e.contains("already exists") || e.contains("in use") {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::BAD_REQUEST
-            };
-            (code, e).into_response()
+            let code = StatusCode::from_u16(e.status()).unwrap_or(StatusCode::BAD_REQUEST);
+            (code, e.to_string()).into_response()
         }
     }
 }

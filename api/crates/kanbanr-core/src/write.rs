@@ -11,7 +11,7 @@
 //! to be kept in step with the other by hand.
 
 use crate::git::{self, PushPolicy};
-use crate::{Store, activity, dispatch, eventing};
+use crate::{CoreError, Store, activity, dispatch, eventing};
 use serde_json::Value;
 use std::path::Path;
 
@@ -21,6 +21,37 @@ use std::path::Path;
 pub struct Applied {
     pub body: String,
     pub push_failures: Vec<String>,
+}
+
+/// Why a write did not happen. The operation's own failure keeps core's error, so a front end that
+/// speaks HTTP answers with [`CoreError::status`] rather than guessing from the message (FEAT-176).
+#[derive(Debug)]
+pub enum WriteError {
+    /// Dispatch refused or failed the operation.
+    Core(CoreError),
+    /// Refused before dispatch ran: nobody can author the commit, or the lock could not be taken.
+    Refused(String),
+}
+
+impl std::fmt::Display for WriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WriteError::Core(e) => e.fmt(f),
+            WriteError::Refused(why) => f.write_str(why),
+        }
+    }
+}
+
+impl std::error::Error for WriteError {}
+
+impl WriteError {
+    /// The HTTP status: core's for an operation that failed, 400 for a write refused up front.
+    pub fn status(&self) -> u16 {
+        match self {
+            WriteError::Core(e) => e.status(),
+            WriteError::Refused(_) => 400,
+        }
+    }
 }
 
 /// Run `f` holding the board's exclusive advisory write lock (FEAT-029). The OS releases it if the
@@ -42,7 +73,7 @@ pub fn with_lock<T>(data_dir: &Path, f: impl FnOnce() -> T) -> std::io::Result<T
 
 /// Apply one data-route write: the whole recipe, under the lock. `method` is POST/PUT/PATCH/DELETE;
 /// a dry run (a batch with `dry_run: true`) dispatches and records nothing. Errors are the
-/// dispatcher's, or the lock's, as text for the front end to render.
+/// dispatcher's, or the refusal's (no author, no lock), for the front end to render.
 #[allow(clippy::too_many_arguments)]
 pub fn apply(
     store: &Store,
@@ -53,15 +84,15 @@ pub fn apply(
     body: Option<&Value>,
     repo: Option<&Path>,
     sender: &dyn eventing::WebhookSender,
-) -> Result<Applied, String> {
+) -> Result<Applied, WriteError> {
     with_lock(data_dir, || {
         git::ensure_repo(data_dir);
         let records = dispatch::is_mutation(method) && !dispatch::is_dry_run(body);
         if records {
-            git::require_identity(data_dir)?;
+            git::require_identity(data_dir).map_err(WriteError::Refused)?;
         }
         let out =
-            dispatch::dispatch_in(store, method, path, body, repo).map_err(|e| e.to_string())?;
+            dispatch::dispatch_in(store, method, path, body, repo).map_err(WriteError::Core)?;
         let mut applied = Applied {
             body: out,
             ..Default::default()
@@ -84,7 +115,7 @@ pub fn apply(
         }
         Ok(applied)
     })
-    .map_err(|e| format!("write lock: {e}"))?
+    .map_err(|e| WriteError::Refused(format!("write lock: {e}")))?
 }
 
 /// The project id from `/projects/<id>/...`.

@@ -263,7 +263,7 @@ impl Backend {
             repo,
             &UreqSender,
         )
-        .map_err(|e| anyhow!(e))?;
+        .map_err(|e| anyhow!(e.to_string()))?;
         for w in &applied.push_failures {
             eprintln!("kanbanr: {w}");
         }
