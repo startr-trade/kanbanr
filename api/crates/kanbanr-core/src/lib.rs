@@ -29,6 +29,7 @@ pub mod doctor;
 pub use ears_classifier as ears;
 pub mod error;
 pub mod eventing;
+pub mod evidence;
 pub mod export;
 pub mod flow;
 pub mod gantt;

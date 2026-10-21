@@ -79,6 +79,29 @@ pub fn refs_of(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The content type a documentation file's raw bytes are served with, from its extension
+/// (FEAT-176: one copy, which the daemon's raw-doc route and its published description both mean).
+/// Images and PDFs as themselves; Markdown and text as plain text, so a browser shows the source
+/// rather than guessing; anything else as bytes the browser will not try to render.
+pub fn content_type(path: &str) -> &'static str {
+    match path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        "md" | "markdown" | "txt" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
 /// Turn a file stem into a friendly title: `getting-started` -> `Getting Started`.
 pub fn title_from_stem(stem: &str) -> String {
     stem.split(['-', '_', ' '])
@@ -92,4 +115,18 @@ pub fn title_from_stem(stem: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_docs_are_typed_by_extension() {
+        assert_eq!(content_type("design/flow.PNG"), "image/png");
+        assert_eq!(content_type("a/b.svg"), "image/svg+xml");
+        assert_eq!(content_type("notes.md"), "text/plain; charset=utf-8");
+        assert_eq!(content_type("page.html"), "application/octet-stream");
+        assert_eq!(content_type("README"), "application/octet-stream");
+    }
 }
