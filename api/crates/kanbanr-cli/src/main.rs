@@ -4571,8 +4571,13 @@ fn run_activity(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
             println!("(no activity yet)");
         }
         for a in arr {
+            // A write made under an agent scope says so, as the monitor does (FEAT-214 R-7).
+            let by =
+                serde_json::from_value::<kanbanr_core::agentscope::ByAgent>(a["by_agent"].clone())
+                    .map(|b| format!(", {b}"))
+                    .unwrap_or_default();
             println!(
-                "{:<20} {:<14} {}",
+                "{:<20} {:<14} {}{by}",
                 a["time"].as_str().unwrap_or(""),
                 a["actor"].as_str().unwrap_or(""),
                 a["message"].as_str().unwrap_or("")
