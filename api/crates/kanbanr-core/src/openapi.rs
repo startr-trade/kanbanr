@@ -179,6 +179,12 @@ pub fn public_routes() -> Vec<RouteDoc> {
             response: Response::Json(schema_of::<crate::readiness::ReadinessView>),
         },
         RouteDoc {
+            path: "/api/projects/{project}/features/{code}/diagrams",
+            summary: "The Mermaid blocks of an item's spec and affects_docs, with the lint's findings",
+            params: &[PROJECT, CODE],
+            response: Response::Json(schema_of::<crate::diagrams::ItemDiagrams>),
+        },
+        RouteDoc {
             path: "/api/projects/{project}/review",
             summary: "What is waiting for a person's agreement, in the order to ask it",
             params: &[PROJECT],

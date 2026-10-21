@@ -1,5 +1,5 @@
 {
-  "_about": "FEAT-200: Mermaid diagrams and what the Rust lint says about each. `rule` null means Pele 1.7.0 parses the source and the lint must flag nothing; a rule name means Pele rejects it and the lint's first finding must be that rule at `line` (1-based within the block). Checked from both sides: diagrams::tests::lint_cases_fixture in Rust, and web/scripts/check-diagram-lint.mjs against the real Pele.",
+  "_about": "Mermaid diagrams and what mermaid-lint says about each. `rule` null means Pele 1.7.0 parses the source and the lint must flag nothing; a rule name means Pele rejects it and the lint's first finding must be that rule at `line` (1-based within the block). Checked from both sides: mermaid_lint::tests::lint_cases_fixture in Rust, and web/scripts/check-diagram-lint.mjs against the real Pele.",
   "cases": [
     { "name": "flow ok", "source": "flowchart LR\n  A --> B\n", "rule": null, "line": null },
     { "name": "graph ok", "source": "graph TD\n  A[Start] --> B{Choose}\n  B -->|yes| C\n", "rule": null, "line": null },

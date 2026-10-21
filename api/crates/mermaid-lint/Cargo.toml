@@ -1,0 +1,24 @@
+[package]
+name = "mermaid-lint"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+description = "Lint Mermaid diagrams in Markdown without a browser: the mistakes Pele and Mermaid reject, found in pure Rust"
+repository = "https://github.com/startr-trade/kanbanr"
+documentation = "https://docs.rs/mermaid-lint"
+readme = "README.md"
+keywords = ["mermaid", "markdown", "lint", "diagrams", "documentation"]
+categories = ["development-tools", "text-processing"]
+
+[features]
+# Serialize and Deserialize on the block, rule and finding types, for a caller that reports
+# findings as JSON. Off by default: the lint itself is text in, findings out, with no dependencies.
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+# Only to read the Pele parity fixture in the tests.
+serde_json = "1"

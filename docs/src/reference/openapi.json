@@ -732,6 +732,80 @@
         ],
         "type": "object"
       },
+      "DiagramBlock": {
+        "description": "One fenced `mermaid` block of a board file, with where it is for a link.",
+        "properties": {
+          "block": {
+            "description": "1-based index among the file's mermaid blocks.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "doc": {
+            "description": "The doc key, for a link to it; `None` for a spec.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "file": {
+            "description": "What the block is in: `\"FEAT-012 spec\"` or `\"docs/<key>\"`.",
+            "type": "string"
+          },
+          "line": {
+            "description": "The file line (1-based) of the block's first source line.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source": {
+            "description": "The diagram's source, between the fences.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "doc",
+          "block",
+          "line",
+          "source"
+        ],
+        "type": "object"
+      },
+      "DiagramFinding": {
+        "description": "One problem in one diagram, located in its file.",
+        "properties": {
+          "block": {
+            "description": "1-based index among the file's mermaid blocks.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "description": "The file line (1-based) the problem is on.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/LintRule"
+          }
+        },
+        "required": [
+          "file",
+          "block",
+          "line",
+          "rule",
+          "message"
+        ],
+        "type": "object"
+      },
       "DiagramsConfig": {
         "additionalProperties": true,
         "description": "The unit a project estimates in.\nHow a project treats Mermaid diagrams the lint finds problems in (FEAT-200). Off by default:\na write succeeds and reports the problems as warnings, which keeps the tool low-friction. Strict:\na write carrying a problem is refused.",
@@ -1472,6 +1546,32 @@
         ],
         "type": "object"
       },
+      "ItemDiagrams": {
+        "description": "The diagrams of one item — every block of its spec and of each doc it names in `affects_docs` —\nwith the lint's findings (FEAT-200). The review page parses each block with Pele and keeps\nApprove disabled until all of them draw.",
+        "properties": {
+          "blocks": {
+            "items": {
+              "$ref": "#/components/schemas/DiagramBlock"
+            },
+            "type": "array"
+          },
+          "code": {
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/DiagramFinding"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "blocks",
+          "findings"
+        ],
+        "type": "object"
+      },
       "Judgement": {
         "properties": {
           "at": {
@@ -1639,6 +1739,20 @@
             "type": "string"
           }
         ]
+      },
+      "LintRule": {
+        "description": "What the lint found wrong.",
+        "enum": [
+          "empty_block",
+          "unknown_type",
+          "semicolon_in_text",
+          "label_punctuation",
+          "unbalanced_label",
+          "end_as_id",
+          "unbalanced_block",
+          "unknown_statement"
+        ],
+        "type": "string"
       },
       "Meta": {
         "description": "What this daemon can do: `GET /api/meta`. The monitor asks before offering an action.",
@@ -3598,6 +3712,56 @@
           }
         },
         "summary": "Server-sent events: `changed` whenever this project changes"
+      }
+    },
+    "/api/projects/{project}/features/{code}/diagrams": {
+      "get": {
+        "operationId": "getProjectsFeaturesDiagrams",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The item's code, such as FEAT-001.",
+            "in": "path",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ItemDiagrams"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The Mermaid blocks of an item's spec and affects_docs, with the lint's findings"
       }
     },
     "/api/projects/{project}/features/{code}/export": {

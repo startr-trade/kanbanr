@@ -1286,6 +1286,10 @@ pub fn dispatch_in(
         )?),
         // ---- what is waiting for agreement (FEAT-067) ----
         // What an item is missing, from the one engine every surface uses (FEAT-112).
+        // The diagrams of an item and the lint's findings (FEAT-200), for the review page's parse.
+        ("GET", ["projects", p, "features", code, "diagrams"]) => {
+            ser(&crate::diagrams::ItemDiagrams::load(store, p, code)?)
+        }
         ("GET", ["projects", p, "features", code, "readiness"]) => {
             ser(&crate::readiness::ReadinessView::load(store, p, code)?)
         }
