@@ -238,6 +238,46 @@ mod tests {
         assert!(skill.contains("`diagrams_valid` gate"));
     }
 
+    /// FEAT-194 R-1: the skill states the method once, by stage role: a section with one
+    /// subsection per role, naming the commands and gates that now carry each rule.
+    #[test]
+    fn skill_states_method_by_role() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        let section = skill
+            .split("\n## The method by stage role\n")
+            .nth(1)
+            .expect("the skill has the method section")
+            .split("\n## ")
+            .next()
+            .unwrap();
+        for role in ["design", "build", "integrate", "release"] {
+            assert!(
+                section.contains(&format!("\n### At the {role} role\n")),
+                "a subsection for the {role} role"
+            );
+        }
+        assert!(
+            section.contains("### The design stage: the spec carries the build-ready design"),
+            "the design stage subsection lives in it"
+        );
+        for want in [
+            "kanbanr git model",
+            "kanbanr git doctor",
+            "kanbanr config method",
+            "kanbanr release promote",
+            "kanbanr sprint close",
+            "affects_docs",
+            "docs-folded",
+            "design-review",
+        ] {
+            assert!(section.contains(want), "the method section names {want:?}");
+        }
+    }
+
     /// FEAT-141 R-1: the skill written is the one embedded, stamped, and recognised as current; a
     /// stale copy kanbanr wrote is replaced.
     #[test]
