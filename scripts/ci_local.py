@@ -61,6 +61,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Install dependencies": LOCAL,
             "Build": LOCAL,
             "Docs diagrams parse": LOCAL,
+            "The diagram lint agrees with Pele": LOCAL,
             "The monitor presents itself correctly": LOCAL,
             "The monitor's markdown cannot run script": LOCAL,
             "Every request goes to the configured API base": LOCAL,

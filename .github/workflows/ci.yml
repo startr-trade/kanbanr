@@ -182,6 +182,11 @@ jobs:
       - name: Docs diagrams parse
         run: npm run check:docs
 
+      # The Rust diagram lint flags only what Pele rejects (FEAT-200): its fixture, parsed by the
+      # real Pele, must fail exactly where the lint names a rule.
+      - name: The diagram lint agrees with Pele
+        run: npm run check:diagram-lint
+
       # A control has to look like a control, and a destination is offered once. Both are
       # greppable rules that decay silently in review (L-21) — see ADR-0008.
       - name: The monitor presents itself correctly

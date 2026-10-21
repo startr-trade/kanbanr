@@ -13,7 +13,8 @@
     "check:api-base": "node scripts/check-api-base.mjs",
     "check:read-only": "node scripts/check-read-only.mjs",
     "check:card-text": "node scripts/check-card-text.mjs",
-    "check:api-types": "node scripts/check-api-types.mjs"
+    "check:api-types": "node scripts/check-api-types.mjs",
+    "check:diagram-lint": "node scripts/check-diagram-lint.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.16",
