@@ -128,6 +128,22 @@ through `kanbanr commit`, which names the item. Subagents take one task at a tim
 todo-list. Nobody commits on main or on a line of integration (the hooks refuse), and kanbanr never
 pushes.
 
+**Sub-agents: what each may do.** When Claude hands work to a sub-agent, each role has fixed
+boundaries, and Claude puts them in the agent's brief word for word:
+
+| | A **build** agent (one item, in its own worktree) | A **design** agent |
+|---|---|---|
+| Read the board and the code | everything | everything |
+| Its item's record | `kanbanr task state` as each task starts and lands; `kanbanr test` evidence for tests it actually ran green | nothing |
+| Everything else on the board | refused: moves, approvals, sign-offs, definitions, specs, docs, other items, `batch`, config | refused |
+| Code | commits only on its item's branch, each naming the item | no edits, no commits |
+| Remote | never: no `git push`, no `kanbanr sync` | never |
+| Tests | on temporary boards only, never a real board | — |
+
+Claude, as the coordinator, keeps the board current as the agents work, never waiting for their
+reports, and takes back every question and every piece of work outside the brief. Verdicts, moves
+and pushes stay with Claude and you.
+
 **At the integrate role.** Before the move, the Design is folded into each doc in `affects_docs`,
 describing it as built (the `docs_updated` check), and you sign off **docs-folded**. With the git
 model on, the move merges the item branch into its line (`--no-ff`, naming the item). If the merge
