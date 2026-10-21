@@ -24,10 +24,32 @@
 use anyhow::{Result, anyhow};
 pub use kanbanr_core::git::PushPolicy;
 use kanbanr_core::git::SyncOutcome;
-use kanbanr_core::{Store, activity, dispatch, eventing, git};
+use kanbanr_core::{Store, activity, agentscope, dispatch, eventing, git};
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+/// The second line behind the CLI's command gate (FEAT-214): a write that does not go through
+/// core's write path is refused when this process runs in an agent's worktree and the board is
+/// one scopes govern. `what` names the command and what it does, for the refusal (M11).
+pub fn outside_core_refusal(data_dir: &Path, what: &str) -> Result<()> {
+    if !agentscope::is_governed_board(data_dir) {
+        return Ok(());
+    }
+    let Ok(cwd) = std::env::current_dir() else {
+        return Ok(());
+    };
+    match agentscope::outside_core_refusal(&cwd, what) {
+        Some(refusal) => Err(anyhow!(refusal)),
+        None => Ok(()),
+    }
+}
+
+/// Set the board's commit identity (`kanbanr identity`): never from an agent's worktree.
+pub fn set_board_identity(dir: &Path, name: &str, email: &str) -> Result<()> {
+    outside_core_refusal(dir, "`kanbanr identity` changes kanbanr itself")?;
+    git::set_identity(dir, name, email).map_err(|e| anyhow!(e)) // architecture: allowed because gated by outside_core_refusal
+}
 
 /// Best-effort webhook delivery for eventing (FEAT-036), backed by the CLI's `ureq` dependency.
 /// Failures (unreachable endpoint, non-2xx, timeout) are swallowed — eventing must never fail or
@@ -100,6 +122,10 @@ impl Backend {
 
     /// Migrate the board to schema 5, as one commit under the write lock (FEAT-187).
     pub fn migrate(&self) -> Result<kanbanr_core::migrate::MigrationReport> {
+        outside_core_refusal(
+            &self.data_dir,
+            "`kanbanr migrate` writes outside the board's write path",
+        )?;
         kanbanr_core::migrate::run(&self.store, &self.data_dir, self.push)
             .map_err(|e| anyhow!(e.to_string()))
     }
@@ -252,6 +278,10 @@ impl Backend {
     ) -> Result<String> {
         let bare = path.split('?').next().unwrap_or(path);
         if bare == "/remotes" || bare.starts_with("/remotes/") {
+            outside_core_refusal(
+                &self.data_dir,
+                "`kanbanr remote` changes where the board is pushed",
+            )?;
             return self.with_write_lock(|| {
                 if let Some(name) = bare.strip_prefix("/remotes/") {
                     git::remove_remote(&self.data_dir, name).map_err(|e| anyhow!(e))?;
@@ -295,9 +325,11 @@ impl Backend {
     /// Explicit `kanbanr sync`: push now, whatever the policy. Holds the write lock so it can't race
     /// a concurrent write's commit. Returns how far ahead the board was and what the push did.
     pub fn sync(&self) -> Result<(Option<usize>, SyncOutcome)> {
+        outside_core_refusal(&self.data_dir, "`kanbanr sync` pushes the board")?;
         self.with_write_lock(|| {
             let ahead = git::ahead_of_remotes(&self.data_dir);
-            Ok((ahead, git::push_pending(&self.data_dir)))
+            let pushed = git::push_pending(&self.data_dir); // architecture: allowed because gated by outside_core_refusal
+            Ok((ahead, pushed))
         })
     }
 
@@ -309,6 +341,10 @@ impl Backend {
     }
 
     fn write_doc_asset_locked(&self, project: &str, rel: &str, bytes: &[u8]) -> Result<String> {
+        outside_core_refusal(
+            &self.data_dir,
+            "`kanbanr doc add` of a file that is not text writes outside the board's write path",
+        )?;
         git::ensure_repo(&self.data_dir);
         git::require_identity(&self.data_dir).map_err(|e| anyhow!(e))?;
         let saved = self
@@ -320,7 +356,8 @@ impl Backend {
             .map(|(n, _)| n)
             .unwrap_or_else(|| "kanbanr".into());
         activity::append(&self.data_dir, project, &actor, &msg, None);
-        if git::commit_local(&self.data_dir, &msg) {
+        let committed = git::commit_local(&self.data_dir, &msg); // architecture: allowed because gated by outside_core_refusal
+        if committed {
             self.after_commit();
         }
         Ok(saved)
@@ -329,7 +366,11 @@ impl Backend {
     /// Emit a sample notification event for the given project (FEAT-036 `events test`): append it
     /// to the events log and POST it to any configured webhook, best-effort. Returns whether any
     /// webhook endpoint was configured (so the caller can tell the user delivery actually ran).
-    pub fn emit_test_event(&self, project: &str) -> bool {
+    pub fn emit_test_event(&self, project: &str) -> Result<bool> {
+        outside_core_refusal(
+            &self.data_dir,
+            "`kanbanr events test` writes outside the board's write path",
+        )?;
         let event = eventing::Event::new(
             project,
             eventing::EventKind::FeatureMoved,
@@ -340,7 +381,7 @@ impl Backend {
         eventing::append(&self.data_dir, project, &event);
         let config = eventing::WebhookConfig::load(&self.data_dir);
         eventing::deliver(&config, &UreqSender, &event);
-        config.is_enabled()
+        Ok(config.is_enabled())
     }
 
     /// List the data folder's project ids (for portfolio-wide maintenance like `index`).
@@ -354,6 +395,10 @@ impl Backend {
     /// (a maintenance write). Serialized against other writers by the data-dir advisory lock. The
     /// index is a derivable cache, so this never touches the source-of-truth feature files. (FEAT-033)
     pub fn rebuild_index(&self, ids: &[String]) -> Result<()> {
+        outside_core_refusal(
+            &self.data_dir,
+            "`kanbanr index` writes outside the board's write path",
+        )?;
         self.with_write_lock(move || {
             git::ensure_repo(&self.data_dir);
             git::require_identity(&self.data_dir).map_err(|e| anyhow!(e))?;
@@ -367,7 +412,8 @@ impl Backend {
             } else {
                 format!("rebuild index for {} projects", ids.len())
             };
-            if git::commit_local(&self.data_dir, &msg) {
+            let committed = git::commit_local(&self.data_dir, &msg); // architecture: allowed because gated by outside_core_refusal
+            if committed {
                 self.after_commit();
             }
             Ok(())

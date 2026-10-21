@@ -22,6 +22,9 @@ pub struct Activity {
     /// per-kind activity streams. Serialized as `item`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub item: Option<String>,
+    /// Made under an agent scope (FEAT-214): the person, by the agent for its item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_agent: Option<crate::agentscope::ByAgent>,
 }
 
 impl crate::daylog::Dated for Activity {
@@ -99,6 +102,18 @@ pub fn write_legacy_for_test(data_dir: &Path, project: &str, entries: &[Activity
 /// Append an entry to today's file. Nothing is trimmed — `item` is the work item the change
 /// touched, when applicable.
 pub fn append(data_dir: &Path, project: &str, actor: &str, message: &str, item: Option<&str>) {
+    append_by(data_dir, project, actor, message, item, None);
+}
+
+/// [`append`], recording the agent the change was made by, when one made it (FEAT-214).
+pub fn append_by(
+    data_dir: &Path,
+    project: &str,
+    actor: &str,
+    message: &str,
+    item: Option<&str>,
+    by_agent: Option<&crate::agentscope::ByAgent>,
+) {
     crate::daylog::append(
         data_dir,
         project,
@@ -108,6 +123,7 @@ pub fn append(data_dir: &Path, project: &str, actor: &str, message: &str, item: 
             actor: actor.to_string(),
             message: message.to_string(),
             item: item.map(String::from),
+            by_agent: by_agent.cloned(),
         },
     );
 }
@@ -134,6 +150,7 @@ mod tests {
             actor: "t".into(),
             message: message.to_string(),
             item: None,
+            by_agent: None,
         }
     }
 

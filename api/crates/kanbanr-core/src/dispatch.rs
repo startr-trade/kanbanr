@@ -523,6 +523,7 @@ pub fn read_media_type(path: &str) -> &'static str {
             MARKDOWN
         }
         ["projects", _, "docs", "content"] => MARKDOWN,
+        ["projects", _, "scopes", _, "brief"] => MARKDOWN,
         _ => JSON,
     }
 }
@@ -897,7 +898,9 @@ fn dispatch_routes(
         ("PUT", ["projects", p, "features", code, "todos", todo, "tasks", key]) => {
             let raw = str_field(b, "state").unwrap_or_default();
             let state = TaskState::parse(&raw).ok_or(CoreError::InvalidTaskState(raw))?;
-            let (feature, held) = store.set_task_state_reported(p, code, todo, key, state)?;
+            let hold = str_field(b, "hold_advance");
+            let (feature, held) =
+                store.set_task_state_held(p, code, todo, key, state, hold.as_deref())?;
             let mut out = serde_json::to_value(&feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
             if let Some(held) = held {
@@ -1441,6 +1444,101 @@ fn dispatch_routes(
             ser(&config)
         }
 
+        // ---- agent scopes (FEAT-214): internal, like the guards ----
+        ("GET", ["projects", p, "scopes"]) => {
+            store.load_meta(p)?;
+            let now = crate::now_rfc3339();
+            let views: Vec<crate::agentscope::ScopeView> = crate::agentscope::load(store, p)?
+                .iter()
+                .map(|s| crate::agentscope::ScopeView::new(s, &now))
+                .collect();
+            ser(&views)
+        }
+        ("GET", ["projects", p, "scopes", "drift"]) => {
+            let repo = repo.ok_or_else(|| {
+                CoreError::Unsupported(
+                    "agent drift reads the code repository: run it from the project folder".into(),
+                )
+            })?;
+            ser(&crate::agentscope::drift(
+                store,
+                p,
+                repo,
+                &crate::now_rfc3339(),
+            )?)
+        }
+        ("GET", ["projects", p, "scopes", id]) => {
+            let scope = find_scope(store, p, id)?;
+            ser(&crate::agentscope::ScopeView::new(
+                &scope,
+                &crate::now_rfc3339(),
+            ))
+        }
+        ("GET", ["projects", p, "scopes", id, "brief"]) => {
+            let scope = find_scope(store, p, id)?;
+            Ok(crate::agentscope::brief(&scope, &store.load_meta(p)?))
+        }
+        ("POST", ["projects", p, "scopes"]) => {
+            let role = str_field(b, "role").unwrap_or_default();
+            let role = crate::agentscope::Role::parse(&role).ok_or_else(|| {
+                CoreError::Unsupported(format!("an agent scope is design or build, not '{role}'"))
+            })?;
+            let req = crate::agentscope::IssueRequest {
+                role,
+                item: str_field(b, "item").unwrap_or_default(),
+                hours: b.get("hours").and_then(Value::as_u64).map(|h| h as u32),
+                note: str_field(b, "note").unwrap_or_default(),
+                worktree: str_field(b, "worktree")
+                    .filter(|w| !w.trim().is_empty())
+                    .map(std::path::PathBuf::from),
+                hooks_ready: bool_field(b, "hooks_ready").unwrap_or(false),
+            };
+            let by = crate::git::verdict_author(store.data_dir(), str_field(b, "by").as_deref())?;
+            ser(&crate::agentscope::issue(
+                store,
+                p,
+                &req,
+                &by,
+                repo,
+                &crate::now_rfc3339(),
+            )?)
+        }
+        ("POST", ["projects", p, "scopes", id, "claim"]) => {
+            let wt = repo
+                .and_then(crate::coderepo::worktree_facts)
+                .ok_or_else(|| {
+                    CoreError::Unsupported(
+                        "a scope is claimed from inside the agent's worktree: run it there".into(),
+                    )
+                })?;
+            let now = crate::now_rfc3339();
+            let scope = crate::agentscope::claim(store, p, id, &wt, &now)?;
+            ser(&crate::agentscope::ScopeView::new(&scope, &now))
+        }
+        ("POST", ["projects", p, "scopes", id, "revoke"]) => {
+            let by = crate::git::verdict_author(store.data_dir(), str_field(b, "by").as_deref())?;
+            let now = crate::now_rfc3339();
+            let scope = crate::agentscope::revoke(
+                store,
+                p,
+                id,
+                &by,
+                &str_field(b, "reason").unwrap_or_default(),
+                &now,
+            )?;
+            ser(&crate::agentscope::ScopeView::new(&scope, &now))
+        }
+        ("POST", ["projects", p, "scopes", id, "renew"]) => {
+            let hours = b
+                .get("hours")
+                .and_then(Value::as_u64)
+                .map(|h| h as u32)
+                .unwrap_or(crate::agentscope::DEFAULT_HOURS);
+            let now = crate::now_rfc3339();
+            let scope = crate::agentscope::renew(store, p, id, hours, &now)?;
+            ser(&crate::agentscope::ScopeView::new(&scope, &now))
+        }
+
         // ---- batch ----
         ("POST", ["projects", p, "batch"]) => {
             let ops: Vec<BatchOp> = b
@@ -1451,12 +1549,22 @@ fn dispatch_routes(
                 .map_err(|e| CoreError::Unsupported(format!("invalid batch: {e}")))?
                 .unwrap_or_default();
             let dry_run = b.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
-            let results = store.apply_batch_with(p, ops, dry_run)?;
+            // Under an agent scope the write path holds every item where it is (FEAT-214).
+            let hold = str_field(b, "hold_advance");
+            let results = store.apply_batch_held(p, ops, dry_run, hold.as_deref())?;
             Ok(json!({ "results": results }).to_string())
         }
 
         _ => Err(CoreError::NoSuchRoute(format!("{method} {path_only}"))),
     }
+}
+
+/// One scope of project `p`, by id (FEAT-214).
+fn find_scope(store: &Store, p: &str, id: &str) -> Result<crate::agentscope::Scope> {
+    crate::agentscope::load(store, p)?
+        .into_iter()
+        .find(|s| s.id == id)
+        .ok_or_else(|| CoreError::Unsupported(format!("no agent scope {id} in {p}")))
 }
 
 /// Whether a write request is a dry run (`"dry_run": true` in the body, honored by the batch
@@ -1490,6 +1598,31 @@ fn git_drift(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Vec<crat
         Some(repo) => crate::gitdrift::scan(store, p, repo)
             .unwrap_or_else(|e| vec![warn(format!("git drift not checked: {e}"))]),
     }
+}
+
+/// [`commit_message`], completed from the write's response where only the response knows: the id
+/// of an agent scope being issued (FEAT-214).
+pub fn commit_message_after(
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    response: &str,
+) -> String {
+    let msg = commit_message(method, path, body);
+    let bare = path.split('?').next().unwrap_or(path);
+    let segs: Vec<&str> = bare.split('/').filter(|s| !s.is_empty()).collect();
+    if method.eq_ignore_ascii_case("POST")
+        && matches!(segs.as_slice(), ["projects", _, "scopes"])
+        && let Ok(v) = serde_json::from_str::<Value>(response)
+        && let Some(id) = v["scope"]["id"].as_str()
+    {
+        return msg.replacen(
+            "issue agent scope (",
+            &format!("issue agent scope {id} ("),
+            1,
+        );
+    }
+    msg
 }
 
 pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String {
@@ -1594,6 +1727,25 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ["projects", _p, "docs", "folder"] => "configure doc folder".into(),
         ["projects", _p, "docs", "content"] if del => "remove document".into(),
         ["projects", _p, "docs", "content"] => "update document".into(),
+        // FEAT-214. The id of a scope being issued is the response's: see `commit_message_after`.
+        ["projects", _p, "scopes"] => {
+            let f = |k: &str| {
+                body.and_then(|b| str_field(b, k))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
+            };
+            format!("issue agent scope ({}, {})", f("role"), f("item"))
+        }
+        ["projects", _p, "scopes", id, "claim"] => format!("claim agent scope {id}"),
+        ["projects", _p, "scopes", id, "revoke"] => format!(
+            "revoke agent scope {id}: {}",
+            body.and_then(|b| str_field(b, "reason"))
+                .map(|r| r.trim().to_string())
+                .filter(|r| !r.is_empty())
+                .unwrap_or_else(|| "revoked".into())
+        ),
+        ["projects", _p, "scopes", id, "renew"] => format!("renew agent scope {id}"),
         ["projects", _p, "batch"] => body
             .and_then(|b| b.get("message").and_then(|m| m.as_str()).map(String::from))
             .unwrap_or_else(|| "batch update".into()),
@@ -1689,6 +1841,143 @@ mod tests {
         assert_eq!(r[0]["diagram_warnings"][0]["file"], "FEAT-002 spec");
         assert!(r[1].get("diagram_warnings").is_none());
         assert_eq!(r[2]["diagram_warnings"][0]["rule"], "unknown_statement");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-214 R-10: the scopes route lists each scope of a project with its derived state —
+    /// issued, active, expired, revoked — and the issue, revoke and renew routes change it.
+    #[test]
+    fn scopes_route_lists_state() {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-dispatch-scopes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let board = dir.join("board");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&board).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        crate::coderepo::git(&repo, &["init", "-q", "-b", "main"]).unwrap();
+        let store = Store::new(board.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let call = |method: &str, path: &str, body: Value| -> Value {
+            let out = dispatch_in(&store, method, path, Some(&body), Some(&repo)).unwrap();
+            serde_json::from_str(&out).unwrap_or(Value::String(out))
+        };
+        call(
+            "POST",
+            "/projects/demo/features",
+            json!({ "title": "T", "milestone": "M" }),
+        );
+        let refused = dispatch_in(
+            &store,
+            "POST",
+            "/projects/demo/scopes",
+            Some(&json!({ "role": "design", "item": "FEAT-001", "by": "Ada" })),
+            Some(&repo),
+        )
+        .unwrap_err();
+        assert!(
+            refused.to_string().contains("kanbanr git install-hooks"),
+            "{refused}"
+        );
+
+        let issue = |note: &str| {
+            call(
+                "POST",
+                "/projects/demo/scopes",
+                json!({ "role": "design", "item": "FEAT-001", "by": "Ada", "note": note,
+                        "hooks_ready": true }),
+            )
+        };
+        let first = issue("one");
+        assert_eq!(first["scope"]["id"], "SC-001");
+        assert_eq!(first["scope"]["state"], "issued");
+        assert_eq!(first["scope"]["issued_by"], "Ada");
+        assert!(
+            first["brief"]
+                .as_str()
+                .unwrap()
+                .contains("kanbanr scope claim SC-001")
+        );
+        assert_eq!(
+            commit_message_after(
+                "POST",
+                "/projects/demo/scopes",
+                Some(&json!({"role": "design", "item": "FEAT-001"})),
+                &first.to_string()
+            ),
+            "issue agent scope SC-001 (design, FEAT-001)"
+        );
+        issue("two");
+        issue("three");
+        call(
+            "POST",
+            "/projects/demo/scopes/SC-002/revoke",
+            json!({ "by": "Ada", "reason": "done" }),
+        );
+        // SC-003 ran out: its record says so, nothing rewrote it.
+        let path = store
+            .project_dir("demo")
+            .join(crate::agentscope::SCOPES_FILE);
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let mut scopes: Vec<crate::agentscope::Scope> = crate::yaml::from_str(&raw).unwrap();
+        scopes[2].expires_at = "2020-01-01T00:00:00Z".into();
+        std::fs::write(&path, crate::yaml::to_string(&scopes).unwrap()).unwrap();
+
+        let listed = call("GET", "/projects/demo/scopes", Value::Null);
+        let states: Vec<(&str, &str)> = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| (s["id"].as_str().unwrap(), s["state"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            states,
+            [
+                ("SC-001", "issued"),
+                ("SC-002", "revoked"),
+                ("SC-003", "expired")
+            ]
+        );
+        assert_eq!(listed[1]["revoked_reason"], "done");
+        assert_eq!(listed[0]["project"], "demo");
+
+        let renewed = call(
+            "POST",
+            "/projects/demo/scopes/SC-003/renew",
+            json!({ "hours": 4 }),
+        );
+        assert_eq!(renewed["state"], "issued", "renewed, it is in force again");
+        let too_long = dispatch_in(
+            &store,
+            "POST",
+            "/projects/demo/scopes/SC-003/renew",
+            Some(&json!({ "hours": 100 })),
+            Some(&repo),
+        );
+        assert!(too_long.is_err(), "72 hours at most");
+        assert_eq!(
+            call("GET", "/projects/demo/scopes/SC-001", Value::Null)["note"],
+            "one"
+        );
+        let brief = call("GET", "/projects/demo/scopes/SC-001/brief", Value::Null);
+        assert!(brief.as_str().unwrap().starts_with("## Your boundaries"));
+        assert_eq!(
+            read_media_type("/projects/demo/scopes/SC-001/brief"),
+            "text/markdown; charset=utf-8"
+        );
+        assert_eq!(
+            commit_message(
+                "POST",
+                "/projects/demo/scopes/SC-002/revoke",
+                Some(&json!({"reason": "done"}))
+            ),
+            "revoke agent scope SC-002: done"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

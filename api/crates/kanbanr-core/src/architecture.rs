@@ -40,6 +40,13 @@ mod tests {
                 },
             },
             Rule {
+                name: "board-commit",
+                why: "a front end commits, pushes or changes the board's identity only in a function \
+                      gated by agentscope::outside_core_refusal, marked `// architecture: allowed \
+                      because gated by outside_core_refusal` (FEAT-214)",
+                hits: |_, l| BOARD_COMMIT_CALLS.iter().any(|c| l.contains(c)),
+            },
+            Rule {
                 name: "dispatch",
                 why: "each front end reaches core's operations through one entry point",
                 hits: |file, l| {
@@ -49,6 +56,44 @@ mod tests {
                 },
             },
         ]
+    }
+
+    /// The calls that write the board outside `write::apply` (FEAT-214's `board-commit` rule).
+    const BOARD_COMMIT_CALLS: &[&str] = &["commit_local(", "push_pending(", "set_identity("];
+    /// The mark a gated board commit carries.
+    const BOARD_COMMIT_MARK: &str =
+        "// architecture: allowed because gated by outside_core_refusal";
+
+    /// The `board-commit` offences of one file's production code: a call that is not marked, or is
+    /// marked in a function that never asks `outside_core_refusal` before it.
+    fn board_commit_offences(text: &str) -> usize {
+        let mut gated = false;
+        let mut n = 0;
+        // Up to the test module: a `#[cfg(test)]` helper above it does not end production code.
+        let code = text.split("#[cfg(test)]\nmod tests").next().unwrap_or(text);
+        for line in code.lines() {
+            let t = line.trim_start();
+            if t.starts_with("fn ")
+                || t.starts_with("pub fn ")
+                || t.starts_with("pub(crate) fn ")
+                || t.starts_with("async fn ")
+                || t.starts_with("pub async fn ")
+            {
+                gated = false;
+            }
+            if line
+                .replace(BOARD_COMMIT_MARK, "")
+                .contains("outside_core_refusal")
+            {
+                gated = true;
+            }
+            if BOARD_COMMIT_CALLS.iter().any(|c| line.contains(c))
+                && !(line.contains(BOARD_COMMIT_MARK) && gated)
+            {
+                n += 1;
+            }
+        }
+        n
     }
 
     /// Today's offences, file → rule → count. Lower these as the refactor moves code into core;
@@ -94,11 +139,15 @@ mod tests {
                         .replace('\\', "/")
                 );
                 let text = std::fs::read_to_string(&path).unwrap();
+                let gated = board_commit_offences(&text);
+                if gated > 0 {
+                    found.insert((rel.clone(), "board-commit".to_string()), gated);
+                }
                 for line in production(&text).lines() {
                     if line.contains("// architecture: allowed because") {
                         continue;
                     }
-                    for rule in rules() {
+                    for rule in rules().into_iter().filter(|r| r.name != "board-commit") {
                         if (rule.hits)(&rel, line) {
                             *found
                                 .entry((rel.clone(), rule.name.to_string()))
@@ -214,6 +263,30 @@ mod tests {
             "kanbanr-cli/src/backend.rs",
             "dispatch::dispatch(&self.store, m, p, b)"
         ));
+        assert!(hit(
+            "board-commit",
+            "kanbanr-cli/src/main.rs",
+            "kanbanr_core::git::set_identity(&dir, name, email)?;"
+        ));
+        // FEAT-214: only a marked call in a function that asks outside_core_refusal first passes.
+        let mark = BOARD_COMMIT_MARK;
+        assert_eq!(
+            board_commit_offences("fn a() {\n git::commit_local(d, m);\n}"),
+            1
+        );
+        assert_eq!(
+            board_commit_offences(&format!("fn a() {{\n git::commit_local(d, m); {mark}\n}}")),
+            1,
+            "marked, but never gated"
+        );
+        assert_eq!(
+            board_commit_offences(&format!(
+                "fn a() {{\n refuse(outside_core_refusal(c, w))?;\n git::push_pending(d); {mark}\n}}\n\
+                 fn b() {{\n git::push_pending(d); {mark}\n}}"
+            )),
+            1,
+            "the gate in one function does not cover the next"
+        );
         assert!(
             production("fn a() {}\n#[cfg(test)]\nmod t { serde_yaml:: }")
                 .find("serde_yaml")

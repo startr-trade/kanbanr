@@ -1619,7 +1619,7 @@ fn run_identity(cli: &Cli, name: &str, email: &str) -> anyhow::Result<()> {
     std::fs::create_dir_all(dir.join("projects"))?;
     // A new board's first commit is authored by the identity being set (FEAT-128).
     kanbanr_core::git::ensure_repo_as(&dir, Some((name, email)));
-    kanbanr_core::git::set_identity(&dir, name, email).map_err(|e| anyhow::anyhow!(e))?;
+    backend::set_board_identity(&dir, name, email)?;
     println!(
         "local commit identity set: {name} <{email}>  (data dir: {})",
         dir.display()
@@ -4177,7 +4177,7 @@ fn run_events(cli: &Cli, client: &Backend, cmd: &EventsCmd) -> anyhow::Result<()
             Ok(())
         }
         EventsCmd::Test => {
-            let delivered = client.emit_test_event(&p);
+            let delivered = client.emit_test_event(&p)?;
             if cli.json {
                 println!(
                     "{}",

@@ -891,12 +891,14 @@ mod tests {
 
         let moves = vec![
             crate::activity::Activity {
+                by_agent: None,
                 time: "2026-09-20T09:00:00Z".into(),
                 actor: "t".into(),
                 message: "move feature FEAT-001 -> Scheduled".into(),
                 item: Some(f.code.clone()),
             },
             crate::activity::Activity {
+                by_agent: None,
                 time: "2026-09-23T09:00:00Z".into(),
                 actor: "t".into(),
                 message: "move feature FEAT-001 -> Completed".into(),
@@ -931,6 +933,7 @@ mod tests {
         let folder = store.data_dir().join("projects/demo/activity");
         std::fs::create_dir_all(&folder).unwrap();
         let later: Vec<crate::activity::Activity> = vec![crate::activity::Activity {
+            by_agent: None,
             time: "2099-01-01T00:00:00Z".into(),
             actor: "t".into(),
             message: "much later".into(),
@@ -989,6 +992,7 @@ mod tests {
             ["2026-09-20T09:00:00Z", "2026-09-21T09:00:00Z"]
                 .iter()
                 .map(|at| crate::activity::Activity {
+                    by_agent: None,
                     time: (*at).to_string(),
                     actor: "t".into(),
                     message: format!("move feature {} -> Completed", f.code),
