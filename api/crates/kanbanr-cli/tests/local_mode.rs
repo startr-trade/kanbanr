@@ -5290,6 +5290,52 @@ fn cli_config_diagrams_strict_toggles() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// FEAT-200 R-12: `process check` accepts `diagrams_valid` in a gate's `requires` and `warns`, a
+/// misspelling is refused naming it, and `process checks` lists it with what it means.
+#[test]
+fn cli_process_check_accepts_diagrams_valid() {
+    let (base, _) = togaf_scratch("diagrams-process");
+    let empty = base.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let file = base.join("mine.yaml");
+    let workflow = "statuses: [Planned, Doing, Done]\ndefault_state: Planned\n\
+                    displayed_states: [Planned, Doing, Done]\nterminal_states: [Done]\n\
+                    transitions: {Planned: [Doing], Doing: [Done]}\n\
+                    gates:\n  Doing: {requires: [diagrams_valid]}\n  Done: {warns: [diagrams_valid]}\n";
+    std::fs::write(&file, workflow).unwrap();
+    let out = run_in(&base, &empty, &["process", "check", file.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("no problems"), "{text}");
+
+    std::fs::write(
+        &file,
+        workflow.replace("[diagrams_valid]}\n  Done", "[diagrams_vaild]}\n  Done"),
+    )
+    .unwrap();
+    let out = run_in(&base, &empty, &["process", "check", file.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        err.contains("'diagrams_vaild'") && err.contains("diagrams_valid"),
+        "{err}"
+    );
+
+    let out = run_in(&base, &empty, &["process", "checks"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success());
+    assert!(
+        text.lines()
+            .any(|l| l.contains("diagrams_valid") && l.contains("diagram lint")),
+        "{text}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-200 R-2: strict off, `feature add` writes the item and prints each diagram problem on
 /// stderr; `--json` carries them as `diagram_warnings` instead.
 #[test]

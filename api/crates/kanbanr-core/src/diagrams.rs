@@ -338,6 +338,48 @@ pub fn guard(
     Ok(findings)
 }
 
+/// The lint's findings for an item: its spec as `"{code} spec"`, then each doc it names in
+/// `affects_docs` as `"docs/{key}"`, read from `docs_dir` on every call. A key that climbs out of
+/// the folder or is absolute is skipped, and so is a doc that is missing or unreadable —
+/// `docs_updated` and doctor report those.
+pub fn item_findings(
+    feature: &crate::FeatureItem,
+    docs_dir: Option<&std::path::Path>,
+) -> Vec<DiagramFinding> {
+    let mut out = lint_markdown(&format!("{} spec", feature.code), &feature.specification);
+    let Some(docs) = docs_dir else {
+        return out;
+    };
+    for key in affects_doc_keys(feature) {
+        if let Ok(text) = std::fs::read_to_string(docs.join(&key)) {
+            out.extend(lint_markdown(&format!("docs/{key}"), &text));
+        }
+    }
+    out
+}
+
+/// The board keys of the docs an item names in `affects_docs`, without any that climb out of the
+/// docs folder or are absolute.
+fn affects_doc_keys(feature: &crate::FeatureItem) -> Vec<String> {
+    let declared = feature
+        .definition
+        .as_ref()
+        .map(|d| d.affects_docs.as_slice())
+        .unwrap_or(&[]);
+    declared
+        .iter()
+        .map(|d| crate::readiness::affects_doc_key(d))
+        .filter(|key| {
+            let path = std::path::Path::new(key);
+            !path.is_absolute()
+                && !key.starts_with('/')
+                && !path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir))
+        })
+        .collect()
+}
+
 fn is_word(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }

@@ -63,13 +63,16 @@ pub enum Check {
     /// Every doc the item declares in `affects_docs` has changed since it entered its current
     /// stage (FEAT-180) — the design was folded into the docs it said it would change.
     DocsUpdated,
+    /// Every Mermaid diagram in the spec and in each `affects_docs` doc passes the diagram lint
+    /// (FEAT-200), judged when the item moves, never cached.
+    DiagramsValid,
 }
 
 impl Check {
     /// Every check a gate can name, in the order the guide lists them (FEAT-168). `signoff` is not
     /// one: a gate asks for a sign-off by its name, under `signoffs`. A new check must be added
     /// here, and [`Check::passes_when`] will not compile until it says what the check means.
-    pub const GATEABLE: [Check; 18] = [
+    pub const GATEABLE: [Check; 19] = [
         Check::Definition,
         Check::Statement,
         Check::Goals,
@@ -88,6 +91,7 @@ impl Check {
         Check::InRelease,
         Check::SpecSections,
         Check::DocsUpdated,
+        Check::DiagramsValid,
     ];
 
     /// The name a gate uses for this check.
@@ -134,6 +138,10 @@ impl Check {
             Check::DocsUpdated => {
                 "every board doc the item names in `affects_docs` has changed since it entered its \
                  current stage"
+            }
+            Check::DiagramsValid => {
+                "every Mermaid diagram in the spec and in each doc it names in `affects_docs` \
+                 passes the diagram lint"
             }
         }
     }
@@ -216,7 +224,9 @@ impl Condition {
     pub fn reads_spec(&self) -> bool {
         matches!(
             self,
-            Condition::SpecSections { .. } | Condition::Check(Check::SpecSections)
+            Condition::SpecSections { .. }
+                | Condition::Check(Check::SpecSections)
+                | Condition::Check(Check::DiagramsValid)
         )
     }
 }
@@ -714,6 +724,9 @@ pub fn evaluate_in(
     {
         gaps.extend(docs_updated_gaps(feature, docs));
     }
+    if checks.contains(&Check::DiagramsValid) && !exempt {
+        gaps.extend(diagram_gaps(feature, ctx.docs_dir.as_deref()));
+    }
     if checks.contains(&Check::InRelease) && !exempt && feature.release.is_none() {
         gaps.push(gap(
             Check::InRelease,
@@ -773,6 +786,7 @@ pub fn evaluate_definition(
                     | Check::Signoff
                     | Check::SpecSections
                     | Check::DocsUpdated
+                    | Check::DiagramsValid
             )
         });
         if reads_definition {
@@ -927,7 +941,8 @@ fn item_level(
         | Check::InRelease
         | Check::Signoff
         | Check::SpecSections
-        | Check::DocsUpdated => {}
+        | Check::DocsUpdated
+        | Check::DiagramsValid => {}
     }
 }
 
@@ -974,6 +989,22 @@ fn docs_updated_gaps(feature: &FeatureItem, docs: &std::path::Path) -> Vec<Gap> 
         }
     }
     gaps
+}
+
+/// One gap per diagram lint finding in the item's spec and its `affects_docs` docs (FEAT-200), read
+/// from disk now, so a fixed diagram unblocks the very next move.
+fn diagram_gaps(feature: &FeatureItem, docs: Option<&std::path::Path>) -> Vec<Gap> {
+    crate::diagrams::item_findings(feature, docs)
+        .into_iter()
+        .map(|f| {
+            gap(
+                Check::DiagramsValid,
+                None,
+                &format!("diagram #{} in {}", f.block, f.file),
+                f.describe(),
+            )
+        })
+        .collect()
 }
 
 fn is_exempt(feature: &FeatureItem) -> bool {
@@ -1786,5 +1817,140 @@ mod tests {
             evaluate(&f, None, &[Check::GoalsKnown]).is_empty(),
             "no charter, no judgement"
         );
+    }
+
+    /// FEAT-200 R-12: `diagrams_valid` is a check a gate can name — in `requires` or `warns` — and
+    /// `process checks` lists it with what it means. It needs no definition, and it reads the spec.
+    #[test]
+    fn diagrams_valid_in_vocabulary() {
+        assert!(Check::GATEABLE.contains(&Check::DiagramsValid));
+        assert_eq!(Check::DiagramsValid.name(), "diagrams_valid");
+        assert!(Check::DiagramsValid.passes_when().contains("diagram lint"));
+        assert_eq!(Check::DiagramsValid.parameters(), None);
+        let gate: crate::config::Gate =
+            serde_yaml::from_str("requires: [diagrams_valid]\nwarns: [diagrams_valid]\n").unwrap();
+        assert_eq!(gate.requires, vec![Condition::Check(Check::DiagramsValid)]);
+        assert_eq!(gate.warns, vec![Condition::Check(Check::DiagramsValid)]);
+        assert!(
+            gate.requires[0].reads_spec(),
+            "a metadata-only load would miss it"
+        );
+
+        let mut f = item(None);
+        assert!(
+            evaluate(&f, None, &[Check::DiagramsValid]).is_empty(),
+            "no definition is not a diagram problem"
+        );
+        f.specification = "```mermaid\nflowchart LR\n  A --> end\n```\n".into();
+        let gaps = evaluate(&f, None, &[Check::DiagramsValid]);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!(gaps[0].check, Check::DiagramsValid);
+        assert_eq!(gaps[0].label, "diagram #1 in FEAT-001 spec");
+        assert!(
+            gaps[0]
+                .message
+                .contains("FEAT-001 spec, diagram #1, line 3")
+        );
+        assert!(gaps[0].message.ends_with("(end_as_id)"));
+        // An exempt item has no gaps, as with every other check.
+        f.definition = Some(FeatureDefinition {
+            exempt: "a spike".into(),
+            ..Default::default()
+        });
+        assert!(evaluate(&f, None, &[Check::DiagramsValid]).is_empty());
+    }
+
+    /// FEAT-200 R-13: a gate asking for `diagrams_valid` refuses the move while the spec, or a doc
+    /// in `affects_docs`, has a diagram the lint rejects — naming file, block, line and rule — and a
+    /// fix unblocks the very next move: the lint runs at move time, never cached.
+    #[test]
+    fn diagrams_valid_gate_blocks_and_names_findings() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-diagram-gate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = crate::Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let charter = crate::Charter {
+            purpose: "Draw diagrams that draw".into(),
+            adopted_at: "2000-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        crate::charter::save(&store, "demo", &charter).unwrap();
+        let gate = crate::config::Gate {
+            requires: vec![Condition::Check(Check::DiagramsValid)],
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Scheduled".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+
+        let broken = "```mermaid\nsequenceDiagram\n  A->>B: one; two\n```\n";
+        let fixed = "```mermaid\nsequenceDiagram\n  A->>B: one, two\n```\n";
+        let item = store
+            .add_feature("demo", "Flow", broken, "M", None)
+            .unwrap();
+        let code = item.code.clone();
+        let refused = |store: &crate::Store| {
+            store
+                .move_feature_gated("demo", &code, "Scheduled", None)
+                .unwrap_err()
+                .to_string()
+        };
+        let err = refused(&store);
+        assert!(
+            err.contains(&format!("{code} spec, diagram #1, line 3"))
+                && err.contains("semicolon_in_text"),
+            "{err}"
+        );
+        store
+            .edit_feature("demo", &code, None, Some(fixed.into()), None, None)
+            .unwrap();
+        store
+            .move_feature_gated("demo", &code, "Scheduled", None)
+            .unwrap();
+
+        // The same for a doc the item names in `affects_docs`.
+        store.move_feature("demo", &code, "Planned").unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(FeatureDefinition {
+                    statement: "Draw the flow".into(),
+                    affects_docs: vec!["architecture/flow".into(), "architecture/missing".into()],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let doc = "# Flow\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n```mermaid\nflowchart LR\n  A[f(x)] --> B\n```\n";
+        store
+            .write_doc("demo", "architecture/flow.md", doc)
+            .unwrap();
+        let err = refused(&store);
+        assert!(
+            err.contains("docs/architecture/flow.md, diagram #2, line 10")
+                && err.contains("label_punctuation"),
+            "{err}"
+        );
+        assert!(
+            !err.contains("missing"),
+            "a missing doc is docs_updated's to report: {err}"
+        );
+        store
+            .write_doc(
+                "demo",
+                "architecture/flow.md",
+                &doc.replace("A[f(x)]", "A[\"f(x)\"]"),
+            )
+            .unwrap();
+        store
+            .move_feature_gated("demo", &code, "Scheduled", None)
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
