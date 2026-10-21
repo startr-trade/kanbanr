@@ -44,12 +44,13 @@ project"** (or anything equivalent):
    `git config user.email`, `git remote -v`, the README and manifests, any tracker files), then ask
    only what that cannot answer, a few questions at a time with AskUserQuestion. **Every entry in
    `ask_the_user` from `kanbanr where --json` is asked, always**: the board's place, the process,
-   and the repository's git identity when git has none. Each usually has an obvious answer;
-   recommend it as the first option, and let the user give it. Never write one of these into the
-   plan as decided. **Ask them in order, each after the answer it depends on**: the process
-   question only once the board is chosen (its options are that board's saved processes first),
-   and the git identity question only once the board's commit identity is given (it offers that
-   identity). Collect three groups:
+   its cadence (sprints, releases), and the repository's git identity when git has none. Each
+   usually has an obvious answer; recommend it as the first option, and let the user give it. Never
+   write one of these into the plan as decided. **Ask them in order, each after the answer it
+   depends on**: the process question only once the board is chosen (its options are that board's
+   saved processes first), the cadence question only once the process is chosen (it recommends the
+   process's own setting), and the git identity question only once the board's commit identity is
+   given (it offers that identity). Collect three groups:
 
    **a. Board and identity**
    - *Where the board lives.* It is its own git repo and should sit **outside** the project folder,
@@ -116,18 +117,24 @@ project"** (or anything equivalent):
      Or **"our own process"**: design it with the user now — see "Designing a process with the
      user" — and the plan saves it and applies it. An organisation's existing process file is
      loaded the same way: check it with `kanbanr process check`, then save and apply it. The phased
-     presets ask for part of the definition at each stage, not all of it up front.
-   - *Cadence*, only when the chosen process uses sprints (scrum, agile), or the user asks for
-     sprints or releases:
-     - sprint length: 1, 2, 3 or 4 weeks, defaulting to 2;
-     - when the first sprint starts: default next Monday;
-     - its capacity, in story points for Scrum;
-     - how often a release is cut: every sprint, every few sprints, or on demand;
-     - the first release's version: default `v0.1.0`.
+     presets ask for part of the definition at each stage, not all of it up front. For "our own
+     process", which stage holds each role (design, build, integrate, release) is part of the
+     design.
+   - *Cadence*, asked for **every** process, as one question with two parts: "Sprints? Releases?"
+     Recommend the chosen process's own setting: on for scrum and agile, off for the rest, which
+     most projects need. Only when one is on, ask its details:
+     - sprints: their length (1, 2, 3 or 4 weeks, defaulting to 2), when the first starts (default
+       next Monday), and its capacity (in story points for Scrum);
+     - releases: how often one is cut (every sprint, every few sprints, or on demand), and the first
+       release's version (default `v0.1.0`).
 
-     For any other process, sprints and releases stay off. Most projects don't need them.
+     After the answer, run `kanbanr git model --sprints on|off --releases on|off` with it. It needs
+     no board. Show its output verbatim in the follow-up and in the plan: where items branch from
+     and merge into, what kanbanr merges, and that pushing is always the user's.
    - *Definitions*: every item carries the Zachman six-dimension definition, EARS requirements
      and tests. That is the method, not an option. Say so, so the user is not surprised by it.
+     Say also, without asking, that design before build and the docs fold-in are on by default
+     (`kanbanr config method --off` turns them off later).
    - *Git hooks* in the code repo (`kanbanr git install-hooks`): every commit names its board
      item, and commits on the default branch are refused. Offer them **defaulting to yes**.
    - *No git repository yet?* If the project folder isn't one, say so and plan `git init` plus
@@ -141,7 +148,10 @@ project"** (or anything equivalent):
      public repo needs an explicit OK), and importing an existing tracker (see "Importing existing
      task trackers": list what you found and ask which to bring in).
 4. **Write the setup plan and exit plan mode.** The plan states every answer and the exact
-   commands, in order, so approving it approves precisely what will run:
+   commands, in order, so approving it approves precisely what will run. Under **Process** it
+   lists the stage that holds each role, as `kanbanr process show <name>` prints them; under
+   **Branching** it quotes the `kanbanr git model` output from the cadence question; and it says
+   the method's gates are on (`kanbanr config method --off` turns them off later):
 
    ```bash
    kanbanr init <name> --data-dir <board> --author "<name>" --email <email> --description "<…>"
@@ -156,9 +166,10 @@ project"** (or anything equivalent):
                                                    # with -c user.name=… -c user.email=… if they said No
                                                    # these two only if the folder was not a git repo
    kanbanr git install-hooks                       # if chosen
-   kanbanr config cadence --sprint-length 14 --release per_sprint   # sprint presets only
-   kanbanr sprint add --start <date> --goal "<first goal>" --capacity <n>
-   kanbanr release add v0.1.0 --target <date>
+   kanbanr config cadence --sprints on|off --releases on|off   # every process: the answer given
+   kanbanr config cadence --sprint-length 14 --release per_sprint   # only when sprints are on
+   kanbanr sprint add --start <date> --goal "<first goal>" --capacity <n>   # sprints on
+   kanbanr release add v0.1.0 --target <date>      # releases on
    kanbanr config workflow --write-agreement       # the working agreement, generated from the gates
    kanbanr remote add <name> <url>                 # if chosen
    kanbanr mirror enable --repo <owner/repo>       # if chosen
@@ -175,8 +186,9 @@ project"** (or anything equivalent):
    leaving a half-configured project. Relay what `init` printed. If the Claude Code sandbox blocks
    writes to the board folder, tell the user to allow it (e.g. `sandbox.filesystem.allowWrite`).
    Save the approved plan as the board doc named in it, so the reasons for the setup outlive the
-   session. Finish by checking `kanbanr hooks status`, `kanbanr git status` (if the hooks were
-   chosen) and `kanbanr doctor`, then show the board. On a new board, doctor's only expected
+   session. Finish by checking `kanbanr hooks status`, `kanbanr git model`, `kanbanr git status`
+   and `kanbanr git doctor` (these two if the hooks were chosen) and `kanbanr doctor`, then show
+   the board. On a new board, doctor's only expected
    warnings are the goals that no item links to yet. Anything else is a setup fault to fix now.
    Tell the user how to watch the board: `kanbanr serve` starts the monitor, which is built into
    the binary (it needs no `--ui-dir`, and never another checkout's build), and `kanbanr open`
@@ -330,10 +342,10 @@ organisation's own process file changes what you ask with nothing changed here:
 | `definition`, `statement`, `goals`, `goals_known`, `zachman` (its named columns), `requirements`, `ears`, `quality`, `tests_named`, `small`, `spec_sections` (its named sections; `Design` is the build-ready design) | **draft it into the plan**; ask only what you cannot work out from the charter and the code |
 | `approved` | the user's **acceptance of the plan**; with nothing to draft, an **Approve** question |
 | `bypass` | a **Ratify** question |
-| `signoff` (a name in `signoffs_needed`) | a **"Sign off \<name\>"** question |
+| `signoff` (a name in `signoffs_needed`, e.g. `design-review`, `docs-folded`) | a **"Sign off \<name\>"** question |
 | `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; the active sprint; planned releases) |
 | `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
-| `docs_updated` | **never a question** — fold the design into each doc in `affects_docs` and say which you changed; if the item names none, ask whether it really changes no architecture doc |
+| `docs_updated` | **never a question** — fold the design into each doc in `affects_docs`, as built, and draft that fold-in into the plan, saying which docs change; if the item names none, ask whether it really changes no architecture doc |
 | `diagrams_valid` | **never a question** — fix each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then run `kanbanr doctor` to confirm none is left |
 | `docs_cover` | **never a question** — fix the coverage: add a link to the item in each view doc the rule names (`[zachman] FEAT-012 is not referenced from architecture/zachman.md`), then move |
 
@@ -342,57 +354,12 @@ than one next stage is possible, ask which. Head the plan with the stage's own `
 
 **Stages have roles** (`kanbanr process checks` lists them): design, build, integrate, release.
 Whatever a process calls its stages, the design is due before the build role's stage, and code is
-written there, on the item's branch. Say which stage holds which role when you plan work.
+written there, on the item's branch. Say which stage holds which role when you plan work. What
+each role asks of you is in "The method by stage role".
 
 **The purpose is a question too.** A stage's `purpose` can name something no check measures — "the
 quality it must reach", "when it happens". If the definition does not yet address it, ask (with
 options, e.g. a latency target, or "no target"), rather than noting its absence afterwards.
-
-### The design stage: the spec carries the build-ready design
-
-When an item reaches a stage whose purpose is *how and where* (System Design, Design, or the
-equivalent in the project's process), its **spec** gains a `## Design` section written at
-implementation level. A reviewer or another session should be able to build from it without
-guessing:
-- components, modules and files;
-- public interfaces with signatures, and what each must do;
-- the data model and on-disk or wire formats;
-- algorithms and edge cases, and control flow (a diagram where it helps);
-- concurrency, transactions and failure handling;
-- configuration and its defaults (with how each default was chosen);
-- dependencies;
-- security and privacy;
-- performance budgets that name their benchmark;
-- a test plan mapping each requirement to its tests;
-- compatibility and migration;
-- links to ADRs, and open questions stated as questions;
-- **Affects docs**: links to the board docs this change touches. Mirror the same paths into the
-  definition's `affects_docs`, which a `docs_updated` gate checks. Include the project's view
-  docs — the Zachman matrix, the component catalog, the ADR index (`kanbanr config coverage`
-  names them) — whenever the change adds an item, a component or a decision they list.
-
-The definition's `how` and `where` lines are one-line summaries of this section, never a
-substitute for it. A section that does not apply says "n/a" and why. A spec that stays
-non-technical at this stage leaves implementation decisions unreviewed, which is the failure the
-gate exists to prevent.
-
-**Write it for hand-off.** The design is the point where a capable model does the thinking, so
-that cheaper models can do the building. End the section with an **implementation task list** a
-lower-cost subagent can carry out one task at a time, without making a design decision. Each task
-names:
-- the files it creates or changes;
-- the exact signatures;
-- the behaviour, including errors;
-- the tests that prove it, by name, and the requirement each serves;
-- the tasks it depends on.
-
-Leave nothing open inside a task. A question still undecided goes to the user before the design is
-signed off, never to the subagent. Mirror the tasks into the item's todo-list, so each one can be
-handed out and tracked.
-
-A project makes the section a condition of moving on with
-`spec_sections: [Design]` in the build stage's `requires`. If it also wants a person to review the
-design before build, it adds `signoffs: [design-review]` to the same gate.
 
 ### Diagrams
 
@@ -498,8 +465,9 @@ what is agreed is exactly what will be enforced:
 4. **What the board can't see becomes a named sign-off.** "The architecture board has reviewed
    it" → `signoffs: [architecture-review]`. Say it back plainly: a person records it, never you.
 5. **The process-wide choices, together in one AskUserQuestion batch:** block or only warn at each
-   gate; where the code branch is made (`on_enter: [branch]`, usually the first building stage);
-   which stage ends the work; which moves back for rework are allowed.
+   gate; which stage holds each role (design, build, integrate and release; build is where the
+   code branch is made, `roles: [build]`, usually the first building stage); which stage ends the
+   work; which moves back for rework are allowed.
 6. **Name it, and ask where it is kept:** on the board (the team gets it through the board's
    remote; recommended when the board has one) or personal (`~/.kanbanr/processes`, theirs on any
    board).
@@ -550,6 +518,146 @@ view behind: add the links each one names before you move the item on.
 - The gate is dormant for projects with no charter, and for items created before the charter was
   adopted — so adopting the method never breaks an existing board.
 
+## The method by stage role
+
+kanbanr carries one method for every process: a build-ready design before code, architecture docs
+kept as built, live links, a git model that follows the cadence, and releases that move through
+stages. It is stated here once, by the **role** a stage holds, so it holds the same under the
+default kanban, Scrum, TOGAF, PDCA or a process of the user's own.
+
+**Roles first.** `kanbanr process show <name>` prints the working agreement with each stage's role,
+and `kanbanr process checks --json` lists the roles and the checks a gate can ask for. Find the
+status that holds each of design, build, integrate and release, and reason from that, never from a
+preset's name. `kanbanr config method` says which parts of the method this project has on
+(`design`, `design-review`, `docs`, `docs-folded`, `links`). A part that is off is not asked for by
+the gates, but it is still good practice: keep doing it, and never turn a part off or on yourself.
+
+### At the design role
+
+The item's spec gains its build-ready `## Design` (the next subsection). Also:
+- **Affects docs**: the Design ends with links to the board docs the change touches, and the same
+  paths go into the definition's `affects_docs`, which the integrate role checks.
+- **Every reference is a live link**: items, requirements, milestones, goals, ADRs and docs, in the
+  forms under "Every change points back at the reason for it". `kanbanr doctor` reports a link that
+  points at nothing.
+- **Decisions are drafted as proposed ADRs** (`kanbanr adr new "…" --affects <CODE>`) and asked
+  about at once: Accept, Reject or Later.
+- **An undecided question goes to the user** before the design is signed off, never to a subagent.
+
+Leaving the design role, the build stage's gate asks for `spec_sections: [Design]` and the
+`design-review` sign-off. Ask **Sign off design-review** once the section exists; the user gives
+it, never you.
+
+### The design stage: the spec carries the build-ready design
+
+When an item reaches a stage whose purpose is *how and where* (System Design, Design, or the
+equivalent in the project's process), its **spec** gains a `## Design` section written at
+implementation level. A reviewer or another session should be able to build from it without
+guessing:
+- components, modules and files;
+- public interfaces with signatures, and what each must do;
+- the data model and on-disk or wire formats;
+- algorithms and edge cases, and control flow (a diagram where it helps);
+- concurrency, transactions and failure handling;
+- configuration and its defaults (with how each default was chosen);
+- dependencies;
+- security and privacy;
+- performance budgets that name their benchmark;
+- a test plan mapping each requirement to its tests;
+- compatibility and migration;
+- links to ADRs, and open questions stated as questions;
+- **Affects docs**: links to the board docs this change touches. Mirror the same paths into the
+  definition's `affects_docs`, which a `docs_updated` gate checks. Include the project's view
+  docs — the Zachman matrix, the component catalog, the ADR index (`kanbanr config coverage`
+  names them) — whenever the change adds an item, a component or a decision they list.
+
+The definition's `how` and `where` lines are one-line summaries of this section, never a
+substitute for it. A section that does not apply says "n/a" and why. A spec that stays
+non-technical at this stage leaves implementation decisions unreviewed, which is the failure the
+gate exists to prevent.
+
+**Write it for hand-off.** The design is the point where a capable model does the thinking, so
+that cheaper models can do the building. End the section with an **implementation task list** a
+lower-cost subagent can carry out one task at a time, without making a design decision. Each task
+names:
+- the files it creates or changes;
+- the exact signatures;
+- the behaviour, including errors;
+- the tests that prove it, by name, and the requirement each serves;
+- the tasks it depends on.
+
+Leave nothing open inside a task. A question still undecided goes to the user before the design is
+signed off, never to the subagent. Mirror the tasks into the item's todo-list, so each one can be
+handed out and tracked.
+
+A project makes the section a condition of moving on with
+`spec_sections: [Design]` in the build stage's `requires`. If it also wants a person to review the
+design before build, it adds `signoffs: [design-review]` to the same gate.
+
+### At the build role
+
+- `kanbanr start <CODE>` makes the item branch. With the git model on, it branches from the line of
+  integration `kanbanr git model` names (main, `sprint/<SP>` or the integration branch), not always
+  from main; a fix to a release under test branches from `release/<V>`.
+- Commit with `kanbanr commit`: it fills in `Refs:` from the branch.
+- Subagents take one task at a time from the item's todo-list, with the approved definition and
+  that task as their brief.
+- Never commit on main or on a line of integration (the hooks refuse), and never push.
+
+### At the integrate role
+
+Before the move:
+- fold the Design into each doc in `affects_docs`, describing it as built (`docs_updated`);
+- ask **Sign off docs-folded**.
+
+With the git model on, entering the integrate role (`kanbanr move <CODE> <status>`) merges the item
+branch into its line, `--no-ff`, with `Refs: kanbanr:<CODE>`. If the merge would conflict, the move
+is refused and the item stays where it was: merge the line *into* the item branch, resolve, commit,
+and move again. Never rebase. `kanbanr git doctor` names any disagreement between the board and the
+branches; fix it before going on.
+
+### At the release role
+
+- A release moves through its stages with `kanbanr release promote <V> [stage]`. The first stage
+  makes `release/<V>`. The last, production, is the cut: kanbanr tags the version and brings main up
+  to it (a fast-forward, refused with nothing changed if main has commits the release lacks).
+- A patch is `kanbanr release add <V> --patch-of <P>`: `release/<V>` is made from `<P>`'s tag. A fix
+  integrated into a release branch reaches the line through `kanbanr git forward <V>`, which the
+  move says is needed; it is never done for you.
+- In the sprints-only model, `kanbanr sprint close <SP>` is the cut: main fast-forwards to
+  `sprint/<SP>`, tagged with the sprint's code.
+
+### Carry-over
+
+`kanbanr sprint close <SP> --carry-to <next SP>` carries the unfinished items and keeps their
+branches. kanbanr merges the next sprint's branch into each carried item's branch (a catch-up, never
+a rebase); a conflict is reported for that item and its branch is left as it was, for you to resolve
+on the item branch.
+
+### Who merges, who pushes
+
+`kanbanr git model --sprints on|off --releases on|off` shows the model for a cadence, and
+`kanbanr git model` the one this project follows:
+
+| Cadence | Items branch from and merge into | Production moves at | kanbanr merges (with the git model on) |
+|---|---|---|---|
+| neither (trunk) | main | the integrate merge | each item branch into main |
+| sprints only | `sprint/<SP>` | the sprint close | item branches into `sprint/<SP>`; `sprint/<SP>` into main at the close; the sprint into carried items |
+| releases only | `integration` | the release cut | item branches into `integration`; `release/<V>` into main at its last stage |
+| sprints and releases | `sprint/<SP>` | the release cut | item branches into `sprint/<SP>`; `release/<V>` into main at its last stage; the sprint into carried items |
+
+With the git model off, kanbanr merges nothing and the model is a description. The **code**
+repository is never pushed, by kanbanr or by you: the user reviews and pushes, in every row. The
+board's own remote is a different repository, which kanbanr syncs after each write as its push
+policy says (`kanbanr remote push-policy`).
+
+### Each milestone ends with a compliance review
+
+Review the architecture as a whole: every component has a board doc that describes it as built,
+its front matter (`items`, `adrs`, `covers`) is current, and the views are updated. `kanbanr trace
+<MS> --zachman` reports a column nothing in scope answers. See "Architecture docs stay as built"
+below.
+
 ## Code points back at the item that justifies it
 
 One item, one branch, and every commit says what it serves. Do not commit on the default branch,
@@ -566,8 +674,10 @@ kanbanr finish                    # refuses while tasks are open or requirements
 `start` moves the item to the status whose gate makes the branch (`on_enter: [branch]`). With
 the default workflow that is the first active status; under a phased workflow such as TOGAF it
 is Implementation. If the item is further back, `start` names the stages in between: move it
-through them with `kanbanr move`, since each has its own gate. In a folder that isn't a git
-repository, `start` moves the item without a branch. `finish` ends at a terminal status the
+through them with `kanbanr move`, since each has its own gate. With the git model on, `start`
+branches from the line of integration `kanbanr git model` names, not always from main (see "The
+method by stage role"). In a folder that isn't a git repository, `start` moves the item without a
+branch. `finish` ends at a terminal status the
 workflow allows from where the item is, and when every task is done the item advances there by
 itself, unless that status's gate isn't met.
 
@@ -656,6 +766,10 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
 The board is the system of record for the project's **reasoning**; `CLAUDE.md` is a pointer at it;
 this skill is the method; the hooks are enforcement. Each fact lives in exactly one of those — a
 fact in two places drifts.
+
+This skill carries the method ("The method by stage role"). A personal or project instruction file
+that restates it is unnecessary, and it drifts from the tool. If one disagrees with the board's
+gates, tell the user what differs and ask which holds.
 
 - `kanbanr claude sync` writes a marked block into the project's `CLAUDE.md` with its purpose,
   goals, non-goals and constraints, and regenerates that block whenever the charter changes.
@@ -915,7 +1029,8 @@ kanbanr start FEAT-001 [--to STATUS] [--no-branch] [--override "<reason>"]
 kanbanr commit -m "…" [--ref R-2] [--ref TL-001/T3] [-a]   # trailer filled from the branch
 kanbanr finish [FEAT-001]         # gated: tasks complete, requirements proven
 kanbanr git install-hooks [--force] | uninstall-hooks | status
-kanbanr git model [--json]                       # main, the line, item branches, protected lines
+kanbanr git model [--json]                       # main, the line, item branches, protected lines, what kanbanr merges
+kanbanr git model --sprints on|off --releases on|off   # preview a cadence's model; needs no board
 kanbanr git forward <VERSION>                    # merge a release's fixes forward into the line
 kanbanr git doctor [--json]                      # board vs branches; read-only, exits 1 on an error
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
@@ -935,7 +1050,8 @@ kanbanr config default-state Planned
 kanbanr config no-op-states "No Action,Not Applicable,Out-of-Scope"   # inert dispositions
 kanbanr config workflow --preset <name> | --from-file process.yaml | (--statuses … --transitions "A>B" --default-state … --displayed-states … --no-op-states …)
 kanbanr config workflow --preset list             # what each preset is
-kanbanr config cadence --sprints on --releases on --unit points   # only for projects that work in sprints
+kanbanr config cadence --sprints on --releases on --unit points   # both off unless switched on; setup asks for every process
+kanbanr config method [--off|--on] [design|design-review|docs|docs-folded|links]   # the method's gates; the user's choice, never yours
 kanbanr config coverage [--from-file rules.yaml | --clear]   # architecture coverage rules: what each view must reference
 kanbanr feature edit FEAT-001 --points 5          # a story-point estimate (--estimate is days)
 kanbanr sprint add --start 2026-10-05 --length 2w --goal "…" [--capacity 20]
@@ -946,6 +1062,7 @@ kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # ship the finished items, write notes, carry the rest
 kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # next or named stage (default candidate → test → staging → production): the first makes release/<V>; the last is the cut — tags and fast-forwards main, refuses if main has commits the release lacks; back a stage needs --reason. Run from the project folder; never pushes
 kanbanr release add v0.2.0 --branch               # add it and promote it to the first stage
+kanbanr release add v0.1.1 --patch-of v0.1.0      # a patch: release/v0.1.1 from v0.1.0's tag, at the first stage
 kanbanr config cadence --release-stages candidate,qa,live [--integration-branch develop] [--main-branch main]
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a shipped release
 kanbanr config workflow --export > process.yaml   # this project's workflow, gates included

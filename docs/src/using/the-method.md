@@ -98,6 +98,73 @@ an older revision is reported as **stale evidence**, not as proof; re-running th
 it. Mark a check a person performs as `kind: manual` — it is exempt from the rot sweep, so use it
 only when a person really did it.
 
+## The method by stage role
+
+kanbanr carries one way of working for every process: a build-ready design before code,
+architecture docs kept as built, live links, a git model that follows your cadence, and releases
+that move through stages. It is the same under the default kanban, Scrum, TOGAF, PDCA or a process
+of your own, because it is tied to the **role** a stage holds, not to what the stage is called
+([Stage roles](processes.md#stage-roles)). Claude follows it from the skill; you don't need to
+copy it into a personal or project instruction file, and a copy would drift from the tool.
+
+**Roles first.** `kanbanr process show <name>` prints the working agreement with each stage's role,
+and `kanbanr process checks` lists the roles and the checks a gate can ask for. `kanbanr config
+method` says which parts of the method your project has on ([The method, on by
+default](processes.md#the-method-on-by-default)). A part you turn off is no longer asked for, but
+it is still good practice, and Claude never turns one off or on for you.
+
+**At the design role.** The item's spec gets a `## Design` written at implementation level
+([The design stage](processes.md#the-design-stage-a-build-ready-design-in-the-spec)), ending with
+an implementation task list that a cheaper model can build one task at a time. The Design ends with
+**Affects docs**, links to the board docs the change touches, mirrored into the definition's
+`affects_docs`. Every reference is a live link ([Tying code to the reason for
+it](traceability.md)). Decisions are drafted as proposed ADRs and put to you at once, and a question
+the design leaves open comes to you, never to a subagent. Leaving the role, the build stage asks for
+the Design and your **design-review** sign-off.
+
+**At the build role.** `kanbanr start <CODE>` makes the item branch. With the git model on, it
+branches from the line of integration `kanbanr git model` names, not always from main. Commits go
+through `kanbanr commit`, which names the item. Subagents take one task at a time from the item's
+todo-list. Nobody commits on main or on a line of integration (the hooks refuse), and kanbanr never
+pushes.
+
+**At the integrate role.** Before the move, the Design is folded into each doc in `affects_docs`,
+describing it as built (the `docs_updated` check), and you sign off **docs-folded**. With the git
+model on, the move merges the item branch into its line (`--no-ff`, naming the item). If the merge
+would conflict, the move is refused and the item stays where it was: the line is merged into the
+item branch, the conflict resolved there, and the move tried again; nothing is rebased.
+`kanbanr git doctor` names any disagreement between the board and the branches.
+
+**At the release role.** `kanbanr release promote <V> [stage]` moves a release through its stages
+([Release stages](processes.md#release-stages)): the first makes `release/<V>`, and the last,
+production, is the cut, where kanbanr tags the version and fast-forwards main to it. A patch is
+`kanbanr release add <V> --patch-of <P>` ([Patch releases](processes.md#patch-releases)), and a fix
+made on a release branch reaches the line through `kanbanr git forward <V>`. With sprints and no
+releases, `kanbanr sprint close <SP>` is the cut.
+
+**Carry-over.** `kanbanr sprint close <SP> --carry-to <next>` carries unfinished items and keeps
+their branches. kanbanr merges the next sprint's branch into each carried item's branch; a conflict
+is reported for that item and its branch is left as it was.
+
+**Who merges, who pushes.** `kanbanr git model --sprints on|off --releases on|off` shows the model
+for a cadence before you choose it (setup runs it for you), and `kanbanr git model` the one your
+project follows:
+
+| Cadence | Items branch from and merge into | Production moves at | kanbanr merges (with the git model on) |
+|---|---|---|---|
+| neither (trunk) | main | the integrate merge | each item branch into main |
+| sprints only | `sprint/<SP>` | the sprint close | item branches into `sprint/<SP>`; `sprint/<SP>` into main at the close; the sprint into carried items |
+| releases only | `integration` | the release cut | item branches into `integration`; `release/<V>` into main at its last stage |
+| sprints and releases | `sprint/<SP>` | the release cut | item branches into `sprint/<SP>`; `release/<V>` into main at its last stage; the sprint into carried items |
+
+With the git model off, kanbanr merges nothing and the model is only a description
+([The git model](processes.md#the-git-model)). **You push your code repository, in every row**:
+neither kanbanr nor Claude ever does. The board's own remote is a different repository, which
+kanbanr syncs after each write as its push policy says (`kanbanr remote push-policy`).
+
+**Each milestone ends** with an architecture compliance review: every component has a doc that
+describes it as built, and the views are current ([Living architecture docs](living-docs.md)).
+
 ## On Zachman and TOGAF
 
 kanbanr borrows from both without adopting either, and it is worth being precise about which half.

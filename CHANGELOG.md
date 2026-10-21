@@ -8,6 +8,18 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **One method for every process, in the skill and the setup interview (FEAT-194).** The skill
+  states the method once, by stage role rather than by stage name: the build-ready design and its
+  hand-off tasks, `affects_docs` and live links at the design role; the item branch from the line
+  of integration at the build role; the docs fold-in and the merge at the integrate role; release
+  stages, the cut and patches at the release role; carry-over; who merges and who pushes for each
+  cadence; and the milestone compliance review. Personal instruction files that restate it are no
+  longer needed. Setup now asks, for every process, whether to work in sprints and releases
+  (`where --json` names the question, after the process), and shows the git model that follows
+  before the plan applies it: `kanbanr git model --sprints on|off --releases on|off` previews a
+  cadence's model, needing no board, and `git model --json` now also gives `line`, `branch_from`,
+  `production_at`, `kanbanr_merges` and `pushes`, the same for the preview and the applied model.
+  [The method by stage role](https://kanbanr.startr.trade/using/the-method.html#the-method-by-stage-role).
 - **Architecture coverage rules keep the cross-cutting views whole (FEAT-197).** A project can say
   what its views must reference — every item at Design or later in the Zachman matrix, every
   accepted ADR somewhere under `architecture/`, every component doc in the catalog — and kanbanr

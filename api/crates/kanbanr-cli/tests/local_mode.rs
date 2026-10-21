@@ -3426,22 +3426,22 @@ fn where_names_the_questions_setup_must_ask() {
     };
     let (v, questions) = ask(&work);
     assert_eq!(v["git_identity"]["name"], serde_json::Value::Null);
-    assert_eq!(questions.len(), 3, "{questions:?}");
+    assert_eq!(questions.len(), 4, "{questions:?}");
     assert!(questions[0].starts_with("Where the board lives"));
     assert!(
         questions[1].starts_with("Which process")
             && questions[1].contains("saved processes first")
             && questions[1].contains("after the board is chosen")
-            && questions[2].contains("after the board's commit identity")
+            && questions[3].contains("after the board's commit identity")
     );
-    assert!(questions[2].contains("git identity") && questions[2].contains("never --global"));
+    assert!(questions[3].contains("git identity") && questions[3].contains("never --global"));
 
     // With a repository identity, that question goes.
     ok(git_in(&base, &work, &["config", "user.name", "T"]));
     ok(git_in(&base, &work, &["config", "user.email", "t@x"]));
     let (v, questions) = ask(&work);
     assert_eq!(v["git_identity"]["name"], "T");
-    assert_eq!(questions.len(), 2, "{questions:?}");
+    assert_eq!(questions.len(), 3, "{questions:?}");
 
     // Set up: nothing left to ask.
     ok(run_in(
@@ -3458,6 +3458,105 @@ fn where_names_the_questions_setup_must_ask() {
         ],
     ));
     assert!(ask(&work).1.is_empty());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-194 R-2: setup asks the cadence third, after the process, and names the preview; the
+/// preview runs before there is a board, each cadence gives its own model, and the model the board
+/// then follows is the one previewed.
+#[test]
+fn setup_asks_cadence_and_shows_git_model() {
+    let (base, work) = togaf_scratch("cadence-ask");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ],
+    ));
+    let json = |args: &[&str]| -> serde_json::Value {
+        serde_json::from_slice(&ok(run_in(&base, &work, args)).stdout).unwrap()
+    };
+
+    let asked = json(&["where", "--json"]);
+    let questions = asked["ask_the_user"].as_array().unwrap();
+    assert_eq!(questions.len(), 4, "{questions:?}");
+    let cadence = questions[2].as_str().unwrap();
+    assert!(
+        cadence.contains("sprints and releases")
+            && cadence.contains("after the process")
+            && cadence.contains("kanbanr git model"),
+        "{cadence}"
+    );
+
+    // No board yet: the preview still answers.
+    let preview = json(&[
+        "git",
+        "model",
+        "--sprints",
+        "on",
+        "--releases",
+        "off",
+        "--json",
+    ]);
+    assert_eq!(preview["line"], "sprint/<SP>");
+    assert_eq!(preview["branch_from"], "sprint/<SP>");
+    assert_eq!(preview["production_at"], "sprint_close");
+    assert_eq!(preview["pushes"], "you");
+    assert!(
+        !work.join("data").exists(),
+        "a preview must not make a board"
+    );
+
+    let mut seen = std::collections::BTreeSet::new();
+    for s in ["on", "off"] {
+        for r in ["on", "off"] {
+            let v = json(&["git", "model", "--sprints", s, "--releases", r, "--json"]);
+            seen.insert(v.to_string());
+        }
+    }
+    assert_eq!(seen.len(), 4, "each cadence gives its own model");
+
+    // Applied: the board's model is the one previewed.
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--sprints", "on"],
+    ));
+    let applied = json(&["git", "model", "--json"]);
+    for k in [
+        "topology",
+        "line",
+        "branch_from",
+        "production_at",
+        "kanbanr_merges",
+        "automated",
+        "pushes",
+    ] {
+        assert_eq!(applied[k], preview[k], "{k}");
+    }
     let _ = std::fs::remove_dir_all(&base);
 }
 

@@ -1387,8 +1387,17 @@ enum GitCmd {
     /// Reads the tool payload on stdin and answers with a decision and a reason.
     Guard,
     /// The git model this project's cadence implies (FEAT-189): main, the line finished items
-    /// integrate into, item branches, and the branches that take merges only.
-    Model,
+    /// integrate into, item branches, and the branches that take merges only. With --sprints or
+    /// --releases, the model that cadence would give, before it is applied (FEAT-194): over this
+    /// board's cadence, or over all-off where there is no board yet.
+    Model {
+        /// Preview with sprints on or off.
+        #[arg(long, value_parser = ["on", "off"])]
+        sprints: Option<String>,
+        /// Preview with releases on or off.
+        #[arg(long, value_parser = ["on", "off"])]
+        releases: Option<String>,
+    },
     /// Merge a release's fixes forward into the current line, naming the items they serve
     /// (FEAT-190). Never automatic: the move that integrated the fix says when it is needed.
     Forward { version: String },
@@ -2732,6 +2741,90 @@ fn branch_item(ctx: &Context) -> Option<String> {
     kanbanr_core::scm::branch_item(&ctx.project, ctx.branch.as_deref())
 }
 
+/// `sprints=on&releases=off`, from `git model`'s preview flags; None when neither is given.
+fn cadence_query(sprints: &Option<String>, releases: &Option<String>) -> Option<String> {
+    let parts: Vec<String> = [("sprints", sprints), ("releases", releases)]
+        .into_iter()
+        .filter_map(|(k, v)| v.as_ref().map(|v| format!("{k}={v}")))
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("&"))
+}
+
+/// `git model --sprints/--releases` where there is no board yet (FEAT-194 R-2): the model that
+/// cadence gives over all-off, so setup can show it before anything is written.
+fn run_git_model_preview(
+    cli: &Cli,
+    sprints: &Option<String>,
+    releases: &Option<String>,
+) -> anyhow::Result<()> {
+    let on = |v: &Option<String>| v.as_deref().map(|v| v == "on");
+    let model = kanbanr_core::gitmodel::preview(
+        kanbanr_core::config::ProjectConfig::default_for("preview"),
+        on(sprints),
+        on(releases),
+        &[],
+        scm::repo_root().as_deref(),
+    );
+    let resp = serde_json::to_string(&kanbanr_core::gitmodel::view(&model))?;
+    print_git_model(cli, &resp)
+}
+
+/// Print `git model`'s answer: the JSON as it is, or the model in a few lines.
+fn print_git_model(cli: &Cli, resp: &str) -> anyhow::Result<()> {
+    if cli.json {
+        println!("{}", pretty(resp));
+        return Ok(());
+    }
+    let v: Value = serde_json::from_str(resp)?;
+    let m = &v["model"];
+    let s = |k: &str| m[k].as_str().unwrap_or_default().to_string();
+    let list = |k: &str| -> String {
+        m[k].as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|x| x.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    println!("topology:   {}", s("topology").replace('_', " "));
+    println!("main:       {}", s("main"));
+    println!(
+        "line:       {}",
+        m["line"]
+            .as_str()
+            .unwrap_or("none — start a sprint to have one")
+    );
+    println!(
+        "branch at:  {}",
+        v["branch_from"].as_str().unwrap_or_default()
+    );
+    println!("production: at the {}", s("production").replace('_', " "));
+    println!("items:      {}", list("item_patterns"));
+    println!("protected:  {}", list("protected"));
+    let automated = m["automated"].as_bool().unwrap_or(false);
+    println!(
+        "kanbanr merges{}:",
+        if automated {
+            ""
+        } else {
+            " (once the model is on)"
+        }
+    );
+    for merge in v["kanbanr_merges"].as_array().into_iter().flatten() {
+        println!("  - {}", merge.as_str().unwrap_or_default());
+    }
+    println!("pushing:    never automatic — you review and push");
+    println!(
+        "automation: {}",
+        if automated {
+            "on — start, sprints and the hooks follow this model"
+        } else {
+            "off — a description only (`kanbanr config cadence --git-model on`)"
+        }
+    );
+    Ok(())
+}
+
 fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
     match cmd {
         GitCmd::InstallHooks { force } => {
@@ -2832,47 +2925,22 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
             print_write(cli, &resp, said);
             Ok(())
         }
-        GitCmd::Model => {
+        GitCmd::Model { sprints, releases } => {
             let p = require_project(cli)?;
-            let root =
-                scm::repo_root().ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
-            let resp = client.get_in(&format!("/projects/{p}/git/model"), Some(&root))?;
-            if cli.json {
-                println!("{}", pretty(&resp));
-                return Ok(());
-            }
-            let v: Value = serde_json::from_str(&resp)?;
-            let m = &v["model"];
-            let s = |k: &str| m[k].as_str().unwrap_or_default().to_string();
-            let list = |k: &str| -> String {
-                m[k].as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|x| x.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
-            println!("topology:   {}", s("topology").replace('_', " "));
-            println!("main:       {}", s("main"));
-            println!(
-                "line:       {}",
-                m["line"]
-                    .as_str()
-                    .unwrap_or("none — start a sprint to have one")
-            );
-            println!("production: at the {}", s("production").replace('_', " "));
-            println!("items:      {}", list("item_patterns"));
-            println!("protected:  {}", list("protected"));
-            println!("pushing:    never automatic");
-            println!(
-                "automation: {}",
-                if m["automated"].as_bool().unwrap_or(false) {
-                    "on — start, sprints and the hooks follow this model"
-                } else {
-                    "off — a description only (`kanbanr config cadence --git-model on`)"
+            let preview = cadence_query(sprints, releases);
+            let resp = match &preview {
+                // A preview reads the repository when there is one, and needs none.
+                Some(q) => client.get_in(
+                    &format!("/projects/{p}/git/model?{q}"),
+                    scm::repo_root().as_deref(),
+                )?,
+                None => {
+                    let root = scm::repo_root()
+                        .ok_or_else(|| anyhow::anyhow!("not inside a git repository"))?;
+                    client.get_in(&format!("/projects/{p}/git/model"), Some(&root))?
                 }
-            );
-            Ok(())
+            };
+            print_git_model(cli, &resp)
         }
         GitCmd::Status => {
             let ctx = scm_context(cli, client)?;
@@ -4894,6 +4962,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         } => return run_serve(cli, bind.clone(), ui_dir.clone(), *allow_writes),
         Command::Open => return run_open(cli),
         Command::Where => return run_where(cli),
+        // A preview of the git model needs no board (FEAT-194): setup shows it before `init`.
+        Command::Git(GitCmd::Model { sprints, releases })
+            if cadence_query(sprints, releases).is_some() && no_board_here(cli).is_some() =>
+        {
+            return run_git_model_preview(cli, sprints, releases);
+        }
         // A definition in a file is checked on its own: no board, no project, no network. That is
         // what lets CI hold a contributor to the same bar as the maintainer (FEAT-052) — so it runs
         // before any board is opened, and never creates one (FEAT-103).

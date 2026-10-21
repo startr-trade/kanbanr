@@ -104,7 +104,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr git install-hooks / uninstall-hooks / status` | the commit hooks that require each commit to name its item |
 | `kanbanr git doctor [--json]` | compare the board with the branches: integrated items not merged, unfinished work on a line, branches naming nothing, release fixes not forwarded; read-only, exits 1 on an error |
 | `kanbanr git forward <VERSION>` | merge a release's fixes forward into the current line, naming the items they serve |
-| `kanbanr git model [--json]` | the git model the cadence implies: main, the line finished items integrate into, item branches, and the lines that take merges only |
+| `kanbanr git model [--sprints on\|off] [--releases on\|off] [--json]` | the git model the cadence implies: main, the line finished items integrate into, where items branch, item branches, the lines that take merges only, what kanbanr merges, and that pushing is yours. With `--sprints` or `--releases`, the model that cadence would give, over this board's cadence or, with no board yet, over all-off: setup shows it before applying it |
 | `kanbanr commit -m "…"` | commit with the board reference filled in from the branch |
 | `kanbanr claude sync` | write the project's charter and stages into `CLAUDE.md` |
 | `kanbanr git guard` / `kanbanr claude guard` / `kanbanr git check-msg` / `kanbanr git check-branch` | the checks the hooks run (you never call them) |

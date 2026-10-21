@@ -17,6 +17,32 @@ Three things are worth knowing up front:
 
 The [Review page](the-monitor.md) and the plain commands still work, for anyone who prefers them.
 
+## Setting up: the cadence and the git model
+
+When Claude sets kanbanr up for a project, it asks where the board lives, which process to use,
+and then, for every process, **whether to work in sprints and releases**. It recommends the
+process's own setting (on for Scrum and agile, off for the rest) and shows you the git model your
+answer gives before anything is written:
+
+```text
+$ kanbanr git model --sprints on --releases off
+topology:   sprints
+main:       main
+line:       none — start a sprint to have one
+branch at:  sprint/<SP>
+production: at the sprint close
+…
+kanbanr merges (once the model is on):
+  - each item branch into sprint/<SP> when the item enters the integrate stage (--no-ff, naming the item)
+  - sprint/<SP> into main when the sprint closes (a fast-forward, tagged with the sprint's code)
+  - sprint/<SP> into each item branch carried into that sprint (a catch-up merge; a conflict is reported for that item)
+pushing:    never automatic — you review and push
+```
+
+The plan quotes that output under *Branching*, lists which stage holds each role (design, build,
+integrate, release) under *Process*, and says that the method's gates are on. Approving the plan
+applies it. What each role then asks for is in [The method by stage role](the-method.md#the-method-by-stage-role).
+
 ## Starting work: a plan you accept
 
 Ask for what you need, in your own words:

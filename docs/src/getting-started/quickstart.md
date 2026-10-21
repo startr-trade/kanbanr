@@ -39,8 +39,13 @@ doesn't start running commands. It switches to **plan mode** and interviews you:
    drafts these from your README and manifests, labels them as a draft, and leaves blank anything
    the repository doesn't answer so it can ask you.
 3. **Process**: the workflow (the default kanban, TOGAF phases as the columns, or your own
-   statuses), the git commit hooks (offered, defaulting to yes), and optionally a backup remote,
-   the GitHub issue mirror and importing an existing tracker.
+   statuses), then whether to work in sprints and releases, whichever process you chose. Claude
+   recommends the process's own setting and shows the git model that follows
+   (`kanbanr git model --sprints on|off --releases on|off`, which needs no board): where items
+   branch from and merge into, what kanbanr merges, and that pushing stays yours. Then the git
+   commit hooks (offered, defaulting to yes), and optionally a backup remote, the GitHub issue
+   mirror and importing an existing tracker. Design before build and the docs fold-in are on by
+   default; the plan says so, and `kanbanr config method --off` turns them off later.
 
 The plan lists every answer and the exact commands it will run. **Approving the plan (exiting plan
 mode) is the go-ahead.** Claude then runs the whole setup: `init`, the workflow, `charter set`,

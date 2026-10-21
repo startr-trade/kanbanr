@@ -110,7 +110,7 @@ pub fn portable_path(path: &str, windows: bool) -> String {
     }
 }
 
-/// The questions a setup here must put to the user (FEAT-171, FEAT-173): `where --json`'s
+/// The questions a setup here must put to the user (FEAT-171, FEAT-173, FEAT-194): `where --json`'s
 /// `ask_the_user`. Said by the tool, because a walkthrough showed Claude filling these in itself
 /// when the skill alone asked it to ask: each has an obvious answer, and an obvious answer is still
 /// the user's to give. `tracked`: this folder already points at an existing board.
@@ -130,6 +130,15 @@ pub fn setup_questions(tracked: bool, git_identity: bool) -> Vec<String> {
          options depend on it: that board's saved processes first (`kanbanr process list \
          --json --data-dir <board>`, library board, then personal; recommend one when the board \
          has it), then the built-in ones, or designing their own."
+            .into(),
+    );
+    // FEAT-194 Q1: asked for every process, because the git model follows from it.
+    ask.push(
+        "Whether to work in sprints and releases — only after the process is chosen, because a \
+         process may switch them on (scrum, agile): recommend its own setting. Then show the \
+         resulting git model (`kanbanr git model --sprints on|off --releases on|off`): where \
+         items branch from and merge into, what kanbanr merges, and that pushing is always the \
+         user's — before the plan applies it."
             .into(),
     );
     if !git_identity {
@@ -867,15 +876,16 @@ mod tests {
         assert!(why.contains("project shop, board <not recorded>"), "{why}");
     }
 
-    /// FEAT-171, FEAT-173: a tracked folder is asked nothing; an untracked one is asked where
-    /// and which process, and for git's identity only when git has none.
+    /// FEAT-171, FEAT-173, FEAT-194: a tracked folder is asked nothing; an untracked one is asked
+    /// where, which process and its cadence, and for git's identity only when git has none.
     #[test]
     fn setup_asks_what_only_the_user_can_answer() {
         assert!(setup_questions(true, false).is_empty());
-        assert_eq!(setup_questions(false, true).len(), 2);
+        assert_eq!(setup_questions(false, true).len(), 3);
         let all = setup_questions(false, false);
-        assert_eq!(all.len(), 3);
-        assert!(all[2].contains("git identity"));
+        assert_eq!(all.len(), 4);
+        assert!(all[2].contains("sprints and releases"));
+        assert!(all[3].contains("git identity"));
     }
     /// FEAT-129: Windows' CI run showed two path forms leaking out — a marker with backslashes,
     /// which no other platform can read, and canonicalize's `\\?\` verbatim prefix in messages.

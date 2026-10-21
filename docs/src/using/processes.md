@@ -490,8 +490,9 @@ QA signs off releases"), at setup or any time later. In plan mode, it:
    can enforce;
 4. turns anything kanbanr can't see ("the architecture board has reviewed it") into a named
    sign-off that a person records;
-5. asks the process-wide choices together: block or warn, where the branch is made, which stage
-   ends the work, which moves back are allowed;
+5. asks the process-wide choices together: block or warn, which stage holds each
+   [role](#stage-roles) (design, build, integrate and release; build is where the branch is made),
+   which stage ends the work, which moves back are allowed;
 6. asks its name, and whether to keep it on the board for the team or in your personal library;
 7. checks the draft with `kanbanr process check` and puts its working agreement and diagram in the
    plan, with a one-line description of what the process is for.
