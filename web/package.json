@@ -14,7 +14,8 @@
     "check:read-only": "node scripts/check-read-only.mjs",
     "check:card-text": "node scripts/check-card-text.mjs",
     "check:api-types": "node scripts/check-api-types.mjs",
-    "check:diagram-lint": "node scripts/check-diagram-lint.mjs"
+    "check:diagram-lint": "node scripts/check-diagram-lint.mjs",
+    "check:diagram-review": "node scripts/check-diagram-review.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.16",
