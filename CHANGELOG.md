@@ -15,7 +15,9 @@ All notable changes to kanbanr are documented here. The format follows
   list of names, and a stage with no gate acts as before. So a release can move main at a stage of
   its own and be tagged only once main holds it and is pushed. **A release prepares itself**: the
   `prepare` action commits the version files, the dated changelog heading, a notes draft and its
-  listing onto `release/<V>` in one commit, nothing checked out (`kanbanr config release-prepare`).
+  listing onto `release/<V>` in one commit, nothing checked out (`kanbanr config release-prepare`;
+  one file may be listed several times, each with its own match, as a lockfile naming several
+  crates needs).
   A promotion is planned before anything changes — refused with every missing condition and its
   fix — and undone step by step if it fails part way. `kanbanr release promote <V> --plan [--fetch]`
   prints the plan; after a promotion kanbanr says what is next. The Releases page shows one button
@@ -24,7 +26,8 @@ All notable changes to kanbanr are documented here. The format follows
   kanbanr still never pushes. Use one kanbanr version per board: an older one ignores the gates.
 - **A release with nothing planned into it is never promoted (FEAT-212).** Every stage refuses it,
   the first included, and the Releases page offers no button; a patch, which carries its parent's
-  fixes, still goes.
+  fixes, still goes. So `release add --branch`, which promoted a release as it was added, is gone:
+  a release starts with `release add`, `release plan`, then promoting it to its first stage.
 
 - **The skill says what each sub-agent may do (FEAT-215).** When Claude hands work to a sub-agent,
   the skill gives each role fixed boundaries, stated in the brief word for word: a build agent reads

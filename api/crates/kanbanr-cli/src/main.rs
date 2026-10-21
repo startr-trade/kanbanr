@@ -1002,7 +1002,8 @@ enum ConfigCmd {
     /// shows it. `{version}` (v0.3.0), `{number}` (0.3.0), `{name}` and `{date}` are filled in.
     ReleasePrepare {
         /// A file whose version is set: `PATH`, or `PATH=MATCH` with a template naming
-        /// `{version}` once (`\n` for a newline). Added to the list; repeat for more.
+        /// `{version}` once (`\n` for a newline). Added to the list; repeat for more. A path may
+        /// appear more than once with different matches; each is applied, in order.
         #[arg(long = "version-file")]
         version_files: Vec<String>,
         /// Start the version file list afresh (with the --version-file given, or none).
@@ -1102,13 +1103,9 @@ enum ReleaseCmd {
         target: Option<String>,
         #[arg(long)]
         name: Option<String>,
-        /// Also promote it to its first stage, which makes the branch `release/<VERSION>` from
-        /// the integration branch in the code repository this runs in (FEAT-183).
-        #[arg(long)]
-        branch: bool,
         /// A patch of this cut release: `release/<VERSION>` is made from its tag, and the patch
         /// starts at the first stage (FEAT-184). Run it from the project folder.
-        #[arg(long, conflicts_with = "branch")]
+        #[arg(long)]
         patch_of: Option<String>,
     },
     /// List the project's releases.
@@ -6960,26 +6957,11 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             let unescape = |s: &str| s.replace("\\n", "\n");
             let mut body = Vec::new();
             if !version_files.is_empty() || *clear_version_files {
-                let mut files: Vec<Value> = if *clear_version_files {
-                    Vec::new()
-                } else {
-                    current["version_files"]
-                        .as_array()
-                        .cloned()
-                        .unwrap_or_default()
-                };
-                for f in version_files {
-                    let (path, pattern) = match f.split_once('=') {
-                        Some((path, m)) => (path.trim().to_string(), Some(unescape(m))),
-                        None => (f.trim().to_string(), None),
-                    };
-                    files.retain(|x| x["path"] != path.as_str());
-                    let mut entry = json!({ "path": path });
-                    if let Some(m) = pattern {
-                        entry["match"] = json!(m);
-                    }
-                    files.push(entry);
-                }
+                let files = merge_version_files(
+                    &current["version_files"],
+                    version_files,
+                    *clear_version_files,
+                );
                 body.push(("version_files", Some(json!(files))));
             }
             body.push(("changelog", changelog.clone().map(|c| json!(c))));
@@ -7355,6 +7337,32 @@ fn num(v: &Value) -> String {
     }
 }
 
+/// The version file list after `config release-prepare --version-file …`: each flag
+/// (`PATH` or `PATH=MATCH`, `\n` a newline) is appended in order to `current` — or to nothing with
+/// `clear` — so one path may carry several entries, each with its own match (FEAT-212: a lockfile
+/// naming several crates). An entry with the same path and match as one already there is not
+/// added twice.
+fn merge_version_files(current: &Value, flags: &[String], clear: bool) -> Vec<Value> {
+    let mut files: Vec<Value> = if clear {
+        Vec::new()
+    } else {
+        current.as_array().cloned().unwrap_or_default()
+    };
+    for f in flags {
+        let entry = match f.split_once('=') {
+            Some((path, m)) => json!({ "path": path.trim(), "match": m.replace("\\n", "\n") }),
+            None => json!({ "path": f.trim() }),
+        };
+        if !files
+            .iter()
+            .any(|x| x["path"] == entry["path"] && x["match"] == entry["match"])
+        {
+            files.push(entry);
+        }
+    }
+    files
+}
+
 fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     match cmd {
@@ -7362,7 +7370,6 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             target,
             name,
-            branch,
             patch_of,
         } => {
             let by = match patch_of {
@@ -7393,11 +7400,6 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 None => format!("added release {version}"),
             };
             print_write(cli, &resp, said);
-            if *branch {
-                let project = get_project(client, &p)?;
-                let first = project.config.cadence.stages().first().cloned();
-                promote_release(cli, client, &p, version, first.as_deref(), None, None)?;
-            }
         }
         ReleaseCmd::Promote {
             version,
@@ -8233,6 +8235,90 @@ fn print_board(project: &Project) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FEAT-212 R-8: `config release-prepare --version-file` keeps several entries for one path,
+    /// each with its own match, in order, through the config and back; an exact duplicate is kept
+    /// once, and `--clear-version-files` clears them all.
+    #[test]
+    fn version_files_allow_several_entries_per_path() {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-version-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = kanbanr_core::store::Store::new(dir.clone());
+        store
+            .init_project(
+                "shop",
+                kanbanr_core::config::ProjectConfig::default_for("shop"),
+            )
+            .unwrap();
+        let lock =
+            |name: &str| format!("api/Cargo.lock=name = \"{name}\"\\nversion = \"{{version}}\"");
+        let flags: Vec<String> = vec![
+            "api/Cargo.toml".into(),
+            lock("kanbanr-core"),
+            lock("kanbanr-cli"),
+            lock("kanbanr-core"),
+        ];
+        let files = merge_version_files(&Value::Null, &flags, false);
+        assert_eq!(
+            files.len(),
+            3,
+            "the repeated kanbanr-core entry is kept once"
+        );
+        let put = |files: Vec<Value>| {
+            kanbanr_core::dispatch::dispatch(
+                &store,
+                "PUT",
+                "/projects/shop/config/release-prepare",
+                Some(&json!({ "version_files": files })),
+            )
+            .unwrap();
+            serde_json::to_value(
+                &store
+                    .load_meta("shop")
+                    .unwrap()
+                    .config
+                    .cadence
+                    .release_prepare,
+            )
+            .unwrap()["version_files"]
+                .clone()
+        };
+        let stored = put(files);
+        // A later run adds to what is stored: one more crate in the same lockfile.
+        let stored = put(merge_version_files(
+            &stored,
+            &[lock("kanbanr-server"), lock("kanbanr-cli")],
+            false,
+        ));
+        let got: Vec<(String, Option<String>)> = stored
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                (
+                    f["path"].as_str().unwrap().to_string(),
+                    f["match"].as_str().map(str::to_string),
+                )
+            })
+            .collect();
+        let m = |name: &str| Some(format!("name = \"{name}\"\nversion = \"{{version}}\""));
+        assert_eq!(
+            got,
+            [
+                ("api/Cargo.toml".to_string(), None),
+                ("api/Cargo.lock".to_string(), m("kanbanr-core")),
+                ("api/Cargo.lock".to_string(), m("kanbanr-cli")),
+                ("api/Cargo.lock".to_string(), m("kanbanr-server")),
+            ]
+        );
+        assert!(merge_version_files(&stored, &[], true).is_empty());
+        assert_eq!(
+            merge_version_files(&stored, &["web/package.json".into()], true),
+            [json!({ "path": "web/package.json" })]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// FEAT-128: `init --author --email` recorded the identity only after the repository's first
     /// commit, which therefore went out as `kanbanr <kanbanr@local>`.

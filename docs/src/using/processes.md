@@ -448,6 +448,8 @@ A release prepares itself: entering the stage with `prepare` commits, in one com
 ```bash
 kanbanr config release-prepare --version-file api/Cargo.toml \
   --version-file 'api/Cargo.lock=name = "kanbanr-core"\nversion = "{version}"' \
+  --version-file 'api/Cargo.lock=name = "kanbanr-cli"\nversion = "{version}"' \
+  --version-file 'api/Cargo.lock=name = "kanbanr-server"\nversion = "{version}"' \
   --changelog CHANGELOG.md --changelog-copy docs/src/project/changelog.md \
   --notes 'docs/src/releases/{version}.md' \
   --notes-listing 'docs/src/SUMMARY.md::- [Release notes](releases/index.md)::  - [{number}](releases/{version}.md)'
@@ -458,7 +460,11 @@ kanbanr config release-prepare                     # shows it
   matches `^version = "{version}"` and a `*.json` file `"version": "{version}"`, the first match
   only. Any other file needs a match: literal text with one `{version}`, where whitespace matches
   any whitespace (newlines too) and a leading `^` anchors to a line; an explicit match sets every
-  occurrence. A missing file, or a match that finds nothing, refuses the promotion.
+  occurrence. A file may be listed more than once, each time with its own match — a lockfile
+  naming several of the project's packages, say; every entry is applied, in order, in the one
+  commit. Each `--version-file` adds an entry (the same path and match twice is kept once), and
+  `--clear-version-files` starts the list afresh. A missing file, or a match that finds nothing,
+  refuses the promotion.
 - **Changelog.** `## [{number}] - {date}` goes below the first `## [Unreleased]`, so what was
   unreleased belongs to the release; an `[Unreleased]: …compare/<prev>...HEAD` link moves on and
   `[{number}]` gets its own. Each copy gets the same text.

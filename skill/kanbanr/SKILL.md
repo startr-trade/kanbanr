@@ -654,7 +654,9 @@ branches; fix it before going on.
 - **A release prepares itself.** The stage with `prepare` commits the version files, the dated
   changelog heading and a notes draft onto `release/<V>` (`kanbanr config release-prepare`). Never
   make a feature item to prepare a release.
-- Plan items into a release before promoting it: a release with nothing planned is refused.
+- Plan items into a release before promoting it: a release with nothing planned is refused. So a
+  release starts with `release add`, then `release plan <V> <CODE>…`, then promoting it to its
+  first stage (candidate), which makes `release/<V>`; `release add` has no `--branch`.
 - Claude runs `kanbanr release promote <V>` (check first with `--plan`) and tells the user the
   `next:` line it prints. **The user pushes main and the tag**, by hand; a cut that requires
   `pushed` waits until main is pushed (and CI has run on it).
@@ -1104,6 +1106,7 @@ kanbanr release promote v0.1.0 [<stage>] --plan [--fetch]  # what it would do an
 kanbanr release stages                            # each stage: requires, on_enter, declared or default
 kanbanr config release-stage main --requires items_finished --on-enter move_main [--clear]
 kanbanr config release-prepare --version-file api/Cargo.toml --changelog CHANGELOG.md --notes 'docs/src/releases/{version}.md'
+kanbanr config release-prepare --version-file 'api/Cargo.lock=name = "a"\nversion = "{version}"' --version-file 'api/Cargo.lock=name = "b"\nversion = "{version}"'   # one file, several entries, each applied
 kanbanr release add v0.1.1 --patch-of v0.1.0      # a patch: release/v0.1.1 from v0.1.0's tag, at the first stage
 kanbanr config cadence --release-stages candidate,qa,live [--integration-branch develop] [--main-branch main]
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a shipped release

@@ -1588,7 +1588,8 @@ fn prepared_at(
         let ok = read(&f.path).is_some_and(|t| {
             crate::releaseprep::names_version(&t, &f.path, f.pattern.as_deref(), &ph.number)
         });
-        if !ok {
+        // Several entries may name one file (a lockfile's crates); it is listed once.
+        if !ok && !lacking.contains(&f.path) {
             lacking.push(f.path.clone());
         }
     }
@@ -2932,6 +2933,78 @@ mod tests {
             "{err}"
         );
         assert!(!coderepo::branch_exists(&repo, "release/v1"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FEAT-212 R-8: a file listed several times, each with its own match — a lockfile naming
+    /// three of the project's crates — gets every entry applied, in order, and is written once, in
+    /// the one preparation commit; the `prepared` check then holds for each entry.
+    #[test]
+    fn prepare_applies_every_entry_for_a_file() {
+        let (store, dir, repo) = board_and_repo("prepare-lockfile");
+        let pkg = |name: &str, version: &str| {
+            format!("[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n\n")
+        };
+        let lock = format!(
+            "version = 4\n\n{}{}{}{}",
+            pkg("kanbanr-cli", "0.1.0"),
+            pkg("kanbanr-core", "0.1.0"),
+            pkg("kanbanr-server", "0.1.0"),
+            pkg("serde", "0.1.0"),
+        );
+        commit_file(&repo, "Cargo.lock", &lock, "lockfile");
+        let entry = |name: &str| {
+            format!(
+                "    - path: Cargo.lock\n      match: \"name = \\\"{name}\\\"\\nversion = \\\"{{version}}\\\"\"\n"
+            )
+        };
+        configure(
+            &store,
+            &format!(
+                "{THREE}release_prepare:\n  version_files:\n{}{}{}",
+                entry("kanbanr-core"),
+                entry("kanbanr-cli"),
+                entry("kanbanr-server")
+            ),
+        );
+        let main_before = coderepo::rev_parse(&repo, "main").unwrap();
+        let done = super::promote(&store, "shop", "v1", None, "Ada", "", Some(&repo)).unwrap();
+        let prepared = done.prepared.clone().unwrap();
+        assert_eq!(prepared.files, ["Cargo.lock"], "written once");
+        let tip = coderepo::rev_parse(&repo, "release/v1").unwrap();
+        assert_eq!(tip, prepared.sha);
+        assert_eq!(
+            coderepo::git(
+                &repo,
+                &["rev-list", "--count", &format!("{main_before}..{tip}")]
+            )
+            .unwrap(),
+            "1",
+            "one commit"
+        );
+        let got = coderepo::read_blob(&repo, &tip, "Cargo.lock")
+            .unwrap()
+            .unwrap()
+            .1;
+        assert_eq!(
+            got,
+            format!(
+                "version = 4\n\n{}{}{}{}",
+                pkg("kanbanr-cli", "1"),
+                pkg("kanbanr-core", "1"),
+                pkg("kanbanr-server", "1"),
+                pkg("serde", "0.1.0"),
+            ),
+            "every entry applied, nothing else touched"
+        );
+        let project = store.load_meta("shop").unwrap();
+        let (ok, said) = super::prepared_at(&repo, &tip, &project, "v1", "release/v1");
+        assert!(ok, "{said}");
+        // Before preparation no entry is carried: the check fails, naming the file once.
+        let (ok, said) = super::prepared_at(&repo, &main_before, &project, "v1", "release/v1");
+        assert!(!ok);
+        assert_eq!(said.matches("Cargo.lock").count(), 1, "{said}");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }
