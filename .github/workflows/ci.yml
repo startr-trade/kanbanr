@@ -176,9 +176,9 @@ jobs:
       - name: Build
         run: npm run build
 
-      # A mermaid diagram that does not parse renders as nothing, and nothing reads as a missing
-      # image rather than a syntax error — so it survives review. Parse them with the same library
-      # the monitor renders them with.
+      # A diagram that does not parse renders as nothing, and nothing reads as a missing image
+      # rather than a syntax error — so it survives review. Draw every one with the same pinned Pele
+      # the book and the monitor use, and check the book's copy of Pele is that build (FEAT-203).
       - name: Docs diagrams parse
         run: npm run check:docs
 

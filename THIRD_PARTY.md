@@ -31,7 +31,9 @@ crate's repository for its exact license text; the generated report (below) is a
 ## Web dependencies (web/)
 
 The read-only monitor is a React + Vite app. Runtime dependencies — `react`, `react-dom`,
-`react-router-dom`, and `marked` — are **MIT**-licensed. Build tooling (`vite`, `typescript`,
+`react-router-dom`, `marked`, `dompurify` (MPL-2.0 OR Apache-2.0) and `pele` — are **MIT**-licensed
+unless noted. [Pele](https://pele.run) (MIT, Obsidian) also ships in the book: its browser build is
+committed as `docs/pele.global.js`, with its licence beside it in `docs/pele.LICENSE`. Build tooling (`vite`, `typescript`,
 `@vitejs/plugin-react`, type stubs) is MIT/Apache-2.0.
 
 ## Generating the authoritative list

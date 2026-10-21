@@ -27,13 +27,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Pinned so a book that builds locally builds identically here. mdbook-mermaid 0.17 is built
-  # against the mdbook 0.5 line and the preprocessor protocol differs across that boundary, so the
-  # two versions move together or not at all.
+  # Pinned so a book that builds locally builds identically here. The book's ```mermaid blocks are
+  # drawn in the reader's browser by the committed Pele build (docs/pele.global.js, FEAT-203), so
+  # the build needs no preprocessor.
   MDBOOK_VERSION: "0.5.4"
-  # The book's diagrams are ```mermaid blocks. A build WITHOUT this renders them as unreadable code
-  # listings rather than failing, which is the worst of both.
-  MDBOOK_MERMAID_VERSION: "0.17.0"
 
 jobs:
   build:
@@ -43,17 +40,13 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - name: Install mdBook + mermaid preprocessor
+      - name: Install mdBook
         run: |
           set -eu
           mkdir -p "$HOME/.local/bin"
           base="https://github.com/rust-lang/mdBook/releases/download"
           curl -fsSL --proto '=https' --proto-redir '=https' \
             "${base}/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xz -C "$HOME/.local/bin"
-          mbase="https://github.com/badboy/mdbook-mermaid/releases/download"
-          curl -fsSL --proto '=https' --proto-redir '=https' \
-            "${mbase}/v${MDBOOK_MERMAID_VERSION}/mdbook-mermaid-v${MDBOOK_MERMAID_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
             | tar -xz -C "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 

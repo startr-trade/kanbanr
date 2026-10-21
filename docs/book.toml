@@ -9,10 +9,12 @@ src = "src"
 default-theme = "rust"
 # A diagram in the content column is bounded by that column. `diagram-open.js` opens a click on one
 # in its own tab at full size, where the browser's own zoom, scroll, save and print already work —
-# no bespoke pan/zoom code to keep alive. `mermaid-fix.css` stops the SVG being clipped by the
-# column, and marks it clickable.
-additional-css = ["mermaid-fix.css", "brand.css"]
-additional-js = ["mermaid.min.js", "mermaid-init.js", "diagram-open.js"]
+# no bespoke pan/zoom code to keep alive. The ```mermaid blocks are drawn by Pele in the reader's
+# browser (FEAT-203): `pele.global.js` is the pinned build (tools/docs/pele.sh), `pele-init.js`
+# draws each block, `pele-theme.css` colours them from the current theme, and `diagrams.css` fits
+# them to the column and marks them clickable.
+additional-css = ["diagrams.css", "pele-theme.css", "brand.css"]
+additional-js = ["pele.global.js", "pele-init.js", "diagram-open.js"]
 preferred-dark-theme = "ayu"
 git-repository-url = "https://github.com/startr-trade/kanbanr"
 edit-url-template = "https://github.com/startr-trade/kanbanr/edit/main/docs/{path}"
@@ -23,11 +25,3 @@ level = 1
 
 [output.html.search]
 enable = true
-
-[preprocessor]
-
-# The docs' diagrams are ```mermaid blocks. Without this preprocessor they render as unreadable
-# code listings rather than failing loudly, which is the worst of both — so the docs workflow
-# installs it alongside mdbook and pins both together.
-[preprocessor.mermaid]
-command = "mdbook-mermaid"

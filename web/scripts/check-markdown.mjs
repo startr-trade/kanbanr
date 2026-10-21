@@ -8,6 +8,7 @@
 import { JSDOM } from "jsdom";
 import createDOMPurify from "dompurify";
 import { readFileSync } from "node:fs";
+import { render } from "pele";
 import { markdownToSafeHtml, safeSvg } from "../src/markdownHtml.ts";
 import { find, isBroken, label, makeIndex } from "../src/boardRefs.ts";
 
@@ -72,6 +73,29 @@ const svg =
 const cleanSvg = safeSvg(svg, purifier);
 if (cleanSvg.includes("onload") || cleanSvg.includes("<script")) problems.push("the SVG kept a script");
 if (!cleanSvg.includes("nodeLabel")) problems.push("the SVG lost its label");
+
+// monitor_diagrams_render_with_pele (FEAT-203 R-2): the Workflow and Gantt pages' sources, as the
+// daemon serves them, and a document's block are drawn by Pele and come through the sanitiser as
+// a diagram: shapes and labels kept, nothing that runs script.
+const diagrams = JSON.parse(readFileSync(new URL("./diagrams-fixture.json", import.meta.url), "utf8"));
+const docBlock = /<code class="language-mermaid">([\s\S]*?)<\/code>/.exec(html);
+const sources = [
+  ["the Workflow page", diagrams.workflow, "Business Arch"],
+  ["the Gantt page", diagrams.gantt, "demo/FEAT-001"],
+  ["a document's block", docBlock ? window.document.createRange().createContextualFragment(docBlock[1]).textContent : "", "B"],
+];
+for (const [what, source, label] of sources) {
+  try {
+    const drawn = safeSvg(render(source, { idPrefix: "t-" }).svg, purifier);
+    if (!drawn.startsWith("<svg")) problems.push(`${what}: Pele's diagram did not survive the sanitiser`);
+    if (!drawn.includes(label)) problems.push(`${what}: the diagram lost its label ${label}`);
+    if (!/<(path|rect|line|polygon)\b/.test(drawn)) problems.push(`${what}: the diagram lost its shapes`);
+    if (!drawn.includes("var(--pele-")) problems.push(`${what}: the diagram lost its theme colours`);
+    if (/<script|\son[a-z]+=/i.test(drawn)) problems.push(`${what}: the diagram kept a script`);
+  } catch (e) {
+    problems.push(`${what}: Pele could not draw it — ${e.message}`);
+  }
+}
 
 // Board references (FEAT-181). First, the finder agrees with the Rust one on the shared fixture.
 const fixture = JSON.parse(readFileSync(new URL("./refs-fixture.json", import.meta.url), "utf8"));
@@ -139,5 +163,6 @@ if (problems.length) {
 }
 console.log(
   "check:markdown — scripts, handlers and javascript: URLs are removed; markdown and diagram labels render; " +
+    "the Workflow, Gantt and document diagrams are drawn by Pele and sanitised; " +
     "board references link, and match the Rust finder on the shared fixture.",
 );

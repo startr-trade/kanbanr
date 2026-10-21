@@ -8,6 +8,13 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Diagrams drawn by Pele, in the colours of the theme you read in (FEAT-203).** The book and the
+  monitor draw ```` ```mermaid ```` blocks with [Pele](https://pele.run) 1.7.0 instead of Mermaid. A
+  diagram takes its colours from the current theme — each of the book's five, and the monitor's
+  light and dark — and follows a theme switch without a reload. The book no longer needs the
+  `mdbook-mermaid` preprocessor, and loads one 680 kB script instead of Mermaid's 2.5 MB; the
+  monitor loads Pele only on a page that has a diagram.
+  `check:docs` draws every diagram with the same Pele.
 - **A versioned read API, described in OpenAPI 3.1 (FEAT-177).** The daemon's public read routes —
   the ones the monitor uses, plus the obvious reads — are now version 1 of a documented contract
   for integrators and tools built on the board. `kanbanr serve` serves the description at
