@@ -3705,6 +3705,9 @@ fn release_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     // The tag is made by the person's own git, so the repository needs someone to author it.
     ok(git_in(&base, &work, &["config", "user.name", "T"]));
     ok(git_in(&base, &work, &["config", "user.email", "t@x"]));
+    // The tests read files back byte for byte; Windows's git would check them out with CRLF
+    // (FEAT-208). The setting is the repository's, so kanbanr's own git honours it too.
+    ok(git_in(&base, &work, &["config", "core.autocrlf", "false"]));
     std::fs::write(work.join("app.txt"), "v0\n").unwrap();
     ok(git_in(&base, &work, &["add", "app.txt"]));
     ok(git_in(

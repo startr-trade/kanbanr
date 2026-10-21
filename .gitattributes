@@ -1,0 +1,4 @@
+# Every text file is checked out with LF line endings, on every platform (FEAT-208). Tests compare
+# committed files byte for byte (the skill, the typed-response fixture, openapi.json); a Windows
+# checkout that converted them to CRLF failed those tests while nothing in the program was wrong.
+* text=auto eol=lf
