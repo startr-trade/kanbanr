@@ -728,6 +728,8 @@ struct Worked {
     prep: Option<PrepWork>,
     /// Refusals of the steps, in the order the cut always checked them.
     blocks: Vec<String>,
+    /// Nothing is planned into it (R-17).
+    empty: bool,
     patch: bool,
 }
 
@@ -853,6 +855,17 @@ fn work_out(
         actions.push((ReleaseAction::Branch, stage.clone()));
     }
     actions.sort_by_key(|(a, _)| *a);
+    // A release with nothing planned into it is never promoted (FEAT-212 R-17): it would ship
+    // nothing. A patch carries its parent's fixes, so it goes with none of its own.
+    let empty = release.parent.is_empty()
+        && !project
+            .features
+            .iter()
+            .any(|f| f.release.as_deref() == Some(version));
+    if empty {
+        actions.clear();
+        requires.clear();
+    }
     let has = |a: ReleaseAction| actions.iter().any(|(x, _)| *x == a);
     let stage_holding = |a: ReleaseAction| {
         gates
@@ -1394,12 +1407,15 @@ fn work_out(
     let reason = reason.trim();
     let needs_reason = direction == Direction::Back && reason.is_empty();
     let mut missing: Vec<String> = Vec::new();
+    if empty {
+        missing.push(empty_release(version));
+    }
     if needs_reason {
         missing.push(format!(
             "moving {version} back from {from} to {stage} needs a reason (--reason)"
         ));
     }
-    if direction == Direction::Again && steps.iter().all(|s| s.noop) {
+    if direction == Direction::Again && steps.iter().all(|s| s.noop) && !empty {
         missing.push(format!("{version} is already at {stage}"));
     }
     for c in conditions.iter().filter(|c| !c.holds) {
@@ -1505,8 +1521,14 @@ fn work_out(
         main,
         prep,
         blocks,
+        empty,
         patch,
     })
+}
+
+/// Why a release with nothing planned into it cannot be promoted, and how to plan into it.
+pub fn empty_release(version: &str) -> String {
+    format!("{version} has no items: plan some in with `kanbanr release plan {version} <CODE>…`")
 }
 
 fn items_finished(preview: &[CutPreview]) -> (bool, String) {
@@ -2078,6 +2100,9 @@ pub fn promote_with(
 /// refusal, word for word as the cut always gave it.
 fn refusal(w: &Worked) -> CoreError {
     let p = &w.plan;
+    if w.empty {
+        return CoreError::Unsupported(empty_release(&p.version));
+    }
     if p.needs_reason || (w.direction == Direction::Again && p.steps.iter().all(|s| s.noop)) {
         return CoreError::Unsupported(p.missing[0].clone());
     }
@@ -2308,8 +2333,28 @@ mod tests {
         )
         .unwrap();
         super::add(&store, "shop", "v1", "", "").unwrap();
+        // A release with nothing planned into it is never promoted (FEAT-212 R-17).
+        store
+            .add_milestone("shop", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        plan_done(&store, "v1");
         let repo = crate::coderepo::tests::scratch_repo(&format!("promote-{tag}"));
         (store, dir, repo)
+    }
+
+    /// A finished item planned into `version` (FEAT-212 R-17).
+    fn plan_done(store: &Store, version: &str) -> String {
+        let code = store
+            .add_feature("shop", &format!("Ships in {version}"), "", "M", None)
+            .unwrap()
+            .code;
+        for status in ["Scheduled", "Completed"] {
+            store
+                .move_feature_approved("shop", &code, status, None)
+                .unwrap();
+        }
+        super::plan(store, "shop", version, std::slice::from_ref(&code)).unwrap();
+        code
     }
 
     /// FEAT-183: the cut tags the release and fast-forwards main to exactly the tagged commit.
@@ -2560,6 +2605,7 @@ mod tests {
 
         // Main with commits the release lacks: refused, nothing moves.
         super::add(&store, "shop", "v2", "", "").unwrap();
+        plan_done(&store, "v2");
         promote("v2", "candidate").unwrap();
         on_release(&repo, "release/v2", "two", "two\n");
         commit_file(&repo, "hotfix", "on main\n", "hotfix on main");
@@ -2674,6 +2720,7 @@ mod tests {
 
         // Offline: the fetch fails, the last-fetched refs decide.
         super::add(&store, "shop", "v2", "", "").unwrap();
+        plan_done(&store, "v2");
         promote("v2", "candidate").unwrap();
         on_release(&repo, "release/v2", "two", "two\n");
         promote("v2", "main").unwrap();
@@ -2739,6 +2786,7 @@ mod tests {
         let (store, dir, repo) = board_and_repo("prepare");
         prepare_fixture(&repo);
         super::add(&store, "shop", "v0.2.0", "", "Gates").unwrap();
+        plan_done(&store, "v0.2.0");
         configure(&store, &format!("{THREE}{PREPARE}"));
         let plan = super::plan_promotion(
             &store,
@@ -3045,9 +3093,6 @@ mod tests {
              pushed], on_enter: [tag] }\n\
              release_prepare: { version_files: [{ path: Cargo.toml }] }\n",
         );
-        store
-            .add_milestone("shop", "M", "", vec![], Some("M".into()))
-            .unwrap();
         let code = store
             .add_feature("shop", "Unfinished", "", "M", None)
             .unwrap()

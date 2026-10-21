@@ -847,6 +847,21 @@ fn promote_through_the_daemon_uses_the_repository_it_was_started_in() {
     kanbanr(&["config", "cadence", "--releases", "on"]);
     kanbanr(&["release", "add", "v1.0.0"]);
     kanbanr(&["release", "add", "v2.0.0"]);
+    // A release with nothing planned into it is never promoted (FEAT-212 R-17).
+    kanbanr(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+    for (code, version) in [("FEAT-001", "v1.0.0"), ("FEAT-002", "v2.0.0")] {
+        kanbanr(&[
+            "feature",
+            "add",
+            "--title",
+            &format!("Ships in {version}"),
+            "--milestone",
+            "MS-001",
+        ]);
+        kanbanr(&["move", code, "In Progress"]);
+        kanbanr(&["move", code, "Completed"]);
+        kanbanr(&["release", "plan", version, code]);
+    }
 
     let start = |dir: &std::path::Path| -> (Daemon, String) {
         let port = free_port();
@@ -973,6 +988,19 @@ fn release_scratch(base: &std::path::Path) -> (PathBuf, PathBuf, PathBuf) {
     );
     run(&["config", "cadence", "--releases", "on"]);
     run(&["release", "add", "v1.0.0"]);
+    // A release with nothing planned into it is never promoted (FEAT-212 R-17): one finished item.
+    run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+    run(&[
+        "feature",
+        "add",
+        "--title",
+        "Ships in v1.0.0",
+        "--milestone",
+        "MS-001",
+    ]);
+    run(&["move", "FEAT-001", "In Progress"]);
+    run(&["move", "FEAT-001", "Completed"]);
+    run(&["release", "plan", "v1.0.0", "FEAT-001"]);
     (home, work, board)
 }
 
