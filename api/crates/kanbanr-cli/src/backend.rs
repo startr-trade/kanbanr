@@ -93,6 +93,11 @@ impl Backend {
         }
     }
 
+    /// The board this backend reads and writes, for core functions that take a store.
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
     /// A read that needs the project's code repository (FEAT-189: the git model reads its
     /// branches).
     pub fn get_in(&self, path: &str, repo: Option<&std::path::Path>) -> Result<String> {

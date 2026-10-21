@@ -869,6 +869,20 @@ pub fn role_problems(
     problems
 }
 
+/// A board record from YAML (or JSON: YAML is a superset) text a front end was handed — a
+/// charter, a definition, a process file (FEAT-176). The error is the parser's own, for the caller
+/// to word.
+pub fn from_yaml<T: serde::de::DeserializeOwned>(
+    text: &str,
+) -> std::result::Result<T, serde_yaml::Error> {
+    serde_yaml::from_str(text)
+}
+
+/// A board record as YAML, the way the board writes it (FEAT-176).
+pub fn to_yaml<T: Serialize>(value: &T) -> crate::Result<String> {
+    Ok(serde_yaml::to_string(value)?)
+}
+
 impl WorkflowFile {
     /// A hash of the process itself — everything but its header (FEAT-169). Two files that would
     /// govern work the same way have the same rev, whatever they are called.
@@ -876,6 +890,39 @@ impl WorkflowFile {
         let mut bare = self.clone();
         bare.process = None;
         crate::hash::stable_hash(&serde_yaml::to_string(&bare).unwrap_or_default())
+    }
+
+    /// A process file from its YAML (or JSON) text (FEAT-176): the one reader of a process file
+    /// a front end was handed. The error is the parser's own, for the caller to word.
+    pub fn from_yaml(text: &str) -> std::result::Result<WorkflowFile, serde_yaml::Error> {
+        serde_yaml::from_str(text)
+    }
+
+    /// This file as YAML, as it is saved and exported (FEAT-176).
+    pub fn to_yaml(&self) -> crate::Result<String> {
+        Ok(serde_yaml::to_string(self)?)
+    }
+
+    /// The body of `PUT /projects/{p}/config/workflow` that applies this file whole, gates,
+    /// cadence and estimate unit included (FEAT-176). `process` says which saved process it came
+    /// from; without one the body carries no `process` key. A caller that overrides a field
+    /// replaces its key, which keeps its place.
+    pub fn to_request(&self, process: Option<&ProcessSource>) -> serde_json::Value {
+        let mut body = serde_json::json!({
+            "statuses": self.statuses,
+            "transitions": self.transitions,
+            "default_state": self.default_state,
+            "displayed_states": self.displayed_states,
+            "no_op_states": self.no_op_states,
+            "terminal_states": self.terminal_states,
+            "gates": self.gates,
+            "cadence": (!self.cadence.is_off()).then_some(&self.cadence),
+            "estimate_unit": (!self.estimate_unit.is_days()).then_some(self.estimate_unit),
+        });
+        if let Some(source) = process {
+            body["process"] = serde_json::json!(source);
+        }
+        body
     }
 
     /// The version this file carries, 0 when it has no header.

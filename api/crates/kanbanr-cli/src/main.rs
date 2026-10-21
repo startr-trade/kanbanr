@@ -4267,7 +4267,7 @@ fn run_charter(cli: &Cli, client: &Backend, cmd: &CharterCmd) -> anyhow::Result<
                 }
             };
             // YAML is a superset of JSON, so one parser accepts either form.
-            let charter: kanbanr_core::Charter = serde_yaml::from_str(&raw)
+            let charter: kanbanr_core::Charter = kanbanr_core::config::from_yaml(&raw)
                 .map_err(|e| anyhow::anyhow!("invalid charter (YAML or JSON expected): {e}"))?;
             let resp = client.write(Method::Put, &path, Some(serde_json::to_value(charter)?))?;
             let saved: kanbanr_core::Charter = serde_json::from_str(&resp)?;
@@ -5018,7 +5018,7 @@ fn run_process_check(cli: &Cli, source: &str) -> anyhow::Result<()> {
         if source == "-" || std::path::Path::new(source).is_file() {
             let text = read_process_text(source)?;
             let label = if source == "-" { "the draft" } else { source };
-            let file = serde_yaml::from_str(&text)
+            let file = WorkflowFile::from_yaml(&text)
                 .map_err(|e| anyhow::anyhow!("{label} is not a process file: {e}"))?;
             (label.to_string(), file)
         } else {
@@ -5087,14 +5087,6 @@ fn personal_processes() -> Option<std::path::PathBuf> {
     kanbanr_core::library::personal_dir(project::home_dir().as_deref())
 }
 
-/// A process saved on this board, if there is one by that name.
-fn board_process(client: &Backend, name: &str) -> Option<kanbanr_core::config::WorkflowFile> {
-    let v: Value = serde_json::from_str(&client.get(&format!("/processes/{name}")).ok()?).ok()?;
-    (v["library"] == "board")
-        .then(|| serde_json::from_value(v["file"].clone()).ok())
-        .flatten()
-}
-
 /// A process by name: the board's, then the personal one, then the built-in one (FEAT-169).
 fn resolve_process(
     cli: &Cli,
@@ -5103,21 +5095,15 @@ fn resolve_process(
     kanbanr_core::config::WorkflowFile,
     kanbanr_core::config::Library,
 )> {
-    let board = board_here(cli).and_then(|c| board_process(&c, name));
-    let personal = match personal_processes() {
-        Some(dir) => kanbanr_core::library::get(&dir, name)?,
-        None => None,
-    };
-    kanbanr_core::library::pick(name, board, personal).ok_or_else(|| {
-        anyhow::anyhow!(
-            "no process named '{name}' on this board, in your personal library or built in — \
-             `kanbanr process list` shows them"
-        )
-    })
+    let board = board_here(cli);
+    Ok(kanbanr_core::library::resolve(
+        board.as_ref().map(Backend::store),
+        name,
+        personal_processes().as_deref(),
+    )?)
 }
 
-/// A personal process the board does not shadow, with where it came from: what the board must be
-/// sent, file and all, because it cannot read the user's home folder (FEAT-169).
+/// A personal process the board does not shadow, with where it came from (FEAT-169).
 fn personal_only(
     client: &Backend,
     name: &str,
@@ -5127,108 +5113,49 @@ fn personal_only(
         kanbanr_core::config::ProcessSource,
     )>,
 > {
-    if board_process(client, name).is_some() || kanbanr_core::config::is_builtin(name) {
-        return Ok(None);
-    }
-    let Some(dir) = personal_processes() else {
-        return Ok(None);
-    };
-    Ok(kanbanr_core::library::get(&dir, name)?.map(|file| {
-        let source = file.source(name, kanbanr_core::config::Library::Personal);
-        (file, source)
-    }))
+    Ok(kanbanr_core::library::personal_only(
+        client.store(),
+        name,
+        personal_processes().as_deref(),
+    )?)
 }
 
 /// `kanbanr process list` (FEAT-169).
 fn run_process_list(cli: &Cli) -> anyhow::Result<()> {
-    let mut rows: Vec<Value> = match board_here(cli) {
-        Some(client) => serde_json::from_str(&client.get("/processes")?)?,
-        None => kanbanr_core::config::presets()
-            .into_iter()
-            .map(|(name, about)| {
-                json!({ "name": name, "library": "builtin", "version": 0,
-                        "description": about, "used_by": [] })
-            })
-            .collect(),
-    };
-    let board_names: Vec<String> = rows
-        .iter()
-        .filter(|r| r["library"] == "board")
-        .filter_map(|r| r["name"].as_str().map(String::from))
-        .collect();
-    // The board lists personal processes only as "used by these projects"; the files are on
-    // people's machines. Yours fill in from your library; any left are someone else's.
-    let (mut used_personal, rest): (Vec<Value>, Vec<Value>) =
-        rows.into_iter().partition(|r| r["library"] == "personal");
-    rows = rest;
-    let mut mine = Vec::new();
-    if let Some(dir) = personal_processes() {
-        for (name, file) in kanbanr_core::library::list(&dir)? {
-            let used = used_personal
-                .iter()
-                .position(|r| r["name"] == name.as_str())
-                .map(|i| used_personal.remove(i)["used_by"].clone())
-                .unwrap_or(json!([]));
-            mine.push(json!({
-                "name": name,
-                "library": "personal",
-                "version": file.version(),
-                "description": file.process.as_ref().map(|h| h.description.clone()).unwrap_or_default(),
-                "rev": file.content_rev(),
-                "used_by": used,
-                "shadowed_by_board": board_names.contains(&name),
-            }));
-        }
-    }
-    for r in used_personal {
-        mine.push(json!({
-            "name": r["name"], "library": "personal", "version": 0,
-            "description": "someone's personal process — not in your library",
-            "used_by": r["used_by"], "not_here": true,
-        }));
-    }
-    let at = rows
-        .iter()
-        .position(|r| r["library"] == "builtin")
-        .unwrap_or(rows.len());
-    rows.splice(at..at, mine);
+    let board = board_here(cli);
+    let rows = kanbanr_core::library::list(
+        board.as_ref().map(Backend::store),
+        personal_processes().as_deref(),
+    )?;
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
     }
     for r in &rows {
-        let library = match r["library"].as_str().unwrap_or("") {
+        let library = match r.library.as_str() {
             "builtin" => "built-in",
             other => other,
         };
-        let version = match r["version"].as_u64() {
+        let version = match r.version {
             Some(0) | None => String::new(),
             Some(v) => format!("v{v}"),
         };
-        let used: Vec<&str> = r["used_by"]
-            .as_array()
-            .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
-            .unwrap_or_default();
         let mut note = String::new();
-        if !used.is_empty() {
-            note = format!("  (used by {})", used.join(", "));
+        if !r.used_by.is_empty() {
+            note = format!("  (used by {})", r.used_by.join(", "));
         }
-        if r["shadowed_by_board"] == true {
+        if r.shadowed_by_board == Some(true) {
             note.push_str("  (the board's copy is used)");
         }
         // The first sentence: the built-in processes describe themselves at length.
-        let about = r["description"].as_str().unwrap_or("");
+        let about = r.description.as_deref().unwrap_or("");
         let about = about
             .split_once(". ")
             .map_or(about, |(first, _)| first)
             .trim_end_matches('.');
         println!(
             "{:<18} {:<9} {:<4} {}{}",
-            r["name"].as_str().unwrap_or(""),
-            library,
-            version,
-            about,
-            note
+            r.name, library, version, about, note
         );
     }
     Ok(())
@@ -5252,7 +5179,7 @@ fn run_process_show(cli: &Cli, name: &str) -> anyhow::Result<()> {
         return Ok(());
     }
     println!("# {name} ({})\n", library.as_str());
-    println!("```yaml\n{}```\n", serde_yaml::to_string(&file)?);
+    println!("```yaml\n{}```\n", file.to_yaml()?);
     println!("{agreement}\n```mermaid\n{diagram}```");
     Ok(())
 }
@@ -5268,7 +5195,7 @@ fn run_process_save(
 ) -> anyhow::Result<()> {
     let board = board_here(cli);
     let file: kanbanr_core::config::WorkflowFile = match from_file {
-        Some(src) => serde_yaml::from_str(&read_process_text(src)?)
+        Some(src) => kanbanr_core::config::WorkflowFile::from_yaml(&read_process_text(src)?)
             .map_err(|e| anyhow::anyhow!("{src} is not a process file: {e}"))?,
         None => {
             let client = board.as_ref().ok_or_else(|| {
@@ -5298,7 +5225,7 @@ fn run_process_save(
                  with --personal, or run this where the board is"
             )
         })?;
-        let before = board_process(client, name);
+        let before = client.store().board_process(name).ok().flatten();
         let resp = client.write(
             Method::Put,
             &format!("/processes/{name}"),
@@ -5313,8 +5240,15 @@ fn run_process_save(
     let unchanged = before.as_ref() == Some(&saved);
     // The projects on this board that are now behind (FEAT-171): said where it is acted on, so the
     // update is offered for each of them — not only for the project the save was made from.
+    let library = if personal {
+        kanbanr_core::config::Library::Personal
+    } else {
+        kanbanr_core::config::Library::Board
+    };
     let behind = match &board {
-        Some(client) => projects_behind(client, name, personal, &saved)?,
+        Some(client) => {
+            kanbanr_core::library::behind(client.store(), name, library, &saved.content_rev())?
+        }
         None => Vec::new(),
     };
     if cli.json {
@@ -5361,58 +5295,19 @@ fn run_process_save(
     Ok(())
 }
 
-/// The projects on this board using process `name` from the same library at a version other than
-/// `saved`, with the version each has.
-fn projects_behind(
-    client: &Backend,
-    name: &str,
-    personal: bool,
-    saved: &kanbanr_core::config::WorkflowFile,
-) -> anyhow::Result<Vec<(String, u32)>> {
-    use kanbanr_core::config::Library;
-    let library = if personal {
-        Library::Personal
-    } else {
-        Library::Board
-    };
-    let rev = saved.content_rev();
-    let ids: Vec<Value> = serde_json::from_str(&client.get("/projects")?)?;
-    let mut out = Vec::new();
-    for id in ids.iter().filter_map(|v| v["id"].as_str()) {
-        let Ok(project) = get_project(client, id) else {
-            continue;
-        };
-        if let Some(src) = &project.config.process
-            && src.name == name
-            && src.library == library
-            && src.rev != rev
-        {
-            out.push((id.to_string(), src.version));
-        }
-    }
-    Ok(out)
-}
-
-/// The current copy of the process a project was given, from the library it was given from — not
-/// by lookup order: an update brings a project its own process's new version (FEAT-170).
+/// The current copy of the process a project was given, from the library it was given from
+/// (FEAT-170).
 fn current_copy(
     client: &Backend,
     config: &kanbanr_core::config::ProjectConfig,
     source: &kanbanr_core::config::ProcessSource,
 ) -> anyhow::Result<Option<kanbanr_core::config::WorkflowFile>> {
-    use kanbanr_core::config::Library;
-    // As this project would have it: the parts of the method it turned off stay off (FEAT-193).
-    let shape =
-        |f: kanbanr_core::config::WorkflowFile| kanbanr_core::method::shaped(f, &config.method);
-    Ok(match source.library {
-        Library::Board => board_process(client, &source.name),
-        Library::Personal => match personal_processes() {
-            Some(dir) => kanbanr_core::library::get(&dir, &source.name)?,
-            None => None,
-        },
-        Library::Builtin => kanbanr_core::config::preset(&source.name).ok(),
-    }
-    .map(shape))
+    Ok(kanbanr_core::library::current_copy(
+        client.store(),
+        config,
+        source,
+        personal_processes().as_deref(),
+    )?)
 }
 
 /// How a project stands against its saved process, the personal case included — which only this
@@ -5421,14 +5316,9 @@ fn project_drift(
     client: &Backend,
     project: &Project,
 ) -> anyhow::Result<Option<kanbanr_core::library::Drift>> {
-    let Some(source) = &project.config.process else {
-        return Ok(None);
-    };
-    let current = current_copy(client, &project.config, source)?;
-    Ok(kanbanr_core::library::drift(
-        &project.config,
-        current.as_ref(),
-    ))
+    Ok(client
+        .store()
+        .process_drift(project, personal_processes().as_deref())?)
 }
 
 /// `process status`, `diff` and `update` (FEAT-170): these read a project, so they need a board.
@@ -5544,18 +5434,7 @@ fn run_process_drift(cli: &Cli, client: &Backend, cmd: &ProcessCmd) -> anyhow::R
             let resp = client.write(
                 Method::Put,
                 &format!("/projects/{p}/config/workflow"),
-                Some(json!({
-                    "statuses": file.statuses,
-                    "transitions": file.transitions,
-                    "default_state": file.default_state,
-                    "displayed_states": file.displayed_states,
-                    "no_op_states": file.no_op_states,
-                    "terminal_states": file.terminal_states,
-                    "gates": file.gates,
-                    "cadence": (!file.cadence.is_off()).then_some(&file.cadence),
-                    "estimate_unit": (!file.estimate_unit.is_days()).then_some(file.estimate_unit),
-                    "process": new_source,
-                })),
+                Some(file.to_request(Some(&new_source))),
             )?;
             let version = match file.version() {
                 0 => String::new(),
@@ -7077,8 +6956,8 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                     }
                 };
                 // YAML is a superset of JSON, so one parser accepts either form.
-                let def: kanbanr_core::models::FeatureDefinition = serde_yaml::from_str(&raw)
-                    .map_err(|e| {
+                let def: kanbanr_core::models::FeatureDefinition =
+                    kanbanr_core::config::from_yaml(&raw).map_err(|e| {
                         anyhow::anyhow!("invalid definition (YAML or JSON expected): {e}")
                     })?;
                 serde_json::to_value(def)?
@@ -7604,29 +7483,19 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             if *export {
                 let project = get_project(client, &p)?;
                 let file = kanbanr_core::config::WorkflowFile::from_config(&project.config);
-                print!("{}", serde_yaml::to_string(&file)?);
+                print!("{}", file.to_yaml()?);
                 return Ok(());
             }
             // Import a whole workflow, gates included, from a file.
             if let Some(src) = from_file {
                 let text = std::fs::read_to_string(src)
                     .map_err(|e| anyhow::anyhow!("could not read {src}: {e}"))?;
-                let file: kanbanr_core::config::WorkflowFile = serde_yaml::from_str(&text)
+                let file = kanbanr_core::config::WorkflowFile::from_yaml(&text)
                     .map_err(|e| anyhow::anyhow!("{src} is not a workflow file: {e}"))?;
                 let resp = client.write(
                     Method::Put,
                     &format!("/projects/{p}/config/workflow"),
-                    Some(json!({
-                        "statuses": file.statuses,
-                        "transitions": file.transitions,
-                        "default_state": file.default_state,
-                        "displayed_states": file.displayed_states,
-                        "no_op_states": file.no_op_states,
-                        "terminal_states": file.terminal_states,
-                        "gates": file.gates,
-                        "cadence": (!file.cadence.is_off()).then_some(&file.cadence),
-                        "estimate_unit": (!file.estimate_unit.is_days()).then_some(file.estimate_unit),
-                    })),
+                    Some(file.to_request(None)),
                 )?;
                 print_write(cli, &resp, format!("workflow loaded from {src}"));
                 return Ok(());
@@ -7680,21 +7549,25 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             if let Some(name) = preset
                 && let Some((file, source)) = personal_only(client, name)?
             {
+                // Any flags given alongside still override the file's fields.
+                let mut body = file.to_request(Some(&source));
+                for (key, flag) in [
+                    ("statuses", statuses),
+                    ("displayed_states", displayed_states),
+                    ("no_op_states", no_op_states),
+                    ("terminal_states", terminal_states),
+                ] {
+                    if let Some(v) = flag {
+                        body[key] = json!(v);
+                    }
+                }
+                if let Some(v) = default_state {
+                    body["default_state"] = json!(v);
+                }
                 let resp = client.write(
                     Method::Put,
                     &format!("/projects/{p}/config/workflow"),
-                    Some(json!({
-                        "statuses": statuses.clone().unwrap_or(file.statuses),
-                        "transitions": file.transitions,
-                        "default_state": default_state.clone().unwrap_or(file.default_state),
-                        "displayed_states": displayed_states.clone().unwrap_or(file.displayed_states),
-                        "no_op_states": no_op_states.clone().unwrap_or(file.no_op_states),
-                        "terminal_states": terminal_states.clone().unwrap_or(file.terminal_states),
-                        "gates": file.gates,
-                        "cadence": (!file.cadence.is_off()).then_some(&file.cadence),
-                        "estimate_unit": (!file.estimate_unit.is_days()).then_some(file.estimate_unit),
-                        "process": source,
-                    })),
+                    Some(body),
                 )?;
                 print_write(
                     cli,

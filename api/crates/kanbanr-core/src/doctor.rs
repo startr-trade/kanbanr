@@ -428,7 +428,7 @@ fn scan_charter(charter: &crate::Charter, project: &str, report: &mut Report) {
 /// A project whose saved process has moved on, or whose workflow was edited after it was applied
 /// (FEAT-170). Reported, never applied: a process change reaches a project when its user says so.
 fn scan_process_drift(store: &Store, project: &Project, report: &mut Report) {
-    let Ok(Some(drift)) = store.process_drift(project) else {
+    let Ok(Some(drift)) = store.process_drift(project, None) else {
         return;
     };
     for message in drift.messages() {

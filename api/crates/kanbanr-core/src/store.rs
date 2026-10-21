@@ -168,19 +168,21 @@ impl Store {
         }
     }
 
-    /// How a project stands against its saved process (FEAT-170), for one on the board or built
-    /// in. `None` when it came from no saved process, or from a personal one, which only the
-    /// user's own kanbanr can see.
-    pub fn process_drift(&self, project: &Project) -> Result<Option<crate::library::Drift>> {
-        use crate::config::Library;
+    /// How a project stands against its saved process (FEAT-170). `None` when it came from no
+    /// saved process, or from a personal one and there is no `personal_dir` to look in: only the
+    /// user's own kanbanr can see that library, so the daemon passes none.
+    pub fn process_drift(
+        &self,
+        project: &Project,
+        personal_dir: Option<&Path>,
+    ) -> Result<Option<crate::library::Drift>> {
         let Some(source) = &project.config.process else {
             return Ok(None);
         };
-        let current = match source.library {
-            Library::Board => self.board_process(&source.name)?,
-            Library::Builtin => crate::config::preset(&source.name).ok(),
-            Library::Personal => return Ok(None),
-        };
+        if source.library == crate::config::Library::Personal && personal_dir.is_none() {
+            return Ok(None);
+        }
+        let current = crate::library::copy_in(self, source, personal_dir)?;
         Ok(crate::library::drift(&project.config, current.as_ref()))
     }
 
