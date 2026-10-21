@@ -6,6 +6,13 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`mermaid-lint` on crates.io (FEAT-200).** The diagram lint kanbanr runs on every write, as a
+  standalone library with no dependencies: it finds the Mermaid diagrams in Markdown and reports
+  each mistake Pele or Mermaid would reject, with its line and rule, and flags no diagram Pele
+  draws. The release workflow publishes it beside `ears-classifier`.
+
 ## [0.2.0] - 2026-10-21
 
 ### Added

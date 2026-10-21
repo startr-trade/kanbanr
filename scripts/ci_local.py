@@ -169,6 +169,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
         },
         "crates": {
             "Publish ears-classifier": "publishes to crates.io",
+            "Publish mermaid-lint": "publishes to crates.io",
         },
     },
 }
