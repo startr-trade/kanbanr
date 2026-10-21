@@ -107,6 +107,20 @@ board.
 An unknown check, an unknown status or an unknown Zachman column is refused when the workflow is
 saved. A gate that could never match is a guardrail that silently isn't there.
 
+`diagrams_valid` is judged when the item moves, never from a cached result, so fixing the diagram
+unblocks the very next move. To keep a broken diagram from moving anywhere, ask for it on every
+gate:
+
+```yaml
+gates:
+  Scheduled:   {requires: [approved, diagrams_valid]}
+  In Progress: {requires: [approved, diagrams_valid]}
+  Completed:   {requires: [tests_green, diagrams_valid]}
+```
+
+A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (semicolon_in_text)`.
+`warns: [diagrams_valid]` reports the same without refusing.
+
 ### When a gate isn't met
 
 - **A blocking gate** refuses the move and lists everything missing.
