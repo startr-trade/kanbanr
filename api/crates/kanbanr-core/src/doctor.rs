@@ -83,6 +83,7 @@ pub fn run(store: &Store) -> Result<Report> {
             scan_references(store, project, &mut report);
         }
         scan_declared_docs(project, &charter, &ctx, &mut report);
+        scan_diagrams(store, project, &mut report);
         scan_method_choice(project, &mut report);
     }
     scan_identity(store, "board", &mut report);
@@ -116,6 +117,7 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
         scan_references(store, &project, &mut report);
     }
     scan_declared_docs(&project, &charter, &ctx, &mut report);
+    scan_diagrams(store, &project, &mut report);
     scan_method_choice(&project, &mut report);
     scan_identity(store, id, &mut report);
     scan_readme(store, id, &mut report);
@@ -589,6 +591,37 @@ fn scan_declared_docs(
 /// A project from before the method that never chose (FEAT-193, Q3): its workflow has none of the
 /// method's gates and it has not said whether it wants them. Said once per project; either choice
 /// silences it.
+/// Every diagram lint finding on the board (FEAT-200): in every item's spec, finished items too,
+/// and in every markdown doc. Warnings — what a `diagrams_valid` gate or a strict project would
+/// refuse, found before then.
+fn scan_diagrams(store: &Store, project: &Project, report: &mut Report) {
+    let mut push = |code: Option<String>, f: crate::diagrams::DiagramFinding| {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.id.clone(),
+            code,
+            message: f.describe(),
+        });
+    };
+    for feature in &project.features {
+        let file = format!("{} spec", feature.code);
+        for f in crate::diagrams::lint_markdown(&file, &feature.specification) {
+            push(Some(feature.code.clone()), f);
+        }
+    }
+    for path in store.list_docs(&project.id).unwrap_or_default() {
+        if !crate::diagrams::is_markdown_path(&path) {
+            continue;
+        }
+        let Ok(text) = store.read_doc(&project.id, &path) else {
+            continue;
+        };
+        for f in crate::diagrams::lint_markdown(&format!("docs/{path}"), &text) {
+            push(None, f);
+        }
+    }
+}
+
 fn scan_method_choice(project: &Project, report: &mut Report) {
     if !project.config.method.chosen_at.is_empty() {
         return;
@@ -829,6 +862,70 @@ mod tests {
         )
         .unwrap();
         (store, dir)
+    }
+
+    /// FEAT-200 R-11: doctor lists every diagram lint finding on the board — in each item's spec
+    /// and in each markdown doc — naming file, block, line and rule; clean diagrams say nothing.
+    #[test]
+    fn doctor_lists_diagram_findings() {
+        let (store, dir) = fixture();
+        let spec = "# Spec\n\n```mermaid\nsequenceDiagram\n  A->>B: one; two\n```\n";
+        let item = store.add_feature("demo", "Flow", spec, "M", None).unwrap();
+        let other = store
+            .add_feature("demo", "Other", "```mermaid\nflowchrt\n```\n", "M", None)
+            .unwrap();
+        store
+            .add_feature("demo", "Clean", "```mermaid\npie\n```\n", "M", None)
+            .unwrap();
+        store
+            .write_doc(
+                "demo",
+                "architecture/flow.md",
+                "# Flow\n\n```mermaid\nflowchart LR\n  A --> end\n```\n",
+            )
+            .unwrap();
+        store
+            .write_doc(
+                "demo",
+                "notes.md",
+                "```mermaid\nflowchart LR\n  A --> B\n```\n",
+            )
+            .unwrap();
+
+        for report in [run(&store).unwrap(), run_project(&store, "demo").unwrap()] {
+            let found: Vec<&Issue> = report
+                .issues
+                .iter()
+                .filter(|i| i.message.contains("diagram #"))
+                .collect();
+            assert_eq!(found.len(), 3, "{found:#?}");
+            assert!(found.iter().all(|i| i.severity == Severity::Warning));
+            let spec_issue = found
+                .iter()
+                .find(|i| i.code.as_deref() == Some(item.code.as_str()))
+                .unwrap();
+            assert_eq!(
+                spec_issue.message,
+                format!(
+                    "{} spec, diagram #1, line 5: `;` ends the statement early, so the rest of the \
+                     message is lost — use a comma or words (semicolon_in_text)",
+                    item.code
+                )
+            );
+            assert!(
+                found
+                    .iter()
+                    .any(|i| i.code.as_deref() == Some(other.code.as_str())
+                        && i.message.ends_with("(unknown_type)"))
+            );
+            assert!(found.iter().any(|i| {
+                i.code.is_none()
+                    && i.message
+                        .starts_with("docs/architecture/flow.md, diagram #1, line 5:")
+                    && i.message.ends_with("(end_as_id)")
+            }));
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// FEAT-181: a link to an item, requirement or doc the board does not have is reported, with

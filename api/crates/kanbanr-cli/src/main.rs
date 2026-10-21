@@ -925,6 +925,14 @@ enum ConfigCmd {
         /// design | design-review | docs | docs-folded | links.
         parts: Vec<String>,
     },
+    /// Whether a write carrying a Mermaid diagram the lint finds a problem in is refused
+    /// (FEAT-200). Off by default: the write succeeds and the problems are printed as warnings.
+    /// With no flag, shows the setting.
+    Diagrams {
+        /// Refuse writes whose diagrams have problems: on | off.
+        #[arg(long, value_parser = ["on", "off"])]
+        strict: Option<String>,
+    },
     /// Whether this project works in sprints and releases, and what it estimates in (FEAT-121).
     /// Both are off unless switched on — most projects follow a different rhythm.
     Cadence {
@@ -3508,6 +3516,28 @@ fn print_catch_up(v: &Value) {
 
 /// What a gate let through but reported (FEAT-113): its `warns`, a `warn` gate's gaps, or what an
 /// override passed over. Said on stderr so a script reading the move's output is unaffected.
+/// The diagram lint's findings on a write (FEAT-200), one per line on stderr: at the top level of
+/// the response, and on each of a batch's results. Silent with `--json`, which carries them.
+fn print_diagram_warnings(cli: &Cli, resp: &str) {
+    if cli.json {
+        return;
+    }
+    let Ok(v) = serde_json::from_str::<Value>(resp) else {
+        return;
+    };
+    let results = v["results"].as_array().into_iter().flatten();
+    for holder in std::iter::once(&v).chain(results) {
+        let Some(found) = holder.get("diagram_warnings") else {
+            continue;
+        };
+        let found: Vec<kanbanr_core::diagrams::DiagramFinding> =
+            serde_json::from_value(found.clone()).unwrap_or_default();
+        for f in found {
+            eprintln!("  diagram: {}", f.describe());
+        }
+    }
+}
+
 fn print_gate_warnings(cli: &Cli, resp: &str) {
     if cli.json {
         return; // the warnings are in the JSON already
@@ -5510,6 +5540,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             } else {
                 client.write(Method::Post, &path, Some(body))?
             };
+            print_diagram_warnings(cli, &resp);
             if cli.json {
                 println!("{}", pretty(&resp));
                 return Ok(());
@@ -6217,6 +6248,7 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                     field(&resp, "status")
                 ),
             );
+            print_diagram_warnings(cli, &resp);
             Ok(())
         }
         FeatureCmd::List {
@@ -6373,6 +6405,7 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                 Some(body),
             )?;
             print_write(cli, &resp, format!("updated {}", field(&resp, "code")));
+            print_diagram_warnings(cli, &resp);
             Ok(())
         }
     }
@@ -6617,6 +6650,30 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                     }
                 };
                 println!("{name:<13} {line}");
+            }
+            Ok(())
+        }
+        ConfigCmd::Diagrams { strict } => {
+            let resp = match strict {
+                Some(v) => client.write(
+                    Method::Put,
+                    &format!("/projects/{p}/config/diagrams"),
+                    Some(json!({ "strict": v == "on" })),
+                )?,
+                None => client.get(&format!("/projects/{p}/config/diagrams"))?,
+            };
+            let v: Value = serde_json::from_str(&resp)?;
+            let on = if v["strict"].as_bool().unwrap_or(false) {
+                "on"
+            } else {
+                "off"
+            };
+            if strict.is_some() {
+                print_write(cli, &resp, format!("diagrams strict: {on}"));
+            } else if cli.json {
+                println!("{}", pretty(&resp));
+            } else {
+                println!("strict: {on}");
             }
             Ok(())
         }
@@ -7445,6 +7502,7 @@ fn run_doc(cli: &Cli, client: &Backend, cmd: &DocCmd) -> anyhow::Result<()> {
                     Some(json!({ "path": path, "content": String::from_utf8_lossy(&bytes) })),
                 )?;
                 print_write(cli, &resp, format!("wrote doc {}", field(&resp, "path")));
+                print_diagram_warnings(cli, &resp);
                 return Ok(());
             }
             let resp = client.write(
@@ -7453,6 +7511,7 @@ fn run_doc(cli: &Cli, client: &Backend, cmd: &DocCmd) -> anyhow::Result<()> {
                 Some(json!({ "path": path, "content": content.clone().unwrap_or_default() })),
             )?;
             print_write(cli, &resp, format!("wrote doc {}", field(&resp, "path")));
+            print_diagram_warnings(cli, &resp);
             Ok(())
         }
         DocCmd::List => {

@@ -40,6 +40,35 @@ Docs are more than text — the viewer renders **diagrams** and **embedded image
   ```
   ````
 
+- **Diagrams are checked when they are written** (FEAT-200). Every `mermaid` block in a spec or a
+  markdown doc is linted on `feature add`/`edit`, `doc add` and `batch`, and the problems are
+  printed as warnings — the write still succeeds:
+
+  ```text
+  created FEAT-012 (Planned)
+    diagram: FEAT-012 spec, diagram #1, line 14: `;` ends the statement early, so the rest of the message is lost — use a comma or words (semicolon_in_text)
+  ```
+
+  `kanbanr doctor` lists every problem on the board, and a gate can require `diagrams_valid` (see
+  [Processes](processes.md#the-checks)). A project that wants a broken diagram refused outright turns
+  on strict mode with `kanbanr config diagrams --strict on`; a refused write changes nothing, and a
+  batch carrying one changes nothing at all.
+
+  The lint catches the common mistakes, each named by its rule: an empty block or one with no
+  diagram type (`empty_block`, `unknown_type`); a `;` with text after it in a sequence message, note
+  or alias, or a class relation label (`semicolon_in_text`); `" | { } ( ) [ ]` in an unquoted
+  flowchart label, or a label never closed (`label_punctuation`, `unbalanced_label`); `end` as a
+  node or participant id (`end_as_id`); a `subgraph`, `alt`, `loop` or other block not closed by
+  `end`, or unbalanced `{}` (`unbalanced_block`); and a sequence line that is no statement
+  (`unknown_statement`). It flags only what [Pele](https://pele.run), which draws the monitor's
+  and the book's diagrams, rejects — Pele is the authority, and the review page runs its real
+  parse before Approve.
+
+  Two habits avoid nearly all of it: **quote flowchart labels** — `A["f(x) {y}"]`, not `A[f(x)]` —
+  and **keep sequence messages to plain words**, without `;`, braces or quotes. GitHub's own Mermaid
+  is stricter than Pele: it rejects `A[x; y]`, which Pele draws, so quoting is the advice even where
+  the lint is silent.
+
 - **Any other diagram tool** — PlantUML, Graphviz/DOT, D2, Excalidraw, draw.io — works too: export
   it to **PNG/SVG** and embed it as an image asset (as above). Mermaid blocks also render natively on
   GitHub, so the same docs look right in your repo.

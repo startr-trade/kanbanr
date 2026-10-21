@@ -334,6 +334,7 @@ organisation's own process file changes what you ask with nothing changed here:
 | `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; the active sprint; planned releases) |
 | `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
 | `docs_updated` | **never a question** — fold the design into each doc in `affects_docs` and say which you changed; if the item names none, ask whether it really changes no architecture doc |
+| `diagrams_valid` | **never a question** — fix each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then run `kanbanr doctor` to confirm none is left |
 
 Warnings go into the plan with a choice: fix it, or go ahead with the warning on record. When more
 than one next stage is possible, ask which. Head the plan with the stage's own `purpose`.
@@ -389,6 +390,26 @@ handed out and tracked.
 A project makes the section a condition of moving on with
 `spec_sections: [Design]` in the build stage's `requires`. If it also wants a person to review the
 design before build, it adds `signoffs: [design-review]` to the same gate.
+
+### Diagrams
+
+A design usually carries Mermaid diagrams, and a broken one draws as an error the reviewer finds at
+approval time. kanbanr lints every `mermaid` block when you write a spec or a doc and prints each
+problem as `diagram: <file>, diagram #n, line N: … (rule)` on stderr; fix it before you go on, not
+after. Write them so they draw:
+- **Quote flowchart labels:** `A["f(x) {y}"]`, never `A[f(x)]`. Parentheses, braces, brackets,
+  `|` and quotes inside an unquoted label break it, and GitHub's Mermaid also rejects a `;` there.
+- **Keep sequence messages to plain words:** no `;` (it ends the statement and cuts the message in
+  half), no braces, no quotes, no JSON. Describe the payload in words.
+- **Never use `end` as an id** — not as a node, a subgraph or a participant. Call it `done` or
+  `finish`.
+- Close every `subgraph`, `alt`, `loop`, `opt` and `par` with `end`.
+- **Run `kanbanr doctor` after writing diagrams**: it lists every diagram problem on the board, with
+  file, diagram number, line and rule. The Review page parses each diagram with Pele before it
+  offers Approve, so a broken one blocks the approval you are waiting for.
+
+A project can refuse broken diagrams outright (`kanbanr config diagrams --strict on`) or require
+`diagrams_valid` on a gate. Both are the user's choice; never switch them yourself.
 
 ### A new item: scope it in plan mode
 
@@ -606,6 +627,9 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
 - A commit may add `Docs: design/mirror.md` and `ADR: ADR-0003`; both are checked against the
   board like any other reference.
 - `kanbanr trace <MS-006> --zachman` reports which of the six columns nothing in scope addresses.
+- **Diagrams draw, or the item does not move.** A `diagrams_valid` gate refuses a move while the
+  spec or a doc in `affects_docs` has a Mermaid diagram the lint rejects; `kanbanr doctor` lists the
+  same problems first, so fix them there before calling the item done.
 - **The method is on by default.** Every built-in process asks for the Design and its
   `design-review` at the build stage, and `docs_updated` with `docs-folded` at the integrate stage
   (`kanbanr config method` shows where). Never turn a part off yourself: it is the user's choice,

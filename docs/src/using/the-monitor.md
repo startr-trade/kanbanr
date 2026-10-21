@@ -231,6 +231,14 @@ through; `kanbanr doctor` lists the same ones. A requirement link lands on that 
 
 ![An item's page](../images/feature.png)
 
+Before you approve, the **Review** page parses every Mermaid diagram the item's brief covers — its
+spec and each doc in its `affects_docs` — with Pele, the library that draws them (FEAT-200). Each
+one that does not parse is listed under **Diagrams** with its file, diagram number and line, and a
+link to the source; **Approve** (or **Ratify**) stays disabled until all of them parse, and while
+the check is still running. Fix the spec and the button comes back on the next live refresh. In a
+doc, a diagram that does not draw keeps its source on the page, with the error and its line under
+it.
+
 | | | |
 |---|---|---|
 | ![Review: approve, ratify, sign off](../images/review.png) | ![The charter, goals and lessons](../images/charter.png) | ![The workflow and its gates](../images/workflow.png) |

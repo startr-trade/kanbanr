@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, type MouseEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import DOMPurify from "dompurify";
 import { markdownToSafeHtml, safeSvg } from "../markdownHtml";
+import { locateError } from "../diagramCheck";
 import { appHref } from "../runtimeConfig";
 import { useBoardIndex } from "../useBoardIndex";
 
@@ -69,10 +70,22 @@ export default function Markdown({
           try {
             const { svg } = render(src, { idPrefix: `d${diagramSeq++}-` });
             wrap.innerHTML = safeSvg(svg);
+            host.replaceWith(wrap);
           } catch (e) {
-            wrap.textContent = "diagram error: " + (e instanceof Error ? e.message : String(e));
+            // A diagram that does not draw keeps its source, with the error and its line under it
+            // (FEAT-200): "Syntax error" alone said neither what nor where. Text only, never HTML.
+            const { line, message } = locateError(e, 1);
+            const source = document.createElement("pre");
+            source.className = "diagram-source";
+            source.textContent = src;
+            const error = document.createElement("div");
+            error.className = "diagram-error";
+            error.textContent = `Diagram error, line ${line}: ${message}`;
+            const failed = document.createElement("div");
+            failed.className = "diagram-failed";
+            failed.append(source, error);
+            host.replaceWith(failed);
           }
-          host.replaceWith(wrap);
         }
       });
     }

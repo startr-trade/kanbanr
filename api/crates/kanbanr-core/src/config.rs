@@ -113,6 +113,10 @@ pub struct ProjectConfig {
         skip_serializing_if = "crate::method::MethodChoice::is_default"
     )]
     pub method: crate::method::MethodChoice,
+    /// How the project treats Mermaid diagrams that fail the lint (FEAT-200). Absent: warnings
+    /// only, and absent stays absent on disk.
+    #[serde(default, skip_serializing_if = "DiagramsConfig::is_default")]
+    pub diagrams: DiagramsConfig,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -173,6 +177,31 @@ pub struct ProcessHeader {
 }
 
 /// The unit a project estimates in.
+/// How a project treats Mermaid diagrams the lint finds problems in (FEAT-200). Off by default:
+/// a write succeeds and reports the problems as warnings, which keeps the tool low-friction. Strict:
+/// a write carrying a problem is refused.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DiagramsConfig {
+    #[serde(default)]
+    pub strict: bool,
+    /// Keys a newer kanbanr wrote here, kept and written back unchanged.
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
+    pub extra: crate::models::Extra,
+}
+
+impl DiagramsConfig {
+    /// Nothing set: what an absent key means, and why it stays absent.
+    pub fn is_default(&self) -> bool {
+        *self == DiagramsConfig::default()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -635,6 +664,7 @@ impl WorkflowFile {
             cadence: self.cadence,
             process: None,
             method: Default::default(),
+            diagrams: Default::default(),
         };
         config.schema_version = config.required_schema_version();
         config
@@ -1412,6 +1442,34 @@ mod tests {
 
     fn config_of(name: &str) -> ProjectConfig {
         preset_bare(name).unwrap().into_config("p")
+    }
+
+    /// FEAT-200 R-17: an absent `diagrams` key is off and stays absent on disk; strict round-trips;
+    /// a key a newer kanbanr wrote under it survives.
+    #[test]
+    fn diagrams_config_defaults_off_and_round_trips() {
+        let config = config_of("default");
+        assert!(!config.diagrams.strict);
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        assert!(!yaml.contains("diagrams"), "{yaml}");
+        let back: ProjectConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(back.diagrams, DiagramsConfig::default());
+
+        let mut strict = config.clone();
+        strict.diagrams.strict = true;
+        let yaml = serde_yaml::to_string(&strict).unwrap();
+        assert!(yaml.contains("diagrams:\n  strict: true"), "{yaml}");
+        let back: ProjectConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert!(back.diagrams.strict);
+
+        let newer = yaml.replace("strict: true", "strict: true\n  severity: high");
+        let back: ProjectConfig = serde_yaml::from_str(&newer).unwrap();
+        assert!(back.diagrams.extra.contains_key("severity"));
+        assert!(
+            serde_yaml::to_string(&back)
+                .unwrap()
+                .contains("severity: high")
+        );
     }
 
     /// FEAT-188 R-1: each role resolves to one status; a status may hold several.

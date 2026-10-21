@@ -4,6 +4,9 @@ members = [
     # Standalone and published on its own: EARS classification and the ISO 25010 vocabulary have
     # no kanbanr in them and are useful to anyone writing requirements down.
     "crates/ears-classifier",
+    # Standalone too: the Mermaid lint has no kanbanr in it, and anyone writing diagrams into
+    # Markdown can use it.
+    "crates/mermaid-lint",
     "crates/kanbanr-core",
     "crates/kanbanr-cli",
     "crates/kanbanr-server",

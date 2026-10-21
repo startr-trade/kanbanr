@@ -1,5 +1,5 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -43,6 +43,14 @@ export const api = {
   /** What each live item is missing, from the one engine every surface uses (FEAT-112). */
   getReadiness: (id: string) =>
     getJson<Readiness>(apiUrl(`/projects/${encodeURIComponent(id)}/readiness`)),
+  /**
+   * Every Mermaid block of an item's spec and of each doc in its `affects_docs`, with the core
+   * lint's findings (FEAT-200). The review page parses each with Pele before offering Approve.
+   */
+  getItemDiagrams: (id: string, code: string) =>
+    getJson<ItemDiagrams>(
+      apiUrl(`/projects/${encodeURIComponent(id)}/features/${encodeURIComponent(code)}/diagrams`),
+    ),
   /** The workflow as Mermaid, drawn by the daemon with its gates as notes (FEAT-117). */
   getWorkflowDiagram: (id: string) =>
     getText(apiUrl(`/projects/${encodeURIComponent(id)}/workflow?format=mermaid`)),

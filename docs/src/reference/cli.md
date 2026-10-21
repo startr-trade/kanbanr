@@ -16,6 +16,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr config rename-status <OLD> <NEW>` | rename a status and move every item in it |
 | `kanbanr config cadence [--sprints on\|off] [--releases on\|off] [--unit points\|days] [--release-stages a,b,c] [--integration-branch B] [--main-branch B] [--git-model on\|off]` | switch sprints, releases and the estimate unit on or off for a project; name the stages a release moves through (the last is the cut) and the branches promotion uses; let the git model drive branching |
 | `kanbanr config method [--on\|--off] [part…]` | the method — design before build, docs kept current, broken references reported — part by part: shown, turned off, or back on |
+| `kanbanr config diagrams [--strict on\|off]` | whether a write whose Mermaid diagrams fail the lint is refused (strict) or written with the problems printed as warnings (the default); with no flag, shows the setting |
 | `kanbanr hooks install / status / uninstall` | the Claude Code hooks (session start, stop nudge, test capture, commit guard) |
 | `kanbanr serve [--ui-dir …]` | the read-only monitor over this board |
 | `kanbanr open` | open the running monitor in a browser |
@@ -73,7 +74,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | Command | What it does |
 |---|---|
 | `kanbanr readme` | write or refresh the board's README: what it is, its projects, and how to install kanbanr and see it as a board; text outside its markers is kept |
-| `kanbanr doctor` | every broken reference and every gap, across the board — including links in specs and docs to items, requirements, ADRs, goals or docs the board does not have |
+| `kanbanr doctor` | every broken reference and every gap, across the board — including links in specs and docs to items, requirements, ADRs, goals or docs the board does not have, and diagram problems: each Mermaid block in a spec or doc the lint rejects, with its file, diagram number, line and rule |
 | `kanbanr check [CODE]` | what one item has not said, and what it cannot yet show |
 | `kanbanr review [CODE] [--pending] [--ui]` | the decision brief — one item, all of them, or in the browser |
 | `kanbanr approve <CODE> [--by …]` | records agreement, attributed to the board's commit identity |

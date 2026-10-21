@@ -61,6 +61,7 @@ same code:
 | The process library | `library::{resolve, list, behind}`, `Store::process_drift`, `WorkflowFile::{to_request, to_yaml}` |
 | Issue-tracker mirror | `mirror::{enable, status, sync, link, pull}` over an `IssueTracker` trait |
 | `check` | `readiness::{check_board, check_definition_text}` |
+| Mermaid diagrams (FEAT-200) | `diagrams::{guard, item_findings, ItemDiagrams}`, over the standalone `mermaid-lint` crate |
 | Errors as HTTP statuses | `CoreError::status()` |
 
 The front ends keep argument parsing and output, process concerns (install, self-update, the skill,
@@ -71,6 +72,12 @@ fails naming the file and the rule when a front end parses board YAML, depends o
 `serde-saphyr` or `ears-classifier`, builds a domain value by hand, or calls `dispatch` outside its
 one entry point. Every board file is read and written through `kanbanr_core::yaml`, which sets the
 YAML library's options in one place (FEAT-187).
+
+Two pieces have no kanbanr in them and live in standalone crates beside the engine:
+`ears-classifier` (EARS patterns and the ISO 25010 vocabulary) and `mermaid-lint` (FEAT-200), a
+dependency-free line scanner that finds the Mermaid mistakes Pele rejects — it flags only what
+Pele's `parse` rejects, held there by a fixture checked from both sides. Core adds what is
+kanbanr's: board file names, the project's strict setting, an item's spec and `affects_docs`.
 
 The daemon's **public read routes** are a versioned contract, v1 (FEAT-177). Their response types
 live in `kanbanr-core` and derive a JSON Schema behind the crate's `schema` feature, which the

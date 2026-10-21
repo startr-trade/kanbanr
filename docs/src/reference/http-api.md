@@ -33,6 +33,7 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/projects/{project}/charter` | — | JSON `Charter` | The project's charter: purpose, goals, scope and constraints |
 | `GET /api/projects/{project}/readiness` | — | JSON `ProjectReadiness` | What each live item is missing, and its next stages, keyed by code |
 | `GET /api/projects/{project}/features/{code}/readiness` | — | JSON `ReadinessView` | What one item is missing, and what its next stages ask |
+| `GET /api/projects/{project}/features/{code}/diagrams` | — | JSON `ItemDiagrams` | The Mermaid blocks of an item's spec and affects_docs, with the lint's findings |
 | `GET /api/projects/{project}/review` | — | JSON `ReviewEntry[]` | What is waiting for a person's agreement, in the order to ask it |
 | `GET /api/projects/{project}/releases` | — | JSON `ReleaseReport[]` | The project's releases, each with what it ships |
 | `GET /api/projects/{project}/sprints` | — | JSON `Sprint[]` | The project's sprints |

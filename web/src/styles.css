@@ -399,6 +399,18 @@ input:focus-visible,
   --pele-accent: var(--accent);
   --pele-error: var(--warn);
 }
+/* A diagram that does not draw (FEAT-200): its source, and the error with its line under it. */
+.markdown .diagram-failed { margin: 14px 0; }
+.markdown pre.diagram-source { margin: 0; border-color: var(--warn); }
+.diagram-error { color: var(--warn); font-size: 13px; margin-top: 6px; }
+/* The review page's list of diagrams that do not parse; Approve waits for it to empty. */
+.diagram-problems {
+  margin: 12px 0; padding: 8px 14px;
+  border: 1px solid var(--warn); border-radius: var(--radius); background: var(--panel-2);
+}
+.diagram-problems h3 { font-size: 14px; margin: 4px 0 6px; color: var(--warn); }
+.diagram-problems ul { margin: 0; padding-left: 18px; }
+.diagram-problems li { margin: 4px 0; }
 .markdown img { max-width: 100%; height: auto; border-radius: 6px; }
 .markdown h1 { font-size: 22px; }
 .markdown h2 { font-size: 18px; }
