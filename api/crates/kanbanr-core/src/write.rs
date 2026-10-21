@@ -217,11 +217,11 @@ pub fn apply_as(
             }
             let events =
                 eventing::record_by(store, data_dir, method, path, &applied.body, by.as_ref());
-            // Under a scope the board is never pushed: the coordinator reviews and pushes.
-            let policy = if scoped.is_some() {
-                PushPolicy::Off
-            } else {
-                policy
+            // From an agent's worktree the board is never pushed — under a scope, and by the claim
+            // that binds one: the coordinator reviews and pushes.
+            let policy = match scope {
+                ProcessScope::Unscoped => policy,
+                _ => PushPolicy::Off,
             };
             let msg = match scoped {
                 Some(s) => agentscope::with_trailer(&msg, s),
