@@ -273,6 +273,11 @@ input:focus-visible,
 .btn:disabled, .btn-primary:disabled {
   opacity: 0.6; cursor: not-allowed; box-shadow: none; transform: none;
 }
+/* A primary action that is not available yet must not look like one that is (FEAT-212: the cut
+   waits for main to be pushed): no accent fill, until it can be pressed. */
+.btn-primary:disabled {
+  background: var(--control); color: var(--muted); border-color: var(--border); filter: none;
+}
 
 /* ---- review queue (FEAT-067, separated in FEAT-076) ---- */
 /* One card per item, collapsed by default: a queue of twelve briefs read as one column of prose

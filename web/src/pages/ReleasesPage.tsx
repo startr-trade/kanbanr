@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
 import { isReadOnly } from "../runtimeConfig";
@@ -184,6 +184,10 @@ function ReleaseButton({
   // "Check again" re-reads the plan: a `git push` updates the remote-tracking ref locally, so no
   // fetch is needed (the monitor never fetches).
   const [again, setAgain] = useState(0);
+  // The last promotion's note says what came next ("push main…"); once the plan has been read
+  // again it may no longer hold, so it is put away until the next promotion.
+  const [hideOutcome, setHideOutcome] = useState(false);
+  useEffect(() => setHideOutcome(false), [outcome]);
   const plan = useAsync(() => api.getReleasePlan(project, release.version), [project, release.version, tick, again]);
   if (plan.error) return <ErrorBox error={plan.error} />;
   if (!plan.data) return <Loading />;
@@ -191,7 +195,7 @@ function ReleaseButton({
   if (action.note) {
     return (
       <p className="muted small">
-        {action.note} <code>{action.command}</code>
+        <Inline text={action.note} />
       </p>
     );
   }
@@ -210,12 +214,18 @@ function ReleaseButton({
         ) : (
           <code>{action.command}</code>
         )}
-        {outcome ? <span className={`chip ${outcome.startsWith("promoted") ? "done" : "warn"}`}>{outcome}</span> : null}
+        {outcome && !hideOutcome ? (
+          <span className={`chip ${outcome.startsWith("promoted") ? "done" : "warn"}`}>
+            <Inline text={outcome} />
+          </span>
+        ) : null}
       </div>
       {action.does.length ? (
         <ul className="dep-list small">
           {action.does.map((d) => (
-            <li key={d}>{d}</li>
+            <li key={d}>
+              <Inline text={d} />
+            </li>
           ))}
         </ul>
       ) : null}
@@ -228,12 +238,24 @@ function ReleaseButton({
           <ul className="dep-list">
             {action.missing.map((m) => (
               <li key={m.text}>
-                {m.text}
-                {m.fix ? <> — {m.fix}</> : null}
+                <Inline text={m.text} />
+                {m.fix ? (
+                  <>
+                    {" — "}
+                    <Inline text={m.fix} />
+                  </>
+                ) : null}
               </li>
             ))}
           </ul>
-          <button className="btn" onClick={() => setAgain((n) => n + 1)} disabled={plan.loading}>
+          <button
+            className="btn"
+            onClick={() => {
+              setHideOutcome(true);
+              setAgain((n) => n + 1);
+            }}
+            disabled={plan.loading}
+          >
             Check again
           </button>
         </div>
@@ -266,5 +288,14 @@ function CutPreviewList({
         </ul>
       ) : null}
     </div>
+  );
+}
+
+/** A message from the plan, with its `code` spans shown as code rather than as backticks. */
+function Inline({ text }: { text: string }) {
+  return (
+    <>
+      {text.split("`").map((part, i) => (i % 2 === 1 ? <code key={i}>{part}</code> : <span key={i}>{part}</span>))}
+    </>
   );
 }
