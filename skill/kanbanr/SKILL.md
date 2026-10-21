@@ -335,6 +335,7 @@ organisation's own process file changes what you ask with nothing changed here:
 | `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
 | `docs_updated` | **never a question** — fold the design into each doc in `affects_docs` and say which you changed; if the item names none, ask whether it really changes no architecture doc |
 | `diagrams_valid` | **never a question** — fix each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then run `kanbanr doctor` to confirm none is left |
+| `docs_cover` | **never a question** — fix the coverage: add a link to the item in each view doc the rule names (`[zachman] FEAT-012 is not referenced from architecture/zachman.md`), then move |
 
 Warnings go into the plan with a choice: fix it, or go ahead with the warning on record. When more
 than one next stage is possible, ask which. Head the plan with the stage's own `purpose`.
@@ -366,7 +367,9 @@ guessing:
 - compatibility and migration;
 - links to ADRs, and open questions stated as questions;
 - **Affects docs**: links to the board docs this change touches. Mirror the same paths into the
-  definition's `affects_docs`, which a `docs_updated` gate checks.
+  definition's `affects_docs`, which a `docs_updated` gate checks. Include the project's view
+  docs — the Zachman matrix, the component catalog, the ADR index (`kanbanr config coverage`
+  names them) — whenever the change adds an item, a component or a decision they list.
 
 The definition's `how` and `where` lines are one-line summaries of this section, never a
 substitute for it. A section that does not apply says "n/a" and why. A spec that stays
@@ -530,7 +533,8 @@ match a process by hand.
 The user moves work by asking: "park FEAT-074", "put FEAT-150 back to Planned". Run
 `kanbanr move <CODE> <status>`. If a gate refuses, say what the stage still needs — it is the same
 table — and offer to work through it. `--override "<reason>"` is for genuine emergencies, with the
-user's reason, and the item then needs ratifying.
+user's reason, and the item then needs ratifying. A write that prints `coverage:` lines has left a
+view behind: add the links each one names before you move the item on.
 
 ### The rules underneath
 
@@ -747,6 +751,8 @@ doc goes **before** creating any file:
   docs: `design/auth-flow.md`"). The user can ask to have it in the project folder instead.
 - **One home per doc.** Never keep the same content in both places; link to the kanbanr doc path
   from specs or tasks instead of copying.
+- **Index every decision.** When an ADR is accepted, add a link to it in the architecture index
+  (or whichever view the project's `adr` coverage rule names) in the same session.
 
 ## Recover & resume (start of every session)
 
@@ -773,6 +779,8 @@ Treat kanbanr updates as part of doing the work, not an afterthought:
   `green` once they actually pass, update the **specification** and any **documentation**
   affected, and **move** the feature's status as appropriate. When every task
   across all of a feature's todo-lists is Completed it auto-advances to "Completed".
+- **Before merging a sprint or cutting a release**, run `kanbanr doctor` and fix every coverage
+  rule it lists, so the architecture views describe everything that ships.
 
 ## Feature items are permanent
 
@@ -928,6 +936,7 @@ kanbanr config no-op-states "No Action,Not Applicable,Out-of-Scope"   # inert di
 kanbanr config workflow --preset <name> | --from-file process.yaml | (--statuses … --transitions "A>B" --default-state … --displayed-states … --no-op-states …)
 kanbanr config workflow --preset list             # what each preset is
 kanbanr config cadence --sprints on --releases on --unit points   # only for projects that work in sprints
+kanbanr config coverage [--from-file rules.yaml | --clear]   # architecture coverage rules: what each view must reference
 kanbanr feature edit FEAT-001 --points 5          # a story-point estimate (--estimate is days)
 kanbanr sprint add --start 2026-10-05 --length 2w --goal "…" [--capacity 20]
 kanbanr sprint plan SP-001 FEAT-001 FEAT-002      # warns over capacity
