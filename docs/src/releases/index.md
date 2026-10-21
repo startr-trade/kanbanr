@@ -8,6 +8,8 @@ Features are frozen until 1.0, apart from the work agreed for it: 0.2.0 carries 
 needs a one-time board migration. Later releases before 1.0 take fixes, documentation, and the
 work toward 1.0's [stability promise](../project/stability.md).
 
+- **[0.2.1](v0.2.1.md)** — fixes after 0.2.0: the book's diagram popup, the release's install
+  check; `mermaid-lint` on crates.io.
 - **[0.2.0](v0.2.0.md)** — one method for every process, and a board format that will last. Every
   board is migrated once: [upgrading a board to schema 5](schema-5.md).
 - **[0.1.7](v0.1.7.md)** — your own process, designed with Claude and shared on the board.
