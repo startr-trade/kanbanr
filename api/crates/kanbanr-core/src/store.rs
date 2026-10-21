@@ -2984,6 +2984,10 @@ impl Store {
         }
         crate::config::Cadence::validate_stages(&cadence.release_stages)
             .map_err(CoreError::Unsupported)?;
+        // FEAT-212: the gates must fit the stages, so a stage with a gate is not renamed away.
+        cadence
+            .validate_release_gates()
+            .map_err(CoreError::Unsupported)?;
         if let Some(unit) = unit {
             project.config.estimate_unit = unit;
         }

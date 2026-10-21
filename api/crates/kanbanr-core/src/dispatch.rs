@@ -481,7 +481,18 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         };
     let config = match (cadence, unit) {
         (None, None) => config,
-        (cadence, unit) => store.set_cadence(p, unit, cadence.unwrap_or(config.cadence))?,
+        (cadence, unit) => {
+            let mut cadence = cadence.unwrap_or_else(|| config.cadence.clone());
+            // FEAT-212: a process that says nothing of the release stages' gates or preparation
+            // keeps the project's own; if its stages no longer fit them, the refusal names the fix.
+            if cadence.release_gates.is_empty() {
+                cadence.release_gates = config.cadence.release_gates.clone();
+            }
+            if cadence.release_prepare.is_empty() {
+                cadence.release_prepare = config.cadence.release_prepare.clone();
+            }
+            store.set_cadence(p, unit, cadence)?
+        }
     };
     if config.process == source {
         return ser(&config);
@@ -1183,6 +1194,10 @@ fn dispatch_routes(
             let current = store.load_meta(p)?.config.cadence;
             let cadence = crate::config::Cadence {
                 extra: current.extra.clone(),
+                // FEAT-212: the stages' gates and what `prepare` writes have routes of their own;
+                // a cadence write that does not name them keeps them.
+                release_gates: current.release_gates.clone(),
+                release_prepare: current.release_prepare.clone(),
                 sprints: bool_field(b, "sprints").unwrap_or(current.sprints),
                 releases: bool_field(b, "releases").unwrap_or(current.releases),
                 sprint_length_days: b

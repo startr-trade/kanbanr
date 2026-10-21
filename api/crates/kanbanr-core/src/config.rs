@@ -251,6 +251,16 @@ pub struct Cadence {
     /// branches, and lines of integration taking merges only. Off by default, so no board changes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub git_model: bool,
+    /// Each release stage's conditions and entry actions, keyed by stage name (FEAT-212). A stage
+    /// not named here takes the default: read them through [`Cadence::effective_release_gates`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub release_gates: BTreeMap<String, crate::releasegates::ReleaseGate>,
+    /// What the `prepare` action writes onto `release/<V>` (FEAT-212). Empty by default.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::releasegates::ReleasePrepare::is_empty"
+    )]
+    pub release_prepare: crate::releasegates::ReleasePrepare,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(

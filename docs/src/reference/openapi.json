@@ -400,6 +400,17 @@
             "description": "How often a release is cut: `per_sprint`, `every_n` sprints, or `on_demand`.",
             "type": "string"
           },
+          "release_gates": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ReleaseGate"
+            },
+            "description": "Each release stage's conditions and entry actions, keyed by stage name (FEAT-212). A stage\nnot named here takes the default: read them through [`Cadence::effective_release_gates`].",
+            "type": "object"
+          },
+          "release_prepare": {
+            "$ref": "#/components/schemas/ReleasePrepare",
+            "description": "What the `prepare` action writes onto `release/<V>` (FEAT-212). Empty by default."
+          },
           "release_stages": {
             "description": "The environments a release moves through, in order (FEAT-183). The last one is the cut.\nEmpty means [`DEFAULT_RELEASE_STAGES`]; read it through [`Cadence::stages`].",
             "items": {
@@ -2048,6 +2059,27 @@
         ],
         "type": "object"
       },
+      "NotesListing": {
+        "additionalProperties": true,
+        "description": "Where the notes draft is listed: `entry` goes directly below the first line equal to `after`.",
+        "properties": {
+          "after": {
+            "type": "string"
+          },
+          "entry": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "after",
+          "entry"
+        ],
+        "type": "object"
+      },
       "Part": {
         "description": "One part of the method.",
         "oneOf": [
@@ -2535,6 +2567,31 @@
         ],
         "type": "object"
       },
+      "ReleaseAction": {
+        "description": "What entering a release stage does. The order of the variants is the order a promotion applies\nthem in, whichever stages hold them.",
+        "oneOf": [
+          {
+            "const": "branch",
+            "description": "Make `release/<V>` from the line of integration, without checking it out.",
+            "type": "string"
+          },
+          {
+            "const": "prepare",
+            "description": "Commit the version files, the changelog heading, the notes draft and its listings onto\n`release/<V>`, without checking anything out.",
+            "type": "string"
+          },
+          {
+            "const": "move_main",
+            "description": "Fast-forward main to the release tip, refused if main has commits the release lacks.",
+            "type": "string"
+          },
+          {
+            "const": "tag",
+            "description": "Tag the release tip with the version (an annotated tag, `Release <V>`).",
+            "type": "string"
+          }
+        ]
+      },
       "ReleaseCarry": {
         "description": "A planned item that did not ship, and where it went.",
         "properties": {
@@ -2554,6 +2611,85 @@
           "code",
           "to"
         ],
+        "type": "object"
+      },
+      "ReleaseCheck": {
+        "description": "A condition a release stage can require before a release enters it.",
+        "oneOf": [
+          {
+            "const": "items_finished",
+            "description": "Nothing planned into the release would be carried over by the cut.",
+            "type": "string"
+          },
+          {
+            "const": "prepared",
+            "description": "The release tip carries the version, the dated changelog heading and the notes.",
+            "type": "string"
+          },
+          {
+            "const": "main_at_release",
+            "description": "Main is at the release tip.",
+            "type": "string"
+          },
+          {
+            "const": "pushed",
+            "description": "The release tip is on main's remote-tracking branch.",
+            "type": "string"
+          }
+        ]
+      },
+      "ReleaseGate": {
+        "additionalProperties": true,
+        "description": "One release stage's rules: what it is for, what must hold to enter it, and what entering it\ndoes.",
+        "properties": {
+          "on_enter": {
+            "items": {
+              "$ref": "#/components/schemas/ReleaseAction"
+            },
+            "type": "array"
+          },
+          "purpose": {
+            "type": "string"
+          },
+          "requires": {
+            "items": {
+              "$ref": "#/components/schemas/ReleaseCheck"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ReleasePrepare": {
+        "additionalProperties": true,
+        "description": "What the `prepare` action writes onto `release/<V>`. Empty by default: `prepare` is then a\nno-op the plan names.",
+        "properties": {
+          "changelog": {
+            "type": "string"
+          },
+          "changelog_copies": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "notes": {
+            "description": "A path template naming `{version}` or `{number}`, e.g. `docs/src/releases/{version}.md`.",
+            "type": "string"
+          },
+          "notes_listings": {
+            "items": {
+              "$ref": "#/components/schemas/NotesListing"
+            },
+            "type": "array"
+          },
+          "version_files": {
+            "items": {
+              "$ref": "#/components/schemas/VersionFile"
+            },
+            "type": "array"
+          }
+        },
         "type": "object"
       },
       "ReleaseReport": {
@@ -3224,6 +3360,24 @@
           "at",
           "from",
           "to"
+        ],
+        "type": "object"
+      },
+      "VersionFile": {
+        "additionalProperties": true,
+        "description": "A file whose version `prepare` sets.",
+        "properties": {
+          "match": {
+            "description": "A template with exactly one `{version}`. Absent: `^version = \"{version}\"` for `*.toml`,\n`\"version\": \"{version}\"` for `*.json`, first match only. Given: every match.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Relative to the repository root.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
         ],
         "type": "object"
       },
