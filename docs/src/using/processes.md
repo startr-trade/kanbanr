@@ -75,6 +75,7 @@ gates:
 | `enforce` | `block` (the default) refuses the move; `warn` allows it and reports what is missing. |
 | `kinds` | Apply only to items of these kinds; an item with no kind is a `feature`. |
 | `on_enter` | `branch`: `kanbanr start` makes the item's branch here, where the project is a git repository. |
+| `affects_docs` | Docs every item entering this stage must list in `affects_docs`; the move adds them, without reopening the approval ([Coverage rules](living-docs.md#coverage-rules-keeping-the-views-whole)). |
 | `done` | `true`: reaching this stage finishes an item for the sprint burndown, the sprint's done total and what a closing sprint carries over. Without it only the end statuses count. The `scrum` preset marks **Done**, its Definition of Done, so a sprint burns down as items are done rather than all at once when a release ships them. |
 
 ### The checks
@@ -125,6 +126,10 @@ A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (sem
 ### When a gate isn't met
 
 - **A blocking gate** refuses the move and lists everything missing.
+- **`docs_cover`** names each rule the item fails and the view doc to add it to:
+  `[zachman] FEAT-012 is not referenced from architecture/zachman.md — add a link to it there`.
+  Add the link in that doc, then move again. A move that passes still prints any rule it now
+  fails as a `coverage:` warning ([Coverage rules](living-docs.md#coverage-rules-keeping-the-views-whole)).
 - **`--override "<reason>"`** gets past a blocking gate, and the reason is kept in the item's
   history. It also records the item as started without agreement, so it shows on the Review page
   until someone ratifies it. `--unapproved` is the older name.

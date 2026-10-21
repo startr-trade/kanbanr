@@ -20,6 +20,15 @@ If you have a remote configured, an occasional `kanbanr sync` keeps the board pu
 where --json` tells you which folder is in use and why.
 
 
+## Keeping the architecture views whole
+
+`kanbanr doctor` lists each coverage rule a view still fails — `coverage rule 'zachman' (every
+item at Design or later is referenced from architecture/zachman.md): 24 of 60 uncovered —
+FEAT-012, …` — with the first ten subjects. A rule whose source doc is gone, an invalid rule in
+a hand-edited config, a gate naming a rule the project does not configure, and a gate's default
+doc that is not on the board are errors. Run it before merging a sprint or cutting a release;
+[Coverage rules](living-docs.md#coverage-rules-keeping-the-views-whole) says how to set them.
+
 ## Troubleshooting
 
 - **`monitor not reachable` from `kanbanr open`** — start the view daemon first:
