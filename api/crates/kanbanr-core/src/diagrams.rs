@@ -318,6 +318,26 @@ pub fn lint_markdown(file: &str, markdown: &str) -> Vec<DiagramFinding> {
     out
 }
 
+/// Lint text about to be written. On a project that checks diagrams strictly, a problem refuses the
+/// write, naming each one; otherwise the problems come back for the caller to report as warnings.
+pub fn guard(
+    config: &crate::config::DiagramsConfig,
+    file: &str,
+    markdown: &str,
+) -> crate::Result<Vec<DiagramFinding>> {
+    let findings = lint_markdown(file, markdown);
+    if config.strict && !findings.is_empty() {
+        let each: Vec<String> = findings.iter().map(DiagramFinding::describe).collect();
+        return Err(crate::CoreError::InvalidDiagram(format!(
+            "{file} has {} diagram problem(s), and this project checks diagrams strictly: {} — fix \
+             them, or turn strict checking off with `kanbanr config diagrams --strict off`",
+            findings.len(),
+            each.join("; ")
+        )));
+    }
+    Ok(findings)
+}
+
 fn is_word(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }

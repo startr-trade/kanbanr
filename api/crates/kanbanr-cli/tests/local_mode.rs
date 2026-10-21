@@ -5227,3 +5227,65 @@ fn build_scripts_read_the_manifest_dir_at_run_time() {
         );
     }
 }
+
+/// A scratch code repository with a default-process board `shop` and one milestone `MS-1`
+/// (FEAT-200's tests). Returns (base, work); both live under the temp dir.
+fn diagram_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (base, work) = togaf_scratch(tag);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-1"],
+    ));
+    (base, work)
+}
+
+/// FEAT-200 R-17: `config diagrams` shows the setting, `--strict on|off` sets it, and off leaves
+/// the key absent from config.yaml, as it was before anyone chose.
+#[test]
+fn cli_config_diagrams_strict_toggles() {
+    let (base, work) = diagram_scratch("diagrams-config");
+    let ok = |args: &[&str]| {
+        let o = run_in(&base, &work, args);
+        assert!(
+            o.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    let board = std::path::PathBuf::from(ok(&["where"]).trim());
+    let config = || std::fs::read_to_string(board.join("projects/shop/config.yaml")).unwrap();
+    assert!(!config().contains("diagrams"), "absent until chosen");
+    assert_eq!(ok(&["config", "diagrams"]).trim(), "strict: off");
+
+    assert!(ok(&["config", "diagrams", "--strict", "on"]).contains("diagrams strict: on"));
+    assert!(config().contains("strict: true"), "{}", config());
+    assert_eq!(ok(&["config", "diagrams"]).trim(), "strict: on");
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(&["--json", "config", "diagrams"])).unwrap();
+    assert_eq!(json["strict"], true);
+
+    assert!(ok(&["config", "diagrams", "--strict", "off"]).contains("diagrams strict: off"));
+    assert!(!config().contains("diagrams"), "off is absent again");
+    assert_eq!(ok(&["config", "diagrams"]).trim(), "strict: off");
+    let _ = std::fs::remove_dir_all(&base);
+}

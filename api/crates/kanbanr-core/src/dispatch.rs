@@ -347,6 +347,7 @@ fn build_project_config(store: &Store, name: &str, body: &Value) -> Result<Proje
                 cadence: Default::default(),
                 process: None,
                 method: Default::default(),
+                diagrams: Default::default(),
             }
         }
         None => {
@@ -1062,6 +1063,21 @@ pub fn dispatch_in(
                 "parts": crate::method::status(&config),
                 "notes": notes,
             }))
+        }
+        // How the project treats diagrams the lint finds problems in (FEAT-200).
+        ("GET", ["projects", p, "config", "diagrams"]) => {
+            ser(&store.read_project_config(p)?.diagrams)
+        }
+        ("PUT", ["projects", p, "config", "diagrams"]) => {
+            let strict = bool_field(b, "strict").ok_or_else(|| {
+                CoreError::Unsupported("say whether to check diagrams strictly: `strict`".into())
+            })?;
+            let current = store.read_project_config(p)?.diagrams;
+            let diagrams = crate::config::DiagramsConfig {
+                strict,
+                extra: current.extra,
+            };
+            ser(&store.set_diagrams(p, diagrams)?.diagrams)
         }
         ("PUT", ["projects", p, "config", "cadence"]) => {
             let unit = match str_field(b, "estimate_unit").as_deref() {

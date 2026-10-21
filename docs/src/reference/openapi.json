@@ -727,6 +727,20 @@
         ],
         "type": "object"
       },
+      "DiagramsConfig": {
+        "additionalProperties": true,
+        "description": "The unit a project estimates in.\nHow a project treats Mermaid diagrams the lint finds problems in (FEAT-200). Off by default:\na write succeeds and reports the problems as warnings, which keeps the tool low-friction. Strict:\na write carrying a problem is refused.",
+        "properties": {
+          "strict": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "strict"
+        ],
+        "type": "object"
+      },
       "Disposition": {
         "description": "A project-independent lane a feature falls into, since statuses are per-project (no shared\nvocabulary). Computed from the project config + the feature's task activity.",
         "oneOf": [
@@ -842,7 +856,6 @@
         "type": "string"
       },
       "EstimateUnit": {
-        "description": "The unit a project estimates in.",
         "enum": [
           "days",
           "points"
@@ -2037,6 +2050,10 @@
           "description": {
             "default": "",
             "type": "string"
+          },
+          "diagrams": {
+            "$ref": "#/components/schemas/DiagramsConfig",
+            "description": "How the project treats Mermaid diagrams that fail the lint (FEAT-200). Absent: warnings\nonly, and absent stays absent on disk."
           },
           "displayed_states": {
             "default": [],

@@ -66,6 +66,10 @@ pub enum CoreError {
     DocNotFound(String),
     #[error("invalid Mermaid state diagram: {0}")]
     InvalidMermaid(String),
+    /// A write carried a Mermaid diagram the lint finds a problem in, on a project that checks
+    /// diagrams strictly (FEAT-200). The message names each problem and the way out.
+    #[error("{0}")]
+    InvalidDiagram(String),
     #[error("unsupported operation: {0}")]
     Unsupported(String),
     /// No route answers this method and path (FEAT-177): the daemon's 404. Worded as
@@ -126,6 +130,7 @@ impl CoreError {
             | DisplayedNoOp(_)
             | BatchOpFailed(_, _)
             | InvalidMermaid(_)
+            | InvalidDiagram(_)
             | Unsupported(_) => 400,
             // The code repository refused a release promotion (FEAT-183): the request was well
             // formed, the repository's state is what stood in the way.

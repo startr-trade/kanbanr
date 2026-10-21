@@ -2840,6 +2840,27 @@ impl Store {
         Ok(updated)
     }
 
+    /// A project's config alone, without its items (FEAT-200): what a write path needs to know
+    /// before it writes, such as whether diagrams are checked strictly.
+    pub fn read_project_config(&self, id: &str) -> Result<ProjectConfig> {
+        if !self.project_exists(id) {
+            return Err(CoreError::ProjectNotFound(id.to_string()));
+        }
+        self.read_config(id)
+    }
+
+    /// Set how the project treats Mermaid diagrams the lint finds problems in (FEAT-200).
+    pub fn set_diagrams(
+        &self,
+        id: &str,
+        diagrams: crate::config::DiagramsConfig,
+    ) -> Result<ProjectConfig> {
+        let mut project = self.load(id)?;
+        project.config.diagrams = diagrams;
+        self.save_config(id, &project.config)?;
+        Ok(project.config)
+    }
+
     /// Set what a project estimates in and whether it has sprints and releases (FEAT-121).
     pub fn set_cadence(
         &self,
