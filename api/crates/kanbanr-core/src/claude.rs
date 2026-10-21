@@ -163,6 +163,111 @@ pub fn merge(existing: &str, block: &str) -> String {
     }
 }
 
+/// The board path to suggest for a file the guard refuses, or `None` when the write is not the
+/// guard's business.
+///
+/// The guard judges only files **inside the tracked repository** (FEAT-111). A path outside it —
+/// Claude Code's own plan file in `~/.claude/plans`, a scratch file, anything reached through
+/// `..` — is none of the board's concern, and refusing it once blocked plan mode outright. The
+/// suggestion is built from the repo-relative path, never the absolute one, which used to come out
+/// as `notes//home/…`.
+pub fn board_path_for(path: &str, root: &std::path::Path, cwd: &std::path::Path) -> Option<String> {
+    let given = std::path::Path::new(path);
+    let absolute = if given.is_absolute() {
+        given.to_path_buf()
+    } else {
+        cwd.join(given)
+    };
+    // Resolve `.` and `..` by the text alone: the file may not exist yet, so it cannot be
+    // canonicalised, and an escape through `..` must not count as inside the repository.
+    let mut resolved = std::path::PathBuf::new();
+    for part in absolute.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            other => resolved.push(other),
+        }
+    }
+    // Then resolve on disk as far as the path exists (FEAT-129). The root comes from the working
+    // directory, which the OS reports with symlinks resolved; the file path arrives as Claude Code
+    // spelled it. On macOS the temp folder is `/var/…`, a symlink to `/private/var/…`, so the two
+    // never shared a prefix and a loose note there was waved through as "outside the repository".
+    let (resolved, root) = (
+        crate::project::normalize(&resolved),
+        crate::project::normalize(root),
+    );
+    let relative = resolved.strip_prefix(&root).ok()?;
+    let relative: Vec<String> = relative
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let relative = relative.join("/");
+    if relative.is_empty() || !belongs_on_board(&relative) {
+        return None;
+    }
+    Some(
+        relative
+            .trim_end_matches(".md")
+            .trim_end_matches(".markdown")
+            .replace(' ', "-")
+            .to_lowercase(),
+    )
+}
+
+/// Is this markdown file project *reasoning* (board) rather than a shipped *deliverable* (repo)?
+///
+/// The allow-list is what a repository publishes. Everything else that is markdown, written loose
+/// in a checkout, is the kind of note that should have gone on the board.
+pub fn belongs_on_board(relative: &str) -> bool {
+    let lower = relative.to_lowercase();
+    if !lower.ends_with(".md") && !lower.ends_with(".markdown") {
+        return false;
+    }
+    const SHIPPED_DIRS: [&str; 8] = [
+        "docs/", "doc/", "book/", "site/", "web/", "skill/", ".github/", "editor/",
+    ];
+    const SHIPPED_FILES: [&str; 9] = [
+        "readme.md",
+        "changelog.md",
+        "contributing.md",
+        "security.md",
+        "code_of_conduct.md",
+        "license.md",
+        "third_party.md",
+        "claude.md",
+        "agents.md",
+    ];
+    if SHIPPED_DIRS.iter().any(|d| lower.starts_with(d)) {
+        return false;
+    }
+    if SHIPPED_FILES.contains(&lower.as_str()) {
+        return false;
+    }
+    // A test fixture or a vendored file is not project reasoning either.
+    if ["target/", "node_modules/", "tests/", "fixtures/", "vendor/"]
+        .iter()
+        .any(|d| lower.contains(d))
+    {
+        return false;
+    }
+    true
+}
+
+/// Why the docs guard refuses a write, and what to run instead (FEAT-065): `suggestion` is
+/// [`board_path_for`]'s answer.
+pub fn docs_guard_reason(suggestion: &str) -> String {
+    format!(
+        "Documentation for this project belongs on its board, not in the code repository \
+         — the board is where it can be found, searched, and linked to the work it \
+         explains.\n\nWrite it there instead:\n    kanbanr doc add notes/{suggestion}.md \
+         --file <path>\n\nIf this file is part of what the repository ships (README, \
+         CHANGELOG, docs/, CONTRIBUTING, LICENSE, a doc-site source or a fixture), say so \
+         and write it: those are deliverables, not project reasoning."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,5 +372,109 @@ mod tests {
             "{with}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-065: the guard decides from a path and nothing else. Every judgement it gets wrong is
+    /// either a note scattered into a codebase or a legitimate write refused — and a guard that
+    /// refuses legitimate writes gets turned off.
+    #[test]
+    fn the_docs_guard_ignores_paths_outside_the_repo() {
+        let root = std::path::Path::new("/work/shop");
+        // FEAT-111 R-1: Claude Code's plan file, a scratch file, and an escape through `..` are
+        // all outside the repository, so the guard has no opinion on them.
+        for path in [
+            "/home/someone/.claude/plans/a-plan.md",
+            "/tmp/scratch/NOTES.md",
+            "../elsewhere/PLAN.md",
+            "/work/shop/../shop-notes/PLAN.md",
+        ] {
+            assert_eq!(board_path_for(path, root, root), None, "{path}");
+        }
+        // Inside it, the rule is unchanged: loose notes are refused, deliverables are not.
+        assert!(board_path_for("/work/shop/NOTES.md", root, root).is_some());
+        assert_eq!(board_path_for("/work/shop/README.md", root, root), None);
+    }
+
+    /// FEAT-129: on macOS the temp folder is `/var/…`, a symlink to `/private/var/…`. The root is
+    /// read from the working directory with symlinks resolved; the file path is not. They shared no
+    /// prefix, so a loose note inside the repository counted as outside it and was let through —
+    /// which only a CI runner, not a Linux laptop, showed.
+    #[cfg(unix)]
+    #[test]
+    fn the_docs_guard_follows_a_symlinked_folder() {
+        let base = std::env::temp_dir().join(format!("kanbanr-guard-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let real = base.join("real");
+        std::fs::create_dir_all(real.join("shop")).unwrap();
+        std::os::unix::fs::symlink(&real, base.join("link")).unwrap();
+        let root = std::fs::canonicalize(real.join("shop")).unwrap();
+
+        // Spelled through the link, it is still the repository's file: refused with the same
+        // suggestion as when spelled through the real path.
+        let through_link = base.join("link/shop/NOTES.md");
+        let through_real = real.join("shop/NOTES.md");
+        let suggestion = board_path_for(through_real.to_str().unwrap(), &root, &root);
+        assert!(suggestion.is_some());
+        assert_eq!(
+            board_path_for(through_link.to_str().unwrap(), &root, &root),
+            suggestion
+        );
+        // A deliverable stays allowed, and an escape through `..` stays outside.
+        let readme = base.join("link/shop/README.md");
+        assert_eq!(board_path_for(readme.to_str().unwrap(), &root, &root), None);
+        let escape = base.join("link/shop/../elsewhere/PLAN.md");
+        assert_eq!(board_path_for(escape.to_str().unwrap(), &root, &root), None);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// FEAT-111 R-2: the suggestion is a board path someone can actually run — built from the
+    /// repo-relative path, never `notes//home/…`.
+    #[test]
+    fn the_docs_guard_suggests_a_usable_board_path() {
+        let root = std::path::Path::new("/work/shop");
+        assert_eq!(
+            board_path_for("/work/shop/api/Design Notes.md", root, root).as_deref(),
+            Some("api/design-notes")
+        );
+        assert_eq!(
+            board_path_for("./PLAN.md", root, &root.join("sub/..")).as_deref(),
+            Some("plan")
+        );
+    }
+
+    #[test]
+    fn the_docs_guard_allows_deliverables_and_stops_the_rest() {
+        // Project reasoning written loose in a checkout: this is what belongs on the board.
+        for path in [
+            "NOTES.md",
+            "design-thoughts.md",
+            "api/PLAN.md",
+            "some/deep/folder/retrospective.md",
+        ] {
+            assert!(belongs_on_board(path), "{path} should go to the board");
+        }
+
+        // What the repository ships, and what is not prose at all.
+        for path in [
+            "README.md",
+            "CHANGELOG.md",
+            "CONTRIBUTING.md",
+            "SECURITY.md",
+            "CLAUDE.md",
+            "docs/USER_GUIDE.md",
+            "skill/kanbanr/SKILL.md",
+            ".github/PULL_REQUEST_TEMPLATE.md",
+            "web/README.md",
+            "api/crates/kanbanr-cli/tests/fixtures/board.md",
+            "api/target/doc/index.md",
+            "src/main.rs",
+            "Cargo.toml",
+        ] {
+            assert!(!belongs_on_board(path), "{path} should be allowed through");
+        }
+
+        // Case is not identity: a repository's README is a README however it is spelled.
+        assert!(!belongs_on_board("readme.md"));
+        assert!(!belongs_on_board("Docs/design.md"));
     }
 }

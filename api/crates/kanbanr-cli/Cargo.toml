@@ -21,8 +21,6 @@ kanbanr-server = { path = "../kanbanr-server" }
 serde.workspace = true
 # preserve_order: `kanbanr hooks install` edits the user's Claude settings without reordering keys.
 serde_json = { workspace = true, features = ["preserve_order"] }
-# `charter set` / `feature define` accept YAML or JSON from a file or stdin (YAML parses both).
-serde_yaml.workspace = true
 clap = { version = "4", features = ["derive"] }
 anyhow.workspace = true
 # `serve` needs an async runtime to host the view daemon.
@@ -46,6 +44,9 @@ flate2 = "1"
 fs2 = "0.4"
 
 [dev-dependencies]
+# The integration tests read and write board YAML to set up and inspect fixtures. The program
+# itself parses no board YAML: that is core's (FEAT-176).
+serde_yaml.workspace = true
 # Spin up the built Docker image to integration-test the view daemon end-to-end.
 # `blocking` provides the synchronous SyncRunner used by the tests.
 testcontainers = { version = "0.28", features = ["blocking"] }

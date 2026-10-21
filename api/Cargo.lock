@@ -1465,6 +1465,7 @@ name = "kanbanr-core"
 version = "0.1.7"
 dependencies = [
  "ears-classifier",
+ "fs2",
  "git2",
  "schemars 1.2.1",
  "serde",
@@ -1481,7 +1482,6 @@ dependencies = [
  "anyhow",
  "axum 0.7.9",
  "flate2",
- "fs2",
  "futures",
  "git2",
  "jsonschema",

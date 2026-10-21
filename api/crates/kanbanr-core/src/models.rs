@@ -730,6 +730,38 @@ pub struct Defect {
     pub extra: crate::models::Extra,
 }
 
+/// Changes to a defect record, a field at a time (FEAT-053): a field given replaces what is
+/// recorded (an empty one clears it); one not given is kept.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DefectChange {
+    pub severity: Option<String>,
+    pub introduced_by: Option<String>,
+    pub found_in: Option<String>,
+    pub root_cause: Option<String>,
+    pub fixed_by: Option<String>,
+    /// Marks it escaped; an escape once recorded is never unrecorded here.
+    pub escaped: bool,
+}
+
+impl Defect {
+    /// This record with `change` applied (FEAT-176), so one flag at a time is enough.
+    pub fn merge(mut self, change: &DefectChange) -> Defect {
+        for (field, value) in [
+            (&mut self.severity, &change.severity),
+            (&mut self.introduced_by, &change.introduced_by),
+            (&mut self.found_in, &change.found_in),
+            (&mut self.root_cause, &change.root_cause),
+            (&mut self.fixed_by, &change.fixed_by),
+        ] {
+            if let Some(v) = value {
+                *field = v.clone();
+            }
+        }
+        self.escaped = self.escaped || change.escaped;
+        self
+    }
+}
+
 /// A link from a feature to the external issue it is mirrored to (FEAT-043).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1009,3 +1041,103 @@ pub struct Milestone {
 // NOTE: There is no `Schedule` entity. A "schedule" is a *derived view*: for a given feature
 // status, the milestones that contain feature items in that status (ordered by their dependency
 // DAG). The UI computes this from features + milestones; nothing is stored on disk.
+
+/// A starting skeleton for a definition, shaped to the kind of work (FEAT-047). Every kind states
+/// why it exists and how it is verified; what differs is the FORM a requirement takes — a feature
+/// asserts new behaviour, a defect names the requirement it violates, a chore asserts an invariant.
+/// Printing only the fields that apply keeps an author from staring at a form full of blanks.
+pub fn definition_template(kind: &str) -> String {
+    let head = "\
+# Why this item exists, what must be true, and how that is verified.
+# Fill what you know; leave the rest BLANK so `kanbanr doctor` can flag it — never invent.
+statement: \"<capability> for <whom> so that <why>\"
+goals: [G-1]          # charter goal ids this serves (kanbanr charter show)
+zachman:
+  what:  \"\"            # data, functions, rules
+  how:   \"\"            # approach
+  where: \"\"            # component or service
+  when:  \"\"            # trigger, frequency, timing
+  who:   \"\"            # stakeholder role
+  why:   \"\"            # the problem or goal served
+affects_docs: []      # board docs the design changes, e.g. [architecture/data.md]: named at the
+                      # design stage; a `docs_updated` gate checks each changed before moving on
+";
+    let requirements = match kind.trim().to_ascii_lowercase().as_str() {
+        "defect" | "bug" => {
+            "\
+requirements:
+  # A defect violates a requirement. If none covers the case, THAT is the finding: add the
+  # missing requirement here instead of leaving `violates` blank.
+  - kind: functional
+    violates: FEAT-000/R-0
+    text: \"WHEN <the trigger>, THE SYSTEM SHALL <the behaviour that was wrong>\"
+    tests:
+      - name: \"<test that reproduces it>\"
+        kind: unit
+        state: red      # red first, then green once fixed
+"
+        }
+        "chore" | "refactor" => {
+            "\
+requirements:
+  # No new behaviour: the requirement is what must NOT change.
+  - kind: functional
+    text: \"THE SYSTEM SHALL continue to <invariant this work must preserve>\"
+    tests:
+      - name: \"<existing suite that proves it>\"
+        kind: integration
+        state: green
+"
+        }
+        "docs" => {
+            "\
+requirements:
+  # The requirement is the contract the documentation must match.
+  - kind: functional
+    text: \"THE SYSTEM SHALL document <the contract> as it actually behaves\"
+    tests:
+      - name: \"<doc check or doctor rule>\"
+        kind: manual
+        state: planned
+"
+        }
+        "recurring" => {
+            "\
+requirements:
+  # Standing work: one statement, verified per occurrence by its checklist.
+  - kind: functional
+    text: \"THE SYSTEM SHALL <the standing obligation>\"
+    tests:
+      - name: \"<per-occurrence check>\"
+        kind: manual
+        state: planned
+"
+        }
+        _ => {
+            "\
+requirements:
+  - kind: functional
+    text: \"WHEN <trigger>, THE SYSTEM SHALL <response>\"
+    tests:
+      - name: \"<test that verifies it>\"
+        kind: unit
+        state: planned
+  # A quality requirement needs a tag AND a measure that names what checks it — a number with
+  # nothing behind it is an unsupported claim, so leave it out unless it is real.
+  - kind: nfr
+    text: \"WHERE <condition>, THE SYSTEM SHALL <quality behaviour>\"
+    iso25010: [Reliability]
+    scenario:
+      stimulus: \"\"
+      environment: \"\"
+      response: \"\"
+      measure: \"<number, and the test or benchmark that checks it>\"
+    tests:
+      - name: \"<test that verifies it>\"
+        kind: integration
+        state: planned
+"
+        }
+    };
+    format!("{head}{requirements}")
+}

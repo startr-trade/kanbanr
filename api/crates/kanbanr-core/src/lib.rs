@@ -12,6 +12,7 @@ unsafe extern "system" {}
 
 pub mod activity;
 pub mod adr;
+mod architecture;
 pub mod batch;
 pub mod boardreadme;
 pub mod charter;
@@ -28,7 +29,9 @@ pub mod doctor;
 pub use ears_classifier as ears;
 pub mod error;
 pub mod eventing;
+pub mod evidence;
 pub mod export;
+pub mod flow;
 pub mod gantt;
 pub mod git;
 pub mod gitdrift;
@@ -58,6 +61,7 @@ pub mod sprints;
 pub mod store;
 pub mod trace;
 pub mod validate;
+pub mod write;
 
 pub use charter::{Charter, Goal, Stakeholder};
 pub use config::ProjectConfig;

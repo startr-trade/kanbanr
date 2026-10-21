@@ -93,6 +93,11 @@ impl Backend {
         }
     }
 
+    /// The board this backend reads and writes, for core functions that take a store.
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
     /// A read that needs the project's code repository (FEAT-189: the git model reads its
     /// branches).
     pub fn get_in(&self, path: &str, repo: Option<&std::path::Path>) -> Result<String> {
@@ -150,20 +155,12 @@ impl Backend {
     /// and diverge the git repo (FEAT-029). The lock is advisory between kanbanr processes; the OS
     /// releases it if the process dies. Reads (`get`) are intentionally not locked.
     fn with_write_lock<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
-        use fs2::FileExt;
-        let lock_path = self.data_dir.join(kanbanr_core::git::WRITE_LOCK_FILE);
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            // The lock file holds no content (advisory locking only); never truncate it.
-            .truncate(false)
-            .open(&lock_path)
-            .map_err(|e| anyhow!("could not open write lock {}: {e}", lock_path.display()))?;
-        file.lock_exclusive()
-            .map_err(|e| anyhow!("could not acquire write lock {}: {e}", lock_path.display()))?;
-        let result = f();
-        let _ = file.unlock();
-        result
+        kanbanr_core::write::with_lock(&self.data_dir, f).map_err(|e| {
+            anyhow!(
+                "could not take the write lock in {}: {e}",
+                self.data_dir.display()
+            )
+        })?
     }
 
     /// A write: git remotes act on the local repo; data routes dispatch + log + commit. Serialized
@@ -182,7 +179,7 @@ impl Backend {
         repo: Option<&std::path::Path>,
     ) -> Result<String> {
         let dry_run = dispatch::is_dry_run(body.as_ref());
-        let out = self.with_write_lock(move || self.write_locked(method, path, body, repo))?;
+        let out = self.write_unlocked(method, path, body, repo)?;
         if let (false, Some(project)) = (dry_run, project_of(path)) {
             self.auto_mirror(&project);
         }
@@ -237,7 +234,10 @@ impl Backend {
         }
     }
 
-    fn write_locked(
+    /// Git remotes act on the local repo under the lock; data routes go through core's one write
+    /// recipe (FEAT-176), which takes the lock itself. `repo` is the project's code repository, for
+    /// the routes that act on it (FEAT-183).
+    fn write_unlocked(
         &self,
         method: Method,
         path: &str,
@@ -246,53 +246,33 @@ impl Backend {
     ) -> Result<String> {
         let bare = path.split('?').next().unwrap_or(path);
         if bare == "/remotes" || bare.starts_with("/remotes/") {
-            if let Some(name) = bare.strip_prefix("/remotes/") {
-                git::remove_remote(&self.data_dir, name).map_err(|e| anyhow!(e))?;
-                return Ok(String::new());
-            }
-            let b = body.unwrap_or(Value::Null);
-            let name = b.get("name").and_then(|v| v.as_str()).unwrap_or_default();
-            let url = b.get("url").and_then(|v| v.as_str()).unwrap_or_default();
-            git::add_remote(&self.data_dir, name, url).map_err(|e| anyhow!(e))?;
-            return Ok(json!({ "name": name, "url": url }).to_string());
+            return self.with_write_lock(|| {
+                if let Some(name) = bare.strip_prefix("/remotes/") {
+                    git::remove_remote(&self.data_dir, name).map_err(|e| anyhow!(e))?;
+                    return Ok(String::new());
+                }
+                let b = body.unwrap_or(Value::Null);
+                let name = b.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+                let url = b.get("url").and_then(|v| v.as_str()).unwrap_or_default();
+                git::add_remote(&self.data_dir, name, url).map_err(|e| anyhow!(e))?;
+                Ok(json!({ "name": name, "url": url }).to_string())
+            });
         }
-
-        git::ensure_repo(&self.data_dir);
-        let m = method_str(method);
-        // Nobody to author the commit: refuse before anything changes on disk (FEAT-128), rather
-        // than write a change no commit records, or record it as a placeholder.
-        if dispatch::is_mutation(m) && !dispatch::is_dry_run(body.as_ref()) {
-            git::require_identity(&self.data_dir).map_err(|e| anyhow!(e))?;
+        let applied = kanbanr_core::write::apply(
+            &self.store,
+            &self.data_dir,
+            self.push,
+            method_str(method),
+            path,
+            body.as_ref(),
+            repo,
+            &UreqSender,
+        )
+        .map_err(|e| anyhow!(e.to_string()))?;
+        for w in &applied.push_failures {
+            eprintln!("kanbanr: {w}");
         }
-        let out = dispatch::dispatch_in(&self.store, m, path, body.as_ref(), repo)
-            .map_err(|e| anyhow!(e.to_string()))?;
-        if dispatch::is_mutation(m) && !dispatch::is_dry_run(body.as_ref()) {
-            let msg = dispatch::commit_message(m, path, body.as_ref());
-            if let Some(project) = project_of(path) {
-                let actor = git::identity(&self.data_dir)
-                    .map(|(n, _)| n)
-                    .unwrap_or_else(|| "kanbanr".into());
-                activity::append(
-                    &self.data_dir,
-                    &project,
-                    &actor,
-                    &msg,
-                    item_of(path).as_deref(),
-                );
-            }
-            // Eventing (FEAT-036): an additive, best-effort, opt-in tail step that never returns
-            // an error into the write path. The LOG is written before the commit so the entry lands
-            // in the same commit as the change it describes (FEAT-059) — otherwise a session's last
-            // events stay uncommitted until some later write sweeps them up, leaving the board repo
-            // dirty. DELIVERY stays after the commit, because it touches the network and must not
-            // delay or fail a durable write.
-            let events = eventing::record(&self.store, &self.data_dir, m, path, &out);
-            if git::commit_local(&self.data_dir, &msg) {
-                self.after_commit();
-            }
-            eventing::deliver_all(&self.data_dir, &events, &UreqSender);
-        }
-        Ok(out)
+        Ok(applied.body)
     }
 
     /// After a successful local commit, apply the board's push policy (FEAT-034, FEAT-142). The
@@ -395,15 +375,7 @@ impl Backend {
     }
 }
 
-/// The project id from `/projects/<id>/...`.
-fn project_of(path: &str) -> Option<String> {
-    let bare = path.split('?').next().unwrap_or(path);
-    let mut segs = bare.split('/').filter(|s| !s.is_empty());
-    if segs.next()? != "projects" {
-        return None;
-    }
-    segs.next().map(|s| s.to_string())
-}
+use kanbanr_core::write::project_of;
 
 /// `/projects/<id>/activity` -> the project id.
 fn activity_project(path: &str) -> Option<String> {
@@ -430,20 +402,6 @@ fn query_param(path: &str, key: &str) -> Option<String> {
         let (k, v) = kv.split_once('=')?;
         (k == key).then(|| v.to_string())
     })
-}
-
-/// The feature code from `/projects/<id>/features/<CODE>/...` (for tagging activity).
-fn item_of(path: &str) -> Option<String> {
-    let bare = path.split('?').next().unwrap_or(path);
-    let mut segs = bare.split('/').filter(|s| !s.is_empty());
-    if segs.next()? != "projects" {
-        return None;
-    }
-    segs.next()?; // project id
-    if segs.next()? != "features" {
-        return None;
-    }
-    segs.next().map(|s| s.to_string())
 }
 
 #[cfg(test)]

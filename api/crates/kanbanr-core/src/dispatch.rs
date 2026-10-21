@@ -251,11 +251,7 @@ fn list_summaries(store: &Store) -> Result<Vec<ProjectSummary>> {
             continue;
         };
         let cfg = &project.config;
-        let displayed = if cfg.displayed_states.is_empty() {
-            cfg.statuses.clone()
-        } else {
-            cfg.displayed_states.clone()
-        };
+        let displayed = cfg.board_states().to_vec();
         let other_states: Vec<String> = cfg
             .statuses
             .iter()
@@ -486,64 +482,6 @@ fn process_source(body: &Value) -> Result<Option<crate::config::ProcessSource>> 
     }
 }
 
-/// The processes this board can apply (FEAT-169): its own library, then the built-in ones, each
-/// with the projects on the board that use it.
-fn list_processes(store: &Store) -> Result<Vec<crate::library::ProcessListing>> {
-    use crate::config::Library;
-    use crate::library::ProcessListing;
-    let mut used: BTreeMap<(String, Library), Vec<String>> = BTreeMap::new();
-    for id in store.list_projects()? {
-        if let Some(src) = store.load(&id)?.config.process {
-            used.entry((src.name, src.library)).or_default().push(id);
-        }
-    }
-    let row = |name: &str, library: Library, file: &crate::config::WorkflowFile, about: String| {
-        ProcessListing {
-            name: name.to_string(),
-            library,
-            version: Some(file.version()),
-            description: Some(about),
-            rev: Some(file.content_rev()),
-            used_by: used
-                .get(&(name.to_string(), library))
-                .cloned()
-                .unwrap_or_default(),
-        }
-    };
-    let mut out = Vec::new();
-    for (name, file) in store.list_processes()? {
-        let about = file
-            .process
-            .as_ref()
-            .map(|h| h.description.clone())
-            .unwrap_or_default();
-        out.push(row(&name, Library::Board, &file, about));
-    }
-    for (name, about) in crate::config::presets() {
-        out.push(row(
-            name,
-            Library::Builtin,
-            &crate::config::preset(name)?,
-            about,
-        ));
-    }
-    // Personal processes live on someone's machine, not here; the board knows only which projects
-    // use one, and which version they applied. The CLI fills in the user's own.
-    for ((name, library), projects) in &used {
-        if *library == Library::Personal {
-            out.push(ProcessListing {
-                name: name.clone(),
-                library: *library,
-                version: None,
-                description: None,
-                rev: None,
-                used_by: projects.clone(),
-            });
-        }
-    }
-    Ok(out)
-}
-
 // ---- the dispatcher ------------------------------------------------------------------------
 
 /// The media type of what a successful `GET` of `path` (with its query) answers with (FEAT-177):
@@ -623,7 +561,7 @@ pub fn dispatch_in(
         }
 
         // ---- the board's process library (FEAT-169) ----
-        ("GET", ["processes"]) => ser(&list_processes(store)?),
+        ("GET", ["processes"]) => ser(&crate::library::listing(store)?),
         ("GET", ["processes", name]) => {
             let (file, library) = store.resolve_process(name)?;
             ser(&json!({ "name": name, "library": library, "file": file }))
@@ -639,7 +577,7 @@ pub fn dispatch_in(
         // the monitor. A personal process is the user's kanbanr's to compare; here it is named only.
         ("GET", ["projects", p, "process"]) => {
             let project = store.load(p)?;
-            let drift = store.process_drift(&project)?;
+            let drift = store.process_drift(&project, None)?;
             ser(&crate::library::ProcessStatus {
                 source: project.config.process,
                 messages: drift.as_ref().map(|d| d.messages()).unwrap_or_default(),
@@ -767,7 +705,17 @@ pub fn dispatch_in(
                 &str_field(b, "milestone").unwrap_or_default(),
                 str_field(b, "code"),
             )?;
-            match maybe_apply_attrs(store, p, &f.code, b)? {
+            let attrs = maybe_apply_attrs(store, p, &f.code, b)?;
+            // Feedback on a release says where it was found, the way a defect does (FEAT-120):
+            // recorded with the item, in the same write.
+            if let Some(version) = str_field(b, "found_in") {
+                let defect = crate::models::Defect {
+                    found_in: version,
+                    ..Default::default()
+                };
+                return ser(&store.set_defect(p, &f.code, Some(defect))?);
+            }
+            match attrs {
                 Some(json) => Ok(json),
                 None => ser(&f),
             }

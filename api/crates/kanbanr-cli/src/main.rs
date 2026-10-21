@@ -12,6 +12,7 @@ mod skill;
 
 use backend::{Backend, Method};
 use clap::{Args, Parser, Subcommand};
+use kanbanr_core::coderepo;
 use kanbanr_core::docs::DocFolder;
 use kanbanr_core::project::{DataDirSource, Marker};
 use kanbanr_core::{Project, project};
@@ -1527,7 +1528,7 @@ fn run_serve(
         let project = project::find_marker(&cwd, project::home_dir().as_deref())?
             .marker
             .project?;
-        let root = kanbanr_core::coderepo::repo_root_in(&cwd)?;
+        let root = coderepo::repo_root_in(&cwd)?;
         Some((project, root))
     });
     if allow_writes && let Some((project, root)) = &code_repo {
@@ -1660,42 +1661,20 @@ fn run_init(
     // this repository its own pointer, recoverable only because FEAT-073 had made the file tracked.
     let wanted = Marker {
         project: Some(proj.clone()),
-        data_dir: record.then(|| marker_path(&dir, &cwd)),
+        data_dir: record.then(|| project::marker_path(&dir, &cwd)),
     };
     let existing = std::fs::read_to_string(cwd.join(project::MARKER_FILE))
         .ok()
         .map(|c| Marker::parse(&c));
-    if let Some(current) = &existing
-        && !force
-        && (current.project != wanted.project || current.data_dir != wanted.data_dir)
-    {
-        let shown = |m: &Marker| {
-            format!(
-                "project {}, board {}",
-                m.project.clone().unwrap_or_else(|| "<none>".into()),
-                m.data_dir
-                    .clone()
-                    .unwrap_or_else(|| "<not recorded>".into())
-            )
-        };
-        anyhow::bail!(
-            "this folder already names a board, and init would replace it:\n  \
-             now:      {}\n  \
-             would be: {}\n\
-             Nothing was changed. To switch project within the SAME board, use \
-             `kanbanr project use <name>`; to repoint deliberately, re-run with `--force`.",
-            shown(current),
-            shown(&wanted)
-        );
+    if let Some(current) = &existing {
+        current.may_repoint(&wanted, force)?;
     }
-    let replaced =
-        existing.filter(|c| c.project != wanted.project || c.data_dir != wanted.data_dir);
+    let replaced = existing.filter(|c| c != &wanted);
     project::write_marker(&cwd, &wanted)?;
     if let Some(old) = replaced {
         println!(
-            "! replaced this folder's previous pointer (project {}, board {})",
-            old.project.unwrap_or_else(|| "<none>".into()),
-            old.data_dir.unwrap_or_else(|| "<not recorded>".into())
+            "! replaced this folder's previous pointer ({})",
+            old.summary()
         );
     }
     println!("✓ selected '{proj}' here (.kanbanr)");
@@ -1882,31 +1861,6 @@ fn choose_init_data_dir(cli: &Cli, cwd: &Path) -> anyhow::Result<(PathBuf, bool)
     Ok((chosen, true))
 }
 
-/// Stamp file-sourced `feature.add` ops with the project repo's HEAD commit when the bundle didn't
-/// say, so an imported item records which version of the file it came from. (FEAT-042)
-fn fill_file_source_revisions(body: &mut Value) {
-    let Some(ops) = body["operations"].as_array_mut() else {
-        return;
-    };
-    let needs = |op: &Value| {
-        op["op"] == "feature.add"
-            && op["source"]["system"] == "file"
-            && op["source"]["revision"].is_null()
-    };
-    if !ops.iter().any(needs) {
-        return;
-    }
-    let Ok(cwd) = std::env::current_dir() else {
-        return;
-    };
-    let Some(rev) = project::project_revision(&cwd, project::home_dir().as_deref()) else {
-        return;
-    };
-    for op in ops.iter_mut().filter(|op| needs(op)) {
-        op["source"]["revision"] = json!(rev);
-    }
-}
-
 /// One line of a `batch --dry-run` preview.
 fn describe_batch_result(r: &Value) -> String {
     let s = |k: &str| r[k].as_str().unwrap_or("").to_string();
@@ -1944,42 +1898,13 @@ fn run_sources(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
     let project = get_project(client, &p)?;
     let cwd = std::env::current_dir()?;
     let root = project::project_root(&cwd, project::home_dir().as_deref());
-    let today = kanbanr_core::now_rfc3339();
-
-    let mut rows = Vec::new();
-    let mut edits = Vec::new();
-    for f in &project.features {
-        let Some(src) = &f.source else { continue };
-        // Only file sources can be checked locally; `TODO.md:14` -> `TODO.md`.
-        let present = (src.system == "file").then(|| {
-            let path = match src.reference.rsplit_once(':') {
-                Some((file, line)) if line.chars().all(|c| c.is_ascii_digit()) => file,
-                _ => src.reference.as_str(),
-            };
-            root.join(path).exists()
-        });
-        let mut updated = src.clone();
-        match present {
-            Some(false) if src.missing_since.is_none() => {
-                updated.missing_since = Some(today.clone())
-            }
-            Some(true) if src.missing_since.is_some() => updated.missing_since = None,
-            _ => {}
-        }
-        if updated != *src {
-            edits.push(json!({"op": "feature.edit", "code": f.code, "source": updated}));
-        }
-        rows.push(json!({
-            "code": f.code,
-            "system": src.system,
-            "ref": src.reference,
-            "revision": src.revision,
-            "url": src.url,
-            "imported_at": src.imported_at,
-            "present": present,
-            "missing_since": updated.missing_since,
-        }));
-    }
+    let plan = kanbanr_core::evidence::plan_sources(
+        &project,
+        &|path| root.join(path).exists(),
+        &kanbanr_core::now_rfc3339(),
+    );
+    let rows = serde_json::to_value(&plan.rows)?;
+    let rows = rows.as_array().cloned().unwrap_or_default();
 
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
@@ -2013,40 +1938,23 @@ fn run_sources(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
         }
     }
 
-    if !edits.is_empty() {
+    if let Some(batch) = plan.batch() {
         if write {
-            client.write(
-                Method::Post,
-                &format!("/projects/{p}/batch"),
-                Some(
-                    json!({"operations": edits, "message": "sources: update missing-source marks"}),
-                ),
-            )?;
+            client.write(Method::Post, &format!("/projects/{p}/batch"), Some(batch))?;
             if !cli.json {
-                println!("recorded {} source change(s)", edits.len());
+                println!("recorded {} source change(s)", plan.edits.len());
             }
         } else if !cli.json {
             println!(
                 "{} source mark(s) out of date; run `kanbanr sources --write` to record them",
-                edits.len()
+                plan.edits.len()
             );
         }
     }
     Ok(())
 }
 
-/// A duration a person would recognise. Days are the unit that matters for a board, but work that
-/// takes an afternoon is not "0.0 days" — printing it that way makes a working metric look broken
-/// and teaches the reader to skip the line (FEAT-062).
-fn duration(days: f64) -> String {
-    if days >= 1.0 {
-        format!("{days:.1}d")
-    } else if days * 24.0 >= 1.0 {
-        format!("{:.0}h", days * 24.0)
-    } else {
-        format!("{:.0}m", days * 24.0 * 60.0)
-    }
-}
+use kanbanr_core::report::duration;
 
 /// Stale evidence, summarised. Every commit moves HEAD, so in an active repo this fires on nearly
 /// everything and clears on the next full test run — enumerating it buries the cases that matter
@@ -2319,13 +2227,13 @@ fn blame_refs(root: &Path, path: &str, line: usize) -> Option<(String, Vec<Strin
     // -C -M follow the line through moves and copies, which is what makes blame survive the
     // refactors that would otherwise lose the link.
     let range = format!("{line},{line}");
-    let out = scm::git(
+    let out = coderepo::git(
         root,
         &["blame", "-C", "-M", "-L", &range, "--porcelain", "--", path],
     )
     .ok()?;
     let sha = out.split_whitespace().next()?.to_string();
-    let message = scm::git(root, &["log", "-1", "--format=%B", &sha]).ok()?;
+    let message = coderepo::git(root, &["log", "-1", "--format=%B", &sha]).ok()?;
     let refs: Vec<String> = kanbanr_core::scm::parse_refs(&message)
         .into_iter()
         .map(|r| r.as_token().trim_start_matches("kanbanr:").to_string())
@@ -2430,7 +2338,7 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         return Ok(());
     };
     let root = project::project_root(&cwd, project::home_dir().as_deref());
-    let Some(suggestion) = board_path_for(path, &root, &cwd) else {
+    let Some(suggestion) = kanbanr_core::claude::board_path_for(path, &root, &cwd) else {
         return Ok(());
     };
     println!(
@@ -2438,106 +2346,10 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         json!({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": format!(
-                "Documentation for this project belongs on its board, not in the code repository \
-                 — the board is where it can be found, searched, and linked to the work it \
-                 explains.\n\nWrite it there instead:\n    kanbanr doc add notes/{suggestion}.md \
-                 --file <path>\n\nIf this file is part of what the repository ships (README, \
-                 CHANGELOG, docs/, CONTRIBUTING, LICENSE, a doc-site source or a fixture), say so \
-                 and write it: those are deliverables, not project reasoning."
-            ),
+            "permissionDecisionReason": kanbanr_core::claude::docs_guard_reason(&suggestion),
         }})
     );
     Ok(())
-}
-
-/// The board path to suggest for a file the guard refuses, or `None` when the write is not the
-/// guard's business.
-///
-/// The guard judges only files **inside the tracked repository** (FEAT-111). A path outside it —
-/// Claude Code's own plan file in `~/.claude/plans`, a scratch file, anything reached through
-/// `..` — is none of the board's concern, and refusing it once blocked plan mode outright. The
-/// suggestion is built from the repo-relative path, never the absolute one, which used to come out
-/// as `notes//home/…`.
-fn board_path_for(path: &str, root: &Path, cwd: &Path) -> Option<String> {
-    let given = Path::new(path);
-    let absolute = if given.is_absolute() {
-        given.to_path_buf()
-    } else {
-        cwd.join(given)
-    };
-    // Resolve `.` and `..` by the text alone: the file may not exist yet, so it cannot be
-    // canonicalised, and an escape through `..` must not count as inside the repository.
-    let mut resolved = PathBuf::new();
-    for part in absolute.components() {
-        match part {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                resolved.pop();
-            }
-            other => resolved.push(other),
-        }
-    }
-    // Then resolve on disk as far as the path exists (FEAT-129). The root comes from the working
-    // directory, which the OS reports with symlinks resolved; the file path arrives as Claude Code
-    // spelled it. On macOS the temp folder is `/var/…`, a symlink to `/private/var/…`, so the two
-    // never shared a prefix and a loose note there was waved through as "outside the repository".
-    let (resolved, root) = (project::normalize(&resolved), project::normalize(root));
-    let relative = resolved.strip_prefix(&root).ok()?;
-    let relative: Vec<String> = relative
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .collect();
-    let relative = relative.join("/");
-    if relative.is_empty() || !belongs_on_the_board(&relative) {
-        return None;
-    }
-    Some(
-        relative
-            .trim_end_matches(".md")
-            .trim_end_matches(".markdown")
-            .replace(' ', "-")
-            .to_lowercase(),
-    )
-}
-
-/// Is this markdown file project *reasoning* (board) rather than a shipped *deliverable* (repo)?
-///
-/// The allow-list is what a repository publishes. Everything else that is markdown, written loose
-/// in a checkout, is the kind of note that should have gone on the board.
-fn belongs_on_the_board(relative: &str) -> bool {
-    let lower = relative.to_lowercase();
-    if !lower.ends_with(".md") && !lower.ends_with(".markdown") {
-        return false;
-    }
-    const SHIPPED_DIRS: [&str; 8] = [
-        "docs/", "doc/", "book/", "site/", "web/", "skill/", ".github/", "editor/",
-    ];
-    const SHIPPED_FILES: [&str; 9] = [
-        "readme.md",
-        "changelog.md",
-        "contributing.md",
-        "security.md",
-        "code_of_conduct.md",
-        "license.md",
-        "third_party.md",
-        "claude.md",
-        "agents.md",
-    ];
-    if SHIPPED_DIRS.iter().any(|d| lower.starts_with(d)) {
-        return false;
-    }
-    if SHIPPED_FILES.contains(&lower.as_str()) {
-        return false;
-    }
-    // A test fixture or a vendored file is not project reasoning either.
-    if ["target/", "node_modules/", "tests/", "fixtures/", "vendor/"]
-        .iter()
-        .any(|d| lower.contains(d))
-    {
-        return false;
-    }
-    true
 }
 
 /// Architecture decisions (FEAT-057).
@@ -2584,17 +2396,7 @@ fn run_adr(cli: &Cli, client: &Backend, cmd: &AdrCmd) -> anyhow::Result<()> {
                 return Ok(());
             }
             let adrs: Vec<kanbanr_core::adr::Adr> = serde_json::from_str(&resp)?;
-            let shown: Vec<&kanbanr_core::adr::Adr> = adrs
-                .iter()
-                .filter(|a| {
-                    for_item.as_deref().is_none_or(|code| {
-                        a.affects.iter().any(|c| c == code)
-                            || a.driven_by
-                                .iter()
-                                .any(|d| d.split('/').next().is_some_and(|c| c == code))
-                    })
-                })
-                .collect();
+            let shown = kanbanr_core::adr::for_item_filter(&adrs, for_item.as_deref());
             if shown.is_empty() {
                 println!("(no decisions recorded)");
             }
@@ -2808,13 +2610,7 @@ fn run_retro(
         return Ok(());
     }
 
-    let since = since.map(|s| match s.strip_suffix('d') {
-        Some(days) => days
-            .parse::<i64>()
-            .map(kanbanr_core::report::days_ago)
-            .unwrap_or_else(|_| s.to_string()),
-        None => s.to_string(),
-    });
+    let since = since.map(kanbanr_core::report::parse_since);
     let mut query = Vec::new();
     for (key, value) in [
         ("milestone", milestone.map(str::to_string)),
@@ -2837,7 +2633,7 @@ fn run_retro(
         return Ok(());
     }
     let retro: kanbanr_core::retro::Retro = serde_json::from_str(&resp)?;
-    let facts = retro_markdown(&retro);
+    let facts = kanbanr_core::retro::markdown(&retro);
     print!("{facts}");
 
     if write {
@@ -2848,12 +2644,7 @@ fn run_retro(
             sprint: sprint.map(str::to_string),
         };
         let doc = kanbanr_core::retro::document_path(&wave, milestone.or(sprint));
-        let body = format!(
-            "{facts}\n## What we make of it\n\n\
-             _Written by whoever writes it, from the numbers above. It may explain them, and it \
-             may disagree with what we expected — it may not contradict them._\n\n\
-             <!-- narrative goes here -->\n"
-        );
+        let body = format!("{facts}{}", kanbanr_core::retro::scaffold());
         client.write(
             Method::Put,
             &format!("/projects/{p}/docs/content"),
@@ -2862,196 +2653,6 @@ fn run_retro(
         println!("\nwritten to {doc}");
     }
     Ok(())
-}
-
-/// The facts section, as markdown — the same text the CLI prints and the document stores, so the
-/// two can never drift apart.
-fn retro_markdown(r: &kanbanr_core::retro::Retro) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-    let _ = writeln!(out, "# Retrospective — {}\n", r.wave);
-    let _ = writeln!(out, "## What the board recorded\n");
-    let _ = writeln!(
-        out,
-        "- items: {} ({} finished, {} still open)",
-        r.items, r.completed, r.still_open
-    );
-    // A sprint retro: what it committed to, what it finished, and what it carried out (FEAT-119).
-    if let Some(sprint) = &r.sprint {
-        let unit = sprint["unit"].as_str().unwrap_or("");
-        let _ = writeln!(
-            out,
-            "- sprint {}: {} of {} {unit} done",
-            sprint["code"].as_str().unwrap_or(""),
-            num(&sprint["done"]),
-            num(&sprint["committed"])
-        );
-        let carried: Vec<String> = sprint["carried"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|c| {
-                format!(
-                    "{} → {}",
-                    c["code"].as_str().unwrap_or(""),
-                    c["to"].as_str().unwrap_or("")
-                )
-            })
-            .collect();
-        if !carried.is_empty() {
-            let _ = writeln!(out, "- carried over: {}", carried.join(", "));
-        }
-    }
-    if let Some(started) = &r.started {
-        let end = match (&r.finished, r.all_done) {
-            (Some(f), _) => f[..10.min(f.len())].to_string(),
-            // Over, but the board never recorded when: saying "still running" would be false.
-            (None, true) => "finished (date not recorded)".into(),
-            (None, false) => "still running".into(),
-        };
-        let _ = writeln!(out, "- ran: {} → {end}", &started[..10.min(started.len())]);
-    }
-    let growth = &r.scope_growth;
-    let _ = writeln!(
-        out,
-        "- scope: {} to begin with, {} added ({} defect(s), {} split, {} unaccounted for)",
-        growth.original,
-        growth.added(),
-        growth.defects.len(),
-        growth.split.len(),
-        growth.unclassified.len()
-    );
-    for (title, list) in [
-        ("added as defects", &growth.defects),
-        ("split out of other work", &growth.split),
-        ("added without a recorded cause", &growth.unclassified),
-    ] {
-        if !list.is_empty() {
-            let _ = writeln!(out, "  - {title}: {}", list.join(", "));
-        }
-    }
-    let _ = writeln!(
-        out,
-        "- defects: {} ({} escaped)",
-        r.defects.total, r.defects.escaped
-    );
-    if !r.defects.self_inflicted.is_empty() {
-        let _ = writeln!(
-            out,
-            "  - caused by work in this same wave: {}",
-            r.defects.self_inflicted.join(", ")
-        );
-    }
-    match &r.cycle_time_days {
-        Some(c) => {
-            let _ = writeln!(
-                out,
-                "- cycle time: p50 {}, p90 {}, max {}",
-                duration(c.p50),
-                duration(c.p90),
-                duration(c.max)
-            );
-        }
-        None => {
-            let _ = writeln!(
-                out,
-                "- cycle time: nothing finished with a recorded history"
-            );
-        }
-    }
-    if !r.rework.is_empty() {
-        let _ = writeln!(
-            out,
-            "- rework (called done, then reopened): {}",
-            r.rework.join(", ")
-        );
-    }
-    let _ = writeln!(
-        out,
-        "- requirements proven by a green test: {}/{}",
-        r.evidence.proven, r.evidence.requirements
-    );
-    if !r.evidence.finished_unproven.is_empty() {
-        let _ = writeln!(
-            out,
-            "  - finished with unproven requirements: {}",
-            r.evidence.finished_unproven.join(", ")
-        );
-    }
-    if !r.estimates.is_empty() {
-        let _ = writeln!(out, "- estimate vs actual:");
-        for e in &r.estimates {
-            let _ = writeln!(
-                out,
-                "  - {}: estimated {}, took {} ({:.1}×)",
-                e.code,
-                duration(e.estimate_days),
-                duration(e.actual_days),
-                if e.estimate_days > 0.0 {
-                    e.actual_days / e.estimate_days
-                } else {
-                    0.0
-                }
-            );
-        }
-    }
-    if !r.approximate.is_empty() {
-        let _ = writeln!(
-            out,
-            "- {} item(s) have only changelog timestamps, which record when the board was written \
-             rather than how long work took — too coarse for cycle time: {}",
-            r.approximate.len(),
-            r.approximate.join(", ")
-        );
-    }
-    if !r.no_history.is_empty() {
-        let _ = writeln!(
-            out,
-            "- no recorded moves, so no flow numbers: {}",
-            r.no_history.join(", ")
-        );
-    }
-    if let Some(starts) = &r.log_starts {
-        let _ = writeln!(
-            out,
-            "- this wave began before the activity log, which starts {starts} — anything earlier \
-             is not recorded here rather than absent"
-        );
-    }
-    out.push('\n');
-
-    // What the wave taught, as it stood when this was written. Still facts — each one carries the
-    // evidence it was recorded with — so it sits above the narrative, not inside it.
-    if !r.lessons.is_empty() {
-        let _ = writeln!(out, "## What this wave taught\n");
-        for l in &r.lessons {
-            let retired = l.status == kanbanr_core::lessons::LessonStatus::Retired;
-            let _ = writeln!(
-                out,
-                "- **{}** ({}%{}) {}",
-                l.id,
-                (l.confidence_now() * 100.0).round() as i64,
-                if retired { ", since retired" } else { "" },
-                l.lesson.trim()
-            );
-            let mut detail: Vec<String> = Vec::new();
-            if !l.from_item.is_empty() {
-                detail.push(format!("from {}", l.from_item));
-            }
-            if !l.evidence.trim().is_empty() {
-                detail.push(l.evidence.trim().to_string());
-            }
-            if !detail.is_empty() {
-                let _ = writeln!(out, "  - {}", detail.join(" · "));
-            }
-        }
-        let _ = writeln!(
-            out,
-            "\n_Live state is `kanbanr lessons`; confidence decays, so these are the figures as of \
-             this retrospective._\n"
-        );
-    }
-    out
 }
 
 /// The board, the repo and the branch, resolved together (FEAT-056). Every SCM command needs the
@@ -3068,7 +2669,7 @@ fn scm_context(cli: &Cli, client: &Backend) -> anyhow::Result<Context> {
     let root = scm::repo_root().ok_or_else(|| {
         anyhow::anyhow!("not inside a git repository — run this in the code repo")
     })?;
-    let branch = scm::current_branch(&root);
+    let branch = coderepo::current_branch(&root);
     Ok(Context {
         project,
         root,
@@ -3092,9 +2693,9 @@ fn scm_context_in(dir: &Path) -> anyhow::Result<Context> {
         .ok_or_else(|| anyhow::anyhow!("could not determine the project of {}", dir.display()))?;
     let data_dir = project::resolve_data_dir_in(None, env_data.as_deref(), dir, home.as_deref());
     let project = get_project(&Backend::new(data_dir.path), &p)?;
-    let root = scm::repo_root_in(dir)
+    let root = coderepo::repo_root_in(dir)
         .ok_or_else(|| anyhow::anyhow!("{} is not inside a git repository", dir.display()))?;
-    let branch = scm::current_branch(&root);
+    let branch = coderepo::current_branch(&root);
     Ok(Context {
         project,
         root,
@@ -3102,36 +2703,9 @@ fn scm_context_in(dir: &Path) -> anyhow::Result<Context> {
     })
 }
 
-/// The item the current branch is about. This is the whole reason the branch rule exists: with it,
-/// nothing else has to ask what is being worked on.
-/// The git model the hooks judge by, when the project has it on (FEAT-189). Which branches take
-/// merges only does not depend on the running sprint, so it is derived here without reading one.
-fn line_model(ctx: &Context) -> Option<kanbanr_core::gitmodel::GitModel> {
-    let config = &ctx.project.config;
-    if !config.cadence.git_model {
-        return None;
-    }
-    let main = config
-        .cadence
-        .main_branch
-        .clone()
-        .filter(|m| !m.trim().is_empty())
-        .unwrap_or_else(|| scm::default_branch(&ctx.root));
-    let facts = kanbanr_core::gitmodel::BranchFacts {
-        main,
-        ..Default::default()
-    };
-    Some(kanbanr_core::gitmodel::derive(config, &[], &facts))
-}
-
+/// The item the current branch is about (FEAT-056): core's rule, for this context.
 fn branch_item(ctx: &Context) -> Option<String> {
-    let pattern = ctx.project.config.branch_pattern();
-    let code = kanbanr_core::scm::item_code_from_branch(pattern, ctx.branch.as_deref()?)?;
-    ctx.project
-        .features
-        .iter()
-        .any(|f| f.code == code)
-        .then_some(code)
+    kanbanr_core::scm::branch_item(&ctx.project, ctx.branch.as_deref())
 }
 
 fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
@@ -3289,7 +2863,7 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
                 }
             );
             println!("branch:  {}", ctx.branch.as_deref().unwrap_or("(detached)"));
-            println!("default: {}", scm::default_branch(&ctx.root));
+            println!("default: {}", coderepo::default_branch(&ctx.root));
             match item {
                 Some(code) => println!("item:    {code}"),
                 None => println!("item:    (this branch belongs to no item)"),
@@ -3363,59 +2937,11 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     let Ok(ctx) = ctx else {
         return Ok(()); // not a kanbanr project: not this guard's business
     };
-    // A line of integration takes merges only (FEAT-189).
-    if let Some(branch) = &ctx.branch
-        && let Some(model) = line_model(&ctx)
-        && !scm::merge_in_progress(&ctx.root)
-        && scm::has_commits(&ctx.root)
-        && let kanbanr_core::gitmodel::LineVerdict::Refused(why) =
-            kanbanr_core::gitmodel::line_commit_verdict(&model, branch, false, None)
-    {
-        deny(why);
-        return Ok(());
-    }
-    // Completing a merge is the intended way work reaches the default branch (FEAT-094).
-    // So is a repository's first commit (FEAT-105): nothing can branch from a repo with none.
-    if let Some(branch) = &ctx.branch
-        && branch == &scm::default_branch(&ctx.root)
-        && !scm::merge_in_progress(&ctx.root)
-        && scm::has_commits(&ctx.root)
-    {
-        deny(format!(
-            "This would commit straight to {branch}. Work belongs on a branch for its item: run \
-             `kanbanr start <CODE>` first."
-        ));
-        return Ok(());
-    }
     // The message is only visible when it is given inline; a commit that opens an editor is
     // checked by the commit-msg hook instead.
-    let Some(message) = inline_message(command) else {
-        return Ok(());
-    };
-    if kanbanr_core::scm::is_generated_commit(&message) {
-        return Ok(());
-    }
-    let refs = kanbanr_core::scm::parse_refs(&message);
-    if refs.is_empty() {
-        if kanbanr_core::scm::escape_reason(&message).is_some() {
-            return Ok(());
-        }
-        let suggestion = branch_item(&ctx)
-            .map(|code| format!("Refs: kanbanr:{code}"))
-            .unwrap_or_else(|| "Refs: kanbanr:<CODE>".to_string());
-        deny(format!(
-            "This commit does not say which item it serves. Add the trailer `{suggestion}` (a \
-             requirement is better: `kanbanr:<CODE>/R-2`), or run `kanbanr commit -m \"…\"`, \
-             which fills it in from the branch."
-        ));
-        return Ok(());
-    }
-    let problems = kanbanr_core::scm::validate_refs(&ctx.project, &refs);
-    if !problems.is_empty() {
-        deny(format!(
-            "This commit references something that is not on the board:\n{}",
-            problems.join("\n")
-        ));
+    let facts = coderepo::repo_facts(&ctx.root, inline_message(command));
+    if let Some(why) = kanbanr_core::scm::commit_verdict(&facts, &ctx.project).refusal {
+        deny(why);
     }
     Ok(())
 }
@@ -3765,7 +3291,6 @@ fn closing_quoted(body: &str, quote: char) -> Option<String> {
 /// The commit-msg hook. Every exit here is a decision about whether a commit happens, so each
 /// refusal says what to write instead — a guardrail that only says "no" gets bypassed.
 fn run_check_msg(cli: &Cli, client: &Backend, file: &Path) -> anyhow::Result<()> {
-    use kanbanr_core::scm;
     let message = std::fs::read_to_string(file)
         .map_err(|e| anyhow::anyhow!("could not read the commit message ({e})"))?;
     // Comment lines are git's own; they are not part of the message.
@@ -3776,101 +3301,47 @@ fn run_check_msg(cli: &Cli, client: &Backend, file: &Path) -> anyhow::Result<()>
         .join("\n");
 
     // Not a kanbanr project (or no board reachable): say nothing, block nothing.
-    let ctx = scm_context(cli, client).ok();
-    // A merge into a line of integration says which items it brings, generated message or not
-    // (FEAT-189): a line is where "which items reached it" is read from.
-    if let Some(ctx) = &ctx
-        && let Some(model) = line_model(ctx)
-        && let Some(branch) = ctx.branch.as_deref()
-        && let kanbanr_core::gitmodel::LineVerdict::Refused(why) =
-            kanbanr_core::gitmodel::line_commit_verdict(
-                &model,
-                branch,
-                crate::scm::merge_in_progress(&ctx.root),
-                Some(&message),
-            )
-    {
-        anyhow::bail!("{why}");
-    }
-    if scm::is_generated_commit(&message) {
-        return Ok(()); // git wrote it; there is no author to ask for a reference
-    }
-    let Some(ctx) = ctx else {
+    let Ok(ctx) = scm_context(cli, client) else {
         return Ok(());
     };
-    // References are read before the escape is considered: a message that carries both is a
-    // referenced commit that happens to mention the escape, not an escape.
-    let refs = scm::parse_refs(&message);
-    if refs.is_empty() {
-        if let Some(reason) = scm::escape_reason(&message) {
-            eprintln!("kanbanr: committing with no reference — recorded reason: {reason}");
-            return Ok(());
-        }
-        let suggestion = branch_item(&ctx)
-            .map(|code| format!("Refs: kanbanr:{code}"))
-            .unwrap_or_else(|| "Refs: kanbanr:FEAT-001".to_string());
-        anyhow::bail!(
-            "this commit says which code changed but not which item it serves.\n\
-             Add a trailer:\n\n    {suggestion}\n\n\
-             or `kanbanr commit -m \"…\"`, which fills it in from the branch.\n\
-             If it genuinely serves no item, say so on the record: `[no-ref] <why>`."
-        );
-    }
-    let mut problems = scm::validate_refs(&ctx.project, &refs);
-    problems.extend(validate_doc_and_adr_refs(client, &message)?);
-    if !problems.is_empty() {
-        anyhow::bail!(
-            "this commit references something that is not on the board:\n  {}",
-            problems.join("\n  ")
-        );
-    }
-    Ok(())
-}
-
-/// `Docs:` and `ADR:` trailers resolve against the board too (FEAT-057). A stale document path or
-/// an invented decision id is a broken link, exactly like a dangling dependency — and the kind
-/// that is hardest to notice later, because it still reads as a reference.
-fn validate_doc_and_adr_refs(client: &Backend, message: &str) -> anyhow::Result<Vec<String>> {
+    let facts = coderepo::repo_facts(&ctx.root, Some(message));
+    // What `Docs:` and `ADR:` trailers resolve against (FEAT-057), fetched only if one names them.
     let p = require_project_quiet();
-    let (docs, adrs) = (
-        kanbanr_core::scm::parse_doc_refs(message),
-        kanbanr_core::scm::parse_adr_refs(message),
-    );
-    if docs.is_empty() && adrs.is_empty() {
-        return Ok(Vec::new());
-    }
-    let Some(p) = p else { return Ok(Vec::new()) };
-    let mut problems = Vec::new();
-    if !docs.is_empty() {
-        let tree = client
-            .get(&format!("/projects/{p}/docs"))
-            .unwrap_or_default();
-        for path in docs {
-            if !tree.contains(&path) {
-                problems.push(format!("Docs: {path} is not a document on this board"));
-            }
-        }
-    }
-    if !adrs.is_empty() {
-        let listed: Vec<kanbanr_core::adr::Adr> = client
-            .get(&format!("/projects/{p}/adrs"))
+    let tree = std::cell::OnceCell::new();
+    let doc_on_board = |path: &str| {
+        tree.get_or_init(|| {
+            client
+                .get(&format!(
+                    "/projects/{}/docs",
+                    p.as_deref().unwrap_or_default()
+                ))
+                .unwrap_or_default()
+        })
+        .contains(path)
+    };
+    let adrs = || -> Vec<kanbanr_core::adr::Adr> {
+        client
+            .get(&format!(
+                "/projects/{}/adrs",
+                p.as_deref().unwrap_or_default()
+            ))
             .ok()
             .and_then(|r| serde_json::from_str(&r).ok())
-            .unwrap_or_default();
-        for id in adrs {
-            match listed.iter().find(|a| a.id.eq_ignore_ascii_case(&id)) {
-                None => problems.push(format!("ADR: {id} is not a decision on this board")),
-                // Not a refusal: sometimes the commit IS the one replacing it. Saying so beats
-                // blocking, because a rule that blocks legitimate work gets bypassed wholesale.
-                Some(adr) if adr.is_superseded() => eprintln!(
-                    "kanbanr: {id} was superseded by {} — make sure this is deliberate",
-                    adr.superseded_by
-                ),
-                Some(_) => {}
-            }
-        }
+            .unwrap_or_default()
+    };
+    let board = kanbanr_core::scm::BoardRefs {
+        doc_on_board: &doc_on_board,
+        adrs: &adrs,
+    };
+    let verdict =
+        kanbanr_core::scm::message_verdict(&facts, &ctx.project, p.as_ref().map(|_| &board));
+    for note in &verdict.notes {
+        eprintln!("kanbanr: {note}");
     }
-    Ok(problems)
+    if let Some(why) = verdict.refusal {
+        anyhow::bail!("{why}");
+    }
+    Ok(())
 }
 
 /// The active project, or `None` — used where a missing project means "not our business" rather
@@ -3884,48 +3355,9 @@ fn run_check_branch(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     let Ok(ctx) = scm_context(cli, client) else {
         return Ok(());
     };
-    let Some(branch) = ctx.branch.clone() else {
-        return Ok(()); // detached head: a rebase or a bisect, not a place for a policy argument
-    };
-    // A commit completing a merge is how an item's branch is SUPPOSED to arrive (FEAT-094), and
-    // every branch rule below is about where new work is written — none of them applies to it.
-    // The first fix exempted only the default-branch check, and the very next check then refused
-    // the same commit because `master` names no item; running the recovery for real caught that.
-    if scm::merge_in_progress(&ctx.root) {
-        return Ok(());
-    }
-    if branch.starts_with(kanbanr_core::scm::SPIKE_PREFIX) {
-        return Ok(()); // a spike is allowed to exist; `finish` is where it is refused
-    }
-    // The root commit has nowhere else to go: an item branch needs a commit to branch from, so a
-    // new repository's first commit lands on its default branch (FEAT-105). Its message is still
-    // checked by commit-msg, so it names an item or says `[no-ref] <why>` on the record.
-    if !scm::has_commits(&ctx.root) && branch == scm::default_branch(&ctx.root) {
-        return Ok(());
-    }
-    // A line of integration takes merges only (FEAT-189).
-    if let Some(model) = line_model(&ctx) {
-        use kanbanr_core::gitmodel::LineVerdict;
-        match kanbanr_core::gitmodel::line_commit_verdict(&model, &branch, false, None) {
-            LineVerdict::Refused(why) => anyhow::bail!("{why}"),
-            LineVerdict::Allowed => return Ok(()),
-            LineVerdict::NotALine => {}
-        }
-    }
-    // The commit completing a merge is how an item's branch is SUPPOSED to arrive here (FEAT-094).
-    if branch == scm::default_branch(&ctx.root) {
-        anyhow::bail!(
-            "this is {branch}, the default branch. Work belongs on a branch for its item:\n\n    \
-             kanbanr start <CODE>\n\n\
-             (or `spike/<name>` to explore — spikes produce a definition change, not merged code.)"
-        );
-    }
-    if branch_item(&ctx).is_none() {
-        anyhow::bail!(
-            "the branch '{branch}' does not name an item on the board, so nothing here can be \
-             traced back to a reason. Use `kanbanr start <CODE>` (pattern: {}), or `spike/<name>`.",
-            ctx.project.config.branch_pattern()
-        );
+    let facts = coderepo::repo_facts(&ctx.root, None);
+    if let Some(why) = kanbanr_core::scm::branch_verdict(&facts, &ctx.project).refusal {
+        anyhow::bail!("{why}");
     }
     Ok(())
 }
@@ -3940,54 +3372,20 @@ fn run_start(
 ) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     let project = get_project(client, &p)?;
-    let feature = project
-        .features
-        .iter()
-        .find(|f| f.code == code)
-        .ok_or_else(|| anyhow::anyhow!("feature '{code}' not found"))?;
-    // Where work starts is the workflow's to say: the status whose gate makes the branch
-    // (FEAT-115). Under TOGAF that is Implementation, not the first phase after Vision.
-    let status = match to {
-        Some(s) => s.to_string(),
-        None => branch_status(&project.config)
-            .map(Ok)
-            .unwrap_or_else(|| first_active_status(&project))?,
-    };
-    require_reachable(&project.config, code, &feature.status, &status)?;
-
     // Branch only where there is a repository to branch in. A project need not be code; there the
     // item simply moves, and says so, rather than refusing to start at all.
     let root = if no_branch { None } else { scm::repo_root() };
+    let facts = root.as_deref().map(|r| coderepo::repo_facts(r, None));
+    let plan = kanbanr_core::flow::plan_start(&project, code, to, facts.as_ref())?;
+    let status = plan.status;
     if !no_branch && root.is_none() {
         println!("not a git repository: moving {code} without a branch");
     }
-    if let Some(root) = root {
-        // An item branch is made from the default branch, and a repository with no commits has
-        // nothing to make it from (FEAT-105): branching anyway leaves an orphan that never joins.
-        if !scm::has_commits(&root) {
-            anyhow::bail!(
-                "this repository has no commits yet, so there is nothing to branch {code} from. \
-                 Make the initial commit on {} first, e.g.\n\n    \
-                 git commit -m \"[no-ref] initial commit\"\n",
-                scm::default_branch(&root)
-            );
-        }
-        // A defect goes on the pattern's `fix/` twin when the pattern is the default (FEAT-189, Q3).
-        let pattern = project.config.branch_pattern();
-        let pattern = match kanbanr_core::scm::fix_twin(pattern) {
-            Some(twin)
-                if matches!(feature.kind.as_deref(), Some("defect" | "bug"))
-                    && pattern == kanbanr_core::scm::DEFAULT_BRANCH_PATTERN =>
-            {
-                twin
-            }
-            _ => pattern.to_string(),
-        };
-        let branch = kanbanr_core::scm::branch_for(&pattern, code, &feature.title);
-        if scm::current_branch(&root).as_deref() == Some(branch.as_str()) {
+    if let (Some(root), Some(facts), Some(branch)) = (root, facts, plan.branch) {
+        if facts.branch.as_deref() == Some(branch.as_str()) {
             println!("already on {branch}");
-        } else if scm::git(&root, &["rev-parse", "--verify", "--quiet", &branch]).is_ok() {
-            scm::git(&root, &["checkout", "-q", &branch])?;
+        } else if coderepo::git(&root, &["rev-parse", "--verify", "--quiet", &branch]).is_ok() {
+            coderepo::git(&root, &["checkout", "-q", &branch])?;
             println!("switched to {branch}");
         } else {
             // Branch from the line the git model says (FEAT-189), else the default branch — never
@@ -4002,7 +3400,7 @@ fn run_start(
                 let base = start["base"].as_str().unwrap_or_default().to_string();
                 if start["create_from_main"].as_bool().unwrap_or(false) {
                     let main = v["model"]["main"].as_str().unwrap_or_default();
-                    scm::git(&root, &["branch", &base, main])?;
+                    coderepo::git(&root, &["branch", &base, main])?;
                     println!("created {base} from {main}");
                 }
                 if let Some(note) = start["note"].as_str() {
@@ -4010,15 +3408,15 @@ fn run_start(
                 }
                 base
             } else {
-                scm::default_branch(&root)
+                facts.default_branch
             };
-            scm::git(&root, &["checkout", "-q", "-b", &branch, &base])
-                .or_else(|_| scm::git(&root, &["checkout", "-q", "-b", &branch]))?;
+            coderepo::git(&root, &["checkout", "-q", "-b", &branch, &base])
+                .or_else(|_| coderepo::git(&root, &["checkout", "-q", "-b", &branch]))?;
             println!("created {branch} from {base}");
         }
     }
 
-    if feature.status == status {
+    if plan.already {
         println!("{code} is already {status}");
         return Ok(());
     }
@@ -4043,7 +3441,7 @@ fn run_start(
 fn code_repo() -> Option<PathBuf> {
     std::env::current_dir()
         .ok()
-        .and_then(|cwd| kanbanr_core::coderepo::repo_root_in(&cwd))
+        .and_then(|cwd| coderepo::repo_root_in(&cwd))
 }
 
 /// What integrating an item merged, and whether its fix needs forwarding (FEAT-190).
@@ -4119,161 +3517,12 @@ fn print_gate_warnings(cli: &Cli, resp: &str) {
     }
 }
 
-/// The first status that means "being worked on": displayed, not the default, not terminal.
-fn first_active_status(project: &Project) -> anyhow::Result<String> {
-    project
-        .config
-        .displayed_states
-        .iter()
-        .find(|s| {
-            *s != &project.config.default_state
-                && !kanbanr_core::graph::is_terminal_status(&project.config, s)
-                && !project.config.is_no_op(s)
-        })
-        .cloned()
-        .ok_or_else(|| {
-            anyhow::anyhow!("this workflow has no active status to start in; pass --to <STATUS>")
-        })
-}
-
-/// The status whose gate creates the item's branch, in workflow order (FEAT-115).
-fn branch_status(config: &kanbanr_core::ProjectConfig) -> Option<String> {
-    // The build role's status (FEAT-188), declared or inferred from where the branch is made.
-    config.branch_status()
-}
-
-/// The shortest chain of allowed transitions from one status to another, both ends included.
-fn status_path(config: &kanbanr_core::ProjectConfig, from: &str, to: &str) -> Option<Vec<String>> {
-    let mut previous: std::collections::BTreeMap<String, String> = Default::default();
-    let mut queue = std::collections::VecDeque::from([from.to_string()]);
-    let mut seen = std::collections::BTreeSet::from([from.to_string()]);
-    while let Some(at) = queue.pop_front() {
-        if at == to {
-            let mut path = vec![at.clone()];
-            let mut cur = at;
-            while let Some(p) = previous.get(&cur) {
-                path.push(p.clone());
-                cur = p.clone();
-            }
-            path.reverse();
-            return Some(path);
-        }
-        for next in config.transitions.get(&at).into_iter().flatten() {
-            if seen.insert(next.clone()) {
-                previous.insert(next.clone(), at.clone());
-                queue.push_back(next.clone());
-            }
-        }
-    }
-    None
-}
-
-/// Refuse a jump the workflow does not allow, naming the stages in between — each has its own gate,
-/// so they are walked, not skipped (FEAT-115).
-fn require_reachable(
-    config: &kanbanr_core::ProjectConfig,
-    code: &str,
-    from: &str,
-    to: &str,
-) -> anyhow::Result<()> {
-    if from == to || config.transition_allowed(from, to) {
-        return Ok(());
-    }
-    match status_path(config, from, to) {
-        Some(path) if path.len() > 2 => anyhow::bail!(
-            "{code} is at {from}, and {to} is reached through {}. Move it through those first — \
-             each stage has its own gate — with `kanbanr move {code} <STATUS>`.",
-            path[1..path.len() - 1].join(" → ")
-        ),
-        _ => anyhow::bail!("the workflow has no way from {from} to {to}"),
-    }
-}
-
 fn run_finish(cli: &Cli, client: &Backend, code: Option<&str>) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     let project = get_project(client, &p)?;
-    let ctx_branch = scm::repo_root().and_then(|r| scm::current_branch(&r));
-    let code = match code {
-        Some(c) => c.to_string(),
-        None => {
-            let branch = ctx_branch
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("no branch to infer the item from; name it"))?;
-            if branch.starts_with(kanbanr_core::scm::SPIKE_PREFIX) {
-                anyhow::bail!(
-                    "'{branch}' is a spike. A spike's output is a change to an item's definition, \
-                     not merged code — write that up, then start the item it belongs to."
-                );
-            }
-            kanbanr_core::scm::code_from_branch(project.config.branch_pattern(), &branch)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("the branch '{branch}' names no item; pass the code")
-                })?
-        }
-    };
-    let feature = project
-        .features
-        .iter()
-        .find(|f| f.code == code)
-        .ok_or_else(|| anyhow::anyhow!("feature '{code}' not found"))?;
-
-    // The end this item can reach next: a terminal status the workflow allows from where it is
-    // (FEAT-115). The first declared terminal was taken before, and refused from any stage that
-    // does not lead straight to it — Implementation under TOGAF.
-    let config = &project.config;
-    let ends: Vec<&String> = config
-        .statuses
-        .iter()
-        .filter(|s| kanbanr_core::graph::is_terminal_status(config, s) && !config.is_no_op(s))
-        .collect();
-    let terminal = match ends
-        .iter()
-        .find(|s| config.transition_allowed(&feature.status, s))
-    {
-        Some(s) => (*s).clone(),
-        None => {
-            let first = ends
-                .first()
-                .map(|s| (*s).clone())
-                .unwrap_or_else(|| "Completed".to_string());
-            require_reachable(config, &code, &feature.status, &first)?;
-            first
-        }
-    };
-
-    // Everything that makes "done" mean something, checked before it is claimed. A workflow that
-    // declares its gates says that itself, on the end status, and the move below enforces it; one
-    // that does not keeps the rules `check` reports.
-    let gaps: Vec<String> = if !config.declares_gates() {
-        check_report(feature)["gaps"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|g| g.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    let open: Vec<String> = feature
-        .todo_lists
-        .iter()
-        .flat_map(|l| {
-            l.tasks
-                .iter()
-                .filter(|t| t.state != kanbanr_core::models::TaskState::Completed)
-                .map(move |t| format!("{}/{} {}", l.code, t.key, t.text))
-        })
-        .collect();
-    if !gaps.is_empty() || !open.is_empty() {
-        let mut lines = gaps;
-        lines.extend(open.iter().map(|t| format!("task not finished: {t}")));
-        anyhow::bail!(
-            "{code} is not finished:\n  {}\n\nFix these, or move it by hand if you disagree.",
-            lines.join("\n  ")
-        );
-    }
+    let branch = scm::repo_root().and_then(|r| coderepo::current_branch(&r));
+    let kanbanr_core::flow::FinishPlan { code, terminal } =
+        kanbanr_core::flow::plan_finish(&project, code, branch.as_deref())?;
 
     let resp = client.write_in(
         Method::Post,
@@ -4356,7 +3605,6 @@ fn run_commit(
 /// by something nobody can run. `--write` returns those to `planned` rather than deleting them —
 /// the requirement still needs a test, it just no longer has one.
 fn run_tests(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
-    use kanbanr_core::models::TestState;
     let p = require_project(cli)?;
     let project = get_project(client, &p)?;
     let cwd = std::env::current_dir()?;
@@ -4365,34 +3613,11 @@ fn run_tests(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
     // — searching it would find every test in its own definition and report all of them present.
     let board = project::resolve_data_dir(cli.data_dir.as_deref());
 
-    let mut rows = Vec::new();
-    let mut ops = Vec::new();
-    for f in &project.features {
-        let Some(def) = &f.definition else { continue };
-        for r in &def.requirements {
-            for t in &r.tests {
-                let name = t.name.trim();
-                // A manual check is performed by a person and has no name in the repo to find;
-                // treating its absence as rot would push people to stop recording manual gates.
-                if name.is_empty() || t.kind.trim().eq_ignore_ascii_case("manual") {
-                    continue;
-                }
-                let found = test_exists(&root, &board, name);
-                rows.push(json!({
-                    "code": f.code, "requirement": r.id, "test": name,
-                    "state": t.state, "found": found,
-                }));
-                // Only recorded evidence is worth correcting: a `planned` test is expected to be
-                // absent — that is what planned means.
-                if !found && t.state != TestState::Planned {
-                    ops.push(json!({
-                        "op": "test.state", "feature": f.code, "requirement": r.id,
-                        "test": name, "state": "planned", "checked_rev": "",
-                    }));
-                }
-            }
-        }
-    }
+    let plan = kanbanr_core::evidence::plan_stale_tests(&project, &|name| {
+        test_exists(&root, &board, name)
+    });
+    let rows = serde_json::to_value(&plan.rows)?;
+    let rows = rows.as_array().cloned().unwrap_or_default();
 
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
@@ -4415,25 +3640,17 @@ fn run_tests(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
         }
     }
 
-    if !ops.is_empty() {
+    if let Some(batch) = plan.batch() {
+        let n = plan.ops.len();
         if write {
-            let n = ops.len();
-            client.write(
-                Method::Post,
-                &format!("/projects/{p}/batch"),
-                Some(json!({
-                    "operations": ops,
-                    "message": format!("tests: {n} result(s) whose test no longer exists are back to planned"),
-                })),
-            )?;
+            client.write(Method::Post, &format!("/projects/{p}/batch"), Some(batch))?;
             if !cli.json {
                 println!("returned {n} result(s) to planned");
             }
         } else if !cli.json {
             println!(
-                "{} recorded result(s) name a test that is not in the repo; \
-                 run `kanbanr tests --write` to return them to planned",
-                ops.len()
+                "{n} recorded result(s) name a test that is not in the repo; \
+                 run `kanbanr tests --write` to return them to planned"
             );
         }
     }
@@ -4492,106 +3709,6 @@ fn walk_for(dir: &std::path::Path, board: &std::path::Path, needle: &str, depth:
     false
 }
 
-/// A starting skeleton for a definition, shaped to the kind of work (FEAT-047). Every kind states
-/// why it exists and how it is verified; what differs is the FORM a requirement takes — a feature
-/// asserts new behaviour, a defect names the requirement it violates, a chore asserts an invariant.
-/// Printing only the fields that apply keeps an author from staring at a form full of blanks.
-fn definition_template(kind: &str) -> String {
-    let head = "\
-# Why this item exists, what must be true, and how that is verified.
-# Fill what you know; leave the rest BLANK so `kanbanr doctor` can flag it — never invent.
-statement: \"<capability> for <whom> so that <why>\"
-goals: [G-1]          # charter goal ids this serves (kanbanr charter show)
-zachman:
-  what:  \"\"            # data, functions, rules
-  how:   \"\"            # approach
-  where: \"\"            # component or service
-  when:  \"\"            # trigger, frequency, timing
-  who:   \"\"            # stakeholder role
-  why:   \"\"            # the problem or goal served
-affects_docs: []      # board docs the design changes, e.g. [architecture/data.md]: named at the
-                      # design stage; a `docs_updated` gate checks each changed before moving on
-";
-    let requirements = match kind.trim().to_ascii_lowercase().as_str() {
-        "defect" | "bug" => {
-            "\
-requirements:
-  # A defect violates a requirement. If none covers the case, THAT is the finding: add the
-  # missing requirement here instead of leaving `violates` blank.
-  - kind: functional
-    violates: FEAT-000/R-0
-    text: \"WHEN <the trigger>, THE SYSTEM SHALL <the behaviour that was wrong>\"
-    tests:
-      - name: \"<test that reproduces it>\"
-        kind: unit
-        state: red      # red first, then green once fixed
-"
-        }
-        "chore" | "refactor" => {
-            "\
-requirements:
-  # No new behaviour: the requirement is what must NOT change.
-  - kind: functional
-    text: \"THE SYSTEM SHALL continue to <invariant this work must preserve>\"
-    tests:
-      - name: \"<existing suite that proves it>\"
-        kind: integration
-        state: green
-"
-        }
-        "docs" => {
-            "\
-requirements:
-  # The requirement is the contract the documentation must match.
-  - kind: functional
-    text: \"THE SYSTEM SHALL document <the contract> as it actually behaves\"
-    tests:
-      - name: \"<doc check or doctor rule>\"
-        kind: manual
-        state: planned
-"
-        }
-        "recurring" => {
-            "\
-requirements:
-  # Standing work: one statement, verified per occurrence by its checklist.
-  - kind: functional
-    text: \"THE SYSTEM SHALL <the standing obligation>\"
-    tests:
-      - name: \"<per-occurrence check>\"
-        kind: manual
-        state: planned
-"
-        }
-        _ => {
-            "\
-requirements:
-  - kind: functional
-    text: \"WHEN <trigger>, THE SYSTEM SHALL <response>\"
-    tests:
-      - name: \"<test that verifies it>\"
-        kind: unit
-        state: planned
-  # A quality requirement needs a tag AND a measure that names what checks it — a number with
-  # nothing behind it is an unsupported claim, so leave it out unless it is real.
-  - kind: nfr
-    text: \"WHERE <condition>, THE SYSTEM SHALL <quality behaviour>\"
-    iso25010: [Reliability]
-    scenario:
-      stimulus: \"\"
-      environment: \"\"
-      response: \"\"
-      measure: \"<number, and the test or benchmark that checks it>\"
-    tests:
-      - name: \"<test that verifies it>\"
-        kind: integration
-        state: planned
-"
-        }
-    };
-    format!("{head}{requirements}")
-}
-
 /// `kanbanr charter …` (FEAT-046). The charter is the root of a project's reasoning: goals get
 /// ids here, and work items link them.
 fn run_charter(cli: &Cli, client: &Backend, cmd: &CharterCmd) -> anyhow::Result<()> {
@@ -4618,7 +3735,7 @@ fn run_charter(cli: &Cli, client: &Backend, cmd: &CharterCmd) -> anyhow::Result<
                 }
             };
             // YAML is a superset of JSON, so one parser accepts either form.
-            let charter: kanbanr_core::Charter = serde_yaml::from_str(&raw)
+            let charter: kanbanr_core::Charter = kanbanr_core::config::from_yaml(&raw)
                 .map_err(|e| anyhow::anyhow!("invalid charter (YAML or JSON expected): {e}"))?;
             let resp = client.write(Method::Put, &path, Some(serde_json::to_value(charter)?))?;
             let saved: kanbanr_core::Charter = serde_json::from_str(&resp)?;
@@ -4777,27 +3894,6 @@ fn run_mirror(cli: &Cli, client: &Backend, cmd: &MirrorCmd) -> anyhow::Result<()
     Ok(())
 }
 
-/// How a data folder is written into a marker in `marker_dir`: relative when nearby, else absolute.
-fn marker_path(data_dir: &Path, marker_dir: &Path) -> String {
-    portable_path(
-        &project::relative_to(data_dir, marker_dir)
-            .display()
-            .to_string(),
-        cfg!(windows),
-    )
-}
-
-/// A path as a marker stores it: with forward slashes, which every platform reads (FEAT-129). A
-/// marker written on Windows said `data_dir: ..\app.kanbanr`, which Linux and macOS read as one
-/// file name — so a marker committed from one machine broke the board on the next.
-fn portable_path(path: &str, windows: bool) -> String {
-    if windows {
-        path.replace('\\', "/")
-    } else {
-        path.to_string()
-    }
-}
-
 /// Print the data folder this directory resolves to (`--json`: provenance and suggestions too).
 fn run_where(cli: &Cli) -> anyhow::Result<()> {
     let resolved = project::resolve_data_dir_detailed(cli.data_dir.as_deref());
@@ -4828,30 +3924,7 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
     // ask: each has an obvious answer, and an obvious answer is still the user's to give.
     let tracked =
         resolved.source == project::DataDirSource::Marker && data_dir.join("projects").is_dir();
-    let mut ask: Vec<String> = Vec::new();
-    if !tracked {
-        ask.push(
-            "Where the board lives: suggested_data_dir first, then each of existing_data_dirs, or a \
-             path the user types."
-                .into(),
-        );
-        ask.push(
-            "Which process — only after the board is chosen, in a later question, because the \
-             options depend on it: that board's saved processes first (`kanbanr process list \
-             --json --data-dir <board>`, library board, then personal; recommend one when the board \
-             has it), then the built-in ones, or designing their own."
-                .into(),
-        );
-        if git_name.is_none() || git_email.is_none() {
-            ask.push(
-                "This repository's git identity — only after the board's commit identity is \
-                 given, in a later question: git has none here, so nobody can commit after setup. \
-                 Offer that identity: Yes (this repository only, never --global), another \
-                 name/email, or No (the first commit only)."
-                    .into(),
-            );
-        }
-    }
+    let ask = project::setup_questions(tracked, git_name.is_some() && git_email.is_some());
     let out = json!({
         "data_dir": show(&data_dir),
         "source": resolved.source,
@@ -4930,20 +4003,11 @@ fn open_in_browser(url: &str) {
 /// `None` means no identity is configured, and the caller must refuse rather than invent one: an
 /// approval that cannot say who gave it is not evidence of agreement.
 fn verdict_author(cli: &Cli, given: Option<&String>) -> anyhow::Result<String> {
-    if let Some(name) = given.filter(|n| !n.trim().is_empty()) {
-        return Ok(name.trim().to_string());
-    }
     let dir = project::resolve_data_dir(cli.data_dir.as_deref());
-    kanbanr_core::git::identity(&dir)
-        .map(|(name, _)| name)
-        .filter(|n| !n.trim().is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "this board has no commit identity, so a verdict could not say who gave it.\n\
-                 Set one once:  kanbanr identity --name \"You\" --email you@example.com\n\
-                 or pass it explicitly with --by."
-            )
-        })
+    Ok(kanbanr_core::git::verdict_author(
+        &dir,
+        given.map(String::as_str),
+    )?)
 }
 
 fn require_project(cli: &Cli) -> anyhow::Result<String> {
@@ -5150,7 +4214,7 @@ fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     .flatten()
     .collect::<Vec<_>>()
     .join("\n");
-    let results = parse_test_results(&text);
+    let results = kanbanr_core::evidence::parse_results(&text);
     if results.is_empty() {
         return Ok(()); // not a test run, or nothing recognizable: stay quiet
     }
@@ -5158,77 +4222,14 @@ fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     let project = get_project(client, &p)?;
     let rev = project_head_rev();
-    let mut ops = Vec::new();
-    for f in &project.features {
-        let Some(def) = &f.definition else { continue };
-        for r in &def.requirements {
-            for t in &r.tests {
-                if let Some(passed) = results.get(t.name.as_str()) {
-                    let state = if *passed { "green" } else { "red" };
-                    if t.state == kanbanr_core::models::TestState::parse(state).unwrap_or_default()
-                        && (!passed || t.checked_rev.as_str() == rev.as_deref().unwrap_or(""))
-                    {
-                        continue; // already recorded at this revision; nothing to say
-                    }
-                    let mut op = json!({
-                        "op": "test.state", "feature": f.code, "requirement": r.id,
-                        "test": t.name, "state": state,
-                    });
-                    if let Some(rev) = &rev {
-                        op["checked_rev"] = json!(rev);
-                    }
-                    ops.push(op);
-                }
-            }
-        }
-    }
-    if ops.is_empty() {
-        return Ok(());
-    }
+    let ops = kanbanr_core::evidence::plan_capture(&project, &results, rev.as_deref());
     let n = ops.len();
-    client.write(
-        Method::Post,
-        &format!("/projects/{p}/batch"),
-        Some(json!({ "operations": ops, "message": format!("record {n} test result(s) from a run") })),
-    )?;
+    let Some(batch) = kanbanr_core::evidence::capture_batch(ops) else {
+        return Ok(());
+    };
+    client.write(Method::Post, &format!("/projects/{p}/batch"), Some(batch))?;
     eprintln!("kanbanr: recorded {n} test result(s) from this run");
     Ok(())
-}
-
-/// Test name -> passed, parsed from a test runner's output. Handles `cargo test` (`test NAME ...
-/// ok`) and the common `✓ NAME` / `✗ NAME` shape used by JS runners. Unknown formats yield
-/// nothing, which is the right failure: recording a guess would be worse than recording nothing.
-fn parse_test_results(text: &str) -> std::collections::BTreeMap<String, bool> {
-    let mut out = std::collections::BTreeMap::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("test ") {
-            // cargo: `test module::name ... ok` / `... FAILED`
-            if let Some((name, verdict)) = rest.rsplit_once(" ... ") {
-                let name = name.trim();
-                match verdict.trim() {
-                    "ok" => {
-                        out.insert(name.to_string(), true);
-                    }
-                    "FAILED" => {
-                        out.insert(name.to_string(), false);
-                    }
-                    _ => {}
-                }
-            }
-        } else if let Some(name) = line
-            .strip_prefix("\u{2713} ")
-            .or_else(|| line.strip_prefix("PASS "))
-        {
-            out.insert(name.trim().to_string(), true);
-        } else if let Some(name) = line
-            .strip_prefix("\u{2717} ")
-            .or_else(|| line.strip_prefix("FAIL "))
-        {
-            out.insert(name.trim().to_string(), false);
-        }
-    }
-    out
 }
 
 /// Check a definition that is not on a board (FEAT-052).
@@ -5238,7 +4239,6 @@ fn parse_test_results(text: &str) -> std::collections::BTreeMap<String, bool> {
 /// applies to an item: the goal link is the only thing that cannot be verified without a charter,
 /// and it is reported as unverifiable rather than as absent.
 fn check_definition_file(cli: &Cli, file: &str) -> anyhow::Result<()> {
-    use kanbanr_core::models::FeatureDefinition;
     let raw = if file == "-" {
         use std::io::Read;
         let mut s = String::new();
@@ -5247,24 +4247,11 @@ fn check_definition_file(cli: &Cli, file: &str) -> anyhow::Result<()> {
     } else {
         std::fs::read_to_string(file).map_err(|e| anyhow::anyhow!("could not read {file}: {e}"))?
     };
-    let definition: FeatureDefinition = serde_yaml::from_str(&raw)
-        .map_err(|e| anyhow::anyhow!("invalid definition (YAML or JSON expected): {e}"))?;
-
-    if definition.goals.is_empty() {
-        // Not a gap that can be judged here: without the charter there is nothing to resolve an id
-        // against. Reported so a maintainer knows to check it, not counted against the contributor.
-        println!("note: no goal link — the maintainer will check this against the charter");
+    let checked = kanbanr_core::readiness::check_definition_text(&raw)?;
+    if let Some(note) = &checked.note {
+        println!("note: {note}");
     }
-    // The same rules the board applies (FEAT-112), minus what needs a board to judge.
-    let gaps: Vec<String> = kanbanr_core::readiness::evaluate_definition(
-        Some(&definition),
-        None,
-        None,
-        kanbanr_core::readiness::FILE,
-    )
-    .into_iter()
-    .map(|g| g.message)
-    .collect();
+    let gaps = checked.gaps;
 
     if cli.json {
         println!(
@@ -5285,18 +4272,6 @@ fn check_definition_file(cli: &Cli, file: &str) -> anyhow::Result<()> {
         // A non-zero exit is what makes this useful in CI.
         std::process::exit(1);
     }
-}
-
-/// What an item has not said, and what it cannot yet show (FEAT-051). The same rules `doctor`
-/// applies, focused on one item and phrased as work left to do rather than as a complaint.
-fn check_report(f: &kanbanr_core::FeatureItem) -> Value {
-    // The engine every surface shares (FEAT-112); `check` and `finish` ask its CHECK list.
-    let gaps: Vec<String> =
-        kanbanr_core::readiness::evaluate(f, None, kanbanr_core::readiness::CHECK)
-            .into_iter()
-            .map(|g| g.message)
-            .collect();
-    json!({ "code": f.code, "title": f.title, "status": f.status, "gaps": gaps })
 }
 
 /// One feature, straight from the project payload.
@@ -5369,7 +4344,7 @@ fn run_process_check(cli: &Cli, source: &str) -> anyhow::Result<()> {
         if source == "-" || std::path::Path::new(source).is_file() {
             let text = read_process_text(source)?;
             let label = if source == "-" { "the draft" } else { source };
-            let file = serde_yaml::from_str(&text)
+            let file = WorkflowFile::from_yaml(&text)
                 .map_err(|e| anyhow::anyhow!("{label} is not a process file: {e}"))?;
             (label.to_string(), file)
         } else {
@@ -5438,14 +4413,6 @@ fn personal_processes() -> Option<std::path::PathBuf> {
     kanbanr_core::library::personal_dir(project::home_dir().as_deref())
 }
 
-/// A process saved on this board, if there is one by that name.
-fn board_process(client: &Backend, name: &str) -> Option<kanbanr_core::config::WorkflowFile> {
-    let v: Value = serde_json::from_str(&client.get(&format!("/processes/{name}")).ok()?).ok()?;
-    (v["library"] == "board")
-        .then(|| serde_json::from_value(v["file"].clone()).ok())
-        .flatten()
-}
-
 /// A process by name: the board's, then the personal one, then the built-in one (FEAT-169).
 fn resolve_process(
     cli: &Cli,
@@ -5454,21 +4421,15 @@ fn resolve_process(
     kanbanr_core::config::WorkflowFile,
     kanbanr_core::config::Library,
 )> {
-    let board = board_here(cli).and_then(|c| board_process(&c, name));
-    let personal = match personal_processes() {
-        Some(dir) => kanbanr_core::library::get(&dir, name)?,
-        None => None,
-    };
-    kanbanr_core::library::pick(name, board, personal).ok_or_else(|| {
-        anyhow::anyhow!(
-            "no process named '{name}' on this board, in your personal library or built in — \
-             `kanbanr process list` shows them"
-        )
-    })
+    let board = board_here(cli);
+    Ok(kanbanr_core::library::resolve(
+        board.as_ref().map(Backend::store),
+        name,
+        personal_processes().as_deref(),
+    )?)
 }
 
-/// A personal process the board does not shadow, with where it came from: what the board must be
-/// sent, file and all, because it cannot read the user's home folder (FEAT-169).
+/// A personal process the board does not shadow, with where it came from (FEAT-169).
 fn personal_only(
     client: &Backend,
     name: &str,
@@ -5478,108 +4439,49 @@ fn personal_only(
         kanbanr_core::config::ProcessSource,
     )>,
 > {
-    if board_process(client, name).is_some() || kanbanr_core::config::is_builtin(name) {
-        return Ok(None);
-    }
-    let Some(dir) = personal_processes() else {
-        return Ok(None);
-    };
-    Ok(kanbanr_core::library::get(&dir, name)?.map(|file| {
-        let source = file.source(name, kanbanr_core::config::Library::Personal);
-        (file, source)
-    }))
+    Ok(kanbanr_core::library::personal_only(
+        client.store(),
+        name,
+        personal_processes().as_deref(),
+    )?)
 }
 
 /// `kanbanr process list` (FEAT-169).
 fn run_process_list(cli: &Cli) -> anyhow::Result<()> {
-    let mut rows: Vec<Value> = match board_here(cli) {
-        Some(client) => serde_json::from_str(&client.get("/processes")?)?,
-        None => kanbanr_core::config::presets()
-            .into_iter()
-            .map(|(name, about)| {
-                json!({ "name": name, "library": "builtin", "version": 0,
-                        "description": about, "used_by": [] })
-            })
-            .collect(),
-    };
-    let board_names: Vec<String> = rows
-        .iter()
-        .filter(|r| r["library"] == "board")
-        .filter_map(|r| r["name"].as_str().map(String::from))
-        .collect();
-    // The board lists personal processes only as "used by these projects"; the files are on
-    // people's machines. Yours fill in from your library; any left are someone else's.
-    let (mut used_personal, rest): (Vec<Value>, Vec<Value>) =
-        rows.into_iter().partition(|r| r["library"] == "personal");
-    rows = rest;
-    let mut mine = Vec::new();
-    if let Some(dir) = personal_processes() {
-        for (name, file) in kanbanr_core::library::list(&dir)? {
-            let used = used_personal
-                .iter()
-                .position(|r| r["name"] == name.as_str())
-                .map(|i| used_personal.remove(i)["used_by"].clone())
-                .unwrap_or(json!([]));
-            mine.push(json!({
-                "name": name,
-                "library": "personal",
-                "version": file.version(),
-                "description": file.process.as_ref().map(|h| h.description.clone()).unwrap_or_default(),
-                "rev": file.content_rev(),
-                "used_by": used,
-                "shadowed_by_board": board_names.contains(&name),
-            }));
-        }
-    }
-    for r in used_personal {
-        mine.push(json!({
-            "name": r["name"], "library": "personal", "version": 0,
-            "description": "someone's personal process — not in your library",
-            "used_by": r["used_by"], "not_here": true,
-        }));
-    }
-    let at = rows
-        .iter()
-        .position(|r| r["library"] == "builtin")
-        .unwrap_or(rows.len());
-    rows.splice(at..at, mine);
+    let board = board_here(cli);
+    let rows = kanbanr_core::library::list(
+        board.as_ref().map(Backend::store),
+        personal_processes().as_deref(),
+    )?;
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
         return Ok(());
     }
     for r in &rows {
-        let library = match r["library"].as_str().unwrap_or("") {
+        let library = match r.library.as_str() {
             "builtin" => "built-in",
             other => other,
         };
-        let version = match r["version"].as_u64() {
+        let version = match r.version {
             Some(0) | None => String::new(),
             Some(v) => format!("v{v}"),
         };
-        let used: Vec<&str> = r["used_by"]
-            .as_array()
-            .map(|a| a.iter().filter_map(|x| x.as_str()).collect())
-            .unwrap_or_default();
         let mut note = String::new();
-        if !used.is_empty() {
-            note = format!("  (used by {})", used.join(", "));
+        if !r.used_by.is_empty() {
+            note = format!("  (used by {})", r.used_by.join(", "));
         }
-        if r["shadowed_by_board"] == true {
+        if r.shadowed_by_board == Some(true) {
             note.push_str("  (the board's copy is used)");
         }
         // The first sentence: the built-in processes describe themselves at length.
-        let about = r["description"].as_str().unwrap_or("");
+        let about = r.description.as_deref().unwrap_or("");
         let about = about
             .split_once(". ")
             .map_or(about, |(first, _)| first)
             .trim_end_matches('.');
         println!(
             "{:<18} {:<9} {:<4} {}{}",
-            r["name"].as_str().unwrap_or(""),
-            library,
-            version,
-            about,
-            note
+            r.name, library, version, about, note
         );
     }
     Ok(())
@@ -5603,7 +4505,7 @@ fn run_process_show(cli: &Cli, name: &str) -> anyhow::Result<()> {
         return Ok(());
     }
     println!("# {name} ({})\n", library.as_str());
-    println!("```yaml\n{}```\n", serde_yaml::to_string(&file)?);
+    println!("```yaml\n{}```\n", file.to_yaml()?);
     println!("{agreement}\n```mermaid\n{diagram}```");
     Ok(())
 }
@@ -5619,7 +4521,7 @@ fn run_process_save(
 ) -> anyhow::Result<()> {
     let board = board_here(cli);
     let file: kanbanr_core::config::WorkflowFile = match from_file {
-        Some(src) => serde_yaml::from_str(&read_process_text(src)?)
+        Some(src) => kanbanr_core::config::WorkflowFile::from_yaml(&read_process_text(src)?)
             .map_err(|e| anyhow::anyhow!("{src} is not a process file: {e}"))?,
         None => {
             let client = board.as_ref().ok_or_else(|| {
@@ -5649,7 +4551,7 @@ fn run_process_save(
                  with --personal, or run this where the board is"
             )
         })?;
-        let before = board_process(client, name);
+        let before = client.store().board_process(name).ok().flatten();
         let resp = client.write(
             Method::Put,
             &format!("/processes/{name}"),
@@ -5664,8 +4566,15 @@ fn run_process_save(
     let unchanged = before.as_ref() == Some(&saved);
     // The projects on this board that are now behind (FEAT-171): said where it is acted on, so the
     // update is offered for each of them — not only for the project the save was made from.
+    let library = if personal {
+        kanbanr_core::config::Library::Personal
+    } else {
+        kanbanr_core::config::Library::Board
+    };
     let behind = match &board {
-        Some(client) => projects_behind(client, name, personal, &saved)?,
+        Some(client) => {
+            kanbanr_core::library::behind(client.store(), name, library, &saved.content_rev())?
+        }
         None => Vec::new(),
     };
     if cli.json {
@@ -5712,58 +4621,19 @@ fn run_process_save(
     Ok(())
 }
 
-/// The projects on this board using process `name` from the same library at a version other than
-/// `saved`, with the version each has.
-fn projects_behind(
-    client: &Backend,
-    name: &str,
-    personal: bool,
-    saved: &kanbanr_core::config::WorkflowFile,
-) -> anyhow::Result<Vec<(String, u32)>> {
-    use kanbanr_core::config::Library;
-    let library = if personal {
-        Library::Personal
-    } else {
-        Library::Board
-    };
-    let rev = saved.content_rev();
-    let ids: Vec<Value> = serde_json::from_str(&client.get("/projects")?)?;
-    let mut out = Vec::new();
-    for id in ids.iter().filter_map(|v| v["id"].as_str()) {
-        let Ok(project) = get_project(client, id) else {
-            continue;
-        };
-        if let Some(src) = &project.config.process
-            && src.name == name
-            && src.library == library
-            && src.rev != rev
-        {
-            out.push((id.to_string(), src.version));
-        }
-    }
-    Ok(out)
-}
-
-/// The current copy of the process a project was given, from the library it was given from — not
-/// by lookup order: an update brings a project its own process's new version (FEAT-170).
+/// The current copy of the process a project was given, from the library it was given from
+/// (FEAT-170).
 fn current_copy(
     client: &Backend,
     config: &kanbanr_core::config::ProjectConfig,
     source: &kanbanr_core::config::ProcessSource,
 ) -> anyhow::Result<Option<kanbanr_core::config::WorkflowFile>> {
-    use kanbanr_core::config::Library;
-    // As this project would have it: the parts of the method it turned off stay off (FEAT-193).
-    let shape =
-        |f: kanbanr_core::config::WorkflowFile| kanbanr_core::method::shaped(f, &config.method);
-    Ok(match source.library {
-        Library::Board => board_process(client, &source.name),
-        Library::Personal => match personal_processes() {
-            Some(dir) => kanbanr_core::library::get(&dir, &source.name)?,
-            None => None,
-        },
-        Library::Builtin => kanbanr_core::config::preset(&source.name).ok(),
-    }
-    .map(shape))
+    Ok(kanbanr_core::library::current_copy(
+        client.store(),
+        config,
+        source,
+        personal_processes().as_deref(),
+    )?)
 }
 
 /// How a project stands against its saved process, the personal case included — which only this
@@ -5772,14 +4642,9 @@ fn project_drift(
     client: &Backend,
     project: &Project,
 ) -> anyhow::Result<Option<kanbanr_core::library::Drift>> {
-    let Some(source) = &project.config.process else {
-        return Ok(None);
-    };
-    let current = current_copy(client, &project.config, source)?;
-    Ok(kanbanr_core::library::drift(
-        &project.config,
-        current.as_ref(),
-    ))
+    Ok(client
+        .store()
+        .process_drift(project, personal_processes().as_deref())?)
 }
 
 /// `process status`, `diff` and `update` (FEAT-170): these read a project, so they need a board.
@@ -5895,18 +4760,7 @@ fn run_process_drift(cli: &Cli, client: &Backend, cmd: &ProcessCmd) -> anyhow::R
             let resp = client.write(
                 Method::Put,
                 &format!("/projects/{p}/config/workflow"),
-                Some(json!({
-                    "statuses": file.statuses,
-                    "transitions": file.transitions,
-                    "default_state": file.default_state,
-                    "displayed_states": file.displayed_states,
-                    "no_op_states": file.no_op_states,
-                    "terminal_states": file.terminal_states,
-                    "gates": file.gates,
-                    "cadence": (!file.cadence.is_off()).then_some(&file.cadence),
-                    "estimate_unit": (!file.estimate_unit.is_days()).then_some(file.estimate_unit),
-                    "process": new_source,
-                })),
+                Some(file.to_request(Some(&new_source))),
             )?;
             let version = match file.version() {
                 0 => String::new(),
@@ -6210,18 +5064,18 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 Value::Null
             } else {
                 // Start from what is already recorded, so one flag at a time is enough.
-                let mut d = get_feature(&client, &p, code)?.defect.unwrap_or_default();
-                let set = |field: &mut String, value: &Option<String>| {
-                    if let Some(v) = value {
-                        *field = v.clone();
-                    }
+                let change = kanbanr_core::models::DefectChange {
+                    severity: severity.clone(),
+                    introduced_by: introduced_by.clone(),
+                    found_in: found_in.clone(),
+                    root_cause: root_cause.clone(),
+                    fixed_by: fixed_by.clone(),
+                    escaped: *escaped,
                 };
-                set(&mut d.severity, severity);
-                set(&mut d.introduced_by, introduced_by);
-                set(&mut d.found_in, found_in);
-                set(&mut d.root_cause, root_cause);
-                set(&mut d.fixed_by, fixed_by);
-                d.escaped = d.escaped || *escaped;
+                let d = get_feature(&client, &p, code)?
+                    .defect
+                    .unwrap_or_default()
+                    .merge(&change);
                 serde_json::to_value(&d)?
             };
             let path = format!("/projects/{p}/features/{code}/defect");
@@ -6252,13 +5106,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         Command::Report { since } => {
             let p = require_project(cli)?;
-            let since = since.as_deref().map(|s| match s.strip_suffix('d') {
-                Some(days) => days
-                    .parse::<i64>()
-                    .map(kanbanr_core::report::days_ago)
-                    .unwrap_or_else(|_| s.to_string()),
-                None => s.to_string(),
-            });
+            let since = since.as_deref().map(kanbanr_core::report::parse_since);
             let rev = project_head_rev();
             let mut query = Vec::new();
             if let Some(s) = &since {
@@ -6339,62 +5187,20 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 return check_definition_file(cli, file); // handled before the board opens
             }
             let p = require_project(cli)?;
-            let project = get_project(&client, &p)?;
-            let features: Vec<&kanbanr_core::FeatureItem> = match code {
-                Some(c) => project
-                    .features
-                    .iter()
-                    .filter(|f| &f.code == c)
-                    .collect::<Vec<_>>(),
-                None => project
-                    .features
-                    .iter()
-                    .filter(|f| {
-                        project
-                            .config
-                            .displayed_states
-                            .iter()
-                            .any(|s| s == &f.status)
-                    })
-                    .filter(|f| {
-                        !kanbanr_core::graph::is_terminal_status(&project.config, &f.status)
-                    })
-                    .collect(),
-            };
-            if features.is_empty() {
-                anyhow::bail!("no such item, or nothing in scope");
-            }
-            // What each item's next stage asks — the readiness route answers it, with the project's
-            // unit and active sprint in hand (FEAT-117, FEAT-119).
-            let reports: Vec<Value> = features
-                .iter()
-                .map(|f| {
-                    let mut report = check_report(f);
-                    let readiness = client
-                        .get(&format!("/projects/{p}/features/{}/readiness", f.code))
-                        .ok()
-                        .and_then(|r| serde_json::from_str::<Value>(&r).ok());
-                    report["next"] = readiness
-                        .as_ref()
-                        .map(|v| v["next"].clone())
-                        .unwrap_or_else(|| json!([]));
-                    // What a verdict on this brief is pinned to (FEAT-159).
-                    report["rev"] = readiness
-                        .as_ref()
-                        .map(|v| v["rev"].clone())
-                        .unwrap_or(Value::Null);
-                    report
-                })
-                .collect();
+            let report = kanbanr_core::readiness::check_board(client.store(), &p, code.as_deref())?;
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&reports)?);
+                println!("{}", serde_json::to_string_pretty(&report)?);
                 return Ok(());
             }
-            let mut ready = 0;
+            let ready = report.ready();
+            let reports: Vec<Value> = report
+                .items
+                .iter()
+                .map(serde_json::to_value)
+                .collect::<Result<_, _>>()?;
             for r in &reports {
                 let gaps = r["gaps"].as_array().cloned().unwrap_or_default();
                 if gaps.is_empty() {
-                    ready += 1;
                     println!(
                         "✓ {} {}",
                         r["code"].as_str().unwrap_or(""),
@@ -6687,16 +5493,11 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             };
             let value: Value = serde_json::from_str(&raw)
                 .map_err(|e| anyhow::anyhow!("invalid JSON bundle: {e}"))?;
-            // Accept either a bare array of operations or { "operations": [...] }.
-            let mut body = if value.is_array() {
-                json!({ "operations": value })
-            } else {
-                value
-            };
-            if let (Some(obj), Some(m)) = (body.as_object_mut(), message) {
-                obj.insert("message".to_string(), json!(m));
-            }
-            fill_file_source_revisions(&mut body);
+            // A bare array or { "operations": [...] }; file sources stamped with the repo's HEAD.
+            let mut body = kanbanr_core::batch::normalize(value, message.as_deref(), &|| {
+                let cwd = std::env::current_dir().ok()?;
+                project::project_revision(&cwd, project::home_dir().as_deref())
+            });
             let path = format!("/projects/{p}/batch");
             let resp = if *dry_run {
                 body["dry_run"] = json!(true);
@@ -7275,7 +6076,7 @@ fn run_project(cli: &Cli, client: &Backend, cmd: &ProjectCmd) -> anyhow::Result<
             let cwd = std::env::current_dir()?;
             let resolved = project::resolve_data_dir_detailed(cli.data_dir.as_deref());
             let data_dir = matches!(resolved.source, DataDirSource::Flag | DataDirSource::Marker)
-                .then(|| marker_path(&resolved.path, &cwd));
+                .then(|| project::marker_path(&resolved.path, &cwd));
             project::write_marker(
                 &cwd,
                 &Marker {
@@ -7332,17 +6133,11 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                 ("team", team.clone().map(|t| json!(t))),
                 ("labels", labels.clone().map(|l| json!(l))),
                 ("depends_on", depends_on.clone().map(|d| json!(d))),
+                // Feedback on a release: where it was found, recorded with it (FEAT-120).
+                ("found_in", found_in.clone().map(|v| json!(v))),
             ]);
             let resp =
                 client.write(Method::Post, &format!("/projects/{p}/features"), Some(body))?;
-            // Feedback on a release: say where it was found, the way a defect does (FEAT-120).
-            if let Some(version) = found_in {
-                client.write(
-                    Method::Put,
-                    &format!("/projects/{p}/features/{}/defect", field(&resp, "code")),
-                    Some(json!({ "found_in": version })),
-                )?;
-            }
             print_write(
                 cli,
                 &resp,
@@ -7410,7 +6205,7 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             if *template {
                 print!(
                     "{}",
-                    definition_template(kind.as_deref().unwrap_or("feature"))
+                    kanbanr_core::models::definition_template(kind.as_deref().unwrap_or("feature"))
                 );
                 return Ok(());
             }
@@ -7428,8 +6223,8 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                     }
                 };
                 // YAML is a superset of JSON, so one parser accepts either form.
-                let def: kanbanr_core::models::FeatureDefinition = serde_yaml::from_str(&raw)
-                    .map_err(|e| {
+                let def: kanbanr_core::models::FeatureDefinition =
+                    kanbanr_core::config::from_yaml(&raw).map_err(|e| {
                         anyhow::anyhow!("invalid definition (YAML or JSON expected): {e}")
                     })?;
                 serde_json::to_value(def)?
@@ -7955,29 +6750,19 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             if *export {
                 let project = get_project(client, &p)?;
                 let file = kanbanr_core::config::WorkflowFile::from_config(&project.config);
-                print!("{}", serde_yaml::to_string(&file)?);
+                print!("{}", file.to_yaml()?);
                 return Ok(());
             }
             // Import a whole workflow, gates included, from a file.
             if let Some(src) = from_file {
                 let text = std::fs::read_to_string(src)
                     .map_err(|e| anyhow::anyhow!("could not read {src}: {e}"))?;
-                let file: kanbanr_core::config::WorkflowFile = serde_yaml::from_str(&text)
+                let file = kanbanr_core::config::WorkflowFile::from_yaml(&text)
                     .map_err(|e| anyhow::anyhow!("{src} is not a workflow file: {e}"))?;
                 let resp = client.write(
                     Method::Put,
                     &format!("/projects/{p}/config/workflow"),
-                    Some(json!({
-                        "statuses": file.statuses,
-                        "transitions": file.transitions,
-                        "default_state": file.default_state,
-                        "displayed_states": file.displayed_states,
-                        "no_op_states": file.no_op_states,
-                        "terminal_states": file.terminal_states,
-                        "gates": file.gates,
-                        "cadence": (!file.cadence.is_off()).then_some(&file.cadence),
-                        "estimate_unit": (!file.estimate_unit.is_days()).then_some(file.estimate_unit),
-                    })),
+                    Some(file.to_request(None)),
                 )?;
                 print_write(cli, &resp, format!("workflow loaded from {src}"));
                 return Ok(());
@@ -8031,21 +6816,25 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             if let Some(name) = preset
                 && let Some((file, source)) = personal_only(client, name)?
             {
+                // Any flags given alongside still override the file's fields.
+                let mut body = file.to_request(Some(&source));
+                for (key, flag) in [
+                    ("statuses", statuses),
+                    ("displayed_states", displayed_states),
+                    ("no_op_states", no_op_states),
+                    ("terminal_states", terminal_states),
+                ] {
+                    if let Some(v) = flag {
+                        body[key] = json!(v);
+                    }
+                }
+                if let Some(v) = default_state {
+                    body["default_state"] = json!(v);
+                }
                 let resp = client.write(
                     Method::Put,
                     &format!("/projects/{p}/config/workflow"),
-                    Some(json!({
-                        "statuses": statuses.clone().unwrap_or(file.statuses),
-                        "transitions": file.transitions,
-                        "default_state": default_state.clone().unwrap_or(file.default_state),
-                        "displayed_states": displayed_states.clone().unwrap_or(file.displayed_states),
-                        "no_op_states": no_op_states.clone().unwrap_or(file.no_op_states),
-                        "terminal_states": terminal_states.clone().unwrap_or(file.terminal_states),
-                        "gates": file.gates,
-                        "cadence": (!file.cadence.is_off()).then_some(&file.cadence),
-                        "estimate_unit": (!file.estimate_unit.is_days()).then_some(file.estimate_unit),
-                        "process": source,
-                    })),
+                    Some(body),
                 )?;
                 print_write(
                     cli,
@@ -8283,7 +7072,7 @@ fn promote_release(
     };
     let repo = std::env::current_dir()
         .ok()
-        .and_then(|cwd| kanbanr_core::coderepo::repo_root_in(&cwd));
+        .and_then(|cwd| coderepo::repo_root_in(&cwd));
     let resp = client.write_in(
         Method::Post,
         &format!(
@@ -8500,7 +7289,7 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
             // With the git model on, the sprint's branch is made in this repository (FEAT-189).
             let repo = std::env::current_dir()
                 .ok()
-                .and_then(|cwd| kanbanr_core::coderepo::repo_root_in(&cwd));
+                .and_then(|cwd| coderepo::repo_root_in(&cwd));
             let resp = client.write_in(
                 Method::Post,
                 &format!("/projects/{p}/sprints/{code}/start"),
@@ -8715,17 +7504,12 @@ fn print_doc_tree(folder: &DocFolder, depth: usize) {
 }
 
 fn print_board(project: &Project) {
-    let states = if project.config.displayed_states.is_empty() {
-        project.config.statuses.clone()
-    } else {
-        project.config.displayed_states.clone()
-    };
     println!("# {} board\n", project.id);
-    for state in states {
+    for state in project.config.board_states() {
         let items: Vec<_> = project
             .features
             .iter()
-            .filter(|f| f.status == state)
+            .filter(|f| &f.status == state)
             .collect();
         println!("## {} ({})", state, items.len());
         for f in items {
@@ -8744,30 +7528,6 @@ fn print_board(project: &Project) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// FEAT-129: Windows' CI run showed two path forms leaking out — a marker with backslashes,
-    /// which no other platform can read, and canonicalize's `\\?\` verbatim prefix in messages.
-    #[test]
-    fn paths_written_and_shown_are_portable() {
-        assert_eq!(portable_path(r"..\app.kanbanr", true), "../app.kanbanr");
-        assert_eq!(
-            portable_path(r"C:\work\app.kanbanr", true),
-            "C:/work/app.kanbanr"
-        );
-        // On Linux and macOS a backslash is an ordinary file-name character: left alone.
-        assert_eq!(portable_path(r"odd\name", false), r"odd\name");
-
-        let plain = |s: &str| project::without_verbatim_prefix(PathBuf::from(s));
-        assert_eq!(
-            plain(r"\\?\C:\Users\a\.claude"),
-            PathBuf::from(r"C:\Users\a\.claude")
-        );
-        assert_eq!(
-            plain(r"\\?\UNC\server\share"),
-            PathBuf::from(r"\\?\UNC\server\share")
-        );
-        assert_eq!(plain("/home/a/.claude"), PathBuf::from("/home/a/.claude"));
-    }
 
     /// FEAT-128: `init --author --email` recorded the identity only after the repository's first
     /// commit, which therefore went out as `kanbanr <kanbanr@local>`.
@@ -9054,113 +7814,6 @@ Refs: kanbanr:FEAT-082/R-1""#;
         assert!(!hint.contains("web/dist"), "{hint}");
     }
 
-    /// FEAT-065: the guard decides from a path and nothing else. Every judgement it gets wrong is
-    /// either a note scattered into a codebase or a legitimate write refused — and a guard that
-    /// refuses legitimate writes gets turned off.
-    #[test]
-    fn the_docs_guard_ignores_paths_outside_the_repo() {
-        let root = Path::new("/work/shop");
-        // FEAT-111 R-1: Claude Code's plan file, a scratch file, and an escape through `..` are
-        // all outside the repository, so the guard has no opinion on them.
-        for path in [
-            "/home/someone/.claude/plans/a-plan.md",
-            "/tmp/scratch/NOTES.md",
-            "../elsewhere/PLAN.md",
-            "/work/shop/../shop-notes/PLAN.md",
-        ] {
-            assert_eq!(board_path_for(path, root, root), None, "{path}");
-        }
-        // Inside it, the rule is unchanged: loose notes are refused, deliverables are not.
-        assert!(board_path_for("/work/shop/NOTES.md", root, root).is_some());
-        assert_eq!(board_path_for("/work/shop/README.md", root, root), None);
-    }
-
-    /// FEAT-129: on macOS the temp folder is `/var/…`, a symlink to `/private/var/…`. The root is
-    /// read from the working directory with symlinks resolved; the file path is not. They shared no
-    /// prefix, so a loose note inside the repository counted as outside it and was let through —
-    /// which only a CI runner, not a Linux laptop, showed.
-    #[cfg(unix)]
-    #[test]
-    fn the_docs_guard_follows_a_symlinked_folder() {
-        let base = std::env::temp_dir().join(format!("kanbanr-guard-link-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        let real = base.join("real");
-        std::fs::create_dir_all(real.join("shop")).unwrap();
-        std::os::unix::fs::symlink(&real, base.join("link")).unwrap();
-        let root = std::fs::canonicalize(real.join("shop")).unwrap();
-
-        // Spelled through the link, it is still the repository's file: refused with the same
-        // suggestion as when spelled through the real path.
-        let through_link = base.join("link/shop/NOTES.md");
-        let through_real = real.join("shop/NOTES.md");
-        let suggestion = board_path_for(through_real.to_str().unwrap(), &root, &root);
-        assert!(suggestion.is_some());
-        assert_eq!(
-            board_path_for(through_link.to_str().unwrap(), &root, &root),
-            suggestion
-        );
-        // A deliverable stays allowed, and an escape through `..` stays outside.
-        let readme = base.join("link/shop/README.md");
-        assert_eq!(board_path_for(readme.to_str().unwrap(), &root, &root), None);
-        let escape = base.join("link/shop/../elsewhere/PLAN.md");
-        assert_eq!(board_path_for(escape.to_str().unwrap(), &root, &root), None);
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    /// FEAT-111 R-2: the suggestion is a board path someone can actually run — built from the
-    /// repo-relative path, never `notes//home/…`.
-    #[test]
-    fn the_docs_guard_suggests_a_usable_board_path() {
-        let root = Path::new("/work/shop");
-        assert_eq!(
-            board_path_for("/work/shop/api/Design Notes.md", root, root).as_deref(),
-            Some("api/design-notes")
-        );
-        assert_eq!(
-            board_path_for("./PLAN.md", root, &root.join("sub/..")).as_deref(),
-            Some("plan")
-        );
-    }
-
-    #[test]
-    fn the_docs_guard_allows_deliverables_and_stops_the_rest() {
-        // Project reasoning written loose in a checkout: this is what belongs on the board.
-        for path in [
-            "NOTES.md",
-            "design-thoughts.md",
-            "api/PLAN.md",
-            "some/deep/folder/retrospective.md",
-        ] {
-            assert!(belongs_on_the_board(path), "{path} should go to the board");
-        }
-
-        // What the repository ships, and what is not prose at all.
-        for path in [
-            "README.md",
-            "CHANGELOG.md",
-            "CONTRIBUTING.md",
-            "SECURITY.md",
-            "CLAUDE.md",
-            "docs/USER_GUIDE.md",
-            "skill/kanbanr/SKILL.md",
-            ".github/PULL_REQUEST_TEMPLATE.md",
-            "web/README.md",
-            "api/crates/kanbanr-cli/tests/fixtures/board.md",
-            "api/target/doc/index.md",
-            "src/main.rs",
-            "Cargo.toml",
-        ] {
-            assert!(
-                !belongs_on_the_board(path),
-                "{path} should be allowed through"
-            );
-        }
-
-        // Case is not identity: a repository's README is a README however it is spelled.
-        assert!(!belongs_on_the_board("readme.md"));
-        assert!(!belongs_on_the_board("Docs/design.md"));
-    }
-
     #[test]
     fn the_commit_guard_recognizes_a_commit_and_reads_its_message() {
         assert!(is_git_commit("git commit -m \"x\""));
@@ -9180,31 +7833,5 @@ Refs: kanbanr:FEAT-082/R-1""#;
         );
         // An editor commit has no inline message; the commit-msg hook covers that one.
         assert_eq!(inline_message("git commit"), None);
-    }
-
-    #[test]
-    fn test_output_is_read_from_the_formats_a_run_actually_prints() {
-        let text = "\
-running 3 tests
-test hooks::tests::install_merges ... ok
-test report::tests::cycle_time ... FAILED
-test slow::case ... ignored
-✓ cart retains items for 7 days
-✗ cart empties on sign-out
-PASS src/cart.test.ts
-FAIL src/checkout.test.ts
-some unrelated line ... ok";
-        let results = parse_test_results(text);
-        assert_eq!(results.get("hooks::tests::install_merges"), Some(&true));
-        assert_eq!(results.get("report::tests::cycle_time"), Some(&false));
-        assert_eq!(results.get("cart retains items for 7 days"), Some(&true));
-        assert_eq!(results.get("cart empties on sign-out"), Some(&false));
-        assert_eq!(results.get("src/cart.test.ts"), Some(&true));
-        assert_eq!(results.get("src/checkout.test.ts"), Some(&false));
-        // An ignored test proves nothing, and a line that merely ends in "ok" is not a result.
-        assert_eq!(results.get("slow::case"), None);
-        assert_eq!(results.len(), 6, "{results:?}");
-        // Nothing recognizable: the hook stays quiet rather than guessing.
-        assert!(parse_test_results("cargo build finished in 3.2s").is_empty());
     }
 }

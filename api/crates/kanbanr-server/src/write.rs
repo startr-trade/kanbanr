@@ -11,7 +11,7 @@
 //!
 //! Binds localhost, no auth — consistent with the read-only monitor.
 
-use kanbanr_core::{Store, activity, dispatch, eventing, git};
+use kanbanr_core::{Store, eventing, git};
 use serde_json::Value;
 use std::path::Path;
 
@@ -23,27 +23,10 @@ pub struct WriteOutcome {
     pub warnings: Vec<String>,
 }
 
-/// Hold the cross-process advisory write lock on `data_dir` while running `f`, identical to the
-/// CLI's `with_write_lock` (FEAT-029), so the daemon and a direct CLI writer can't interleave.
-fn with_write_lock<T>(data_dir: &Path, f: impl FnOnce() -> T) -> std::io::Result<T> {
-    use fs2::FileExt;
-    let lock_path = data_dir.join(git::WRITE_LOCK_FILE);
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(&lock_path)?;
-    file.lock_exclusive()?;
-    let result = f();
-    let _ = file.unlock();
-    Ok(result)
-}
-
-/// The data-route write recipe: dispatch + activity + local commit + debounced push, serialized by
-/// the advisory write lock. `method` is one of POST/PUT/PATCH/DELETE. This is the daemon's only
-/// mutation entry point and it reuses `dispatch::dispatch` exactly like the CLI. Returns the
-/// dispatcher's error string on failure (the caller maps it to an HTTP status). `repo` is the
-/// project's code repository, when the daemon has one for this project (FEAT-183).
+/// The data-route write: core's one write recipe (FEAT-176), the same the CLI runs. The daemon has
+/// no HTTP client, so events are recorded and not delivered; webhook delivery stays the CLI's.
+/// On failure, core's error, which carries its HTTP status. `repo` is
+/// the project's code repository, when the daemon has one for this project (FEAT-183).
 pub fn write(
     store: &Store,
     data_dir: &Path,
@@ -52,78 +35,32 @@ pub fn write(
     path: &str,
     body: Option<&Value>,
     repo: Option<&Path>,
-) -> Result<WriteOutcome, String> {
-    with_write_lock(data_dir, || {
-        git::ensure_repo(data_dir);
-        // Refused before anything changes on disk when nobody can author the commit (FEAT-128).
-        if dispatch::is_mutation(method) && !dispatch::is_dry_run(body) {
-            git::require_identity(data_dir)?;
-        }
-        let out =
-            dispatch::dispatch_in(store, method, path, body, repo).map_err(|e| e.to_string())?;
-        let mut warnings = Vec::new();
-        if dispatch::is_mutation(method) && !dispatch::is_dry_run(body) {
-            let msg = dispatch::commit_message(method, path, body);
-            if let Some(project) = project_of(path) {
-                let actor = git::identity(data_dir)
-                    .map(|(n, _)| n)
-                    .unwrap_or_else(|| "kanbanr".into());
-                activity::append(data_dir, &project, &actor, &msg, item_of(path).as_deref());
-            }
-            // Eventing (FEAT-036): additive and best-effort. The LOG is written before the commit
-            // so the entry lands in the same commit as the change it describes (FEAT-059) — the CLI
-            // path does the same, and the daemon must not be the one that leaves the board dirty.
-            // The daemon has no HTTP client, so it records only; webhook *delivery* stays the CLI's
-            // responsibility for now, and a daemon-side sender slots in after the commit.
-            let events = eventing::record(store, data_dir, method, path, &out);
-            if git::commit_local(data_dir, &msg) {
-                // The board's policy, as the CLI applies it (FEAT-142): one rule, in core.
-                if let Some(outcome) = git::after_commit(data_dir, policy) {
-                    warnings = outcome.failures;
-                }
-            }
-            eventing::deliver_all(data_dir, &events, &eventing::NullSender);
-        }
-        Ok(WriteOutcome {
-            body: out,
-            warnings,
-        })
+) -> Result<WriteOutcome, kanbanr_core::write::WriteError> {
+    let applied = kanbanr_core::write::apply(
+        store,
+        data_dir,
+        policy,
+        method,
+        path,
+        body,
+        repo,
+        &eventing::NullSender,
+    )?;
+    Ok(WriteOutcome {
+        body: applied.body,
+        warnings: applied.push_failures,
     })
-    .map_err(|e| format!("write lock: {e}"))?
 }
 
 /// Explicit sync: push pending local commits regardless of policy (the daemon's `/sync` route).
 pub fn sync(data_dir: &Path) -> git::SyncOutcome {
-    with_write_lock(data_dir, || git::push_pending(data_dir)).unwrap_or_default()
-}
-
-/// The project id from `/projects/<id>/...` (mirrors the CLI helper).
-fn project_of(path: &str) -> Option<String> {
-    let bare = path.split('?').next().unwrap_or(path);
-    let mut segs = bare.split('/').filter(|s| !s.is_empty());
-    if segs.next()? != "projects" {
-        return None;
-    }
-    segs.next().map(|s| s.to_string())
-}
-
-/// The feature code from `/projects/<id>/features/<CODE>/...` (mirrors the CLI helper).
-fn item_of(path: &str) -> Option<String> {
-    let bare = path.split('?').next().unwrap_or(path);
-    let mut segs = bare.split('/').filter(|s| !s.is_empty());
-    if segs.next()? != "projects" {
-        return None;
-    }
-    segs.next()?;
-    if segs.next()? != "features" {
-        return None;
-    }
-    segs.next().map(|s| s.to_string())
+    kanbanr_core::write::with_lock(data_dir, || git::push_pending(data_dir)).unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kanbanr_core::dispatch;
     use std::path::PathBuf;
 
     fn temp_dir(tag: &str) -> PathBuf {

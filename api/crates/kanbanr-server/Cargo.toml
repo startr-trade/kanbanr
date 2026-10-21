@@ -25,7 +25,6 @@ notify = "6"
 # FEAT-034: the optional single-writer daemon (`serve --allow-writes`) needs the same cross-process
 # advisory write lock the CLI uses, so concurrent writers (CLI + daemon) never interleave a
 # mutate→commit sequence on the same data dir. git itself stays in kanbanr-core (commit + push).
-fs2 = "0.4"
 # The monitor is baked into the binary (FEAT-084): gzipped at build time, decompressed once at
 # startup. flate2 is the only new runtime dependency and is already in the tree via git2's zlib.
 flate2 = "1"

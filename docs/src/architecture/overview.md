@@ -47,6 +47,30 @@ for data operations). The **CLI** links it to write the folder directly; the **v
 (`kanbanr-server`, a library run by `kanbanr serve`) links it to read. Both go through `dispatch`,
 so they agree by construction. It's all one binary.
 
+**Core decides, the front ends act** (FEAT-176). Every rule about the board lives in
+`kanbanr-core`'s public API, as functions over plain inputs, so the CLI and the daemon call the
+same code:
+
+| Concern | In core |
+|---|---|
+| The write recipe (lock, dispatch, activity, events, commit, push) | `write::apply` |
+| Code-repository git | `coderepo` |
+| Commit and branch policy | `scm::{commit_verdict, message_verdict, branch_verdict, validate_trailers}` over `RepoFacts` |
+| Moving through the workflow | `flow::{plan_start, plan_finish}`, `ProjectConfig::{first_active_status, path_between, finish_target}` |
+| Test evidence | `evidence::{parse_results, plan_capture, plan_stale_tests, plan_sources}` |
+| The process library | `library::{resolve, list, behind}`, `Store::process_drift`, `WorkflowFile::{to_request, to_yaml}` |
+| Issue-tracker mirror | `mirror::{enable, status, sync, link, pull}` over an `IssueTracker` trait |
+| `check` | `readiness::{check_board, check_definition_text}` |
+| Errors as HTTP statuses | `CoreError::status()` |
+
+The front ends keep argument parsing and output, process concerns (install, self-update, the skill,
+the editor extension, Claude Code hooks), the `gh` adapter, the commit guard's shell-line parsing,
+and collecting facts from outside the board — the code repository's state, a test run's output,
+`git grep` — which they hand to core to decide on. A test, `architecture::front_ends_are_thin`,
+fails naming the file and the rule when a front end parses board YAML, depends on `git2`,
+`serde_yaml` or `ears-classifier`, builds a domain value by hand, or calls `dispatch` outside its
+one entry point.
+
 The daemon's **public read routes** are a versioned contract, v1 (FEAT-177). Their response types
 live in `kanbanr-core` and derive a JSON Schema behind the crate's `schema` feature, which the
 shipped binary does not enable; `kanbanr_core::openapi` lists the public routes and builds an

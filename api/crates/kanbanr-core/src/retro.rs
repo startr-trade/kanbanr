@@ -424,6 +424,215 @@ pub fn document_path(wave: &Wave, code: Option<&str>) -> String {
     )
 }
 
+/// The facts section, as markdown — the same text the CLI prints and the document stores, so the
+/// two can never drift apart.
+pub fn markdown(r: &Retro) -> String {
+    use crate::report::duration;
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(out, "# Retrospective — {}\n", r.wave);
+    let _ = writeln!(out, "## What the board recorded\n");
+    let _ = writeln!(
+        out,
+        "- items: {} ({} finished, {} still open)",
+        r.items, r.completed, r.still_open
+    );
+    // A sprint retro: what it committed to, what it finished, and what it carried out (FEAT-119).
+    if let Some(sprint) = &r.sprint {
+        let unit = sprint["unit"].as_str().unwrap_or("");
+        let _ = writeln!(
+            out,
+            "- sprint {}: {} of {} {unit} done",
+            sprint["code"].as_str().unwrap_or(""),
+            num(&sprint["done"]),
+            num(&sprint["committed"])
+        );
+        let carried: Vec<String> = sprint["carried"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|c| {
+                format!(
+                    "{} → {}",
+                    c["code"].as_str().unwrap_or(""),
+                    c["to"].as_str().unwrap_or("")
+                )
+            })
+            .collect();
+        if !carried.is_empty() {
+            let _ = writeln!(out, "- carried over: {}", carried.join(", "));
+        }
+    }
+    if let Some(started) = &r.started {
+        let end = match (&r.finished, r.all_done) {
+            (Some(f), _) => f[..10.min(f.len())].to_string(),
+            // Over, but the board never recorded when: saying "still running" would be false.
+            (None, true) => "finished (date not recorded)".into(),
+            (None, false) => "still running".into(),
+        };
+        let _ = writeln!(out, "- ran: {} → {end}", &started[..10.min(started.len())]);
+    }
+    let growth = &r.scope_growth;
+    let _ = writeln!(
+        out,
+        "- scope: {} to begin with, {} added ({} defect(s), {} split, {} unaccounted for)",
+        growth.original,
+        growth.added(),
+        growth.defects.len(),
+        growth.split.len(),
+        growth.unclassified.len()
+    );
+    for (title, list) in [
+        ("added as defects", &growth.defects),
+        ("split out of other work", &growth.split),
+        ("added without a recorded cause", &growth.unclassified),
+    ] {
+        if !list.is_empty() {
+            let _ = writeln!(out, "  - {title}: {}", list.join(", "));
+        }
+    }
+    let _ = writeln!(
+        out,
+        "- defects: {} ({} escaped)",
+        r.defects.total, r.defects.escaped
+    );
+    if !r.defects.self_inflicted.is_empty() {
+        let _ = writeln!(
+            out,
+            "  - caused by work in this same wave: {}",
+            r.defects.self_inflicted.join(", ")
+        );
+    }
+    match &r.cycle_time_days {
+        Some(c) => {
+            let _ = writeln!(
+                out,
+                "- cycle time: p50 {}, p90 {}, max {}",
+                duration(c.p50),
+                duration(c.p90),
+                duration(c.max)
+            );
+        }
+        None => {
+            let _ = writeln!(
+                out,
+                "- cycle time: nothing finished with a recorded history"
+            );
+        }
+    }
+    if !r.rework.is_empty() {
+        let _ = writeln!(
+            out,
+            "- rework (called done, then reopened): {}",
+            r.rework.join(", ")
+        );
+    }
+    let _ = writeln!(
+        out,
+        "- requirements proven by a green test: {}/{}",
+        r.evidence.proven, r.evidence.requirements
+    );
+    if !r.evidence.finished_unproven.is_empty() {
+        let _ = writeln!(
+            out,
+            "  - finished with unproven requirements: {}",
+            r.evidence.finished_unproven.join(", ")
+        );
+    }
+    if !r.estimates.is_empty() {
+        let _ = writeln!(out, "- estimate vs actual:");
+        for e in &r.estimates {
+            let _ = writeln!(
+                out,
+                "  - {}: estimated {}, took {} ({:.1}×)",
+                e.code,
+                duration(e.estimate_days),
+                duration(e.actual_days),
+                if e.estimate_days > 0.0 {
+                    e.actual_days / e.estimate_days
+                } else {
+                    0.0
+                }
+            );
+        }
+    }
+    if !r.approximate.is_empty() {
+        let _ = writeln!(
+            out,
+            "- {} item(s) have only changelog timestamps, which record when the board was written \
+             rather than how long work took — too coarse for cycle time: {}",
+            r.approximate.len(),
+            r.approximate.join(", ")
+        );
+    }
+    if !r.no_history.is_empty() {
+        let _ = writeln!(
+            out,
+            "- no recorded moves, so no flow numbers: {}",
+            r.no_history.join(", ")
+        );
+    }
+    if let Some(starts) = &r.log_starts {
+        let _ = writeln!(
+            out,
+            "- this wave began before the activity log, which starts {starts} — anything earlier \
+             is not recorded here rather than absent"
+        );
+    }
+    out.push('\n');
+
+    // What the wave taught, as it stood when this was written. Still facts — each one carries the
+    // evidence it was recorded with — so it sits above the narrative, not inside it.
+    if !r.lessons.is_empty() {
+        let _ = writeln!(out, "## What this wave taught\n");
+        for l in &r.lessons {
+            let retired = l.status == crate::lessons::LessonStatus::Retired;
+            let _ = writeln!(
+                out,
+                "- **{}** ({}%{}) {}",
+                l.id,
+                (l.confidence_now() * 100.0).round() as i64,
+                if retired { ", since retired" } else { "" },
+                l.lesson.trim()
+            );
+            let mut detail: Vec<String> = Vec::new();
+            if !l.from_item.is_empty() {
+                detail.push(format!("from {}", l.from_item));
+            }
+            if !l.evidence.trim().is_empty() {
+                detail.push(l.evidence.trim().to_string());
+            }
+            if !detail.is_empty() {
+                let _ = writeln!(out, "  - {}", detail.join(" · "));
+            }
+        }
+        let _ = writeln!(
+            out,
+            "\n_Live state is `kanbanr lessons`; confidence decays, so these are the figures as of \
+             this retrospective._\n"
+        );
+    }
+    out
+}
+
+/// What follows the facts in a retro's document (FEAT-054): the narrative section, kept visibly
+/// apart so a reader always knows which part the board vouches for.
+pub fn scaffold() -> &'static str {
+    "\n## What we make of it\n\n\
+     _Written by whoever writes it, from the numbers above. It may explain them, and it may \
+     disagree with what we expected — it may not contradict them._\n\n\
+     <!-- narrative goes here -->\n"
+}
+
+/// A number as a person writes it: `3`, not `3.0`.
+fn num(v: &serde_json::Value) -> String {
+    match v.as_f64() {
+        Some(x) if x.fract() == 0.0 => format!("{}", x as i64),
+        Some(x) => format!("{x}"),
+        None => v.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

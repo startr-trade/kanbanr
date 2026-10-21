@@ -869,6 +869,20 @@ pub fn role_problems(
     problems
 }
 
+/// A board record from YAML (or JSON: YAML is a superset) text a front end was handed — a
+/// charter, a definition, a process file (FEAT-176). The error is the parser's own, for the caller
+/// to word.
+pub fn from_yaml<T: serde::de::DeserializeOwned>(
+    text: &str,
+) -> std::result::Result<T, serde_yaml::Error> {
+    serde_yaml::from_str(text)
+}
+
+/// A board record as YAML, the way the board writes it (FEAT-176).
+pub fn to_yaml<T: Serialize>(value: &T) -> crate::Result<String> {
+    Ok(serde_yaml::to_string(value)?)
+}
+
 impl WorkflowFile {
     /// A hash of the process itself — everything but its header (FEAT-169). Two files that would
     /// govern work the same way have the same rev, whatever they are called.
@@ -876,6 +890,39 @@ impl WorkflowFile {
         let mut bare = self.clone();
         bare.process = None;
         crate::hash::stable_hash(&serde_yaml::to_string(&bare).unwrap_or_default())
+    }
+
+    /// A process file from its YAML (or JSON) text (FEAT-176): the one reader of a process file
+    /// a front end was handed. The error is the parser's own, for the caller to word.
+    pub fn from_yaml(text: &str) -> std::result::Result<WorkflowFile, serde_yaml::Error> {
+        serde_yaml::from_str(text)
+    }
+
+    /// This file as YAML, as it is saved and exported (FEAT-176).
+    pub fn to_yaml(&self) -> crate::Result<String> {
+        Ok(serde_yaml::to_string(self)?)
+    }
+
+    /// The body of `PUT /projects/{p}/config/workflow` that applies this file whole, gates,
+    /// cadence and estimate unit included (FEAT-176). `process` says which saved process it came
+    /// from; without one the body carries no `process` key. A caller that overrides a field
+    /// replaces its key, which keeps its place.
+    pub fn to_request(&self, process: Option<&ProcessSource>) -> serde_json::Value {
+        let mut body = serde_json::json!({
+            "statuses": self.statuses,
+            "transitions": self.transitions,
+            "default_state": self.default_state,
+            "displayed_states": self.displayed_states,
+            "no_op_states": self.no_op_states,
+            "terminal_states": self.terminal_states,
+            "gates": self.gates,
+            "cadence": (!self.cadence.is_off()).then_some(&self.cadence),
+            "estimate_unit": (!self.estimate_unit.is_days()).then_some(self.estimate_unit),
+        });
+        if let Some(source) = process {
+            body["process"] = serde_json::json!(source);
+        }
+        body
     }
 
     /// The version this file carries, 0 when it has no header.
@@ -1089,6 +1136,73 @@ impl ProjectConfig {
             .get(from)
             .map(|tos| tos.iter().any(|t| t == to))
             .unwrap_or(false)
+    }
+
+    /// The statuses the board shows as columns, in order (FEAT-176): the displayed ones, or every
+    /// status when none is marked displayed.
+    pub fn board_states(&self) -> &[String] {
+        if self.displayed_states.is_empty() {
+            &self.statuses
+        } else {
+            &self.displayed_states
+        }
+    }
+
+    /// The first status that means "being worked on": displayed, not the default, not terminal,
+    /// not a no-op. Where `start` moves an item when no stage makes its branch.
+    pub fn first_active_status(&self) -> Option<String> {
+        self.displayed_states
+            .iter()
+            .find(|s| {
+                *s != &self.default_state
+                    && !crate::graph::is_terminal_status(self, s)
+                    && !self.is_no_op(s)
+            })
+            .cloned()
+    }
+
+    /// The shortest chain of allowed transitions from one status to another, both ends included;
+    /// `None` when the workflow has no way between them.
+    pub fn path_between(&self, from: &str, to: &str) -> Option<Vec<String>> {
+        let mut previous: BTreeMap<String, String> = BTreeMap::new();
+        let mut queue = std::collections::VecDeque::from([from.to_string()]);
+        let mut seen = std::collections::BTreeSet::from([from.to_string()]);
+        while let Some(at) = queue.pop_front() {
+            if at == to {
+                let mut path = vec![at.clone()];
+                let mut cur = at;
+                while let Some(p) = previous.get(&cur) {
+                    path.push(p.clone());
+                    cur = p.clone();
+                }
+                path.reverse();
+                return Some(path);
+            }
+            for next in self.transitions.get(&at).into_iter().flatten() {
+                if seen.insert(next.clone()) {
+                    previous.insert(next.clone(), at.clone());
+                    queue.push_back(next.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Where `finish` takes an item that is at `from` (FEAT-115): the end status the workflow
+    /// allows from there, else the first end status (`Completed` when there is none), which the
+    /// item may still have stages to walk to. The first declared end was taken before, and refused
+    /// from any stage that does not lead straight to it — Implementation under TOGAF.
+    pub fn finish_target(&self, from: &str) -> String {
+        let ends: Vec<&String> = self
+            .statuses
+            .iter()
+            .filter(|s| crate::graph::is_terminal_status(self, s) && !self.is_no_op(s))
+            .collect();
+        ends.iter()
+            .find(|s| self.transition_allowed(from, s))
+            .or(ends.first())
+            .map(|s| (*s).clone())
+            .unwrap_or_else(|| "Completed".to_string())
     }
 
     /// The schema a config is stamped with: gates need a reader that enforces them.
