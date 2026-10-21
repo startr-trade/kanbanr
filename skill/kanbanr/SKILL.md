@@ -347,50 +347,6 @@ written there, on the item's branch. Say which stage holds which role when you p
 quality it must reach", "when it happens". If the definition does not yet address it, ask (with
 options, e.g. a latency target, or "no target"), rather than noting its absence afterwards.
 
-### The design stage: the spec carries the build-ready design
-
-When an item reaches a stage whose purpose is *how and where* (System Design, Design, or the
-equivalent in the project's process), its **spec** gains a `## Design` section written at
-implementation level. A reviewer or another session should be able to build from it without
-guessing:
-- components, modules and files;
-- public interfaces with signatures, and what each must do;
-- the data model and on-disk or wire formats;
-- algorithms and edge cases, and control flow (a diagram where it helps);
-- concurrency, transactions and failure handling;
-- configuration and its defaults (with how each default was chosen);
-- dependencies;
-- security and privacy;
-- performance budgets that name their benchmark;
-- a test plan mapping each requirement to its tests;
-- compatibility and migration;
-- links to ADRs, and open questions stated as questions;
-- **Affects docs**: links to the board docs this change touches. Mirror the same paths into the
-  definition's `affects_docs`, which a `docs_updated` gate checks.
-
-The definition's `how` and `where` lines are one-line summaries of this section, never a
-substitute for it. A section that does not apply says "n/a" and why. A spec that stays
-non-technical at this stage leaves implementation decisions unreviewed, which is the failure the
-gate exists to prevent.
-
-**Write it for hand-off.** The design is the point where a capable model does the thinking, so
-that cheaper models can do the building. End the section with an **implementation task list** a
-lower-cost subagent can carry out one task at a time, without making a design decision. Each task
-names:
-- the files it creates or changes;
-- the exact signatures;
-- the behaviour, including errors;
-- the tests that prove it, by name, and the requirement each serves;
-- the tasks it depends on.
-
-Leave nothing open inside a task. A question still undecided goes to the user before the design is
-signed off, never to the subagent. Mirror the tasks into the item's todo-list, so each one can be
-handed out and tracked.
-
-A project makes the section a condition of moving on with
-`spec_sections: [Design]` in the build stage's `requires`. If it also wants a person to review the
-design before build, it adds `signoffs: [design-review]` to the same gate.
-
 ### Diagrams
 
 A design usually carries Mermaid diagrams, and a broken one draws as an error the reviewer finds at
@@ -545,6 +501,144 @@ user's reason, and the item then needs ratifying.
   definition**, not merged code.
 - The gate is dormant for projects with no charter, and for items created before the charter was
   adopted — so adopting the method never breaks an existing board.
+
+## The method by stage role
+
+kanbanr carries one method for every process: a build-ready design before code, architecture docs
+kept as built, live links, a git model that follows the cadence, and releases that move through
+stages. It is stated here once, by the **role** a stage holds, so it holds the same under the
+default kanban, Scrum, TOGAF, PDCA or a process of the user's own.
+
+**Roles first.** `kanbanr process show <name>` prints the working agreement with each stage's role,
+and `kanbanr process checks --json` lists the roles and the checks a gate can ask for. Find the
+status that holds each of design, build, integrate and release, and reason from that, never from a
+preset's name. `kanbanr config method` says which parts of the method this project has on
+(`design`, `design-review`, `docs`, `docs-folded`, `links`). A part that is off is not asked for by
+the gates, but it is still good practice: keep doing it, and never turn a part off or on yourself.
+
+### At the design role
+
+The item's spec gains its build-ready `## Design` (the next subsection). Also:
+- **Affects docs**: the Design ends with links to the board docs the change touches, and the same
+  paths go into the definition's `affects_docs`, which the integrate role checks.
+- **Every reference is a live link**: items, requirements, milestones, goals, ADRs and docs, in the
+  forms under "Every change points back at the reason for it". `kanbanr doctor` reports a link that
+  points at nothing.
+- **Decisions are drafted as proposed ADRs** (`kanbanr adr new "…" --affects <CODE>`) and asked
+  about at once: Accept, Reject or Later.
+- **An undecided question goes to the user** before the design is signed off, never to a subagent.
+
+Leaving the design role, the build stage's gate asks for `spec_sections: [Design]` and the
+`design-review` sign-off. Ask **Sign off design-review** once the section exists; the user gives
+it, never you.
+
+### The design stage: the spec carries the build-ready design
+
+When an item reaches a stage whose purpose is *how and where* (System Design, Design, or the
+equivalent in the project's process), its **spec** gains a `## Design` section written at
+implementation level. A reviewer or another session should be able to build from it without
+guessing:
+- components, modules and files;
+- public interfaces with signatures, and what each must do;
+- the data model and on-disk or wire formats;
+- algorithms and edge cases, and control flow (a diagram where it helps);
+- concurrency, transactions and failure handling;
+- configuration and its defaults (with how each default was chosen);
+- dependencies;
+- security and privacy;
+- performance budgets that name their benchmark;
+- a test plan mapping each requirement to its tests;
+- compatibility and migration;
+- links to ADRs, and open questions stated as questions;
+- **Affects docs**: links to the board docs this change touches. Mirror the same paths into the
+  definition's `affects_docs`, which a `docs_updated` gate checks.
+
+The definition's `how` and `where` lines are one-line summaries of this section, never a
+substitute for it. A section that does not apply says "n/a" and why. A spec that stays
+non-technical at this stage leaves implementation decisions unreviewed, which is the failure the
+gate exists to prevent.
+
+**Write it for hand-off.** The design is the point where a capable model does the thinking, so
+that cheaper models can do the building. End the section with an **implementation task list** a
+lower-cost subagent can carry out one task at a time, without making a design decision. Each task
+names:
+- the files it creates or changes;
+- the exact signatures;
+- the behaviour, including errors;
+- the tests that prove it, by name, and the requirement each serves;
+- the tasks it depends on.
+
+Leave nothing open inside a task. A question still undecided goes to the user before the design is
+signed off, never to the subagent. Mirror the tasks into the item's todo-list, so each one can be
+handed out and tracked.
+
+A project makes the section a condition of moving on with
+`spec_sections: [Design]` in the build stage's `requires`. If it also wants a person to review the
+design before build, it adds `signoffs: [design-review]` to the same gate.
+
+### At the build role
+
+- `kanbanr start <CODE>` makes the item branch. With the git model on, it branches from the line of
+  integration `kanbanr git model` names (main, `sprint/<SP>` or the integration branch), not always
+  from main; a fix to a release under test branches from `release/<V>`.
+- Commit with `kanbanr commit`: it fills in `Refs:` from the branch.
+- Subagents take one task at a time from the item's todo-list, with the approved definition and
+  that task as their brief.
+- Never commit on main or on a line of integration (the hooks refuse), and never push.
+
+### At the integrate role
+
+Before the move:
+- fold the Design into each doc in `affects_docs`, describing it as built (`docs_updated`);
+- ask **Sign off docs-folded**.
+
+With the git model on, entering the integrate role (`kanbanr move <CODE> <status>`) merges the item
+branch into its line, `--no-ff`, with `Refs: kanbanr:<CODE>`. If the merge would conflict, the move
+is refused and the item stays where it was: merge the line *into* the item branch, resolve, commit,
+and move again. Never rebase. `kanbanr git doctor` names any disagreement between the board and the
+branches; fix it before going on.
+
+### At the release role
+
+- A release moves through its stages with `kanbanr release promote <V> [stage]`. The first stage
+  makes `release/<V>`. The last, production, is the cut: kanbanr tags the version and brings main up
+  to it (a fast-forward, refused with nothing changed if main has commits the release lacks).
+- A patch is `kanbanr release add <V> --patch-of <P>`: `release/<V>` is made from `<P>`'s tag. A fix
+  integrated into a release branch reaches the line through `kanbanr git forward <V>`, which the
+  move says is needed; it is never done for you.
+- In the sprints-only model, `kanbanr sprint close <SP>` is the cut: main fast-forwards to
+  `sprint/<SP>`, tagged with the sprint's code.
+
+### Carry-over
+
+`kanbanr sprint close <SP> --carry-to <next SP>` carries the unfinished items and keeps their
+branches. kanbanr merges the next sprint's branch into each carried item's branch (a catch-up, never
+a rebase); a conflict is reported for that item and its branch is left as it was, for you to resolve
+on the item branch.
+
+### Who merges, who pushes
+
+`kanbanr git model --sprints on|off --releases on|off` shows the model for a cadence, and
+`kanbanr git model` the one this project follows:
+
+| Cadence | Items branch from and merge into | Production moves at | kanbanr merges (with the git model on) |
+|---|---|---|---|
+| neither (trunk) | main | the integrate merge | each item branch into main |
+| sprints only | `sprint/<SP>` | the sprint close | item branches into `sprint/<SP>`; `sprint/<SP>` into main at the close; the sprint into carried items |
+| releases only | `integration` | the release cut | item branches into `integration`; `release/<V>` into main at its last stage |
+| sprints and releases | `sprint/<SP>` | the release cut | item branches into `sprint/<SP>`; `release/<V>` into main at its last stage; the sprint into carried items |
+
+With the git model off, kanbanr merges nothing and the model is a description. The **code**
+repository is never pushed, by kanbanr or by you: the user reviews and pushes, in every row. The
+board's own remote is a different repository, which kanbanr syncs after each write as its push
+policy says (`kanbanr remote push-policy`).
+
+### Each milestone ends with a compliance review
+
+Review the architecture as a whole: every component has a board doc that describes it as built,
+its front matter (`items`, `adrs`, `covers`) is current, and the views are updated. `kanbanr trace
+<MS> --zachman` reports a column nothing in scope answers. See "Architecture docs stay as built"
+below.
 
 ## Code points back at the item that justifies it
 
