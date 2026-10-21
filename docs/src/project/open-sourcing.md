@@ -51,7 +51,7 @@ for you). **Never** paste a token into a file that gets committed.
 | Destination | What it's for | Account | Credential to create | Where it lives |
 |---|---|---|---|---|
 | **GitHub** | Hosts the repo, runs CI, stores release binaries, serves the plugin marketplace | github.com (free) + **2FA** | an **SSH key** for `git push`; CI's `GITHUB_TOKEN` is automatic | SSH key on your laptop (`~/.ssh`); `GITHUB_TOKEN` is injected into Actions — nothing to store |
-| **crates.io** | Publishes the standalone **`ears-classifier`** library — the only crate that is published. kanbanr itself is **not** on crates.io (see §5) | crates.io (log in with GitHub) + **2FA** | an **API token**, *or* set up **Trusted Publishing** | `CARGO_REGISTRY_TOKEN` secret, **or** none (Trusted Publishing) |
+| **crates.io** | Publishes the standalone **`ears-classifier`** and **`mermaid-lint`** libraries — the only crates that are published. kanbanr itself is **not** on crates.io (see §5) | crates.io (log in with GitHub) + **2FA** | an **API token**, *or* set up **Trusted Publishing** | `CARGO_REGISTRY_TOKEN` secret, **or** none (Trusted Publishing) |
 | **GHCR** (GitHub Container Registry) | Publishes the Docker image so `docker run ghcr.io/startr-trade/kanbanr` works | your GitHub account | **none** — Actions uses the automatic `GITHUB_TOKEN` (`packages: write`) | nothing to store; locally use a PAT with `write:packages` |
 | **Claude Code plugin marketplace** | Lets users `claude plugin install kanbanr` | your GitHub account | **none** — it's just your public git repo | nothing — users add the repo URL |
 | **VS Code Marketplace** *(only when you ship the extension — `editor/vscode/`)* | Publishes the VS Code extension | **Azure DevOps** account (free) + a **publisher** at marketplace.visualstudio.com/manage | a **Personal Access Token** scoped *Marketplace → Manage* | `VSCE_PAT` secret |
@@ -72,7 +72,7 @@ cat ~/.ssh/id_ed25519.pub                     # copy this line
 ```
 Paste it at GitHub → Settings → **SSH and GPG keys** → New SSH key. Test: `ssh -T git@github.com`.
 
-**crates.io API token (to publish `ears-classifier`):**
+**crates.io API token (to publish `ears-classifier` and `mermaid-lint`):**
 1. Sign in at crates.io with GitHub; enable 2FA.
 2. Account Settings → **API Tokens** → New Token. Name it `kanbanr-release`; scope to
    **publish-update** (plus **publish-new** for the very first publish); set an expiry.
@@ -84,7 +84,7 @@ Paste it at GitHub → Settings → **SSH and GPG keys** → New SSH key. Test: 
    name the workflows read with `vars.` exists only as a secret. **Better:** skip the
    token and set up **Trusted Publishing** on crates.io (your crate → Settings → Trusted Publishing →
    add `startr-trade/kanbanr` + the `release.yml` workflow), then delete the token line. The job
-   publishes `ears-classifier` only; every kanbanr crate declares `publish = false`, so a stray
+   publishes `ears-classifier` and `mermaid-lint` only; every kanbanr crate declares `publish = false`, so a stray
    `cargo publish` of one of them is refused.
 5. ⚠️ **A published version is permanent** — you can `cargo yank` a bad version but never delete or
    reuse it. Double-check before `cargo publish`.

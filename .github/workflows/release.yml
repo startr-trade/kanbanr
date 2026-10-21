@@ -6,13 +6,14 @@ name: Release
 #   1. cross-platform `kanbanr` binaries attached to a GitHub Release, with the installers, the
 #      VS Code extension and the standalone monitor bundle (kanbanr-monitor-<tag>.tar.gz, FEAT-178)
 #   2. a multi-arch-capable Docker image pushed to GHCR (ghcr.io/startr-trade/kanbanr)
-#   3. (optional) the ears-classifier library published to crates.io — the ONLY crate that is.
+#   3. (optional) the standalone libraries published to crates.io: ears-classifier and
+#      mermaid-lint (FEAT-200), the only crates that are.
 #      kanbanr itself ships as these archives, the installers and the image, never as a crate;
 #      its crates declare `publish = false` (FEAT-024).
 #
 # Secrets/setup required (see docs/src/project/open-sourcing.md → "Accounts, keys & credentials"):
 #   - GHCR: none — uses the automatic GITHUB_TOKEN (needs `packages: write`, set below).
-#   - crates.io (ears-classifier only): set repo variable PUBLISH_CRATES=true, plus the repo
+#   - crates.io (ears-classifier and mermaid-lint only): set repo variable PUBLISH_CRATES=true, plus the repo
 #     secret CARGO_REGISTRY_TOKEN or Trusted Publishing. Without PUBLISH_CRATES the job is skipped.
 
 on:
@@ -565,7 +566,7 @@ jobs:
 
   # ---- 3. Publish the standalone library to crates.io (optional) ------------
   crates:
-    name: publish ears-classifier to crates.io
+    name: publish the standalone libraries to crates.io
     needs: tag
     runs-on: ubuntu-24.04
     # Only runs once the repo variable PUBLISH_CRATES is `true`; it then needs the
@@ -612,6 +613,26 @@ jobs:
                 echo "::notice::ears-classifier is already published at this version — nothing to do." ;;
               *)
                 echo "::error::ears-classifier failed to publish."
+                exit 1 ;;
+            esac
+          fi
+      # mermaid-lint (FEAT-200): the diagram lint kanbanr runs, as its own crate. No dependencies,
+      # so the same toolchain serves. Its own version: it is published when that version is new.
+      - name: Publish mermaid-lint
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -eu
+          if out="$(cargo publish --locked -p mermaid-lint 2>&1)"; then
+            echo "$out"
+            echo "::notice::mermaid-lint published."
+          else
+            echo "$out"
+            case "$out" in
+              *"already exists on crates.io"*|*"already uploaded"*)
+                echo "::notice::mermaid-lint is already published at this version — nothing to do." ;;
+              *)
+                echo "::error::mermaid-lint failed to publish."
                 exit 1 ;;
             esac
           fi
