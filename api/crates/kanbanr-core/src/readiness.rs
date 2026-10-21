@@ -1152,6 +1152,127 @@ fn requirement_level(check: Check, r: &Requirement, gaps: &mut Vec<Gap>) {
     }
 }
 
+/// One item as `kanbanr check` reports it (FEAT-051, FEAT-117): what it has not said, what its
+/// next stage asks, and the definition revision a verdict would be pinned to (FEAT-159).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ItemCheck {
+    pub code: String,
+    pub title: String,
+    pub status: String,
+    /// The CHECK list's gaps, as messages.
+    pub gaps: Vec<String>,
+    /// What each next stage asks; empty when the item's readiness could not be read.
+    pub next: Vec<NextGate>,
+    pub rev: Option<String>,
+}
+
+/// What `kanbanr check` reports over its scope (FEAT-176).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct CheckReport {
+    pub items: Vec<ItemCheck>,
+}
+
+impl CheckReport {
+    /// How many items have no gaps left.
+    pub fn ready(&self) -> usize {
+        self.items.iter().filter(|i| i.gaps.is_empty()).count()
+    }
+}
+
+/// `kanbanr check [<code>]` (FEAT-051): the named item, or with none every item in a displayed,
+/// non-terminal status — the work in flight. Nothing in scope is refused.
+pub fn check_board(
+    store: &crate::Store,
+    p: &str,
+    scope: Option<&str>,
+) -> crate::Result<CheckReport> {
+    let project = store.load(p)?;
+    let features: Vec<&FeatureItem> = match scope {
+        Some(code) => project.features.iter().filter(|f| f.code == code).collect(),
+        None => project
+            .features
+            .iter()
+            .filter(|f| project.config.displayed_states.contains(&f.status))
+            .filter(|f| !crate::graph::is_terminal_status(&project.config, &f.status))
+            .collect(),
+    };
+    if features.is_empty() {
+        return Err(crate::CoreError::Refused(
+            "no such item, or nothing in scope".into(),
+        ));
+    }
+    let items = features
+        .into_iter()
+        .map(|f| {
+            // What each item's next stage asks, with the project's unit and active sprint in hand
+            // (FEAT-117, FEAT-119).
+            let view = ReadinessView::load(store, p, &f.code).ok();
+            ItemCheck {
+                code: f.code.clone(),
+                title: f.title.clone(),
+                status: f.status.clone(),
+                gaps: evaluate(f, None, CHECK)
+                    .into_iter()
+                    .map(|g| g.message)
+                    .collect(),
+                next: view.as_ref().map(|v| v.next.clone()).unwrap_or_default(),
+                rev: view.and_then(|v| v.rev),
+            }
+        })
+        .collect();
+    Ok(CheckReport { items })
+}
+
+/// What `kanbanr check --file` found in a definition that is not on a board (FEAT-052).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DefinitionCheck {
+    /// Something to tell a maintainer that is not counted against the author: a goal link
+    /// cannot be judged without the charter.
+    pub note: Option<String>,
+    pub gaps: Vec<String>,
+}
+
+/// Check a definition's text (YAML or JSON) by the rules the board applies (FEAT-052, FEAT-112),
+/// minus what needs a board to judge. Text that does not parse is refused, saying so.
+pub fn check_definition_text(text: &str) -> crate::Result<DefinitionCheck> {
+    let definition: FeatureDefinition = serde_yaml::from_str(text).map_err(|e| {
+        crate::CoreError::Refused(format!("invalid definition (YAML or JSON expected): {e}"))
+    })?;
+    // Not a gap that can be judged here: without the charter there is nothing to resolve an id
+    // against. Reported so a maintainer knows to check it, not counted against the contributor.
+    let note = definition
+        .goals
+        .is_empty()
+        .then(|| "no goal link — the maintainer will check this against the charter".to_string());
+    let gaps = evaluate_definition(Some(&definition), None, None, FILE)
+        .into_iter()
+        .map(|g| g.message)
+        .collect();
+    Ok(DefinitionCheck { note, gaps })
+}
+
+#[cfg(test)]
+mod check_tests {
+    use super::*;
+
+    /// FEAT-176: a definition that does not parse is refused in the words `check --file` used;
+    /// one with no goal carries the maintainer's note.
+    #[test]
+    fn check_definition_text_notes_and_refuses() {
+        let err = check_definition_text("statement: [")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.starts_with("invalid definition (YAML or JSON expected): "),
+            "{err}"
+        );
+        let checked = check_definition_text("statement: \"x for y so that z\"\n").unwrap();
+        assert!(checked.note.is_some());
+        assert!(!checked.gaps.is_empty());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

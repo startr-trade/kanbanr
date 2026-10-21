@@ -142,6 +142,24 @@ impl Adr {
             .filter(|s| !filled.contains(s))
             .collect()
     }
+
+    /// Whether this decision bears on item `code`: it affects it, or one of the item's
+    /// requirements (`FEAT-001/R-2`) drove it.
+    pub fn concerns(&self, code: &str) -> bool {
+        self.affects.iter().any(|c| c == code)
+            || self
+                .driven_by
+                .iter()
+                .any(|d| d.split('/').next().is_some_and(|c| c == code))
+    }
+}
+
+/// The decisions `adr list --for <code>` shows (FEAT-176): those that [`Adr::concerns`] the item,
+/// or every one when no item is named.
+pub fn for_item_filter<'a>(adrs: &'a [Adr], code: Option<&str>) -> Vec<&'a Adr> {
+    adrs.iter()
+        .filter(|a| code.is_none_or(|c| a.concerns(c)))
+        .collect()
 }
 
 /// The text under a `## Section` heading, in either the heading form or the `**Section.**` form the
@@ -722,5 +740,33 @@ mod tests {
             "case is not identity"
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FEAT-176: `adr list --for` shows a decision that affects the item or that one of its
+    /// requirements drove, and every decision when no item is named.
+    #[test]
+    fn for_item_filter_matches_affects_and_driven_by() {
+        let adrs = vec![
+            Adr {
+                id: "ADR-0001".into(),
+                affects: vec!["FEAT-001".into()],
+                ..Default::default()
+            },
+            Adr {
+                id: "ADR-0002".into(),
+                driven_by: vec!["FEAT-002/R-1".into()],
+                ..Default::default()
+            },
+        ];
+        let ids = |code: Option<&str>| -> Vec<String> {
+            for_item_filter(&adrs, code)
+                .iter()
+                .map(|a| a.id.clone())
+                .collect()
+        };
+        assert_eq!(ids(Some("FEAT-001")), vec!["ADR-0001"]);
+        assert_eq!(ids(Some("FEAT-002")), vec!["ADR-0002"]);
+        assert!(ids(Some("FEAT-00")).is_empty());
+        assert_eq!(ids(None).len(), 2);
     }
 }

@@ -93,7 +93,7 @@ impl Backend {
         }
     }
 
-    /// The board, for core operations that read it directly (the issue mirror, FEAT-176).
+    /// The board this backend reads and writes, for core functions that take a store.
     pub fn store(&self) -> &Store {
         &self.store
     }

@@ -202,6 +202,26 @@ pub fn require_identity(dir: &Path) -> Result<(String, String), String> {
     identity(dir).ok_or_else(|| NO_IDENTITY.to_string())
 }
 
+/// Who a verdict (an approval, a sign-off, a waiver) is recorded as given by (FEAT-176): the name
+/// given, trimmed, else the board's commit identity. A verdict that cannot say who gave it is
+/// refused, with how to fix that.
+pub fn verdict_author(dir: &Path, given: Option<&str>) -> crate::Result<String> {
+    if let Some(name) = given.filter(|n| !n.trim().is_empty()) {
+        return Ok(name.trim().to_string());
+    }
+    identity(dir)
+        .map(|(name, _)| name)
+        .filter(|n| !n.trim().is_empty())
+        .ok_or_else(|| {
+            crate::CoreError::Refused(
+                "this board has no commit identity, so a verdict could not say who gave it.\n\
+                 Set one once:  kanbanr identity --name \"You\" --email you@example.com\n\
+                 or pass it explicitly with --by."
+                    .into(),
+            )
+        })
+}
+
 /// Does this repository's own config still carry the placeholder identity? (FEAT-128)
 pub fn has_placeholder_identity(dir: &Path) -> bool {
     Repository::open(dir)

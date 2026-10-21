@@ -35,6 +35,44 @@ pub fn read(data_dir: &Path, project: &str, limit: usize) -> Vec<Activity> {
     crate::daylog::read(data_dir, project, LOG, limit)
 }
 
+/// Which activity a reader asked for (FEAT-176): `GET /projects/{p}/activity?ref=&ongoing=&limit=`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Filter {
+    /// Only changes to this work item.
+    pub item: Option<String>,
+    /// The maintenance stream: only changes to items now in a status the board does not display.
+    pub ongoing: bool,
+    /// How many entries at most; 25 when not given.
+    pub limit: Option<usize>,
+}
+
+/// The most recent activity a [`Filter`] selects, newest first, from the last 200 entries. When
+/// the project cannot be read, the ongoing stream is empty.
+pub fn read_filtered(store: &crate::Store, id: &str, filter: &Filter) -> Vec<Activity> {
+    let mut entries = read(store.data_dir(), id, 200);
+    if let Some(item) = &filter.item {
+        entries.retain(|e| e.item.as_deref() == Some(item.as_str()));
+    }
+    if filter.ongoing {
+        match store.load(id).ok() {
+            Some(project) => {
+                let displayed = project.config.board_states();
+                // Feature codes whose current status is NOT displayed (ongoing/maintenance).
+                let ongoing_codes: std::collections::HashSet<&str> = project
+                    .features
+                    .iter()
+                    .filter(|f| !displayed.contains(&f.status))
+                    .map(|f| f.code.as_str())
+                    .collect();
+                entries.retain(|e| e.item.as_deref().is_some_and(|c| ongoing_codes.contains(c)));
+            }
+            None => entries.clear(),
+        }
+    }
+    entries.truncate(filter.limit.unwrap_or(25));
+    entries
+}
+
 /// Every entry, oldest first. For callers that need the whole history rather than a window — the
 /// retrospective's fallback, which used to ask for a thousand entries and silently get two hundred.
 pub fn read_all(data_dir: &Path, project: &str) -> Vec<Activity> {

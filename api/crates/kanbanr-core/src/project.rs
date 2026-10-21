@@ -61,6 +61,87 @@ impl Marker {
             ),
         }
     }
+
+    /// What this marker points at, in words: `project <p>, board <dir>`.
+    pub fn summary(&self) -> String {
+        format!(
+            "project {}, board {}",
+            self.project.as_deref().unwrap_or("<none>"),
+            self.data_dir.as_deref().unwrap_or("<not recorded>")
+        )
+    }
+
+    /// Whether `init` may replace this marker with `wanted` (FEAT-085). The marker is the only
+    /// pointer from a folder to its board, so it is data, not scratch state: one that names
+    /// another project or board is replaced only when forced, and the refusal says what to run.
+    pub fn may_repoint(&self, wanted: &Marker, force: bool) -> crate::Result<()> {
+        if force || self == wanted {
+            return Ok(());
+        }
+        Err(crate::CoreError::Refused(format!(
+            "this folder already names a board, and init would replace it:\n  \
+             now:      {}\n  \
+             would be: {}\n\
+             Nothing was changed. To switch project within the SAME board, use \
+             `kanbanr project use <name>`; to repoint deliberately, re-run with `--force`.",
+            self.summary(),
+            wanted.summary()
+        )))
+    }
+}
+
+/// How a data folder is written into a marker in `marker_dir`: relative when nearby, else absolute,
+/// with forward slashes ([`portable_path`]).
+pub fn marker_path(data_dir: &Path, marker_dir: &Path) -> String {
+    portable_path(
+        &relative_to(data_dir, marker_dir).display().to_string(),
+        cfg!(windows),
+    )
+}
+
+/// A path as a marker stores it: with forward slashes, which every platform reads (FEAT-129). A
+/// marker written on Windows said `data_dir: ..\app.kanbanr`, which Linux and macOS read as one
+/// file name — so a marker committed from one machine broke the board on the next.
+pub fn portable_path(path: &str, windows: bool) -> String {
+    if windows {
+        path.replace('\\', "/")
+    } else {
+        path.to_string()
+    }
+}
+
+/// The questions a setup here must put to the user (FEAT-171, FEAT-173): `where --json`'s
+/// `ask_the_user`. Said by the tool, because a walkthrough showed Claude filling these in itself
+/// when the skill alone asked it to ask: each has an obvious answer, and an obvious answer is still
+/// the user's to give. `tracked`: this folder already points at an existing board.
+/// `git_identity`: git has a name and an email here.
+pub fn setup_questions(tracked: bool, git_identity: bool) -> Vec<String> {
+    let mut ask: Vec<String> = Vec::new();
+    if tracked {
+        return ask;
+    }
+    ask.push(
+        "Where the board lives: suggested_data_dir first, then each of existing_data_dirs, or a \
+         path the user types."
+            .into(),
+    );
+    ask.push(
+        "Which process — only after the board is chosen, in a later question, because the \
+         options depend on it: that board's saved processes first (`kanbanr process list \
+         --json --data-dir <board>`, library board, then personal; recommend one when the board \
+         has it), then the built-in ones, or designing their own."
+            .into(),
+    );
+    if !git_identity {
+        ask.push(
+            "This repository's git identity — only after the board's commit identity is \
+             given, in a later question: git has none here, so nobody can commit after setup. \
+             Offer that identity: Yes (this repository only, never --global), another \
+             name/email, or No (the first commit only)."
+                .into(),
+        );
+    }
+    ask
 }
 
 fn non_empty(s: Option<String>) -> Option<String> {
@@ -765,5 +846,58 @@ mod tests {
         assert_eq!(expand_tilde("~", Some(home)), PathBuf::from("/home/u"));
         assert_eq!(expand_tilde("~bob/x", Some(home)), PathBuf::from("~bob/x"));
         assert_eq!(expand_tilde("rel", Some(home)), PathBuf::from("rel"));
+    }
+
+    /// FEAT-085, FEAT-176: init replaces a marker that points elsewhere only when forced, and
+    /// the refusal names both pointers.
+    #[test]
+    fn a_marker_is_repointed_only_when_forced() {
+        let now = Marker {
+            project: Some("shop".into()),
+            data_dir: Some("../shop.kanbanr".into()),
+        };
+        let other = Marker {
+            project: Some("shop".into()),
+            data_dir: None,
+        };
+        assert!(now.may_repoint(&now.clone(), false).is_ok());
+        assert!(now.may_repoint(&other, true).is_ok());
+        let why = now.may_repoint(&other, false).unwrap_err().to_string();
+        assert!(why.contains("project shop, board ../shop.kanbanr"), "{why}");
+        assert!(why.contains("project shop, board <not recorded>"), "{why}");
+    }
+
+    /// FEAT-171, FEAT-173: a tracked folder is asked nothing; an untracked one is asked where
+    /// and which process, and for git's identity only when git has none.
+    #[test]
+    fn setup_asks_what_only_the_user_can_answer() {
+        assert!(setup_questions(true, false).is_empty());
+        assert_eq!(setup_questions(false, true).len(), 2);
+        let all = setup_questions(false, false);
+        assert_eq!(all.len(), 3);
+        assert!(all[2].contains("git identity"));
+    }
+    /// FEAT-129: Windows' CI run showed two path forms leaking out — a marker with backslashes,
+    /// which no other platform can read, and canonicalize's `\\?\` verbatim prefix in messages.
+    #[test]
+    fn paths_written_and_shown_are_portable() {
+        assert_eq!(portable_path(r"..\app.kanbanr", true), "../app.kanbanr");
+        assert_eq!(
+            portable_path(r"C:\work\app.kanbanr", true),
+            "C:/work/app.kanbanr"
+        );
+        // On Linux and macOS a backslash is an ordinary file-name character: left alone.
+        assert_eq!(portable_path(r"odd\name", false), r"odd\name");
+
+        let plain = |s: &str| without_verbatim_prefix(PathBuf::from(s));
+        assert_eq!(
+            plain(r"\\?\C:\Users\a\.claude"),
+            PathBuf::from(r"C:\Users\a\.claude")
+        );
+        assert_eq!(
+            plain(r"\\?\UNC\server\share"),
+            PathBuf::from(r"\\?\UNC\server\share")
+        );
+        assert_eq!(plain("/home/a/.claude"), PathBuf::from("/home/a/.claude"));
     }
 }
