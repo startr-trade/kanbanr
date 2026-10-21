@@ -30,6 +30,8 @@ const thrown = (source) => {
 const semicolon = locateError(thrown("sequenceDiagram\n  A->>B: one; two\n"), 14);
 expect(semicolon.line === 15, `a Pele error on block line 2 of a block at file line 14 is file line 15, got ${semicolon.line}`);
 expect(semicolon.message.length > 0 && !semicolon.message.includes("\n"), `the message is one line: ${JSON.stringify(semicolon.message)}`);
+expect(!/^Parse error on line/.test(semicolon.message) && semicolon.message.includes("Expecting"),
+  `a syntax error says what went wrong, not only where: ${JSON.stringify(semicolon.message)}`);
 const untyped = locateError(thrown("flowchrt LR\n  A --> B\n"), 7);
 expect(same(untyped, { line: 7, message: "no diagram type on the first line" }), `no type: ${JSON.stringify(untyped)}`);
 expect(locateError("plain text", 3).line === 3, "a thrown string lands on the first line");
@@ -45,7 +47,7 @@ const item = {
     { file: "docs/arch/flow.md", doc: "arch/flow.md", block: 2, line: 9, source: "pie\n  \"a\" : 1\n" },
   ],
   findings: [
-    // On a block Pele also rejects: listed once, as Pele's error.
+    // On a block Pele also rejects: listed once, at Pele's line, in the lint's words.
     { file: "FEAT-012 spec", block: 2, line: 11, rule: "semicolon_in_text", message: "`;` ends the statement early" },
     // On a block Pele accepted (lint and Pele disagree): listed anyway — fail closed.
     { file: "docs/arch/flow.md", block: 2, line: 10, rule: "unknown_statement", message: "not a statement" },
@@ -55,6 +57,8 @@ const found = checkBlocks(item, parse);
 expect(found.length === 3, `three problems, one per broken block: ${JSON.stringify(found)}`);
 const spec = found.find((p) => p.file === "FEAT-012 spec");
 expect(spec && spec.block === 2 && spec.line === 11 && spec.doc === null, `the spec's block 2 at file line 11: ${JSON.stringify(spec)}`);
+expect(spec && spec.message === "`;` ends the statement early (semicolon_in_text)",
+  `where the lint caught the same block, its plain words are shown: ${JSON.stringify(spec)}`);
 const doc = found.find((p) => p.file === "docs/arch/flow.md" && p.block === 1);
 expect(doc && doc.doc === "arch/flow.md" && doc.line === 4, `the doc's block 1 at file line 4, with its key: ${JSON.stringify(doc)}`);
 const lintOnly = found.find((p) => p.file === "docs/arch/flow.md" && p.block === 2);

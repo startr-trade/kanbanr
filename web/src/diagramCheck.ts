@@ -34,7 +34,12 @@ export function locateError(e: unknown, firstLine: number): { line: number; mess
   const line = within > 0 ? firstLine + within - 1 : firstLine;
   if (err.code === "unsupported-diagram") return { line, message: "no diagram type on the first line" };
   const text = typeof err.message === "string" ? err.message : String(e);
-  return { line, message: text.split("\n")[0].trim() || "the diagram does not parse" };
+  // Pele's syntax errors open with "Parse error on line N:" and the source snippet; the line that
+  // says what went wrong ("Expecting …, got …") is the last. The line is already given above.
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const said = lines.filter((l) => !/^Parse error on line \d+:?$/.test(l) && !/^-*\^$/.test(l));
+  const message = (err.code === "syntax" ? said[said.length - 1] : said[0]) ?? "";
+  return { line, message: message || "the diagram does not parse" };
 }
 
 /**
@@ -50,7 +55,16 @@ export function checkBlocks(d: ItemDiagrams, parse: (source: string) => unknown)
       parse(b.source);
     } catch (e) {
       seen.add(key(b.file, b.block));
-      problems.push({ file: b.file, doc: b.doc, block: b.block, ...locateError(e, b.line) });
+      // Pele says where; the core lint, when it caught the same block, says why in plain words.
+      const plain = d.findings.find((f) => f.file === b.file && f.block === b.block);
+      const at = locateError(e, b.line);
+      problems.push({
+        file: b.file,
+        doc: b.doc,
+        block: b.block,
+        line: at.line,
+        message: plain ? `${plain.message} (${plain.rule})` : at.message,
+      });
     }
   }
   for (const f of d.findings) {
