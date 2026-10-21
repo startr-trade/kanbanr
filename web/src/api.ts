@@ -1,5 +1,5 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ReleasePlan, ItemDiagrams, GitModelView, GitDoctorIssue, Guards } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -140,6 +140,14 @@ export const api = {
     getJson<CutPreview[]>(
       apiUrl(`/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/cut-preview`),
     ),
+  /**
+   * What promoting `version` to its next stage would do, nothing changed (FEAT-212): the button,
+   * each step and condition, what is missing and, for the cut, what ships. Never fetches.
+   */
+  getReleasePlan: (id: string, version: string) =>
+    getJson<ReleasePlan>(
+      apiUrl(`/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/plan`),
+    ),
   /** Add a planned release (FEAT-185), as `kanbanr release add` does. */
   addRelease: (id: string, version: string, target: string, name = "") =>
     writePost(
@@ -152,10 +160,11 @@ export const api = {
    * Move a release to its next stage, or the named one (FEAT-183, FEAT-185): the same core
    * promotion as `kanbanr release promote`, recorded as `by`. The last stage is the cut.
    */
-  promoteRelease: (id: string, version: string, by: string, stage?: string) =>
+  promoteRelease: (id: string, version: string, by: string, stage?: string, expect?: string) =>
     writePost(
       `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/promote`,
-      stage ? { by, stage } : { by },
+      // `expect`: the release tip the plan showed (FEAT-212) — refused if the branch moved since.
+      { by, ...(stage ? { stage } : {}), ...(expect ? { expect } : {}) },
       "promote a release",
       `kanbanr release promote ${version}${stage ? ` ${stage}` : ""}`,
     ),

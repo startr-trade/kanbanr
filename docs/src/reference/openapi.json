@@ -2781,6 +2781,10 @@
             "description": "`forward`, `back` or `again`.",
             "type": "string"
           },
+          "empty": {
+            "description": "Nothing is planned into the release, so it cannot be promoted (R-17).",
+            "type": "boolean"
+          },
           "from": {
             "description": "The stage it is at; empty when it has none yet.",
             "type": "string"
@@ -2847,7 +2851,8 @@
           "missing",
           "ready",
           "needs_reason",
-          "repo"
+          "repo",
+          "empty"
         ],
         "type": "object"
       },

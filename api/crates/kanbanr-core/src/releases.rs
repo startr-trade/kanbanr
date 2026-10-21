@@ -695,6 +695,8 @@ pub struct ReleasePlan {
     pub after: String,
     /// Whether the code repository was there to read.
     pub repo: bool,
+    /// Nothing is planned into the release, so it cannot be promoted (R-17).
+    pub empty: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1508,6 +1510,7 @@ fn work_out(
         origin,
         after,
         repo: repo.is_some(),
+        empty,
     };
     Ok(Worked {
         plan,

@@ -4,6 +4,7 @@ import { api } from "../api";
 import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
+import { releaseAction } from "../releaseAction";
 import type { Release } from "../types";
 
 /** The stages a release moves through when the project names none (FEAT-183). */
@@ -20,11 +21,9 @@ export default function ReleasesPage() {
   const board = useAsync(() => api.getProject(project), [project, tick]);
   const releases = useAsync(() => api.getReleases(project), [project, tick]);
   const meta = useAsync(() => api.getMeta(), []);
-  // Promote (FEAT-185): which release is being promoted, what came of it, and which is waiting on
-  // the production confirmation.
+  // Promote (FEAT-185): which release is being promoted, and what came of it.
   const [busy, setBusy] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Record<string, string>>({});
-  const [confirming, setConfirming] = useState<string | null>(null);
 
   if ((board.loading && !board.data) || (releases.loading && !releases.data)) return <Loading />;
   if (board.error) return <ErrorBox error={board.error} />;
@@ -57,14 +56,14 @@ export default function ReleasesPage() {
     const at = r.stage ? stages.indexOf(r.stage) : -1;
     return at + 1 < stages.length ? stages[at + 1] : null;
   };
-  // The same core promotion as the CLI, through the daemon's promote route (FEAT-183).
-  const promote = async (r: Release, to: string) => {
+  // The same core promotion as the CLI, through the daemon's promote route (FEAT-183), carrying
+  // the release tip the plan showed (FEAT-212).
+  const promote = async (r: Release, to: string, expect: string) => {
     if (!who) return;
     setBusy(r.version);
-    setConfirming(null);
     try {
-      await api.promoteRelease(project, r.version, who, to);
-      setOutcome((o) => ({ ...o, [r.version]: `promoted to ${to}` }));
+      const done = (await api.promoteRelease(project, r.version, who, to, expect)) as { next?: string };
+      setOutcome((o) => ({ ...o, [r.version]: `promoted to ${to}${done?.next ? ` — ${done.next}` : ""}` }));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setOutcome((o) => ({
@@ -135,43 +134,15 @@ export default function ReleasesPage() {
                   ))}
                 </ul>
                 {next ? (
-                  <div className="review-actions">
-                    {!writable ? (
-                      <code>kanbanr release promote {r.version}</code>
-                    ) : confirming === r.version ? (
-                      <div>
-                        <p className="small">
-                          <strong>Promoting {r.version} to {next} is the cut.</strong> It tags the code
-                          repository <code>{r.version}</code> and fast-forwards main to{" "}
-                          <code>release/{r.version}</code> (a patch of an older release is tagged
-                          without moving main).
-                        </p>
-                        <CutPreviewList project={project} version={r.version} />
-                        <div className="review-actions">
-                          <button className="btn btn-primary" onClick={() => promote(r, next)} disabled={busy != null}>
-                            {busy === r.version ? "promoting…" : `Cut ${r.version}`}
-                          </button>
-                          <button className="btn" onClick={() => setConfirming(null)} disabled={busy != null}>
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <button
-                        className={`btn ${next === last ? "" : "btn-primary"}`}
-                        onClick={() => (next === last ? setConfirming(r.version) : promote(r, next))}
-                        disabled={busy != null}
-                        title={next === last ? "production is the cut: a tag and a merge to main" : undefined}
-                      >
-                        {busy === r.version ? "promoting…" : `Promote to ${next}${next === last ? " (cut)" : ""}`}
-                      </button>
-                    )}
-                    {outcome[r.version] ? (
-                      <span className={`chip ${outcome[r.version].startsWith("promoted") ? "done" : "warn"}`}>
-                        {outcome[r.version]}
-                      </span>
-                    ) : null}
-                  </div>
+                  <ReleaseButton
+                    project={project}
+                    release={r}
+                    tick={tick}
+                    writable={writable}
+                    busy={busy}
+                    onPromote={promote}
+                    outcome={outcome[r.version]}
+                  />
                 ) : null}
                 {r.notes_doc ? (
                   <p className="small">
@@ -189,21 +160,105 @@ export default function ReleasesPage() {
   );
 }
 
-/** Exactly what the cut would ship and carry over, by its own rule (FEAT-185). */
-function CutPreviewList({ project, version }: { project: string; version: string }) {
-  const preview = useAsync(() => api.getCutPreview(project, version), [project, version]);
-  if (preview.error) return <ErrorBox error={preview.error} />;
-  if (!preview.data) return <Loading />;
-  const ships = preview.data.filter((p) => p.ships);
-  const carries = preview.data.filter((p) => !p.ships);
+/**
+ * A release's one button (FEAT-212): named for its next step, with what the step will do beside it,
+ * the cut's preview inline, and — until the plan is ready — what is missing and how to fix it.
+ */
+function ReleaseButton({
+  project,
+  release,
+  tick,
+  writable,
+  busy,
+  onPromote,
+  outcome,
+}: {
+  project: string;
+  release: Release;
+  tick: number;
+  writable: boolean;
+  busy: string | null;
+  onPromote: (r: Release, to: string, expect: string) => void;
+  outcome?: string;
+}) {
+  // "Check again" re-reads the plan: a `git push` updates the remote-tracking ref locally, so no
+  // fetch is needed (the monitor never fetches).
+  const [again, setAgain] = useState(0);
+  const plan = useAsync(() => api.getReleasePlan(project, release.version), [project, release.version, tick, again]);
+  if (plan.error) return <ErrorBox error={plan.error} />;
+  if (!plan.data) return <Loading />;
+  const action = releaseAction(plan.data, writable);
+  if (action.note) {
+    return (
+      <p className="muted small">
+        {action.note} <code>{action.command}</code>
+      </p>
+    );
+  }
+  return (
+    <div className="release-action">
+      <div className="review-actions">
+        {action.button ? (
+          <button
+            className="btn btn-primary"
+            onClick={() => onPromote(release, plan.data!.to, plan.data!.release_tip)}
+            disabled={!action.enabled || busy != null}
+            title={action.enabled ? action.does.join("; ") : "not ready: see what is missing"}
+          >
+            {busy === release.version ? "promoting…" : action.label}
+          </button>
+        ) : (
+          <code>{action.command}</code>
+        )}
+        {outcome ? <span className={`chip ${outcome.startsWith("promoted") ? "done" : "warn"}`}>{outcome}</span> : null}
+      </div>
+      {action.does.length ? (
+        <ul className="dep-list small">
+          {action.does.map((d) => (
+            <li key={d}>{d}</li>
+          ))}
+        </ul>
+      ) : null}
+      {action.preview ? <CutPreviewList preview={action.preview} /> : null}
+      {action.missing.length ? (
+        <div className="small">
+          <p>
+            <strong>Needs:</strong>
+          </p>
+          <ul className="dep-list">
+            {action.missing.map((m) => (
+              <li key={m.text}>
+                {m.text}
+                {m.fix ? <> — {m.fix}</> : null}
+              </li>
+            ))}
+          </ul>
+          <button className="btn" onClick={() => setAgain((n) => n + 1)} disabled={plan.loading}>
+            Check again
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Exactly what the cut would tag, ship and carry over, from the plan (FEAT-185, FEAT-212). */
+function CutPreviewList({
+  preview,
+}: {
+  preview: { tag: string; ships: string[]; carries: { code: string; why: string }[] };
+}) {
   return (
     <div className="small">
-      <p>
-        Ships: {ships.length ? ships.map((p) => (p.to ? `${p.code} (→ ${p.to})` : p.code)).join(", ") : "nothing"}
-      </p>
-      {carries.length ? (
+      {preview.tag ? (
+        <p>
+          Tags: <code>{preview.tag}</code>
+        </p>
+      ) : null}
+      <p>Ships: {preview.ships.length ? preview.ships.join(", ") : "nothing"}</p>
+      {preview.carries.length ? (
         <ul className="dep-list">
-          {carries.map((p) => (
+          {preview.carries.map((p) => (
             <li key={p.code}>
               carries {p.code}: {p.why}
             </li>
