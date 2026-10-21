@@ -241,7 +241,7 @@ fn repin_definition(
     def: &mut FeatureDefinition,
     report: &mut MigrationReport,
 ) {
-    let key = |at: &str| (project.to_string(), code.to_string(), at.to_string());
+    let key = |at: &str| (project.to_string(), code.to_string(), instant(at));
     let unverified = |what: &str, at: &str, current: bool| Unverified {
         project: project.to_string(),
         code: Some(code.to_string()),
@@ -304,7 +304,7 @@ fn repin_definition(
             project.to_string(),
             code.to_string(),
             signoff.id.clone(),
-            signoff.at.clone(),
+            instant(&signoff.at),
         );
         match history.signoffs.get(&k) {
             Some(rev) => {
@@ -498,8 +498,8 @@ impl History {
         let ats = def
             .approvals
             .iter()
-            .map(|e| e.at.clone())
-            .chain(def.approval.iter().map(|a| a.at.clone()));
+            .map(|e| instant(&e.at))
+            .chain(def.approval.iter().map(|a| instant(&a.at)));
         for at in ats {
             let key = (project.to_string(), code.to_string(), at);
             self.approvals.entry(key).or_insert_with(&mut rev);
@@ -509,10 +509,27 @@ impl History {
                 project.to_string(),
                 code.to_string(),
                 s.id.clone(),
-                s.at.clone(),
+                instant(&s.at),
             );
             self.signoffs.entry(key).or_insert_with(&mut rev);
         }
+    }
+}
+
+/// The instant a verdict names, as a key: UTC, to the microsecond. A board whose files were
+/// rewritten outside kanbanr can carry the same verdict's `at` in another form
+/// (`…57.420470251Z` became `…57.420470+00:00` when a script re-serialised the files); keyed by
+/// the text, the rewrite's commit would look like the one that recorded the verdict, and the
+/// verdict would be pinned to whatever that commit changed. Text that is not a timestamp is its
+/// own key.
+fn instant(at: &str) -> String {
+    use time::format_description::well_known::Rfc3339;
+    match time::OffsetDateTime::parse(at, &Rfc3339) {
+        Ok(t) => {
+            let t = t.to_offset(time::UtcOffset::UTC);
+            format!("{}.{:06}", t.unix_timestamp(), t.microsecond())
+        }
+        Err(_) => at.to_string(),
     }
 }
 
@@ -706,6 +723,49 @@ mod tests {
         let again = run(&store, &board.path, PushPolicy::Off).unwrap();
         assert!(again.projects.is_empty() && !again.committed, "{again:?}");
         assert_eq!(commits(&board.path).len(), after.len());
+    }
+
+    /// FEAT-187 R-4: a definition reworded outside kanbanr after it was approved stays lapsed, even
+    /// when the same rewrite re-serialised the approval's timestamp (as a script re-writing the
+    /// files does: `…05.210046972Z` becomes `…05.210046+00:00`). Keyed by its text, the rewrite's
+    /// commit looked like the one that recorded the approval, and the approval came out current.
+    #[test]
+    fn a_hand_rewrite_after_approval_stays_lapsed() {
+        let board = fixture(true);
+        let file = board
+            .path
+            .join("projects/demo/features/Planned/FEAT-001.yaml");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            text.contains("statement: Approved and current"),
+            "the fixture item"
+        );
+        let rewritten = text
+            .replace(
+                "statement: Approved and current",
+                "statement: Approved, then reworded",
+            )
+            .replace("05.210046972Z", "05.210046+00:00");
+        assert_ne!(rewritten, text);
+        std::fs::write(&file, rewritten).unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=T", "-c", "user.email=t@x", "-C"])
+                .arg(&board.path)
+                .args(args)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "reword by hand"]);
+
+        let store = Store::new(&board.path);
+        run(&store, &board.path, PushPolicy::Off).unwrap();
+        let mut want = expected();
+        want["demo"]["items"]["FEAT-001"]["approval"] = Value::from("lapsed");
+        assert_eq!(states(&store), want);
     }
 
     /// FEAT-187 R-5: with no history to read, nothing is trusted. Every revision reads as lapsed,
