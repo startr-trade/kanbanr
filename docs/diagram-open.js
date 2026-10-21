@@ -26,7 +26,10 @@
         }
         clone.removeAttribute('width');
         clone.removeAttribute('height');
-        clone.removeAttribute('style');
+        // Pele keeps the diagram's own colour variables in the SVG's style (`--_s`, `--_fg`, …,
+        // each from a `--pele-*`), and every shape and label refers to them: removing the style
+        // draws black boxes with no labels (FEAT-209). Only the sizing goes.
+        for (const prop of ['max-width', 'width', 'height']) clone.style.removeProperty(prop);
         clone.setAttribute('preserveAspectRatio', 'xMidYMid meet');
         clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
         const vars = getComputedStyle(pre);
@@ -36,10 +39,15 @@
         }
 
         // Carry the reader's current theme across, so a diagram opened from the dark book
-        // does not land on a white page.
-        const styles = getComputedStyle(document.body);
-        const bg = styles.backgroundColor || '#fff';
-        const fg = styles.color || '#333';
+        // does not land on a white page. The diagram's own colours first; mdBook paints its
+        // background on <html> and leaves <body> transparent (FEAT-209).
+        const opaque = (c) => c && c !== 'transparent' && !/^rgba\(.*,\s*0\)$/.test(c);
+        const bg = [
+            vars.getPropertyValue('--pele-bg').trim(),
+            getComputedStyle(document.documentElement).backgroundColor,
+            getComputedStyle(document.body).backgroundColor,
+        ].find(opaque) || '#fff';
+        const fg = vars.getPropertyValue('--pele-fg').trim() || getComputedStyle(document.body).color || '#333';
 
         // A caption that says where this came from — a diagram tab with no provenance is a
         // screenshot waiting to be misattributed.
