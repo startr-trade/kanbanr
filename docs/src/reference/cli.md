@@ -82,6 +82,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr split-from <CODE> <PARENT>` | records that an item was sliced out of another |
 | `kanbanr sources [--write]` | imported items whose source file has gone |
 | `kanbanr index` | rebuild the per-project cache from the source-of-truth files |
+| `kanbanr migrate [--json]` | bring a board written before schema 5 up to date, once: re-pins every approval, sign-off and process record from the board's history, rewrites the files, one commit; every other command refuses such a board until it has run ([upgrading](../releases/schema-5.md)) |
 
 **Reasoning and evidence**
 

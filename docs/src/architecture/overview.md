@@ -68,8 +68,9 @@ the editor extension, Claude Code hooks), the `gh` adapter, the commit guard's s
 and collecting facts from outside the board — the code repository's state, a test run's output,
 `git grep` — which they hand to core to decide on. A test, `architecture::front_ends_are_thin`,
 fails naming the file and the rule when a front end parses board YAML, depends on `git2`,
-`serde_yaml` or `ears-classifier`, builds a domain value by hand, or calls `dispatch` outside its
-one entry point.
+`serde-saphyr` or `ears-classifier`, builds a domain value by hand, or calls `dispatch` outside its
+one entry point. Every board file is read and written through `kanbanr_core::yaml`, which sets the
+YAML library's options in one place (FEAT-187).
 
 The daemon's **public read routes** are a versioned contract, v1 (FEAT-177). Their response types
 live in `kanbanr-core` and derive a JSON Schema behind the crate's `schema` feature, which the
