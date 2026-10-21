@@ -2373,7 +2373,7 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         return Ok(());
     };
     let root = project::project_root(&cwd, project::home_dir().as_deref());
-    let Some(suggestion) = board_path_for(path, &root, &cwd) else {
+    let Some(suggestion) = kanbanr_core::claude::board_path_for(path, &root, &cwd) else {
         return Ok(());
     };
     println!(
@@ -2381,106 +2381,10 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         json!({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": format!(
-                "Documentation for this project belongs on its board, not in the code repository \
-                 — the board is where it can be found, searched, and linked to the work it \
-                 explains.\n\nWrite it there instead:\n    kanbanr doc add notes/{suggestion}.md \
-                 --file <path>\n\nIf this file is part of what the repository ships (README, \
-                 CHANGELOG, docs/, CONTRIBUTING, LICENSE, a doc-site source or a fixture), say so \
-                 and write it: those are deliverables, not project reasoning."
-            ),
+            "permissionDecisionReason": kanbanr_core::claude::docs_guard_reason(&suggestion),
         }})
     );
     Ok(())
-}
-
-/// The board path to suggest for a file the guard refuses, or `None` when the write is not the
-/// guard's business.
-///
-/// The guard judges only files **inside the tracked repository** (FEAT-111). A path outside it —
-/// Claude Code's own plan file in `~/.claude/plans`, a scratch file, anything reached through
-/// `..` — is none of the board's concern, and refusing it once blocked plan mode outright. The
-/// suggestion is built from the repo-relative path, never the absolute one, which used to come out
-/// as `notes//home/…`.
-fn board_path_for(path: &str, root: &Path, cwd: &Path) -> Option<String> {
-    let given = Path::new(path);
-    let absolute = if given.is_absolute() {
-        given.to_path_buf()
-    } else {
-        cwd.join(given)
-    };
-    // Resolve `.` and `..` by the text alone: the file may not exist yet, so it cannot be
-    // canonicalised, and an escape through `..` must not count as inside the repository.
-    let mut resolved = PathBuf::new();
-    for part in absolute.components() {
-        match part {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                resolved.pop();
-            }
-            other => resolved.push(other),
-        }
-    }
-    // Then resolve on disk as far as the path exists (FEAT-129). The root comes from the working
-    // directory, which the OS reports with symlinks resolved; the file path arrives as Claude Code
-    // spelled it. On macOS the temp folder is `/var/…`, a symlink to `/private/var/…`, so the two
-    // never shared a prefix and a loose note there was waved through as "outside the repository".
-    let (resolved, root) = (project::normalize(&resolved), project::normalize(root));
-    let relative = resolved.strip_prefix(&root).ok()?;
-    let relative: Vec<String> = relative
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
-        .collect();
-    let relative = relative.join("/");
-    if relative.is_empty() || !belongs_on_the_board(&relative) {
-        return None;
-    }
-    Some(
-        relative
-            .trim_end_matches(".md")
-            .trim_end_matches(".markdown")
-            .replace(' ', "-")
-            .to_lowercase(),
-    )
-}
-
-/// Is this markdown file project *reasoning* (board) rather than a shipped *deliverable* (repo)?
-///
-/// The allow-list is what a repository publishes. Everything else that is markdown, written loose
-/// in a checkout, is the kind of note that should have gone on the board.
-fn belongs_on_the_board(relative: &str) -> bool {
-    let lower = relative.to_lowercase();
-    if !lower.ends_with(".md") && !lower.ends_with(".markdown") {
-        return false;
-    }
-    const SHIPPED_DIRS: [&str; 8] = [
-        "docs/", "doc/", "book/", "site/", "web/", "skill/", ".github/", "editor/",
-    ];
-    const SHIPPED_FILES: [&str; 9] = [
-        "readme.md",
-        "changelog.md",
-        "contributing.md",
-        "security.md",
-        "code_of_conduct.md",
-        "license.md",
-        "third_party.md",
-        "claude.md",
-        "agents.md",
-    ];
-    if SHIPPED_DIRS.iter().any(|d| lower.starts_with(d)) {
-        return false;
-    }
-    if SHIPPED_FILES.contains(&lower.as_str()) {
-        return false;
-    }
-    // A test fixture or a vendored file is not project reasoning either.
-    if ["target/", "node_modules/", "tests/", "fixtures/", "vendor/"]
-        .iter()
-        .any(|d| lower.contains(d))
-    {
-        return false;
-    }
-    true
 }
 
 /// Architecture decisions (FEAT-057).
@@ -4465,7 +4369,6 @@ fn parse_test_results(text: &str) -> std::collections::BTreeMap<String, bool> {
 /// applies to an item: the goal link is the only thing that cannot be verified without a charter,
 /// and it is reported as unverifiable rather than as absent.
 fn check_definition_file(cli: &Cli, file: &str) -> anyhow::Result<()> {
-    use kanbanr_core::models::FeatureDefinition;
     let raw = if file == "-" {
         use std::io::Read;
         let mut s = String::new();
@@ -4474,24 +4377,11 @@ fn check_definition_file(cli: &Cli, file: &str) -> anyhow::Result<()> {
     } else {
         std::fs::read_to_string(file).map_err(|e| anyhow::anyhow!("could not read {file}: {e}"))?
     };
-    let definition: FeatureDefinition = serde_yaml::from_str(&raw)
-        .map_err(|e| anyhow::anyhow!("invalid definition (YAML or JSON expected): {e}"))?;
-
-    if definition.goals.is_empty() {
-        // Not a gap that can be judged here: without the charter there is nothing to resolve an id
-        // against. Reported so a maintainer knows to check it, not counted against the contributor.
-        println!("note: no goal link — the maintainer will check this against the charter");
+    let checked = kanbanr_core::readiness::check_definition_text(&raw)?;
+    if let Some(note) = &checked.note {
+        println!("note: {note}");
     }
-    // The same rules the board applies (FEAT-112), minus what needs a board to judge.
-    let gaps: Vec<String> = kanbanr_core::readiness::evaluate_definition(
-        Some(&definition),
-        None,
-        None,
-        kanbanr_core::readiness::FILE,
-    )
-    .into_iter()
-    .map(|g| g.message)
-    .collect();
+    let gaps = checked.gaps;
 
     if cli.json {
         println!(
@@ -4512,18 +4402,6 @@ fn check_definition_file(cli: &Cli, file: &str) -> anyhow::Result<()> {
         // A non-zero exit is what makes this useful in CI.
         std::process::exit(1);
     }
-}
-
-/// What an item has not said, and what it cannot yet show (FEAT-051). The same rules `doctor`
-/// applies, focused on one item and phrased as work left to do rather than as a complaint.
-fn check_report(f: &kanbanr_core::FeatureItem) -> Value {
-    // The engine every surface shares (FEAT-112); `check` and `finish` ask its CHECK list.
-    let gaps: Vec<String> =
-        kanbanr_core::readiness::evaluate(f, None, kanbanr_core::readiness::CHECK)
-            .into_iter()
-            .map(|g| g.message)
-            .collect();
-    json!({ "code": f.code, "title": f.title, "status": f.status, "gaps": gaps })
 }
 
 /// One feature, straight from the project payload.
@@ -5439,62 +5317,20 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 return check_definition_file(cli, file); // handled before the board opens
             }
             let p = require_project(cli)?;
-            let project = get_project(&client, &p)?;
-            let features: Vec<&kanbanr_core::FeatureItem> = match code {
-                Some(c) => project
-                    .features
-                    .iter()
-                    .filter(|f| &f.code == c)
-                    .collect::<Vec<_>>(),
-                None => project
-                    .features
-                    .iter()
-                    .filter(|f| {
-                        project
-                            .config
-                            .displayed_states
-                            .iter()
-                            .any(|s| s == &f.status)
-                    })
-                    .filter(|f| {
-                        !kanbanr_core::graph::is_terminal_status(&project.config, &f.status)
-                    })
-                    .collect(),
-            };
-            if features.is_empty() {
-                anyhow::bail!("no such item, or nothing in scope");
-            }
-            // What each item's next stage asks — the readiness route answers it, with the project's
-            // unit and active sprint in hand (FEAT-117, FEAT-119).
-            let reports: Vec<Value> = features
-                .iter()
-                .map(|f| {
-                    let mut report = check_report(f);
-                    let readiness = client
-                        .get(&format!("/projects/{p}/features/{}/readiness", f.code))
-                        .ok()
-                        .and_then(|r| serde_json::from_str::<Value>(&r).ok());
-                    report["next"] = readiness
-                        .as_ref()
-                        .map(|v| v["next"].clone())
-                        .unwrap_or_else(|| json!([]));
-                    // What a verdict on this brief is pinned to (FEAT-159).
-                    report["rev"] = readiness
-                        .as_ref()
-                        .map(|v| v["rev"].clone())
-                        .unwrap_or(Value::Null);
-                    report
-                })
-                .collect();
+            let report = kanbanr_core::readiness::check_board(client.store(), &p, code.as_deref())?;
             if cli.json {
-                println!("{}", serde_json::to_string_pretty(&reports)?);
+                println!("{}", serde_json::to_string_pretty(&report)?);
                 return Ok(());
             }
-            let mut ready = 0;
+            let ready = report.ready();
+            let reports: Vec<Value> = report
+                .items
+                .iter()
+                .map(serde_json::to_value)
+                .collect::<Result<_, _>>()?;
             for r in &reports {
                 let gaps = r["gaps"].as_array().cloned().unwrap_or_default();
                 if gaps.is_empty() {
-                    ready += 1;
                     println!(
                         "✓ {} {}",
                         r["code"].as_str().unwrap_or(""),
@@ -8106,113 +7942,6 @@ Refs: kanbanr:FEAT-082/R-1""#;
         assert!(hint.contains("kanbanr serve\n"), "{hint}");
         assert!(!hint.contains("--ui-dir"), "{hint}");
         assert!(!hint.contains("web/dist"), "{hint}");
-    }
-
-    /// FEAT-065: the guard decides from a path and nothing else. Every judgement it gets wrong is
-    /// either a note scattered into a codebase or a legitimate write refused — and a guard that
-    /// refuses legitimate writes gets turned off.
-    #[test]
-    fn the_docs_guard_ignores_paths_outside_the_repo() {
-        let root = Path::new("/work/shop");
-        // FEAT-111 R-1: Claude Code's plan file, a scratch file, and an escape through `..` are
-        // all outside the repository, so the guard has no opinion on them.
-        for path in [
-            "/home/someone/.claude/plans/a-plan.md",
-            "/tmp/scratch/NOTES.md",
-            "../elsewhere/PLAN.md",
-            "/work/shop/../shop-notes/PLAN.md",
-        ] {
-            assert_eq!(board_path_for(path, root, root), None, "{path}");
-        }
-        // Inside it, the rule is unchanged: loose notes are refused, deliverables are not.
-        assert!(board_path_for("/work/shop/NOTES.md", root, root).is_some());
-        assert_eq!(board_path_for("/work/shop/README.md", root, root), None);
-    }
-
-    /// FEAT-129: on macOS the temp folder is `/var/…`, a symlink to `/private/var/…`. The root is
-    /// read from the working directory with symlinks resolved; the file path is not. They shared no
-    /// prefix, so a loose note inside the repository counted as outside it and was let through —
-    /// which only a CI runner, not a Linux laptop, showed.
-    #[cfg(unix)]
-    #[test]
-    fn the_docs_guard_follows_a_symlinked_folder() {
-        let base = std::env::temp_dir().join(format!("kanbanr-guard-link-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        let real = base.join("real");
-        std::fs::create_dir_all(real.join("shop")).unwrap();
-        std::os::unix::fs::symlink(&real, base.join("link")).unwrap();
-        let root = std::fs::canonicalize(real.join("shop")).unwrap();
-
-        // Spelled through the link, it is still the repository's file: refused with the same
-        // suggestion as when spelled through the real path.
-        let through_link = base.join("link/shop/NOTES.md");
-        let through_real = real.join("shop/NOTES.md");
-        let suggestion = board_path_for(through_real.to_str().unwrap(), &root, &root);
-        assert!(suggestion.is_some());
-        assert_eq!(
-            board_path_for(through_link.to_str().unwrap(), &root, &root),
-            suggestion
-        );
-        // A deliverable stays allowed, and an escape through `..` stays outside.
-        let readme = base.join("link/shop/README.md");
-        assert_eq!(board_path_for(readme.to_str().unwrap(), &root, &root), None);
-        let escape = base.join("link/shop/../elsewhere/PLAN.md");
-        assert_eq!(board_path_for(escape.to_str().unwrap(), &root, &root), None);
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    /// FEAT-111 R-2: the suggestion is a board path someone can actually run — built from the
-    /// repo-relative path, never `notes//home/…`.
-    #[test]
-    fn the_docs_guard_suggests_a_usable_board_path() {
-        let root = Path::new("/work/shop");
-        assert_eq!(
-            board_path_for("/work/shop/api/Design Notes.md", root, root).as_deref(),
-            Some("api/design-notes")
-        );
-        assert_eq!(
-            board_path_for("./PLAN.md", root, &root.join("sub/..")).as_deref(),
-            Some("plan")
-        );
-    }
-
-    #[test]
-    fn the_docs_guard_allows_deliverables_and_stops_the_rest() {
-        // Project reasoning written loose in a checkout: this is what belongs on the board.
-        for path in [
-            "NOTES.md",
-            "design-thoughts.md",
-            "api/PLAN.md",
-            "some/deep/folder/retrospective.md",
-        ] {
-            assert!(belongs_on_the_board(path), "{path} should go to the board");
-        }
-
-        // What the repository ships, and what is not prose at all.
-        for path in [
-            "README.md",
-            "CHANGELOG.md",
-            "CONTRIBUTING.md",
-            "SECURITY.md",
-            "CLAUDE.md",
-            "docs/USER_GUIDE.md",
-            "skill/kanbanr/SKILL.md",
-            ".github/PULL_REQUEST_TEMPLATE.md",
-            "web/README.md",
-            "api/crates/kanbanr-cli/tests/fixtures/board.md",
-            "api/target/doc/index.md",
-            "src/main.rs",
-            "Cargo.toml",
-        ] {
-            assert!(
-                !belongs_on_the_board(path),
-                "{path} should be allowed through"
-            );
-        }
-
-        // Case is not identity: a repository's README is a README however it is spelled.
-        assert!(!belongs_on_the_board("readme.md"));
-        assert!(!belongs_on_the_board("Docs/design.md"));
     }
 
     #[test]

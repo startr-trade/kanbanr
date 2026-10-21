@@ -53,7 +53,7 @@ mod tests {
 
     /// Today's offences, file → rule → count. Lower these as the refactor moves code into core;
     /// the refactor is finished when this is empty.
-    const BASELINE: &[(&str, &str, usize)] = &[("kanbanr-cli/src/main.rs", "yaml", 1)];
+    const BASELINE: &[(&str, &str, usize)] = &[];
 
     /// Front-end crates may not depend directly on these: they are core's business.
     const CORE_ONLY_DEPS: &[&str] = &["git2", "serde_yaml", "ears-classifier"];
