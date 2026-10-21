@@ -618,9 +618,20 @@ branches; fix it before going on.
 
 ### At the release role
 
-- A release moves through its stages with `kanbanr release promote <V> [stage]`. The first stage
-  makes `release/<V>`. The last, production, is the cut: kanbanr tags the version and brings main up
-  to it (a fast-forward, refused with nothing changed if main has commits the release lacks).
+- A release moves through its stages with `kanbanr release promote <V> [stage]`. By default the
+  first stage makes `release/<V>` and the last, production, is the cut: kanbanr brings main up to
+  the release (a fast-forward, refused with nothing changed if main has commits the release lacks)
+  and tags the version.
+- Stages can act (`kanbanr release stages`, `kanbanr config release-stage`): each may require
+  `items_finished`, `prepared`, `main_at_release`, `pushed`, and do `branch`, `prepare`,
+  `move_main`, `tag` on entry. A refusal lists every missing condition with its fix; nothing changed.
+- **A release prepares itself.** The stage with `prepare` commits the version files, the dated
+  changelog heading and a notes draft onto `release/<V>` (`kanbanr config release-prepare`). Never
+  make a feature item to prepare a release.
+- Plan items into a release before promoting it: a release with nothing planned is refused.
+- Claude runs `kanbanr release promote <V>` (check first with `--plan`) and tells the user the
+  `next:` line it prints. **The user pushes main and the tag**, by hand; a cut that requires
+  `pushed` waits until main is pushed (and CI has run on it).
 - A patch is `kanbanr release add <V> --patch-of <P>`: `release/<V>` is made from `<P>`'s tag. A fix
   integrated into a release branch reaches the line through `kanbanr git forward <V>`, which the
   move says is needed; it is never done for you.
@@ -643,8 +654,10 @@ on the item branch.
 |---|---|---|---|
 | neither (trunk) | main | the integrate merge | each item branch into main |
 | sprints only | `sprint/<SP>` | the sprint close | item branches into `sprint/<SP>`; `sprint/<SP>` into main at the close; the sprint into carried items |
-| releases only | `integration` | the release cut | item branches into `integration`; `release/<V>` into main at its last stage |
-| sprints and releases | `sprint/<SP>` | the release cut | item branches into `sprint/<SP>`; `release/<V>` into main at its last stage; the sprint into carried items |
+| releases only | `integration` | the release stage with `move_main` (by default the last) | item branches into `integration`; `release/<V>` into main at its `move_main` stage; tagged at the cut, after main is pushed if the stage requires `pushed` |
+| sprints and releases | `sprint/<SP>` | the release stage with `move_main` (by default the last) | item branches into `sprint/<SP>`; `release/<V>` into main at its `move_main` stage; tagged at the cut, after main is pushed if the stage requires `pushed`; the sprint into carried items |
+
+kanbanr commits only its release-preparation commit on `release/<V>`.
 
 With the git model off, kanbanr merges nothing and the model is a description. The **code**
 repository is never pushed, by kanbanr or by you: the user reviews and pushes, in every row. The
@@ -1060,8 +1073,11 @@ kanbanr sprint start SP-001 | show [SP-001] | list | close SP-001 --carry-to SP-
 kanbanr retro --sprint SP-001                     # the sprint's items, what it carried, its burndown
 kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # ship the finished items, write notes, carry the rest
-kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # next or named stage (default candidate → test → staging → production): the first makes release/<V>; the last is the cut — tags and fast-forwards main, refuses if main has commits the release lacks; back a stage needs --reason. Run from the project folder; never pushes
-kanbanr release add v0.2.0 --branch               # add it and promote it to the first stage
+kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # next or named stage, doing what its gates say (default candidate → test → staging → production: the first makes release/<V>; the last is the cut — fast-forwards main and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
+kanbanr release promote v0.1.0 [<stage>] --plan [--fetch]  # what it would do and still needs; changes nothing
+kanbanr release stages                            # each stage: requires, on_enter, declared or default
+kanbanr config release-stage main --requires items_finished --on-enter move_main [--clear]
+kanbanr config release-prepare --version-file api/Cargo.toml --changelog CHANGELOG.md --notes 'docs/src/releases/{version}.md'
 kanbanr release add v0.1.1 --patch-of v0.1.0      # a patch: release/v0.1.1 from v0.1.0's tag, at the first stage
 kanbanr config cadence --release-stages candidate,qa,live [--integration-branch develop] [--main-branch main]
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a shipped release

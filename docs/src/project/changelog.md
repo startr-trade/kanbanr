@@ -8,6 +8,24 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Release stages that act: move main, then tag it (FEAT-212).** Each release stage can require
+  conditions (`items_finished`, `prepared`, `main_at_release`, `pushed`) and do actions on entry
+  (`branch`, `prepare`, `move_main`, `tag`), set under `cadence.release_gates` with
+  `kanbanr config release-stage` and shown by `kanbanr release stages`; `release_stages` stays a
+  list of names, and a stage with no gate acts as before. So a release can move main at a stage of
+  its own and be tagged only once main holds it and is pushed. **A release prepares itself**: the
+  `prepare` action commits the version files, the dated changelog heading, a notes draft and its
+  listing onto `release/<V>` in one commit, nothing checked out (`kanbanr config release-prepare`).
+  A promotion is planned before anything changes — refused with every missing condition and its
+  fix — and undone step by step if it fails part way. `kanbanr release promote <V> --plan [--fetch]`
+  prints the plan; after a promotion kanbanr says what is next. The Releases page shows one button
+  per release, named for its next step ("Cut v0.3.0"), with what it does and the cut's preview
+  beside it; no second confirmation. A new read, `GET /api/projects/{project}/releases/{version}/plan`.
+  kanbanr still never pushes. Use one kanbanr version per board: an older one ignores the gates.
+- **A release with nothing planned into it is never promoted (FEAT-212).** Every stage refuses it,
+  the first included, and the Releases page offers no button; a patch, which carries its parent's
+  fixes, still goes.
+
 - **The Workflow page shows the cadence, the git model and every guard rail (FEAT-213).** Below
   the stages: the sprint length and the running sprint; how often releases are cut, their stages
   with the cut marked, and each unshipped release at its stage; the git model in words (main, the

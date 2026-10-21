@@ -321,10 +321,12 @@ kanbanr retro --sprint SP-001
 kanbanr release add v0.1.0 --target 2026-10-18
 kanbanr release plan v0.1.0 FEAT-001 FEAT-002
 kanbanr release list                            # every release, its state and its stage
+kanbanr release promote v0.1.0 --plan           # what the next stage would do and needs; changes nothing
 kanbanr release promote v0.1.0                  # candidate: makes the branch release/v0.1.0
 kanbanr release promote v0.1.0 staging          # a named stage; a middle one changes only the board
 kanbanr release promote v0.1.0 test --reason "the payment check failed on staging"   # back a stage
-kanbanr release promote v0.1.0 production       # the cut: ship, notes, tag, fast-forward main
+kanbanr release promote v0.1.0 production       # the cut: ship, notes, fast-forward main, tag
+kanbanr release stages                          # what each stage requires and does
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a release
 ```
 
@@ -352,8 +354,7 @@ A release moves through the environments it is deployed to before production. By
 the **last one is always the cut**. Every move is recorded on the release with who made it and when.
 
 - **The first stage** makes the branch `release/<VERSION>` from the integration branch, without
-  checking it out. `kanbanr release add v0.1.0 --branch` adds a release and promotes it there in one
-  step.
+  checking it out.
 - **A middle stage** is a board change only.
 - **Back a stage** — staging to test after a failed check — needs `--reason`, which is recorded.
   Nothing moves back from production.
@@ -369,6 +370,105 @@ the **last one is always the cut**. Every move is recorded on the release with w
 A release that has no branch yet gets `release/<VERSION>` made first whichever stage it is promoted
 to, so a process with a single stage (both first and the cut) works, and so does a promotion that
 skips the first stage.
+
+A release with **nothing planned into it is never promoted**, to any stage: it would ship nothing.
+It is refused with "v0.3.0 has no items: plan some in with `kanbanr release plan v0.3.0 <CODE>…`",
+and the Releases page offers it no button. A patch is the exception: it carries its parent's fixes,
+so it is promoted with nothing of its own planned.
+
+#### Stages that act
+
+That is the default. A stage can instead say what must hold before a release enters it
+(`requires`) and what entering it does (`on_enter`), as an item's status has a gate. The rules sit
+beside the stage names, under `cadence.release_gates`, keyed by stage name:
+
+```yaml
+cadence:
+  release_stages: [candidate, main, production]   # names only; the last is the cut
+  release_gates:
+    candidate:  { on_enter: [branch, prepare] }
+    main:       { purpose: "main holds the release; push it and let CI run",
+                  requires: [items_finished], on_enter: [move_main] }
+    production: { requires: [main_at_release, pushed], on_enter: [tag] }
+```
+
+| action | does |
+|---|---|
+| `branch` | makes `release/<V>` from the line of integration, nothing checked out |
+| `prepare` | one commit on `release/<V>`: the version files, the dated changelog heading and its copies, the notes draft and its listings (see below) |
+| `move_main` | fast-forwards main to the release tip; refused if main has commits the release lacks (a patch of an older release leaves main where it is) |
+| `tag` | tags the release tip `<V>` ("Release <V>"); the last stage only |
+
+| condition | holds when | fix shown |
+|---|---|---|
+| `items_finished` | the cut would carry nothing over | finish the item, or plan it into another release |
+| `prepared` | the release tip carries the version, the changelog heading and the notes | promote to the stage that prepares |
+| `main_at_release` | main is at the release tip | promote to the stage with `move_main` |
+| `pushed` | the release tip is on main's remote-tracking branch (`origin/main`) | push main (`git push origin main`), then wait for CI |
+
+A stage with no gate of its own keeps the default:
+
+| stage | default `on_enter` |
+|---|---|
+| the first | `branch` (unless another stage holds it) |
+| a middle one | nothing |
+| the last | `move_main, tag` (without `move_main` if another stage holds it) |
+| the only one | `branch, move_main, tag` |
+
+A promotion takes the actions of every stage it passes or enters, in the order `branch`, `prepare`,
+`move_main`, `tag`, and needs every condition those stages require. Everything is worked out first;
+if anything is missing it is refused with **each missing condition and its fix**, and nothing
+changes. A condition an action of the same promotion makes true counts as met (`prepare` makes
+`prepared`, `move_main` makes `main_at_release`); nothing makes `pushed` true, so skipping straight
+to the cut still waits for the push. If a step or the board fails after earlier steps, every git
+step is undone, newest first. Promoting to the stage a release is at takes its actions again when
+any of them would change something. Moving back stays a board change: main never moves back, since
+it may already be pushed.
+
+`pushed` reads the remote-tracking branch. A promotion fetches main first; offline, it judges from
+the last fetch and says so. kanbanr never pushes: pushing main and the tag is yours.
+
+```bash
+kanbanr config release-stage candidate --on-enter branch,prepare
+kanbanr config release-stage main --requires items_finished --on-enter move_main
+kanbanr config release-stage production --requires main_at_release,pushed --on-enter tag
+kanbanr config release-stage production --clear     # back to the default
+kanbanr release promote v0.3.0 --plan --fetch        # the plan, after fetching main
+```
+
+`release promote --plan` prints the button, each step, each condition with ✓ or ✗ and its fix, and
+for the cut what it tags, ships and carries over. After a promotion, kanbanr says what is next —
+"next: push main (`git push origin main`), then wait for CI, then Cut v0.3.0".
+
+#### Preparing a release
+
+A release prepares itself: entering the stage with `prepare` commits, in one commit on
+`release/<V>`, what a release needs. No separate item is made for it.
+
+```bash
+kanbanr config release-prepare --version-file api/Cargo.toml \
+  --version-file 'api/Cargo.lock=name = "kanbanr-core"\nversion = "{version}"' \
+  --changelog CHANGELOG.md --changelog-copy docs/src/project/changelog.md \
+  --notes 'docs/src/releases/{version}.md' \
+  --notes-listing 'docs/src/SUMMARY.md::- [Release notes](releases/index.md)::  - [{number}](releases/{version}.md)'
+kanbanr config release-prepare                     # shows it
+```
+
+- **Version files.** Each file's version is set to `{number}` (`v0.3.0` → `0.3.0`). A `*.toml` file
+  matches `^version = "{version}"` and a `*.json` file `"version": "{version}"`, the first match
+  only. Any other file needs a match: literal text with one `{version}`, where whitespace matches
+  any whitespace (newlines too) and a leading `^` anchors to a line; an explicit match sets every
+  occurrence. A missing file, or a match that finds nothing, refuses the promotion.
+- **Changelog.** `## [{number}] - {date}` goes below the first `## [Unreleased]`, so what was
+  unreleased belongs to the release; an `[Unreleased]: …compare/<prev>...HEAD` link moves on and
+  `[{number}]` gets its own. Each copy gets the same text.
+- **Notes.** A draft from the items the cut would ship, written only if the file is not there yet,
+  and listed below the line named in each listing.
+
+Nothing is checked out: kanbanr writes the commit with git's plumbing, so no hook runs, and the
+commit carries `[no-ref] release preparation, made by kanbanr` and a `Kanbanr-Release:` trailer.
+People's commits on `release/*` stay refused; kanbanr's preparation commit is the one exception.
+With nothing configured, `prepare` bumps nothing, makes no commit, and the plan says so.
 
 ### Patch releases
 
