@@ -496,7 +496,7 @@ impl Snapshot {
             }
             snap.sources.insert(source, keys);
         }
-        for (id, _) in snap.problems.iter() {
+        for id in snap.problems.keys() {
             snap.rule_sources.remove(id);
         }
         Ok(snap)
