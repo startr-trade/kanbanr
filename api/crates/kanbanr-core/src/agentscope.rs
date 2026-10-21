@@ -1781,6 +1781,143 @@ mod tests {
         assert!(push_verdict(&ProcessScope::Unscoped).is_allowed());
     }
 
+    /// FEAT-214 R-9: drift is the scope branch's commits made after the later of its item's last
+    /// task change and the scope's issue; a revoked scope and a design scope have none.
+    #[test]
+    fn drift_counts_commits_after_last_task_change() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-scope-drift-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (board, repo) = (dir.join("board"), dir.join("repo"));
+        std::fs::create_dir_all(&board).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let store = Store::new(board);
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        let list = store.add_todo_list("demo", &f.code, "w", None).unwrap();
+        store
+            .add_task("demo", &f.code, &list.code, "one", None)
+            .unwrap();
+        store
+            .set_task_state(
+                "demo",
+                &f.code,
+                &list.code,
+                "T1",
+                crate::models::TaskState::InProgress,
+            )
+            .unwrap();
+        let changed = last_task_change(
+            &store
+                .load("demo")
+                .unwrap()
+                .feature(&f.code)
+                .unwrap()
+                .clone(),
+        )
+        .expect("the change is stamped");
+
+        let at = |hours: i64| {
+            (OffsetDateTime::parse(&changed, &Rfc3339).unwrap() + time::Duration::hours(hours))
+                .format(&Rfc3339)
+                .unwrap()
+        };
+        let git = |date: &str, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "T")
+                .env("GIT_AUTHOR_EMAIL", "t@x")
+                .env("GIT_COMMITTER_NAME", "T")
+                .env("GIT_COMMITTER_EMAIL", "t@x")
+                .env("GIT_COMMITTER_DATE", date)
+                .env("GIT_AUTHOR_DATE", date)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&at(-3), &["init", "-q", "-b", "main"]);
+        git(&at(-3), &["commit", "-q", "--allow-empty", "-m", "base"]);
+        let base = coderepo::rev_parse(&repo, "main").unwrap();
+        git(&at(-3), &["switch", "-q", "-c", "feat/FEAT-001-cart"]);
+        git(
+            &at(-1),
+            &[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "before the task changed",
+            ],
+        );
+        git(
+            &at(1),
+            &[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "after the task changed",
+            ],
+        );
+
+        let mut s = scope(Role::Build);
+        s.project = "demo".into();
+        s.item = f.code.clone();
+        s.branch = Some("feat/FEAT-001-cart".into());
+        s.base = Some(base);
+        s.issued_at = at(-2);
+        let mut design = scope(Role::Design);
+        design.id = "SC-008".into();
+        design.item = f.code.clone();
+        save(&store, "demo", &[s.clone(), design]).unwrap();
+
+        let found = drift(&store, "demo", &repo, NOW).unwrap();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(
+            found[0].since, changed,
+            "since the task changed, after the issue"
+        );
+        let subjects: Vec<&str> = found[0]
+            .commits
+            .iter()
+            .map(|c| c.subject.as_str())
+            .collect();
+        assert_eq!(subjects, ["after the task changed"]);
+        let line = found[0].line();
+        assert!(
+            line.starts_with(
+                "FEAT-001: 1 commit(s) on feat/FEAT-001-cart since its tasks last changed at"
+            ),
+            "{line}"
+        );
+        assert!(
+            line.contains("(agent scope SC-007)") && line.contains("after the task changed"),
+            "{line}"
+        );
+        let issues = drift_issues(&store, "demo", &repo, NOW);
+        assert!(issues.iter().any(|i| i.message == line), "{issues:?}");
+
+        // Issued after both commits: nothing is ahead of it.
+        s.issued_at = at(2);
+        save(&store, "demo", std::slice::from_ref(&s)).unwrap();
+        assert!(drift(&store, "demo", &repo, NOW).unwrap().is_empty());
+        // Revoked: its work is the coordinator's to look at, not drift.
+        s.issued_at = at(-2);
+        s.revoked_at = Some(NOW.into());
+        save(&store, "demo", &[s]).unwrap();
+        assert!(drift(&store, "demo", &repo, NOW).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The trailer is added once and joins a trailer block.
     #[test]
     fn trailer_joins_the_trailer_block_once() {

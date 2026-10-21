@@ -15,10 +15,14 @@ use std::path::{Path, PathBuf};
 
 /// Marker line identifying a hook kanbanr wrote, so an update never clobbers someone else's.
 const MARKER: &str = "# kanbanr hook (FEAT-056)";
-const HOOKS: [(&str, &str); 2] = [
+const HOOKS: [(&str, &str); 3] = [
     ("commit-msg", "check-msg \"$1\""),
     ("pre-commit", "check-branch"),
+    // Nothing is pushed from an agent's worktree (FEAT-214).
+    ("pre-push", "check-push"),
 ];
+/// The hooks that check commits: what `hooks_installed` has always meant.
+const COMMIT_HOOKS: [&str; 2] = ["commit-msg", "pre-commit"];
 
 /// The working tree root of the repo the current directory is in.
 pub fn repo_root() -> Option<PathBuf> {
@@ -107,7 +111,12 @@ pub fn uninstall_hooks(root: &Path) -> Result<usize> {
 }
 
 pub fn hooks_installed(root: &Path) -> bool {
-    hooks_dir(root).is_ok_and(|dir| HOOKS.iter().all(|(name, _)| is_ours(&dir.join(name))))
+    hooks_dir(root).is_ok_and(|dir| COMMIT_HOOKS.iter().all(|name| is_ours(&dir.join(name))))
+}
+
+/// Is kanbanr's pre-push hook installed (FEAT-214)? An agent scope is issued only where it is.
+pub fn push_hook_installed(root: &Path) -> bool {
+    hooks_dir(root).is_ok_and(|dir| is_ours(&dir.join("pre-push")))
 }
 
 #[cfg(unix)]
@@ -152,8 +161,8 @@ mod tests {
                 .contains("echo mine")
         );
 
-        // With --force it is kept and chained.
-        assert_eq!(install_hooks(&repo, true).unwrap().len(), 2);
+        // With --force it is kept and chained. Three hooks: the pre-push one too (FEAT-214).
+        assert_eq!(install_hooks(&repo, true).unwrap().len(), 3);
         assert!(
             std::fs::read_to_string(dir.join("commit-msg.pre-kanbanr"))
                 .unwrap()
@@ -169,11 +178,11 @@ mod tests {
         );
         assert!(hooks_installed(&repo));
         // Installing twice changes nothing.
-        assert_eq!(install_hooks(&repo, false).unwrap().len(), 2);
+        assert_eq!(install_hooks(&repo, false).unwrap().len(), 3);
         assert!(!dir.join("commit-msg.pre-kanbanr.pre-kanbanr").exists());
 
         // Uninstalling restores the original.
-        assert_eq!(uninstall_hooks(&repo).unwrap(), 2);
+        assert_eq!(uninstall_hooks(&repo).unwrap(), 3);
         assert!(
             std::fs::read_to_string(dir.join("commit-msg"))
                 .unwrap()

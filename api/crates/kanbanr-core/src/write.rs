@@ -453,6 +453,24 @@ mod tests {
             git::has_unpushed(&dir),
             "under a scope the board is never pushed"
         );
+        // The events of a scoped write carry its agent too.
+        let by = match &scoped {
+            ProcessScope::Scoped(s) => s.by_agent(),
+            _ => unreachable!(),
+        };
+        let events = eventing::record_by(
+            &store,
+            &dir,
+            "POST",
+            "/projects/demo/features",
+            r#"{"code": "FEAT-009", "status": "Planned"}"#,
+            Some(&by),
+        );
+        assert_eq!(events[0].by_agent.as_ref(), Some(&by));
+        assert_eq!(
+            eventing::read(&dir, "demo", 1)[0].by_agent.as_ref(),
+            Some(&by)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -299,7 +299,15 @@ pub fn scan(store: &Store, id: &str, root: &Path) -> Result<Vec<Issue>> {
     let releases = crate::releases::load(store, id).unwrap_or_default();
     let (model, _) = gitmodel::load(store, id, root)?;
     let facts = collect(root, &model, &releases)?;
-    Ok(check(&project, &sprints, &releases, &model, &facts))
+    let mut issues = check(&project, &sprints, &releases, &model, &facts);
+    // Agent work the board has not caught up with, and scopes whose worktree is gone (FEAT-214).
+    issues.extend(crate::agentscope::drift_issues(
+        store,
+        id,
+        root,
+        &crate::now_rfc3339(),
+    ));
+    Ok(issues)
 }
 
 #[cfg(test)]

@@ -83,6 +83,30 @@ $NowEpoch = [long][Math]::Floor(([DateTimeOffset]::UtcNow).ToUnixTimeSeconds())
 $AgeSec = $NowEpoch - $LastCommitEpoch
 $WindowSec = $WindowMin * 60
 
+# Agent work the board has not caught up with (FEAT-214): a build scope's branch has commits newer
+# than its item's last task change. Checked before rule 1, with its own per-session stamp.
+try {
+    $drift = (& kanbanr scope drift --brief 2>$null | Select-Object -First 5 | Out-String).Trim()
+    if ($drift) {
+        $agentSession = 'nosession'
+        if ($HookInput -and $HookInput.session_id) {
+            $agentSession = ("$($HookInput.session_id)" -replace '[^A-Za-z0-9_-]', '')
+        }
+        $AgentStamp = Join-Path ([System.IO.Path]::GetTempPath()) "kanbanr-agents-$agentSession"
+        $lastAgent = 0L
+        if (Test-Path -LiteralPath $AgentStamp) {
+            [void][long]::TryParse((Get-Content -LiteralPath $AgentStamp -Raw -ErrorAction SilentlyContinue), [ref]$lastAgent)
+        }
+        if (($NowEpoch - $lastAgent) -ge $WindowSec) {
+            try { Set-Content -LiteralPath $AgentStamp -Value "$NowEpoch" -NoNewline -ErrorAction Stop } catch { }
+            $lines = ($drift -split "`r?`n") -join ' '
+            $reason = "kanbanr: agent work is ahead of the board: $lines Look at the branch and bring the item's tasks up to date now (``kanbanr task state …``)."
+            [ordered]@{ decision = 'block'; reason = $reason } | ConvertTo-Json -Compress
+            exit 0
+        }
+    }
+} catch { }
+
 # Clock skew / future commit timestamp -> treat as fresh, don't nag.
 if ($AgeSec -lt 0) { exit 0 }
 
