@@ -596,3 +596,24 @@ input:focus-visible,
 .bd-label { fill: var(--muted); font-size: 11px; }
 .bd-table { border-collapse: collapse; margin-top: 6px; }
 .bd-table th, .bd-table td { padding: 2px 10px; text-align: left; }
+
+/* ---- workflow page: cadence, git model, guard rails (FEAT-213) ---- */
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 4px 0 0; }
+.facts-row { display: contents; }
+.facts dt { color: var(--muted); font-size: 13px; }
+.facts dd { margin: 0; color: var(--text); font-size: 13px; }
+.facts code, .guard-list code, .warn-box code, .workflow-page p code {
+  background: var(--panel-2); padding: 1px 5px; border-radius: 4px; color: var(--text);
+}
+.guard-list { list-style: none; padding: 0; margin: 0; }
+.guard-list li {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px;
+  padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; color: var(--text);
+}
+.guard-list li:first-child { border-top: none; }
+.warn-box {
+  border: 1px solid var(--warn); border-radius: var(--radius); background: var(--panel);
+  color: var(--text); padding: 10px 14px; margin: 8px 0 12px;
+}
+.warn-box strong { color: var(--warn); }
+.warn-box ul { margin: 6px 0; padding-left: 18px; }
