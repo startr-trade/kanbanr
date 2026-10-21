@@ -42,7 +42,8 @@ try {
   if ($body -notmatch '/assets/') {
     Write-Host '::error::the installed binary served no monitor — the embed did not ship'; exit 1
   }
-  if ($body -notmatch 'src="/assets/([^"]+)"') {
+  # Relative (`./assets/…`, FEAT-178) or absolute (`/assets/…`); either is served at /assets/.
+  if ($body -notmatch 'src="\.?/assets/([^"]+)"') {
     Write-Host '::error::index.html names no bundle'; exit 1
   }
   try { Invoke-WebRequest "$base/assets/$($Matches[1])" -UseBasicParsing | Out-Null }

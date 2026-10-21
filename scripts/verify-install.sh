@@ -39,7 +39,9 @@ done
 body="$(curl -fsS "http://127.0.0.1:$port/")"
 echo "$body" | grep -q "/assets/" \
   || { echo "::error::the installed binary served no monitor — the embed did not ship" >&2; exit 1; }
-asset="$(echo "$body" | sed -n 's|.*src="/assets/\([^"]*\)".*|\1|p' | head -n1)"
+# The monitor names its bundle relative to the page (`./assets/…`, FEAT-178: the standalone bundle
+# works under any folder) or, before that, absolutely (`/assets/…`); either is served at /assets/.
+asset="$(echo "$body" | sed -n 's|.*src="\.\{0,1\}/assets/\([^"]*\)".*|\1|p' | head -n1)"
 [ -n "$asset" ] || { echo "::error::index.html names no bundle" >&2; exit 1; }
 curl -fsS -o /dev/null "http://127.0.0.1:$port/assets/${asset}" \
   || { echo "::error::the bundle the index names is not served" >&2; exit 1; }
