@@ -176,6 +176,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Security
 
+- **Distrusted emSign intermediates no longer trusted (FEAT-206).** `webpki-roots` goes to 1.0.10
+  (RUSTSEC-2026-0381) and `rustls-webpki` to 0.103.16 (RUSTSEC-2026-0382): the certificate checks
+  behind kanbanr's self-update and release check could accept a path through intermediates whose
+  private keys are now public.
 - **rustls advisories; an unmaintained YAML parser recorded (FEAT-186).** rustls goes to 0.23.46
   (RUSTSEC-2026-0346, RUSTSEC-2026-0348). `unsafe-libyaml`, which `serde_yaml` uses to read and
   write every board file, is unmaintained with no safe upgrade (RUSTSEC-2024-0449); it is listed
