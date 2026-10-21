@@ -476,6 +476,24 @@ commit carries `[no-ref] release preparation, made by kanbanr` and a `Kanbanr-Re
 People's commits on `release/*` stay refused; kanbanr's preparation commit is the one exception.
 With nothing configured, `prepare` bumps nothing, makes no commit, and the plan says so.
 
+#### Reading and editing the notes
+
+The drafted notes are on `release/<V>`, not in your checkout, so read and change them from the
+release itself — no branch switch, no separate item:
+
+```bash
+kanbanr release notes v0.3.0                 # release/v0.3.0 @ 8f995e1: docs/src/releases/v0.3.0.md, then the text
+kanbanr release notes v0.3.0 --edit          # $VISUAL / $EDITOR on a copy; committed if it changed
+kanbanr release notes v0.3.0 --file notes.md # or `-` for stdin
+```
+
+A save is one commit onto `release/<V>`, made the way the preparation commit is: nothing checked
+out, `[no-ref] release notes, written by kanbanr` and a `Kanbanr-Release:` trailer. The same text
+makes no commit. Each save also applies the notes listings again, so a listing added to the config
+after the release became a candidate reaches it. The notes can be edited until the release is cut;
+after that they read as shipped. The Releases page shows the same notes under **Release notes**,
+with **Edit notes** on a write-enabled monitor started in the project folder.
+
 ### Patch releases
 
 A fix to a release already in production gets a release of its own, a **patch**:

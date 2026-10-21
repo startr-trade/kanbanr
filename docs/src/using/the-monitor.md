@@ -297,7 +297,7 @@ CLI's to read: the page shows it as not known and names `kanbanr git status`, wh
 
 ### Release actions
 
-With releases on, two release decisions can be made from the monitor started with writes on
+With releases on, release decisions can be made from the monitor started with writes on
 (`kanbanr review --ui`). Each uses the same operation as its CLI command, so the board ends up the
 same whichever you use. A read-only monitor shows the command instead.
 
@@ -320,6 +320,12 @@ same whichever you use. A read-only monitor shows the command instead.
   on the code repository, and the monitor uses the repository it was started in. Started anywhere
   else, it says "the monitor was not started in the project folder" and names the CLI command. A
   read-only monitor shows the command and the plan, never the button.
+- **Release notes.** A release with a branch has a **Release notes** section, collapsed until
+  opened, showing the notes as they are on `release/<V>` — headed "draft on release/v0.3.0 @
+  8f995e1", or "as shipped on …" after the cut. Until the cut, **Edit notes** opens the text;
+  **Save** commits it onto the branch, nothing checked out, and shows the new commit; **Cancel**
+  discards it. This is `kanbanr release notes <VERSION> --edit`. The notes are read from the
+  repository the monitor was started in; a read-only monitor shows them with the command instead.
 
 Across several projects ([Portfolio](portfolio.md)):
 

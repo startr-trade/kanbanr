@@ -683,6 +683,11 @@ branches; fix it before going on.
 - **A release prepares itself.** The stage with `prepare` commits the version files, the dated
   changelog heading and a notes draft onto `release/<V>` (`kanbanr config release-prepare`). Never
   make a feature item to prepare a release.
+- **The notes are read and edited from the release.** They live on `release/<V>`, not in the
+  checkout: `kanbanr release notes <V>` shows them and where they are; `--file F` (or `-`) or
+  `--edit` commits new text there, nothing checked out, until the cut. When the user asks where
+  the notes are or wants them changed, use this — never a fix item, never a checkout of
+  `release/<V>`. The Releases page shows them too, with Edit on a write-enabled monitor.
 - Plan items into a release before promoting it: a release with nothing planned is refused. So a
   release starts with `release add`, then `release plan <V> <CODE>…`, then promoting it to its
   first stage (candidate), which makes `release/<V>`; `release add` has no `--branch`.
@@ -1132,6 +1137,7 @@ kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # ship the finished items, write notes, carry the rest
 kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # next or named stage, doing what its gates say (default candidate → test → staging → production: the first makes release/<V>; the last is the cut — fast-forwards main and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
 kanbanr release promote v0.1.0 [<stage>] --plan [--fetch]  # what it would do and still needs; changes nothing
+kanbanr release notes v0.1.0 [--file F | --edit]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut
 kanbanr release stages                            # each stage: requires, on_enter, declared or default
 kanbanr config release-stage main --requires items_finished --on-enter move_main [--clear]
 kanbanr config release-prepare --version-file api/Cargo.toml --changelog CHANGELOG.md --notes 'docs/src/releases/{version}.md'
