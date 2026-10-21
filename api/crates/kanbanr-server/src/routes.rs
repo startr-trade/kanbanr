@@ -54,6 +54,9 @@ fn core_err(e: kanbanr_core::CoreError) -> (StatusCode, String) {
         // The code repository refused a release promotion (FEAT-183): the request was well formed,
         // the repository's state is what stood in the way.
         Git(_) => StatusCode::CONFLICT,
+        // A workflow rule refused a step (FEAT-176): as with the repository, the request was well
+        // formed and the item's state is what stood in the way.
+        Refused(_) => StatusCode::CONFLICT,
         Io(_) | Yaml(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (code, e.to_string())

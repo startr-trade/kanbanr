@@ -1091,6 +1091,63 @@ impl ProjectConfig {
             .unwrap_or(false)
     }
 
+    /// The first status that means "being worked on": displayed, not the default, not terminal,
+    /// not a no-op. Where `start` moves an item when no stage makes its branch.
+    pub fn first_active_status(&self) -> Option<String> {
+        self.displayed_states
+            .iter()
+            .find(|s| {
+                *s != &self.default_state
+                    && !crate::graph::is_terminal_status(self, s)
+                    && !self.is_no_op(s)
+            })
+            .cloned()
+    }
+
+    /// The shortest chain of allowed transitions from one status to another, both ends included;
+    /// `None` when the workflow has no way between them.
+    pub fn path_between(&self, from: &str, to: &str) -> Option<Vec<String>> {
+        let mut previous: BTreeMap<String, String> = BTreeMap::new();
+        let mut queue = std::collections::VecDeque::from([from.to_string()]);
+        let mut seen = std::collections::BTreeSet::from([from.to_string()]);
+        while let Some(at) = queue.pop_front() {
+            if at == to {
+                let mut path = vec![at.clone()];
+                let mut cur = at;
+                while let Some(p) = previous.get(&cur) {
+                    path.push(p.clone());
+                    cur = p.clone();
+                }
+                path.reverse();
+                return Some(path);
+            }
+            for next in self.transitions.get(&at).into_iter().flatten() {
+                if seen.insert(next.clone()) {
+                    previous.insert(next.clone(), at.clone());
+                    queue.push_back(next.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Where `finish` takes an item that is at `from` (FEAT-115): the end status the workflow
+    /// allows from there, else the first end status (`Completed` when there is none), which the
+    /// item may still have stages to walk to. The first declared end was taken before, and refused
+    /// from any stage that does not lead straight to it — Implementation under TOGAF.
+    pub fn finish_target(&self, from: &str) -> String {
+        let ends: Vec<&String> = self
+            .statuses
+            .iter()
+            .filter(|s| crate::graph::is_terminal_status(self, s) && !self.is_no_op(s))
+            .collect();
+        ends.iter()
+            .find(|s| self.transition_allowed(from, s))
+            .or(ends.first())
+            .map(|s| (*s).clone())
+            .unwrap_or_else(|| "Completed".to_string())
+    }
+
     /// The schema a config is stamped with: gates need a reader that enforces them.
     pub fn required_schema_version(&self) -> u32 {
         if self.gates.is_empty() {

@@ -30,6 +30,7 @@ pub use ears_classifier as ears;
 pub mod error;
 pub mod eventing;
 pub mod export;
+pub mod flow;
 pub mod gantt;
 pub mod git;
 pub mod gitdrift;

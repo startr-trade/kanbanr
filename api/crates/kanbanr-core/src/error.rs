@@ -75,6 +75,10 @@ pub enum CoreError {
     /// The code repository refused (FEAT-183): git's own reason, as git said it.
     #[error("{0}")]
     Git(String),
+    /// A rule of the workflow refused a step (FEAT-176), in words that say what to do instead —
+    /// `start` and `finish` planning, shown as they are.
+    #[error("{0}")]
+    Refused(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("yaml error: {0}")]
