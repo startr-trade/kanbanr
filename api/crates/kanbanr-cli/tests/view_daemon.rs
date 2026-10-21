@@ -1080,3 +1080,81 @@ fn monitor_promote_matches_cli() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// FEAT-213 R-2: a read-only daemon started in the project's code repository answers the git
+/// model and git doctor from that repository; started anywhere else, it answers as the CLI does
+/// outside one.
+#[test]
+fn daemon_serves_git_model_with_its_repository() {
+    let root =
+        std::env::temp_dir().join(format!("kanbanr-git-model-daemon-{}", std::process::id()));
+    // A releases-only project: its line is the integration branch. The board is asserted to be
+    // the scratch one by `release_scratch`.
+    let (home, work, board) = release_scratch(&root);
+
+    let start = |dir: &std::path::Path| -> (Daemon, String) {
+        let port = free_port();
+        let child = Command::new(cli())
+            .args(["serve", "--bind", &format!("127.0.0.1:{port}")])
+            .current_dir(dir)
+            .env("HOME", &home)
+            .env("KANBANR_DATA_DIR", &board)
+            .spawn()
+            .expect("spawn kanbanr serve");
+        let daemon = Daemon(child);
+        let url = format!("http://127.0.0.1:{port}");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            assert!(Instant::now() < deadline, "daemon did not become ready");
+            match ureq::get(&format!("{url}/api/projects")).call() {
+                Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+                Err(_) => std::thread::sleep(Duration::from_millis(100)),
+            }
+        }
+        (daemon, url)
+    };
+    let get = |url: &str| -> (u16, String) {
+        match ureq::get(url).call() {
+            Ok(r) => (r.status(), r.into_string().unwrap()),
+            Err(ureq::Error::Status(code, r)) => (code, r.into_string().unwrap()),
+            Err(e) => panic!("no answer from the daemon: {e}"),
+        }
+    };
+
+    // Started in the project folder: the model, with the repository's facts.
+    {
+        let (_daemon, url) = start(&work);
+        let (status, body) = get(&format!("{url}/api/projects/shop/git/model"));
+        assert_eq!(status, 200, "the git model through the daemon: {body}");
+        let model: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(model["line"], "integration", "{model}");
+        assert_eq!(model["facts"]["main"], "main", "{model}");
+        let (status, body) = get(&format!("{url}/api/projects/shop/git/doctor"));
+        assert_eq!(status, 200, "git doctor through the daemon: {body}");
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&body)
+                .unwrap()
+                .is_array()
+        );
+        let (status, body) = get(&format!("{url}/api/projects/shop/guards"));
+        assert_eq!(status, 200, "the guard rails through the daemon: {body}");
+        let guards: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(guards["commits"]["hooks_installed"].is_null(), "{guards}");
+    }
+
+    // Started elsewhere: no repository, so the git model is refused as the CLI refuses it outside
+    // one, while the cadence preview and the guard rails still answer.
+    {
+        let (_daemon, url) = start(&root);
+        let (status, why) = get(&format!("{url}/api/projects/shop/git/model"));
+        assert_eq!(status, 400, "no code repository: {why}");
+        assert!(why.contains("run it from the project folder"), "{why}");
+        let (status, body) = get(&format!(
+            "{url}/api/projects/shop/git/model?sprints=off&releases=on"
+        ));
+        assert_eq!(status, 200, "the preview needs no repository: {body}");
+        let (status, body) = get(&format!("{url}/api/projects/shop/guards"));
+        assert_eq!(status, 200, "{body}");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}

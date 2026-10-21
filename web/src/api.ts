@@ -1,5 +1,5 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -40,6 +40,25 @@ export const api = {
     getJson<SprintReport>(apiUrl(`/projects/${encodeURIComponent(id)}/sprints/${encodeURIComponent(code)}`)),
   /** A project's releases (FEAT-120). */
   getReleases: (id: string) => getJson<Release[]>(apiUrl(`/projects/${encodeURIComponent(id)}/releases`)),
+  /**
+   * The git model (FEAT-189), read by a daemon started in the code repository (FEAT-213). A
+   * daemon started anywhere else refuses it; `getGitModelPreview` then gives the model from the
+   * cadence alone.
+   */
+  getGitModel: (id: string) =>
+    getJson<GitModelView>(apiUrl(`/projects/${encodeURIComponent(id)}/git/model`)),
+  /** The model a cadence gives, with no repository needed (FEAT-194). */
+  getGitModelPreview: (id: string, sprints: boolean, releases: boolean) =>
+    getJson<GitModelView>(
+      apiUrl(
+        `/projects/${encodeURIComponent(id)}/git/model?sprints=${sprints ? "on" : "off"}&releases=${releases ? "on" : "off"}`,
+      ),
+    ),
+  /** Where the board and the branches disagree (FEAT-191); needs the code repository. */
+  getGitDoctor: (id: string) =>
+    getJson<GitDoctorIssue[]>(apiUrl(`/projects/${encodeURIComponent(id)}/git/doctor`)),
+  /** Every guard rail the project has on, in one read (FEAT-213). */
+  getGuards: (id: string) => getJson<Guards>(apiUrl(`/projects/${encodeURIComponent(id)}/guards`)),
   /** What each live item is missing, from the one engine every surface uses (FEAT-112). */
   getReadiness: (id: string) =>
     getJson<Readiness>(apiUrl(`/projects/${encodeURIComponent(id)}/readiness`)),

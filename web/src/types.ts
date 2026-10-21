@@ -376,6 +376,8 @@ export interface ProjectConfig {
     release_stages?: string[];
     integration_branch?: string;
     main_branch?: string;
+    /** Branching follows the git model the cadence implies (FEAT-189). */
+    git_model?: boolean;
   };
 }
 
@@ -610,4 +612,58 @@ export interface ProcessStatus {
   source: ProcessSource | null;
   drift: { edited: boolean; newer: number | null; gone: boolean } | null;
   messages: string[];
+}
+
+/**
+ * The git model the cadence implies (FEAT-189, FEAT-194), as `GET …/git/model` answers it: the
+ * summary in words, the model itself, and, from a daemon started in the code repository, the
+ * branches it read. Internal: not in the published API.
+ */
+export interface GitModelView {
+  topology: "trunk" | "sprints" | "releases" | "sprints_and_releases";
+  /** Where finished items are merged: `sprint/<SP>` stands for the running sprint's branch. */
+  line: string;
+  /** Where an item branch is made. */
+  branch_from: string;
+  production_at: "integrate_merge" | "sprint_close" | "release_cut";
+  /** The merges kanbanr makes; only when `automated` is on. */
+  kanbanr_merges: string[];
+  automated: boolean;
+  /** Who pushes the code: always "you". */
+  pushes: string;
+  model: {
+    main: string;
+    integration_branch?: string;
+    line: string | null;
+    item_patterns: string[];
+    protected: string[];
+  };
+  /** The branches read from the code repository; absent from a preview. */
+  facts?: { main: string } | null;
+}
+
+/** One problem `GET …/git/doctor` finds between the board and the branches (FEAT-191). Internal. */
+export interface GitDoctorIssue {
+  severity: "error" | "warning";
+  project: string;
+  code: string | null;
+  message: string;
+}
+
+/** Every guard rail a project has, in one read (FEAT-213): `GET …/guards`. Internal. */
+export interface Guards {
+  method: { part: string; on: boolean; status?: string; means: string }[];
+  commits: {
+    item_branch: boolean;
+    branch_pattern: string;
+    trailer: string;
+    escape: string;
+    protected: string[];
+    /** Null where it cannot be told: the daemon does not read the code repository's hooks. */
+    hooks_installed: boolean | null;
+  };
+  diagrams: { lint_on_write: boolean; strict: boolean };
+  coverage: { id: string; subjects: number; uncovered: number; problem?: string }[];
+  push_policy: { policy: string; source: "environment" | "board" | "default" };
+  code_pushes: string;
 }
