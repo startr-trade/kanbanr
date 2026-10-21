@@ -190,7 +190,7 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn query_param(query: Option<&str>, key: &str) -> Option<String> {
+pub(crate) fn query_param(query: Option<&str>, key: &str) -> Option<String> {
     query?.split('&').find_map(|kv| {
         let (k, v) = kv.split_once('=')?;
         (k == key).then(|| percent_decode(v))
@@ -363,6 +363,7 @@ fn build_project_config(store: &Store, name: &str, body: &Value) -> Result<Proje
                 process: None,
                 method: Default::default(),
                 diagrams: Default::default(),
+                coverage: Vec::new(),
             }
         }
         None => {
@@ -538,6 +539,28 @@ pub fn dispatch(store: &Store, method: &str, path: &str, body: Option<&Value>) -
 /// was started in when that folder's marker names the project. Without one, the promotions that
 /// need it — the first stage and the cut — are refused, never guessed.
 pub fn dispatch_in(
+    store: &Store,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    repo: Option<&std::path::Path>,
+) -> Result<String> {
+    let out = dispatch_routes(store, method, path, body, repo)?;
+    // After a write, the coverage rules it now fails (FEAT-197). A dry run changed nothing.
+    if !is_mutation(method) || is_dry_run(body) {
+        return Ok(out);
+    }
+    Ok(crate::coverage::annotate(
+        store,
+        method,
+        path,
+        body.unwrap_or(&Value::Null),
+        out,
+    ))
+}
+
+/// The routes themselves: [`dispatch_in`] without what it adds after a write.
+fn dispatch_routes(
     store: &Store,
     method: &str,
     path: &str,
@@ -1117,6 +1140,32 @@ pub fn dispatch_in(
             };
             ser(&store.set_diagrams(p, diagrams)?.diagrams)
         }
+        // Architecture coverage rules (FEAT-197): each rule and what it leaves uncovered; set from
+        // YAML text (`text`, parsed here in core) or as `rules`, refused when invalid.
+        ("GET", ["projects", p, "coverage"]) => {
+            let project = store.load_meta(p)?;
+            if project.config.coverage.is_empty() {
+                return ser(&crate::coverage::CoverageReport::default());
+            }
+            let snap = crate::coverage::Snapshot::load(store, &project)?;
+            ser(&snap.report(&project))
+        }
+        ("PUT", ["projects", p, "coverage"]) => {
+            let rules = match (str_field(b, "text"), b.get("rules")) {
+                (Some(text), _) => crate::coverage::parse_rules(&text)?,
+                (None, Some(rules)) => serde_json::from_value(rules.clone())
+                    .map_err(|e| CoreError::Unsupported(format!("invalid coverage rules: {e}")))?,
+                (None, None) => {
+                    return Err(CoreError::Unsupported(
+                        "give the coverage rules: `text` (YAML) or `rules`".into(),
+                    ));
+                }
+            };
+            store.set_coverage(p, rules)?;
+            let project = store.load_meta(p)?;
+            let snap = crate::coverage::Snapshot::load(store, &project)?;
+            ser(&snap.report(&project))
+        }
         ("PUT", ["projects", p, "config", "cadence"]) => {
             let unit = match str_field(b, "estimate_unit").as_deref() {
                 None => None,
@@ -1526,6 +1575,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
             )
         }
         ["projects", _p, "config", what] => format!("update config: {what}"),
+        ["projects", _p, "coverage"] => "config: coverage rules".into(),
         ["projects", _p, "sprints"] => "add a sprint".into(),
         ["projects", _p, "releases"] => "add a release".into(),
         // FEAT-183: the stage it went to, which a request for "the next one" does not name.

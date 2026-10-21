@@ -117,6 +117,12 @@ pub struct ProjectConfig {
     /// only, and absent stays absent on disk.
     #[serde(default, skip_serializing_if = "DiagramsConfig::is_default")]
     pub diagrams: DiagramsConfig,
+    /// Architecture coverage rules (FEAT-197): every subject of a kind — items in a stage range,
+    /// accepted ADRs, docs under a folder — is referenced from a named doc, or lists one. They name
+    /// this project's doc paths, so they live here and not in a process. Absent: none, and nothing
+    /// is read for coverage.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub coverage: Vec<crate::coverage::CoverageRule>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -366,6 +372,11 @@ pub struct Gate {
     /// one step on release day.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub done: bool,
+    /// The docs every item entering this stage must list in `affects_docs` (FEAT-197): the move
+    /// adds them, so the cross-cutting views are part of every fold-in and `docs_updated` checks
+    /// them. Travels with the process; paths are board doc paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub affects_docs: Vec<String>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -381,7 +392,8 @@ impl Gate {
     /// A gate that only names roles and asks nothing (FEAT-188). It labels a stage; it does not
     /// declare a guardrail, so a workflow whose gates are all labels keeps the built-in rule.
     pub fn is_role_label(&self) -> bool {
-        !self.roles.is_empty()
+        // Default docs (FEAT-197) label a stage too: they ask nothing of the move.
+        (!self.roles.is_empty() || !self.affects_docs.is_empty())
             && self.purpose.is_empty()
             && self.requires.is_empty()
             && self.warns.is_empty()
@@ -665,6 +677,7 @@ impl WorkflowFile {
             process: None,
             method: Default::default(),
             diagrams: Default::default(),
+            coverage: Vec::new(),
         };
         config.schema_version = config.required_schema_version();
         config
@@ -796,6 +809,16 @@ pub fn gate_problems(
                 )));
             }
         }
+        // Default docs are board doc paths (FEAT-197): nothing that could name a file outside the
+        // doc tree.
+        for doc in &gate.affects_docs {
+            if crate::coverage::bad_path(doc) || doc.trim().ends_with('/') {
+                problems.push(CoreError::Unsupported(format!(
+                    "the gate on '{status}' lists '{doc}' in affects_docs, which is not a board \
+                     doc path (relative, under docs/, no `..`)"
+                )));
+            }
+        }
     }
     problems.extend(role_problems(statuses, no_ops, terminals, gates));
     problems
@@ -816,6 +839,7 @@ fn merge_gate(target: &mut Gate, from: &Gate) {
     union(&mut target.warns, &from.warns);
     union(&mut target.signoffs, &from.signoffs);
     union(&mut target.on_enter, &from.on_enter);
+    union(&mut target.affects_docs, &from.affects_docs);
     if target.purpose.is_empty() {
         target.purpose = from.purpose.clone();
     }
@@ -1034,6 +1058,7 @@ pub fn working_agreement(project: &str, config: &ProjectConfig) -> String {
         Condition::SpecSections { spec_sections } => {
             format!("spec sections: {}", spec_sections.join(", "))
         }
+        Condition::DocsCover { docs_cover } => format!("docs cover: {}", docs_cover.join(", ")),
     };
     let gates = config.effective_gates();
     let roles = config.roles();
@@ -1043,6 +1068,7 @@ pub fn working_agreement(project: &str, config: &ProjectConfig) -> String {
         }
         out.push_str(&format!("## {status}\n\n"));
         // What the stage is for in any process (FEAT-188), after its own purpose.
+        let defaults = config.default_affects_docs(status);
         let role_lines = |out: &mut String| {
             for role in roles.of(status) {
                 out.push_str(&format!(
@@ -1050,6 +1076,13 @@ pub fn working_agreement(project: &str, config: &ProjectConfig) -> String {
                     role.name(),
                     role.means(),
                     if roles.declared { "" } else { " (inferred)" }
+                ));
+            }
+            // The docs entering adds to every item's affects_docs (FEAT-197).
+            if !defaults.is_empty() {
+                out.push_str(&format!(
+                    "entering: list {} in affects_docs\n\n",
+                    defaults.join(", ")
                 ));
             }
         };
@@ -1324,6 +1357,67 @@ impl ProjectConfig {
             by_role,
             declared: false,
         }
+    }
+
+    /// A stage named as a status or as `"@<role>"` (FEAT-197): the status, if the workflow has it.
+    pub fn resolve_stage(&self, stage: &str) -> Option<String> {
+        let stage = stage.trim();
+        if stage.starts_with(ROLE_KEY_PREFIX) {
+            return role_key(stage).and_then(|r| self.role_status(r));
+        }
+        self.has_status(stage).then(|| stage.to_string())
+    }
+
+    /// The statuses a coverage rule's stage range takes in (FEAT-197). `in_stages` lists exact
+    /// statuses (no-ops allowed); otherwise `from` is every status at or after it in the workflow's
+    /// order, no-ops excluded; with neither, every status that is not a no-op. A stage may be named
+    /// `"@<role>"`. `None` when a stage does not resolve.
+    pub fn stage_set(
+        &self,
+        from: Option<&str>,
+        in_stages: &[String],
+    ) -> Option<std::collections::BTreeSet<String>> {
+        if !in_stages.is_empty() {
+            return in_stages.iter().map(|s| self.resolve_stage(s)).collect();
+        }
+        let start = match from {
+            Some(f) => {
+                let status = self.resolve_stage(f)?;
+                self.statuses.iter().position(|s| *s == status)?
+            }
+            None => 0,
+        };
+        Some(
+            self.statuses[start..]
+                .iter()
+                .filter(|s| !self.is_no_op(s))
+                .cloned()
+                .collect(),
+        )
+    }
+
+    /// The docs an item entering `status` must list (FEAT-197): the gate's own `affects_docs`, and
+    /// those of each `"@<role>"` gate for a role the status holds. As board paths, each once.
+    pub fn default_affects_docs(&self, status: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut add = |docs: &[String]| {
+            for d in docs {
+                let key = crate::refs::doc_key(d);
+                if !out.contains(&key) {
+                    out.push(key);
+                }
+            }
+        };
+        if let Some(g) = self.gates.get(status) {
+            add(&g.affects_docs);
+        }
+        let roles = self.roles().of(status);
+        for (key, g) in &self.gates {
+            if role_key(key).is_some_and(|r| roles.contains(&r)) {
+                add(&g.affects_docs);
+            }
+        }
+        out
     }
 
     /// The status that holds `role`.
@@ -1708,6 +1802,97 @@ mod tests {
         assert!(!config.counts_as_done("Out-of-Scope"));
         assert!(
             working_agreement("shop", &config).contains("finishes an item for the sprint burndown")
+        );
+    }
+
+    /// FEAT-197 R-11: a stage's default docs are its own gate's `affects_docs` and those of every
+    /// `@role` gate for a role it holds, as board paths, each once; another stage has none.
+    #[test]
+    fn default_affects_docs_by_role() {
+        let mut config = config_of("scheduled");
+        // Planned holds design; Completed holds integrate and release.
+        config.gates.insert(
+            "@design".into(),
+            Gate {
+                affects_docs: vec![
+                    "architecture/zachman".into(),
+                    "docs/architecture/c4.md".into(),
+                ],
+                ..Default::default()
+            },
+        );
+        config.gates.insert(
+            "@integrate".into(),
+            Gate {
+                affects_docs: vec!["architecture/catalog.md".into()],
+                ..Default::default()
+            },
+        );
+        config.gates.get_mut("Planned").unwrap().affects_docs =
+            vec!["./architecture/zachman.md".into(), "views/data".into()];
+        assert_eq!(
+            config.default_affects_docs("Planned"),
+            vec![
+                "architecture/zachman.md",
+                "views/data.md",
+                "architecture/c4.md"
+            ]
+        );
+        assert_eq!(
+            config.default_affects_docs("Completed"),
+            vec!["architecture/catalog.md"]
+        );
+        assert!(config.default_affects_docs("Scheduled").is_empty());
+        // Merged onto the role's stage in the effective gates too.
+        assert!(
+            config.effective_gates()["Completed"]
+                .affects_docs
+                .contains(&"architecture/catalog.md".to_string())
+        );
+        // A path outside the doc tree is refused when the workflow is saved.
+        let mut gates = config.gates.clone();
+        gates.get_mut("@design").unwrap().affects_docs = vec!["../escape.md".into()];
+        let problems = gate_problems(
+            &config.statuses,
+            &config.no_op_states,
+            &config.terminal_states,
+            &gates,
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.to_string().contains("../escape.md")),
+            "{problems:?}"
+        );
+        assert!(
+            working_agreement("p", &config)
+                .contains("entering: list architecture/catalog.md in affects_docs")
+        );
+    }
+
+    /// FEAT-197: a gate that only names default docs labels its stage, as a roles-only gate does:
+    /// the workflow keeps the built-in rule rather than reading as one that declares its own gates.
+    #[test]
+    fn affects_docs_only_gate_keeps_builtin_rule() {
+        let mut config = ProjectConfig::default_for("p");
+        let before = config.effective_gates();
+        config.gates.insert(
+            "Scheduled".into(),
+            Gate {
+                affects_docs: vec!["architecture/zachman.md".into()],
+                ..Default::default()
+            },
+        );
+        assert!(config.gates["Scheduled"].is_role_label());
+        assert!(!config.declares_gates());
+        assert_eq!(
+            config.effective_gates(),
+            before,
+            "the built-in rule still applies"
+        );
+        assert_eq!(
+            config.default_affects_docs("Scheduled"),
+            vec!["architecture/zachman.md"]
         );
     }
 }

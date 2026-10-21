@@ -424,9 +424,13 @@ export interface Release {
   branch?: string;
 }
 
-/** A check a gate names, the Zachman check narrowed to some columns, or the spec's named sections
- * (FEAT-179). */
-export type Condition = string | { zachman: string[] } | { spec_sections: string[] };
+/** A check a gate names, the Zachman check narrowed to some columns, the spec's named sections
+ * (FEAT-179), or the coverage check narrowed to some of the project's rules (FEAT-197). */
+export type Condition =
+  | string
+  | { zachman: string[] }
+  | { spec_sections: string[] }
+  | { docs_cover: string[] };
 
 /** What entering a status asks for (FEAT-113, FEAT-114). */
 /** What a cut would do with one planned item (FEAT-183, FEAT-185). */
@@ -447,6 +451,8 @@ export interface Gate {
   on_enter?: string[];
   /** The stage roles this status holds: design, build, integrate, release (FEAT-188). */
   roles?: string[];
+  /** The docs every item entering this stage must list in affects_docs (FEAT-197). */
+  affects_docs?: string[];
 }
 
 /** Readable text for a gate condition. */
@@ -454,6 +460,7 @@ export function conditionText(c: Condition): string {
   if (typeof c === "string") return c.replace(/_/g, " ");
   if ("spec_sections" in c) return `spec sections ${c.spec_sections.join(", ")}`;
   if ("zachman" in c) return `zachman ${c.zachman.join("/")}`;
+  if ("docs_cover" in c) return `docs cover ${c.docs_cover.join(", ")}`;
   // A condition a newer kanbanr writes: shown as it is rather than breaking the page (FEAT-199).
   return JSON.stringify(c);
 }

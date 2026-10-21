@@ -238,6 +238,29 @@ mod tests {
         assert!(skill.contains("`diagrams_valid` gate"));
     }
 
+    /// FEAT-197 R-16 (its automatable half): the skill says when to list the view docs, index a
+    /// new ADR, fix coverage warnings before a move and run doctor before a sprint merge or a cut,
+    /// what a `docs_cover` gate asks, and names `config coverage`. Whether the guidance matches the
+    /// book's is the manual check.
+    #[test]
+    fn skill_carries_coverage_guidance() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        for want in [
+            "| `docs_cover` | **never a question** — fix the coverage",
+            "Include the project's view\n  docs",
+            "add the links each one names before you move the item on",
+            "**Index every decision.**",
+            "**Before merging a sprint or cutting a release**, run `kanbanr doctor`",
+            "kanbanr config coverage [--from-file rules.yaml | --clear]",
+        ] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+    }
+
     /// FEAT-194 R-1: the skill states the method once, by stage role: a section with one
     /// subsection per role, naming the commands and gates that now carry each rule.
     #[test]

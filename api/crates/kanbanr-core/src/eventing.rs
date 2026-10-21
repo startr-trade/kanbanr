@@ -61,6 +61,9 @@ pub enum EventKind {
     SignoffRecorded,
     /// A sign-off was taken back (FEAT-182), with the reason.
     SignoffWithdrawn,
+    /// A write left coverage rules uncovered (FEAT-197): the cross-cutting views fell behind.
+    /// `detail.findings` carries each one.
+    CoverageGap,
 }
 
 /// A single notification event. Mirrors the shape of an activity entry, plus structured detail.
@@ -385,6 +388,25 @@ pub fn compute_events(store: &Store, method: &str, path: &str, result: &str) -> 
             push_move_events(store, &mut events, &project, code, &status);
         }
         _ => {}
+    }
+
+    // Whatever the write, the coverage it left uncovered (FEAT-197), as one event.
+    if let Some(findings) = parsed
+        .get("coverage_warnings")
+        .and_then(Value::as_array)
+        .filter(|f| !f.is_empty())
+    {
+        let more = parsed
+            .get("coverage_more")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        events.push(Event::new(
+            &project,
+            EventKind::CoverageGap,
+            crate::write::item_of(path),
+            format!("{} coverage gap(s)", findings.len() + more),
+            json!({ "findings": findings }),
+        ));
     }
 
     events
@@ -756,6 +778,63 @@ mod tests {
         assert!(!cfg.is_enabled(), "no config + no env => delivery off");
         let cfg = WebhookConfig::load_with_env(&dir, Some("https://example.test/hook"));
         assert!(cfg.is_enabled(), "an env URL turns delivery on");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// FEAT-197 R-9: a write whose response carries `coverage_warnings` becomes one `coverage_gap`
+    /// event, about the item the route names, carrying the findings; it is logged and delivered
+    /// to a configured webhook. A response without them adds no such event.
+    #[test]
+    fn coverage_gap_event() {
+        struct Recorder(std::cell::RefCell<Vec<(String, String)>>);
+        impl WebhookSender for Recorder {
+            fn post(&self, url: &str, body: &str) {
+                self.0.borrow_mut().push((url.into(), body.into()));
+            }
+        }
+        let dir = temp_dir();
+        let store = Store::new(dir.clone());
+        new_project(&store, "demo");
+        let a = store.add_feature("demo", "A", "", "M", None).unwrap();
+        let mut out = serde_json::to_value(&a).unwrap();
+        out["coverage_warnings"] = json!([{
+            "rule": "zachman",
+            "subject": {"kind": "item", "id": a.code},
+            "level": "warning",
+            "message": format!("[zachman] {} is not referenced from architecture/zachman.md — add a link to it there", a.code),
+        }]);
+        out["coverage_more"] = json!(2);
+        let path = format!("/projects/demo/features/{}", a.code);
+        let events = compute_events(&store, "PATCH", &path, &out.to_string());
+        assert_eq!(events.len(), 1);
+        let e = &events[0];
+        assert_eq!(e.kind, EventKind::CoverageGap);
+        assert_eq!(e.feature.as_deref(), Some(a.code.as_str()));
+        assert_eq!(e.message, "3 coverage gap(s)");
+        assert_eq!(e.detail["findings"][0]["rule"], "zachman");
+        assert_eq!(serde_json::to_value(e.kind).unwrap(), json!("coverage_gap"));
+
+        // Recorded in the events log, and delivered where a webhook is configured.
+        std::fs::write(
+            dir.join(CONFIG_FILE),
+            "webhooks: [\"https://example.test/hook\"]\n",
+        )
+        .unwrap();
+        let recorded = record(&store, &dir, "PATCH", &path, &out.to_string());
+        let sender = Recorder(Default::default());
+        deliver_all(&dir, &recorded, &sender);
+        assert!(
+            read(&dir, "demo", 10)
+                .iter()
+                .any(|e| e.kind == EventKind::CoverageGap)
+        );
+        let sent = sender.0.borrow();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].1.contains("coverage_gap") && sent[0].1.contains("zachman"));
+
+        // No warnings, no event.
+        let plain = serde_json::to_string(&a).unwrap();
+        assert!(compute_events(&store, "PATCH", &path, &plain).is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

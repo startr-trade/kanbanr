@@ -98,6 +98,11 @@ function StageTile({ status, gate }: { status: string; gate: Gate }) {
             role: {r}
           </span>
         ))}
+        {(gate.affects_docs ?? []).map((d) => (
+          <span className="chip tasks" key={`doc-${d}`} title="every item entering lists this doc in affects_docs">
+            lists {d}
+          </span>
+        ))}
         {requires.length + signoffs.length + warns.length === 0 ? (
           <span className="muted small">asks nothing to enter</span>
         ) : null}

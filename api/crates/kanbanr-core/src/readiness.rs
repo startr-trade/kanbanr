@@ -66,13 +66,16 @@ pub enum Check {
     /// Every Mermaid diagram in the spec and in each `affects_docs` doc passes the diagram lint
     /// (FEAT-200), judged when the item moves, never cached.
     DiagramsValid,
+    /// The item is covered by the project's coverage rules (FEAT-197), judged as if it were already
+    /// in the stage it is entering; `{docs_cover: [id]}` asks for only those rules.
+    DocsCover,
 }
 
 impl Check {
     /// Every check a gate can name, in the order the guide lists them (FEAT-168). `signoff` is not
     /// one: a gate asks for a sign-off by its name, under `signoffs`. A new check must be added
     /// here, and [`Check::passes_when`] will not compile until it says what the check means.
-    pub const GATEABLE: [Check; 19] = [
+    pub const GATEABLE: [Check; 20] = [
         Check::Definition,
         Check::Statement,
         Check::Goals,
@@ -92,6 +95,7 @@ impl Check {
         Check::SpecSections,
         Check::DocsUpdated,
         Check::DiagramsValid,
+        Check::DocsCover,
     ];
 
     /// The name a gate uses for this check.
@@ -143,6 +147,10 @@ impl Check {
                 "every Mermaid diagram in the spec and in each doc it names in `affects_docs` \
                  passes the diagram lint"
             }
+            Check::DocsCover => {
+                "the item is covered by every project coverage rule it falls under; \
+                 `{docs_cover: [id]}` asks for only those rules"
+            }
         }
     }
 
@@ -153,6 +161,9 @@ impl Check {
             Check::SpecSections => {
                 Some("spec_sections: [Design, …] (the spec's headings, any level)")
             }
+            Check::DocsCover => Some(
+                "docs_cover: [rule-id, …] (the project's coverage rules, `kanbanr config coverage`)",
+            ),
             _ => None,
         }
     }
@@ -174,8 +185,16 @@ impl Check {
 #[serde(untagged)]
 pub enum Condition {
     Check(Check),
-    Zachman { zachman: Vec<String> },
-    SpecSections { spec_sections: Vec<String> },
+    Zachman {
+        zachman: Vec<String>,
+    },
+    SpecSections {
+        spec_sections: Vec<String>,
+    },
+    /// The coverage check narrowed to some of the project's rules (FEAT-197).
+    DocsCover {
+        docs_cover: Vec<String>,
+    },
 }
 
 /// Read by hand so a misspelt check is named, with the ones there are (FEAT-168): the derived
@@ -188,9 +207,11 @@ impl<'de> Deserialize<'de> for Condition {
             Name(String),
             Zachman { zachman: Vec<String> },
             SpecSections { spec_sections: Vec<String> },
+            DocsCover { docs_cover: Vec<String> },
         }
         match Raw::deserialize(d)? {
             Raw::Zachman { zachman } => Ok(Condition::Zachman { zachman }),
+            Raw::DocsCover { docs_cover } => Ok(Condition::DocsCover { docs_cover }),
             Raw::SpecSections { spec_sections } => Ok(Condition::SpecSections { spec_sections }),
             Raw::Name(name) => serde_json::from_value(serde_json::Value::String(name.clone()))
                 .map(Condition::Check)
@@ -215,8 +236,18 @@ impl Condition {
                 .iter()
                 .find(|c| !COLUMNS.contains(&c.trim().to_ascii_lowercase().as_str()))
                 .cloned(),
-            Condition::Check(_) | Condition::SpecSections { .. } => None,
+            Condition::Check(_) | Condition::SpecSections { .. } | Condition::DocsCover { .. } => {
+                None
+            }
         }
+    }
+
+    /// Whether this condition asks for coverage (FEAT-197), plain or narrowed.
+    pub fn is_docs_cover(&self) -> bool {
+        matches!(
+            self,
+            Condition::Check(Check::DocsCover) | Condition::DocsCover { .. }
+        )
     }
 
     /// Whether evaluating this condition reads the spec body, which a metadata-only load leaves
@@ -286,6 +317,9 @@ pub struct Context {
     /// The project's doc folder, for [`Check::DocsUpdated`] (FEAT-180). Its history is read only
     /// when that check is evaluated, and only for items that declare docs.
     pub docs_dir: Option<std::path::PathBuf>,
+    /// What the coverage rules' source docs reference (FEAT-197), read only when the project has
+    /// rules and some gate asks for `docs_cover`.
+    pub coverage: Option<std::sync::Arc<crate::coverage::Snapshot>>,
 }
 
 impl Context {
@@ -301,21 +335,60 @@ impl Context {
                 None
             },
             docs_dir: Some(store.project_dir(id).join("docs")),
+            coverage: Self::coverage(store, id, config),
         }
+    }
+
+    /// The coverage snapshot, when a gate will ask for it; one that names why, when it cannot be
+    /// built.
+    fn coverage(
+        store: &crate::Store,
+        id: &str,
+        config: &crate::ProjectConfig,
+    ) -> Option<std::sync::Arc<crate::coverage::Snapshot>> {
+        let asked = config.effective_gates().values().any(|g| {
+            g.requires
+                .iter()
+                .chain(&g.warns)
+                .any(Condition::is_docs_cover)
+        });
+        if config.coverage.is_empty() || !asked {
+            return None;
+        }
+        let snap = store
+            .load_meta(id)
+            .and_then(|p| crate::coverage::Snapshot::load(store, &p))
+            .unwrap_or_else(|e| crate::coverage::Snapshot::failed(config, e.to_string()));
+        Some(std::sync::Arc::new(snap))
     }
 }
 
+/// The gaps of an item against a gate's conditions, judged where it stands.
 pub fn evaluate_conditions(
     feature: &FeatureItem,
     goal_ids: Option<&std::collections::BTreeSet<String>>,
     conditions: &[Condition],
     ctx: &Context,
 ) -> Vec<Gap> {
+    evaluate_entering(feature, goal_ids, conditions, ctx, &feature.status)
+}
+
+/// The gaps of an item against a gate's conditions, as if it were already in `entering` — the
+/// stage whose gate is being judged (FEAT-197). Only `docs_cover` depends on where the item is.
+pub fn evaluate_entering(
+    feature: &FeatureItem,
+    goal_ids: Option<&std::collections::BTreeSet<String>>,
+    conditions: &[Condition],
+    ctx: &Context,
+    entering: &str,
+) -> Vec<Gap> {
     let checks: Vec<Check> = conditions
         .iter()
         .filter_map(|c| match c {
             Condition::Check(c) => Some(*c),
-            Condition::Zachman { .. } | Condition::SpecSections { .. } => None,
+            Condition::Zachman { .. }
+            | Condition::SpecSections { .. }
+            | Condition::DocsCover { .. } => None,
         })
         .collect();
     let mut gaps = evaluate_in(feature, goal_ids, &checks, ctx);
@@ -333,7 +406,9 @@ pub fn evaluate_conditions(
         .iter()
         .flat_map(|c| match c {
             Condition::Zachman { zachman } => zachman.clone(),
-            Condition::Check(_) | Condition::SpecSections { .. } => vec![],
+            Condition::Check(_) | Condition::SpecSections { .. } | Condition::DocsCover { .. } => {
+                vec![]
+            }
         })
         .map(|c| c.trim().to_ascii_lowercase())
         .collect();
@@ -351,6 +426,69 @@ pub fn evaluate_conditions(
                 gaps.push(gap(Check::Zachman, None, &label, label.clone()));
             }
         }
+    }
+    gaps.extend(docs_cover_gaps(feature, conditions, ctx, entering));
+    gaps
+}
+
+/// What `docs_cover` lacks (FEAT-197): plain asks for every rule, narrowed for the union of the ids
+/// named. Judged at `entering`. A named rule the project does not configure is an Error.
+fn docs_cover_gaps(
+    feature: &FeatureItem,
+    conditions: &[Condition],
+    ctx: &Context,
+    entering: &str,
+) -> Vec<Gap> {
+    let asked: Vec<&Condition> = conditions.iter().filter(|c| c.is_docs_cover()).collect();
+    if asked.is_empty() || is_exempt(feature) {
+        return Vec::new();
+    }
+    let plain = asked
+        .iter()
+        .any(|c| matches!(c, Condition::Check(Check::DocsCover)));
+    let mut named: Vec<String> = Vec::new();
+    for c in &asked {
+        if let Condition::DocsCover { docs_cover } = c {
+            for id in docs_cover.iter().map(|i| i.trim().to_string()) {
+                if !id.is_empty() && !named.contains(&id) {
+                    named.push(id);
+                }
+            }
+        }
+    }
+    let configured = |id: &str| {
+        ctx.coverage
+            .as_ref()
+            .is_some_and(|s| s.rules.iter().any(|r| r.id == id))
+    };
+    let mut gaps = Vec::new();
+    for id in named.iter().filter(|id| !configured(id)) {
+        gaps.push(Gap {
+            level: Level::Error,
+            ..gap(
+                Check::DocsCover,
+                None,
+                &format!("unknown rule {id}"),
+                format!("docs_cover names rule '{id}', which this project does not configure"),
+            )
+        });
+    }
+    let Some(snap) = ctx.coverage.as_deref() else {
+        return gaps;
+    };
+    let only: Option<Vec<String>> =
+        (!plain).then(|| named.iter().filter(|id| configured(id)).cloned().collect());
+    if only.as_ref().is_some_and(|o| o.is_empty()) {
+        return gaps;
+    }
+    for f in snap.item_findings(&snap.config, feature, entering, only.as_deref()) {
+        gaps.push(Gap {
+            check: Check::DocsCover,
+            requirement: None,
+            level: f.level,
+            label: format!("[{}] not covered", f.rule),
+            message: f.message,
+        });
     }
     gaps
 }
@@ -530,7 +668,7 @@ pub fn next_gates(
                 return None;
             }
             let requires_gaps =
-                evaluate_conditions(feature, goal_ids.as_ref(), &gate.requires, ctx);
+                evaluate_entering(feature, goal_ids.as_ref(), &gate.requires, ctx, to);
             let mut gaps = requires_gaps.clone();
             let signoffs = signoff_gaps(feature, &gate.signoffs);
             let signoffs_needed = gate
@@ -552,7 +690,7 @@ pub fn next_gates(
                 enforce: gate.enforce,
                 gaps,
                 requires_gaps,
-                warnings: evaluate_conditions(feature, goal_ids.as_ref(), &gate.warns, ctx),
+                warnings: evaluate_entering(feature, goal_ids.as_ref(), &gate.warns, ctx, to),
                 signoffs_needed,
             })
         })
@@ -787,6 +925,7 @@ pub fn evaluate_definition(
                     | Check::SpecSections
                     | Check::DocsUpdated
                     | Check::DiagramsValid
+                    | Check::DocsCover
             )
         });
         if reads_definition {
@@ -942,7 +1081,8 @@ fn item_level(
         | Check::Signoff
         | Check::SpecSections
         | Check::DocsUpdated
-        | Check::DiagramsValid => {}
+        | Check::DiagramsValid
+        | Check::DocsCover => {}
     }
 }
 
@@ -1952,5 +2092,188 @@ mod tests {
             .move_feature_gated("demo", &code, "Scheduled", None)
             .unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A board with coverage rules, for FEAT-197's gate tests: `zachman` asks every item at
+    /// Scheduled or later to be referenced from architecture/zachman.md, `listed` asks items in
+    /// Scheduled to list it; the doc names FEAT-002 only.
+    fn coverage_board(tag: &str) -> (crate::Store, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-cover-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = crate::Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let charter = crate::Charter {
+            purpose: "Keep the views whole".into(),
+            adopted_at: "2000-01-01T00:00:00Z".into(),
+            ..Default::default()
+        };
+        crate::charter::save(&store, "demo", &charter).unwrap();
+        for t in ["One", "Two"] {
+            store.add_feature("demo", t, "", "M", None).unwrap();
+        }
+        store
+            .write_doc("demo", "architecture/zachman.md", "| FEAT-002 |\n")
+            .unwrap();
+        let rules = crate::coverage::parse_rules(
+            "- id: zachman\n  from: Scheduled\n  referenced_from: architecture/zachman.md\n\
+             - id: listed\n  in: [Scheduled]\n  lists: architecture/zachman.md\n",
+        )
+        .unwrap();
+        store.set_coverage("demo", rules).unwrap();
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Scheduled".to_string(),
+            crate::config::Gate {
+                requires: vec![Condition::Check(Check::DocsCover)],
+                ..Default::default()
+            },
+        );
+        store.set_gates("demo", gates).unwrap();
+        (store, dir)
+    }
+
+    /// FEAT-197 R-8: `docs_cover` is judged as if the item were already in the stage it enters —
+    /// an item at Planned is not yet a subject of a rule from Scheduled, and is one on entering it;
+    /// a narrowed condition asks only for its rules; an exempt item has no gaps.
+    #[test]
+    fn docs_cover_gate() {
+        let (store, dir) = coverage_board("gate");
+        let project = store.load_meta("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        assert!(
+            ctx.coverage.is_some(),
+            "a gate asks, and the project has rules"
+        );
+        let one = project.feature("FEAT-001").unwrap();
+        let two = project.feature("FEAT-002").unwrap();
+        let plain = vec![Condition::Check(Check::DocsCover)];
+        assert!(
+            evaluate_conditions(one, None, &plain, &ctx).is_empty(),
+            "at Planned"
+        );
+        let gaps = evaluate_entering(one, None, &plain, &ctx, "Scheduled");
+        let labels: Vec<&str> = gaps.iter().map(|g| g.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            vec!["[zachman] not covered", "[listed] not covered"]
+        );
+        assert!(gaps.iter().all(|g| g.check == Check::DocsCover));
+        assert_eq!(
+            gaps[0].message,
+            "[zachman] FEAT-001 is not referenced from architecture/zachman.md — add a link to \
+             it there"
+        );
+        let narrowed = vec![Condition::DocsCover {
+            docs_cover: vec!["zachman".into()],
+        }];
+        let gaps = evaluate_entering(two, None, &narrowed, &ctx, "Scheduled");
+        assert!(gaps.is_empty(), "FEAT-002 is in the matrix: {gaps:?}");
+        let gaps = evaluate_entering(two, None, &plain, &ctx, "Scheduled");
+        assert_eq!(gaps.len(), 1, "it does not list the doc: {gaps:?}");
+        assert_eq!(
+            gaps[0].message,
+            "[listed] FEAT-002 does not list architecture/zachman.md in affects_docs"
+        );
+        // Past Scheduled, `listed` no longer applies; `zachman` still does.
+        assert_eq!(
+            evaluate_entering(one, None, &plain, &ctx, "Completed").len(),
+            1
+        );
+        let mut exempt = one.clone();
+        exempt.definition = Some(FeatureDefinition {
+            exempt: "a spike".into(),
+            ..Default::default()
+        });
+        assert!(evaluate_entering(&exempt, None, &plain, &ctx, "Scheduled").is_empty());
+        // The gate refuses the move, naming the rule; a link in the doc lets it through.
+        let err = store
+            .move_feature_gated("demo", "FEAT-001", "Scheduled", None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("[zachman] FEAT-001 is not referenced"),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-197 R-14: a gate narrowing `docs_cover` to a rule the project does not configure is an
+    /// Error gap naming it — with rules configured and without.
+    #[test]
+    fn docs_cover_unknown_rule_is_error() {
+        let (store, dir) = coverage_board("unknown");
+        let project = store.load_meta("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        let one = project.feature("FEAT-001").unwrap();
+        let narrowed = vec![Condition::DocsCover {
+            docs_cover: vec!["zachman".into(), "catalgo".into()],
+        }];
+        let gaps = evaluate_entering(one, None, &narrowed, &ctx, "Scheduled");
+        let unknown: Vec<&Gap> = gaps.iter().filter(|g| g.level == Level::Error).collect();
+        assert_eq!(unknown.len(), 1, "{gaps:?}");
+        assert_eq!(
+            unknown[0].message,
+            "docs_cover names rule 'catalgo', which this project does not configure"
+        );
+        assert!(gaps.iter().any(|g| g.label == "[zachman] not covered"));
+        // No rules at all: plain passes, a named rule is unknown.
+        let none = Context::default();
+        assert!(
+            evaluate_entering(
+                one,
+                None,
+                &[Condition::Check(Check::DocsCover)],
+                &none,
+                "Scheduled"
+            )
+            .is_empty()
+        );
+        let gaps = evaluate_entering(one, None, &narrowed, &none, "Scheduled");
+        assert_eq!(gaps.len(), 2);
+        assert!(gaps.iter().all(|g| g.level == Level::Error));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-197 R-12: `docs_cover` reads plain and narrowed, in `requires` and `warns`, says what
+    /// it means and what narrows it, and reads no spec body.
+    #[test]
+    fn docs_cover_reads_and_narrows() {
+        assert!(Check::GATEABLE.contains(&Check::DocsCover));
+        assert_eq!(Check::DocsCover.name(), "docs_cover");
+        assert!(Check::DocsCover.passes_when().contains("coverage rule"));
+        assert!(
+            Check::DocsCover
+                .parameters()
+                .is_some_and(|p| p.starts_with("docs_cover: [rule-id"))
+        );
+        let gate: crate::config::Gate = crate::yaml::from_str(
+            "requires: [docs_cover, {docs_cover: [zachman, catalog]}]\nwarns: [docs_cover]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            gate.requires,
+            vec![
+                Condition::Check(Check::DocsCover),
+                Condition::DocsCover {
+                    docs_cover: vec!["zachman".into(), "catalog".into()]
+                }
+            ]
+        );
+        assert_eq!(gate.warns, vec![Condition::Check(Check::DocsCover)]);
+        assert!(gate.requires.iter().all(Condition::is_docs_cover));
+        assert!(!gate.reads_spec());
+        assert_eq!(gate.requires[1].invalid_column(), None);
+        let back: crate::config::Gate =
+            crate::yaml::from_str(&crate::yaml::to_string(&gate).unwrap()).unwrap();
+        assert_eq!(back, gate, "round-trips");
+        // No definition is not a coverage gap of its own.
+        let f = item(None);
+        assert!(evaluate(&f, None, &[Check::DocsCover]).is_empty());
     }
 }
