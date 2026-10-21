@@ -6,12 +6,24 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-21
+
 ### Added
 
 - **`mermaid-lint` on crates.io (FEAT-200).** The diagram lint kanbanr runs on every write, as a
   standalone library with no dependencies: it finds the Mermaid diagrams in Markdown and reports
   each mistake Pele or Mermaid would reject, with its line and rule, and flags no diagram Pele
   draws. The release workflow publishes it beside `ears-classifier`.
+
+### Fixed
+
+- **A diagram opened from the book draws in its theme (FEAT-209).** The open-in-a-new-tab copy
+  removed the SVG's style attribute, where Pele keeps the diagram's colour variables, so every
+  shape drew black and the labels vanished, on a white page. It now keeps them, and the tab takes
+  the diagram's own background and text colour.
+- **The release's install check reads a relative bundle path (FEAT-210).** Since FEAT-178 the
+  monitor's `index.html` names `./assets/…`; `scripts/verify-install.sh` and `.ps1` looked only for
+  `/assets/…`, so 0.2.0's install checks failed though the binary was right.
 
 ## [0.2.0] - 2026-10-21
 
@@ -1039,7 +1051,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/startr-trade/kanbanr/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/startr-trade/kanbanr/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/startr-trade/kanbanr/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/startr-trade/kanbanr/compare/v0.1.5...v0.1.6
