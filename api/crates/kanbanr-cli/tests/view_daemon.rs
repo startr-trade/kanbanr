@@ -836,8 +836,12 @@ fn promote_through_the_daemon_uses_the_repository_it_was_started_in() {
         "--no-hooks",
     ]);
     let board = kanbanr(&["where"]);
+    // Both sides resolved: macOS's temp dir is a symlink (/var → /private/var) and Windows's can
+    // be a short name (RUNNER~1), while kanbanr reports the board's real path (FEAT-208).
     assert!(
-        std::path::Path::new(&board).starts_with(&base),
+        std::fs::canonicalize(&board)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(&base).unwrap()),
         "the scratch board must be the test's own, not {board}"
     );
     kanbanr(&["config", "cadence", "--releases", "on"]);
@@ -959,8 +963,11 @@ fn release_scratch(base: &std::path::Path) -> (PathBuf, PathBuf, PathBuf) {
         "--no-hooks",
     ]);
     let board = PathBuf::from(run(&["where"]));
+    // Both sides resolved, as above (FEAT-208).
     assert!(
-        board.starts_with(base),
+        std::fs::canonicalize(&board)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(base).unwrap()),
         "the scratch board must be the test's own, not {}",
         board.display()
     );
