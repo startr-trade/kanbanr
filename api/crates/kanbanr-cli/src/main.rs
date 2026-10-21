@@ -1944,42 +1944,13 @@ fn run_sources(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
     let project = get_project(client, &p)?;
     let cwd = std::env::current_dir()?;
     let root = project::project_root(&cwd, project::home_dir().as_deref());
-    let today = kanbanr_core::now_rfc3339();
-
-    let mut rows = Vec::new();
-    let mut edits = Vec::new();
-    for f in &project.features {
-        let Some(src) = &f.source else { continue };
-        // Only file sources can be checked locally; `TODO.md:14` -> `TODO.md`.
-        let present = (src.system == "file").then(|| {
-            let path = match src.reference.rsplit_once(':') {
-                Some((file, line)) if line.chars().all(|c| c.is_ascii_digit()) => file,
-                _ => src.reference.as_str(),
-            };
-            root.join(path).exists()
-        });
-        let mut updated = src.clone();
-        match present {
-            Some(false) if src.missing_since.is_none() => {
-                updated.missing_since = Some(today.clone())
-            }
-            Some(true) if src.missing_since.is_some() => updated.missing_since = None,
-            _ => {}
-        }
-        if updated != *src {
-            edits.push(json!({"op": "feature.edit", "code": f.code, "source": updated}));
-        }
-        rows.push(json!({
-            "code": f.code,
-            "system": src.system,
-            "ref": src.reference,
-            "revision": src.revision,
-            "url": src.url,
-            "imported_at": src.imported_at,
-            "present": present,
-            "missing_since": updated.missing_since,
-        }));
-    }
+    let plan = kanbanr_core::evidence::plan_sources(
+        &project,
+        &|path| root.join(path).exists(),
+        &kanbanr_core::now_rfc3339(),
+    );
+    let rows = serde_json::to_value(&plan.rows)?;
+    let rows = rows.as_array().cloned().unwrap_or_default();
 
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
@@ -2013,22 +1984,16 @@ fn run_sources(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
         }
     }
 
-    if !edits.is_empty() {
+    if let Some(batch) = plan.batch() {
         if write {
-            client.write(
-                Method::Post,
-                &format!("/projects/{p}/batch"),
-                Some(
-                    json!({"operations": edits, "message": "sources: update missing-source marks"}),
-                ),
-            )?;
+            client.write(Method::Post, &format!("/projects/{p}/batch"), Some(batch))?;
             if !cli.json {
-                println!("recorded {} source change(s)", edits.len());
+                println!("recorded {} source change(s)", plan.edits.len());
             }
         } else if !cli.json {
             println!(
                 "{} source mark(s) out of date; run `kanbanr sources --write` to record them",
-                edits.len()
+                plan.edits.len()
             );
         }
     }
@@ -4356,7 +4321,6 @@ fn run_commit(
 /// by something nobody can run. `--write` returns those to `planned` rather than deleting them —
 /// the requirement still needs a test, it just no longer has one.
 fn run_tests(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
-    use kanbanr_core::models::TestState;
     let p = require_project(cli)?;
     let project = get_project(client, &p)?;
     let cwd = std::env::current_dir()?;
@@ -4365,34 +4329,11 @@ fn run_tests(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
     // — searching it would find every test in its own definition and report all of them present.
     let board = project::resolve_data_dir(cli.data_dir.as_deref());
 
-    let mut rows = Vec::new();
-    let mut ops = Vec::new();
-    for f in &project.features {
-        let Some(def) = &f.definition else { continue };
-        for r in &def.requirements {
-            for t in &r.tests {
-                let name = t.name.trim();
-                // A manual check is performed by a person and has no name in the repo to find;
-                // treating its absence as rot would push people to stop recording manual gates.
-                if name.is_empty() || t.kind.trim().eq_ignore_ascii_case("manual") {
-                    continue;
-                }
-                let found = test_exists(&root, &board, name);
-                rows.push(json!({
-                    "code": f.code, "requirement": r.id, "test": name,
-                    "state": t.state, "found": found,
-                }));
-                // Only recorded evidence is worth correcting: a `planned` test is expected to be
-                // absent — that is what planned means.
-                if !found && t.state != TestState::Planned {
-                    ops.push(json!({
-                        "op": "test.state", "feature": f.code, "requirement": r.id,
-                        "test": name, "state": "planned", "checked_rev": "",
-                    }));
-                }
-            }
-        }
-    }
+    let plan = kanbanr_core::evidence::plan_stale_tests(&project, &|name| {
+        test_exists(&root, &board, name)
+    });
+    let rows = serde_json::to_value(&plan.rows)?;
+    let rows = rows.as_array().cloned().unwrap_or_default();
 
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&rows)?);
@@ -4415,25 +4356,17 @@ fn run_tests(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
         }
     }
 
-    if !ops.is_empty() {
+    if let Some(batch) = plan.batch() {
+        let n = plan.ops.len();
         if write {
-            let n = ops.len();
-            client.write(
-                Method::Post,
-                &format!("/projects/{p}/batch"),
-                Some(json!({
-                    "operations": ops,
-                    "message": format!("tests: {n} result(s) whose test no longer exists are back to planned"),
-                })),
-            )?;
+            client.write(Method::Post, &format!("/projects/{p}/batch"), Some(batch))?;
             if !cli.json {
                 println!("returned {n} result(s) to planned");
             }
         } else if !cli.json {
             println!(
-                "{} recorded result(s) name a test that is not in the repo; \
-                 run `kanbanr tests --write` to return them to planned",
-                ops.len()
+                "{n} recorded result(s) name a test that is not in the repo; \
+                 run `kanbanr tests --write` to return them to planned"
             );
         }
     }
@@ -5150,7 +5083,7 @@ fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     .flatten()
     .collect::<Vec<_>>()
     .join("\n");
-    let results = parse_test_results(&text);
+    let results = kanbanr_core::evidence::parse_results(&text);
     if results.is_empty() {
         return Ok(()); // not a test run, or nothing recognizable: stay quiet
     }
@@ -5158,77 +5091,14 @@ fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     let project = get_project(client, &p)?;
     let rev = project_head_rev();
-    let mut ops = Vec::new();
-    for f in &project.features {
-        let Some(def) = &f.definition else { continue };
-        for r in &def.requirements {
-            for t in &r.tests {
-                if let Some(passed) = results.get(t.name.as_str()) {
-                    let state = if *passed { "green" } else { "red" };
-                    if t.state == kanbanr_core::models::TestState::parse(state).unwrap_or_default()
-                        && (!passed || t.checked_rev.as_str() == rev.as_deref().unwrap_or(""))
-                    {
-                        continue; // already recorded at this revision; nothing to say
-                    }
-                    let mut op = json!({
-                        "op": "test.state", "feature": f.code, "requirement": r.id,
-                        "test": t.name, "state": state,
-                    });
-                    if let Some(rev) = &rev {
-                        op["checked_rev"] = json!(rev);
-                    }
-                    ops.push(op);
-                }
-            }
-        }
-    }
-    if ops.is_empty() {
-        return Ok(());
-    }
+    let ops = kanbanr_core::evidence::plan_capture(&project, &results, rev.as_deref());
     let n = ops.len();
-    client.write(
-        Method::Post,
-        &format!("/projects/{p}/batch"),
-        Some(json!({ "operations": ops, "message": format!("record {n} test result(s) from a run") })),
-    )?;
+    let Some(batch) = kanbanr_core::evidence::capture_batch(ops) else {
+        return Ok(());
+    };
+    client.write(Method::Post, &format!("/projects/{p}/batch"), Some(batch))?;
     eprintln!("kanbanr: recorded {n} test result(s) from this run");
     Ok(())
-}
-
-/// Test name -> passed, parsed from a test runner's output. Handles `cargo test` (`test NAME ...
-/// ok`) and the common `✓ NAME` / `✗ NAME` shape used by JS runners. Unknown formats yield
-/// nothing, which is the right failure: recording a guess would be worse than recording nothing.
-fn parse_test_results(text: &str) -> std::collections::BTreeMap<String, bool> {
-    let mut out = std::collections::BTreeMap::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("test ") {
-            // cargo: `test module::name ... ok` / `... FAILED`
-            if let Some((name, verdict)) = rest.rsplit_once(" ... ") {
-                let name = name.trim();
-                match verdict.trim() {
-                    "ok" => {
-                        out.insert(name.to_string(), true);
-                    }
-                    "FAILED" => {
-                        out.insert(name.to_string(), false);
-                    }
-                    _ => {}
-                }
-            }
-        } else if let Some(name) = line
-            .strip_prefix("\u{2713} ")
-            .or_else(|| line.strip_prefix("PASS "))
-        {
-            out.insert(name.trim().to_string(), true);
-        } else if let Some(name) = line
-            .strip_prefix("\u{2717} ")
-            .or_else(|| line.strip_prefix("FAIL "))
-        {
-            out.insert(name.trim().to_string(), false);
-        }
-    }
-    out
 }
 
 /// Check a definition that is not on a board (FEAT-052).
@@ -9180,31 +9050,5 @@ Refs: kanbanr:FEAT-082/R-1""#;
         );
         // An editor commit has no inline message; the commit-msg hook covers that one.
         assert_eq!(inline_message("git commit"), None);
-    }
-
-    #[test]
-    fn test_output_is_read_from_the_formats_a_run_actually_prints() {
-        let text = "\
-running 3 tests
-test hooks::tests::install_merges ... ok
-test report::tests::cycle_time ... FAILED
-test slow::case ... ignored
-✓ cart retains items for 7 days
-✗ cart empties on sign-out
-PASS src/cart.test.ts
-FAIL src/checkout.test.ts
-some unrelated line ... ok";
-        let results = parse_test_results(text);
-        assert_eq!(results.get("hooks::tests::install_merges"), Some(&true));
-        assert_eq!(results.get("report::tests::cycle_time"), Some(&false));
-        assert_eq!(results.get("cart retains items for 7 days"), Some(&true));
-        assert_eq!(results.get("cart empties on sign-out"), Some(&false));
-        assert_eq!(results.get("src/cart.test.ts"), Some(&true));
-        assert_eq!(results.get("src/checkout.test.ts"), Some(&false));
-        // An ignored test proves nothing, and a line that merely ends in "ok" is not a result.
-        assert_eq!(results.get("slow::case"), None);
-        assert_eq!(results.len(), 6, "{results:?}");
-        // Nothing recognizable: the hook stays quiet rather than guessing.
-        assert!(parse_test_results("cargo build finished in 3.2s").is_empty());
     }
 }
