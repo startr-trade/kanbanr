@@ -3735,7 +3735,42 @@ fn release_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
         &["config", "cadence", "--releases", "on"],
     ));
     ok(run_in(&base, &work, &["release", "add", "v1.0.0"]));
+    // A release with nothing planned into it is never promoted (FEAT-212 R-17).
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    plan_finished_item(&base, &work, "v1.0.0");
     (base, work)
+}
+
+/// A finished item, planned into `version`: a release with nothing planned into it is never
+/// promoted (FEAT-212 R-17). Needs milestone MS-001.
+fn plan_finished_item(base: &std::path::Path, work: &std::path::Path, version: &str) -> String {
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let made = ok(run_in(
+        base,
+        work,
+        &[
+            "--json",
+            "feature",
+            "add",
+            "--title",
+            &format!("Ships in {version}"),
+            "--milestone",
+            "MS-001",
+        ],
+    ));
+    let made: serde_json::Value = serde_json::from_slice(&made.stdout).unwrap();
+    let code = made["code"].as_str().unwrap().to_string();
+    ok(run_in(base, work, &["move", &code, "In Progress"]));
+    ok(run_in(base, work, &["move", &code, "Completed"]));
+    ok(run_in(base, work, &["release", "plan", version, &code]));
+    code
 }
 
 /// The commit a name points at in the scratch repository, or "" when it names none.
@@ -3814,7 +3849,12 @@ fn promote_candidate_creates_branch() {
         &["config", "cadence", "--integration-branch", "develop"],
     );
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    let o = run_in(&base, &work, &["release", "add", "v1.1.0", "--branch"]);
+    // FEAT-212 R-17: planned into before it is promoted, so `add --branch` becomes add, plan,
+    // promote.
+    let o = run_in(&base, &work, &["release", "add", "v1.1.0"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    plan_finished_item(&base, &work, "v1.1.0");
+    let o = run_in(&base, &work, &["release", "promote", "v1.1.0"]);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     assert_eq!(
         rev(&base, &work, "release/v1.1.0"),
@@ -3832,6 +3872,7 @@ fn promote_candidate_creates_branch() {
             .status
             .success()
     );
+    plan_finished_item(&base, &work, "v2.0.0");
     let o = run_in(&base, &work, &["release", "promote", "v2.0.0", "candidate"]);
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("already exists"));
@@ -3846,7 +3887,14 @@ fn promote_candidate_creates_branch() {
         format!("project: shop\ndata_dir: {}\n", board.trim()),
     )
     .unwrap();
-    let o = run_in(&base, &elsewhere, &["release", "add", "v3.0.0", "--branch"]);
+    // FEAT-212 R-17: planned into before it is promoted.
+    assert!(
+        run_in(&base, &elsewhere, &["release", "add", "v3.0.0"])
+            .status
+            .success()
+    );
+    plan_finished_item(&base, &elsewhere, "v3.0.0");
+    let o = run_in(&base, &elsewhere, &["release", "promote", "v3.0.0"]);
     assert!(!o.status.success());
     let why = String::from_utf8_lossy(&o.stderr);
     assert!(why.contains("needs the code repository"), "{why}");
@@ -3904,11 +3952,10 @@ fn promote_production_cuts_tags_merges() {
     assert_eq!(moves, ["candidate", "staging", "production"]);
 
     // `cut --tag` is the same promotion.
-    ok(run_in(
-        &base,
-        &work,
-        &["release", "add", "v1.1.0", "--branch"],
-    ));
+    // FEAT-212 R-17: planned into before it is promoted.
+    ok(run_in(&base, &work, &["release", "add", "v1.1.0"]));
+    plan_finished_item(&base, &work, "v1.1.0");
+    ok(run_in(&base, &work, &["release", "promote", "v1.1.0"]));
     commit_on(&base, &work, "release/v1.1.0", "v1.1\n");
     ok(run_in(&base, &work, &["release", "cut", "v1.1.0", "--tag"]));
     assert_eq!(
@@ -4774,9 +4821,10 @@ fn fixes_forward_merged() {
         String::from_utf8(o.stdout).unwrap()
     };
     ok(run_in(&base, &work, &["release", "add", "v1"]));
+    // FEAT-212 R-17: planned into before it is promoted (this line was after the promote).
+    ok(run_in(&base, &work, &["release", "plan", "v1", "FEAT-002"]));
     ok(run_in(&base, &work, &["release", "promote", "v1"]));
     assert!(branches(&base, &work).contains("release/v1"));
-    ok(run_in(&base, &work, &["release", "plan", "v1", "FEAT-002"]));
     let started = ok(run_in(&base, &work, &["start", "FEAT-002"]));
     assert!(
         started.contains("fix/FEAT-002-"),
@@ -5182,6 +5230,8 @@ fn git_doctor_orphans_and_forward_merges() {
         ok(git_in(&base, &work, &["branch", b, "main"]));
     }
     ok(run_in(&base, &work, &["release", "add", "v1"]));
+    // FEAT-212 R-17: planned into before it is promoted.
+    ok(run_in(&base, &work, &["release", "plan", "v1", "FEAT-001"]));
     ok(run_in(&base, &work, &["release", "promote", "v1"]));
     ok(git_in(&base, &work, &["checkout", "-q", "release/v1"]));
     commit_file_in(
@@ -6680,4 +6730,271 @@ fn scoped_task_completion_holds_auto_advance() {
     );
     assert_eq!(fx.feature_status("FEAT-001"), "In Progress");
     fx.ok(&fx.work, &["move", "FEAT-001", "Completed"]);
+}
+
+/// FEAT-212 R-17: a release with nothing planned into it is never promoted, to any stage — the
+/// first included, so no branch is made — and nothing changes. A patch carries its parent's fixes,
+/// so it is promoted with nothing of its own planned.
+#[test]
+fn an_empty_release_cannot_be_promoted() {
+    let (base, work) = release_scratch("empty-release");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(&base, &work, &["release", "add", "v2.0.0"]));
+    let board = std::path::PathBuf::from(ok(run_in(&base, &work, &["where"])).trim());
+    let releases = || {
+        std::fs::read_to_string(board.join("projects").join("shop").join("releases.yaml")).unwrap()
+    };
+    let before = releases();
+    let said = "v2.0.0 has no items: plan some in with `kanbanr release plan v2.0.0 <CODE>…`";
+    for stage in ["candidate", "staging", "production"] {
+        let o = run_in(&base, &work, &["release", "promote", "v2.0.0", stage]);
+        assert!(!o.status.success(), "{stage} was not refused");
+        let why = String::from_utf8_lossy(&o.stderr);
+        assert!(why.contains(said), "{why}");
+    }
+    let plan = ok(run_in(
+        &base,
+        &work,
+        &["--json", "release", "promote", "v2.0.0", "--plan"],
+    ));
+    let plan: serde_json::Value = serde_json::from_str(&plan).unwrap();
+    assert_eq!(plan["ready"], false);
+    assert_eq!(plan["missing"], serde_json::json!([said]));
+    assert_eq!(plan["steps"], serde_json::json!([]));
+    assert_eq!(
+        rev(&base, &work, "release/v2.0.0"),
+        "",
+        "no branch was made"
+    );
+    assert_eq!(rev(&base, &work, "v2.0.0"), "", "no tag");
+    assert_eq!(releases(), before, "the board's releases are untouched");
+
+    // A patch goes with nothing planned of its own.
+    cut_first_release(&base, &work);
+    ok(run_in(
+        &base,
+        &work,
+        &["release", "add", "v1.0.1", "--patch-of", "v1.0.0"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.1", "production"],
+    ));
+    assert_eq!(release_json(&base, &work, "v1.0.1")["state"], "shipped");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-212 R-13: `release promote --plan` prints the button, the steps and what is missing, and
+/// changes nothing — not the board, not a ref; after a promotion, the CLI says what is next.
+#[test]
+fn promote_plan_changes_nothing() {
+    let (base, work) = release_scratch("promote-plan");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let board = std::path::PathBuf::from(ok(run_in(&base, &work, &["where"])).trim());
+    let refs = || ok(git_in(&base, &work, &["for-each-ref"]));
+    let (board_before, refs_before) = (snapshot(&board), refs());
+    let said = ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "--plan"],
+    ));
+    assert!(said.contains("v1.0.0: Promote to candidate"), "{said}");
+    assert!(said.contains("makes release/v1.0.0 from main"), "{said}");
+    assert!(
+        said.contains("ready: `kanbanr release promote v1.0.0 candidate`"),
+        "{said}"
+    );
+    assert!(said.contains("nothing was changed"), "{said}");
+    let cut = ok(run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "promote",
+            "v1.0.0",
+            "production",
+            "--plan",
+            "--fetch",
+        ],
+    ));
+    assert!(cut.contains("v1.0.0: Cut v1.0.0"), "{cut}");
+    assert!(cut.contains("ships: FEAT-001"), "{cut}");
+    assert!(cut.contains("main is already at release/v1.0.0"), "{cut}");
+    assert!(snapshot(&board) == board_before, "the board is untouched");
+    assert_eq!(refs(), refs_before, "no ref moved");
+
+    let done = ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    assert!(done.contains("makes release/v1.0.0 from main"), "{done}");
+    assert!(
+        done.contains("next: `kanbanr release promote v1.0.0` (Promote to test)"),
+        "{done}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-212 R-16: the flow 0.2.1 went through, by the stages themselves — candidate makes the
+/// branch and prepares it in one commit, main is fast-forwarded at its own stage, the cut is
+/// refused until main is pushed, then tags main's tip; kanbanr pushes nothing.
+#[test]
+fn release_flow_as_lived_with_0_2_1() {
+    let (base, work) = release_scratch("as-lived");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // The code: a version, a changelog, a book summary; and a remote that has main.
+    std::fs::write(
+        work.join("Cargo.toml"),
+        "[package]\nname = \"shop\"\nversion = \"0.9.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        work.join("CHANGELOG.md"),
+        "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Things.\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(work.join("docs")).unwrap();
+    std::fs::write(
+        work.join("docs/SUMMARY.md"),
+        "- [Release notes](releases/index.md)\n",
+    )
+    .unwrap();
+    ok(git_in(&base, &work, &["add", "-A"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["commit", "-q", "-m", "[no-ref] the code"],
+    ));
+    let bare = base.join("remote.git");
+    std::fs::create_dir_all(&bare).unwrap();
+    ok(git_in(&base, &bare, &["init", "-q", "--bare"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["remote", "add", "origin", bare.to_str().unwrap()],
+    ));
+    ok(git_in(&base, &work, &["push", "-q", "origin", "main"]));
+
+    for args in [
+        &[
+            "config",
+            "cadence",
+            "--release-stages",
+            "candidate,main,production",
+        ][..],
+        &[
+            "config",
+            "release-stage",
+            "candidate",
+            "--on-enter",
+            "branch,prepare",
+        ],
+        &[
+            "config",
+            "release-stage",
+            "main",
+            "--requires",
+            "items_finished",
+            "--on-enter",
+            "move_main",
+        ],
+        &[
+            "config",
+            "release-stage",
+            "production",
+            "--requires",
+            "main_at_release,pushed",
+            "--on-enter",
+            "tag",
+        ],
+        &[
+            "config",
+            "release-prepare",
+            "--version-file",
+            "Cargo.toml",
+            "--changelog",
+            "CHANGELOG.md",
+            "--notes",
+            "docs/releases/{version}.md",
+            "--notes-listing",
+            "docs/SUMMARY.md::- [Release notes](releases/index.md)::  - [{number}](releases/{version}.md)",
+        ],
+    ] {
+        ok(run_in(&base, &work, args));
+    }
+    let stages = ok(run_in(&base, &work, &["release", "stages"]));
+    assert!(stages.contains("main_at_release, pushed"), "{stages}");
+
+    // Candidate: the branch, and the preparation on it in one commit.
+    let said = ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    assert!(said.contains("created release/v1.0.0"), "{said}");
+    assert!(
+        said.contains(
+            "commits the version 1.0.0, the changelog heading and draft notes to release/v1.0.0"
+        ),
+        "{said}"
+    );
+    let tip = rev(&base, &work, "release/v1.0.0");
+    let show = |path: &str| ok(git_in(&base, &work, &["show", &format!("{tip}:{path}")]));
+    assert!(show("Cargo.toml").contains("version = \"1.0.0\""));
+    assert!(show("CHANGELOG.md").contains("## [1.0.0] - "));
+    assert!(show("docs/releases/v1.0.0.md").contains("FEAT-001"));
+    assert!(show("docs/SUMMARY.md").contains("  - [1.0.0](releases/v1.0.0.md)"));
+    assert_eq!(
+        ok(git_in(&base, &work, &["rev-parse", &format!("{tip}~1")])).trim(),
+        rev(&base, &work, "main"),
+        "one commit on top of main"
+    );
+
+    // Main: fast-forwarded, not tagged; next is the push.
+    let said = ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    assert!(
+        said.contains("main fast-forwarded to it, not tagged"),
+        "{said}"
+    );
+    assert!(
+        said.contains(
+            "next: push main (`git push origin main`), then wait for CI, then Cut v1.0.0"
+        ),
+        "{said}"
+    );
+    assert_eq!(rev(&base, &work, "main"), tip);
+    assert_eq!(rev(&base, &work, "v1.0.0"), "");
+
+    // The cut waits for the push.
+    let o = run_in(&base, &work, &["release", "promote", "v1.0.0"]);
+    assert!(!o.status.success());
+    let why = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        why.contains("push main (`git push origin main`), then wait for CI"),
+        "{why}"
+    );
+    assert_eq!(rev(&base, &work, "v1.0.0"), "");
+
+    // The person pushes; the cut tags main's tip, and pushes nothing.
+    ok(git_in(&base, &work, &["push", "-q", "origin", "main"]));
+    let said = ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    assert!(
+        said.contains("tagged v1.0.0, where main already is"),
+        "{said}"
+    );
+    assert!(
+        said.contains("push the tag: `git push origin v1.0.0`"),
+        "{said}"
+    );
+    assert_eq!(
+        rev(&base, &work, "v1.0.0^{commit}"),
+        rev(&base, &work, "main")
+    );
+    assert_eq!(release_json(&base, &work, "v1.0.0")["state"], "shipped");
+    let remote_tags = ok(git_in(&base, &work, &["ls-remote", "--tags", "origin"]));
+    assert_eq!(remote_tags.trim(), "", "nothing was pushed");
+    let _ = std::fs::remove_dir_all(&base);
 }

@@ -43,6 +43,7 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/projects/{project}/process` | — | JSON `ProcessStatus` | How the project's workflow stands against the process it was applied from |
 | `GET /api/projects/{project}/gates` | — | JSON `object` | The gate each status's moves are judged by, keyed by status: role-addressed gates resolved, the built-in rule included |
 | `GET /api/projects/{project}/releases/{version}/cut-preview` | — | JSON `CutPreview[]` | What cutting a release now would ship and carry over, with nothing written |
+| `GET /api/projects/{project}/releases/{version}/plan` | `stage` (optional), `reason` (optional) | JSON `ReleasePlan` | What promoting a release would do, with nothing changed: the button, each step and condition, what is missing and, for the cut, what ships. The monitor reads the code repository only when started in the project folder |
 | `GET /api/projects/{project}/workflow` | `format=mermaid` | `text/plain` | The workflow as a Mermaid state diagram |
 | `GET /api/projects/{project}/gantt` | — | `text/plain` | The schedule as a Mermaid gantt diagram, by milestone |
 | `GET /api/projects/{project}/docs` | — | JSON `DocFolder` | The project's documentation tree |

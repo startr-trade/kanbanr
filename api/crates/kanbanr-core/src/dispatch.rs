@@ -481,7 +481,18 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         };
     let config = match (cadence, unit) {
         (None, None) => config,
-        (cadence, unit) => store.set_cadence(p, unit, cadence.unwrap_or(config.cadence))?,
+        (cadence, unit) => {
+            let mut cadence = cadence.unwrap_or_else(|| config.cadence.clone());
+            // FEAT-212: a process that says nothing of the release stages' gates or preparation
+            // keeps the project's own; if its stages no longer fit them, the refusal names the fix.
+            if cadence.release_gates.is_empty() {
+                cadence.release_gates = config.cadence.release_gates.clone();
+            }
+            if cadence.release_prepare.is_empty() {
+                cadence.release_prepare = config.cadence.release_prepare.clone();
+            }
+            store.set_cadence(p, unit, cadence)?
+        }
     };
     if config.process == source {
         return ser(&config);
@@ -990,9 +1001,11 @@ fn dispatch_routes(
         ("GET", ["projects", p, "releases", version, "cut-preview"]) => ser(
             &crate::releases::cut_preview(store, p, &percent_decode(version))?,
         ),
-        // FEAT-183: `{stage?, by, reason?}` — the next stage, or the named one.
+        // FEAT-183: `{stage?, by, reason?, expect?}` — the next stage, or the named one. `expect`
+        // is the release tip the caller's plan showed (FEAT-212): a branch moved since is refused.
         ("POST", ["projects", p, "releases", version, "promote"]) => {
-            ser(&crate::releases::promote(
+            let expect = str_field(b, "expect");
+            ser(&crate::releases::promote_with(
                 store,
                 p,
                 &percent_decode(version),
@@ -1000,7 +1013,94 @@ fn dispatch_routes(
                 &str_field(b, "by").unwrap_or_default(),
                 &str_field(b, "reason").unwrap_or_default(),
                 repo,
+                crate::releases::PromoteOptions {
+                    expect_tip: expect.as_deref(),
+                    fetch: crate::releases::Fetch::Try,
+                },
             )?)
+        }
+        // What promoting a release would do, with nothing changed (FEAT-212): `?stage=` (default
+        // the next), `?reason=` for a move back, `?fetch=1` to fetch main first (the CLI's
+        // `--plan --fetch`; the monitor never asks).
+        ("GET", ["projects", p, "releases", version, "plan"]) => {
+            let fetch = match query_param(query, "fetch").as_deref() {
+                Some("1") | Some("true") => crate::releases::Fetch::Try,
+                _ => crate::releases::Fetch::No,
+            };
+            ser(&crate::releases::plan_promotion(
+                store,
+                p,
+                &percent_decode(version),
+                query_param(query, "stage").as_deref(),
+                &query_param(query, "reason").unwrap_or_default(),
+                repo,
+                fetch,
+            )?)
+        }
+        // The release stages with the gate in force on each (FEAT-212).
+        ("GET", ["projects", p, "release-stages"]) => {
+            ser(&store.load_meta(p)?.config.cadence.release_stage_views())
+        }
+        // `{purpose?, requires?, on_enter?, clear?}`: declare a stage's gate, starting from the
+        // one in force, or clear it back to the default (FEAT-212).
+        ("PUT", ["projects", p, "config", "release-stages", stage]) => {
+            let stage = percent_decode(stage);
+            let gate = if bool_field(b, "clear").unwrap_or(false) {
+                None
+            } else {
+                let cadence = store.load_meta(p)?.config.cadence;
+                let mut gate = cadence
+                    .effective_release_gates()
+                    .into_iter()
+                    .find(|(s, _)| *s == stage)
+                    .map(|(_, g)| g)
+                    .ok_or_else(|| {
+                        CoreError::Unsupported(format!(
+                            "'{stage}' is not a release stage — this project's are {}",
+                            cadence.stages().join(", ")
+                        ))
+                    })?;
+                if let Some(purpose) = str_field(b, "purpose") {
+                    gate.purpose = purpose.trim().to_string();
+                }
+                if let Some(v) = b.get("requires").filter(|v| !v.is_null()) {
+                    gate.requires = serde_json::from_value(v.clone())
+                        .map_err(|e| CoreError::Unsupported(e.to_string()))?;
+                }
+                if let Some(v) = b.get("on_enter").filter(|v| !v.is_null()) {
+                    gate.on_enter = serde_json::from_value(v.clone())
+                        .map_err(|e| CoreError::Unsupported(e.to_string()))?;
+                }
+                Some(gate)
+            };
+            let config = store.set_release_gate(p, &stage, gate)?;
+            ser(&config.cadence.release_stage_views())
+        }
+        // `{version_files?, changelog?, changelog_copies?, notes?, notes_listings?}`: what
+        // `prepare` writes (FEAT-212). A field left out is kept; `""` clears a path.
+        ("PUT", ["projects", p, "config", "release-prepare"]) => {
+            let mut prep = store.load_meta(p)?.config.cadence.release_prepare;
+            let invalid = |e: serde_json::Error| CoreError::Unsupported(e.to_string());
+            if let Some(v) = b.get("version_files").filter(|v| !v.is_null()) {
+                prep.version_files = serde_json::from_value(v.clone()).map_err(invalid)?;
+            }
+            if let Some(c) = str_field(b, "changelog") {
+                prep.changelog = Some(c.trim().to_string()).filter(|c| !c.is_empty());
+            }
+            if let Some(copies) = vec_field(b, "changelog_copies") {
+                prep.changelog_copies = copies
+                    .into_iter()
+                    .map(|c| c.trim().to_string())
+                    .filter(|c| !c.is_empty())
+                    .collect();
+            }
+            if let Some(n) = str_field(b, "notes") {
+                prep.notes = Some(n.trim().to_string()).filter(|n| !n.is_empty());
+            }
+            if let Some(v) = b.get("notes_listings").filter(|v| !v.is_null()) {
+                prep.notes_listings = serde_json::from_value(v.clone()).map_err(invalid)?;
+            }
+            ser(&store.set_release_prepare(p, prep)?.cadence.release_prepare)
         }
         // ---- sprints (FEAT-119) ----
         ("GET", ["projects", p, "sprints"]) => ser(&crate::sprints::load(store, p)?),
@@ -1186,6 +1286,10 @@ fn dispatch_routes(
             let current = store.load_meta(p)?.config.cadence;
             let cadence = crate::config::Cadence {
                 extra: current.extra.clone(),
+                // FEAT-212: the stages' gates and what `prepare` writes have routes of their own;
+                // a cadence write that does not name them keeps them.
+                release_gates: current.release_gates.clone(),
+                release_prepare: current.release_prepare.clone(),
                 sprints: bool_field(b, "sprints").unwrap_or(current.sprints),
                 releases: bool_field(b, "releases").unwrap_or(current.releases),
                 sprint_length_days: b
@@ -1756,6 +1860,193 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A board with releases on, for the release stage routes.
+    fn release_board(tag: &str) -> (Store, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-dispatch-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("shop", crate::ProjectConfig::default_for("shop"))
+            .unwrap();
+        dispatch(
+            &store,
+            "PUT",
+            "/projects/shop/config/cadence",
+            Some(&serde_json::json!({"releases": true, "release_stages": ["candidate", "main", "production"]})),
+        )
+        .unwrap();
+        (store, dir)
+    }
+
+    /// FEAT-212 R-1: a stage's gate is declared through its route, starting from the one in force,
+    /// read back by `release-stages`, and cleared to the default; `release-prepare` sets what
+    /// `prepare` writes. Bad names and orders are refused, saying why.
+    #[test]
+    fn release_stage_routes_round_trip() {
+        let (store, dir) = release_board("stage-routes");
+        let call = |method: &str, path: &str, body: Value| {
+            dispatch(&store, method, path, Some(&body))
+                .map(|s| serde_json::from_str::<Value>(&s).unwrap())
+        };
+        let stages = call("GET", "/projects/shop/release-stages", Value::Null).unwrap();
+        assert_eq!(stages[0]["on_enter"], serde_json::json!(["branch"]));
+        assert_eq!(
+            stages[2]["on_enter"],
+            serde_json::json!(["move_main", "tag"])
+        );
+        assert_eq!(stages[2]["cut"], true);
+        assert_eq!(stages[2]["declared"], false);
+
+        call(
+            "PUT",
+            "/projects/shop/config/release-stages/candidate",
+            serde_json::json!({"on_enter": ["branch", "prepare"]}),
+        )
+        .unwrap();
+        call(
+            "PUT",
+            "/projects/shop/config/release-stages/main",
+            serde_json::json!({"purpose": "main holds the release", "requires": ["items_finished"], "on_enter": ["move_main"]}),
+        )
+        .unwrap();
+        // Only `requires` given: the actions in force (here, `tag` alone now) are kept.
+        let stages = call(
+            "PUT",
+            "/projects/shop/config/release-stages/production",
+            serde_json::json!({"requires": ["main_at_release", "pushed"]}),
+        )
+        .unwrap();
+        assert_eq!(stages[1]["purpose"], "main holds the release");
+        assert_eq!(stages[2]["on_enter"], serde_json::json!(["tag"]));
+        assert_eq!(
+            stages[2]["requires"],
+            serde_json::json!(["main_at_release", "pushed"])
+        );
+        assert_eq!(stages[2]["declared"], true);
+        let cadence = store.load_meta("shop").unwrap().config.cadence;
+        assert_eq!(cadence.release_stages, ["candidate", "main", "production"]);
+        assert_eq!(cadence.release_gates.len(), 3);
+
+        let err = call(
+            "PUT",
+            "/projects/shop/config/release-stages/main",
+            serde_json::json!({"requires": ["pushd"]}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("'pushd' is not a check"), "{err}");
+        let err = call(
+            "PUT",
+            "/projects/shop/config/release-stages/main",
+            serde_json::json!({"on_enter": ["move_main", "tag"]}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("only the last stage"), "{err}");
+        let err = call(
+            "PUT",
+            "/projects/shop/config/release-stages/staging",
+            serde_json::json!({"on_enter": ["branch"]}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("'staging' is not a release stage"), "{err}");
+        // Renaming a stage that has a gate is refused, naming the fix.
+        let err = call(
+            "PUT",
+            "/projects/shop/config/cadence",
+            serde_json::json!({"release_stages": ["candidate", "production"]}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("kanbanr config release-stage main --clear"),
+            "{err}"
+        );
+
+        let prep = call(
+            "PUT",
+            "/projects/shop/config/release-prepare",
+            serde_json::json!({
+                "version_files": [{"path": "api/Cargo.toml"}, {"path": "api/Cargo.lock", "match": "name = \"x\"\nversion = \"{version}\""}],
+                "changelog": "CHANGELOG.md",
+                "notes": "docs/src/releases/{version}.md",
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            prep["version_files"][1]["match"],
+            "name = \"x\"\nversion = \"{version}\""
+        );
+        let prep = call(
+            "PUT",
+            "/projects/shop/config/release-prepare",
+            serde_json::json!({"changelog": ""}),
+        )
+        .unwrap();
+        assert!(prep.get("changelog").is_none(), "{prep}");
+        assert_eq!(prep["notes"], "docs/src/releases/{version}.md");
+        assert!(
+            call(
+                "PUT",
+                "/projects/shop/config/release-prepare",
+                serde_json::json!({"notes": "../out.md"}),
+            )
+            .is_err()
+        );
+
+        // Clearing goes back to the default.
+        let stages = call(
+            "PUT",
+            "/projects/shop/config/release-stages/production",
+            serde_json::json!({"clear": true}),
+        )
+        .unwrap();
+        assert_eq!(stages[2]["declared"], false);
+        assert_eq!(
+            stages[2]["on_enter"],
+            serde_json::json!(["tag"]),
+            "main still moves at main"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-212 R-15: a cadence write that does not name the gates or the preparation keeps them.
+    #[test]
+    fn release_gates_survive_cadence_put() {
+        let (store, dir) = release_board("gates-survive");
+        dispatch(
+            &store,
+            "PUT",
+            "/projects/shop/config/release-stages/main",
+            Some(&serde_json::json!({"on_enter": ["move_main"]})),
+        )
+        .unwrap();
+        dispatch(
+            &store,
+            "PUT",
+            "/projects/shop/config/release-prepare",
+            Some(&serde_json::json!({"changelog": "CHANGELOG.md"})),
+        )
+        .unwrap();
+        let before = store.load_meta("shop").unwrap().config.cadence;
+        dispatch(
+            &store,
+            "PUT",
+            "/projects/shop/config/cadence",
+            Some(&serde_json::json!({"sprints": true, "main_branch": "trunk"})),
+        )
+        .unwrap();
+        let after = store.load_meta("shop").unwrap().config.cadence;
+        assert_eq!(after.release_gates, before.release_gates);
+        assert_eq!(after.release_prepare, before.release_prepare);
+        assert_eq!(after.main_branch.as_deref(), Some("trunk"));
+        assert!(after.sprints);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// FEAT-200 R-1 and R-2: with strict off (the default), a spec or markdown doc whose diagram
     /// fails the lint is written, and the response names each finding as `diagram_warnings` —

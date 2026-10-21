@@ -309,13 +309,17 @@ same whichever you use. A read-only monitor shows the command instead.
   The question comes after any approval or sign-off the item is waiting on. Once the item is in a
   release, it leaves the queue.
 - **Promote.** Each release on the Releases page shows its stage, with the stage history on hover,
-  and a **Promote to \<next stage\>** button until it reaches the last stage. This is
-  `kanbanr release promote <VERSION>`. Promoting to the last stage (production) is the cut, so the
-  page asks you to confirm first. It lists the release's items (the finished ones ship, the rest
-  are carried over), the tag `<VERSION>`, and the merge `release/<VERSION> → main`. The first
-  stage and the cut act on the code repository. The monitor uses the repository it was started in.
-  Started anywhere else, it refuses those two and names the CLI command to run from the project
-  folder.
+  and one button named for its next step — **Promote to \<next stage\>**, or **Cut \<VERSION\>**
+  for the last — until it ships. This is `kanbanr release promote <VERSION>`. Beside the button,
+  the page says what the step will do ("fast-forwards main to release/v0.3.0", "tags abc1234
+  …"); for the cut, it shows the commit it tags, what ships and what carries over, so one click
+  cuts. There is no second confirmation: the stage's conditions keep it safe. Until the plan is
+  ready the button is disabled and the page lists what is missing with its fix ("push main
+  (`git push origin main`), then wait for CI"), with **Check again** to read the plan once more.
+  A release with nothing planned into it shows no button, only how to plan into it. The steps act
+  on the code repository, and the monitor uses the repository it was started in. Started anywhere
+  else, it says "the monitor was not started in the project folder" and names the CLI command. A
+  read-only monitor shows the command and the plan, never the button.
 
 Across several projects ([Portfolio](portfolio.md)):
 

@@ -3034,9 +3034,63 @@ impl Store {
         }
         crate::config::Cadence::validate_stages(&cadence.release_stages)
             .map_err(CoreError::Unsupported)?;
+        // FEAT-212: the gates must fit the stages, so a stage with a gate is not renamed away.
+        cadence
+            .validate_release_gates()
+            .map_err(CoreError::Unsupported)?;
         if let Some(unit) = unit {
             project.config.estimate_unit = unit;
         }
+        project.config.cadence = cadence;
+        self.save_config(id, &project.config)?;
+        Ok(project.config)
+    }
+
+    /// Declare a release stage's gate, or clear it back to the default with `None` (FEAT-212).
+    pub fn set_release_gate(
+        &self,
+        id: &str,
+        stage: &str,
+        gate: Option<crate::releasegates::ReleaseGate>,
+    ) -> Result<ProjectConfig> {
+        let mut project = self.load(id)?;
+        let mut cadence = project.config.cadence.clone();
+        let stage = stage.trim();
+        match gate {
+            Some(gate) => {
+                let stages = cadence.stages();
+                if !stages.iter().any(|s| s == stage) {
+                    return Err(CoreError::Unsupported(format!(
+                        "'{stage}' is not a release stage — this project's are {}",
+                        stages.join(", ")
+                    )));
+                }
+                cadence.release_gates.insert(stage.to_string(), gate);
+            }
+            None => {
+                cadence.release_gates.remove(stage);
+            }
+        }
+        cadence
+            .validate_release_gates()
+            .map_err(CoreError::Unsupported)?;
+        project.config.cadence = cadence;
+        self.save_config(id, &project.config)?;
+        Ok(project.config)
+    }
+
+    /// Set what the `prepare` action writes onto `release/<V>` (FEAT-212).
+    pub fn set_release_prepare(
+        &self,
+        id: &str,
+        prepare: crate::releasegates::ReleasePrepare,
+    ) -> Result<ProjectConfig> {
+        let mut project = self.load(id)?;
+        let mut cadence = project.config.cadence.clone();
+        cadence.release_prepare = prepare;
+        cadence
+            .validate_release_gates()
+            .map_err(CoreError::Unsupported)?;
         project.config.cadence = cadence;
         self.save_config(id, &project.config)?;
         Ok(project.config)
