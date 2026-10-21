@@ -1978,6 +1978,22 @@ mod tests {
             ),
             "revoke agent scope SC-002: done"
         );
+        // The Workflow page's guard rail: the roles, and the scopes in force across items.
+        let g = call("GET", "/projects/demo/guards", Value::Null);
+        assert_eq!(g["agents"]["roles"][0]["role"], "design");
+        assert_eq!(g["agents"]["roles"][0]["operations"], json!([]));
+        assert_eq!(
+            g["agents"]["roles"][1]["operations"],
+            json!(["task.state", "test.state", "commit"])
+        );
+        let live: Vec<&str> = g["agents"]["scopes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(live, ["SC-001", "SC-003"], "issued and active only");
+        assert!(g["agents"]["push_hook_installed"].is_null());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

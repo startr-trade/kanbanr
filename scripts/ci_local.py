@@ -69,6 +69,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The standalone monitor is read-only": LOCAL,
             "Board cards say what is next in plain words": LOCAL,
             "The Workflow page shows the cadence, the git model and the guard rails": LOCAL,
+            "The monitor shows agent scopes and who made each change": LOCAL,
             "The monitor's types match the published API": LOCAL,
         },
         "vscode": {

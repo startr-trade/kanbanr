@@ -16,7 +16,8 @@
     "check:workflow": "node scripts/check-workflow-sections.mjs",
     "check:api-types": "node scripts/check-api-types.mjs",
     "check:diagram-lint": "node scripts/check-diagram-lint.mjs",
-    "check:diagram-review": "node scripts/check-diagram-review.mjs"
+    "check:diagram-review": "node scripts/check-diagram-review.mjs",
+    "check:agent-scopes": "node scripts/check-agent-scopes.mjs"
   },
   "dependencies": {
     "dompurify": "^3.4.16",

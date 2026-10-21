@@ -5,6 +5,45 @@ export interface Activity {
   time: string;
   actor: string;
   message: string;
+  /** Made under an agent scope (FEAT-214): the person, by the agent for its item. */
+  by_agent?: ByAgent | null;
+}
+
+/** Who a change under an agent scope was made by (FEAT-214). */
+export interface ByAgent {
+  scope: string;
+  role: string;
+  item: string;
+}
+
+/** An agent scope with its derived state (FEAT-214): `GET …/scopes`. Internal. */
+export interface AgentScope {
+  id: string;
+  project: string;
+  role: "design" | "build";
+  item: string;
+  operations: string[];
+  branch?: string | null;
+  base?: string | null;
+  issued_by: string;
+  issued_at: string;
+  expires_at: string;
+  note?: string;
+  worktree?: string | null;
+  claimed_at?: string | null;
+  revoked_at?: string | null;
+  revoked_by?: string | null;
+  revoked_reason?: string | null;
+  state: "issued" | "active" | "expired" | "revoked";
+}
+
+/** A build scope's branch ahead of its item's tasks (FEAT-214): `GET …/scopes/drift`. Internal. */
+export interface ScopeDrift {
+  scope: string;
+  item: string;
+  branch: string;
+  since: string;
+  commits: { sha: string; subject: string }[];
 }
 
 export interface Task {
@@ -666,4 +705,11 @@ export interface Guards {
   coverage: { id: string; subjects: number; uncovered: number; problem?: string }[];
   push_policy: { policy: string; source: "environment" | "board" | "default" };
   code_pushes: string;
+  /** Agent scopes (FEAT-214): the roles, the scopes in force, and the pre-push hook. */
+  agents?: {
+    roles: { role: string; operations: string[] }[];
+    scopes: AgentScope[];
+    /** Null where it cannot be told: the daemon does not read the code repository's hooks. */
+    push_hook_installed: boolean | null;
+  };
 }
