@@ -50,7 +50,21 @@ pub fn run(store: &Store) -> Result<Report> {
     let ids = store.list_projects()?;
 
     // Build the universe of existing qualified feature ids first (one load each).
-    let projects: Vec<Project> = ids.iter().filter_map(|id| store.load(id).ok()).collect();
+    let mut projects: Vec<Project> = Vec::new();
+    for id in &ids {
+        match store.load(id) {
+            Ok(p) => projects.push(p),
+            // A board from before canonical revisions cannot be scanned until it is migrated, and
+            // saying nothing would read as healthy (FEAT-187).
+            Err(e @ crate::CoreError::NeedsMigration { .. }) => report.issues.push(Issue {
+                severity: Severity::Error,
+                project: id.clone(),
+                code: None,
+                message: e.to_string(),
+            }),
+            Err(_) => {}
+        }
+    }
     let existing: BTreeSet<String> = projects
         .iter()
         .flat_map(|p| p.features.iter().map(move |f| qualify(&p.id, &f.code)))
@@ -658,6 +672,62 @@ fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
     }
 }
 
+/// Verdicts the schema-5 migration could not verify from the board's history (FEAT-187 R-5): each
+/// reads as lapsed, and is named here so that someone gives it again.
+fn scan_unverified(project: &Project, report: &mut Report) {
+    use crate::migrate::UNVERIFIED;
+    let mut warn = |code: Option<&str>, message: String| {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.id.clone(),
+            code: code.map(String::from),
+            message,
+        })
+    };
+    for f in &project.features {
+        let Some(def) = &f.definition else { continue };
+        if def.approval.as_ref().is_some_and(|a| a.rev == UNVERIFIED) {
+            warn(
+                Some(&f.code),
+                format!(
+                    "approval of {} could not be verified during the schema-5 migration; approve \
+                     again",
+                    f.code
+                ),
+            );
+        }
+        let names: BTreeSet<&str> = def.signoffs.iter().map(|s| s.id.as_str()).collect();
+        for name in names {
+            if def
+                .signoff_latest(name)
+                .is_some_and(|s| s.verdict.is_given() && s.rev == UNVERIFIED)
+            {
+                warn(
+                    Some(&f.code),
+                    format!(
+                        "sign-off '{name}' of {} could not be verified during the schema-5 \
+                         migration; sign off again",
+                        f.code
+                    ),
+                );
+            }
+        }
+    }
+    if project
+        .config
+        .process
+        .as_ref()
+        .is_some_and(|s| s.rev == UNVERIFIED)
+    {
+        warn(
+            None,
+            "the process this project's workflow came from could not be verified during the \
+             schema-5 migration; apply it again with `kanbanr process update`"
+                .to_string(),
+        );
+    }
+}
+
 fn scan_project(project: &Project, existing: &BTreeSet<String>, report: &mut Report) {
     let pid = &project.id;
 
@@ -690,6 +760,8 @@ fn scan_project(project: &Project, existing: &BTreeSet<String>, report: &mut Rep
             ),
         });
     }
+
+    scan_unverified(project, report);
 
     let milestones: BTreeSet<&str> = project.milestones.iter().map(|m| m.code.as_str()).collect();
 

@@ -14,6 +14,15 @@ pub enum CoreError {
     )]
     SchemaTooNew { found: u32, understood: u32 },
 
+    /// The board was written before revisions were canonical (FEAT-187). Reading it as it stands
+    /// would show every approval as lapsed, so it is refused until it is migrated, once.
+    #[error(
+        "this board was written by an earlier kanbanr (schema {found}; this build reads {needed}) \
+         — run `kanbanr migrate` once to bring it up to date: it re-pins every approval and \
+         sign-off to its canonical revision and rewrites the files, in one commit"
+    )]
+    NeedsMigration { found: u32, needed: u32 },
+
     #[error("project '{0}' not found")]
     ProjectNotFound(String),
     #[error("project '{0}' already exists")]
@@ -108,6 +117,8 @@ impl CoreError {
             // rather than returning an empty board (FEAT-072). 409 is the honest code — the request
             // is fine, the server's state is what conflicts.
             SchemaTooNew { .. } => 409,
+            // Likewise for a board that must be migrated first (FEAT-187).
+            NeedsMigration { .. } => 409,
             ProjectExists(_)
             | FeatureExists(_)
             | MilestoneExists(_)

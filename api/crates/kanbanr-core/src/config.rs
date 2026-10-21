@@ -24,10 +24,36 @@ use std::collections::BTreeMap;
 ///
 /// 4 — gates may only label stage roles, or be addressed to a role (`@build`) (FEAT-188). Stamped
 /// only then: an older reader would take the labels for declared gates, or never match `@build`.
-pub const CURRENT_SCHEMA_VERSION: u32 = 4;
+///
+/// 5 — every stored revision is a hash of canonical JSON, and the files are written by serde-saphyr
+/// (FEAT-187). Every board is stamped 5, gates or not: an older reader would hash the YAML text and
+/// read every approval as lapsed. A board below 5 is refused until `kanbanr migrate` re-pins its
+/// revisions ([`crate::migrate`]).
+pub const CURRENT_SCHEMA_VERSION: u32 = 5;
 
-/// What a board with no gates is stamped with: the storage layout of FEAT-071/FEAT-066.
-pub const BASE_SCHEMA_VERSION: u32 = 2;
+/// What every board this build writes is stamped with (FEAT-187): its revisions are canonical, so
+/// no reader before schema 5 may take it.
+pub const BASE_SCHEMA_VERSION: u32 = 5;
+
+/// The oldest schema this build reads without migrating (FEAT-187): revisions before it were
+/// hashed from YAML text.
+pub const MIN_READABLE_SCHEMA_VERSION: u32 = 5;
+
+/// Whether a reader that understands schemas up to `understood` may read a board stamped `found`
+/// (FEAT-072, FEAT-187): newer is refused by name; older than the canonical revisions needs
+/// `kanbanr migrate`.
+pub fn check_schema(found: u32, understood: u32) -> crate::Result<()> {
+    if found > understood {
+        return Err(crate::CoreError::SchemaTooNew { found, understood });
+    }
+    if found < MIN_READABLE_SCHEMA_VERSION {
+        return Err(crate::CoreError::NeedsMigration {
+            found,
+            needed: MIN_READABLE_SCHEMA_VERSION,
+        });
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1206,20 +1232,11 @@ impl ProjectConfig {
             .unwrap_or_else(|| "Completed".to_string())
     }
 
-    /// The schema a config is stamped with: gates need a reader that enforces them.
+    /// The schema a config is stamped with. Gates once decided it (3 for declared gates, 4 for
+    /// role labels and `@role` gates, FEAT-113/FEAT-188); since canonical revisions (FEAT-187) every
+    /// board needs a reader of schema 5, which knows both.
     pub fn required_schema_version(&self) -> u32 {
-        if self.gates.is_empty() {
-            BASE_SCHEMA_VERSION
-        } else if !self.declares_gates()
-            || self.gates.keys().any(|k| k.starts_with(ROLE_KEY_PREFIX))
-        {
-            // Role labels alone, or a gate addressed to a role (FEAT-188): an older reader would
-            // take the labels for declared gates (losing the built-in rule) or never match the
-            // `@role` key — a guardrail silently gone either way, so it must refuse the board.
-            4
-        } else {
-            3
-        }
+        CURRENT_SCHEMA_VERSION
     }
 
     /// Does the workflow declare gates of its own (FEAT-188)? Gates that only label roles do not:
@@ -1575,13 +1592,14 @@ mod tests {
         );
     }
 
-    /// FEAT-188: labels only, or a role-addressed gate, need a reader that knows roles.
+    /// FEAT-188: labels only, or a role-addressed gate, need a reader that knows roles — which
+    /// since FEAT-187 every board needs anyway: all are stamped 5, the schema of canonical revisions.
     #[test]
     fn schema_four_for_role_labels() {
-        assert_eq!(config_of("default").required_schema_version(), 4);
+        assert_eq!(config_of("default").required_schema_version(), 5);
         assert_eq!(
             config_of("togaf").required_schema_version(),
-            3,
+            5,
             "roles beside real gates"
         );
         let mut config = config_of("togaf");
@@ -1592,7 +1610,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(config.required_schema_version(), 4);
+        assert_eq!(config.required_schema_version(), 5);
         assert_eq!(
             ProjectConfig::default_for("p").required_schema_version(),
             BASE_SCHEMA_VERSION

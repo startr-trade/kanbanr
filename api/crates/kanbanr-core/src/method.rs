@@ -310,7 +310,8 @@ mod tests {
         let default = crate::config::preset_bare("default")
             .unwrap()
             .into_config("p");
-        assert_eq!(default.required_schema_version(), 4);
+        // Every board is stamped 5 since canonical revisions (FEAT-187); 4 before.
+        assert_eq!(default.required_schema_version(), 5);
     }
 
     #[test]
