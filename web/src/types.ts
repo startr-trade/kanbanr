@@ -475,6 +475,21 @@ export interface Release {
   branch?: string;
 }
 
+/** A release's notes as they are on its branch `release/<V>` (FEAT-216). */
+export interface ReleaseNotes {
+  version: string;
+  branch: string;
+  /** The notes file in the code repository. */
+  path: string;
+  text: string;
+  /** The release branch's tip they were read at, seven characters. */
+  at: string;
+  /** The release has a branch and has not shipped. */
+  editable: boolean;
+  /** Why not, when not editable. */
+  why_not?: string;
+}
+
 /** A check a gate names, the Zachman check narrowed to some columns, the spec's named sections
  * (FEAT-179), or the coverage check narrowed to some of the project's rules (FEAT-197). */
 export type Condition =

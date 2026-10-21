@@ -215,6 +215,10 @@ jobs:
       # and none when nothing is planned into it (FEAT-212).
       - name: Each release's button says what it does
         run: npm run check:release-action
+      # A release's notes show on the Releases page, editable only on a write-enabled monitor before
+      # the cut (FEAT-216).
+      - name: A release's notes show and are edited from the Releases page
+        run: npm run check:release-notes
       # The Workflow page shows the cadence, the git model and every guard rail, each with the
       # command that changes it, and changes nothing itself (FEAT-213).
       - name: The Workflow page shows the cadence, the git model and the guard rails

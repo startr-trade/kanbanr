@@ -1,5 +1,5 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -153,6 +153,23 @@ export const api = {
     getJson<ReleasePlan>(
       apiUrl(`/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/plan`),
     ),
+  /**
+   * A release's notes as they are on `release/<V>` (FEAT-216), read from the code repository the
+   * daemon was started in.
+   */
+  getReleaseNotes: (id: string, version: string) =>
+    getJson<ReleaseNotes>(
+      apiUrl(`/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/notes`),
+    ),
+  /** Commit `text` as a release's notes onto `release/<V>` (FEAT-216): the new sha and the notes. */
+  saveReleaseNotes: (id: string, version: string, text: string, by: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/notes`,
+      { text, by },
+      "save release notes",
+      `kanbanr release notes ${version} --edit`,
+      "PUT",
+    ) as Promise<{ sha: string; notes: ReleaseNotes }>,
   /** Add a planned release (FEAT-185), as `kanbanr release add` does. */
   addRelease: (id: string, version: string, target: string, name = "") =>
     writePost(
@@ -266,12 +283,12 @@ async function verdict(
  * not offer the action then; this is the guarantee that the standalone bundle never calls a write
  * route even if one did.
  */
-async function postWrite(url: string, body: unknown, command: string): Promise<Response> {
+async function postWrite(url: string, body: unknown, command: string, method = "POST"): Promise<Response> {
   if (isReadOnly()) {
     throw new Error(`This monitor is read-only. Run \`${command}\` instead.`);
   }
   return fetch(url, {
-    method: "POST",
+    method,
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -282,8 +299,8 @@ async function postWrite(url: string, body: unknown, command: string): Promise<R
  * guard (FEAT-178). A daemon without writes has no such route, so a 404 or 405 says which monitor
  * can; any other refusal is the daemon's own message, shown as it gave it.
  */
-async function writePost(path: string, body: unknown, verb: string, command: string) {
-  const res = await postWrite(apiUrl(`/write${path}`), body, command);
+async function writePost(path: string, body: unknown, verb: string, command: string, method = "POST") {
+  const res = await postWrite(apiUrl(`/write${path}`), body, command, method);
   if (!res.ok) {
     throw new Error(
       res.status === 404 || res.status === 405
