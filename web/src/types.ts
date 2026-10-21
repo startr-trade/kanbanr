@@ -249,6 +249,46 @@ export interface Gap {
   message: string;
 }
 
+/** One fenced `mermaid` block of an item's spec or of a doc it names (FEAT-200). */
+export interface DiagramBlock {
+  /** `"FEAT-012 spec"` or `"docs/<key>"`. */
+  file: string;
+  /** The doc key, for a link to it; null for a spec. */
+  doc: string | null;
+  /** 1-based index among the file's mermaid blocks. */
+  block: number;
+  /** The file line of the block's first source line. */
+  line: number;
+  source: string;
+}
+
+/** What the diagram lint found wrong, by rule name. */
+export type LintRule =
+  | "empty_block"
+  | "unknown_type"
+  | "semicolon_in_text"
+  | "label_punctuation"
+  | "unbalanced_label"
+  | "end_as_id"
+  | "unbalanced_block"
+  | "unknown_statement";
+
+/** One problem the diagram lint found, located in its file (FEAT-200). */
+export interface DiagramFinding {
+  file: string;
+  block: number;
+  line: number;
+  rule: LintRule;
+  message: string;
+}
+
+/** Every diagram of an item's spec and its `affects_docs`, with the lint's findings (FEAT-200). */
+export interface ItemDiagrams {
+  code: string;
+  blocks: DiagramBlock[];
+  findings: DiagramFinding[];
+}
+
 /** Per live item, keyed by code: what its card counts, and the next stage with how much it lacks. */
 export type Readiness = Record<
   string,

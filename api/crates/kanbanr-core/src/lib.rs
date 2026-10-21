@@ -20,6 +20,7 @@ pub mod claude;
 pub mod coderepo;
 pub mod config;
 pub mod daylog;
+pub mod diagrams;
 pub mod dispatch;
 pub mod docs;
 pub mod doctor;

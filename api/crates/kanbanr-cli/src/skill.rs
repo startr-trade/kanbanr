@@ -206,6 +206,38 @@ mod tests {
         d
     }
 
+    /// FEAT-200 R-18: the skill tells Claude how to write diagrams that draw — quote flowchart
+    /// labels, plain words in sequence messages, never `end` as an id, `kanbanr doctor` after — and
+    /// what a `diagrams_valid` gate asks of it.
+    #[test]
+    fn skill_carries_diagram_guidance() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        let section = skill
+            .split("### Diagrams")
+            .nth(1)
+            .expect("the skill has a Diagrams section")
+            .split("\n## ")
+            .next()
+            .unwrap();
+        for want in [
+            "Quote flowchart labels",
+            "plain words",
+            "Never use `end` as an id",
+            "kanbanr doctor",
+        ] {
+            assert!(section.contains(want), "the Diagrams section says {want:?}");
+        }
+        assert!(
+            skill.contains("| `diagrams_valid` |"),
+            "the checks table covers it"
+        );
+        assert!(skill.contains("`diagrams_valid` gate"));
+    }
+
     /// FEAT-141 R-1: the skill written is the one embedded, stamped, and recognised as current; a
     /// stale copy kanbanr wrote is replaced.
     #[test]

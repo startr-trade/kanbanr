@@ -5227,3 +5227,147 @@ fn build_scripts_read_the_manifest_dir_at_run_time() {
         );
     }
 }
+
+/// A scratch code repository with a default-process board `shop` and one milestone `MS-1`
+/// (FEAT-200's tests). Returns (base, work); both live under the temp dir.
+fn diagram_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (base, work) = togaf_scratch(tag);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-1"],
+    ));
+    (base, work)
+}
+
+/// FEAT-200 R-17: `config diagrams` shows the setting, `--strict on|off` sets it, and off leaves
+/// the key absent from config.yaml, as it was before anyone chose.
+#[test]
+fn cli_config_diagrams_strict_toggles() {
+    let (base, work) = diagram_scratch("diagrams-config");
+    let ok = |args: &[&str]| {
+        let o = run_in(&base, &work, args);
+        assert!(
+            o.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    let board = std::path::PathBuf::from(ok(&["where"]).trim());
+    let config = || std::fs::read_to_string(board.join("projects/shop/config.yaml")).unwrap();
+    assert!(!config().contains("diagrams"), "absent until chosen");
+    assert_eq!(ok(&["config", "diagrams"]).trim(), "strict: off");
+
+    assert!(ok(&["config", "diagrams", "--strict", "on"]).contains("diagrams strict: on"));
+    assert!(config().contains("strict: true"), "{}", config());
+    assert_eq!(ok(&["config", "diagrams"]).trim(), "strict: on");
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(&["--json", "config", "diagrams"])).unwrap();
+    assert_eq!(json["strict"], true);
+
+    assert!(ok(&["config", "diagrams", "--strict", "off"]).contains("diagrams strict: off"));
+    assert!(!config().contains("diagrams"), "off is absent again");
+    assert_eq!(ok(&["config", "diagrams"]).trim(), "strict: off");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-200 R-12: `process check` accepts `diagrams_valid` in a gate's `requires` and `warns`, a
+/// misspelling is refused naming it, and `process checks` lists it with what it means.
+#[test]
+fn cli_process_check_accepts_diagrams_valid() {
+    let (base, _) = togaf_scratch("diagrams-process");
+    let empty = base.join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let file = base.join("mine.yaml");
+    let workflow = "statuses: [Planned, Doing, Done]\ndefault_state: Planned\n\
+                    displayed_states: [Planned, Doing, Done]\nterminal_states: [Done]\n\
+                    transitions: {Planned: [Doing], Doing: [Done]}\n\
+                    gates:\n  Doing: {requires: [diagrams_valid]}\n  Done: {warns: [diagrams_valid]}\n";
+    std::fs::write(&file, workflow).unwrap();
+    let out = run_in(&base, &empty, &["process", "check", file.to_str().unwrap()]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("no problems"), "{text}");
+
+    std::fs::write(
+        &file,
+        workflow.replace("[diagrams_valid]}\n  Done", "[diagrams_vaild]}\n  Done"),
+    )
+    .unwrap();
+    let out = run_in(&base, &empty, &["process", "check", file.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        err.contains("'diagrams_vaild'") && err.contains("diagrams_valid"),
+        "{err}"
+    );
+
+    let out = run_in(&base, &empty, &["process", "checks"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success());
+    assert!(
+        text.lines()
+            .any(|l| l.contains("diagrams_valid") && l.contains("diagram lint")),
+        "{text}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-200 R-2: strict off, `feature add` writes the item and prints each diagram problem on
+/// stderr; `--json` carries them as `diagram_warnings` instead.
+#[test]
+fn cli_feature_add_prints_diagram_warning() {
+    let (base, work) = diagram_scratch("diagrams-warn");
+    let spec = "# Spec\n\n```mermaid\nsequenceDiagram\n  A->>B: one; two\n```\n";
+    let add = [
+        "feature",
+        "add",
+        "--milestone",
+        "MS-1",
+        "--spec",
+        spec,
+        "--title",
+    ];
+    let out = run_in(&base, &work, &[&add[..], &["Broken"]].concat());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("created FEAT-001"),
+        "the write succeeds"
+    );
+    assert!(
+        stderr.contains("diagram: FEAT-001 spec, diagram #1, line 5:")
+            && stderr.contains("(semicolon_in_text)"),
+        "{stderr}"
+    );
+
+    let out = run_in(&base, &work, &[&["--json"], &add[..], &["Again"]].concat());
+    assert!(out.status.success());
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("diagram:"));
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["diagram_warnings"][0]["rule"], "semicolon_in_text");
+    let _ = std::fs::remove_dir_all(&base);
+}

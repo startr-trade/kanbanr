@@ -102,9 +102,24 @@ board.
 | `in_release` | planned into a release (projects with releases switched on) |
 | `spec_sections` | the spec has each named section, with content; plain `spec_sections` asks for `Design` |
 | `docs_updated` | every board doc the item names in `affects_docs` has changed since it entered its current stage |
+| `diagrams_valid` | every Mermaid diagram in the spec and in each doc it names in `affects_docs` passes the diagram lint |
 
 An unknown check, an unknown status or an unknown Zachman column is refused when the workflow is
 saved. A gate that could never match is a guardrail that silently isn't there.
+
+`diagrams_valid` is judged when the item moves, never from a cached result, so fixing the diagram
+unblocks the very next move. To keep a broken diagram from moving anywhere, ask for it on every
+gate:
+
+```yaml
+gates:
+  Scheduled:   {requires: [approved, diagrams_valid]}
+  In Progress: {requires: [approved, diagrams_valid]}
+  Completed:   {requires: [tests_green, diagrams_valid]}
+```
+
+A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (semicolon_in_text)`.
+`warns: [diagrams_valid]` reports the same without refusing.
 
 ### When a gate isn't met
 

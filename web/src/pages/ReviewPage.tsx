@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Link } from "react-router-dom";
 import { api } from "../api";
@@ -8,6 +8,7 @@ import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
 import { zachmanColumns } from "../types";
 import type { Adr, PendingReview } from "../types";
+import { approveBlocker, checkBlocks, type DiagramProblem } from "../diagramCheck";
 
 /**
  * What is waiting for agreement, and the one action that gives it (FEAT-067).
@@ -181,6 +182,7 @@ export default function ReviewPage() {
           key={item.code}
           project={project}
           item={item}
+          tick={tick}
           writable={writable}
           busy={busy === item.code}
           outcome={done[item.code]}
@@ -314,9 +316,55 @@ function DecisionBrief({
   );
 }
 
+/**
+ * Pele's parse of every diagram an item's brief covers — its spec and each doc in `affects_docs`
+ * (FEAT-200) — re-run on the live tick, so fixing the spec re-enables Approve without a reload.
+ */
+function useDiagramCheck(project: string, code: string, tick: number) {
+  const diagrams = useAsync(() => api.getItemDiagrams(project, code), [project, code, tick]);
+  const [parsed, setParsed] = useState<{ problems: DiagramProblem[]; failed: string | null; done: boolean }>({
+    problems: [],
+    failed: null,
+    done: false,
+  });
+  useEffect(() => {
+    const d = diagrams.data;
+    if (diagrams.error) {
+      setParsed({ problems: [], failed: diagrams.error, done: true });
+      return;
+    }
+    if (!d) return;
+    setParsed((p) => ({ ...p, done: false }));
+    let cancelled = false;
+    import("pele")
+      .then(({ parse }) => {
+        if (!cancelled) setParsed({ problems: checkBlocks(d, parse), failed: null, done: true });
+      })
+      .catch((e) => {
+        if (!cancelled) setParsed({ problems: [], failed: String(e), done: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [diagrams.data, diagrams.error]);
+  // Fails closed: a refetch in flight counts as loading, so a spec broken since the last check is
+  // never approved on the strength of the check before it.
+  const loading = diagrams.loading || !parsed.done;
+  return { ...parsed, loading };
+}
+
+/** Where a diagram problem's source is: the item for its spec, the doc page for a doc. */
+function problemHref(project: string, code: string, p: DiagramProblem): string {
+  const enc = encodeURIComponent;
+  return p.doc
+    ? `/p/${enc(project)}/docs/file/${p.doc.split("/").map(enc).join("/")}`
+    : `/p/${enc(project)}/feature/${enc(code)}`;
+}
+
 function Brief({
   project,
   item,
+  tick,
   writable,
   busy,
   outcome,
@@ -328,6 +376,7 @@ function Brief({
 }: {
   project: string;
   item: PendingReview;
+  tick: number;
   writable: boolean;
   busy: boolean;
   outcome?: string;
@@ -355,6 +404,8 @@ function Brief({
     (outcome ?? "").startsWith("signed off") ||
     (outcome ?? "").startsWith("planned into");
   const signoffs = item.signoffs_needed ?? [];
+  const diagrams = useDiagramCheck(project, item.code, tick);
+  const blocker = approveBlocker(diagrams);
 
   return (
     <details className="review-item" id={item.code} open={defaultOpen}>
@@ -443,6 +494,24 @@ function Brief({
         </div>
       )}
 
+      {diagrams.failed || diagrams.problems.length > 0 ? (
+        <div className="diagram-problems">
+          <h3>Diagrams</h3>
+          {diagrams.failed ? (
+            <p className="diagram-error">The diagram check could not run: {diagrams.failed}</p>
+          ) : (
+            <ul>
+              {diagrams.problems.map((p) => (
+                <li key={`${p.file}#${p.block}`}>
+                  <Link to={problemHref(project, item.code, p)}>{p.file}</Link>, diagram #{p.block}, line{" "}
+                  {p.line}: {p.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+
       {/* The action lives in the body, not the summary: approving should follow reading. */}
       <div className="review-actions">
         {approved ? (
@@ -450,7 +519,12 @@ function Brief({
         ) : writable ? (
           <>
             {waitingOnSignoff || whichRelease ? null : (
-              <button className="btn btn-primary" onClick={onApprove} disabled={busy}>
+              <button
+                className="btn btn-primary"
+                onClick={onApprove}
+                disabled={busy || blocker != null}
+                title={blocker ?? undefined}
+              >
                 {busy ? "recording…" : `${verb} ${item.code}`}
               </button>
             )}

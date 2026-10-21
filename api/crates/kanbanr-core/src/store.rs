@@ -681,6 +681,13 @@ impl Store {
         if existing.iter().any(|c| c == &code) {
             return Err(CoreError::FeatureExists(code));
         }
+        // FEAT-200: a strict project refuses a spec whose diagrams fail the lint, before anything
+        // changes; otherwise the caller reports the findings as warnings.
+        crate::diagrams::guard(
+            &project.config.diagrams,
+            &format!("{code} spec"),
+            specification,
+        )?;
         let now = now_rfc3339();
         let feature = FeatureItem {
             extra: Default::default(),
@@ -772,7 +779,13 @@ impl Store {
             }
             _ => None,
         };
+        let diagrams = project.config.diagrams.clone();
         let feature = project.feature_mut(code)?;
+        // FEAT-200: checked against the code the item ends up with, before any change.
+        if let Some(spec) = &specification {
+            let final_code = rename.as_deref().unwrap_or(code);
+            crate::diagrams::guard(&diagrams, &format!("{final_code} spec"), spec)?;
+        }
         if let Some(t) = title {
             feature.title = t;
         }
@@ -2081,6 +2094,8 @@ impl Store {
                         &ms,
                         code,
                     )?;
+                    let warnings =
+                        crate::diagrams::lint_markdown(&format!("{} spec", f.code), &spec_text);
                     if source.is_some() || issue.is_some() {
                         let feature = project.feature_mut(&f.code)?;
                         feature.source = source;
@@ -2135,9 +2150,13 @@ impl Store {
                     if had_deps {
                         crate::graph::validate_feature_deps(self, &project, id, &f.code)?;
                     }
-                    Ok(serde_json::json!({
-                        "op": "feature.add", "code": f.code, "title": f.title, "status": f.status,
-                    }))
+                    Ok(with_diagram_warnings(
+                        serde_json::json!({
+                            "op": "feature.add", "code": f.code, "title": f.title,
+                            "status": f.status,
+                        }),
+                        &warnings,
+                    ))
                 }
                 FeatureEdit {
                     code,
@@ -2162,6 +2181,7 @@ impl Store {
                         return Ok(skip("feature.edit", &code));
                     }
                     let ms = milestone.map(|m| Some(resolve(&aliases, &m)));
+                    let written_spec = spec.clone();
                     let f = Self::edit_feature_on(
                         &mut project,
                         &mut pending,
@@ -2171,6 +2191,9 @@ impl Store {
                         ms,
                         new_code,
                     )?;
+                    let warnings = written_spec
+                        .map(|s| crate::diagrams::lint_markdown(&format!("{} spec", f.code), &s))
+                        .unwrap_or_default();
                     let deps = depends_on.map(|d| d.iter().map(|x| resolve(&aliases, x)).collect());
                     let had_deps = deps.is_some();
                     let f = if kind.is_some()
@@ -2231,7 +2254,10 @@ impl Store {
                         feature.updated_at = now_rfc3339();
                         pending.persist_features.insert(f.code.clone());
                     }
-                    Ok(serde_json::json!({"op":"feature.edit","code":f.code}))
+                    Ok(with_diagram_warnings(
+                        serde_json::json!({"op":"feature.edit","code":f.code}),
+                        &warnings,
+                    ))
                 }
                 FeatureMove {
                     code,
@@ -2476,6 +2502,17 @@ impl Store {
                     Ok(serde_json::json!({"op":"doc.folder","path":path}))
                 }
                 DocWrite { path, content } => {
+                    // FEAT-200: a markdown doc's diagrams are linted as it is queued — refused on a
+                    // strict project, dry run included; otherwise reported on this op.
+                    let warnings = if crate::diagrams::is_markdown_path(&path) {
+                        crate::diagrams::guard(
+                            &project.config.diagrams,
+                            &format!("docs/{path}"),
+                            &content,
+                        )?
+                    } else {
+                        Vec::new()
+                    };
                     let saved = if dry_run {
                         self.doc_path(id, &path)?;
                         path
@@ -2487,7 +2524,10 @@ impl Store {
                         });
                         Self::doc_rel_display(&self.docs_dir(id), &resolved)
                     };
-                    Ok(serde_json::json!({"op":"doc.write","path":saved}))
+                    Ok(with_diagram_warnings(
+                        serde_json::json!({"op":"doc.write","path":saved}),
+                        &warnings,
+                    ))
                 }
             })();
 
@@ -2838,6 +2878,27 @@ impl Store {
         pending.persist_features.insert(updated.code.clone());
         self.flush(id, &project, &pending)?;
         Ok(updated)
+    }
+
+    /// A project's config alone, without its items (FEAT-200): what a write path needs to know
+    /// before it writes, such as whether diagrams are checked strictly.
+    pub fn read_project_config(&self, id: &str) -> Result<ProjectConfig> {
+        if !self.project_exists(id) {
+            return Err(CoreError::ProjectNotFound(id.to_string()));
+        }
+        self.read_config(id)
+    }
+
+    /// Set how the project treats Mermaid diagrams the lint finds problems in (FEAT-200).
+    pub fn set_diagrams(
+        &self,
+        id: &str,
+        diagrams: crate::config::DiagramsConfig,
+    ) -> Result<ProjectConfig> {
+        let mut project = self.load(id)?;
+        project.config.diagrams = diagrams;
+        self.save_config(id, &project.config)?;
+        Ok(project.config)
     }
 
     /// Set what a project estimates in and whether it has sprints and releases (FEAT-121).
@@ -3260,6 +3321,18 @@ fn build_folder(dir: &Path, base: &Path, rel: String) -> Result<DocFolder> {
     })
 }
 
+/// A write's result with the diagram lint's findings attached as `diagram_warnings` (FEAT-200),
+/// only when there are any.
+fn with_diagram_warnings(
+    mut v: serde_json::Value,
+    warnings: &[crate::diagrams::DiagramFinding],
+) -> serde_json::Value {
+    if !warnings.is_empty() {
+        v["diagram_warnings"] = serde_json::json!(warnings);
+    }
+    v
+}
+
 /// The "Imported from" spec section that preserves an imported item's original text (FEAT-042),
 /// so the content outlives its source.
 fn imported_section(src: &crate::models::Source, original: &str) -> String {
@@ -3338,4 +3411,147 @@ pub(crate) struct GateOutcome {
 pub enum Capability {
     Sprints,
     Releases,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A scratch board under the temp dir with project `demo` and milestone `M`, diagrams strict.
+    fn strict_board(tag: &str) -> (Store, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-store-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let strict = crate::config::DiagramsConfig {
+            strict: true,
+            ..Default::default()
+        };
+        store.set_diagrams("demo", strict).unwrap();
+        (store, dir)
+    }
+
+    const BROKEN: &str = "# Spec\n\n```mermaid\nsequenceDiagram\n  A->>B: one; two\n```\n";
+    const FINE: &str = "# Spec\n\n```mermaid\nsequenceDiagram\n  A->>B: one, two\n```\n";
+
+    /// FEAT-200 R-3: on a strict project a spec or doc whose diagram fails the lint is refused,
+    /// nothing changes, and the refusal names the file, block, line and rule.
+    #[test]
+    fn strict_diagrams_refuse_the_write() {
+        let (store, dir) = strict_board("strict-write");
+        let err = store
+            .add_feature("demo", "Broken", BROKEN, "M", None)
+            .unwrap_err();
+        assert!(matches!(err, CoreError::InvalidDiagram(_)), "{err}");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("FEAT-001 spec, diagram #1, line 5") && msg.contains("semicolon_in_text"),
+            "{msg}"
+        );
+        assert!(
+            msg.contains("kanbanr config diagrams --strict off"),
+            "{msg}"
+        );
+        assert!(
+            store.load("demo").unwrap().features.is_empty(),
+            "no item made"
+        );
+
+        // An edit is checked against the item's code, and leaves the spec as it was.
+        let f = store.add_feature("demo", "Fine", FINE, "M", None).unwrap();
+        let err = store
+            .edit_feature("demo", &f.code, None, Some(BROKEN.into()), None, None)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains(&format!("{} spec", f.code)),
+            "{err}"
+        );
+        assert_eq!(store.feature_spec("demo", &f.code).unwrap(), FINE);
+        // A rename checks the code the item ends up with.
+        let err = store
+            .edit_feature(
+                "demo",
+                &f.code,
+                None,
+                Some(BROKEN.into()),
+                None,
+                Some("FEAT-900".into()),
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("FEAT-900 spec"), "{err}");
+
+        // A markdown doc written through the route is refused before it is written.
+        let err = crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/docs/content",
+            Some(&json!({ "path": "design/flow.md", "content": BROKEN })),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("docs/design/flow.md, diagram #1"),
+            "{err}"
+        );
+        assert_eq!(err.status(), 400);
+        assert!(
+            store.read_doc("demo", "design/flow.md").is_err(),
+            "not written"
+        );
+        // A file that is not markdown is not linted.
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/docs/content",
+            Some(&json!({ "path": "notes.txt", "content": BROKEN })),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FEAT-200 R-3: a strict refusal anywhere in a batch changes nothing at all — dry run included.
+    #[test]
+    fn strict_diagrams_refuse_the_whole_batch() {
+        let (store, dir) = strict_board("strict-batch");
+        let batch = |ops: serde_json::Value, dry_run: bool| {
+            crate::dispatch::dispatch(
+                &store,
+                "POST",
+                "/projects/demo/batch",
+                Some(&json!({ "operations": ops, "dry_run": dry_run })),
+            )
+        };
+        let ops = json!([
+            { "op": "feature.add", "title": "Fine", "milestone": "M", "spec": FINE },
+            { "op": "doc.write", "path": "a.md", "content": FINE },
+            { "op": "doc.write", "path": "b.md", "content": BROKEN },
+        ]);
+        for dry_run in [true, false] {
+            let err = batch(ops.clone(), dry_run).unwrap_err();
+            let msg = err.to_string();
+            assert!(matches!(err, CoreError::BatchOpFailed(2, _)), "{msg}");
+            assert!(msg.contains("docs/b.md, diagram #1, line 5"), "{msg}");
+        }
+        assert!(
+            store.load("demo").unwrap().features.is_empty(),
+            "nothing at all"
+        );
+        assert!(store.read_doc("demo", "a.md").is_err());
+
+        let ops = json!([
+            { "op": "feature.add", "ref": "x", "title": "Fine", "milestone": "M", "spec": FINE },
+            { "op": "feature.edit", "code": "x", "spec": BROKEN },
+        ]);
+        let err = batch(ops, false).unwrap_err();
+        assert!(matches!(err, CoreError::BatchOpFailed(1, _)), "{err}");
+        assert!(err.to_string().contains("FEAT-001 spec"), "{err}");
+        assert!(store.load("demo").unwrap().features.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

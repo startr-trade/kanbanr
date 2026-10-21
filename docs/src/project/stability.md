@@ -31,8 +31,8 @@ that makes this promise checkable — no new features.
 - **The skill's wording** — how SKILL.md phrases its guidance to Claude, as long as the commands it
   drives keep working.
 - **Internal crates** — `kanbanr-core`, `kanbanr-server` and `kanbanr-cli` are not libraries;
-  they are not published, and their Rust API changes freely. (`ears-classifier` is published and
-  versioned on its own.)
+  they are not published, and their Rust API changes freely. (`ears-classifier` and `mermaid-lint`
+  are standalone, and versioned on their own.)
 - **Anything marked experimental** in its own documentation.
 - **Undocumented behaviour**, including the order of items where no order is documented.
 

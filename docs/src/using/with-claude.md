@@ -110,6 +110,7 @@ same in every workflow:
 | `tests_named` | names a test for each requirement |
 | `spec_sections` | drafts each named section of the spec into the plan; for `Design`, the build-ready design and its implementation task list |
 | `docs_updated` | folds the item's design into each doc in `affects_docs` before the move, and says which docs it changed |
+| `diagrams_valid` | fixes each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then runs `kanbanr doctor` to confirm none is left |
 | `small` | proposes splitting the item |
 | `approved` | your acceptance of the plan, or an Approve question when nothing needs drafting |
 | `bypass` | a Ratify question |

@@ -8,6 +8,16 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Mermaid diagrams are checked when they are written (FEAT-200).** Every ```` ```mermaid ````
+  block in a spec or a markdown doc is linted on `feature add`/`edit`, `doc add` and `batch`, and
+  each problem is printed with its file, diagram number, line and rule — a `;` that cuts a sequence
+  message short, punctuation in an unquoted flowchart label, `end` used as an id, a block never
+  closed. The write still succeeds; `kanbanr config diagrams --strict on` makes a project refuse it
+  instead. `kanbanr doctor` lists every diagram problem on the board, and a gate can require the
+  new `diagrams_valid` check, judged when the item moves. The **Review** page parses every diagram
+  an item's spec and its `affects_docs` carry with Pele and keeps Approve disabled until all of
+  them parse; a doc that has a broken diagram shows its source with the error and its line. The
+  lint flags only what Pele rejects, and is its own dependency-free crate, `mermaid-lint`.
 - **Diagrams drawn by Pele, in the colours of the theme you read in (FEAT-203).** The book and the
   monitor draw ```` ```mermaid ```` blocks with [Pele](https://pele.run) 1.7.0 instead of Mermaid. A
   diagram takes its colours from the current theme — each of the book's five, and the monitor's
