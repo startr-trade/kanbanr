@@ -1828,7 +1828,7 @@ mod tests {
         assert!(Check::DiagramsValid.passes_when().contains("diagram lint"));
         assert_eq!(Check::DiagramsValid.parameters(), None);
         let gate: crate::config::Gate =
-            serde_yaml::from_str("requires: [diagrams_valid]\nwarns: [diagrams_valid]\n").unwrap();
+            crate::yaml::from_str("requires: [diagrams_valid]\nwarns: [diagrams_valid]\n").unwrap();
         assert_eq!(gate.requires, vec![Condition::Check(Check::DiagramsValid)]);
         assert_eq!(gate.warns, vec![Condition::Check(Check::DiagramsValid)]);
         assert!(

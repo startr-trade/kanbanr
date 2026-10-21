@@ -1450,23 +1450,23 @@ mod tests {
     fn diagrams_config_defaults_off_and_round_trips() {
         let config = config_of("default");
         assert!(!config.diagrams.strict);
-        let yaml = serde_yaml::to_string(&config).unwrap();
+        let yaml = crate::yaml::to_string(&config).unwrap();
         assert!(!yaml.contains("diagrams"), "{yaml}");
-        let back: ProjectConfig = serde_yaml::from_str(&yaml).unwrap();
+        let back: ProjectConfig = crate::yaml::from_str(&yaml).unwrap();
         assert_eq!(back.diagrams, DiagramsConfig::default());
 
         let mut strict = config.clone();
         strict.diagrams.strict = true;
-        let yaml = serde_yaml::to_string(&strict).unwrap();
+        let yaml = crate::yaml::to_string(&strict).unwrap();
         assert!(yaml.contains("diagrams:\n  strict: true"), "{yaml}");
-        let back: ProjectConfig = serde_yaml::from_str(&yaml).unwrap();
+        let back: ProjectConfig = crate::yaml::from_str(&yaml).unwrap();
         assert!(back.diagrams.strict);
 
         let newer = yaml.replace("strict: true", "strict: true\n  severity: high");
-        let back: ProjectConfig = serde_yaml::from_str(&newer).unwrap();
+        let back: ProjectConfig = crate::yaml::from_str(&newer).unwrap();
         assert!(back.diagrams.extra.contains_key("severity"));
         assert!(
-            serde_yaml::to_string(&back)
+            crate::yaml::to_string(&back)
                 .unwrap()
                 .contains("severity: high")
         );
