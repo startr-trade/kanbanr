@@ -152,8 +152,13 @@ item branch, the conflict resolved there, and the move tried again; nothing is r
 `kanbanr git doctor` names any disagreement between the board and the branches.
 
 **At the release role.** `kanbanr release promote <V> [stage]` moves a release through its stages
-([Release stages](processes.md#release-stages)): the first makes `release/<V>`, and the last,
-production, is the cut, where kanbanr tags the version and fast-forwards main to it. A patch is
+([Release stages](processes.md#release-stages)): by default the first makes `release/<V>`, and the
+last, production, is the cut, where kanbanr fast-forwards main to it and tags the version. Stages
+can act on their own ([Stages that act](processes.md#stages-that-act)): the release prepares itself
+(version, changelog, notes) on entering a stage, main moves at a stage of its own, and the cut tags
+main only once main is pushed. A release prepares itself, so no item is made to prepare it.
+`kanbanr release promote <V> --plan` says what the next stage does and still needs; after each
+promotion kanbanr says what is next. A release with nothing planned into it is never promoted. A patch is
 `kanbanr release add <V> --patch-of <P>` ([Patch releases](processes.md#patch-releases)), and a fix
 made on a release branch reaches the line through `kanbanr git forward <V>`. With sprints and no
 releases, `kanbanr sprint close <SP>` is the cut.
@@ -170,8 +175,10 @@ project follows:
 |---|---|---|---|
 | neither (trunk) | main | the integrate merge | each item branch into main |
 | sprints only | `sprint/<SP>` | the sprint close | item branches into `sprint/<SP>`; `sprint/<SP>` into main at the close; the sprint into carried items |
-| releases only | `integration` | the release cut | item branches into `integration`; `release/<V>` into main at its last stage |
-| sprints and releases | `sprint/<SP>` | the release cut | item branches into `sprint/<SP>`; `release/<V>` into main at its last stage; the sprint into carried items |
+| releases only | `integration` | the release stage with `move_main` (by default the last) | item branches into `integration`; `release/<V>` into main at its `move_main` stage (by default the last); tagged at the cut, after main is pushed if the stage requires `pushed` |
+| sprints and releases | `sprint/<SP>` | the release stage with `move_main` (by default the last) | item branches into `sprint/<SP>`; `release/<V>` into main at its `move_main` stage (by default the last); tagged at the cut, after main is pushed if the stage requires `pushed`; the sprint into carried items |
+
+kanbanr commits only its release-preparation commit on `release/<V>`.
 
 With the git model off, kanbanr merges nothing and the model is only a description
 ([The git model](processes.md#the-git-model)). **You push your code repository, in every row**:

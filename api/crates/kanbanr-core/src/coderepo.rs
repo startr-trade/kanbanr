@@ -13,17 +13,62 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn run(root: &Path, args: &[&str]) -> Result<Output> {
+    run_with(root, args, None, &[])
+}
+
+/// Run git with bytes on its stdin and extra environment (FEAT-212: plumbing that writes objects
+/// and a temporary index). Still never a push.
+fn run_with(
+    root: &Path,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    env: &[(&str, &str)],
+) -> Result<Output> {
     // kanbanr never publishes anything (FEAT-189): pushing is whoever reviewed it, by hand.
     if args.first() == Some(&"push") {
         return Err(CoreError::Git(
             "kanbanr never pushes: push it yourself once you have checked it".into(),
         ));
     }
-    Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .output()
-        .map_err(|e| CoreError::Git(format!("could not run git: {e}")))
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(root);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let fail = |e: std::io::Error| CoreError::Git(format!("could not run git: {e}"));
+    let Some(input) = stdin else {
+        return cmd.output().map_err(fail);
+    };
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(fail)?;
+    if let Some(mut pipe) = child.stdin.take() {
+        pipe.write_all(input).map_err(fail)?;
+    }
+    child.wait_with_output().map_err(fail)
+}
+
+/// [`git`] with stdin and environment.
+fn git_with(
+    root: &Path,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    env: &[(&str, &str)],
+) -> Result<String> {
+    let out = run_with(root, args, stdin, env)?;
+    if !out.status.success() {
+        return Err(CoreError::Git(format!(
+            "git {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// Run git in `root`, returning its trimmed stdout. A failure carries git's own reason, so the
@@ -484,6 +529,192 @@ pub fn log_between(root: &Path, from: &str, to: &str) -> Result<Vec<String>> {
         .collect())
 }
 
+/// A file as it is at `rev`: its mode and its text, or `None` when `rev` has no such file
+/// (FEAT-212). Read from git's objects, so no working tree is involved.
+pub fn read_blob(root: &Path, rev: &str, path: &str) -> Result<Option<(String, String)>> {
+    let listed = git(root, &["ls-tree", rev, "--", path])?;
+    let Some(line) = listed.lines().next() else {
+        return Ok(None);
+    };
+    // `<mode> <type> <object>\t<path>`
+    let meta = line.split('\t').next().unwrap_or_default();
+    let mut parts = meta.split_whitespace();
+    let (Some(mode), Some(kind), Some(object)) = (parts.next(), parts.next(), parts.next()) else {
+        return Ok(None);
+    };
+    if kind != "blob" {
+        return Err(CoreError::Git(format!(
+            "{path} at {rev} is a {kind}, not a file"
+        )));
+    }
+    let out = run(root, &["cat-file", "blob", object])?;
+    if !out.status.success() {
+        return Err(CoreError::Git(format!(
+            "git cat-file blob {object}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    let text = String::from_utf8(out.stdout)
+        .map_err(|_| CoreError::Git(format!("{path} at {rev} is not UTF-8 text")))?;
+    Ok(Some((mode.to_string(), text)))
+}
+
+/// One commit on `branch` holding `files` (path, new content) on top of its tip, made with git's
+/// plumbing so nothing is checked out and no hook runs (FEAT-212): kanbanr's own release
+/// preparation commit. Refused when the branch is checked out in a worktree, whose files would
+/// then no longer match it. Returns the tips before and after, for [`undo_commit`].
+pub fn commit_files(
+    root: &Path,
+    branch: &str,
+    files: &[(String, String)],
+    message: &str,
+) -> Result<(String, String)> {
+    if let Some(worktree) = checked_out_in(root, branch) {
+        return Err(CoreError::Git(format!(
+            "{branch} is checked out in {}: kanbanr commits the release preparation without \
+             checking anything out, so switch that worktree to another branch first",
+            worktree.display()
+        )));
+    }
+    let tip = rev_parse(root, branch)?;
+    let index = PathBuf::from(git(
+        root,
+        &["rev-parse", "--git-path", "kanbanr-prepare.index"],
+    )?);
+    let index = if index.is_absolute() {
+        index
+    } else {
+        root.join(index)
+    };
+    let index_env = index.to_string_lossy().to_string();
+    let env = [("GIT_INDEX_FILE", index_env.as_str())];
+    let result = (|| {
+        git_with(root, &["read-tree", &tip], None, &env)?;
+        for (path, content) in files {
+            let mode = read_blob(root, &tip, path)?
+                .map(|(m, _)| m)
+                .unwrap_or_else(|| "100644".to_string());
+            let blob = git_with(
+                root,
+                &["hash-object", "-w", "--stdin"],
+                Some(content.as_bytes()),
+                &[],
+            )?;
+            git_with(
+                root,
+                &[
+                    "update-index",
+                    "--add",
+                    "--cacheinfo",
+                    &format!("{mode},{blob},{path}"),
+                ],
+                None,
+                &env,
+            )?;
+        }
+        let tree = git_with(root, &["write-tree"], None, &env)?;
+        let commit = git(root, &["commit-tree", &tree, "-p", &tip, "-m", message])?;
+        git(
+            root,
+            &["update-ref", &format!("refs/heads/{branch}"), &commit, &tip],
+        )?;
+        Ok(commit)
+    })();
+    let _ = std::fs::remove_file(&index);
+    result.map(|commit| (tip, commit))
+}
+
+/// Put `branch` back from `new` to `old` — the undo of [`commit_files`], refused if the branch
+/// has moved on since.
+pub fn undo_commit(root: &Path, branch: &str, old: &str, new: &str) -> Result<()> {
+    git(
+        root,
+        &["update-ref", &format!("refs/heads/{branch}"), old, new],
+    )
+    .map(|_| ())
+}
+
+/// The remote-tracking branch `branch` is judged pushed against: its upstream, else
+/// `origin/<branch>` when that exists.
+pub fn upstream_of(root: &Path, branch: &str) -> Option<String> {
+    if let Ok(up) = git(
+        root,
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            &format!("{branch}@{{upstream}}"),
+        ],
+    ) && !up.is_empty()
+    {
+        return Some(up);
+    }
+    let origin = format!("origin/{branch}");
+    succeeds(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/{origin}"),
+        ],
+    )
+    .then_some(origin)
+}
+
+/// The remote `branch` pushes to: its configured remote, else `origin`.
+pub fn remote_of(root: &Path, branch: &str) -> String {
+    git(
+        root,
+        &["config", "--get", &format!("branch.{branch}.remote")],
+    )
+    .ok()
+    .filter(|r| !r.is_empty() && r != ".")
+    .unwrap_or_else(|| "origin".to_string())
+}
+
+/// Bring `remote`'s `branch` into its remote-tracking ref (FEAT-212). Non-interactive and bounded:
+/// no prompt for credentials, a slow transfer is abandoned, ssh gives up rather than asks.
+pub fn fetch_branch(root: &Path, remote: &str, branch: &str) -> Result<()> {
+    let mut env = vec![
+        ("GIT_TERMINAL_PROMPT", "0"),
+        ("GIT_HTTP_LOW_SPEED_LIMIT", "1000"),
+        ("GIT_HTTP_LOW_SPEED_TIME", "10"),
+    ];
+    if std::env::var_os("GIT_SSH_COMMAND").is_none() {
+        env.push((
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o ConnectTimeout=10",
+        ));
+    }
+    git_with(
+        root,
+        &["fetch", "--quiet", "--no-tags", remote, branch],
+        None,
+        &env,
+    )
+    .map(|_| ())
+}
+
+/// The remote-tracking branches that contain `commit`.
+pub fn remote_branches_containing(root: &Path, commit: &str) -> Result<Vec<String>> {
+    Ok(git(
+        root,
+        &[
+            "branch",
+            "-r",
+            "--contains",
+            commit,
+            "--format=%(refname:short)",
+        ],
+    )?
+    .lines()
+    .map(str::trim)
+    .filter(|l| !l.is_empty())
+    .map(str::to_string)
+    .collect())
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -707,6 +938,192 @@ pub(crate) mod tests {
         assert!(!repo.join("a").exists());
         assert!(is_clean(&repo));
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FEAT-212 R-8: the preparation commit lands on the branch with the files given, keeping a
+    /// file's mode, and nothing is checked out: the working tree, the index and HEAD stay as they
+    /// were. A branch checked out somewhere is refused; the undo puts the branch back.
+    #[test]
+    fn commit_files_moves_branch_without_checkout() {
+        let repo = scratch_repo("commit-files");
+        std::fs::write(repo.join("run.sh"), "echo 1\n").unwrap();
+        git(&repo, &["add", "run.sh"]).unwrap();
+        git(&repo, &["update-index", "--chmod=+x", "run.sh"]).unwrap();
+        git(&repo, &["commit", "-q", "-m", "script"]).unwrap();
+        create_branch_from(&repo, "release/v1", "main").unwrap();
+        std::fs::write(repo.join("README"), "edited, not committed\n").unwrap();
+        let head_before = rev_parse(&repo, "HEAD").unwrap();
+        let tip = rev_parse(&repo, "release/v1").unwrap();
+        let files = vec![
+            ("README".to_string(), "v1\n".to_string()),
+            ("run.sh".to_string(), "echo 2\n".to_string()),
+            ("docs/new.md".to_string(), "# v1\n".to_string()),
+        ];
+        let (old, new) = commit_files(
+            &repo,
+            "release/v1",
+            &files,
+            "Release v1\n\n[no-ref] release preparation, made by kanbanr",
+        )
+        .unwrap();
+        assert_eq!(
+            (old.as_str(), rev_parse(&repo, "release/v1").unwrap()),
+            (tip.as_str(), new.clone())
+        );
+        assert_eq!(
+            read_blob(&repo, "release/v1", "README").unwrap().unwrap().1,
+            "v1\n"
+        );
+        assert_eq!(
+            read_blob(&repo, "release/v1", "run.sh").unwrap().unwrap().0,
+            "100755",
+            "the mode is kept"
+        );
+        assert_eq!(
+            read_blob(&repo, "release/v1", "docs/new.md")
+                .unwrap()
+                .unwrap(),
+            ("100644".to_string(), "# v1\n".to_string())
+        );
+        assert_eq!(read_blob(&repo, "release/v1", "absent").unwrap(), None);
+        assert_eq!(
+            git(
+                &repo,
+                &["rev-list", "--count", &format!("{tip}..release/v1")]
+            )
+            .unwrap(),
+            "1",
+            "one commit"
+        );
+        // Nothing checked out moved.
+        assert_eq!(current_branch(&repo).as_deref(), Some("main"));
+        assert_eq!(rev_parse(&repo, "HEAD").unwrap(), head_before);
+        assert_eq!(
+            std::fs::read_to_string(repo.join("README")).unwrap(),
+            "edited, not committed\n"
+        );
+        assert!(!repo.join("docs").exists());
+        assert_eq!(
+            git(&repo, &["diff", "--cached", "--name-only"]).unwrap(),
+            "",
+            "the real index is untouched"
+        );
+        let index = git(&repo, &["rev-parse", "--git-path", "kanbanr-prepare.index"]).unwrap();
+        assert!(!repo.join(index).exists(), "the temporary index is removed");
+
+        undo_commit(&repo, "release/v1", &old, &new).unwrap();
+        assert_eq!(rev_parse(&repo, "release/v1").unwrap(), tip);
+        // Checked out: refused, nothing made.
+        let err = commit_files(&repo, "main", &files, "x")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("is checked out in"), "{err}");
+        assert_eq!(rev_parse(&repo, "main").unwrap(), head_before);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FEAT-212 R-7: `pushed` reads main's remote-tracking branch — its upstream, else
+    /// `origin/<main>` — never the remote itself; fetching updates it, and nothing here can push.
+    #[test]
+    fn pushed_condition_reads_remote_tracking_ref() {
+        let repo = scratch_repo("pushed");
+        let bare = repo.with_extension("remote.git");
+        let _ = std::fs::remove_dir_all(&bare);
+        std::fs::create_dir_all(&bare).unwrap();
+        git(&bare, &["init", "-q", "--bare"]).unwrap();
+        assert_eq!(upstream_of(&repo, "main"), None, "no remote yet");
+        assert_eq!(remote_of(&repo, "main"), "origin");
+        git(&repo, &["remote", "add", "origin", &bare.to_string_lossy()]).unwrap();
+        // The test pushes with plain git: kanbanr's own runner refuses.
+        assert!(run(&repo, &["push", "origin", "main"]).is_err());
+        assert!(
+            Command::new("git")
+                .args(["push", "-q", "origin", "main"])
+                .current_dir(&repo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(upstream_of(&repo, "main").as_deref(), Some("origin/main"));
+        let pushed = rev_parse(&repo, "main").unwrap();
+        assert!(is_ancestor(&repo, &pushed, "origin/main"));
+        commit_file(&repo, "a", "a\n", "not pushed");
+        let local = rev_parse(&repo, "main").unwrap();
+        assert!(!is_ancestor(&repo, &local, "origin/main"));
+        assert!(
+            remote_branches_containing(&repo, &local)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            remote_branches_containing(&repo, &pushed).unwrap(),
+            ["origin/main"]
+        );
+        // The remote moves (someone pushed from elsewhere): only a fetch shows it.
+        let other = repo.with_extension("other");
+        let _ = std::fs::remove_dir_all(&other);
+        assert!(
+            Command::new("git")
+                .args([
+                    "clone",
+                    "-b",
+                    "main",
+                    "-q",
+                    &bare.to_string_lossy(),
+                    &other.to_string_lossy()
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        git(&repo, &["checkout", "-q", "-b", "side"]).unwrap();
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        git(&repo, &["push", "--dry-run"]).unwrap_err();
+        let before = rev_parse(&repo, "origin/main").unwrap();
+        assert!(
+            Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=T",
+                    "-c",
+                    "user.email=t@x",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    "elsewhere",
+                ])
+                .current_dir(&other)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .args(["push", "-q", "origin", "main"])
+                .current_dir(&other)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(rev_parse(&repo, "origin/main").unwrap(), before);
+        fetch_branch(&repo, "origin", "main").unwrap();
+        assert_ne!(rev_parse(&repo, "origin/main").unwrap(), before);
+        // An upstream set explicitly wins over origin/<branch>.
+        git(&repo, &["branch", "--set-upstream-to=origin/main", "side"]).unwrap();
+        assert_eq!(upstream_of(&repo, "side").as_deref(), Some("origin/main"));
+        // A remote that cannot be reached is an error, not a hang.
+        git(
+            &repo,
+            &["remote", "add", "gone", "/nonexistent/kanbanr-remote.git"],
+        )
+        .unwrap();
+        assert!(fetch_branch(&repo, "gone", "main").is_err());
+        for d in [&repo, &bare, &other] {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 
     /// A scratch repository with no commit yet, on `main`.

@@ -55,6 +55,8 @@ pub mod project;
 pub mod query;
 pub mod readiness;
 pub mod refs;
+pub mod releasegates;
+pub mod releaseprep;
 pub mod releases;
 pub mod report;
 pub mod retro;
@@ -2869,7 +2871,12 @@ requirements:
             text.replacen("- version: v0.1.0", "- version: v0.1.0\n  future: kept", 1),
         )
         .unwrap();
-        crate::releases::plan(&store, "demo", "v0.2.0", &[]).unwrap();
+        // FEAT-212 R-17: a release with nothing planned into it is never promoted.
+        let later = store
+            .add_feature("demo", "Later", "", "M", None)
+            .unwrap()
+            .code;
+        crate::releases::plan(&store, "demo", "v0.2.0", &[later]).unwrap();
         crate::releases::promote(
             &store,
             "demo",

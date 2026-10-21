@@ -378,6 +378,16 @@ export interface ProjectConfig {
     main_branch?: string;
     /** Branching follows the git model the cadence implies (FEAT-189). */
     git_model?: boolean;
+    /** Each release stage's conditions and entry actions, keyed by stage name (FEAT-212). */
+    release_gates?: Record<string, { purpose?: string; requires?: string[]; on_enter?: string[] }>;
+    /** What a release's `prepare` action commits onto `release/<V>` (FEAT-212). */
+    release_prepare?: {
+      version_files?: { path: string; match?: string }[];
+      changelog?: string;
+      changelog_copies?: string[];
+      notes?: string;
+      notes_listings?: { path: string; after: string; entry: string }[];
+    };
   };
 }
 
@@ -441,6 +451,49 @@ export interface CutPreview {
   ships: boolean;
   to?: string;
   why?: string;
+}
+
+/** One condition of a release stage a promotion enters, and whether it holds (FEAT-212). */
+export interface PlanCondition {
+  check: "items_finished" | "prepared" | "main_at_release" | "pushed";
+  stage: string;
+  holds: boolean;
+  detail: string;
+  fix?: string;
+}
+
+/** One step a promotion takes (FEAT-212). */
+export interface PlanStep {
+  action: "branch" | "prepare" | "move_main" | "tag";
+  stage: string;
+  does: string;
+  noop: boolean;
+  blocked?: string;
+}
+
+/** What promoting a release would do, with nothing changed (FEAT-212). */
+export interface ReleasePlan {
+  version: string;
+  from: string;
+  to: string;
+  direction: string;
+  cut: boolean;
+  /** What the one button says: "Promote to main", "Cut v0.2.1". */
+  button: string;
+  conditions: PlanCondition[];
+  steps: PlanStep[];
+  preview?: CutPreview[];
+  tag_commit?: { sha: string; subject: string };
+  release_tip: string;
+  missing: string[];
+  ready: boolean;
+  needs_reason: boolean;
+  origin?: { tracking: string; fetched: boolean; fetch_error?: string };
+  after?: string;
+  /** Whether the daemon had the code repository to read. */
+  repo: boolean;
+  /** Nothing is planned into the release (FEAT-212 R-17). */
+  empty: boolean;
 }
 
 export interface Gate {

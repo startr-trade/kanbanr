@@ -979,6 +979,51 @@ enum ConfigCmd {
         #[arg(long, value_parser = ["on", "off"])]
         git_model: Option<String>,
     },
+    /// A release stage's gate (FEAT-212): what must hold before a release enters it, and what
+    /// entering it does. Starts from the gate in force (`release stages`); `--clear` goes back to
+    /// the default.
+    ReleaseStage {
+        stage: String,
+        /// What the stage is for, in a sentence.
+        #[arg(long)]
+        purpose: Option<String>,
+        /// Conditions: items_finished, prepared, main_at_release, pushed ("" for none).
+        #[arg(long, value_delimiter = ',')]
+        requires: Option<Vec<String>>,
+        /// Actions, applied in this order whatever the order given: branch, prepare, move_main,
+        /// tag ("" for none).
+        #[arg(long, value_delimiter = ',')]
+        on_enter: Option<Vec<String>>,
+        /// Remove the stage's own gate: it acts as the default again.
+        #[arg(long, conflicts_with_all = ["purpose", "requires", "on_enter"])]
+        clear: bool,
+    },
+    /// What a release's `prepare` action commits onto `release/<V>` (FEAT-212). With no flag,
+    /// shows it. `{version}` (v0.3.0), `{number}` (0.3.0), `{name}` and `{date}` are filled in.
+    ReleasePrepare {
+        /// A file whose version is set: `PATH`, or `PATH=MATCH` with a template naming
+        /// `{version}` once (`\n` for a newline). Added to the list; repeat for more. A path may
+        /// appear more than once with different matches; each is applied, in order.
+        #[arg(long = "version-file")]
+        version_files: Vec<String>,
+        /// Start the version file list afresh (with the --version-file given, or none).
+        #[arg(long)]
+        clear_version_files: bool,
+        /// The changelog whose `## [Unreleased]` gets the dated heading ("" for none).
+        #[arg(long)]
+        changelog: Option<String>,
+        /// A copy of the changelog to keep identical; repeat for more. Replaces the list ("" for
+        /// none).
+        #[arg(long = "changelog-copy")]
+        changelog_copies: Vec<String>,
+        /// Where the notes draft goes, e.g. `docs/src/releases/{version}.md` ("" for none).
+        #[arg(long)]
+        notes: Option<String>,
+        /// Where the notes are listed: `PATH::AFTER::ENTRY` puts ENTRY below the line AFTER in
+        /// PATH (`\n` for a newline). Replaces the list; repeat for more ("" for none).
+        #[arg(long = "notes-listing")]
+        notes_listings: Vec<String>,
+    },
     SetTransition(SetTransitionArgs),
     DisplayedStates {
         #[arg(value_delimiter = ',')]
@@ -1058,22 +1103,20 @@ enum ReleaseCmd {
         target: Option<String>,
         #[arg(long)]
         name: Option<String>,
-        /// Also promote it to its first stage, which makes the branch `release/<VERSION>` from
-        /// the integration branch in the code repository this runs in (FEAT-183).
-        #[arg(long)]
-        branch: bool,
         /// A patch of this cut release: `release/<VERSION>` is made from its tag, and the patch
         /// starts at the first stage (FEAT-184). Run it from the project folder.
-        #[arg(long, conflicts_with = "branch")]
+        #[arg(long)]
         patch_of: Option<String>,
     },
     /// List the project's releases.
     List,
-    /// Move a release to its next stage, or to the one named (FEAT-183). The first stage makes the
-    /// branch `release/<VERSION>`; the last is the cut — it ships the finished items, tags the code
-    /// repository with the version and fast-forwards the main branch to the release, refusing
-    /// (and changing nothing) if main has commits the release lacks. Run it from the project
-    /// folder: those two stages act on the code repository there. Nothing is pushed.
+    /// Move a release to its next stage, or to the one named (FEAT-183), doing what the stages
+    /// it enters say (FEAT-212, `release stages`). By default the first stage makes the branch
+    /// `release/<VERSION>` and the last is the cut — it ships the finished items, fast-forwards the
+    /// main branch to the release and tags it, refusing (and changing nothing) if main has commits
+    /// the release lacks. Stages can instead prepare the release, move main at a stage of its own,
+    /// and tag only once main is pushed. Run it from the project folder: the steps act on the code
+    /// repository there. Nothing is pushed. A release with nothing planned into it is refused.
     Promote {
         version: String,
         /// The stage to move to (default: the next one). An earlier stage needs --reason.
@@ -1084,7 +1127,17 @@ enum ReleaseCmd {
         /// Who moved it (default: the board's commit identity).
         #[arg(long)]
         by: Option<String>,
+        /// Print what the promotion would do — each step, each condition with its fix, and for
+        /// the cut what ships — and change nothing.
+        #[arg(long)]
+        plan: bool,
+        /// With --plan: fetch main from its remote first, so `pushed` reads what is there now.
+        #[arg(long, requires = "plan")]
+        fetch: bool,
     },
+    /// Each release stage: what it requires, what entering it does, and whether that is the
+    /// project's own gate or the default (FEAT-212).
+    Stages,
     /// Plan items into a release.
     Plan {
         version: String,
@@ -6830,6 +6883,121 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             }
             Ok(())
         }
+        ConfigCmd::ReleaseStage {
+            stage,
+            purpose,
+            requires,
+            on_enter,
+            clear,
+        } => {
+            // `--requires ""` arrives as one blank entry: none.
+            let list = |v: &Option<Vec<String>>| {
+                v.as_ref().map(|items| {
+                    json!(
+                        items
+                            .iter()
+                            .map(|x| x.trim())
+                            .filter(|x| !x.is_empty())
+                            .collect::<Vec<_>>()
+                    )
+                })
+            };
+            let resp = client.write(
+                Method::Put,
+                &format!(
+                    "/projects/{p}/config/release-stages/{}",
+                    urlencode_segment(stage)
+                ),
+                Some(obj(vec![
+                    ("purpose", purpose.clone().map(|x| json!(x))),
+                    ("requires", list(requires)),
+                    ("on_enter", list(on_enter)),
+                    ("clear", clear.then(|| json!(true))),
+                ])),
+            )?;
+            let said = if *clear {
+                format!("release stage {stage}: back to the default")
+            } else {
+                format!("release stage {stage} set")
+            };
+            print_write(cli, &resp, said);
+            if !cli.json {
+                print_release_stages(cli, client, &p)?;
+            }
+            Ok(())
+        }
+        ConfigCmd::ReleasePrepare {
+            version_files,
+            clear_version_files,
+            changelog,
+            changelog_copies,
+            notes,
+            notes_listings,
+        } => {
+            let nothing = version_files.is_empty()
+                && !clear_version_files
+                && changelog.is_none()
+                && changelog_copies.is_empty()
+                && notes.is_none()
+                && notes_listings.is_empty();
+            let current =
+                serde_json::to_value(&get_project(client, &p)?.config.cadence.release_prepare)?;
+            if nothing {
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&current)?);
+                } else if current.as_object().is_none_or(|o| o.is_empty()) {
+                    println!(
+                        "nothing to prepare — `kanbanr config release-prepare --version-file <path>`"
+                    );
+                } else {
+                    println!("{}", kanbanr_core::yaml::to_string(&current)?);
+                }
+                return Ok(());
+            }
+            let unescape = |s: &str| s.replace("\\n", "\n");
+            let mut body = Vec::new();
+            if !version_files.is_empty() || *clear_version_files {
+                let files = merge_version_files(
+                    &current["version_files"],
+                    version_files,
+                    *clear_version_files,
+                );
+                body.push(("version_files", Some(json!(files))));
+            }
+            body.push(("changelog", changelog.clone().map(|c| json!(c))));
+            if !changelog_copies.is_empty() {
+                body.push(("changelog_copies", Some(json!(changelog_copies))));
+            }
+            body.push(("notes", notes.clone().map(|n| json!(n))));
+            if !notes_listings.is_empty() {
+                let mut listings = Vec::new();
+                for l in notes_listings.iter().filter(|l| !l.trim().is_empty()) {
+                    let parts: Vec<&str> = l.splitn(3, "::").collect();
+                    let [path, after, entry] = parts[..] else {
+                        anyhow::bail!("--notes-listing takes PATH::AFTER::ENTRY, not '{l}'");
+                    };
+                    listings.push(json!({
+                        "path": path.trim(),
+                        "after": unescape(after),
+                        "entry": unescape(entry),
+                    }));
+                }
+                body.push(("notes_listings", Some(json!(listings))));
+            }
+            let resp = client.write(
+                Method::Put,
+                &format!("/projects/{p}/config/release-prepare"),
+                Some(obj(body)),
+            )?;
+            print_write(cli, &resp, "release preparation set".to_string());
+            if !cli.json {
+                println!(
+                    "{}",
+                    kanbanr_core::yaml::to_string(&serde_json::from_str::<Value>(&resp)?)?
+                );
+            }
+            Ok(())
+        }
         ConfigCmd::Cadence {
             sprints,
             releases,
@@ -7169,6 +7337,32 @@ fn num(v: &Value) -> String {
     }
 }
 
+/// The version file list after `config release-prepare --version-file …`: each flag
+/// (`PATH` or `PATH=MATCH`, `\n` a newline) is appended in order to `current` — or to nothing with
+/// `clear` — so one path may carry several entries, each with its own match (FEAT-212: a lockfile
+/// naming several crates). An entry with the same path and match as one already there is not
+/// added twice.
+fn merge_version_files(current: &Value, flags: &[String], clear: bool) -> Vec<Value> {
+    let mut files: Vec<Value> = if clear {
+        Vec::new()
+    } else {
+        current.as_array().cloned().unwrap_or_default()
+    };
+    for f in flags {
+        let entry = match f.split_once('=') {
+            Some((path, m)) => json!({ "path": path.trim(), "match": m.replace("\\n", "\n") }),
+            None => json!({ "path": f.trim() }),
+        };
+        if !files
+            .iter()
+            .any(|x| x["path"] == entry["path"] && x["match"] == entry["match"])
+        {
+            files.push(entry);
+        }
+    }
+    files
+}
+
 fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     match cmd {
@@ -7176,7 +7370,6 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             target,
             name,
-            branch,
             patch_of,
         } => {
             let by = match patch_of {
@@ -7207,17 +7400,34 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 None => format!("added release {version}"),
             };
             print_write(cli, &resp, said);
-            if *branch {
-                let project = get_project(client, &p)?;
-                let first = project.config.cadence.stages().first().cloned();
-                promote_release(cli, client, &p, version, first.as_deref(), None, None)?;
-            }
         }
         ReleaseCmd::Promote {
             version,
             stage,
             reason,
             by,
+            plan: true,
+            fetch,
+        } => {
+            let _ = by;
+            print_release_plan(
+                cli,
+                client,
+                &p,
+                version,
+                stage.as_deref(),
+                reason.as_deref(),
+                *fetch,
+            )?;
+        }
+        ReleaseCmd::Stages => print_release_stages(cli, client, &p)?,
+        ReleaseCmd::Promote {
+            version,
+            stage,
+            reason,
+            by,
+            plan: false,
+            ..
         } => {
             promote_release(
                 cli,
@@ -7320,6 +7530,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
 
 /// Promote a release (FEAT-183), with the code repository this command runs in. The stage is
 /// worked out here when none is named, so the board's commit says where the release went.
+#[allow(clippy::too_many_arguments)]
 fn promote_release(
     cli: &Cli,
     client: &Backend,
@@ -7332,27 +7543,9 @@ fn promote_release(
     let by = verdict_author(cli, by)?;
     let stage = match stage {
         Some(s) => s.to_string(),
-        None => {
-            let stages = get_project(client, p)?.config.cadence.stages();
-            let releases: Vec<Value> =
-                serde_json::from_str(&client.get(&format!("/projects/{p}/releases"))?)?;
-            let current = releases
-                .iter()
-                .find(|r| r["version"] == version)
-                .and_then(|r| r["stage"].as_str())
-                .unwrap_or("");
-            let next = stages
-                .iter()
-                .position(|s| s == current)
-                .map_or(0, |i| i + 1);
-            stages.get(next).cloned().ok_or_else(|| {
-                anyhow::anyhow!("{version} is at {current}, the last stage — there is no next one")
-            })?
-        }
+        None => next_release_stage(client, p, version)?,
     };
-    let repo = std::env::current_dir()
-        .ok()
-        .and_then(|cwd| coderepo::repo_root_in(&cwd));
+    let repo = code_repo();
     let resp = client.write_in(
         Method::Post,
         &format!(
@@ -7371,17 +7564,38 @@ fn promote_release(
     if let Some(b) = v["branch_created"].as_str() {
         said.push_str(&format!("; created {b}"));
     }
-    if let Some(t) = v["tagged"].as_str() {
-        match v["main_branch"].as_str() {
-            Some(main) => said.push_str(&format!("; tagged {t}, {main} fast-forwarded to it")),
-            // A patch of an older release leaves main where it is (FEAT-184).
-            None => said.push_str(&format!(
+    let main_moved = v["main_branch"].as_str();
+    match (v["tagged"].as_str(), main_moved) {
+        (Some(t), Some(main)) => {
+            said.push_str(&format!("; tagged {t}, {main} fast-forwarded to it"))
+        }
+        // A patch of an older release leaves main where it is (FEAT-184).
+        (Some(t), None) if !v["release"]["parent"].as_str().unwrap_or("").is_empty() => said
+            .push_str(&format!(
                 "; tagged {t}; main has moved on, so it was left as it is"
             )),
-        }
+        // Main was moved to the release at an earlier stage (FEAT-212).
+        (Some(t), None) => said.push_str(&format!("; tagged {t}, where main already is")),
+        (None, Some(main)) => said.push_str(&format!("; {main} fast-forwarded to it, not tagged")),
+        (None, None) => {}
     }
     print_write(cli, &resp, said);
-    if !cli.json && v["tagged"].is_string() {
+    if cli.json {
+        return Ok(());
+    }
+    // What each step did (FEAT-212).
+    for s in v["steps"].as_array().into_iter().flatten() {
+        println!("  {}", s["does"].as_str().unwrap_or_default());
+    }
+    if let Some(prepared) = v["prepared"].as_object() {
+        let sha = prepared["sha"].as_str().unwrap_or_default();
+        println!(
+            "  prepared {} on {}",
+            &sha[..sha.len().min(12)],
+            v["release"]["branch"].as_str().unwrap_or_default()
+        );
+    }
+    if v["tagged"].is_string() {
         let release = &v["release"];
         let shipped = release["shipped"].as_array().map_or(0, Vec::len);
         println!(
@@ -7396,28 +7610,30 @@ fn promote_release(
                 c["why"].as_str().unwrap_or("")
             );
         }
-        let forward: Vec<&Value> = v["forward_merge"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .collect();
-        if !forward.is_empty() {
+    }
+    let forward: Vec<&Value> = v["forward_merge"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect();
+    if !forward.is_empty() {
+        println!(
+            "  merge these forward into {} (`kanbanr git forward {version}` with the git model \
+             on, or by hand):",
+            v["forward_into"]
+                .as_str()
+                .unwrap_or("the integration branch")
+        );
+        for c in forward {
+            let sha = c["sha"].as_str().unwrap_or_default();
             println!(
-                "  merge these forward into {} (`kanbanr git forward {version}` with the git model \
-                 on, or by hand):",
-                v["forward_into"]
-                    .as_str()
-                    .unwrap_or("the integration branch")
+                "    {} {}",
+                &sha[..sha.len().min(12)],
+                c["subject"].as_str().unwrap_or_default()
             );
-            for c in forward {
-                let sha = c["sha"].as_str().unwrap_or_default();
-                println!(
-                    "    {} {}",
-                    &sha[..sha.len().min(12)],
-                    c["subject"].as_str().unwrap_or_default()
-                );
-            }
         }
+    }
+    if v["tagged"].is_string() {
         println!(
             "  nothing was pushed: push the tag{} when you are ready",
             v["main_branch"]
@@ -7425,6 +7641,214 @@ fn promote_release(
                 .map(|m| format!(" and {m}"))
                 .unwrap_or_default()
         );
+    } else if main_moved.is_some() {
+        println!("  nothing was pushed: push main when you are ready");
+    }
+    if let Some(next) = v["next"].as_str() {
+        println!("  {next}");
+    }
+    Ok(())
+}
+
+/// The stage after the one a release is at, as `release promote` with none named moves it to.
+fn next_release_stage(client: &Backend, p: &str, version: &str) -> anyhow::Result<String> {
+    let stages = get_project(client, p)?.config.cadence.stages();
+    let releases: Vec<Value> =
+        serde_json::from_str(&client.get(&format!("/projects/{p}/releases"))?)?;
+    let current = releases
+        .iter()
+        .find(|r| r["version"] == version)
+        .and_then(|r| r["stage"].as_str())
+        .unwrap_or("");
+    let next = stages
+        .iter()
+        .position(|s| s == current)
+        .map_or(0, |i| i + 1);
+    stages.get(next).cloned().ok_or_else(|| {
+        anyhow::anyhow!("{version} is at {current}, the last stage — there is no next one")
+    })
+}
+
+/// `release promote --plan` (FEAT-212): what promoting would do, with nothing changed.
+fn print_release_plan(
+    cli: &Cli,
+    client: &Backend,
+    p: &str,
+    version: &str,
+    stage: Option<&str>,
+    reason: Option<&str>,
+    fetch: bool,
+) -> anyhow::Result<()> {
+    let mut query = Vec::new();
+    if let Some(s) = stage {
+        query.push(format!("stage={}", urlencode_segment(s)));
+    }
+    if let Some(r) = reason {
+        query.push(format!("reason={}", urlencode_segment(r)));
+    }
+    if fetch {
+        query.push("fetch=1".to_string());
+    }
+    let path = format!(
+        "/projects/{p}/releases/{}/plan{}",
+        urlencode_segment(version),
+        if query.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", query.join("&"))
+        }
+    );
+    let resp = client.get_in(&path, code_repo().as_deref())?;
+    if cli.json {
+        println!("{}", pretty(&resp));
+        return Ok(());
+    }
+    let plan: Value = serde_json::from_str(&resp)?;
+    let from = plan["from"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("—");
+    println!(
+        "{version}: {} ({from} → {})",
+        plan["button"].as_str().unwrap_or_default(),
+        plan["to"].as_str().unwrap_or_default()
+    );
+    let steps = plan["steps"].as_array().cloned().unwrap_or_default();
+    if !steps.is_empty() {
+        println!("  does:");
+        for s in &steps {
+            let mark = if s["blocked"].is_string() {
+                "✗"
+            } else if s["noop"] == true {
+                "·"
+            } else {
+                "→"
+            };
+            println!(
+                "    {mark} {} ({}): {}",
+                s["action"].as_str().unwrap_or_default(),
+                s["stage"].as_str().unwrap_or_default(),
+                s["does"].as_str().unwrap_or_default()
+            );
+        }
+    }
+    let conditions = plan["conditions"].as_array().cloned().unwrap_or_default();
+    if !conditions.is_empty() {
+        println!("  needs:");
+        for c in &conditions {
+            let holds = c["holds"] == true;
+            println!(
+                "    {} {} ({}): {}{}",
+                if holds { "✓" } else { "✗" },
+                c["check"].as_str().unwrap_or_default(),
+                c["stage"].as_str().unwrap_or_default(),
+                c["detail"].as_str().unwrap_or_default(),
+                c["fix"]
+                    .as_str()
+                    .map(|f| format!(" — {f}"))
+                    .unwrap_or_default()
+            );
+        }
+    }
+    if let Some(o) = plan["origin"].as_object() {
+        let tracking = o["tracking"].as_str().unwrap_or_default();
+        match o.get("fetch_error").and_then(Value::as_str) {
+            Some(e) => println!("  judged from {tracking} as last fetched (the fetch failed: {e})"),
+            None if o["fetched"] == true => println!("  judged from {tracking}, just fetched"),
+            None => {
+                println!("  judged from {tracking} as last fetched (`--fetch` to fetch it first)")
+            }
+        }
+    }
+    if let Some(t) = plan["tag_commit"].as_object() {
+        let sha = t["sha"].as_str().unwrap_or_default();
+        println!(
+            "  tags: {} {}",
+            &sha[..sha.len().min(12)],
+            t["subject"].as_str().unwrap_or_default()
+        );
+    }
+    let preview = plan["preview"].as_array().cloned().unwrap_or_default();
+    if plan["cut"] == true {
+        let ships: Vec<&str> = preview
+            .iter()
+            .filter(|c| c["ships"] == true)
+            .filter_map(|c| c["code"].as_str())
+            .collect();
+        println!(
+            "  ships: {}",
+            if ships.is_empty() {
+                "nothing".to_string()
+            } else {
+                ships.join(", ")
+            }
+        );
+        for c in preview.iter().filter(|c| c["ships"] == false) {
+            println!(
+                "  carries over: {} ({})",
+                c["code"].as_str().unwrap_or_default(),
+                c["why"].as_str().unwrap_or_default()
+            );
+        }
+    }
+    if plan["ready"] == true {
+        println!(
+            "  ready: `kanbanr release promote {version} {}`",
+            plan["to"].as_str().unwrap_or_default()
+        );
+    } else {
+        println!("  not ready:");
+        for m in plan["missing"].as_array().into_iter().flatten() {
+            println!("    - {}", m.as_str().unwrap_or_default());
+        }
+    }
+    if let Some(after) = plan["after"].as_str() {
+        println!("  after: {after}");
+    }
+    println!("  (a plan: nothing was changed)");
+    Ok(())
+}
+
+/// `release stages` (FEAT-212): each stage with what it requires and does, declared or default.
+fn print_release_stages(cli: &Cli, client: &Backend, p: &str) -> anyhow::Result<()> {
+    let resp = client.get(&format!("/projects/{p}/release-stages"))?;
+    if cli.json {
+        println!("{}", pretty(&resp));
+        return Ok(());
+    }
+    let stages: Vec<Value> = serde_json::from_str(&resp)?;
+    let names = |v: &Value| -> String {
+        let all: Vec<&str> = v
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        if all.is_empty() {
+            "—".to_string()
+        } else {
+            all.join(", ")
+        }
+    };
+    println!("{:<14} {:<34} ON ENTER", "STAGE", "REQUIRES");
+    for s in &stages {
+        let mut note = Vec::new();
+        if s["cut"] == true {
+            note.push("the cut");
+        }
+        if s["declared"] != true {
+            note.push("default");
+        }
+        println!(
+            "{:<14} {:<34} {:<30} {}",
+            s["name"].as_str().unwrap_or_default(),
+            names(&s["requires"]),
+            names(&s["on_enter"]),
+            note.join(", ")
+        );
+        if let Some(purpose) = s["purpose"].as_str() {
+            println!("{:<14} {purpose}", "");
+        }
     }
     Ok(())
 }
@@ -7811,6 +8235,90 @@ fn print_board(project: &Project) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FEAT-212 R-8: `config release-prepare --version-file` keeps several entries for one path,
+    /// each with its own match, in order, through the config and back; an exact duplicate is kept
+    /// once, and `--clear-version-files` clears them all.
+    #[test]
+    fn version_files_allow_several_entries_per_path() {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-version-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = kanbanr_core::store::Store::new(dir.clone());
+        store
+            .init_project(
+                "shop",
+                kanbanr_core::config::ProjectConfig::default_for("shop"),
+            )
+            .unwrap();
+        let lock =
+            |name: &str| format!("api/Cargo.lock=name = \"{name}\"\\nversion = \"{{version}}\"");
+        let flags: Vec<String> = vec![
+            "api/Cargo.toml".into(),
+            lock("kanbanr-core"),
+            lock("kanbanr-cli"),
+            lock("kanbanr-core"),
+        ];
+        let files = merge_version_files(&Value::Null, &flags, false);
+        assert_eq!(
+            files.len(),
+            3,
+            "the repeated kanbanr-core entry is kept once"
+        );
+        let put = |files: Vec<Value>| {
+            kanbanr_core::dispatch::dispatch(
+                &store,
+                "PUT",
+                "/projects/shop/config/release-prepare",
+                Some(&json!({ "version_files": files })),
+            )
+            .unwrap();
+            serde_json::to_value(
+                &store
+                    .load_meta("shop")
+                    .unwrap()
+                    .config
+                    .cadence
+                    .release_prepare,
+            )
+            .unwrap()["version_files"]
+                .clone()
+        };
+        let stored = put(files);
+        // A later run adds to what is stored: one more crate in the same lockfile.
+        let stored = put(merge_version_files(
+            &stored,
+            &[lock("kanbanr-server"), lock("kanbanr-cli")],
+            false,
+        ));
+        let got: Vec<(String, Option<String>)> = stored
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                (
+                    f["path"].as_str().unwrap().to_string(),
+                    f["match"].as_str().map(str::to_string),
+                )
+            })
+            .collect();
+        let m = |name: &str| Some(format!("name = \"{name}\"\nversion = \"{{version}}\""));
+        assert_eq!(
+            got,
+            [
+                ("api/Cargo.toml".to_string(), None),
+                ("api/Cargo.lock".to_string(), m("kanbanr-core")),
+                ("api/Cargo.lock".to_string(), m("kanbanr-cli")),
+                ("api/Cargo.lock".to_string(), m("kanbanr-server")),
+            ]
+        );
+        assert!(merge_version_files(&stored, &[], true).is_empty());
+        assert_eq!(
+            merge_version_files(&stored, &["web/package.json".into()], true),
+            [json!({ "path": "web/package.json" })]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// FEAT-128: `init --author --email` recorded the identity only after the repository's first
     /// commit, which therefore went out as `kanbanr <kanbanr@local>`.
