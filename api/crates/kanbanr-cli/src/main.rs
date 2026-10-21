@@ -12,6 +12,7 @@ mod skill;
 
 use backend::{Backend, Method};
 use clap::{Args, Parser, Subcommand};
+use kanbanr_core::coderepo;
 use kanbanr_core::docs::DocFolder;
 use kanbanr_core::project::{DataDirSource, Marker};
 use kanbanr_core::{Project, project};
@@ -1527,7 +1528,7 @@ fn run_serve(
         let project = project::find_marker(&cwd, project::home_dir().as_deref())?
             .marker
             .project?;
-        let root = kanbanr_core::coderepo::repo_root_in(&cwd)?;
+        let root = coderepo::repo_root_in(&cwd)?;
         Some((project, root))
     });
     if allow_writes && let Some((project, root)) = &code_repo {
@@ -2319,13 +2320,13 @@ fn blame_refs(root: &Path, path: &str, line: usize) -> Option<(String, Vec<Strin
     // -C -M follow the line through moves and copies, which is what makes blame survive the
     // refactors that would otherwise lose the link.
     let range = format!("{line},{line}");
-    let out = scm::git(
+    let out = coderepo::git(
         root,
         &["blame", "-C", "-M", "-L", &range, "--porcelain", "--", path],
     )
     .ok()?;
     let sha = out.split_whitespace().next()?.to_string();
-    let message = scm::git(root, &["log", "-1", "--format=%B", &sha]).ok()?;
+    let message = coderepo::git(root, &["log", "-1", "--format=%B", &sha]).ok()?;
     let refs: Vec<String> = kanbanr_core::scm::parse_refs(&message)
         .into_iter()
         .map(|r| r.as_token().trim_start_matches("kanbanr:").to_string())
@@ -3068,7 +3069,7 @@ fn scm_context(cli: &Cli, client: &Backend) -> anyhow::Result<Context> {
     let root = scm::repo_root().ok_or_else(|| {
         anyhow::anyhow!("not inside a git repository — run this in the code repo")
     })?;
-    let branch = scm::current_branch(&root);
+    let branch = coderepo::current_branch(&root);
     Ok(Context {
         project,
         root,
@@ -3092,9 +3093,9 @@ fn scm_context_in(dir: &Path) -> anyhow::Result<Context> {
         .ok_or_else(|| anyhow::anyhow!("could not determine the project of {}", dir.display()))?;
     let data_dir = project::resolve_data_dir_in(None, env_data.as_deref(), dir, home.as_deref());
     let project = get_project(&Backend::new(data_dir.path), &p)?;
-    let root = scm::repo_root_in(dir)
+    let root = coderepo::repo_root_in(dir)
         .ok_or_else(|| anyhow::anyhow!("{} is not inside a git repository", dir.display()))?;
-    let branch = scm::current_branch(&root);
+    let branch = coderepo::current_branch(&root);
     Ok(Context {
         project,
         root,
@@ -3116,7 +3117,7 @@ fn line_model(ctx: &Context) -> Option<kanbanr_core::gitmodel::GitModel> {
         .main_branch
         .clone()
         .filter(|m| !m.trim().is_empty())
-        .unwrap_or_else(|| scm::default_branch(&ctx.root));
+        .unwrap_or_else(|| coderepo::default_branch(&ctx.root));
     let facts = kanbanr_core::gitmodel::BranchFacts {
         main,
         ..Default::default()
@@ -3289,7 +3290,7 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
                 }
             );
             println!("branch:  {}", ctx.branch.as_deref().unwrap_or("(detached)"));
-            println!("default: {}", scm::default_branch(&ctx.root));
+            println!("default: {}", coderepo::default_branch(&ctx.root));
             match item {
                 Some(code) => println!("item:    {code}"),
                 None => println!("item:    (this branch belongs to no item)"),
@@ -3366,8 +3367,8 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     // A line of integration takes merges only (FEAT-189).
     if let Some(branch) = &ctx.branch
         && let Some(model) = line_model(&ctx)
-        && !scm::merge_in_progress(&ctx.root)
-        && scm::has_commits(&ctx.root)
+        && !coderepo::merge_in_progress(&ctx.root)
+        && coderepo::has_commits(&ctx.root)
         && let kanbanr_core::gitmodel::LineVerdict::Refused(why) =
             kanbanr_core::gitmodel::line_commit_verdict(&model, branch, false, None)
     {
@@ -3377,9 +3378,9 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     // Completing a merge is the intended way work reaches the default branch (FEAT-094).
     // So is a repository's first commit (FEAT-105): nothing can branch from a repo with none.
     if let Some(branch) = &ctx.branch
-        && branch == &scm::default_branch(&ctx.root)
-        && !scm::merge_in_progress(&ctx.root)
-        && scm::has_commits(&ctx.root)
+        && branch == &coderepo::default_branch(&ctx.root)
+        && !coderepo::merge_in_progress(&ctx.root)
+        && coderepo::has_commits(&ctx.root)
     {
         deny(format!(
             "This would commit straight to {branch}. Work belongs on a branch for its item: run \
@@ -3786,7 +3787,7 @@ fn run_check_msg(cli: &Cli, client: &Backend, file: &Path) -> anyhow::Result<()>
             kanbanr_core::gitmodel::line_commit_verdict(
                 &model,
                 branch,
-                crate::scm::merge_in_progress(&ctx.root),
+                coderepo::merge_in_progress(&ctx.root),
                 Some(&message),
             )
     {
@@ -3891,7 +3892,7 @@ fn run_check_branch(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     // every branch rule below is about where new work is written — none of them applies to it.
     // The first fix exempted only the default-branch check, and the very next check then refused
     // the same commit because `master` names no item; running the recovery for real caught that.
-    if scm::merge_in_progress(&ctx.root) {
+    if coderepo::merge_in_progress(&ctx.root) {
         return Ok(());
     }
     if branch.starts_with(kanbanr_core::scm::SPIKE_PREFIX) {
@@ -3900,7 +3901,7 @@ fn run_check_branch(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     // The root commit has nowhere else to go: an item branch needs a commit to branch from, so a
     // new repository's first commit lands on its default branch (FEAT-105). Its message is still
     // checked by commit-msg, so it names an item or says `[no-ref] <why>` on the record.
-    if !scm::has_commits(&ctx.root) && branch == scm::default_branch(&ctx.root) {
+    if !coderepo::has_commits(&ctx.root) && branch == coderepo::default_branch(&ctx.root) {
         return Ok(());
     }
     // A line of integration takes merges only (FEAT-189).
@@ -3913,7 +3914,7 @@ fn run_check_branch(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         }
     }
     // The commit completing a merge is how an item's branch is SUPPOSED to arrive here (FEAT-094).
-    if branch == scm::default_branch(&ctx.root) {
+    if branch == coderepo::default_branch(&ctx.root) {
         anyhow::bail!(
             "this is {branch}, the default branch. Work belongs on a branch for its item:\n\n    \
              kanbanr start <CODE>\n\n\
@@ -3964,12 +3965,12 @@ fn run_start(
     if let Some(root) = root {
         // An item branch is made from the default branch, and a repository with no commits has
         // nothing to make it from (FEAT-105): branching anyway leaves an orphan that never joins.
-        if !scm::has_commits(&root) {
+        if !coderepo::has_commits(&root) {
             anyhow::bail!(
                 "this repository has no commits yet, so there is nothing to branch {code} from. \
                  Make the initial commit on {} first, e.g.\n\n    \
                  git commit -m \"[no-ref] initial commit\"\n",
-                scm::default_branch(&root)
+                coderepo::default_branch(&root)
             );
         }
         // A defect goes on the pattern's `fix/` twin when the pattern is the default (FEAT-189, Q3).
@@ -3984,10 +3985,10 @@ fn run_start(
             _ => pattern.to_string(),
         };
         let branch = kanbanr_core::scm::branch_for(&pattern, code, &feature.title);
-        if scm::current_branch(&root).as_deref() == Some(branch.as_str()) {
+        if coderepo::current_branch(&root).as_deref() == Some(branch.as_str()) {
             println!("already on {branch}");
-        } else if scm::git(&root, &["rev-parse", "--verify", "--quiet", &branch]).is_ok() {
-            scm::git(&root, &["checkout", "-q", &branch])?;
+        } else if coderepo::git(&root, &["rev-parse", "--verify", "--quiet", &branch]).is_ok() {
+            coderepo::git(&root, &["checkout", "-q", &branch])?;
             println!("switched to {branch}");
         } else {
             // Branch from the line the git model says (FEAT-189), else the default branch — never
@@ -4002,7 +4003,7 @@ fn run_start(
                 let base = start["base"].as_str().unwrap_or_default().to_string();
                 if start["create_from_main"].as_bool().unwrap_or(false) {
                     let main = v["model"]["main"].as_str().unwrap_or_default();
-                    scm::git(&root, &["branch", &base, main])?;
+                    coderepo::git(&root, &["branch", &base, main])?;
                     println!("created {base} from {main}");
                 }
                 if let Some(note) = start["note"].as_str() {
@@ -4010,10 +4011,10 @@ fn run_start(
                 }
                 base
             } else {
-                scm::default_branch(&root)
+                coderepo::default_branch(&root)
             };
-            scm::git(&root, &["checkout", "-q", "-b", &branch, &base])
-                .or_else(|_| scm::git(&root, &["checkout", "-q", "-b", &branch]))?;
+            coderepo::git(&root, &["checkout", "-q", "-b", &branch, &base])
+                .or_else(|_| coderepo::git(&root, &["checkout", "-q", "-b", &branch]))?;
             println!("created {branch} from {base}");
         }
     }
@@ -4043,7 +4044,7 @@ fn run_start(
 fn code_repo() -> Option<PathBuf> {
     std::env::current_dir()
         .ok()
-        .and_then(|cwd| kanbanr_core::coderepo::repo_root_in(&cwd))
+        .and_then(|cwd| coderepo::repo_root_in(&cwd))
 }
 
 /// What integrating an item merged, and whether its fix needs forwarding (FEAT-190).
@@ -4192,7 +4193,7 @@ fn require_reachable(
 fn run_finish(cli: &Cli, client: &Backend, code: Option<&str>) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     let project = get_project(client, &p)?;
-    let ctx_branch = scm::repo_root().and_then(|r| scm::current_branch(&r));
+    let ctx_branch = scm::repo_root().and_then(|r| coderepo::current_branch(&r));
     let code = match code {
         Some(c) => c.to_string(),
         None => {
@@ -8283,7 +8284,7 @@ fn promote_release(
     };
     let repo = std::env::current_dir()
         .ok()
-        .and_then(|cwd| kanbanr_core::coderepo::repo_root_in(&cwd));
+        .and_then(|cwd| coderepo::repo_root_in(&cwd));
     let resp = client.write_in(
         Method::Post,
         &format!(
@@ -8500,7 +8501,7 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
             // With the git model on, the sprint's branch is made in this repository (FEAT-189).
             let repo = std::env::current_dir()
                 .ok()
-                .and_then(|cwd| kanbanr_core::coderepo::repo_root_in(&cwd));
+                .and_then(|cwd| coderepo::repo_root_in(&cwd));
             let resp = client.write_in(
                 Method::Post,
                 &format!("/projects/{p}/sprints/{code}/start"),
