@@ -857,12 +857,30 @@ pub fn resolve_with(
     ProcessScope::Unscoped
 }
 
-/// Is this board one scopes govern? Never one inside the system temporary directory (D7): test
-/// boards live there, and build agents run the tests in their worktrees.
+/// Is this board one scopes govern? A board that holds scopes always is, wherever it lives: the
+/// temporary directory comes from `TMPDIR`, which an agent can set, so its location alone must never
+/// lift a scope. A board inside the temporary directory that holds none is not (D7): test boards
+/// live there, and build agents run the tests in their worktrees.
 pub fn is_governed_board(data_dir: &Path) -> bool {
+    if holds_scopes(data_dir) {
+        return true;
+    }
     let board = crate::project::normalize(data_dir);
     let temp = crate::project::normalize(&std::env::temp_dir());
     !board.starts_with(&temp)
+}
+
+/// Whether any project on the board at `data_dir` has a scope record.
+fn holds_scopes(data_dir: &Path) -> bool {
+    std::fs::read_dir(data_dir.join("projects"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|p| {
+            std::fs::metadata(p.path().join(SCOPES_FILE))
+                .map(|m| m.len() > 0)
+                .unwrap_or(false)
+        })
 }
 
 /// The scope a process in `cwd` writes `store` under.
@@ -1296,6 +1314,30 @@ pub fn drift_issues(store: &Store, id: &str, root: &Path, now: &str) -> Vec<crat
 
 #[cfg(test)]
 mod tests {
+    /// FEAT-214 R-4, the TMPDIR hole: a board that holds scopes is governed even when the
+    /// temporary directory is made to cover it; one that holds none, inside it, is not (D7).
+    #[test]
+    fn a_board_holding_scopes_is_governed_wherever_it_is() {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-scope-governed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("projects").join("shop")).unwrap();
+        assert!(
+            !is_governed_board(&dir),
+            "a temp board with no scopes is a test board"
+        );
+        std::fs::write(
+            dir.join("projects").join("shop").join(SCOPES_FILE),
+            "- id: SC-001\n",
+        )
+        .unwrap();
+        assert!(
+            is_governed_board(&dir),
+            "holding scopes, it is governed although it is in temp"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
     use serde_json::json;
 
