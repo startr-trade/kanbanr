@@ -74,6 +74,22 @@ erDiagram
   features in that status (dependency-ordered).
 
 
+## Agent scopes
+
+A **scope** (FEAT-214, `agentscope.rs`) says what one sub-agent may do: a `role` (`design` reads
+only; `build` may set its item's task states and test evidence, and commit on its item's branch),
+the `item`, the `operations` the role carries (`task.state`, `test.state`, `commit`), the build
+item's `branch` and its `base` at issue, who issued it and when, when it expires (8 hours by
+default, 72 at most), and, once claimed, the `worktree` it is bound to. Revoking it records who,
+when and why. Its state is derived from those fields and the clock: issued, active, expired or
+revoked (revoked wins). Scopes are kept in `projects/<id>/scopes.yaml`; the worktree keeps only a
+pointer to its scope.
+
+A **task** records `changed_at`, when its state last changed: a build scope's branch commits newer
+than its item's last change are its *drift*. An **activity entry** and an **event** made under a
+scope carry `by_agent: {scope, role, item}`. All three fields are optional, so an older board reads
+unchanged and an older binary keeps `changed_at` through its unknown keys.
+
 ## Activity changelog
 
 Each write appends an entry to `projects/<id>/activity/<YYYY-MM-DD>.yaml` — `{time, actor, message,

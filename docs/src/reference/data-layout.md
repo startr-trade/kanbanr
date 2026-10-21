@@ -18,6 +18,7 @@ sibling cannot be.
         ├── charter.yaml                # purpose, goals, non-goals, stakeholders, adopted_at (FEAT-046)
         ├── lessons.yaml                # what was learned, with decaying confidence (FEAT-055)
         ├── mirror.yaml                 # GitHub issue mirror config, when enabled (FEAT-043)
+        ├── scopes.yaml                 # agent scopes, oldest first, never trimmed (FEAT-214)
         ├── index.yaml                  # derived cache of item metadata, rebuildable (FEAT-033)
         ├── features/                   # every item, filed under its status (FEAT-071)
         │   └── <Status>/                # e.g. Planned/  In Progress/  Completed/
@@ -32,6 +33,16 @@ sibling cannot be.
                 ├── _folder.yaml         # folder name + short description
                 └── overview.md
 ```
+
+**Agent scopes** (FEAT-214). `scopes.yaml` holds every scope issued for the project: `id`, `role`
+(`design` or `build`), `item`, `operations`, `branch` and `base` (build), `issued_by`, `issued_at`,
+`expires_at`, `note`, and once claimed `worktree` (relative to the main worktree, so the board
+carries no home paths) and `claimed_at`; a revoked one adds `revoked_at`, `revoked_by` and
+`revoked_reason`. Its state (issued, active, expired, revoked) is derived, never stored. The agent's
+worktree holds only a pointer, `kanbanr-scope.yaml` with `{scope, project}`, in the worktree's own
+git directory (`.git/worktrees/<name>/`): it cannot be committed, survives `git clean`, and goes
+with the worktree. A task records when its state last changed (`changed_at`), which agent drift is
+measured from.
 
 **Side files, not new entities.** `charter.yaml`, `lessons.yaml` and `mirror.yaml` follow one
 pattern: absent means "none", empty removes the file, and none of them is part of `Project` — so

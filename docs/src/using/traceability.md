@@ -22,6 +22,20 @@ merges, reverts, `spike/*` branches, and a recorded escape (`[no-ref] <why>` in 
 leaves the reason in git history forever). If kanbanr is not on PATH the hooks step aside rather
 than making the repository uncommittable for someone who never installed it.
 
+### Commits made by an agent
+
+A commit made under an agent scope (FEAT-214) carries a second trailer beside `Refs:`, naming the
+scope it was made under:
+
+```
+Refs: kanbanr:FEAT-214/R-5
+Agent-Scope: SC-007 (build, by the agent for FEAT-214)
+```
+
+The commit-msg hook adds it, and so does `kanbanr commit`; a message naming another scope is
+refused. Board commits made under a scope carry the same trailer, and their activity entries and
+events record the agent, so who did what stays traceable after the agent is gone.
+
 ### Lines of integration
 
 With the git model on ([Processes](processes.md#the-git-model)), the hooks also guard the

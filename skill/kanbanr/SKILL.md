@@ -543,6 +543,8 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
 - **Decisions are drafted as proposed ADRs** (`kanbanr adr new "…" --affects <CODE>`) and asked
   about at once: Accept, Reject or Later.
 - **An undecided question goes to the user** before the design is signed off, never to a subagent.
+  A design subagent works under a design scope, in its own worktree: it reads, and writes nothing
+  (see "Sub-agents: what each may do").
 
 Leaving the design role, the build stage's gate asks for `spec_sections: [Design]` and the
 `design-review` sign-off. Ask **Sign off design-review** once the section exists; the user gives
@@ -601,34 +603,61 @@ design before build, it adds `signoffs: [design-review]` to the same gate.
   from main; a fix to a release under test branches from `release/<V>`.
 - Commit with `kanbanr commit`: it fills in `Refs:` from the branch.
 - Subagents take one task at a time from the item's todo-list, with the approved definition and
-  that task as their brief, and the boundaries of their role (next section).
+  that task as their brief, under a build scope issued for the item (next section).
 - Never commit on main or on a line of integration (the hooks refuse), and never push.
 
 ### Sub-agents: what each may do
 
 When you hand work to a sub-agent, its limits are not left to its judgement or to a one-off line
-in the brief. Each role has fixed boundaries, and the brief states them **verbatim**:
+in the brief. Each role has fixed boundaries, kanbanr enforces them,
+and the brief states them **verbatim**:
 
-| | A **build** agent (one item, in its own worktree) | A **design** agent |
+| | A **build** agent (one item, in its own worktree) | A **design** agent (in its own worktree) |
 |---|---|---|
 | Read the board and the code | everything | everything |
 | Its item's record | `kanbanr task state <CODE> …` as each task starts and lands; `kanbanr test <CODE> R-n "<name>" green --rev <sha>` for a test it actually ran green | nothing |
-| Everything else on the board | refused: moves, approvals, sign-offs, definitions, specs, docs, other items, `batch`, config | refused |
+| Everything else on the board | refused: moves, approvals, sign-offs, definitions, specs, docs, other items, config; a `batch` only of these ops | refused |
 | Code | commits only on its item's branch, each naming the item | no edits, no commits |
 | Remote | never: no `git push`, no `kanbanr sync` | never |
 | Tests | on temporary boards only, never a real board | — |
 
+**Issue a scope before each sub-agent.** One command records what the agent may do on the board
+and prints its brief:
+
+    kanbanr scope issue <design|build> <CODE>      # --for 8h by default, 72h at most; --note "T1–T4"
+
+Then:
+- start the agent with `isolation: worktree`, design agents included: a scope binds to the agent's
+  own worktree, never to your checkout;
+- paste the printed brief **verbatim** at the top of the agent's brief. Its first line has the
+  agent claim the scope (`kanbanr scope claim SC-…`); from then on kanbanr refuses, and names, every
+  board write, commit and push from that worktree that the scope does not allow;
+- add the item, its todo-list and the tasks the agent takes, and nothing that contradicts the
+  table;
+- when the agent's work has been reviewed, revoke the scope: `kanbanr scope revoke SC-… --reason
+  done`. `kanbanr scope list` shows what is in force; `kanbanr scope renew SC-… --for 4h` extends
+  one;
+- never issue scopes from inside an agent: an agent's worktree refuses it.
+
+A build scope needs its item at the build stage and kanbanr's hooks installed
+(`kanbanr git install-hooks`, which adds the pre-push hook). It finds or makes the item branch;
+the claim switches the agent's worktree to it.
+
 As the coordinator you:
-- put the role's table in every brief, word for word, with the item, its branch and its todo-list;
+- put the role's table in every brief, word for word, with the item, its branch and its todo-list
+  — the printed brief is that table;
 - have build agents record their own progress, so the board never lags the code; and when you look
-  at an agent's branch, bring its item's tasks up to date at once, never waiting for its report;
+  at an agent's branch, bring its item's tasks up to date at once, never waiting for its report.
+  `kanbanr scope drift` (and the Stop hook) names an agent branch ahead of its item's tasks;
 - take back every question and every piece of work outside the brief: the agent reports it, you
-  decide or ask the user, it never decides a design question itself;
+  decide or ask the user, it never decides a design question itself. A refusal an agent reports is
+  the same: decide it or ask the user, never widen the scope to get past it;
 - give no agent a verdict to record, a stage to move or anything to push; those stay yours and the
-  user's.
+  user's. When a scoped agent finishes an item's last task, the item stays where it is: you move it.
 
 A sub-agent is not a way round the method: it works inside the same gates, on the same branch rules,
-and what it records is checked like anything else.
+and what it records is checked like anything else. Every write and commit it makes is recorded as
+the user, by the agent for its item (`Agent-Scope:` on the commit).
 
 ### At the integrate role
 

@@ -8,6 +8,24 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Agent scopes: what a sub-agent may do, enforced by kanbanr (FEAT-214).** Before starting a
+  sub-agent, Claude runs `kanbanr scope issue <design|build> <CODE>`: the scope is recorded on the
+  board (who issued it, the item, what it allows, the item's branch, when it expires: 8 hours by
+  default, 72 at most) and the command prints the boundary table to paste into the agent's brief.
+  The agent, in its own worktree, runs `kanbanr scope claim SC-…` first; from then on every board
+  write, commit and push from that worktree is checked against the scope, and anything outside it
+  is refused, naming the scope and the boundary crossed. A build agent records its own item's task
+  states and test evidence and commits only on its item's branch, each naming the item; a design
+  agent only reads. An agent's worktree with no scope bound to it is refused, a revoked or expired
+  scope refuses everything, nothing is pushed from an agent's worktree (a new `pre-push` hook:
+  re-run `kanbanr git install-hooks`), and an agent finishing an item's last task leaves the item
+  for the coordinator to move. Every write and commit an agent makes is recorded as the person, by
+  the agent for its item: on the activity entry, the event, and an `Agent-Scope:` trailer on the
+  board and code commits. `kanbanr scope drift`, `git doctor`, the Stop hook and session start name
+  an agent's commits that are newer than its item's tasks. The monitor shows each item's agents and
+  the scopes in force on the Workflow page. Also `scope here`, `list`, `show`, `brief`, `revoke`
+  and `renew`. The main checkout, and a board with no scopes, behave as before.
+
 - **The skill says what each sub-agent may do (FEAT-215).** When Claude hands work to a sub-agent,
   the skill gives each role fixed boundaries, stated in the brief word for word: a build agent reads
   everything, records task states and test evidence on its own item, commits only on its item's

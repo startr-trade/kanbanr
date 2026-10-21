@@ -282,6 +282,46 @@ mod tests {
         }
     }
 
+    /// FEAT-214 R-12: the skill tells Claude to issue a scope with one command before starting
+    /// each sub-agent, to start it in its own worktree (design agents too), to put the printed
+    /// brief into its brief, and to revoke the scope when the work is reviewed.
+    #[test]
+    fn skill_issues_a_scope_before_each_sub_agent() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        let section = skill
+            .split("### Sub-agents: what each may do")
+            .nth(1)
+            .expect("the sub-agents subsection")
+            .split("\n### ")
+            .next()
+            .unwrap();
+        for want in [
+            "**Issue a scope before each sub-agent.**",
+            "kanbanr scope issue <design|build> <CODE>",
+            "`isolation: worktree`, design agents included",
+            "paste the printed brief **verbatim** at the top of the agent's brief",
+            "kanbanr scope claim SC-…",
+            "kanbanr scope revoke SC-… --reason\n  done",
+            "never issue scopes from inside an agent",
+            "a `batch` only of these ops",
+            "decide it or ask the user",
+        ] {
+            assert!(section.contains(want), "the subsection says {want:?}");
+        }
+        assert!(
+            skill.contains("under a build scope issued for the item (next section)"),
+            "the build role points to it"
+        );
+        assert!(
+            skill.contains("A design subagent works under a design scope"),
+            "the design role points to it"
+        );
+    }
+
     /// FEAT-194 R-1: the skill states the method once, by stage role: a section with one
     /// subsection per role, naming the commands and gates that now carry each rule.
     #[test]
