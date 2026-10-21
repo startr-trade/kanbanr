@@ -42,6 +42,10 @@ pub struct Task {
     pub key: String,
     pub text: String,
     pub state: TaskState,
+    /// When the task's state last changed (RFC3339; FEAT-214): what agent drift is measured from.
+    /// Absent on tasks no kanbanr since FEAT-214 has changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_at: Option<String>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(

@@ -3093,6 +3093,10 @@
         "additionalProperties": true,
         "description": "A todo item belonging to a todo-list. `key` is short and unique within its todo-list.",
         "properties": {
+          "changed_at": {
+            "description": "When the task's state last changed (RFC3339; FEAT-214): what agent drift is measured from.\nAbsent on tasks no kanbanr since FEAT-214 has changed.",
+            "type": "string"
+          },
           "key": {
             "type": "string"
           },
