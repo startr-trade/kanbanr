@@ -89,8 +89,9 @@ scan-image:
 codeql:
 	scripts/security-scan.sh codeql
 
-# Every mermaid diagram in the docs parses with the library the monitor renders them with. A
-# diagram that fails renders as nothing, which reads as a missing image rather than an error.
+# Every diagram in the docs is drawn by the pinned Pele the book and the monitor use, and the book's
+# copy of Pele is that build (FEAT-203). A diagram that fails renders as nothing, which reads as a
+# missing image rather than an error.
 check-docs:
 	cd web && npm install && npm run check:docs
 	tools/docs/sync.sh

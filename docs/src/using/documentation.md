@@ -30,7 +30,8 @@ Docs are more than text — the viewer renders **diagrams** and **embedded image
   The view daemon serves the asset from your data folder — nothing leaves your machine.
 
 - **Mermaid diagrams.** A fenced `mermaid` code block renders to a live diagram (flowchart,
-  sequence, state, etc.), theme-aware:
+  sequence, state, gantt and the rest of Mermaid's types), drawn by [Pele](https://pele.run) in
+  the monitor's light or dark colours:
 
   ````markdown
   ```mermaid

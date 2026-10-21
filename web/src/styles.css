@@ -386,6 +386,19 @@ input:focus-visible,
   overflow-x: auto;
 }
 .markdown .mermaid-diagram svg { max-width: 100%; height: auto; }
+/* Pele colours its diagrams through these (FEAT-203): mapped onto the monitor's palette, so a
+ * diagram follows light and dark the moment the theme changes, with nothing re-rendered. */
+.mermaid-diagram {
+  --pele-bg: var(--panel-2);
+  --pele-fg: var(--text);
+  --pele-muted: var(--muted);
+  --pele-line: var(--muted);
+  --pele-surface: var(--panel);
+  --pele-surface-alt: var(--bg);
+  --pele-border: var(--border);
+  --pele-accent: var(--accent);
+  --pele-error: var(--warn);
+}
 .markdown img { max-width: 100%; height: auto; border-radius: 6px; }
 .markdown h1 { font-size: 22px; }
 .markdown h2 { font-size: 18px; }

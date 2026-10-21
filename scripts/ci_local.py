@@ -17,7 +17,7 @@ HOW IT STAYS HONEST:
   * It ends by listing what it could not verify, so "all passed" never overstates.
 
 Needs: bash, git, python3 with PyYAML, cargo, node/npm, docker (actionlint, PowerShell), gh
-(authenticated, for resolving action references), mdbook + mdbook-mermaid, shellcheck.
+(authenticated, for resolving action references), mdbook, shellcheck.
 """
 
 from __future__ import annotations
@@ -108,7 +108,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
     },
     "docs.yml": {
         "build": {
-            "Install mdBook + mermaid preprocessor": "downloads the pinned mdBook; checked here by version instead",
+            "Install mdBook": "downloads the pinned mdBook; checked here by version instead",
             "Every page is in the table of contents": LOCAL,
             "The mirrored chapters are in sync": LOCAL,
             "Build": LOCAL,
@@ -448,9 +448,6 @@ def uses_equivalents() -> None:
     want = yaml.safe_load((TREE / ".github/workflows/docs.yml").read_text())["env"]
     ok, out = sh(["mdbook", "--version"], TREE)
     say(f"docs: mdbook is the pinned {want['MDBOOK_VERSION']}", ok and want["MDBOOK_VERSION"] in out, out)
-    ok, out = sh(["mdbook-mermaid", "--version"], TREE)
-    say(f"docs: mdbook-mermaid is the pinned {want['MDBOOK_MERMAID_VERSION']}",
-        ok and want["MDBOOK_MERMAID_VERSION"] in out, out)
     verify_install_script()
     _, sha = sh(["git", "rev-parse", "HEAD"], TREE)
     _, date = sh(["git", "log", "-1", "--format=%cd", "--date=short"], TREE)

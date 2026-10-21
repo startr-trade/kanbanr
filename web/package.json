@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "check:docs": "node scripts/check-mermaid.mjs ../docs/src/**/*.md ../docs/src/*.md ../README.md ../skill/kanbanr/SKILL.md",
+    "check:docs": "node scripts/check-diagrams.mjs ../docs/src/**/*.md ../docs/src/*.md ../README.md ../skill/kanbanr/SKILL.md",
     "check:ui": "node scripts/check-affordance.mjs",
     "check:markdown": "node scripts/check-markdown.mjs",
     "check:api-base": "node scripts/check-api-base.mjs",
@@ -18,7 +18,7 @@
   "dependencies": {
     "dompurify": "^3.4.16",
     "marked": "^12.0.2",
-    "mermaid": "^11.15.0",
+    "pele": "1.7.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.18.4"
