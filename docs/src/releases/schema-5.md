@@ -1,6 +1,6 @@
 # Upgrading a board to schema 5
 
-*For the first release after 0.1.7.*
+*For 0.2.0.*
 
 kanbanr reads and writes board files with a new YAML library, and approvals, sign-offs and process
 records are now pinned to their content in a way that does not depend on how a file is written. A

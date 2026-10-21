@@ -4,11 +4,12 @@ What each release means for you, newest first. The [changelog](../project/change
 complete record of every change; these pages are the story of each release — its highlights, what
 is new, changed and fixed, what does not work yet, and what to do when you upgrade.
 
-Features are frozen until 1.0: the 0.1.x releases take fixes, documentation, and the work toward
-1.0's [stability promise](../project/stability.md).
+Features are frozen until 1.0, apart from the work agreed for it: 0.2.0 carries that work, and
+needs a one-time board migration. Later releases before 1.0 take fixes, documentation, and the
+work toward 1.0's [stability promise](../project/stability.md).
 
-- **Next release** — [upgrading a board to schema 5](schema-5.md): a maintained YAML library, and
-  revisions that do not depend on how a file is written. Run `kanbanr migrate` once.
+- **[0.2.0](v0.2.0.md)** — one method for every process, and a board format that will last. Every
+  board is migrated once: [upgrading a board to schema 5](schema-5.md).
 - **[0.1.7](v0.1.7.md)** — your own process, designed with Claude and shared on the board.
 - **[0.1.6](v0.1.6.md)** — timestamps compared as instants; the release waits for CI.
 - **[0.1.5](v0.1.5.md)** — scope and decide work inside Claude Code, with your workflow deciding
