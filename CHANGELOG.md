@@ -137,6 +137,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Changed
 
+- **One copy of every board rule, in core (FEAT-176).** The write recipe, code-repository git,
+  commit and branch policy, workflow movement, test evidence, the process library, the issue
+  mirror, `check`, and a dozen smaller rules moved from the CLI and the daemon into
+  `kanbanr-core`; the front ends now parse arguments, collect facts and print. The CLI no longer
+  depends on `serde_yaml`, and `architecture::front_ends_are_thin` keeps it that way. Behaviour is
+  unchanged, with three small exceptions: `feature add --found-in` makes one commit instead of
+  two, a few daemon write failures answer with the same HTTP status a read gets for the same
+  error, and an unreadable saved process file is now reported rather than treated as gone.
 - **The daemon's answers say what they are (FEAT-177).** A `GET` under `/api` that no route answers
   is now a `404`, not a `400` "unsupported operation". Mermaid diagrams (`workflow`, `gantt`) and
   the DOT graph are sent as `text/plain` and the project export as `text/markdown`, where they

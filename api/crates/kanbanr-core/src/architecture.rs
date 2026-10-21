@@ -58,7 +58,7 @@ mod tests {
     /// Front-end crates may not depend directly on these: they are core's business.
     const CORE_ONLY_DEPS: &[&str] = &["git2", "serde_yaml", "ears-classifier"];
     /// Direct dependencies still to be removed (the dependency rule's baseline).
-    const DEP_BASELINE: &[(&str, &str)] = &[("kanbanr-cli", "serde_yaml")];
+    const DEP_BASELINE: &[(&str, &str)] = &[];
 
     fn crates_dir() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
