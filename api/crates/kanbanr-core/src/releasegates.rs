@@ -224,7 +224,40 @@ impl ReleasePrepare {
     }
 }
 
+/// A release stage with the gate in force, as `release stages` and the monitor show it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ReleaseStageView {
+    pub name: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub purpose: String,
+    pub requires: Vec<ReleaseCheck>,
+    pub on_enter: Vec<ReleaseAction>,
+    /// The last stage: entering it is the cut.
+    pub cut: bool,
+    /// The project declares this stage's gate; otherwise it is the default.
+    pub declared: bool,
+}
+
 impl Cadence {
+    /// The release stages with their gates in force, in order.
+    pub fn release_stage_views(&self) -> Vec<ReleaseStageView> {
+        let gates = self.effective_release_gates();
+        let last = gates.len().saturating_sub(1);
+        gates
+            .into_iter()
+            .enumerate()
+            .map(|(i, (name, g))| ReleaseStageView {
+                declared: self.declares_release_gate(&name),
+                name,
+                purpose: g.purpose,
+                requires: g.requires,
+                on_enter: g.on_enter,
+                cut: i == last,
+            })
+            .collect()
+    }
+
     /// Every release stage with the gate in force: its declared one, or the default that reproduces
     /// what stages did before they could act (FEAT-183):
     ///

@@ -275,6 +275,37 @@ pub fn public_routes() -> Vec<RouteDoc> {
             ],
             response: Response::Json(schema_of::<Vec<crate::releases::CutPreview>>),
         },
+        RouteDoc {
+            path: "/api/projects/{project}/releases/{version}/plan",
+            summary: "What promoting a release would do, with nothing changed: the button, each \
+                      step and condition, what is missing and, for the cut, what ships. The \
+                      monitor reads the code repository only when started in the project folder",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "version",
+                    location: In::Path,
+                    required: true,
+                    kind: Kind::String,
+                    description: "The release's version, such as 1.0.",
+                },
+                Param {
+                    name: "stage",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "The stage to plan a move to; the next one when absent.",
+                },
+                Param {
+                    name: "reason",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Why the release moves back, for a move to an earlier stage.",
+                },
+            ],
+            response: Response::Json(schema_of::<crate::releases::ReleasePlan>),
+        },
         // ---- diagrams ----
         RouteDoc {
             path: "/api/projects/{project}/workflow",

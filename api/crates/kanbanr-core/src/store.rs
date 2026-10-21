@@ -2996,6 +2996,56 @@ impl Store {
         Ok(project.config)
     }
 
+    /// Declare a release stage's gate, or clear it back to the default with `None` (FEAT-212).
+    pub fn set_release_gate(
+        &self,
+        id: &str,
+        stage: &str,
+        gate: Option<crate::releasegates::ReleaseGate>,
+    ) -> Result<ProjectConfig> {
+        let mut project = self.load(id)?;
+        let mut cadence = project.config.cadence.clone();
+        let stage = stage.trim();
+        match gate {
+            Some(gate) => {
+                let stages = cadence.stages();
+                if !stages.iter().any(|s| s == stage) {
+                    return Err(CoreError::Unsupported(format!(
+                        "'{stage}' is not a release stage — this project's are {}",
+                        stages.join(", ")
+                    )));
+                }
+                cadence.release_gates.insert(stage.to_string(), gate);
+            }
+            None => {
+                cadence.release_gates.remove(stage);
+            }
+        }
+        cadence
+            .validate_release_gates()
+            .map_err(CoreError::Unsupported)?;
+        project.config.cadence = cadence;
+        self.save_config(id, &project.config)?;
+        Ok(project.config)
+    }
+
+    /// Set what the `prepare` action writes onto `release/<V>` (FEAT-212).
+    pub fn set_release_prepare(
+        &self,
+        id: &str,
+        prepare: crate::releasegates::ReleasePrepare,
+    ) -> Result<ProjectConfig> {
+        let mut project = self.load(id)?;
+        let mut cadence = project.config.cadence.clone();
+        cadence.release_prepare = prepare;
+        cadence
+            .validate_release_gates()
+            .map_err(CoreError::Unsupported)?;
+        project.config.cadence = cadence;
+        self.save_config(id, &project.config)?;
+        Ok(project.config)
+    }
+
     /// Refuse sprint or release work on a project that has not switched it on (FEAT-121). Most
     /// projects follow a different rhythm; the refusal names the one line that turns it on.
     pub fn require_cadence(project: &Project, what: Capability) -> Result<()> {
