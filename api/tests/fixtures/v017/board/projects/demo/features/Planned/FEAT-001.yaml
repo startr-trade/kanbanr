@@ -41,13 +41,13 @@ definition:
       state: planned
   approval:
     by: Fixture Maker
-    at: 2026-10-21T10:56:03.232484341Z
+    at: 2026-10-21T11:29:05.210046972Z
     rev: 897311b3552fddec
   approvals:
-  - at: 2026-10-21T10:56:03.232484341Z
+  - at: 2026-10-21T11:29:05.210046972Z
     by: Fixture Maker
     verdict: approved
     rev: 897311b3552fddec
     status: Planned
-created_at: 2026-10-21T10:56:03.195913208Z
-updated_at: 2026-10-21T10:56:03.232484341Z
+created_at: 2026-10-21T11:29:05.155559365Z
+updated_at: 2026-10-21T11:29:05.210046972Z

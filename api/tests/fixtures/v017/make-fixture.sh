@@ -48,6 +48,13 @@ requirements:
 EOF
 }
 add() { d feature add --title "$1" --milestone MS-001 --code "$2" >/dev/null; }
+# 0.1.7's `feature define` replaces the sign-offs with the ones the file gives (none, by default):
+# carry the item's sign-offs into the new definition, as an edit of the exported block would.
+carry_signoffs() { # carry_signoffs <code> <def file>
+  local f
+  f=$(ls "$B"/projects/demo/features/*/"$1".yaml)
+  awk '/^  signoffs:/{on=1; print "signoffs:"; next} on && /^  (- |  )/{print substr($0, 3); next} on{on=0}' "$f" >> "$DEFS/$2"
+}
 
 # 1 current
 add "Approved and current" FEAT-001
@@ -89,7 +96,7 @@ d signoff FEAT-007 design-review --note "held on Monday" >/dev/null
 add "Sign-off lapsed by an edit" FEAT-008
 def 8.yaml "Sign-off lapsed by an edit"; d feature define FEAT-008 --file "$DEFS/8.yaml" >/dev/null
 d signoff FEAT-008 design-review >/dev/null
-def 8b.yaml "Sign-off lapsed by an edit, then approved"; d feature define FEAT-008 --file "$DEFS/8b.yaml" >/dev/null
+def 8b.yaml "Sign-off lapsed by an edit, then approved"; carry_signoffs FEAT-008 8b.yaml; d feature define FEAT-008 --file "$DEFS/8b.yaml" >/dev/null
 d approve FEAT-008 >/dev/null
 # 9 defined, never approved
 add "Defined, never approved" FEAT-009
@@ -119,7 +126,7 @@ add "Two sign-offs" FEAT-014
 def 14.yaml "Two sign-offs"; d feature define FEAT-014 --file "$DEFS/14.yaml" >/dev/null
 d signoff FEAT-014 design-review >/dev/null
 d signoff FEAT-014 release >/dev/null
-def 14b.yaml "Two sign-offs, after an edit"; d feature define FEAT-014 --file "$DEFS/14b.yaml" >/dev/null
+def 14b.yaml "Two sign-offs, after an edit"; carry_signoffs FEAT-014 14b.yaml; d feature define FEAT-014 --file "$DEFS/14b.yaml" >/dev/null
 d signoff FEAT-014 release >/dev/null
 d approve FEAT-014 >/dev/null
 

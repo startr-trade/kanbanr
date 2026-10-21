@@ -40,16 +40,16 @@ definition:
       kind: integration
       state: planned
   approvals:
-  - at: 2026-10-21T10:56:03.365006496Z
+  - at: 2026-10-21T11:29:05.421248361Z
     by: Fixture Maker
     verdict: approved
     rev: 70dd38863629b9d5
     status: Planned
-  - at: 2026-10-21T10:56:03.384510045Z
+  - at: 2026-10-21T11:29:05.450155669Z
     by: Fixture Maker
     verdict: withdrawn
     reason: scope is wrong
     rev: 70dd38863629b9d5
     status: Planned
-created_at: 2026-10-21T10:56:03.325767482Z
-updated_at: 2026-10-21T10:56:03.384510045Z
+created_at: 2026-10-21T11:29:05.361996013Z
+updated_at: 2026-10-21T11:29:05.450155669Z

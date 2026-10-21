@@ -41,10 +41,10 @@ definition:
       state: planned
   approval:
     by: Fixture Maker
-    at: 2026-10-21T10:56:03.470255807Z
+    at: 2026-10-21T11:29:05.582485553Z
     rev: 7eb9fa48a3a1f6bb
   approvals:
-  - at: 2026-10-21T10:56:03.470255807Z
+  - at: 2026-10-21T11:29:05.582485553Z
     by: Fixture Maker
     verdict: ratified
     reason: agreed afterwards
@@ -52,9 +52,9 @@ definition:
     status: In Progress
   started_unapproved: shipping under a deadline
 history:
-- at: 2026-10-21T10:56:03.446769688Z
+- at: 2026-10-21T11:29:05.548763101Z
   from: Planned
   to: In Progress
   override: shipping under a deadline
-created_at: 2026-10-21T10:56:03.404096974Z
-updated_at: 2026-10-21T10:56:03.470255807Z
+created_at: 2026-10-21T11:29:05.485305617Z
+updated_at: 2026-10-21T11:29:05.582485553Z

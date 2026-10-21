@@ -1,6 +1,6 @@
 {
   "made_by": "kanbanr 0.1.7 (git tag v0.1.7), with make-fixture.sh",
-  "observed_with": "kanbanr 0.1.7: `feature show` for approvals and sign-offs, `process status --json` for process drift",
+  "observed_with": "kanbanr 0.1.7: `feature show` for approvals and sign-offs (it marks a lapsed sign-off), `process status --json` for process drift",
   "projects": {
     "demo": {
       "items": {
