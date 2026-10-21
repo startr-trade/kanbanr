@@ -603,6 +603,11 @@
             "const": "diagrams_valid",
             "description": "Every Mermaid diagram in the spec and in each `affects_docs` doc passes the diagram lint\n(FEAT-200), judged when the item moves, never cached.",
             "type": "string"
+          },
+          {
+            "const": "docs_cover",
+            "description": "The item is covered by the project's coverage rules (FEAT-197), judged as if it were already\nin the stage it is entering; `{docs_cover: [id]}` asks for only those rules.",
+            "type": "string"
           }
         ]
       },
@@ -638,6 +643,21 @@
               "spec_sections"
             ],
             "type": "object"
+          },
+          {
+            "description": "The coverage check narrowed to some of the project's rules (FEAT-197).",
+            "properties": {
+              "docs_cover": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "docs_cover"
+            ],
+            "type": "object"
           }
         ],
         "description": "One condition a gate can name: a check, or the Zachman check narrowed to some columns\n(`{zachman: [what, who, why]}`), which is how a process asks for the six dimensions a stage at a\ntime rather than all at once."
@@ -671,6 +691,66 @@
           "tasks_total",
           "tasks_done",
           "percent"
+        ],
+        "type": "object"
+      },
+      "CoverageRule": {
+        "additionalProperties": true,
+        "description": "One coverage rule, as a project's config holds it under `coverage:`.",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "every": {
+            "$ref": "#/components/schemas/Every",
+            "default": "item",
+            "description": "What the subjects are; absent, items."
+          },
+          "except": {
+            "description": "Subjects grandfathered out: item codes, ADR ids or doc paths.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "from": {
+            "description": "Items only: this stage or later (a status, or `\"@<role>\"`).",
+            "type": "string"
+          },
+          "id": {
+            "description": "`^[a-z0-9][a-z0-9-]*$`, unique in the project; what `{docs_cover: [id]}` names.",
+            "type": "string"
+          },
+          "in": {
+            "description": "Items only: exactly these stages (excludes `from`).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kinds": {
+            "description": "Items only: only these kinds (an item with no kind is a `feature`).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "lists": {
+            "description": "Items only, instead of `referenced_from`: the doc every subject lists in `affects_docs`.",
+            "type": "string"
+          },
+          "referenced_from": {
+            "description": "The doc, or a folder ending `/` (any doc under it), a subject must be referenced from.",
+            "type": "string"
+          },
+          "under": {
+            "description": "Docs only, required: the folder whose docs are the subjects.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "every"
         ],
         "type": "object"
       },
@@ -940,6 +1020,26 @@
           "points"
         ],
         "type": "string"
+      },
+      "Every": {
+        "description": "What a rule's subjects are.",
+        "oneOf": [
+          {
+            "const": "item",
+            "description": "Items in a stage range, optionally of some kinds.",
+            "type": "string"
+          },
+          {
+            "const": "adr",
+            "description": "Accepted ADRs (superseded and rejected ones are not subjects).",
+            "type": "string"
+          },
+          {
+            "const": "doc",
+            "description": "Docs under a folder.",
+            "type": "string"
+          }
+        ]
       },
       "FeatureDefinition": {
         "additionalProperties": true,
@@ -1398,6 +1498,13 @@
         "additionalProperties": true,
         "description": "The entry criteria of one status. Every field is optional; an empty gate asks nothing.",
         "properties": {
+          "affects_docs": {
+            "description": "The docs every item entering this stage must list in `affects_docs` (FEAT-197): the move\nadds them, so the cross-cutting views are part of every fold-in and `docs_updated` checks\nthem. Travels with the process; paths are board doc paths.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "done": {
             "description": "Reaching this stage finishes an item for the cadence views — the sprint burndown, its done\ntotal, what a closing sprint carries over (FEAT-137). Scrum's Definition of Done is the Done\ncolumn, not the release that ships it, and a burndown that waited for the release dropped in\none step on release day.",
             "type": "boolean"
@@ -2160,6 +2267,13 @@
           "cadence": {
             "$ref": "#/components/schemas/Cadence",
             "description": "Whether this project works in sprints and releases at all (FEAT-121). Off unless switched\non: many projects follow a different workflow, and data nobody asked for is clutter."
+          },
+          "coverage": {
+            "description": "Architecture coverage rules (FEAT-197): every subject of a kind — items in a stage range,\naccepted ADRs, docs under a folder — is referenced from a named doc, or lists one. They name\nthis project's doc paths, so they live here and not in a process. Absent: none, and nothing\nis read for coverage.",
+            "items": {
+              "$ref": "#/components/schemas/CoverageRule"
+            },
+            "type": "array"
           },
           "default_state": {
             "default": "",

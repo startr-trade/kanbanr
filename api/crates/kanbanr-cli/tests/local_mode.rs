@@ -5457,3 +5457,234 @@ fn cli_feature_add_prints_diagram_warning() {
     assert_eq!(v["diagram_warnings"][0]["rule"], "semicolon_in_text");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FEAT-197: run a command in a coverage scratch board, returning (success, stdout, stderr).
+fn coverage_run(base: &Path, work: &Path, args: &[&str]) -> (bool, String, String) {
+    let o = run_in(base, work, args);
+    (
+        o.status.success(),
+        String::from_utf8_lossy(&o.stdout).to_string(),
+        String::from_utf8_lossy(&o.stderr).to_string(),
+    )
+}
+
+/// FEAT-197: as [`coverage_run`], failing the test when the command fails.
+fn coverage_ok(base: &Path, work: &Path, args: &[&str]) -> (String, String) {
+    let (ok, out, err) = coverage_run(base, work, args);
+    assert!(ok, "{args:?}: {err}");
+    (out, err)
+}
+
+/// FEAT-197 R-4: with no coverage rules, writes carry no `coverage_warnings`, print no coverage
+/// line, and doctor says nothing about coverage; `config coverage` says there are none.
+#[test]
+fn coverage_silent_without_rules() {
+    let (base, work) = diagram_scratch("coverage-none");
+    let ok = |args: &[&str]| coverage_ok(&base, &work, args);
+    ok(&[
+        "doc",
+        "add",
+        "architecture/zachman.md",
+        "--content",
+        "# Zachman\n",
+    ]);
+    let (out, _) = ok(&[
+        "--json",
+        "feature",
+        "add",
+        "--milestone",
+        "MS-1",
+        "--title",
+        "One",
+    ]);
+    assert!(!out.contains("coverage_warnings"), "{out}");
+    for args in [
+        &["feature", "edit", "FEAT-001", "--title", "Uno"][..],
+        &["move", "FEAT-001", "Deferred"],
+        &[
+            "doc",
+            "add",
+            "architecture/catalog.md",
+            "--content",
+            "# Catalog\n",
+        ],
+    ] {
+        let (_, err) = ok(args);
+        assert!(!err.contains("coverage:"), "{args:?}: {err}");
+    }
+    let (out, _) = ok(&["--json", "move", "FEAT-001", "Planned"]);
+    assert!(!out.contains("coverage_warnings"), "{out}");
+    let (doctor, _) = ok(&["doctor"]);
+    assert!(!doctor.contains("coverage"), "{doctor}");
+    let (shown, _) = ok(&["config", "coverage"]);
+    assert!(shown.contains("no coverage rules"), "{shown}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-197 R-5: with a rule set from a file, adding, editing, defining and moving an item each
+/// warn of the rule it fails — on stderr, and as `coverage_warnings` under `--json` — until the
+/// view doc links it.
+#[test]
+fn coverage_warns_on_item_events() {
+    let (base, work) = diagram_scratch("coverage-items");
+    let ok = |args: &[&str]| coverage_ok(&base, &work, args);
+    ok(&[
+        "doc",
+        "add",
+        "architecture/zachman.md",
+        "--content",
+        "# Zachman\n",
+    ]);
+    let rules = base.join("rules.yaml");
+    std::fs::write(
+        &rules,
+        "coverage:\n  - id: zachman\n    description: the matrix lists every item\n    \
+         referenced_from: architecture/zachman.md\n",
+    )
+    .unwrap();
+    let (set, _) = ok(&["config", "coverage", "--from-file", rules.to_str().unwrap()]);
+    assert!(set.contains("zachman"), "{set}");
+    let warning = "coverage: [zachman] FEAT-001 is not referenced from architecture/zachman.md \
+                   — add a link to it there";
+
+    let (out, err) = ok(&["feature", "add", "--milestone", "MS-1", "--title", "One"]);
+    assert!(out.contains("created FEAT-001"), "the write is kept: {out}");
+    assert!(err.contains(warning), "add: {err}");
+    let (_, err) = ok(&["feature", "edit", "FEAT-001", "--title", "Uno"]);
+    assert!(err.contains(warning), "edit: {err}");
+    let def = base.join("def.yaml");
+    std::fs::write(&def, "statement: One thing for someone so that something\n").unwrap();
+    let (_, err) = ok(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        def.to_str().unwrap(),
+    ]);
+    assert!(err.contains(warning), "define: {err}");
+    let (_, err) = ok(&["move", "FEAT-001", "Deferred"]);
+    assert!(err.contains(warning), "move: {err}");
+    let (json, err) = ok(&["--json", "move", "FEAT-001", "Planned"]);
+    assert!(
+        !err.contains("coverage:"),
+        "--json prints nothing extra: {err}"
+    );
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(v["coverage_warnings"][0]["rule"], "zachman");
+    assert_eq!(v["coverage_warnings"][0]["subject"]["id"], "FEAT-001");
+    let (shown, _) = ok(&["config", "coverage"]);
+    assert!(
+        shown.contains("zachman") && shown.contains("1/1 uncovered  architecture/zachman.md"),
+        "{shown}"
+    );
+
+    // Linked from the view, the item is covered.
+    ok(&[
+        "doc",
+        "add",
+        "architecture/zachman.md",
+        "--content",
+        "# Zachman\n\n| [FEAT-001](/p/shop/feature/FEAT-001) |\n",
+    ]);
+    let (_, err) = ok(&["feature", "edit", "FEAT-001", "--title", "One"]);
+    assert!(!err.contains("coverage:"), "{err}");
+    let (shown, _) = ok(&["config", "coverage"]);
+    assert!(shown.contains("0/1 uncovered"), "{shown}");
+    ok(&["config", "coverage", "--clear"]);
+    let (shown, _) = ok(&["config", "coverage"]);
+    assert!(shown.contains("no coverage rules"), "{shown}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FEAT-197 R-6: accepting an ADR warns when no architecture view indexes it; writing a doc under
+/// a catalogued folder warns until the catalog links it; deleting the catalog warns that its rule
+/// has no source.
+#[test]
+fn coverage_warns_on_adr_accept_and_doc_write() {
+    let (base, work) = diagram_scratch("coverage-adr-doc");
+    let ok = |args: &[&str]| coverage_ok(&base, &work, args);
+    ok(&[
+        "doc",
+        "add",
+        "architecture/index.md",
+        "--content",
+        "# Index\n",
+    ]);
+    ok(&[
+        "doc",
+        "add",
+        "architecture/catalog.md",
+        "--content",
+        "# Catalog\n",
+    ]);
+    let rules = base.join("rules.yaml");
+    std::fs::write(
+        &rules,
+        "- id: adr-index\n  every: adr\n  referenced_from: architecture/\n\
+         - id: catalog\n  every: doc\n  under: architecture/components/\n  \
+         referenced_from: architecture/catalog.md\n",
+    )
+    .unwrap();
+    ok(&["config", "coverage", "--from-file", rules.to_str().unwrap()]);
+
+    let adr = "---\nid: ADR-0001\nstatus: proposed\n---\n\n# Cache carts\n\n## Context\n\nSlow.\n\n\
+               ## Decision\n\nCache them.\n\n## Alternatives considered\n\nNone.\n\n\
+               ## Consequences\n\nStale reads.\n\n## Compliance\n\nA test.\n";
+    // `--content=` because the text starts with `---`, which would read as a flag.
+    let content = format!("--content={adr}");
+    ok(&["doc", "add", "decisions/0001-cache-carts.md", &content]);
+    let (out, err) = ok(&["adr", "accept", "ADR-0001"]);
+    assert!(out.contains("ADR-0001 accepted"), "{out}");
+    assert!(
+        err.contains(
+            "coverage: [adr-index] ADR-0001 is not referenced from architecture/ — add a link to \
+             it there"
+        ),
+        "accept: {err}"
+    );
+    let (_, err) = ok(&[
+        "doc",
+        "add",
+        "architecture/index.md",
+        "--content",
+        "# Index\n\n- [ADR-0001](../decisions/0001-cache-carts.md)\n",
+    ]);
+    assert!(
+        !err.contains("adr-index"),
+        "indexed by a relative link: {err}"
+    );
+
+    let (_, err) = ok(&[
+        "doc",
+        "add",
+        "architecture/components/store.md",
+        "--content",
+        "# Store\n",
+    ]);
+    assert!(
+        err.contains(
+            "coverage: [catalog] architecture/components/store.md is not referenced from \
+             architecture/catalog.md — add a link to it there"
+        ),
+        "doc write: {err}"
+    );
+    let (_, err) = ok(&[
+        "doc",
+        "add",
+        "architecture/catalog.md",
+        "--content",
+        "# Catalog\n\n- [Store](components/store.md)\n",
+    ]);
+    assert!(!err.contains("coverage:"), "{err}");
+    let (_, err) = ok(&["doc", "rm", "architecture/catalog.md"]);
+    assert!(
+        err.contains("coverage: [catalog] architecture/catalog.md is not on the board"),
+        "doc delete: {err}"
+    );
+    let (doctor, _) = ok(&["doctor"]);
+    assert!(
+        doctor.contains("coverage rule 'catalog': architecture/catalog.md is not on the board"),
+        "{doctor}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}

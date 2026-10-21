@@ -933,6 +933,17 @@ enum ConfigCmd {
         #[arg(long, value_parser = ["on", "off"])]
         strict: Option<String>,
     },
+    /// Architecture coverage rules (FEAT-197): every item at a stage, accepted ADR or doc under a
+    /// folder is referenced from a view doc, or lists one. With no flag, shows each rule and how
+    /// many of its subjects are uncovered.
+    Coverage {
+        /// Set the rules from a YAML file: a list, or a mapping with a `coverage:` key.
+        #[arg(long, conflicts_with = "clear")]
+        from_file: Option<PathBuf>,
+        /// Remove every rule.
+        #[arg(long)]
+        clear: bool,
+    },
     /// Whether this project works in sprints and releases, and what it estimates in (FEAT-121).
     /// Both are off unless switched on — most projects follow a different rhythm.
     Cadence {
@@ -5541,6 +5552,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 client.write(Method::Post, &path, Some(body))?
             };
             print_diagram_warnings(cli, &resp);
+            print_coverage_warnings(cli, &resp);
             if cli.json {
                 println!("{}", pretty(&resp));
                 return Ok(());
@@ -6093,6 +6105,31 @@ fn print_write(cli: &Cli, resp: &str, human: String) {
     } else {
         println!("{human}");
     }
+    print_coverage_warnings(cli, resp);
+}
+
+/// The coverage rules a write now fails (FEAT-197), on stderr: the first ten, then how many more
+/// and where to see them all. Silent with `--json`, which carries them as `coverage_warnings`.
+fn print_coverage_warnings(cli: &Cli, resp: &str) {
+    if cli.json {
+        return;
+    }
+    let Ok(v) = serde_json::from_str::<Value>(resp) else {
+        return;
+    };
+    let found: Vec<&str> = v["coverage_warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|w| w["message"].as_str())
+        .collect();
+    for message in found.iter().take(10) {
+        eprintln!("  coverage: {message}");
+    }
+    let more = found.len().saturating_sub(10) + v["coverage_more"].as_u64().unwrap_or(0) as usize;
+    if more > 0 {
+        eprintln!("  … and {more} more — kanbanr doctor");
+    }
 }
 
 fn run_project(cli: &Cli, client: &Backend, cmd: &ProjectCmd) -> anyhow::Result<()> {
@@ -6332,6 +6369,7 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                 serde_json::to_value(def)?
             };
             let resp = client.write(Method::Put, &path, Some(body))?;
+            print_coverage_warnings(cli, &resp);
             if cli.json {
                 println!("{}", pretty(&resp));
             } else if *clear {
@@ -6650,6 +6688,47 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                     }
                 };
                 println!("{name:<13} {line}");
+            }
+            Ok(())
+        }
+        ConfigCmd::Coverage { from_file, clear } => {
+            let path = format!("/projects/{p}/coverage");
+            let resp = match (from_file, clear) {
+                (Some(file), _) => {
+                    // Sent as text: the rules are YAML, and core is what reads board YAML.
+                    let text = std::fs::read_to_string(file)?;
+                    client.write(Method::Put, &path, Some(json!({ "text": text })))?
+                }
+                (None, true) => client.write(Method::Put, &path, Some(json!({ "rules": [] })))?,
+                (None, false) => client.get(&path)?,
+            };
+            if cli.json {
+                println!("{}", pretty(&resp));
+                return Ok(());
+            }
+            let report: kanbanr_core::coverage::CoverageReport = serde_json::from_str(&resp)?;
+            if report.rules.is_empty() {
+                println!(
+                    "{}",
+                    if *clear {
+                        "coverage rules cleared"
+                    } else {
+                        "no coverage rules — `kanbanr config coverage --from-file rules.yaml`"
+                    }
+                );
+                return Ok(());
+            }
+            for r in &report.rules {
+                match &r.problem {
+                    Some(problem) => println!("{:<16} {problem}", r.id),
+                    None => println!(
+                        "{:<16} {}/{} uncovered  {}",
+                        r.id,
+                        r.uncovered.len(),
+                        r.subjects,
+                        r.source
+                    ),
+                }
             }
             Ok(())
         }
@@ -7569,12 +7648,13 @@ fn run_doc(cli: &Cli, client: &Backend, cmd: &DocCmd) -> anyhow::Result<()> {
         }
         DocCmd::Rm { path } => {
             let enc = urlencode(path);
-            client.write(
+            let resp = client.write(
                 Method::Delete,
                 &format!("/projects/{p}/docs/content?path={enc}"),
                 None,
             )?;
             println!("removed doc {path}");
+            print_coverage_warnings(cli, &resp);
             Ok(())
         }
     }

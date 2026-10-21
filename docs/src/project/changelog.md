@@ -8,6 +8,18 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Architecture coverage rules keep the cross-cutting views whole (FEAT-197).** A project can say
+  what its views must reference — every item at Design or later in the Zachman matrix, every
+  accepted ADR somewhere under `architecture/`, every component doc in the catalog — and kanbanr
+  checks it whenever the board changes: adding, editing, defining or moving an item, accepting an
+  ADR, writing or deleting a doc, closing a sprint, and cutting or promoting a release each print
+  the rules the board now fails (`coverage: [zachman] FEAT-012 is not referenced from
+  architecture/zachman.md — add a link to it there`), record a `coverage_gap` event, and carry them
+  as `coverage_warnings` under `--json`. `kanbanr config coverage` sets, shows and clears the
+  rules; `kanbanr doctor` lists every uncovered rule. A gate can require the new `docs_cover`
+  check, judged as if the item were already in the stage it enters and narrowable to rule ids, and
+  can name `affects_docs` that every item entering the stage must list — added by the move, so
+  `docs_updated` checks the views too. With no rules configured, nothing changes.
 - **Mermaid diagrams are checked when they are written (FEAT-200).** Every ```` ```mermaid ````
   block in a spec or a markdown doc is linted on `feature add`/`edit`, `doc add` and `batch`, and
   each problem is printed with its file, diagram number, line and rule — a `;` that cuts a sequence
