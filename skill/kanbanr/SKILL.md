@@ -44,12 +44,13 @@ project"** (or anything equivalent):
    `git config user.email`, `git remote -v`, the README and manifests, any tracker files), then ask
    only what that cannot answer, a few questions at a time with AskUserQuestion. **Every entry in
    `ask_the_user` from `kanbanr where --json` is asked, always**: the board's place, the process,
-   and the repository's git identity when git has none. Each usually has an obvious answer;
-   recommend it as the first option, and let the user give it. Never write one of these into the
-   plan as decided. **Ask them in order, each after the answer it depends on**: the process
-   question only once the board is chosen (its options are that board's saved processes first),
-   and the git identity question only once the board's commit identity is given (it offers that
-   identity). Collect three groups:
+   its cadence (sprints, releases), and the repository's git identity when git has none. Each
+   usually has an obvious answer; recommend it as the first option, and let the user give it. Never
+   write one of these into the plan as decided. **Ask them in order, each after the answer it
+   depends on**: the process question only once the board is chosen (its options are that board's
+   saved processes first), the cadence question only once the process is chosen (it recommends the
+   process's own setting), and the git identity question only once the board's commit identity is
+   given (it offers that identity). Collect three groups:
 
    **a. Board and identity**
    - *Where the board lives.* It is its own git repo and should sit **outside** the project folder,
@@ -116,18 +117,24 @@ project"** (or anything equivalent):
      Or **"our own process"**: design it with the user now — see "Designing a process with the
      user" — and the plan saves it and applies it. An organisation's existing process file is
      loaded the same way: check it with `kanbanr process check`, then save and apply it. The phased
-     presets ask for part of the definition at each stage, not all of it up front.
-   - *Cadence*, only when the chosen process uses sprints (scrum, agile), or the user asks for
-     sprints or releases:
-     - sprint length: 1, 2, 3 or 4 weeks, defaulting to 2;
-     - when the first sprint starts: default next Monday;
-     - its capacity, in story points for Scrum;
-     - how often a release is cut: every sprint, every few sprints, or on demand;
-     - the first release's version: default `v0.1.0`.
+     presets ask for part of the definition at each stage, not all of it up front. For "our own
+     process", which stage holds each role (design, build, integrate, release) is part of the
+     design.
+   - *Cadence*, asked for **every** process, as one question with two parts: "Sprints? Releases?"
+     Recommend the chosen process's own setting: on for scrum and agile, off for the rest, which
+     most projects need. Only when one is on, ask its details:
+     - sprints: their length (1, 2, 3 or 4 weeks, defaulting to 2), when the first starts (default
+       next Monday), and its capacity (in story points for Scrum);
+     - releases: how often one is cut (every sprint, every few sprints, or on demand), and the first
+       release's version (default `v0.1.0`).
 
-     For any other process, sprints and releases stay off. Most projects don't need them.
+     After the answer, run `kanbanr git model --sprints on|off --releases on|off` with it. It needs
+     no board. Show its output verbatim in the follow-up and in the plan: where items branch from
+     and merge into, what kanbanr merges, and that pushing is always the user's.
    - *Definitions*: every item carries the Zachman six-dimension definition, EARS requirements
      and tests. That is the method, not an option. Say so, so the user is not surprised by it.
+     Say also, without asking, that design before build and the docs fold-in are on by default
+     (`kanbanr config method --off` turns them off later).
    - *Git hooks* in the code repo (`kanbanr git install-hooks`): every commit names its board
      item, and commits on the default branch are refused. Offer them **defaulting to yes**.
    - *No git repository yet?* If the project folder isn't one, say so and plan `git init` plus
@@ -141,7 +148,10 @@ project"** (or anything equivalent):
      public repo needs an explicit OK), and importing an existing tracker (see "Importing existing
      task trackers": list what you found and ask which to bring in).
 4. **Write the setup plan and exit plan mode.** The plan states every answer and the exact
-   commands, in order, so approving it approves precisely what will run:
+   commands, in order, so approving it approves precisely what will run. Under **Process** it
+   lists the stage that holds each role, as `kanbanr process show <name>` prints them; under
+   **Branching** it quotes the `kanbanr git model` output from the cadence question; and it says
+   the method's gates are on (`kanbanr config method --off` turns them off later):
 
    ```bash
    kanbanr init <name> --data-dir <board> --author "<name>" --email <email> --description "<…>"
@@ -156,9 +166,10 @@ project"** (or anything equivalent):
                                                    # with -c user.name=… -c user.email=… if they said No
                                                    # these two only if the folder was not a git repo
    kanbanr git install-hooks                       # if chosen
-   kanbanr config cadence --sprint-length 14 --release per_sprint   # sprint presets only
-   kanbanr sprint add --start <date> --goal "<first goal>" --capacity <n>
-   kanbanr release add v0.1.0 --target <date>
+   kanbanr config cadence --sprints on|off --releases on|off   # every process: the answer given
+   kanbanr config cadence --sprint-length 14 --release per_sprint   # only when sprints are on
+   kanbanr sprint add --start <date> --goal "<first goal>" --capacity <n>   # sprints on
+   kanbanr release add v0.1.0 --target <date>      # releases on
    kanbanr config workflow --write-agreement       # the working agreement, generated from the gates
    kanbanr remote add <name> <url>                 # if chosen
    kanbanr mirror enable --repo <owner/repo>       # if chosen
@@ -175,8 +186,9 @@ project"** (or anything equivalent):
    leaving a half-configured project. Relay what `init` printed. If the Claude Code sandbox blocks
    writes to the board folder, tell the user to allow it (e.g. `sandbox.filesystem.allowWrite`).
    Save the approved plan as the board doc named in it, so the reasons for the setup outlive the
-   session. Finish by checking `kanbanr hooks status`, `kanbanr git status` (if the hooks were
-   chosen) and `kanbanr doctor`, then show the board. On a new board, doctor's only expected
+   session. Finish by checking `kanbanr hooks status`, `kanbanr git model`, `kanbanr git status`
+   and `kanbanr git doctor` (these two if the hooks were chosen) and `kanbanr doctor`, then show
+   the board. On a new board, doctor's only expected
    warnings are the goals that no item links to yet. Anything else is a setup fault to fix now.
    Tell the user how to watch the board: `kanbanr serve` starts the monitor, which is built into
    the binary (it needs no `--ui-dir`, and never another checkout's build), and `kanbanr open`
@@ -330,10 +342,10 @@ organisation's own process file changes what you ask with nothing changed here:
 | `definition`, `statement`, `goals`, `goals_known`, `zachman` (its named columns), `requirements`, `ears`, `quality`, `tests_named`, `small`, `spec_sections` (its named sections; `Design` is the build-ready design) | **draft it into the plan**; ask only what you cannot work out from the charter and the code |
 | `approved` | the user's **acceptance of the plan**; with nothing to draft, an **Approve** question |
 | `bypass` | a **Ratify** question |
-| `signoff` (a name in `signoffs_needed`) | a **"Sign off \<name\>"** question |
+| `signoff` (a name in `signoffs_needed`, e.g. `design-review`, `docs-folded`) | a **"Sign off \<name\>"** question |
 | `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; the active sprint; planned releases) |
 | `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
-| `docs_updated` | **never a question** — fold the design into each doc in `affects_docs` and say which you changed; if the item names none, ask whether it really changes no architecture doc |
+| `docs_updated` | **never a question** — fold the design into each doc in `affects_docs`, as built, and draft that fold-in into the plan, saying which docs change; if the item names none, ask whether it really changes no architecture doc |
 | `diagrams_valid` | **never a question** — fix each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then run `kanbanr doctor` to confirm none is left |
 
 Warnings go into the plan with a choice: fix it, or go ahead with the warning on record. When more
@@ -341,7 +353,8 @@ than one next stage is possible, ask which. Head the plan with the stage's own `
 
 **Stages have roles** (`kanbanr process checks` lists them): design, build, integrate, release.
 Whatever a process calls its stages, the design is due before the build role's stage, and code is
-written there, on the item's branch. Say which stage holds which role when you plan work.
+written there, on the item's branch. Say which stage holds which role when you plan work. What
+each role asks of you is in "The method by stage role".
 
 **The purpose is a question too.** A stage's `purpose` can name something no check measures — "the
 quality it must reach", "when it happens". If the definition does not yet address it, ask (with
@@ -451,8 +464,9 @@ what is agreed is exactly what will be enforced:
 4. **What the board can't see becomes a named sign-off.** "The architecture board has reviewed
    it" → `signoffs: [architecture-review]`. Say it back plainly: a person records it, never you.
 5. **The process-wide choices, together in one AskUserQuestion batch:** block or only warn at each
-   gate; where the code branch is made (`on_enter: [branch]`, usually the first building stage);
-   which stage ends the work; which moves back for rework are allowed.
+   gate; which stage holds each role (design, build, integrate and release; build is where the
+   code branch is made, `roles: [build]`, usually the first building stage); which stage ends the
+   work; which moves back for rework are allowed.
 6. **Name it, and ask where it is kept:** on the board (the team gets it through the board's
    remote; recommended when the board has one) or personal (`~/.kanbanr/processes`, theirs on any
    board).
@@ -656,8 +670,10 @@ kanbanr finish                    # refuses while tasks are open or requirements
 `start` moves the item to the status whose gate makes the branch (`on_enter: [branch]`). With
 the default workflow that is the first active status; under a phased workflow such as TOGAF it
 is Implementation. If the item is further back, `start` names the stages in between: move it
-through them with `kanbanr move`, since each has its own gate. In a folder that isn't a git
-repository, `start` moves the item without a branch. `finish` ends at a terminal status the
+through them with `kanbanr move`, since each has its own gate. With the git model on, `start`
+branches from the line of integration `kanbanr git model` names, not always from main (see "The
+method by stage role"). In a folder that isn't a git repository, `start` moves the item without a
+branch. `finish` ends at a terminal status the
 workflow allows from where the item is, and when every task is done the item advances there by
 itself, unless that status's gate isn't met.
 
@@ -746,6 +762,10 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
 The board is the system of record for the project's **reasoning**; `CLAUDE.md` is a pointer at it;
 this skill is the method; the hooks are enforcement. Each fact lives in exactly one of those — a
 fact in two places drifts.
+
+This skill carries the method ("The method by stage role"). A personal or project instruction file
+that restates it is unnecessary, and it drifts from the tool. If one disagrees with the board's
+gates, tell the user what differs and ask which holds.
 
 - `kanbanr claude sync` writes a marked block into the project's `CLAUDE.md` with its purpose,
   goals, non-goals and constraints, and regenerates that block whenever the charter changes.
@@ -1001,7 +1021,8 @@ kanbanr start FEAT-001 [--to STATUS] [--no-branch] [--override "<reason>"]
 kanbanr commit -m "…" [--ref R-2] [--ref TL-001/T3] [-a]   # trailer filled from the branch
 kanbanr finish [FEAT-001]         # gated: tasks complete, requirements proven
 kanbanr git install-hooks [--force] | uninstall-hooks | status
-kanbanr git model [--json]                       # main, the line, item branches, protected lines
+kanbanr git model [--json]                       # main, the line, item branches, protected lines, what kanbanr merges
+kanbanr git model --sprints on|off --releases on|off   # preview a cadence's model; needs no board
 kanbanr git forward <VERSION>                    # merge a release's fixes forward into the line
 kanbanr git doctor [--json]                      # board vs branches; read-only, exits 1 on an error
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
@@ -1021,7 +1042,8 @@ kanbanr config default-state Planned
 kanbanr config no-op-states "No Action,Not Applicable,Out-of-Scope"   # inert dispositions
 kanbanr config workflow --preset <name> | --from-file process.yaml | (--statuses … --transitions "A>B" --default-state … --displayed-states … --no-op-states …)
 kanbanr config workflow --preset list             # what each preset is
-kanbanr config cadence --sprints on --releases on --unit points   # only for projects that work in sprints
+kanbanr config cadence --sprints on --releases on --unit points   # both off unless switched on; setup asks for every process
+kanbanr config method [--off|--on] [design|design-review|docs|docs-folded|links]   # the method's gates; the user's choice, never yours
 kanbanr feature edit FEAT-001 --points 5          # a story-point estimate (--estimate is days)
 kanbanr sprint add --start 2026-10-05 --length 2w --goal "…" [--capacity 20]
 kanbanr sprint plan SP-001 FEAT-001 FEAT-002      # warns over capacity
@@ -1031,6 +1053,7 @@ kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # ship the finished items, write notes, carry the rest
 kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # next or named stage (default candidate → test → staging → production): the first makes release/<V>; the last is the cut — tags and fast-forwards main, refuses if main has commits the release lacks; back a stage needs --reason. Run from the project folder; never pushes
 kanbanr release add v0.2.0 --branch               # add it and promote it to the first stage
+kanbanr release add v0.1.1 --patch-of v0.1.0      # a patch: release/v0.1.1 from v0.1.0's tag, at the first stage
 kanbanr config cadence --release-stages candidate,qa,live [--integration-branch develop] [--main-branch main]
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a shipped release
 kanbanr config workflow --export > process.yaml   # this project's workflow, gates included
