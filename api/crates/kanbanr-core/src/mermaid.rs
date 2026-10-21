@@ -154,6 +154,9 @@ fn condition_text(c: &crate::readiness::Condition) -> String {
         crate::readiness::Condition::SpecSections { spec_sections } => {
             format!("spec sections {}", spec_sections.join("/"))
         }
+        crate::readiness::Condition::DocsCover { docs_cover } => {
+            format!("docs cover {}", docs_cover.join("/"))
+        }
     }
 }
 

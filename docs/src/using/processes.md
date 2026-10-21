@@ -103,6 +103,7 @@ board.
 | `spec_sections` | the spec has each named section, with content; plain `spec_sections` asks for `Design` |
 | `docs_updated` | every board doc the item names in `affects_docs` has changed since it entered its current stage |
 | `diagrams_valid` | every Mermaid diagram in the spec and in each doc it names in `affects_docs` passes the diagram lint |
+| `docs_cover` | the item is covered by every project coverage rule it falls under; `{docs_cover: [id]}` asks for only those rules |
 
 An unknown check, an unknown status or an unknown Zachman column is refused when the workflow is
 saved. A gate that could never match is a guardrail that silently isn't there.

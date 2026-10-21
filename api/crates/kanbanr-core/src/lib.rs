@@ -19,6 +19,7 @@ pub mod charter;
 pub mod claude;
 pub mod coderepo;
 pub mod config;
+pub mod coverage;
 pub mod daylog;
 pub mod diagrams;
 pub mod dispatch;
@@ -6383,5 +6384,378 @@ requirements:
             checked += 1;
         }
         assert_eq!(checked, 6);
+    }
+
+    // ---- FEAT-197: architecture coverage rules -------------------------------------------------
+
+    fn coverage_rules(yaml: &str) -> Vec<crate::coverage::CoverageRule> {
+        crate::coverage::parse_rules(yaml).unwrap()
+    }
+
+    fn adopt_coverage_charter(store: &Store) {
+        crate::charter::save(
+            store,
+            "demo",
+            &crate::Charter {
+                purpose: "Keep the views whole".into(),
+                adopted_at: "2000-01-01T00:00:00Z".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+
+    fn approved(store: &Store, title: &str) -> String {
+        let f = store.add_feature("demo", title, "", "M", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(crate::models::FeatureDefinition {
+                    statement: format!("{title} for someone so that something"),
+                    affects_docs: vec!["architecture/data.md".into()],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        store.approve_feature("demo", &f.code, "Ada L").unwrap();
+        f.code
+    }
+
+    /// FEAT-197 R-11: an item entering a stage whose gate (or the gate of a role it holds) names
+    /// default docs lists them afterwards, once each, beside its own, and its approval stays
+    /// current; an item with no definition is moved and warned that they were not recorded.
+    #[test]
+    fn default_affects_docs_on_entry() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Scheduled".to_string(),
+            crate::config::Gate {
+                roles: vec!["build".into()],
+                affects_docs: vec!["architecture/zachman".into()],
+                ..Default::default()
+            },
+        );
+        gates.insert(
+            "@build".to_string(),
+            crate::config::Gate {
+                affects_docs: vec!["architecture/catalog.md".into(), "architecture/data".into()],
+                ..Default::default()
+            },
+        );
+        store.set_gates("demo", gates).unwrap();
+        let code = approved(&store, "Views");
+        let (moved, warnings) = store
+            .move_feature_gated("demo", &code, "Scheduled", None)
+            .unwrap();
+        let def = moved.definition.as_ref().unwrap();
+        assert_eq!(
+            def.affects_docs,
+            vec![
+                "architecture/data.md",
+                "architecture/zachman.md",
+                "architecture/catalog.md"
+            ]
+        );
+        assert_eq!(
+            def.approval_state(),
+            crate::models::ApprovalState::Current,
+            "naming docs does not reopen the agreement"
+        );
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let stored = store.load("demo").unwrap();
+        assert_eq!(
+            stored
+                .feature(&code)
+                .unwrap()
+                .definition
+                .as_ref()
+                .unwrap()
+                .affects_docs,
+            def.affects_docs,
+            "written to the board"
+        );
+        // Moving back and in again adds nothing twice.
+        store.move_feature("demo", &code, "Planned").unwrap();
+        let (again, _) = store
+            .move_feature_gated("demo", &code, "Scheduled", None)
+            .unwrap();
+        assert_eq!(again.definition.unwrap().affects_docs.len(), 3);
+
+        // No definition: moved, and said.
+        let bare = store.add_feature("demo", "Bare", "", "M", None).unwrap();
+        let (moved, warnings) = store
+            .move_feature_gated("demo", &bare.code, "Scheduled", None)
+            .unwrap();
+        assert_eq!(moved.status, "Scheduled");
+        assert!(moved.definition.is_none());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(
+            warnings[0].message,
+            format!(
+                "{} has no definition: the stage's default docs (architecture/zachman.md, \
+                 architecture/catalog.md, architecture/data.md) are not recorded",
+                bare.code
+            )
+        );
+    }
+
+    /// FEAT-197 R-8: a gate requiring `docs_cover` refuses a move into its stage while the item
+    /// fails a rule judged at that stage — naming the rule — and lets it through once the view doc
+    /// links the item, or with an override, which is recorded.
+    #[test]
+    fn docs_cover_blocks_move_until_covered() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        adopt_coverage_charter(&store);
+        store
+            .write_doc("demo", "architecture/zachman.md", "# Zachman\n")
+            .unwrap();
+        store
+            .set_coverage(
+                "demo",
+                coverage_rules(
+                    "- id: zachman\n  from: Scheduled\n  referenced_from: architecture/zachman.md\n",
+                ),
+            )
+            .unwrap();
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Scheduled".to_string(),
+            crate::config::Gate {
+                requires: vec![crate::readiness::Condition::DocsCover {
+                    docs_cover: vec!["zachman".into()],
+                }],
+                ..Default::default()
+            },
+        );
+        store.set_gates("demo", gates).unwrap();
+        let code = approved(&store, "Matrix");
+        let err = store
+            .move_feature_gated("demo", &code, "Scheduled", None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(&format!(
+                "cannot move {code} to 'Scheduled': [zachman] {code} is not referenced from \
+                 architecture/zachman.md — add a link to it there"
+            )),
+            "{err}"
+        );
+        assert_eq!(
+            store.load("demo").unwrap().feature(&code).unwrap().status,
+            "Planned"
+        );
+        store
+            .write_doc(
+                "demo",
+                "architecture/zachman.md",
+                &format!("# Zachman\n\n| [{code}](/p/demo/feature/{code}) |\n"),
+            )
+            .unwrap();
+        store
+            .move_feature_gated("demo", &code, "Scheduled", None)
+            .unwrap();
+
+        // An override passes a failing rule, reports it, and is recorded.
+        let other = approved(&store, "Other");
+        let (moved, warnings) = store
+            .move_feature_gated(
+                "demo",
+                &other,
+                "Scheduled",
+                Some("the matrix is rebuilt later"),
+            )
+            .unwrap();
+        assert_eq!(moved.status, "Scheduled");
+        assert!(warnings.iter().any(|w| w.label == "[zachman] not covered"));
+        assert_eq!(
+            moved.definition.unwrap().started_unapproved,
+            "the matrix is rebuilt later"
+        );
+    }
+
+    /// FEAT-197 R-1: setting coverage rules refuses an invalid set with its first problem, naming
+    /// the rule, and writes nothing; a valid set is stored with its paths normalised; an empty one
+    /// removes them, and the key is gone from config.yaml.
+    #[test]
+    fn set_coverage_refuses_invalid_rules() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let config_file =
+            || std::fs::read_to_string(store.project_dir("demo").join("config.yaml")).unwrap();
+        let err = store
+            .set_coverage(
+                "demo",
+                coverage_rules("- id: zachman\n  from: Nowhere\n  referenced_from: z.md\n"),
+            )
+            .unwrap_err();
+        assert_eq!(err.status(), 400);
+        assert_eq!(
+            err.to_string(),
+            "unsupported operation: coverage rule 'zachman': 'Nowhere' is not a status of the \
+             workflow"
+        );
+        assert!(!config_file().contains("coverage"), "nothing written");
+        let err = store
+            .set_coverage(
+                "demo",
+                coverage_rules(
+                    "- id: a\n  referenced_from: a.md\n- id: a\n  referenced_from: b.md\n",
+                ),
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("'a': the id is used twice"),
+            "{err}"
+        );
+
+        let config = store
+            .set_coverage(
+                "demo",
+                coverage_rules(
+                    "- id: catalog\n  every: doc\n  under: docs/architecture/components\n  \
+                     referenced_from: ./architecture/catalog\n",
+                ),
+            )
+            .unwrap();
+        let rule = &config.coverage[0];
+        assert_eq!(rule.under.as_deref(), Some("architecture/components/"));
+        assert_eq!(
+            rule.referenced_from.as_deref(),
+            Some("architecture/catalog.md")
+        );
+        assert_eq!(
+            store.load_meta("demo").unwrap().config.coverage,
+            config.coverage
+        );
+        assert!(config_file().contains("coverage:"));
+        store.set_coverage("demo", vec![]).unwrap();
+        assert!(!config_file().contains("coverage"), "absent again");
+    }
+
+    /// FEAT-197 R-17: renaming a status renames it in the coverage rules' `from` and `in`.
+    #[test]
+    fn rename_status_updates_coverage_rules() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        store
+            .set_coverage(
+                "demo",
+                coverage_rules(
+                    "- id: a\n  from: Scheduled\n  referenced_from: a.md\n\
+                     - id: b\n  in: [Planned, Scheduled]\n  lists: a.md\n",
+                ),
+            )
+            .unwrap();
+        let config = store
+            .rename_status("demo", "Scheduled", "Building")
+            .unwrap();
+        assert_eq!(config.coverage[0].from.as_deref(), Some("Building"));
+        assert_eq!(config.coverage[1].in_stages, vec!["Planned", "Building"]);
+        assert!(crate::coverage::rule_problems(&config.coverage, &config).is_empty());
+    }
+
+    /// FEAT-197 R-7: closing a sprint, cutting a release and promoting one each answer with every
+    /// uncovered rule as `coverage_warnings`.
+    #[test]
+    fn coverage_reports_all_at_sprint_close_and_cut() {
+        use serde_json::{Value, json};
+        let (store, _d, items) = release_board();
+        store
+            .write_doc("demo", "architecture/zachman.md", "# Zachman\n")
+            .unwrap();
+        store
+            .write_doc("demo", "architecture/components/store.md", "# Store\n")
+            .unwrap();
+        store
+            .write_doc("demo", "architecture/catalog.md", "# Catalog\n")
+            .unwrap();
+        store
+            .set_coverage(
+                "demo",
+                coverage_rules(
+                    "- id: zachman\n  referenced_from: architecture/zachman.md\n\
+                     - id: catalog\n  every: doc\n  under: architecture/components/\n  \
+                     referenced_from: architecture/catalog.md\n",
+                ),
+            )
+            .unwrap();
+        let call = |path: &str, body: Value| -> Value {
+            serde_json::from_str(
+                &crate::dispatch::dispatch(&store, "POST", path, Some(&body)).unwrap(),
+            )
+            .unwrap()
+        };
+        let messages = |v: &Value| -> Vec<String> {
+            let mut m: Vec<String> = v["coverage_warnings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|w| w["message"].as_str().unwrap().to_string())
+                .collect();
+            m.sort();
+            m
+        };
+        let mut all: Vec<String> = items
+            .iter()
+            .map(|c| {
+                format!(
+                    "[zachman] {c} is not referenced from architecture/zachman.md — add a link to \
+                     it there"
+                )
+            })
+            .chain(std::iter::once(
+                "[catalog] architecture/components/store.md is not referenced from \
+                 architecture/catalog.md — add a link to it there"
+                    .to_string(),
+            ))
+            .collect();
+        all.sort();
+
+        let cut = call("/projects/demo/releases/v0.1.0/cut", json!({}));
+        assert!(cut["release"].is_object(), "the cut's own answer is kept");
+        assert_eq!(messages(&cut), all);
+
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&json!({"sprints": true})),
+        )
+        .unwrap();
+        let sprint = crate::sprints::add(&store, "demo", "2026-10-05", None, "", None, "").unwrap();
+        crate::sprints::start(&store, "demo", &sprint.code).unwrap();
+        let closed = call(
+            &format!("/projects/demo/sprints/{}/close", sprint.code),
+            json!({ "carry_to": "backlog" }),
+        );
+        assert_eq!(closed["code"], sprint.code.as_str());
+        assert_eq!(messages(&closed), all);
+
+        // Once the views link everything, a close says nothing more.
+        let links: String = items
+            .iter()
+            .map(|c| format!("- [{c}](/p/demo/feature/{c})\n"))
+            .collect();
+        store
+            .write_doc("demo", "architecture/zachman.md", &links)
+            .unwrap();
+        store
+            .write_doc(
+                "demo",
+                "architecture/catalog.md",
+                "- [store](components/store.md)\n",
+            )
+            .unwrap();
+        let next = crate::sprints::add(&store, "demo", "2026-10-19", None, "", None, "").unwrap();
+        crate::sprints::start(&store, "demo", &next.code).unwrap();
+        let closed = call(
+            &format!("/projects/demo/sprints/{}/close", next.code),
+            json!({ "carry_to": "backlog" }),
+        );
+        assert!(closed.get("coverage_warnings").is_none(), "{closed}");
     }
 }

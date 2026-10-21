@@ -83,6 +83,7 @@ pub fn run(store: &Store) -> Result<Report> {
             scan_references(store, project, &mut report);
         }
         scan_declared_docs(project, &charter, &ctx, &mut report);
+        scan_coverage(store, project, &mut report);
         scan_diagrams(store, project, &mut report);
         scan_method_choice(project, &mut report);
     }
@@ -117,6 +118,7 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
         scan_references(store, &project, &mut report);
     }
     scan_declared_docs(&project, &charter, &ctx, &mut report);
+    scan_coverage(store, &project, &mut report);
     scan_diagrams(store, &project, &mut report);
     scan_method_choice(&project, &mut report);
     scan_identity(store, id, &mut report);
@@ -585,6 +587,122 @@ fn scan_declared_docs(
                 ),
             });
         }
+    }
+}
+
+/// The project's coverage rules (FEAT-197): one issue per rule that leaves subjects uncovered,
+/// naming the first ten; an invalid rule, a rule that cannot be judged, a gate narrowing
+/// `docs_cover` to a rule the project does not configure, and a gate's default doc that is not on
+/// the board are errors. Silent for a project with no rules and no gate asking for coverage.
+fn scan_coverage(store: &Store, project: &Project, report: &mut Report) {
+    let config = &project.config;
+    let asks = config
+        .gates
+        .values()
+        .any(|g| g.requires.iter().chain(&g.warns).any(|c| c.is_docs_cover()));
+    let defaults = config.gates.values().any(|g| !g.affects_docs.is_empty());
+    if config.coverage.is_empty() && !asks && !defaults {
+        return;
+    }
+    let mut issue = |severity: Severity, message: String| {
+        report.issues.push(Issue {
+            severity,
+            project: project.id.clone(),
+            code: None,
+            message,
+        });
+    };
+    let invalid: Vec<String> = crate::coverage::rule_problems(&config.coverage, config);
+    for p in &invalid {
+        issue(Severity::Error, p.clone());
+    }
+    let ids: BTreeSet<&str> = config.coverage.iter().map(|r| r.id.as_str()).collect();
+    let docs: BTreeSet<String> = store
+        .list_docs(&project.id)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    for (key, gate) in &config.gates {
+        for c in gate.requires.iter().chain(&gate.warns) {
+            if let crate::readiness::Condition::DocsCover { docs_cover } = c {
+                for id in docs_cover.iter().filter(|id| !ids.contains(id.trim())) {
+                    issue(
+                        Severity::Error,
+                        format!(
+                            "the gate on '{key}' asks for docs_cover rule '{id}', which this \
+                             project does not configure"
+                        ),
+                    );
+                }
+            }
+        }
+        for doc in &gate.affects_docs {
+            let path = crate::refs::doc_key(doc);
+            if !docs.contains(&path) {
+                issue(
+                    Severity::Error,
+                    format!(
+                        "the gate on '{key}' lists {path} in affects_docs, which is not on the \
+                         board"
+                    ),
+                );
+            }
+        }
+    }
+    if config.coverage.is_empty() {
+        return;
+    }
+    let snap = match crate::coverage::Snapshot::load(store, project) {
+        Ok(s) => s,
+        Err(e) => {
+            issue(
+                Severity::Error,
+                format!("coverage rules could not be judged: {e}"),
+            );
+            return;
+        }
+    };
+    for (rule, r) in snap.rules.iter().zip(snap.report(project).rules) {
+        if let Some(problem) = &r.problem {
+            // An invalid rule was named above, from the rules as written.
+            if !invalid
+                .iter()
+                .any(|p| p.starts_with(&format!("coverage rule '{}'", r.id)))
+            {
+                let problem = problem
+                    .strip_prefix(&format!("[{}] ", r.id))
+                    .unwrap_or(problem);
+                issue(
+                    Severity::Error,
+                    format!("coverage rule '{}': {problem}", r.id),
+                );
+            }
+            continue;
+        }
+        if r.uncovered.is_empty() {
+            continue;
+        }
+        let about = if rule.description.trim().is_empty() {
+            rule.describe()
+        } else {
+            rule.description.trim().to_string()
+        };
+        let first: Vec<&str> = r.uncovered.iter().take(10).map(|s| s.id.as_str()).collect();
+        let more = if r.uncovered.len() > 10 {
+            ", … (first 10)"
+        } else {
+            ""
+        };
+        issue(
+            Severity::Warning,
+            format!(
+                "coverage rule '{}' ({about}): {} of {} uncovered — {}{more}",
+                r.id,
+                r.uncovered.len(),
+                r.subjects,
+                first.join(", ")
+            ),
+        );
     }
 }
 
@@ -1285,5 +1403,108 @@ mod tests {
         assert!(lag(&store).is_empty(), "within the policy once pushed");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    /// FEAT-197 R-10: doctor lists each coverage rule that leaves subjects uncovered, with the
+    /// first ten; a rule whose source is not on the board, a hand-edited invalid rule, a gate
+    /// narrowing `docs_cover` to an unknown rule and a gate's unknown default doc are errors; with
+    /// no rules and no such gate it says nothing about coverage.
+    #[test]
+    fn doctor_lists_uncovered_rules() {
+        let (store, dir) = fixture();
+        let coverage = |report: &Report| -> Vec<(Severity, String)> {
+            report
+                .issues
+                .iter()
+                .filter(|i| i.message.contains("coverage") || i.message.contains("gate on"))
+                .map(|i| (i.severity, i.message.clone()))
+                .collect()
+        };
+        for n in 0..12 {
+            store
+                .add_feature("demo", &format!("Item {n}"), "", "M", None)
+                .unwrap();
+        }
+        assert!(coverage(&run_project(&store, "demo").unwrap()).is_empty());
+
+        store
+            .write_doc("demo", "architecture/zachman.md", "FEAT-001 and FEAT-002\n")
+            .unwrap();
+        store
+            .set_coverage(
+                "demo",
+                crate::coverage::parse_rules(
+                    "- id: zachman\n  referenced_from: architecture/zachman.md\n\
+                     - id: gone\n  referenced_from: architecture/gone.md\n\
+                     - id: adrs\n  every: adr\n  referenced_from: architecture/\n",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        // Hand-edited after: an invalid rule the store would have refused.
+        let mut config = store.load_meta("demo").unwrap().config;
+        config.coverage.push(crate::coverage::CoverageRule {
+            id: "broken".into(),
+            from: Some("Nowhere".into()),
+            referenced_from: Some("architecture/zachman.md".into()),
+            ..Default::default()
+        });
+        config.gates.insert(
+            "Scheduled".into(),
+            crate::config::Gate {
+                requires: vec![crate::readiness::Condition::DocsCover {
+                    docs_cover: vec!["zachman".into(), "catalgo".into()],
+                }],
+                affects_docs: vec!["architecture/missing.md".into()],
+                ..Default::default()
+            },
+        );
+        store.save_config("demo", &config).unwrap();
+
+        let found = coverage(&run_project(&store, "demo").unwrap());
+        let has = |severity: Severity, text: &str| {
+            assert!(
+                found
+                    .iter()
+                    .any(|(s, m)| *s == severity && m.contains(text)),
+                "no {severity:?} '{text}' in {found:#?}"
+            )
+        };
+        has(
+            Severity::Warning,
+            "coverage rule 'zachman' (every item is referenced from architecture/zachman.md): \
+             10 of 12 uncovered — FEAT-003, FEAT-004, FEAT-005, FEAT-006, FEAT-007, FEAT-008, \
+             FEAT-009, FEAT-010, FEAT-011, FEAT-012",
+        );
+        has(
+            Severity::Error,
+            "coverage rule 'gone': architecture/gone.md is not on the board",
+        );
+        has(
+            Severity::Error,
+            "coverage rule 'broken': 'Nowhere' is not a status of the workflow",
+        );
+        has(
+            Severity::Error,
+            "the gate on 'Scheduled' asks for docs_cover rule 'catalgo', which this project does \
+             not configure",
+        );
+        has(
+            Severity::Error,
+            "the gate on 'Scheduled' lists architecture/missing.md in affects_docs, which is not on \
+             the board",
+        );
+        assert!(
+            !found.iter().any(|(_, m)| m.contains("'adrs'")),
+            "no accepted ADRs, nothing uncovered: {found:#?}"
+        );
+        assert!(
+            found.iter().filter(|(_, m)| m.contains("'broken'")).count() == 1,
+            "said once: {found:#?}"
+        );
+        // The portfolio-wide run says the same.
+        let all = coverage(&run(&store).unwrap());
+        assert_eq!(all.len(), found.len());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

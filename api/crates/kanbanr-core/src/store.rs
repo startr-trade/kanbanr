@@ -1485,17 +1485,60 @@ impl Store {
             def.started_unapproved = reason.to_string();
         }
         let f = Self::move_feature_on(project, pending, code, to)?;
-        let f = match reason {
-            Some(reason) => {
+        let mut warnings = outcome.warnings;
+        let defaults = Self::add_default_docs(project, code, to);
+        let f = match (reason, defaults) {
+            (None, None) => f,
+            (reason, defaults) => {
                 let feature = project.feature_mut(code)?;
-                if let Some(last) = feature.history.last_mut().filter(|t| t.to == to) {
+                if let Some(reason) = reason
+                    && let Some(last) = feature.history.last_mut().filter(|t| t.to == to)
+                {
                     last.override_reason = Some(reason.to_string());
                 }
+                warnings.extend(defaults.and_then(|d| d.err()));
                 feature.clone()
             }
-            None => f,
         };
-        Ok((f, outcome.warnings))
+        Ok((f, warnings))
+    }
+
+    /// Add the docs every item entering `to` must list to `code`'s `affects_docs` (FEAT-197), so
+    /// the stage's views are part of its fold-in. Approval does not lapse: which docs the work
+    /// touches is not part of what was agreed. `None` when the stage names no docs; `Ok` when the
+    /// item lists them now; `Err` with a warning when it has no definition to record them in.
+    fn add_default_docs(
+        project: &mut Project,
+        code: &str,
+        to: &str,
+    ) -> Option<std::result::Result<(), crate::readiness::Gap>> {
+        let defaults = project.config.default_affects_docs(to);
+        if defaults.is_empty() {
+            return None;
+        }
+        let feature = project.feature_mut(code).ok()?;
+        let Some(def) = feature.definition.as_mut() else {
+            return Some(Err(crate::readiness::Gap {
+                check: crate::readiness::Check::DocsUpdated,
+                requirement: None,
+                level: crate::readiness::Level::Warning,
+                label: "default docs not recorded".into(),
+                message: format!(
+                    "{code} has no definition: the stage's default docs ({}) are not recorded",
+                    defaults.join(", ")
+                ),
+            }));
+        };
+        for doc in defaults {
+            if !def
+                .affects_docs
+                .iter()
+                .any(|d| crate::refs::doc_key(d) == doc)
+            {
+                def.affects_docs.push(doc);
+            }
+        }
+        Some(Ok(()))
     }
 
     /// Evaluate the gate of `to` for `code` (FEAT-113). Adoption is never retroactive: a project with
@@ -1525,11 +1568,13 @@ impl Store {
             return Ok(pass);
         }
         let goal_ids = charter.goal_ids();
+        // Judged as if the item were already there (FEAT-197): what a stage asks of its items
+        // applies to the item entering it.
         let mut failing =
-            crate::readiness::evaluate_conditions(feature, Some(&goal_ids), &gate.requires, ctx);
+            crate::readiness::evaluate_entering(feature, Some(&goal_ids), &gate.requires, ctx, to);
         failing.extend(crate::readiness::signoff_gaps(feature, &gate.signoffs));
         let mut warnings =
-            crate::readiness::evaluate_conditions(feature, Some(&goal_ids), &gate.warns, ctx);
+            crate::readiness::evaluate_entering(feature, Some(&goal_ids), &gate.warns, ctx, to);
         if failing.is_empty() {
             return Ok(GateOutcome { warnings });
         }
@@ -2902,6 +2947,26 @@ impl Store {
         Ok(project.config)
     }
 
+    /// Replace a project's coverage rules (FEAT-197). An invalid set is refused with its first
+    /// problem, naming the rule; an empty one removes them. Paths are stored as the board stores
+    /// them.
+    pub fn set_coverage(
+        &self,
+        id: &str,
+        rules: Vec<crate::coverage::CoverageRule>,
+    ) -> Result<ProjectConfig> {
+        let mut project = self.load_meta(id)?;
+        if let Some(problem) = crate::coverage::rule_problems(&rules, &project.config)
+            .into_iter()
+            .next()
+        {
+            return Err(CoreError::Unsupported(problem));
+        }
+        project.config.coverage = rules.iter().map(|r| r.normalized()).collect();
+        self.save_config(id, &project.config)?;
+        Ok(project.config)
+    }
+
     /// Set what a project estimates in and whether it has sprints and releases (FEAT-121).
     pub fn set_cadence(
         &self,
@@ -3042,6 +3107,13 @@ impl Store {
             })
             .collect();
         project.config.transitions = renamed;
+        // Coverage rules name stages too (FEAT-197); a role (`@design`) follows on its own.
+        for rule in &mut project.config.coverage {
+            if let Some(from) = rule.from.as_mut() {
+                swap(from);
+            }
+            rule.in_stages.iter_mut().for_each(swap);
+        }
 
         // 2) Migrate features in the old status to the new status folder.
         let migrating: Vec<FeatureItem> = project
