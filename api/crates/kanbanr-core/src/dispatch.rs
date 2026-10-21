@@ -251,11 +251,7 @@ fn list_summaries(store: &Store) -> Result<Vec<ProjectSummary>> {
             continue;
         };
         let cfg = &project.config;
-        let displayed = if cfg.displayed_states.is_empty() {
-            cfg.statuses.clone()
-        } else {
-            cfg.displayed_states.clone()
-        };
+        let displayed = cfg.board_states().to_vec();
         let other_states: Vec<String> = cfg
             .statuses
             .iter()
@@ -709,7 +705,17 @@ pub fn dispatch_in(
                 &str_field(b, "milestone").unwrap_or_default(),
                 str_field(b, "code"),
             )?;
-            match maybe_apply_attrs(store, p, &f.code, b)? {
+            let attrs = maybe_apply_attrs(store, p, &f.code, b)?;
+            // Feedback on a release says where it was found, the way a defect does (FEAT-120):
+            // recorded with the item, in the same write.
+            if let Some(version) = str_field(b, "found_in") {
+                let defect = crate::models::Defect {
+                    found_in: version,
+                    ..Default::default()
+                };
+                return ser(&store.set_defect(p, &f.code, Some(defect))?);
+            }
+            match attrs {
                 Some(json) => Ok(json),
                 None => ser(&f),
             }

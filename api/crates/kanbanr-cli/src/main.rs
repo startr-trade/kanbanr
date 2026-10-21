@@ -1661,42 +1661,20 @@ fn run_init(
     // this repository its own pointer, recoverable only because FEAT-073 had made the file tracked.
     let wanted = Marker {
         project: Some(proj.clone()),
-        data_dir: record.then(|| marker_path(&dir, &cwd)),
+        data_dir: record.then(|| project::marker_path(&dir, &cwd)),
     };
     let existing = std::fs::read_to_string(cwd.join(project::MARKER_FILE))
         .ok()
         .map(|c| Marker::parse(&c));
-    if let Some(current) = &existing
-        && !force
-        && (current.project != wanted.project || current.data_dir != wanted.data_dir)
-    {
-        let shown = |m: &Marker| {
-            format!(
-                "project {}, board {}",
-                m.project.clone().unwrap_or_else(|| "<none>".into()),
-                m.data_dir
-                    .clone()
-                    .unwrap_or_else(|| "<not recorded>".into())
-            )
-        };
-        anyhow::bail!(
-            "this folder already names a board, and init would replace it:\n  \
-             now:      {}\n  \
-             would be: {}\n\
-             Nothing was changed. To switch project within the SAME board, use \
-             `kanbanr project use <name>`; to repoint deliberately, re-run with `--force`.",
-            shown(current),
-            shown(&wanted)
-        );
+    if let Some(current) = &existing {
+        current.may_repoint(&wanted, force)?;
     }
-    let replaced =
-        existing.filter(|c| c.project != wanted.project || c.data_dir != wanted.data_dir);
+    let replaced = existing.filter(|c| c != &wanted);
     project::write_marker(&cwd, &wanted)?;
     if let Some(old) = replaced {
         println!(
-            "! replaced this folder's previous pointer (project {}, board {})",
-            old.project.unwrap_or_else(|| "<none>".into()),
-            old.data_dir.unwrap_or_else(|| "<not recorded>".into())
+            "! replaced this folder's previous pointer ({})",
+            old.summary()
         );
     }
     println!("✓ selected '{proj}' here (.kanbanr)");
@@ -1883,31 +1861,6 @@ fn choose_init_data_dir(cli: &Cli, cwd: &Path) -> anyhow::Result<(PathBuf, bool)
     Ok((chosen, true))
 }
 
-/// Stamp file-sourced `feature.add` ops with the project repo's HEAD commit when the bundle didn't
-/// say, so an imported item records which version of the file it came from. (FEAT-042)
-fn fill_file_source_revisions(body: &mut Value) {
-    let Some(ops) = body["operations"].as_array_mut() else {
-        return;
-    };
-    let needs = |op: &Value| {
-        op["op"] == "feature.add"
-            && op["source"]["system"] == "file"
-            && op["source"]["revision"].is_null()
-    };
-    if !ops.iter().any(needs) {
-        return;
-    }
-    let Ok(cwd) = std::env::current_dir() else {
-        return;
-    };
-    let Some(rev) = project::project_revision(&cwd, project::home_dir().as_deref()) else {
-        return;
-    };
-    for op in ops.iter_mut().filter(|op| needs(op)) {
-        op["source"]["revision"] = json!(rev);
-    }
-}
-
 /// One line of a `batch --dry-run` preview.
 fn describe_batch_result(r: &Value) -> String {
     let s = |k: &str| r[k].as_str().unwrap_or("").to_string();
@@ -2036,18 +1989,7 @@ fn run_sources(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A duration a person would recognise. Days are the unit that matters for a board, but work that
-/// takes an afternoon is not "0.0 days" — printing it that way makes a working metric look broken
-/// and teaches the reader to skip the line (FEAT-062).
-fn duration(days: f64) -> String {
-    if days >= 1.0 {
-        format!("{days:.1}d")
-    } else if days * 24.0 >= 1.0 {
-        format!("{:.0}h", days * 24.0)
-    } else {
-        format!("{:.0}m", days * 24.0 * 60.0)
-    }
-}
+use kanbanr_core::report::duration;
 
 /// Stale evidence, summarised. Every commit moves HEAD, so in an active repo this fires on nearly
 /// everything and clears on the next full test run — enumerating it buries the cases that matter
@@ -2585,17 +2527,7 @@ fn run_adr(cli: &Cli, client: &Backend, cmd: &AdrCmd) -> anyhow::Result<()> {
                 return Ok(());
             }
             let adrs: Vec<kanbanr_core::adr::Adr> = serde_json::from_str(&resp)?;
-            let shown: Vec<&kanbanr_core::adr::Adr> = adrs
-                .iter()
-                .filter(|a| {
-                    for_item.as_deref().is_none_or(|code| {
-                        a.affects.iter().any(|c| c == code)
-                            || a.driven_by
-                                .iter()
-                                .any(|d| d.split('/').next().is_some_and(|c| c == code))
-                    })
-                })
-                .collect();
+            let shown = kanbanr_core::adr::for_item_filter(&adrs, for_item.as_deref());
             if shown.is_empty() {
                 println!("(no decisions recorded)");
             }
@@ -2809,13 +2741,7 @@ fn run_retro(
         return Ok(());
     }
 
-    let since = since.map(|s| match s.strip_suffix('d') {
-        Some(days) => days
-            .parse::<i64>()
-            .map(kanbanr_core::report::days_ago)
-            .unwrap_or_else(|_| s.to_string()),
-        None => s.to_string(),
-    });
+    let since = since.map(kanbanr_core::report::parse_since);
     let mut query = Vec::new();
     for (key, value) in [
         ("milestone", milestone.map(str::to_string)),
@@ -2838,7 +2764,7 @@ fn run_retro(
         return Ok(());
     }
     let retro: kanbanr_core::retro::Retro = serde_json::from_str(&resp)?;
-    let facts = retro_markdown(&retro);
+    let facts = kanbanr_core::retro::markdown(&retro);
     print!("{facts}");
 
     if write {
@@ -2849,12 +2775,7 @@ fn run_retro(
             sprint: sprint.map(str::to_string),
         };
         let doc = kanbanr_core::retro::document_path(&wave, milestone.or(sprint));
-        let body = format!(
-            "{facts}\n## What we make of it\n\n\
-             _Written by whoever writes it, from the numbers above. It may explain them, and it \
-             may disagree with what we expected — it may not contradict them._\n\n\
-             <!-- narrative goes here -->\n"
-        );
+        let body = format!("{facts}{}", kanbanr_core::retro::scaffold());
         client.write(
             Method::Put,
             &format!("/projects/{p}/docs/content"),
@@ -2863,196 +2784,6 @@ fn run_retro(
         println!("\nwritten to {doc}");
     }
     Ok(())
-}
-
-/// The facts section, as markdown — the same text the CLI prints and the document stores, so the
-/// two can never drift apart.
-fn retro_markdown(r: &kanbanr_core::retro::Retro) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-    let _ = writeln!(out, "# Retrospective — {}\n", r.wave);
-    let _ = writeln!(out, "## What the board recorded\n");
-    let _ = writeln!(
-        out,
-        "- items: {} ({} finished, {} still open)",
-        r.items, r.completed, r.still_open
-    );
-    // A sprint retro: what it committed to, what it finished, and what it carried out (FEAT-119).
-    if let Some(sprint) = &r.sprint {
-        let unit = sprint["unit"].as_str().unwrap_or("");
-        let _ = writeln!(
-            out,
-            "- sprint {}: {} of {} {unit} done",
-            sprint["code"].as_str().unwrap_or(""),
-            num(&sprint["done"]),
-            num(&sprint["committed"])
-        );
-        let carried: Vec<String> = sprint["carried"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|c| {
-                format!(
-                    "{} → {}",
-                    c["code"].as_str().unwrap_or(""),
-                    c["to"].as_str().unwrap_or("")
-                )
-            })
-            .collect();
-        if !carried.is_empty() {
-            let _ = writeln!(out, "- carried over: {}", carried.join(", "));
-        }
-    }
-    if let Some(started) = &r.started {
-        let end = match (&r.finished, r.all_done) {
-            (Some(f), _) => f[..10.min(f.len())].to_string(),
-            // Over, but the board never recorded when: saying "still running" would be false.
-            (None, true) => "finished (date not recorded)".into(),
-            (None, false) => "still running".into(),
-        };
-        let _ = writeln!(out, "- ran: {} → {end}", &started[..10.min(started.len())]);
-    }
-    let growth = &r.scope_growth;
-    let _ = writeln!(
-        out,
-        "- scope: {} to begin with, {} added ({} defect(s), {} split, {} unaccounted for)",
-        growth.original,
-        growth.added(),
-        growth.defects.len(),
-        growth.split.len(),
-        growth.unclassified.len()
-    );
-    for (title, list) in [
-        ("added as defects", &growth.defects),
-        ("split out of other work", &growth.split),
-        ("added without a recorded cause", &growth.unclassified),
-    ] {
-        if !list.is_empty() {
-            let _ = writeln!(out, "  - {title}: {}", list.join(", "));
-        }
-    }
-    let _ = writeln!(
-        out,
-        "- defects: {} ({} escaped)",
-        r.defects.total, r.defects.escaped
-    );
-    if !r.defects.self_inflicted.is_empty() {
-        let _ = writeln!(
-            out,
-            "  - caused by work in this same wave: {}",
-            r.defects.self_inflicted.join(", ")
-        );
-    }
-    match &r.cycle_time_days {
-        Some(c) => {
-            let _ = writeln!(
-                out,
-                "- cycle time: p50 {}, p90 {}, max {}",
-                duration(c.p50),
-                duration(c.p90),
-                duration(c.max)
-            );
-        }
-        None => {
-            let _ = writeln!(
-                out,
-                "- cycle time: nothing finished with a recorded history"
-            );
-        }
-    }
-    if !r.rework.is_empty() {
-        let _ = writeln!(
-            out,
-            "- rework (called done, then reopened): {}",
-            r.rework.join(", ")
-        );
-    }
-    let _ = writeln!(
-        out,
-        "- requirements proven by a green test: {}/{}",
-        r.evidence.proven, r.evidence.requirements
-    );
-    if !r.evidence.finished_unproven.is_empty() {
-        let _ = writeln!(
-            out,
-            "  - finished with unproven requirements: {}",
-            r.evidence.finished_unproven.join(", ")
-        );
-    }
-    if !r.estimates.is_empty() {
-        let _ = writeln!(out, "- estimate vs actual:");
-        for e in &r.estimates {
-            let _ = writeln!(
-                out,
-                "  - {}: estimated {}, took {} ({:.1}×)",
-                e.code,
-                duration(e.estimate_days),
-                duration(e.actual_days),
-                if e.estimate_days > 0.0 {
-                    e.actual_days / e.estimate_days
-                } else {
-                    0.0
-                }
-            );
-        }
-    }
-    if !r.approximate.is_empty() {
-        let _ = writeln!(
-            out,
-            "- {} item(s) have only changelog timestamps, which record when the board was written \
-             rather than how long work took — too coarse for cycle time: {}",
-            r.approximate.len(),
-            r.approximate.join(", ")
-        );
-    }
-    if !r.no_history.is_empty() {
-        let _ = writeln!(
-            out,
-            "- no recorded moves, so no flow numbers: {}",
-            r.no_history.join(", ")
-        );
-    }
-    if let Some(starts) = &r.log_starts {
-        let _ = writeln!(
-            out,
-            "- this wave began before the activity log, which starts {starts} — anything earlier \
-             is not recorded here rather than absent"
-        );
-    }
-    out.push('\n');
-
-    // What the wave taught, as it stood when this was written. Still facts — each one carries the
-    // evidence it was recorded with — so it sits above the narrative, not inside it.
-    if !r.lessons.is_empty() {
-        let _ = writeln!(out, "## What this wave taught\n");
-        for l in &r.lessons {
-            let retired = l.status == kanbanr_core::lessons::LessonStatus::Retired;
-            let _ = writeln!(
-                out,
-                "- **{}** ({}%{}) {}",
-                l.id,
-                (l.confidence_now() * 100.0).round() as i64,
-                if retired { ", since retired" } else { "" },
-                l.lesson.trim()
-            );
-            let mut detail: Vec<String> = Vec::new();
-            if !l.from_item.is_empty() {
-                detail.push(format!("from {}", l.from_item));
-            }
-            if !l.evidence.trim().is_empty() {
-                detail.push(l.evidence.trim().to_string());
-            }
-            if !detail.is_empty() {
-                let _ = writeln!(out, "  - {}", detail.join(" · "));
-            }
-        }
-        let _ = writeln!(
-            out,
-            "\n_Live state is `kanbanr lessons`; confidence decays, so these are the figures as of \
-             this retrospective._\n"
-        );
-    }
-    out
 }
 
 /// The board, the repo and the branch, resolved together (FEAT-056). Every SCM command needs the
@@ -4141,106 +3872,6 @@ fn walk_for(dir: &std::path::Path, board: &std::path::Path, needle: &str, depth:
     false
 }
 
-/// A starting skeleton for a definition, shaped to the kind of work (FEAT-047). Every kind states
-/// why it exists and how it is verified; what differs is the FORM a requirement takes — a feature
-/// asserts new behaviour, a defect names the requirement it violates, a chore asserts an invariant.
-/// Printing only the fields that apply keeps an author from staring at a form full of blanks.
-fn definition_template(kind: &str) -> String {
-    let head = "\
-# Why this item exists, what must be true, and how that is verified.
-# Fill what you know; leave the rest BLANK so `kanbanr doctor` can flag it — never invent.
-statement: \"<capability> for <whom> so that <why>\"
-goals: [G-1]          # charter goal ids this serves (kanbanr charter show)
-zachman:
-  what:  \"\"            # data, functions, rules
-  how:   \"\"            # approach
-  where: \"\"            # component or service
-  when:  \"\"            # trigger, frequency, timing
-  who:   \"\"            # stakeholder role
-  why:   \"\"            # the problem or goal served
-affects_docs: []      # board docs the design changes, e.g. [architecture/data.md]: named at the
-                      # design stage; a `docs_updated` gate checks each changed before moving on
-";
-    let requirements = match kind.trim().to_ascii_lowercase().as_str() {
-        "defect" | "bug" => {
-            "\
-requirements:
-  # A defect violates a requirement. If none covers the case, THAT is the finding: add the
-  # missing requirement here instead of leaving `violates` blank.
-  - kind: functional
-    violates: FEAT-000/R-0
-    text: \"WHEN <the trigger>, THE SYSTEM SHALL <the behaviour that was wrong>\"
-    tests:
-      - name: \"<test that reproduces it>\"
-        kind: unit
-        state: red      # red first, then green once fixed
-"
-        }
-        "chore" | "refactor" => {
-            "\
-requirements:
-  # No new behaviour: the requirement is what must NOT change.
-  - kind: functional
-    text: \"THE SYSTEM SHALL continue to <invariant this work must preserve>\"
-    tests:
-      - name: \"<existing suite that proves it>\"
-        kind: integration
-        state: green
-"
-        }
-        "docs" => {
-            "\
-requirements:
-  # The requirement is the contract the documentation must match.
-  - kind: functional
-    text: \"THE SYSTEM SHALL document <the contract> as it actually behaves\"
-    tests:
-      - name: \"<doc check or doctor rule>\"
-        kind: manual
-        state: planned
-"
-        }
-        "recurring" => {
-            "\
-requirements:
-  # Standing work: one statement, verified per occurrence by its checklist.
-  - kind: functional
-    text: \"THE SYSTEM SHALL <the standing obligation>\"
-    tests:
-      - name: \"<per-occurrence check>\"
-        kind: manual
-        state: planned
-"
-        }
-        _ => {
-            "\
-requirements:
-  - kind: functional
-    text: \"WHEN <trigger>, THE SYSTEM SHALL <response>\"
-    tests:
-      - name: \"<test that verifies it>\"
-        kind: unit
-        state: planned
-  # A quality requirement needs a tag AND a measure that names what checks it — a number with
-  # nothing behind it is an unsupported claim, so leave it out unless it is real.
-  - kind: nfr
-    text: \"WHERE <condition>, THE SYSTEM SHALL <quality behaviour>\"
-    iso25010: [Reliability]
-    scenario:
-      stimulus: \"\"
-      environment: \"\"
-      response: \"\"
-      measure: \"<number, and the test or benchmark that checks it>\"
-    tests:
-      - name: \"<test that verifies it>\"
-        kind: integration
-        state: planned
-"
-        }
-    };
-    format!("{head}{requirements}")
-}
-
 /// `kanbanr charter …` (FEAT-046). The charter is the root of a project's reasoning: goals get
 /// ids here, and work items link them.
 fn run_charter(cli: &Cli, client: &Backend, cmd: &CharterCmd) -> anyhow::Result<()> {
@@ -4426,27 +4057,6 @@ fn run_mirror(cli: &Cli, client: &Backend, cmd: &MirrorCmd) -> anyhow::Result<()
     Ok(())
 }
 
-/// How a data folder is written into a marker in `marker_dir`: relative when nearby, else absolute.
-fn marker_path(data_dir: &Path, marker_dir: &Path) -> String {
-    portable_path(
-        &project::relative_to(data_dir, marker_dir)
-            .display()
-            .to_string(),
-        cfg!(windows),
-    )
-}
-
-/// A path as a marker stores it: with forward slashes, which every platform reads (FEAT-129). A
-/// marker written on Windows said `data_dir: ..\app.kanbanr`, which Linux and macOS read as one
-/// file name — so a marker committed from one machine broke the board on the next.
-fn portable_path(path: &str, windows: bool) -> String {
-    if windows {
-        path.replace('\\', "/")
-    } else {
-        path.to_string()
-    }
-}
-
 /// Print the data folder this directory resolves to (`--json`: provenance and suggestions too).
 fn run_where(cli: &Cli) -> anyhow::Result<()> {
     let resolved = project::resolve_data_dir_detailed(cli.data_dir.as_deref());
@@ -4477,30 +4087,7 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
     // ask: each has an obvious answer, and an obvious answer is still the user's to give.
     let tracked =
         resolved.source == project::DataDirSource::Marker && data_dir.join("projects").is_dir();
-    let mut ask: Vec<String> = Vec::new();
-    if !tracked {
-        ask.push(
-            "Where the board lives: suggested_data_dir first, then each of existing_data_dirs, or a \
-             path the user types."
-                .into(),
-        );
-        ask.push(
-            "Which process — only after the board is chosen, in a later question, because the \
-             options depend on it: that board's saved processes first (`kanbanr process list \
-             --json --data-dir <board>`, library board, then personal; recommend one when the board \
-             has it), then the built-in ones, or designing their own."
-                .into(),
-        );
-        if git_name.is_none() || git_email.is_none() {
-            ask.push(
-                "This repository's git identity — only after the board's commit identity is \
-                 given, in a later question: git has none here, so nobody can commit after setup. \
-                 Offer that identity: Yes (this repository only, never --global), another \
-                 name/email, or No (the first commit only)."
-                    .into(),
-            );
-        }
-    }
+    let ask = project::setup_questions(tracked, git_name.is_some() && git_email.is_some());
     let out = json!({
         "data_dir": show(&data_dir),
         "source": resolved.source,
@@ -4579,20 +4166,11 @@ fn open_in_browser(url: &str) {
 /// `None` means no identity is configured, and the caller must refuse rather than invent one: an
 /// approval that cannot say who gave it is not evidence of agreement.
 fn verdict_author(cli: &Cli, given: Option<&String>) -> anyhow::Result<String> {
-    if let Some(name) = given.filter(|n| !n.trim().is_empty()) {
-        return Ok(name.trim().to_string());
-    }
     let dir = project::resolve_data_dir(cli.data_dir.as_deref());
-    kanbanr_core::git::identity(&dir)
-        .map(|(name, _)| name)
-        .filter(|n| !n.trim().is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "this board has no commit identity, so a verdict could not say who gave it.\n\
-                 Set one once:  kanbanr identity --name \"You\" --email you@example.com\n\
-                 or pass it explicitly with --by."
-            )
-        })
+    Ok(kanbanr_core::git::verdict_author(
+        &dir,
+        given.map(String::as_str),
+    )?)
 }
 
 fn require_project(cli: &Cli) -> anyhow::Result<String> {
@@ -5738,18 +5316,18 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 Value::Null
             } else {
                 // Start from what is already recorded, so one flag at a time is enough.
-                let mut d = get_feature(&client, &p, code)?.defect.unwrap_or_default();
-                let set = |field: &mut String, value: &Option<String>| {
-                    if let Some(v) = value {
-                        *field = v.clone();
-                    }
+                let change = kanbanr_core::models::DefectChange {
+                    severity: severity.clone(),
+                    introduced_by: introduced_by.clone(),
+                    found_in: found_in.clone(),
+                    root_cause: root_cause.clone(),
+                    fixed_by: fixed_by.clone(),
+                    escaped: *escaped,
                 };
-                set(&mut d.severity, severity);
-                set(&mut d.introduced_by, introduced_by);
-                set(&mut d.found_in, found_in);
-                set(&mut d.root_cause, root_cause);
-                set(&mut d.fixed_by, fixed_by);
-                d.escaped = d.escaped || *escaped;
+                let d = get_feature(&client, &p, code)?
+                    .defect
+                    .unwrap_or_default()
+                    .merge(&change);
                 serde_json::to_value(&d)?
             };
             let path = format!("/projects/{p}/features/{code}/defect");
@@ -5780,13 +5358,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         Command::Report { since } => {
             let p = require_project(cli)?;
-            let since = since.as_deref().map(|s| match s.strip_suffix('d') {
-                Some(days) => days
-                    .parse::<i64>()
-                    .map(kanbanr_core::report::days_ago)
-                    .unwrap_or_else(|_| s.to_string()),
-                None => s.to_string(),
-            });
+            let since = since.as_deref().map(kanbanr_core::report::parse_since);
             let rev = project_head_rev();
             let mut query = Vec::new();
             if let Some(s) = &since {
@@ -6215,16 +5787,11 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             };
             let value: Value = serde_json::from_str(&raw)
                 .map_err(|e| anyhow::anyhow!("invalid JSON bundle: {e}"))?;
-            // Accept either a bare array of operations or { "operations": [...] }.
-            let mut body = if value.is_array() {
-                json!({ "operations": value })
-            } else {
-                value
-            };
-            if let (Some(obj), Some(m)) = (body.as_object_mut(), message) {
-                obj.insert("message".to_string(), json!(m));
-            }
-            fill_file_source_revisions(&mut body);
+            // A bare array or { "operations": [...] }; file sources stamped with the repo's HEAD.
+            let mut body = kanbanr_core::batch::normalize(value, message.as_deref(), &|| {
+                let cwd = std::env::current_dir().ok()?;
+                project::project_revision(&cwd, project::home_dir().as_deref())
+            });
             let path = format!("/projects/{p}/batch");
             let resp = if *dry_run {
                 body["dry_run"] = json!(true);
@@ -6803,7 +6370,7 @@ fn run_project(cli: &Cli, client: &Backend, cmd: &ProjectCmd) -> anyhow::Result<
             let cwd = std::env::current_dir()?;
             let resolved = project::resolve_data_dir_detailed(cli.data_dir.as_deref());
             let data_dir = matches!(resolved.source, DataDirSource::Flag | DataDirSource::Marker)
-                .then(|| marker_path(&resolved.path, &cwd));
+                .then(|| project::marker_path(&resolved.path, &cwd));
             project::write_marker(
                 &cwd,
                 &Marker {
@@ -6860,17 +6427,11 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
                 ("team", team.clone().map(|t| json!(t))),
                 ("labels", labels.clone().map(|l| json!(l))),
                 ("depends_on", depends_on.clone().map(|d| json!(d))),
+                // Feedback on a release: where it was found, recorded with it (FEAT-120).
+                ("found_in", found_in.clone().map(|v| json!(v))),
             ]);
             let resp =
                 client.write(Method::Post, &format!("/projects/{p}/features"), Some(body))?;
-            // Feedback on a release: say where it was found, the way a defect does (FEAT-120).
-            if let Some(version) = found_in {
-                client.write(
-                    Method::Put,
-                    &format!("/projects/{p}/features/{}/defect", field(&resp, "code")),
-                    Some(json!({ "found_in": version })),
-                )?;
-            }
             print_write(
                 cli,
                 &resp,
@@ -6938,7 +6499,7 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             if *template {
                 print!(
                     "{}",
-                    definition_template(kind.as_deref().unwrap_or("feature"))
+                    kanbanr_core::models::definition_template(kind.as_deref().unwrap_or("feature"))
                 );
                 return Ok(());
             }
@@ -8237,17 +7798,12 @@ fn print_doc_tree(folder: &DocFolder, depth: usize) {
 }
 
 fn print_board(project: &Project) {
-    let states = if project.config.displayed_states.is_empty() {
-        project.config.statuses.clone()
-    } else {
-        project.config.displayed_states.clone()
-    };
     println!("# {} board\n", project.id);
-    for state in states {
+    for state in project.config.board_states() {
         let items: Vec<_> = project
             .features
             .iter()
-            .filter(|f| f.status == state)
+            .filter(|f| &f.status == state)
             .collect();
         println!("## {} ({})", state, items.len());
         for f in items {
@@ -8266,30 +7822,6 @@ fn print_board(project: &Project) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// FEAT-129: Windows' CI run showed two path forms leaking out — a marker with backslashes,
-    /// which no other platform can read, and canonicalize's `\\?\` verbatim prefix in messages.
-    #[test]
-    fn paths_written_and_shown_are_portable() {
-        assert_eq!(portable_path(r"..\app.kanbanr", true), "../app.kanbanr");
-        assert_eq!(
-            portable_path(r"C:\work\app.kanbanr", true),
-            "C:/work/app.kanbanr"
-        );
-        // On Linux and macOS a backslash is an ordinary file-name character: left alone.
-        assert_eq!(portable_path(r"odd\name", false), r"odd\name");
-
-        let plain = |s: &str| project::without_verbatim_prefix(PathBuf::from(s));
-        assert_eq!(
-            plain(r"\\?\C:\Users\a\.claude"),
-            PathBuf::from(r"C:\Users\a\.claude")
-        );
-        assert_eq!(
-            plain(r"\\?\UNC\server\share"),
-            PathBuf::from(r"\\?\UNC\server\share")
-        );
-        assert_eq!(plain("/home/a/.claude"), PathBuf::from("/home/a/.claude"));
-    }
 
     /// FEAT-128: `init --author --email` recorded the identity only after the repository's first
     /// commit, which therefore went out as `kanbanr <kanbanr@local>`.

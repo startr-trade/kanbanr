@@ -1138,6 +1138,16 @@ impl ProjectConfig {
             .unwrap_or(false)
     }
 
+    /// The statuses the board shows as columns, in order (FEAT-176): the displayed ones, or every
+    /// status when none is marked displayed.
+    pub fn board_states(&self) -> &[String] {
+        if self.displayed_states.is_empty() {
+            &self.statuses
+        } else {
+            &self.displayed_states
+        }
+    }
+
     /// The first status that means "being worked on": displayed, not the default, not terminal,
     /// not a no-op. Where `start` moves an item when no stage makes its branch.
     pub fn first_active_status(&self) -> Option<String> {

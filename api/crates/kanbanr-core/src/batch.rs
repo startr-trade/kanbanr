@@ -196,3 +196,71 @@ pub enum BatchOp {
     #[serde(rename = "doc.write")]
     DocWrite { path: String, content: String },
 }
+
+/// A bundle as `POST /projects/{p}/batch` takes it (FEAT-176): a bare array of operations is
+/// wrapped as `{ "operations": [...] }`, `message` (when given) is set on it, and each file-sourced
+/// `feature.add` that does not say which revision of the file it came from is stamped with
+/// `revision()` — asked only when one needs it, since finding it reads the project's repository
+/// (FEAT-042).
+pub fn normalize(
+    bundle: serde_json::Value,
+    message: Option<&str>,
+    revision: &dyn Fn() -> Option<String>,
+) -> serde_json::Value {
+    let mut body = if bundle.is_array() {
+        serde_json::json!({ "operations": bundle })
+    } else {
+        bundle
+    };
+    if let (Some(obj), Some(m)) = (body.as_object_mut(), message) {
+        obj.insert("message".to_string(), serde_json::json!(m));
+    }
+    let Some(ops) = body["operations"].as_array_mut() else {
+        return body;
+    };
+    let needs = |op: &serde_json::Value| {
+        op["op"] == "feature.add"
+            && op["source"]["system"] == "file"
+            && op["source"]["revision"].is_null()
+    };
+    if !ops.iter().any(needs) {
+        return body;
+    }
+    let Some(rev) = revision() else {
+        return body;
+    };
+    for op in ops.iter_mut().filter(|op| needs(op)) {
+        op["source"]["revision"] = serde_json::json!(rev);
+    }
+    body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// FEAT-176: an array is wrapped, the message set, and only a file source missing its
+    /// revision is stamped — the repository is not asked when none needs it.
+    #[test]
+    fn normalize_wraps_and_stamps_file_sources() {
+        let bundle = json!([
+            { "op": "feature.add", "title": "a", "milestone": "MS-001",
+              "source": { "system": "file", "key": "x.md" } },
+            { "op": "feature.add", "title": "b", "milestone": "MS-001",
+              "source": { "system": "file", "key": "y.md", "revision": "old" } },
+        ]);
+        let body = normalize(bundle, Some("import"), &|| Some("abc".into()));
+        assert_eq!(body["message"], "import");
+        assert_eq!(body["operations"][0]["source"]["revision"], "abc");
+        assert_eq!(body["operations"][1]["source"]["revision"], "old");
+        let asked = std::cell::Cell::new(false);
+        let plain = json!({ "operations": [{ "op": "milestone.add", "title": "m" }] });
+        let body = normalize(plain.clone(), None, &|| {
+            asked.set(true);
+            None
+        });
+        assert_eq!(body, plain);
+        assert!(!asked.get());
+    }
+}

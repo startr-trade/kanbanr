@@ -253,38 +253,14 @@ pub async fn project_activity(
     Path(p): Path<String>,
     Query(q): Query<ActivityQuery>,
 ) -> impl IntoResponse {
-    let mut entries = kanbanr_core::activity::read(&st.data_dir, &p, 200);
-    if let Some(item) = &q.item {
-        entries.retain(|e| e.item.as_deref() == Some(item.as_str()));
-    }
-    if q.ongoing {
-        match st.store.load(&p) {
-            Ok(project) => {
-                let displayed: std::collections::HashSet<&String> =
-                    if project.config.displayed_states.is_empty() {
-                        project.config.statuses.iter().collect()
-                    } else {
-                        project.config.displayed_states.iter().collect()
-                    };
-                // Feature codes whose current status is NOT displayed (ongoing/maintenance).
-                let ongoing_codes: std::collections::HashSet<String> = project
-                    .features
-                    .iter()
-                    .filter(|f| !displayed.contains(&f.status))
-                    .map(|f| f.code.clone())
-                    .collect();
-                entries.retain(|e| {
-                    e.item
-                        .as_ref()
-                        .map(|c| ongoing_codes.contains(c))
-                        .unwrap_or(false)
-                });
-            }
-            Err(_) => entries.clear(),
-        }
-    }
-    entries.truncate(q.limit.unwrap_or(25));
-    Json(entries)
+    let filter = kanbanr_core::activity::Filter {
+        item: q.item,
+        ongoing: q.ongoing,
+        limit: q.limit,
+    };
+    Json(kanbanr_core::activity::read_filtered(
+        &st.store, &p, &filter,
+    ))
 }
 
 pub async fn project_events(

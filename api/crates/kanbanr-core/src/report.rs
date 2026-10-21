@@ -240,6 +240,31 @@ pub fn days_ago(days: i64) -> String {
         .unwrap_or_default()
 }
 
+/// A `--since` value as the board's filters take it (FEAT-176): `14d` is fourteen days ago, as an
+/// RFC3339 timestamp; anything else (a date, a timestamp, an unparsable `xd`) passes through.
+pub fn parse_since(since: &str) -> String {
+    match since.strip_suffix('d') {
+        Some(days) => days
+            .parse::<i64>()
+            .map(days_ago)
+            .unwrap_or_else(|_| since.to_string()),
+        None => since.to_string(),
+    }
+}
+
+/// A duration given in days, the way a person would say it: `3.5d`, `6h`, `29m`. Work that
+/// takes an afternoon is not "0.0 days" — printing it that way makes a working metric look broken
+/// and teaches the reader to skip the line (FEAT-062).
+pub fn duration(days: f64) -> String {
+    if days >= 1.0 {
+        format!("{days:.1}d")
+    } else if days * 24.0 >= 1.0 {
+        format!("{:.0}h", days * 24.0)
+    } else {
+        format!("{:.0}m", days * 24.0 * 60.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,5 +498,55 @@ mod tests {
         let p = percentiles(&mut values).unwrap();
         assert_eq!((p.p50, p.p90, p.max), (3.0, 5.0, 5.0));
         assert!(percentiles(&mut []).is_none(), "no data, no number");
+    }
+
+    /// FEAT-176: `--since 14d` is a timestamp fourteen days back; anything else passes through.
+    #[test]
+    fn parse_since_reads_days_and_passes_the_rest() {
+        let since = parse_since("14d");
+        assert!(
+            since.contains('T') && since < crate::now_rfc3339(),
+            "{since}"
+        );
+        assert_eq!(parse_since("2026-01-01"), "2026-01-01");
+        assert_eq!(parse_since("xd"), "xd");
+    }
+
+    /// FEAT-176: a defect record changes a field at a time, and an escape stays recorded.
+    #[test]
+    fn a_defect_merges_one_field_at_a_time() {
+        use crate::models::DefectChange;
+        let d = Defect {
+            severity: "high".into(),
+            escaped: true,
+            ..Default::default()
+        }
+        .merge(&DefectChange {
+            found_in: Some("production".into()),
+            ..Default::default()
+        });
+        assert_eq!(
+            (d.severity.as_str(), d.found_in.as_str(), d.escaped),
+            ("high", "production", true)
+        );
+        let cleared = d.merge(&DefectChange {
+            severity: Some(String::new()),
+            ..Default::default()
+        });
+        assert!(cleared.severity.is_empty() && cleared.escaped);
+    }
+
+    /// FEAT-176: each kind's skeleton asks for the requirement form that kind takes.
+    #[test]
+    fn definition_template_is_shaped_to_the_kind() {
+        use crate::models::definition_template;
+        assert!(definition_template("bug").contains("violates:"));
+        assert!(definition_template("refactor").contains("continue to"));
+        assert!(definition_template("feature").contains("iso25010"));
+        for kind in ["feature", "defect", "chore", "docs", "recurring"] {
+            let parsed: crate::models::FeatureDefinition =
+                crate::config::from_yaml(&definition_template(kind)).unwrap();
+            assert!(!parsed.requirements.is_empty(), "{kind}");
+        }
     }
 }
