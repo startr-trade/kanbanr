@@ -129,20 +129,28 @@ todo-list. Nobody commits on main or on a line of integration (the hooks refuse)
 pushes.
 
 **Sub-agents: what each may do.** When Claude hands work to a sub-agent, each role has fixed
-boundaries, and Claude puts them in the agent's brief word for word:
+boundaries, kanbanr enforces them, and Claude puts them in the agent's brief word for word:
 
 | | A **build** agent (one item, in its own worktree) | A **design** agent |
 |---|---|---|
 | Read the board and the code | everything | everything |
 | Its item's record | `kanbanr task state` as each task starts and lands; `kanbanr test` evidence for tests it actually ran green | nothing |
-| Everything else on the board | refused: moves, approvals, sign-offs, definitions, specs, docs, other items, `batch`, config | refused |
+| Everything else on the board | refused: moves, approvals, sign-offs, definitions, specs, docs, other items, config; a `batch` only of these ops | refused |
 | Code | commits only on its item's branch, each naming the item | no edits, no commits |
 | Remote | never: no `git push`, no `kanbanr sync` | never |
 | Tests | on temporary boards only, never a real board | — |
 
+Before starting each sub-agent, Claude issues it a scope with one command,
+`kanbanr scope issue <design|build> <CODE>`, starts the agent in its own worktree (design agents
+too), and pastes the brief the command prints at the top of the agent's brief. The agent's first
+command claims the scope; from then on every board write, commit and push from its worktree that
+the scope does not allow is refused, naming the boundary it crossed. See
+[Agent scopes](with-claude.md#sub-agents-and-agent-scopes).
+
 Claude, as the coordinator, keeps the board current as the agents work, never waiting for their
 reports, and takes back every question and every piece of work outside the brief. Verdicts, moves
-and pushes stay with Claude and you.
+and pushes stay with Claude and you; when the agent's work has been reviewed, Claude revokes its
+scope.
 
 **At the integrate role.** Before the move, the Design is folded into each doc in `affects_docs`,
 describing it as built (the `docs_updated` check), and you sign off **docs-folded**. With the git

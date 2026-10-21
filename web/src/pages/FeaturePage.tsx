@@ -13,6 +13,7 @@ import {
   zachmanColumns,
 } from "../types";
 import type { Feature, Requirement, Signoff, TestRef } from "../types";
+import { byAgentText, liveScopes, scopeBanner, scopeRows } from "../agentScopes";
 
 /** Dedicated page for one feature (epic): Specification + a tile per todo-list (newest first). */
 export default function FeaturePage() {
@@ -135,8 +136,51 @@ export default function FeaturePage() {
         )}
       </section>
 
+      <FeatureAgents project={project} code={feature.code} tick={tick} />
+
       <FeatureActivity project={project} code={feature.code} tick={tick} />
     </div>
+  );
+}
+
+/**
+ * The agents that worked or work on this item (FEAT-214): a banner for each scope in force, then
+ * the item's scope history, expired and revoked ones included. Issued and revoked from the CLI.
+ */
+function FeatureAgents({ project, code, tick }: { project: string; code: string; tick: number }) {
+  const scopes = useAsync(() => api.getScopes(project), [project, tick]);
+  const drift = useAsync(() => api.getScopeDrift(project).catch(() => []), [project, tick]);
+  const mine = (scopes.data ?? []).filter((s) => s.item === code);
+  if (mine.length === 0) return null;
+  const now = Date.now();
+  return (
+    <section className="section">
+      <h2>Agents</h2>
+      {liveScopes(mine).map((s) => {
+        const ahead = (drift.data ?? []).find((d) => d.scope === s.id)?.commits.length;
+        return (
+          <div className="warn-box" key={s.id}>
+            {scopeBanner(s, now, ahead)}
+          </div>
+        );
+      })}
+      <ul className="guard-list">
+        {scopeRows(mine, code, now).map((r) => (
+          <li key={r.id}>
+            <span>
+              {r.id} · {r.role} · {r.covers}
+            </span>
+            <span className="muted small">
+              {r.state}, issued {r.issued} · {r.ends}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="muted small">
+        Issued and revoked from the CLI: <code>kanbanr scope issue &lt;design|build&gt; {code}</code>,{" "}
+        <code>kanbanr scope revoke &lt;SC-id&gt;</code>
+      </p>
+    </section>
   );
 }
 
@@ -456,7 +500,7 @@ function FeatureActivity({ project, code, tick }: { project: string; code: strin
           <li key={i}>
             <span className="activity-msg">{a.message}</span>
             <span className="activity-meta">
-              {a.actor} · {new Date(a.time).toLocaleString()}
+              {byAgentText(a)} · {new Date(a.time).toLocaleString()}
             </span>
           </li>
         ))}

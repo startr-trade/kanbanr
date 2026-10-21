@@ -123,6 +123,26 @@ sequenceDiagram
   terminates TLS and adds auth (Caddy/nginx examples in
   [the monitor chapter](../using/the-monitor.md#exposing-the-monitor-beyond-localhost)).
 
+### Agent scopes on the write path
+
+Every board write, from the CLI and the writes-enabled daemon alike, goes through
+`write::apply`, which first resolves the **agent scope** of the folder the process runs in
+(FEAT-214): the main checkout and a board with no scopes are unscoped and behave as before; an
+agent's worktree with a valid scope bound to it is scoped; an agent's worktree without one is
+refused. Under the write lock and before dispatch, a scoped write must be one of the scope's
+operations, on its item, on a board with no changes made outside kanbanr; a task change holds the
+item's auto-advance. After dispatch it is recorded as the person, by the agent: on the activity
+entry, the events and the board commit's `Agent-Scope:` trailer, and the board is not pushed.
+
+The same scope is checked where writes do not go through `write::apply`: the CLI's command gate
+classifies every command (an exhaustive match) and refuses, in an agent's worktree, those that
+change kanbanr itself or write outside the board's write path; the commit-msg and pre-commit hooks
+and the Claude Code guard hold commits to the scope's branch and item; the pre-push hook, the guard
+and the board sync refuse every push. A board that holds scopes is always governed, wherever it
+is; only a board in the system temporary directory that holds none is exempt, so the test suite
+runs in an agent's worktree as anywhere else, and pointing `TMPDIR` at the real board does not
+lift its scopes.
+
 ## The rules: one engine for what is missing
 
 Whether an item may move, what `kanbanr check` reports, what `doctor` warns about, what

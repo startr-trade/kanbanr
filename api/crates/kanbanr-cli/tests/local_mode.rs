@@ -1440,7 +1440,8 @@ fn cli_git_guardrails_in_a_scratch_repo() {
     assert!(run(&["git", "install-hooks", "--force"]).contains("commit-msg"));
     assert!(hooks.join("pre-commit.pre-kanbanr").exists());
     assert!(run(&["git", "install-hooks"]).contains("installed"));
-    assert!(run(&["git", "uninstall-hooks"]).contains("removed 2"));
+    // commit-msg, pre-commit and (FEAT-214) pre-push.
+    assert!(run(&["git", "uninstall-hooks"]).contains("removed 3"));
 
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -4116,7 +4117,9 @@ fn tests_run_inside_the_fence() {
         ("integration.rs", include_str!("integration.rs")),
     ] {
         let uses = source.matches(in_tree).count();
-        let allowed = usize::from(name == "local_mode.rs");
+        // And FEAT-214's scope tests: a scope governs no board in the temporary directory (D7),
+        // so their boards stand outside the fence too, each asserted to be the test's own.
+        let allowed = if name == "local_mode.rs" { 2 } else { 0 };
         assert_eq!(
             uses, allowed,
             "{name} keeps a scratch folder in the build tree"
@@ -5839,6 +5842,894 @@ fn coverage_warns_on_adr_accept_and_doc_write() {
         "{doctor}"
     );
     let _ = std::fs::remove_dir_all(&base);
+}
+
+// ---- agent scopes (FEAT-214) --------------------------------------------------------------------
+//
+// A scope governs only a board outside the system temporary directory (D7), so these boards live in
+// the build tree, with the fence unset for these runs alone. Every command names the board and the
+// project explicitly, and each test first asserts, by canonical path, that the board it reaches is
+// its own.
+
+/// A code repository with kanbanr's hooks, a board beside it with one approved item In Progress
+/// (its build stage) holding two tasks and one requirement, and a second item.
+struct ScopeFx {
+    base: PathBuf,
+    board: PathBuf,
+    work: PathBuf,
+    home: PathBuf,
+}
+
+impl ScopeFx {
+    fn new(tag: &str) -> ScopeFx {
+        let base = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("scopes-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let fx = ScopeFx {
+            board: base.join("board"),
+            work: base.join("code").join("shop"),
+            home: base.join("home"),
+            base,
+        };
+        std::fs::create_dir_all(&fx.home).unwrap();
+        std::fs::create_dir_all(&fx.work).unwrap();
+        fx.ok_git(&fx.work, &["init", "-q", "-b", "main"]);
+        fx.ok_git(
+            &fx.work,
+            &[
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "[no-ref] initial commit",
+            ],
+        );
+        fx.ok(&fx.work, &["identity", "--name", "A", "--email", "a@x"]);
+        // Its own board, by canonical path, before anything is written to it.
+        let wher = fx.ok(&fx.work, &["where"]);
+        assert_eq!(
+            std::fs::canonicalize(wher.trim()).unwrap(),
+            std::fs::canonicalize(&fx.board).unwrap(),
+            "the test's own board"
+        );
+        assert!(!fx.board.starts_with(std::env::temp_dir()), "governed (D7)");
+        fx.ok(&fx.work, &["project", "init", "shop"]);
+        fx.ok(
+            &fx.work,
+            &["milestone", "add", "--name", "M", "--code", "MS-001"],
+        );
+        fx.ok(
+            &fx.work,
+            &["feature", "add", "--title", "Cart", "--milestone", "MS-001"],
+        );
+        fx.ok(
+            &fx.work,
+            &[
+                "feature",
+                "add",
+                "--title",
+                "Other",
+                "--milestone",
+                "MS-001",
+            ],
+        );
+        let def = fx.base.join("def.yaml");
+        std::fs::write(
+            &def,
+            "statement: Keep a cart\nrequirements:\n  - kind: functional\n    text: THE SYSTEM \
+             SHALL keep a cart.\n    tests:\n      - name: cart::keeps\n        kind: unit\n        \
+             state: planned\n",
+        )
+        .unwrap();
+        for code in ["FEAT-001", "FEAT-002"] {
+            fx.ok(
+                &fx.work,
+                &["feature", "define", code, "--file", def.to_str().unwrap()],
+            );
+            fx.ok(&fx.work, &["approve", code]);
+            fx.ok(&fx.work, &["move", code, "In Progress"]);
+            fx.ok(&fx.work, &["todo", "add", code, "--description", "work"]);
+            fx.ok(&fx.work, &["task", "add", code, "TL-001", "--text", "one"]);
+            fx.ok(&fx.work, &["task", "add", code, "TL-001", "--text", "two"]);
+        }
+        fx.ok(&fx.work, &["git", "install-hooks"]);
+        fx
+    }
+
+    /// The test build first on PATH, so the git hooks run it.
+    fn path(&self) -> String {
+        format!(
+            "{}:{}",
+            cli().parent().unwrap().display(),
+            std::env::var("PATH").unwrap_or_default()
+        )
+    }
+
+    fn env(&self, c: &mut Command) {
+        c.env("HOME", &self.home)
+            .env("PATH", self.path())
+            .env("KANBANR_DATA_DIR", &self.board)
+            .env("KANBANR_PROJECT", "shop")
+            .env_remove("KANBANR_BOARD_FENCE")
+            .env_remove("KANBANR_PUSH")
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_PROCESSES_DIR")
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .stdin(std::process::Stdio::null());
+    }
+
+    fn run(&self, dir: &Path, args: &[&str]) -> Output {
+        let mut c = Command::new(cli());
+        c.args(args).current_dir(dir);
+        self.env(&mut c);
+        c.output().expect("run kanbanr CLI")
+    }
+
+    fn ok(&self, dir: &Path, args: &[&str]) -> String {
+        let o = self.run(dir, args);
+        assert!(
+            o.status.success(),
+            "{args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8(o.stdout).unwrap()
+    }
+
+    /// A command refused: its stderr.
+    fn refused(&self, dir: &Path, args: &[&str]) -> String {
+        let o = self.run(dir, args);
+        assert!(!o.status.success(), "{args:?} was not refused");
+        String::from_utf8_lossy(&o.stderr).to_string()
+    }
+
+    fn git(&self, dir: &Path, args: &[&str]) -> Output {
+        let mut c = Command::new("git");
+        c.args(args).current_dir(dir);
+        self.env(&mut c);
+        c.output().expect("run git")
+    }
+
+    fn ok_git(&self, dir: &Path, args: &[&str]) -> String {
+        let o = self.git(dir, args);
+        assert!(
+            o.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8(o.stdout).unwrap()
+    }
+
+    /// A worktree where Claude Code makes an agent's: `.claude/worktrees/<name>`.
+    fn worktree(&self, name: &str) -> PathBuf {
+        let rel = format!(".claude/worktrees/{name}");
+        self.ok_git(&self.work, &["worktree", "add", "-q", &rel, "-b", name]);
+        self.work.join(rel)
+    }
+
+    /// Issue a build scope for FEAT-001 and claim it from a fresh agent worktree.
+    fn claimed(&self, name: &str) -> PathBuf {
+        let out = self.ok(&self.work, &["scope", "issue", "build", "FEAT-001"]);
+        let id = out.split_whitespace().nth(1).unwrap().to_string();
+        let wt = self.worktree(name);
+        self.ok(&wt, &["scope", "claim", &id]);
+        wt
+    }
+
+    fn feature_status(&self, code: &str) -> String {
+        let v: serde_json::Value =
+            serde_json::from_str(&self.ok(&self.work, &["export", code, "--format", "json"]))
+                .unwrap();
+        v["status"].as_str().unwrap_or_default().to_string()
+    }
+
+    fn guard(&self, cwd: &Path, command: &str) -> String {
+        let mut c = Command::new(cli());
+        c.args(["git", "guard"]).current_dir(cwd);
+        self.env(&mut c);
+        c.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
+        let mut child = c.spawn().unwrap();
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(
+                serde_json::json!({"tool_input": {"command": command}, "cwd": cwd})
+                    .to_string()
+                    .as_bytes(),
+            )
+            .unwrap();
+        String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+    }
+}
+
+impl Drop for ScopeFx {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}
+
+/// FEAT-214 R-1: `scope issue` records the scope with its issuer, item, operations, branch, issue
+/// time and expiry, and prints the boundary table with the claim command. It is refused until the
+/// pre-push hook is installed, for an item not at the build stage, and for longer than 72 hours.
+#[test]
+fn scope_issue_records_and_prints_the_brief() {
+    let fx = ScopeFx::new("issue");
+    fx.ok(&fx.work, &["git", "uninstall-hooks"]);
+    let err = fx.refused(&fx.work, &["scope", "issue", "build", "FEAT-001"]);
+    assert!(err.contains("kanbanr git install-hooks"), "{err}");
+    fx.ok(&fx.work, &["git", "install-hooks"]);
+    let err = fx.refused(
+        &fx.work,
+        &["scope", "issue", "build", "FEAT-001", "--for", "100h"],
+    );
+    assert!(err.contains("72 hours"), "{err}");
+    fx.ok(&fx.work, &["move", "FEAT-002", "Planned"]);
+    let err = fx.refused(&fx.work, &["scope", "issue", "build", "FEAT-002"]);
+    assert!(
+        err.contains("move it first: `kanbanr move FEAT-002 \"In Progress\"`"),
+        "{err}"
+    );
+
+    let out = fx.ok(
+        &fx.work,
+        &[
+            "scope",
+            "issue",
+            "build",
+            "FEAT-001",
+            "--for",
+            "4h",
+            "--note",
+            "T1 and T2",
+        ],
+    );
+    for want in [
+        "issued SC-001 (build, FEAT-001) — created feat/FEAT-001-cart",
+        "## Your boundaries — kanbanr agent scope SC-001 (build, FEAT-001), enforced by kanbanr",
+        "First, in your worktree: `kanbanr scope claim SC-001` (switches you to feat/FEAT-001-cart)",
+        "| FEAT-001's record | `kanbanr task state FEAT-001 <TL> <T> <state>`",
+        "| Remote | nothing | `git push`, `kanbanr sync` |",
+        "Note: T1 and T2",
+        "never work around it.",
+    ] {
+        assert!(out.contains(want), "{want:?} in:\n{out}");
+    }
+    let listed: serde_json::Value =
+        serde_json::from_str(&fx.ok(&fx.work, &["--json", "scope", "list"])).unwrap();
+    let s = &listed[0];
+    assert_eq!(s["id"], "SC-001");
+    assert_eq!(s["issued_by"], "A");
+    assert_eq!(s["item"], "FEAT-001");
+    assert_eq!(
+        s["operations"],
+        serde_json::json!(["task.state", "test.state", "commit"])
+    );
+    assert_eq!(s["branch"], "feat/FEAT-001-cart");
+    assert_eq!(s["state"], "issued");
+    assert!(s["issued_at"].is_string() && s["expires_at"].is_string());
+    let raw = std::fs::read_to_string(fx.board.join("projects/shop/scopes.yaml")).unwrap();
+    assert!(
+        raw.contains("id: SC-001") && raw.contains("issued_by: A"),
+        "{raw}"
+    );
+    let branches = fx.ok_git(&fx.work, &["branch", "--list", "feat/*"]);
+    assert!(
+        branches.contains("feat/FEAT-001-cart"),
+        "made, never checked out: {branches}"
+    );
+    assert_eq!(
+        fx.ok_git(&fx.work, &["branch", "--show-current"]).trim(),
+        "main"
+    );
+    let log = fx.ok_git(&fx.board, &["log", "-1", "--format=%s"]);
+    assert_eq!(log.trim(), "issue agent scope SC-001 (build, FEAT-001)");
+
+    let design = fx.ok(&fx.work, &["scope", "issue", "design", "FEAT-002"]);
+    assert!(
+        design.contains("| FEAT-002's record | nothing | every write |"),
+        "{design}"
+    );
+    assert!(
+        fx.ok(&fx.work, &["scope", "brief", "SC-002"])
+            .contains("(design, FEAT-002)")
+    );
+}
+
+/// FEAT-214 R-2: `scope claim` in a linked worktree binds the scope to it on the board and in the
+/// worktree's own git directory, and switches a build agent to its branch; it is refused from the
+/// main checkout.
+#[test]
+fn scope_claim_binds_a_worktree() {
+    let fx = ScopeFx::new("claim");
+    fx.ok(&fx.work, &["scope", "issue", "build", "FEAT-001"]);
+    let err = fx.refused(&fx.work, &["scope", "claim", "SC-001"]);
+    assert!(err.contains("never from the main checkout"), "{err}");
+    let wt = fx.worktree("agent-t1");
+    let out = fx.ok(&wt, &["scope", "claim", "SC-001"]);
+    assert!(out.contains("claimed SC-001"), "{out}");
+    assert_eq!(
+        fx.ok_git(&wt, &["branch", "--show-current"]).trim(),
+        "feat/FEAT-001-cart"
+    );
+    let git_dir = fx.ok_git(&wt, &["rev-parse", "--absolute-git-dir"]);
+    let pointer =
+        std::fs::read_to_string(Path::new(git_dir.trim()).join("kanbanr-scope.yaml")).unwrap();
+    assert!(
+        pointer.contains("scope: SC-001") && pointer.contains("project: shop"),
+        "{pointer}"
+    );
+    assert!(
+        fx.ok_git(&wt, &["status", "--porcelain"]).trim().is_empty(),
+        "the pointer is not in the worktree"
+    );
+    let s: serde_json::Value =
+        serde_json::from_str(&fx.ok(&fx.work, &["--json", "scope", "show", "SC-001"])).unwrap();
+    assert_eq!(s["worktree"], ".claude/worktrees/agent-t1");
+    assert_eq!(s["state"], "active");
+    assert!(s["claimed_at"].is_string());
+    let here = fx.ok(&wt, &["scope", "here"]);
+    assert!(
+        here.contains("agent scope SC-001 (build, FEAT-001) applies here"),
+        "{here}"
+    );
+    assert!(
+        fx.ok(&fx.work, &["scope", "here"])
+            .contains("no agent scope applies here")
+    );
+    let again = fx.refused(&fx.worktree("agent-t2"), &["scope", "claim", "SC-001"]);
+    assert!(
+        again.contains("already bound to .claude/worktrees/agent-t1"),
+        "{again}"
+    );
+}
+
+/// FEAT-214 R-3: an agent under a build scope records its own item's task and test states; a move,
+/// an approval, another item's task and a batch carrying a move are refused, naming the scope and
+/// the boundary, and the board is left byte for byte as it was.
+#[test]
+fn scoped_agent_records_task_and_test_but_cannot_move() {
+    let fx = ScopeFx::new("record");
+    let wt = fx.claimed("agent-t1");
+    let out = fx.ok(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+    assert!(out.contains("T1 -> InProgress"), "{out}");
+    let out = fx.ok(
+        &wt,
+        &[
+            "test",
+            "FEAT-001",
+            "R-1",
+            "cart::keeps",
+            "green",
+            "--rev",
+            "abc",
+        ],
+    );
+    assert!(out.contains("-> green"), "{out}");
+
+    let before = snapshot(&fx.board);
+    let moved = fx.refused(&wt, &["move", "FEAT-001", "Completed"]);
+    assert!(
+        moved.contains("refused by agent scope SC-001 (build, FEAT-001): `move feature FEAT-001` is not one of its operations"),
+        "{moved}"
+    );
+    assert!(moved.contains("do not work around it"), "{moved}");
+    let approved = fx.refused(&wt, &["approve", "FEAT-001"]);
+    assert!(
+        approved.contains("`approve definition of FEAT-001` is not one of its operations"),
+        "{approved}"
+    );
+    let other = fx.refused(
+        &wt,
+        &["task", "state", "FEAT-002", "TL-001", "T1", "InProgress"],
+    );
+    assert!(
+        other.contains("is on FEAT-002; this scope covers FEAT-001 only"),
+        "{other}"
+    );
+    let bundle = fx.base.join("bundle.json");
+    std::fs::write(
+        &bundle,
+        r#"{"operations": [
+            {"op": "task.state", "feature": "FEAT-001", "todo": "TL-001", "key": "T2", "state": "InProgress"},
+            {"op": "feature.move", "code": "FEAT-001", "to": "Completed"}
+        ]}"#,
+    )
+    .unwrap();
+    let smuggled = fx.refused(&wt, &["batch", "--file", bundle.to_str().unwrap()]);
+    assert!(
+        smuggled.contains("`batch op feature.move` is not one of its operations"),
+        "{smuggled}"
+    );
+    assert!(
+        snapshot(&fx.board) == before,
+        "a refused write leaves the board byte-identical"
+    );
+    assert_eq!(fx.feature_status("FEAT-001"), "In Progress");
+}
+
+/// FEAT-214 R-4: in an agent worktree with no scope bound to it, every board write and commit is
+/// refused — an unclaimed worktree, a deleted pointer, a pointer naming another scope, and a pointer
+/// naming another project alike.
+#[test]
+fn agent_worktree_without_scope_is_refused() {
+    let fx = ScopeFx::new("unbound");
+    let wt = fx.claimed("agent-t1");
+    let unbound = fx.worktree("agent-t2");
+    let err = fx.refused(
+        &unbound,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+    assert!(err.contains("this is an agent worktree"), "{err}");
+    assert!(err.contains("kanbanr scope claim SC-"), "{err}");
+    std::fs::write(unbound.join("f.txt"), "x").unwrap();
+    fx.ok_git(&unbound, &["add", "f.txt"]);
+    let commit = fx.git(
+        &unbound,
+        &["commit", "-q", "-m", "x\n\nRefs: kanbanr:FEAT-001"],
+    );
+    assert!(!commit.status.success(), "an unbound agent cannot commit");
+    assert!(String::from_utf8_lossy(&commit.stderr).contains("no agent scope is bound to it"));
+
+    let git_dir = fx.ok_git(&wt, &["rev-parse", "--absolute-git-dir"]);
+    let pointer = Path::new(git_dir.trim()).join("kanbanr-scope.yaml");
+    let original = std::fs::read_to_string(&pointer).unwrap();
+    std::fs::remove_file(&pointer).unwrap();
+    let err = fx.refused(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+    assert!(
+        err.contains("no agent scope is bound to it"),
+        "deleted: {err}"
+    );
+    std::fs::write(&pointer, "scope: SC-099\nproject: shop\n").unwrap();
+    let err = fx.refused(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+    assert!(
+        err.contains("no agent scope is bound to it"),
+        "another scope: {err}"
+    );
+    std::fs::write(&pointer, "scope: SC-001\nproject: other\n").unwrap();
+    let err = fx.refused(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+    assert!(
+        err.contains("the scope file here names SC-001 of other"),
+        "another project: {err}"
+    );
+    std::fs::write(&pointer, &original).unwrap();
+    fx.ok(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+}
+
+/// FEAT-214 R-5: under a build scope, commits land only on its branch and name its item — refused
+/// by the git hooks and by the Claude Code guard alike; a design scope commits nothing.
+#[test]
+fn scoped_commits_only_on_item_branch() {
+    let fx = ScopeFx::new("commits");
+    let wt = fx.claimed("agent-t1");
+    std::fs::write(wt.join("cart.rs"), "fn cart() {}\n").unwrap();
+    fx.ok_git(&wt, &["add", "cart.rs"]);
+    let unnamed = fx.git(
+        &wt,
+        &["commit", "-q", "-m", "cart\n\nRefs: kanbanr:FEAT-002"],
+    );
+    assert!(!unnamed.status.success());
+    assert!(
+        String::from_utf8_lossy(&unnamed.stderr)
+            .contains("a commit under this scope must name FEAT-001"),
+        "{}",
+        String::from_utf8_lossy(&unnamed.stderr)
+    );
+    let guard = fx.guard(&wt, "git commit -m \"cart\n\nRefs: kanbanr:FEAT-002\"");
+    assert!(
+        guard.contains("\"deny\"") && guard.contains("must name FEAT-001"),
+        "{guard}"
+    );
+    fx.ok(&wt, &["commit", "-m", "keep a cart"]);
+    let msg = fx.ok_git(&wt, &["log", "-1", "--format=%B"]);
+    assert!(msg.contains("Refs: kanbanr:FEAT-001"), "{msg}");
+    assert!(
+        msg.contains("Agent-Scope: SC-001 (build, by the agent for FEAT-001)"),
+        "{msg}"
+    );
+
+    fx.ok_git(&wt, &["switch", "-q", "-c", "elsewhere"]);
+    std::fs::write(wt.join("more.rs"), "\n").unwrap();
+    fx.ok_git(&wt, &["add", "more.rs"]);
+    let off = fx.git(
+        &wt,
+        &["commit", "-q", "-m", "more\n\nRefs: kanbanr:FEAT-001"],
+    );
+    assert!(!off.status.success());
+    assert!(
+        String::from_utf8_lossy(&off.stderr)
+            .contains("this commit is on elsewhere; this agent commits only on feat/FEAT-001-cart"),
+        "{}",
+        String::from_utf8_lossy(&off.stderr)
+    );
+    let guard = fx.guard(&wt, "git commit -m \"more\n\nRefs: kanbanr:FEAT-001\"");
+    assert!(
+        guard.contains("this agent commits only on feat/FEAT-001-cart"),
+        "{guard}"
+    );
+
+    fx.ok(&fx.work, &["scope", "issue", "design", "FEAT-002"]);
+    let design = fx.worktree("agent-d1");
+    fx.ok(&design, &["scope", "claim", "SC-002"]);
+    std::fs::write(design.join("x.md"), "x\n").unwrap();
+    fx.ok_git(&design, &["add", "x.md"]);
+    let refused = fx.git(
+        &design,
+        &["commit", "-q", "-m", "x\n\nRefs: kanbanr:FEAT-002"],
+    );
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr)
+            .contains("a design agent does not commit or edit code"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+}
+
+/// FEAT-214 R-6: nothing is pushed from an agent worktree: `kanbanr sync` is refused, a board
+/// whose policy is `auto` is not pushed after a scoped write, `git push` is refused by the pre-push
+/// hook, and the guard denies it before it runs.
+#[test]
+fn scoped_agent_cannot_push_or_sync() {
+    let fx = ScopeFx::new("push");
+    let remote = fx.base.join("board-remote.git");
+    fx.ok_git(
+        &fx.base,
+        &["init", "-q", "--bare", remote.to_str().unwrap()],
+    );
+    fx.ok(
+        &fx.work,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    fx.ok(&fx.work, &["remote", "push-policy", "auto"]);
+    let wt = fx.claimed("agent-t1");
+    let pushed_before = fx.ok_git(&remote, &["rev-list", "--all", "--count"]);
+
+    let err = fx.refused(&wt, &["sync"]);
+    assert!(
+        err.contains("refused by agent scope SC-001: `kanbanr sync` pushes the board"),
+        "{err}"
+    );
+    fx.ok(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+    let pushed_after = fx.ok_git(&remote, &["rev-list", "--all", "--count"]);
+    assert_ne!(
+        pushed_before.trim(),
+        "0",
+        "the coordinator's writes were pushed"
+    );
+    assert_eq!(
+        pushed_before, pushed_after,
+        "the scoped write was not pushed"
+    );
+    assert!(
+        fx.board.join(".kanbanr.unpushed").exists(),
+        "left for the coordinator to push"
+    );
+
+    let code_remote = fx.base.join("code-remote.git");
+    fx.ok_git(
+        &fx.base,
+        &["init", "-q", "--bare", code_remote.to_str().unwrap()],
+    );
+    let push = fx.git(&wt, &["push", "-q", code_remote.to_str().unwrap(), "HEAD"]);
+    assert!(!push.status.success(), "the pre-push hook refuses");
+    assert!(
+        String::from_utf8_lossy(&push.stderr).contains("agents never push"),
+        "{}",
+        String::from_utf8_lossy(&push.stderr)
+    );
+    let guard = fx.guard(&wt, "git push origin HEAD");
+    assert!(
+        guard.contains("\"deny\"") && guard.contains("agents never push"),
+        "{guard}"
+    );
+    let guard = fx.guard(&wt, "cd ../../.. && kanbanr sync");
+    assert!(guard.contains("\"deny\""), "{guard}");
+    // From the main checkout the coordinator pushes as before.
+    fx.ok(&fx.work, &["sync"]);
+}
+
+/// FEAT-214 R-7: a write and a commit made under a scope are recorded as the person, by the agent
+/// for its item: on the activity entry, the event, the board commit and the code commit.
+#[test]
+fn scoped_writes_are_attributed() {
+    let fx = ScopeFx::new("attributed");
+    let wt = fx.claimed("agent-t1");
+    fx.ok(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+    let board_commit = fx.ok_git(&fx.board, &["log", "-1", "--format=%an%n%B"]);
+    assert!(
+        board_commit.starts_with("A\n"),
+        "as the person: {board_commit}"
+    );
+    assert!(
+        board_commit.contains("Agent-Scope: SC-001 (build, by the agent for FEAT-001)"),
+        "{board_commit}"
+    );
+    let read_all = |dir: &str| -> String {
+        let mut out = String::new();
+        for e in std::fs::read_dir(fx.board.join("projects/shop").join(dir))
+            .unwrap()
+            .flatten()
+        {
+            out.push_str(&std::fs::read_to_string(e.path()).unwrap());
+        }
+        out
+    };
+    let activity = read_all("activity");
+    assert!(activity.contains("scope: SC-001"), "{activity}");
+    assert!(activity.contains("actor: A"), "{activity}");
+    // A task or test change emits no event; one that did would carry the agent too
+    // (write::tests::scoped_write_is_refused_before_dispatch records one through record_by).
+    let events = read_all("events");
+    assert!(!events.contains("task"), "{events}");
+    std::fs::write(wt.join("cart.rs"), "fn cart() {}\n").unwrap();
+    fx.ok_git(&wt, &["add", "cart.rs"]);
+    fx.ok_git(
+        &wt,
+        &["commit", "-q", "-m", "cart\n\nRefs: kanbanr:FEAT-001/R-1"],
+    );
+    let code = fx.ok_git(&wt, &["log", "-1", "--format=%B"]);
+    assert!(
+        code.contains("Refs: kanbanr:FEAT-001/R-1\nAgent-Scope: SC-001"),
+        "the hook adds it: {code}"
+    );
+}
+
+/// FEAT-214 R-8: once a scope is revoked, or its expiry passes, every further write and commit
+/// under it is refused.
+#[test]
+fn revoked_and_expired_scopes_refuse() {
+    let fx = ScopeFx::new("ended");
+    let wt = fx.claimed("agent-t1");
+    std::fs::write(wt.join("cart.rs"), "\n").unwrap();
+    fx.ok_git(&wt, &["add", "cart.rs"]);
+    fx.ok(&fx.work, &["scope", "revoke", "SC-001", "--reason", "done"]);
+    let err = fx.refused(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+    assert!(err.contains("agent scope SC-001 was revoked by A"), "{err}");
+    assert!(err.contains("(done)"), "{err}");
+    let commit = fx.git(&wt, &["commit", "-q", "-m", "x\n\nRefs: kanbanr:FEAT-001"]);
+    assert!(!commit.status.success());
+    assert!(String::from_utf8_lossy(&commit.stderr).contains("was revoked"));
+
+    // The coordinator takes the first agent's worktree away, and issues a second scope.
+    fx.ok_git(
+        &fx.work,
+        &["worktree", "remove", "--force", wt.to_str().unwrap()],
+    );
+    let wt2 = fx.claimed("agent-t2");
+    // Its expiry passes: written into the record by hand and committed, as time would.
+    let file = fx.board.join("projects/shop/scopes.yaml");
+    let raw = std::fs::read_to_string(&file).unwrap();
+    let ended = raw.replacen(
+        "expires_at:",
+        "expires_at: 2020-01-01T00:00:00Z\n  old_expiry:",
+        2,
+    );
+    std::fs::write(&file, ended).unwrap();
+    fx.ok_git(&fx.board, &["commit", "-q", "-am", "the clock passes"]);
+    let err = fx.refused(
+        &wt2,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+    assert!(
+        err.contains("agent scope SC-002 expired at 2020-01-01 00:00 UTC"),
+        "{err}"
+    );
+    assert!(err.contains("kanbanr scope renew SC-002 --for 4h"), "{err}");
+}
+
+/// FEAT-214 R-9: a build scope's commits made after its item's tasks last changed are named by
+/// `scope drift --brief` (the Stop hook and session start read it) and by `git doctor`; recording
+/// the task clears it.
+#[test]
+fn scope_drift_is_reported() {
+    let fx = ScopeFx::new("drift");
+    let wt = fx.claimed("agent-t1");
+    assert!(
+        fx.ok(&fx.work, &["scope", "drift", "--brief"])
+            .trim()
+            .is_empty()
+    );
+    fx.ok(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(wt.join("cart.rs"), "\n").unwrap();
+    fx.ok_git(&wt, &["add", "cart.rs"]);
+    fx.ok(&wt, &["commit", "-m", "keep a cart"]);
+    let drift = fx.ok(&fx.work, &["scope", "drift", "--brief"]);
+    assert!(
+        drift.contains(
+            "FEAT-001: 1 commit(s) on feat/FEAT-001-cart since its tasks last changed at"
+        ),
+        "{drift}"
+    );
+    assert!(
+        drift.contains("(agent scope SC-001)") && drift.contains("keep a cart"),
+        "{drift}"
+    );
+    let doctor = fx.run(&fx.work, &["git", "doctor"]);
+    let doctor = String::from_utf8_lossy(&doctor.stdout);
+    assert!(
+        doctor.contains("1 commit(s) on feat/FEAT-001-cart"),
+        "{doctor}"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    fx.ok(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "Completed"],
+    );
+    assert!(
+        fx.ok(&fx.work, &["scope", "drift", "--brief"])
+            .trim()
+            .is_empty()
+    );
+}
+
+/// FEAT-214 R-11: with scopes on the board, the main checkout works as it always has: its writes
+/// carry no agent, it moves items, commits on an item branch, sets the identity and syncs.
+#[test]
+fn main_session_unchanged_with_scopes_on_board() {
+    let fx = ScopeFx::new("main");
+    let _wt = fx.claimed("agent-t1");
+    fx.ok(
+        &fx.work,
+        &["task", "state", "FEAT-002", "TL-001", "T1", "InProgress"],
+    );
+    let msg = fx.ok_git(&fx.board, &["log", "-1", "--format=%B"]);
+    assert!(!msg.contains("Agent-Scope"), "{msg}");
+    fx.ok(&fx.work, &["move", "FEAT-002", "Planned"]);
+    fx.ok(&fx.work, &["identity", "--name", "A", "--email", "a@x"]);
+    fx.ok(&fx.work, &["sync"]);
+    fx.ok_git(&fx.work, &["switch", "-q", "-c", "feat/FEAT-002-other"]);
+    std::fs::write(fx.work.join("o.rs"), "\n").unwrap();
+    fx.ok_git(&fx.work, &["add", "o.rs"]);
+    fx.ok(&fx.work, &["commit", "-m", "other"]);
+    let code = fx.ok_git(&fx.work, &["log", "-1", "--format=%B"]);
+    assert!(
+        code.contains("Refs: kanbanr:FEAT-002") && !code.contains("Agent-Scope"),
+        "{code}"
+    );
+    assert!(
+        fx.guard(&fx.work, "git push origin HEAD").trim().is_empty(),
+        "the guard says nothing"
+    );
+    assert!(
+        fx.ok(&fx.work, &["scope", "here"])
+            .contains("no agent scope applies here")
+    );
+}
+
+/// FEAT-214 R-13: in an agent worktree, the commands that change kanbanr itself or write outside the
+/// board's write path are refused before they run, and the board is untouched.
+#[test]
+fn outside_core_commands_refused_in_agent_worktree() {
+    let fx = ScopeFx::new("outside");
+    let wt = fx.claimed("agent-t1");
+    let before = snapshot(&fx.board);
+    for args in [
+        vec!["identity", "--name", "B", "--email", "b@x"],
+        vec!["sync"],
+        vec!["migrate"],
+        vec!["index"],
+        vec!["git", "install-hooks"],
+        vec!["git", "uninstall-hooks"],
+        vec!["hooks", "install"],
+        vec!["serve", "--allow-writes"],
+        vec!["project", "use", "other"],
+        vec!["claude", "sync"],
+        vec!["start", "FEAT-001"],
+        vec!["finish", "FEAT-001"],
+        vec!["events", "test"],
+        vec!["remote", "add", "x", "/nowhere"],
+        vec!["remote", "push-policy", "auto"],
+        vec!["init", "shop", "--no-hooks"],
+        vec!["skill", "install"],
+    ] {
+        let err = fx.refused(&wt, &args);
+        assert!(
+            err.contains("refused by agent scope SC-001"),
+            "{args:?}: {err}"
+        );
+        assert!(
+            err.contains("which no agent scope allows"),
+            "{args:?}: {err}"
+        );
+    }
+    assert!(snapshot(&fx.board) == before, "the board is untouched");
+    for (command, why) in [
+        (
+            "kanbanr --data-dir /elsewhere task state FEAT-001 TL-001 T1 Completed",
+            "never another",
+        ),
+        ("KANBANR_PROJECT=other kanbanr board", "never another"),
+        ("cat .git/kanbanr-scope.yaml", "the scope file"),
+        ("git worktree remove .", "the coordinator's to remove"),
+        ("git config core.hooksPath /dev/null", "stay where they are"),
+        ("cd /usr && git status", "never from another folder"),
+    ] {
+        let out = fx.guard(&wt, command);
+        assert!(
+            out.contains("\"deny\"") && out.contains(why),
+            "{command}: {out}"
+        );
+    }
+    let board_file = fx.board.join("projects/shop/config.yaml");
+    let out = fx.guard(&wt, &format!("echo x > {}", board_file.display()));
+    assert!(out.contains("written only through kanbanr"), "{out}");
+    assert!(
+        fx.guard(&wt, "cargo test 2>&1 | tail -5").trim().is_empty(),
+        "work goes on"
+    );
+}
+
+/// FEAT-214 R-14: a task change under a scope that completes its item leaves the item where it is,
+/// and says the coordinator moves it.
+#[test]
+fn scoped_task_completion_holds_auto_advance() {
+    let fx = ScopeFx::new("hold");
+    let wt = fx.claimed("agent-t1");
+    fx.ok(
+        &wt,
+        &[
+            "test",
+            "FEAT-001",
+            "R-1",
+            "cart::keeps",
+            "green",
+            "--rev",
+            "abc",
+        ],
+    );
+    fx.ok(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "Completed"],
+    );
+    let out = fx.run(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T2", "Completed"],
+    );
+    assert!(out.status.success());
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        said.contains("all of FEAT-001's tasks are done, but it stays in In Progress: under agent scope SC-001 the coordinator moves it"),
+        "{said}"
+    );
+    assert_eq!(fx.feature_status("FEAT-001"), "In Progress");
+    fx.ok(&fx.work, &["move", "FEAT-001", "Completed"]);
 }
 
 /// FEAT-212 R-17: a release with nothing planned into it is never promoted, to any stage — the

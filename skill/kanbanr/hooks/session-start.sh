@@ -106,6 +106,21 @@ if [ "$WAITING" -gt 0 ]; then
   echo
 fi
 
+# Agents at work (FEAT-214): the scopes in force, and any agent branch ahead of its item's tasks.
+SCOPES="$(kanbanr "${PROJECT_ARGS[@]}" scope list 2>/dev/null || true)"
+DRIFT="$(kanbanr "${PROJECT_ARGS[@]}" scope drift --brief 2>/dev/null || true)"
+if { [ -n "$SCOPES" ] && [ "$SCOPES" != "(no agent scopes in force)" ]; } || [ -n "$DRIFT" ]; then
+  echo "### Agents at work"
+  if [ -n "$SCOPES" ] && [ "$SCOPES" != "(no agent scopes in force)" ]; then
+    printf '%s\n' "$SCOPES"
+  fi
+  if [ -n "$DRIFT" ]; then
+    echo "Ahead of the board — bring these items' tasks up to date first:"
+    printf '%s\n' "$DRIFT"
+  fi
+  echo
+fi
+
 # A saved process that has moved on (FEAT-170): said once; applied only when the user says so.
 PROCESS="$(kanbanr "${PROJECT_ARGS[@]}" process status --if-changed 2>/dev/null || true)"
 if [ -n "$PROCESS" ]; then

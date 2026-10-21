@@ -222,7 +222,12 @@ The board — kanbanr's own, as it is developed — and, in dark mode:
 ![The same board in dark mode](../images/board-dark.png)
 
 An item: why it exists, the goals it serves, its requirements and the tests that proved them, its
-todo-lists and its history.
+todo-lists and its history. When agents work on it (FEAT-214), an **Agents** section after the
+todo-lists shows a banner for each scope in force: the agent's role and scope, its branch, who
+issued it and when, the time left, and how many of its commits are ahead of the item's tasks; and
+below it the item's scope history, expired and revoked scopes included, with the revoke reason. An
+activity line made by an agent reads *you, by the agent for FEAT-214 (SC-007)*, on the item page
+and on the board.
 
 In every spec, doc and charter, a reference to the board — `FEAT-012`, `FEAT-012/R-2`, `MS-004`,
 `ADR-0005`, `G-1`, `architecture/data.md` — is a link to its page, underlined dotted so it reads
@@ -279,7 +284,9 @@ every guard rail that refuses a step on the way (FEAT-213). Its sections, top to
   a `Refs:` trailer naming the item, never on a protected branch) and whether the hooks are
   installed; diagram linting and strictness (`config diagrams`); each coverage rule and how many
   subjects it leaves uncovered (`config coverage`); the board's push policy (`remote push-policy`),
-  and that kanbanr never pushes code.
+  and that kanbanr never pushes code; and **Agent scopes** (FEAT-214): what a design and a build
+  scope allow, every scope in force across items (`kanbanr scope revoke`), and whether the
+  pre-push hook is installed.
 
 Every line shows its state and the CLI command that changes it. The page changes nothing itself.
 

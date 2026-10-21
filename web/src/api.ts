@@ -1,5 +1,5 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ReleasePlan, ItemDiagrams, GitModelView, GitDoctorIssue, Guards } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -59,6 +59,11 @@ export const api = {
     getJson<GitDoctorIssue[]>(apiUrl(`/projects/${encodeURIComponent(id)}/git/doctor`)),
   /** Every guard rail the project has on, in one read (FEAT-213). */
   getGuards: (id: string) => getJson<Guards>(apiUrl(`/projects/${encodeURIComponent(id)}/guards`)),
+  /** A project's agent scopes with their state (FEAT-214). */
+  getScopes: (id: string) => getJson<AgentScope[]>(apiUrl(`/projects/${encodeURIComponent(id)}/scopes`)),
+  /** Agent branches ahead of their items' tasks (FEAT-214); needs the code repository. */
+  getScopeDrift: (id: string) =>
+    getJson<ScopeDrift[]>(apiUrl(`/projects/${encodeURIComponent(id)}/scopes/drift`)),
   /** What each live item is missing, from the one engine every surface uses (FEAT-112). */
   getReadiness: (id: string) =>
     getJson<Readiness>(apiUrl(`/projects/${encodeURIComponent(id)}/readiness`)),

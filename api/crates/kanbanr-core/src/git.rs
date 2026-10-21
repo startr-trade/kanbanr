@@ -176,9 +176,58 @@ pub fn ensure_repo_as(dir: &Path, identity: Option<(&str, &str)>) {
     }
 }
 
+/// M11 for a change to the board `dir` made from an agent's worktree (FEAT-214), where the board is
+/// one scopes govern (never a temporary one, D7).
+fn agent_refusal(dir: &Path, what: &str) -> Option<String> {
+    if !crate::agentscope::is_governed_board(dir) {
+        return None;
+    }
+    let cwd = std::env::current_dir().ok()?;
+    crate::agentscope::outside_core_refusal(&cwd, what)
+}
+
+/// The scope id (or `none`) of an agent context this process runs in, when it would push a governed
+/// board (FEAT-214 R-6).
+fn agent_pusher(dir: &Path) -> Option<String> {
+    if !crate::agentscope::is_governed_board(dir) {
+        return None;
+    }
+    let wt = crate::agentscope::agent_context(&std::env::current_dir().ok()?)?;
+    Some(
+        crate::agentscope::read_pointer(&wt.git_dir)
+            .map(|p| p.scope)
+            .unwrap_or_else(|| "none".to_string()),
+    )
+}
+
+/// The board's files changed outside a kanbanr write (FEAT-214): every path git reports as
+/// modified, added, deleted or untracked, ignored files aside. `Ok` when there are none.
+pub fn is_clean(dir: &Path) -> Result<(), Vec<String>> {
+    let Ok(repo) = Repository::open(dir) else {
+        return Ok(());
+    };
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(false);
+    let Ok(statuses) = repo.statuses(Some(&mut opts)) else {
+        return Ok(());
+    };
+    let paths: Vec<String> = statuses
+        .iter()
+        .filter(|e| e.status() != git2::Status::CURRENT)
+        .filter_map(|e| e.path().ok().map(String::from))
+        .collect();
+    if paths.is_empty() { Ok(()) } else { Err(paths) }
+}
+
 /// Set the repo-local commit identity (used by local mode: `kanbanr identity --name --email`).
 pub fn set_identity(dir: &Path, name: &str, email: &str) -> Result<(), String> {
     crate::project::assert_inside_fence(dir); // FEAT-195
+    // Who the board's commits are by is never an agent's to change (FEAT-214).
+    if let Some(refusal) = agent_refusal(dir, "`kanbanr identity` changes kanbanr itself") {
+        return Err(refusal);
+    }
     let repo = Repository::open(dir).map_err(|e| e.message().to_string())?;
     let mut cfg = repo.config().map_err(|e| e.message().to_string())?;
     cfg.set_str("user.name", name)
@@ -420,6 +469,11 @@ pub struct SyncOutcome {
 pub fn sync_all(dir: &Path) -> SyncOutcome {
     crate::project::assert_inside_fence(dir); // FEAT-195
     let mut outcome = SyncOutcome::default();
+    // An agent never pushes the board (FEAT-214): the coordinator reviews and pushes.
+    if let Some(id) = agent_pusher(dir) {
+        outcome.failures.push(crate::agentscope::push_refusal(&id));
+        return outcome;
+    }
     let Ok(repo) = Repository::open(dir) else {
         return outcome;
     };

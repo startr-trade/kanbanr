@@ -116,6 +116,59 @@ Claude Code, start the line with `!`:
 ! kanbanr move FEAT-074 Deferred
 ```
 
+## Sub-agents and agent scopes
+
+When Claude splits work across sub-agents, a design agent to draft, build agents in their own git
+worktrees to write the code, each agent's limits are not left to its brief. Claude issues each one
+a **scope** first, and kanbanr enforces it (FEAT-214):
+
+```
+kanbanr scope issue build FEAT-214            # --for 8h by default, 72h at most; --note "T1–T4"
+```
+
+The command records the scope on the board (who issued it, the item, what it allows, the item's
+branch, when it expires) and prints the boundary table Claude pastes at the top of the agent's
+brief. The agent starts in its own worktree (`isolation: worktree`), and its first command is the
+one the brief names, `kanbanr scope claim SC-007`. The claim binds the scope to that worktree, on
+the board and in a pointer file in the worktree's own git directory, and switches a build agent to
+its item's branch.
+
+From then on, in that worktree:
+
+| | A **build** scope | A **design** scope |
+|---|---|---|
+| Board writes | its own item's task states and test evidence; a batch only of those | none |
+| Commits | on its item's branch, each naming its item | none |
+| Pushing | never: `kanbanr sync`, `git push` and the board's push policy are all refused | never |
+| `identity`, `hooks`, `migrate`, `serve --allow-writes`, `start`, `finish`, … | refused | refused |
+
+A refusal names the scope and the boundary it crossed:
+
+```
+refused by agent scope SC-007 (build, FEAT-214): `move feature FEAT-214` is not one of its
+operations. Under this scope you may: `kanbanr task state FEAT-214 …`, `kanbanr test FEAT-214 …`,
+commits on feat/FEAT-214-agent-scopes naming FEAT-214. Report what you needed to the coordinator; do
+not work around it.
+```
+
+A worktree under `.claude/worktrees/` with no scope bound to it is refused every write and commit.
+When the agent finishes its item's last task, the item stays where it is: Claude moves it. Every
+write and commit an agent makes is recorded as you, by the agent for its item: on the activity
+entry and the event, and as an `Agent-Scope:` trailer on the board commit and the code commit.
+
+Claude keeps an eye on the agents' branches: `kanbanr scope drift` names a build agent's commits
+that are newer than its item's last task change, and so do the Stop hook, session start and
+`kanbanr git doctor`. When the agent's work has been reviewed, Claude revokes its scope
+(`kanbanr scope revoke SC-007 --reason done`); `kanbanr scope list` shows the ones in force, and
+`kanbanr scope renew SC-007 --for 4h` extends one. Your own checkout is never scoped.
+
+Scopes guard against mistakes and casual crossings, not a hostile process: the agent runs as you,
+with your file permissions. A script that leaves the worktree, a commit with its hooks switched off
+inside a script, or a hand edit to the board's `scopes.yaml` is not stopped, though every scoped
+write carries its agent and a trailer, so an unattributed change stands out in the history.
+A board that holds scopes is governed wherever it is, so setting `TMPDIR` does not make it look
+like a test board; only a board in the temporary directory that holds no scopes is exempt.
+
 ## Why it asks what it asks
 
 Claude asks the board, `kanbanr check <CODE> --json`, what each possible next stage still lacks.

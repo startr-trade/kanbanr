@@ -194,3 +194,19 @@ the repo root), use `${CLAUDE_PLUGIN_ROOT}/skill/kanbanr/hooks/...` for the
 `command` paths instead of an absolute path. The plugin manifest defaults to the
 `.sh` hooks; Windows users point the `command` at the matching `.ps1` and add
 `"shell": "powershell"`.
+
+## Agents at work (FEAT-214)
+
+Both hooks read the agent scopes in force:
+
+- **SessionStart** prints an `### Agents at work` section from `kanbanr scope list` and
+  `kanbanr scope drift --brief`: every scope in force, and any build agent whose branch has commits
+  newer than its item's last task change.
+- **Stop** runs `kanbanr scope drift --brief` before its staleness rule, with its own per-session
+  stamp (`kanbanr-agents-<session>` in the temp dir). When an agent's branch is ahead of the board
+  it blocks once with: "kanbanr: agent work is ahead of the board: … Look at the branch and bring
+  the item's tasks up to date now (`kanbanr task state …`)."
+
+`kanbanr git install-hooks` also installs a `pre-push` hook (`kanbanr git check-push`) beside the
+commit hooks: in an agent's worktree it refuses every push. Re-run it on an existing install
+(it is idempotent); `kanbanr scope issue` refuses until it is there.

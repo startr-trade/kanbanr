@@ -59,6 +59,10 @@
             "description": "Who made the change (the commit identity name).",
             "type": "string"
           },
+          "by_agent": {
+            "$ref": "#/components/schemas/ByAgent",
+            "description": "Made under an agent scope (FEAT-214): the person, by the agent for its item."
+          },
           "item": {
             "description": "The work item (feature code) this change touched, when applicable — enables per-item and\nper-kind activity streams. Serialized as `item`.",
             "type": "string"
@@ -377,6 +381,29 @@
         "required": [
           "date",
           "remaining"
+        ],
+        "type": "object"
+      },
+      "ByAgent": {
+        "description": "Who a write under a scope was made by: the person, by the agent for the item. Recorded on the\nactivity entry and the event.",
+        "properties": {
+          "item": {
+            "description": "The item the scope is for.",
+            "type": "string"
+          },
+          "role": {
+            "description": "`design` or `build`.",
+            "type": "string"
+          },
+          "scope": {
+            "description": "The scope it was made under, `SC-007`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "role",
+          "item"
         ],
         "type": "object"
       },
@@ -3425,6 +3452,10 @@
         "additionalProperties": true,
         "description": "A todo item belonging to a todo-list. `key` is short and unique within its todo-list.",
         "properties": {
+          "changed_at": {
+            "description": "When the task's state last changed (RFC3339; FEAT-214): what agent drift is measured from.\nAbsent on tasks no kanbanr since FEAT-214 has changed.",
+            "type": "string"
+          },
           "key": {
             "type": "string"
           },

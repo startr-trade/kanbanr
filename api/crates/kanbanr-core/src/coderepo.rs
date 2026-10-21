@@ -416,6 +416,64 @@ pub fn worktree_of(root: &Path, branch: &str) -> Option<PathBuf> {
     checked_out_in(root, branch)
 }
 
+/// What agent scope resolution reads about the working tree `cwd` is in (FEAT-214): its root, its
+/// own git directory, the main worktree's root, whether it is a linked worktree and its branch.
+/// `None` outside a work tree. Paths are resolved on disk, so they compare as the board stores them.
+pub fn worktree_facts(cwd: &Path) -> Option<crate::agentscope::WorktreeFacts> {
+    let out = git(
+        cwd,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+            "--git-dir",
+            "--git-common-dir",
+        ],
+    )
+    .ok()?;
+    let mut lines = out
+        .lines()
+        .map(|l| crate::project::normalize(Path::new(l.trim())));
+    let (root, git_dir, common) = (lines.next()?, lines.next()?, lines.next()?);
+    let linked = git_dir != common;
+    // The main worktree is the one whose git directory is the common one: `<main>/.git`.
+    let main_root = if common.file_name().is_some_and(|n| n == ".git") {
+        common.parent()?.to_path_buf()
+    } else {
+        root.clone()
+    };
+    Some(crate::agentscope::WorktreeFacts {
+        branch: current_branch(&root),
+        root,
+        git_dir,
+        main_root,
+        linked,
+    })
+}
+
+/// The commits of `range` committed after `since` (an RFC3339 instant), newest first (FEAT-214:
+/// agent drift). Compared as instants here rather than by `git log --since`, which reads only to
+/// the second and parses fractions loosely.
+pub fn commits_since(root: &Path, range: &str, since: &str) -> Result<Vec<Commit>> {
+    let out = git(root, &["log", "--format=%H%x1f%cI%x1f%s%x1f%B%x1e", range])?;
+    Ok(out
+        .split('\u{1e}')
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .filter_map(|r| {
+            let mut parts = r.splitn(4, '\u{1f}');
+            let sha = parts.next()?.to_string();
+            let at = parts.next()?.to_string();
+            let commit = Commit {
+                sha,
+                subject: parts.next()?.to_string(),
+                message: parts.next().unwrap_or_default().to_string(),
+            };
+            crate::before(since, &at).then_some(commit)
+        })
+        .collect())
+}
+
 /// Is `ancestor` contained in `of`? That is, can `of` be reached from `ancestor` by fast-forward.
 pub fn is_ancestor(root: &Path, ancestor: &str, of: &str) -> bool {
     succeeds(root, &["merge-base", "--is-ancestor", ancestor, of])

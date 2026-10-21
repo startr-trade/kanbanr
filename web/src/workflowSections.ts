@@ -156,7 +156,7 @@ export function doctorWarning(issues: GitDoctorIssue[], first = 3): { count: num
 
 /** One guard rail: what it is, its state, and the command that changes it. */
 export interface GuardRow extends Row {
-  group: "Method" | "Commits" | "Diagrams" | "Coverage" | "Pushing";
+  group: "Method" | "Commits" | "Diagrams" | "Coverage" | "Pushing" | "Agent scopes";
   command: string;
   tone: Tone;
 }
@@ -266,5 +266,49 @@ export function guardRows(g: Guards): GuardRow[] {
       command: "git push",
     },
   );
+
+  // What sub-agents may do (FEAT-214): the roles, every scope in force, and the pre-push hook.
+  const a = g.agents;
+  if (!a) {
+    rows.push({
+      group: "Agent scopes",
+      label: "scopes",
+      value: "not known here: this daemon does not report them",
+      tone: "unknown",
+      command: "kanbanr scope list",
+    });
+    return rows;
+  }
+  for (const r of a.roles) {
+    rows.push({
+      group: "Agent scopes",
+      label: r.role,
+      value: r.operations.length === 0 ? "reads only" : r.operations.join(", "),
+      tone: "on",
+      command: `kanbanr scope issue ${r.role} <CODE>`,
+    });
+  }
+  for (const s of a.scopes) {
+    rows.push({
+      group: "Agent scopes",
+      label: s.id,
+      value: `${s.role}, ${s.item}, ${s.state}${s.branch ? ` on ${s.branch}` : ""}, until ${s.expires_at.slice(0, 16).replace("T", " ")} UTC`,
+      tone: "on",
+      command: `kanbanr scope revoke ${s.id} --reason done`,
+    });
+  }
+  const hook = a.push_hook_installed;
+  rows.push({
+    group: "Agent scopes",
+    label: "pre-push hook",
+    value:
+      hook === null
+        ? "not known here: the monitor does not read the repository's hooks"
+        : hook
+          ? "installed: nothing is pushed from an agent's worktree"
+          : "not installed: no scope is issued until it is",
+    tone: hook === null ? "unknown" : hook ? "on" : "warn",
+    command: hook === null ? "kanbanr git status" : "kanbanr git install-hooks",
+  });
   return rows;
 }

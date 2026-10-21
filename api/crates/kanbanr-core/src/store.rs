@@ -1730,6 +1730,7 @@ impl Store {
             key,
             text: text.to_string(),
             state: TaskState::NotStarted,
+            changed_at: None,
         };
         list.tasks.push(task.clone());
         f.updated_at = now_rfc3339();
@@ -1761,14 +1762,45 @@ impl Store {
         key: &str,
         state: TaskState,
     ) -> Result<(FeatureItem, Option<String>)> {
+        self.set_task_state_held(id, feature, todo, key, state, None)
+    }
+
+    /// [`Store::set_task_state_reported`], with the item's auto-advance held when `hold` is given
+    /// (FEAT-214: under an agent scope the coordinator moves items). Held, the item stays where it
+    /// is; when its tasks are all done, `hold` is returned as the reason it stayed.
+    pub fn set_task_state_held(
+        &self,
+        id: &str,
+        feature: &str,
+        todo: &str,
+        key: &str,
+        state: TaskState,
+        hold: Option<&str>,
+    ) -> Result<(FeatureItem, Option<String>)> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
-        let charter = crate::charter::load(self, id)?;
-        let ctx = crate::readiness::Context::load(self, id, &project.config);
         Self::set_task_state_on(&mut project, &mut pending, feature, todo, key, state)?;
-        let out = Self::auto_advance_on(&mut project, &mut pending, &charter, &ctx, feature)?;
+        let out = match hold {
+            Some(hold) => Self::held_on(&project, feature, hold)?,
+            None => {
+                let charter = crate::charter::load(self, id)?;
+                let ctx = crate::readiness::Context::load(self, id, &project.config);
+                Self::auto_advance_on(&mut project, &mut pending, &charter, &ctx, feature)?
+            }
+        };
         self.flush(id, &project, &pending)?;
         Ok(out)
+    }
+
+    /// The item as it stands, with `hold` as why it stayed when its tasks are all done (FEAT-214).
+    fn held_on(
+        project: &Project,
+        feature: &str,
+        hold: &str,
+    ) -> Result<(FeatureItem, Option<String>)> {
+        let f = project.feature(feature)?.clone();
+        let held = f.all_tasks_completed().then(|| hold.to_string());
+        Ok((f, held))
     }
 
     /// Set one task's state. Whether the item then finishes is a separate step,
@@ -1795,7 +1827,10 @@ impl Store {
             .find(|t| t.key == key)
             .ok_or_else(|| CoreError::TaskNotFound(key.to_string(), todo.to_string()))?;
         task.state = state;
-        f.updated_at = now_rfc3339();
+        // When it changed (FEAT-214): agent drift is the branch's commits after this.
+        let now = now_rfc3339();
+        task.changed_at = Some(now.clone());
+        f.updated_at = now;
         pending.persist_features.insert(f.code.clone());
         Ok(())
     }
@@ -2054,6 +2089,18 @@ impl Store {
         id: &str,
         ops: Vec<crate::batch::BatchOp>,
         dry_run: bool,
+    ) -> Result<Vec<serde_json::Value>> {
+        self.apply_batch_held(id, ops, dry_run, None)
+    }
+
+    /// [`Store::apply_batch_with`], with every touched item's auto-advance held when `hold` is
+    /// given (FEAT-214): the items stay where they are, and a finished one says why.
+    pub fn apply_batch_held(
+        &self,
+        id: &str,
+        ops: Vec<crate::batch::BatchOp>,
+        dry_run: bool,
+        hold: Option<&str>,
     ) -> Result<Vec<serde_json::Value>> {
         use crate::batch::BatchOp::*;
         use std::collections::{HashMap, HashSet};
@@ -2595,8 +2642,11 @@ impl Store {
             if !judged.insert(code.clone()) {
                 continue;
             }
-            let (f, held) = Self::auto_advance_on(&mut project, &mut pending, &charter, &ctx, code)
-                .map_err(|e| CoreError::BatchOpFailed(*i, e.to_string()))?;
+            let advanced = match hold {
+                Some(hold) => Self::held_on(&project, code, hold),
+                None => Self::auto_advance_on(&mut project, &mut pending, &charter, &ctx, code),
+            };
+            let (f, held) = advanced.map_err(|e| CoreError::BatchOpFailed(*i, e.to_string()))?;
             if let Some(entry) = out.get_mut(*i) {
                 entry["status"] = serde_json::json!(f.status);
                 if let Some(held) = held {
@@ -3544,6 +3594,71 @@ pub enum Capability {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// FEAT-214 R-14: a held task change leaves a finished item where it is and says why, by task
+    /// write and by batch alike; unheld, the same change finishes it. Every state change is
+    /// stamped with when it happened.
+    #[test]
+    fn hold_skips_auto_advance() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-store-hold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let item = |title: &str| {
+            let f = store.add_feature("demo", title, "", "M", None).unwrap();
+            store.move_feature("demo", &f.code, "Scheduled").unwrap();
+            let list = store.add_todo_list("demo", &f.code, "work", None).unwrap();
+            store
+                .add_task("demo", &f.code, &list.code, "one", None)
+                .unwrap();
+            (f.code, list.code)
+        };
+        let hold = "all of the item's tasks are done, but it stays: the coordinator moves it";
+
+        let (held_code, list) = item("Held");
+        let (f, held) = store
+            .set_task_state_held(
+                "demo",
+                &held_code,
+                &list,
+                "T1",
+                TaskState::Completed,
+                Some(hold),
+            )
+            .unwrap();
+        assert_eq!(f.status, "Scheduled", "held: it stays where it is");
+        assert_eq!(held.as_deref(), Some(hold), "and says why");
+        let task = &f.todo_lists[0].tasks[0];
+        assert!(task.changed_at.is_some(), "the change is stamped");
+
+        let (batched, list2) = item("Batched");
+        let ops: Vec<crate::batch::BatchOp> = serde_json::from_value(json!([
+            {"op": "task.state", "feature": batched, "todo": list2, "key": "T1", "state": "Completed"}
+        ]))
+        .unwrap();
+        let out = store
+            .apply_batch_held("demo", ops, false, Some(hold))
+            .unwrap();
+        assert_eq!(out[0]["status"], "Scheduled", "{out:?}");
+        assert_eq!(out[0]["held"], hold);
+
+        let (free, list3) = item("Free");
+        let (f, held) = store
+            .set_task_state_reported("demo", &free, &list3, "T1", TaskState::Completed)
+            .unwrap();
+        assert_eq!(
+            (f.status.as_str(), held),
+            ("Completed", None),
+            "unheld, it finishes"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A scratch board under the temp dir with project `demo` and milestone `M`, diagrams strict.
     fn strict_board(tag: &str) -> (Store, PathBuf) {

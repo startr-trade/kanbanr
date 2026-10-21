@@ -70,6 +70,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Board cards say what is next in plain words": LOCAL,
             "Each release's button says what it does": LOCAL,
             "The Workflow page shows the cadence, the git model and the guard rails": LOCAL,
+            "The monitor shows agent scopes and who made each change": LOCAL,
             "The monitor's types match the published API": LOCAL,
         },
         "vscode": {

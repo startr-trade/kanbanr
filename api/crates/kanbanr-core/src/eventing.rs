@@ -83,6 +83,9 @@ pub struct Event {
     /// Free-form structured payload (e.g. new status, the dependency that unblocked this one).
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub detail: Value,
+    /// Made under an agent scope (FEAT-214): the person, by the agent for its item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by_agent: Option<crate::agentscope::ByAgent>,
 }
 
 impl Event {
@@ -101,6 +104,7 @@ impl Event {
             feature,
             message: message.into(),
             detail,
+            by_agent: None,
         }
     }
 }
@@ -225,8 +229,21 @@ pub fn record(
     path: &str,
     result: &str,
 ) -> Vec<Event> {
-    let events = compute_events(store, method, path, result);
-    for event in &events {
+    record_by(store, data_dir, method, path, result, None)
+}
+
+/// [`record`], recording on each event the agent the change was made by (FEAT-214).
+pub fn record_by(
+    store: &Store,
+    data_dir: &Path,
+    method: &str,
+    path: &str,
+    result: &str,
+    by_agent: Option<&crate::agentscope::ByAgent>,
+) -> Vec<Event> {
+    let mut events = compute_events(store, method, path, result);
+    for event in &mut events {
+        event.by_agent = by_agent.cloned();
         append(data_dir, &event.project, event);
     }
     events

@@ -219,6 +219,10 @@ jobs:
       # command that changes it, and changes nothing itself (FEAT-213).
       - name: The Workflow page shows the cadence, the git model and the guard rails
         run: npm run check:workflow
+      # Every agent scope and its state, on the item page, the Workflow page and the activity, with
+      # no action offered: scopes are issued and revoked from the CLI (FEAT-214).
+      - name: The monitor shows agent scopes and who made each change
+        run: npm run check:agent-scopes
 
       # The monitor reads the published read API (FEAT-177): every field api.ts's types read must
       # be one the route sends, as the OpenAPI document generated from the Rust types describes it.

@@ -54,7 +54,21 @@ pub fn write(
 
 /// Explicit sync: push pending local commits regardless of policy (the daemon's `/sync` route).
 pub fn sync(data_dir: &Path) -> git::SyncOutcome {
-    kanbanr_core::write::with_lock(data_dir, || git::push_pending(data_dir)).unwrap_or_default()
+    // Never from an agent's worktree (FEAT-214); core's push refuses there too.
+    if kanbanr_core::agentscope::is_governed_board(data_dir)
+        && let Some(refusal) = std::env::current_dir().ok().and_then(|cwd| {
+            kanbanr_core::agentscope::outside_core_refusal(
+                &cwd,
+                "the daemon's sync pushes the board",
+            )
+        })
+    {
+        return git::SyncOutcome {
+            pushed: Vec::new(),
+            failures: vec![refusal],
+        };
+    }
+    kanbanr_core::write::with_lock(data_dir, || git::push_pending(data_dir)).unwrap_or_default() // architecture: allowed because gated by outside_core_refusal
 }
 
 #[cfg(test)]

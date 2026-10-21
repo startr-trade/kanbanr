@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
+import { byAgentText } from "../agentScopes";
 import { useAsync, useLiveTick } from "../live";
 import { displayedStates, featuresNewestFirst } from "../types";
 import type { Feature, SprintReport } from "../types";
@@ -208,7 +209,7 @@ function ActivityPanel({ project, tick }: { project: string; tick: number }) {
           <li key={i}>
             <span className="activity-msg">{a.message}</span>
             <span className="activity-meta">
-              {a.actor} · {when(a.time)}
+              {byAgentText(a)} · {when(a.time)}
             </span>
           </li>
         ))}

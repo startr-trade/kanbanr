@@ -28,6 +28,27 @@ pub struct Guards {
     pub push_policy: PushPolicyView,
     /// Who pushes the code repository: always the person, never kanbanr (FEAT-189 R-5).
     pub code_pushes: &'static str,
+    /// What sub-agents may do (FEAT-214).
+    pub agents: AgentGuards,
+}
+
+/// Agent scopes, as a guard rail (FEAT-214): the roles and what each allows, every scope in force,
+/// and whether pushing from an agent's worktree is refused by the hook as well as by the guard.
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentGuards {
+    pub roles: Vec<AgentRole>,
+    /// Issued and active scopes, across items.
+    pub scopes: Vec<crate::agentscope::ScopeView>,
+    /// Whether kanbanr's pre-push hook is installed. `None` where it cannot be told: the hooks are
+    /// the CLI's to write and read.
+    pub push_hook_installed: Option<bool>,
+}
+
+/// One role an agent scope is issued for, and the operations it carries.
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentRole {
+    pub role: &'static str,
+    pub operations: Vec<&'static str>,
 }
 
 /// The commit guard's rules (FEAT-056, FEAT-176, FEAT-189).
@@ -127,5 +148,27 @@ pub fn report(store: &Store, id: &str, repo: Option<&Path>) -> Result<Guards> {
             source,
         },
         code_pushes: crate::gitmodel::PUSHES,
+        agents: agents(store, id)?,
+    })
+}
+
+/// The agent-scope guard rail of project `id` (FEAT-214).
+fn agents(store: &Store, id: &str) -> Result<AgentGuards> {
+    use crate::agentscope::{self, Role};
+    let now = crate::now_rfc3339();
+    let scopes = agentscope::load(store, id)?;
+    Ok(AgentGuards {
+        roles: [Role::Design, Role::Build]
+            .into_iter()
+            .map(|r| AgentRole {
+                role: r.name(),
+                operations: r.operations().iter().map(|o| o.as_str()).collect(),
+            })
+            .collect(),
+        scopes: agentscope::active(&scopes, &now)
+            .into_iter()
+            .map(|s| agentscope::ScopeView::new(s, &now))
+            .collect(),
+        push_hook_installed: None,
     })
 }

@@ -93,6 +93,22 @@ try {
     }
 } catch { }
 
+# Agents at work (FEAT-214): the scopes in force, and any agent branch ahead of its item's tasks.
+try {
+    $scopes = (& kanbanr scope list 2>$null | Out-String).Trim()
+    $drift = (& kanbanr scope drift --brief 2>$null | Out-String).Trim()
+    if ($scopes -eq '(no agent scopes in force)') { $scopes = '' }
+    if ($scopes -or $drift) {
+        Write-Output "### Agents at work"
+        if ($scopes) { Write-Output $scopes }
+        if ($drift) {
+            Write-Output "Ahead of the board - bring these items' tasks up to date first:"
+            Write-Output $drift
+        }
+        Write-Output ""
+    }
+} catch { }
+
 # A saved process that has moved on (FEAT-170): said once; applied only when the user says so.
 try {
     $process = (& kanbanr process status --if-changed 2>$null | Out-String).Trim()

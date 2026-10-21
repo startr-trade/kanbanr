@@ -87,6 +87,23 @@ case "$BOARD_EPOCH" in ''|*[!0-9]*) exit 0 ;; esac
 NOW="$(date +%s 2>/dev/null || true)"
 case "$NOW" in ''|*[!0-9]*) exit 0 ;; esac
 
+# Agent work the board has not caught up with (FEAT-214): a build scope's branch has commits newer
+# than its item's last task change. Checked before rule 1, with its own per-session stamp: a
+# board updated a minute ago can still lag the agent's branch.
+AGENT_DRIFT="$(kanbanr scope drift --brief 2>/dev/null | head -n 5 || true)"
+if [ -n "$AGENT_DRIFT" ]; then
+  SESSION="$(printf '%s' "$INPUT" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 | tr -cd 'A-Za-z0-9_-')"
+  STAMP="${TMPDIR:-/tmp}/kanbanr-agents-${SESSION:-nosession}"
+  LAST="$(cat "$STAMP" 2>/dev/null || true)"
+  case "$LAST" in ''|*[!0-9]*) LAST=0 ;; esac
+  if [ $(( NOW - LAST )) -ge "$WINDOW_SEC" ]; then
+    printf '%s' "$NOW" > "$STAMP" 2>/dev/null || true
+    LINES="$(printf '%s' "$AGENT_DRIFT" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    printf '{"decision":"block","reason":"kanbanr: agent work is ahead of the board: %s Look at the branch and bring the item'"'"'s tasks up to date now (`kanbanr task state …`)."}\n' "$LINES"
+    exit 0
+  fi
+fi
+
 # A finished wave with no retro is worth one reminder regardless of staleness.
 if [ -n "$RETRO_DUE" ]; then
   SESSION="$(printf '%s' "$INPUT" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1 | tr -cd 'A-Za-z0-9_-')"
