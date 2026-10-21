@@ -44,9 +44,6 @@ flate2 = "1"
 fs2 = "0.4"
 
 [dev-dependencies]
-# The integration tests read and write board YAML to set up and inspect fixtures. The program
-# itself parses no board YAML: that is core's (FEAT-176).
-serde_yaml.workspace = true
 # Spin up the built Docker image to integration-test the view daemon end-to-end.
 # `blocking` provides the synchronous SyncRunner used by the tests.
 testcontainers = { version = "0.28", features = ["blocking"] }

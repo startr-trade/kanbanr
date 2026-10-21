@@ -146,7 +146,7 @@ fn charter_path(store: &Store, id: &str) -> PathBuf {
 /// a normal state a new project is in — never an error.
 pub fn load(store: &Store, id: &str) -> Result<Charter> {
     match std::fs::read_to_string(charter_path(store, id)) {
-        Ok(s) if !s.trim().is_empty() => Ok(serde_yaml::from_str(&s)?),
+        Ok(s) if !s.trim().is_empty() => Ok(crate::yaml::from_str(&s)?),
         _ => Ok(Charter::default()),
     }
 }
@@ -169,7 +169,7 @@ pub fn save(store: &Store, id: &str, charter: &Charter) -> Result<Charter> {
             charter.adopted_at = crate::now_rfc3339();
         }
     }
-    std::fs::write(path, serde_yaml::to_string(&charter)?)?;
+    std::fs::write(path, crate::yaml::to_string(&charter)?)?;
     Ok(charter)
 }
 

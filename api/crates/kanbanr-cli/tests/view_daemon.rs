@@ -990,14 +990,14 @@ fn release_cli(home: &std::path::Path, work: &std::path::Path, args: &[&str]) ->
 
 /// A board's releases.yaml, with each stage change's time cleared: two promotions made a moment
 /// apart are the same promotion.
-fn releases_yaml(board: &std::path::Path) -> serde_yaml::Value {
+fn releases_yaml(board: &std::path::Path) -> kanbanr_core::yaml::Value {
     let text = std::fs::read_to_string(board.join("projects").join("shop").join("releases.yaml"))
         .expect("releases.yaml");
-    let mut v: serde_yaml::Value = serde_yaml::from_str(&text).unwrap();
-    for release in v.as_sequence_mut().unwrap() {
-        if let Some(stages) = release.get_mut("stages").and_then(|s| s.as_sequence_mut()) {
+    let mut v: kanbanr_core::yaml::Value = kanbanr_core::yaml::from_str(&text).unwrap();
+    for release in v.as_array_mut().unwrap() {
+        if let Some(stages) = release.get_mut("stages").and_then(|s| s.as_array_mut()) {
             for change in stages {
-                change["at"] = serde_yaml::Value::String(String::new());
+                change["at"] = kanbanr_core::yaml::Value::String(String::new());
             }
         }
     }

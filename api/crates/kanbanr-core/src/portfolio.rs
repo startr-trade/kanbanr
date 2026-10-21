@@ -66,7 +66,7 @@ pub fn load(store: &Store) -> Result<Workspace> {
         return Ok(Workspace::default());
     }
     let text = std::fs::read_to_string(&path)?;
-    let ws: Workspace = serde_yaml::from_str(&text)?;
+    let ws: Workspace = crate::yaml::from_str(&text)?;
     Ok(ws)
 }
 
@@ -76,7 +76,7 @@ pub fn save(store: &Store, ws: &Workspace) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let text = serde_yaml::to_string(ws)?;
+    let text = crate::yaml::to_string(ws)?;
     std::fs::write(&path, text)?;
     Ok(())
 }

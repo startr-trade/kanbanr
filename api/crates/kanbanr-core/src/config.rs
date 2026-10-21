@@ -585,7 +585,7 @@ pub fn preset_bare(name: &str) -> crate::Result<WorkflowFile> {
                 known.join(", ")
             ))
         })?;
-    serde_yaml::from_str(text)
+    crate::yaml::from_str(text)
         .map_err(|e| crate::CoreError::Unsupported(format!("the {key} preset does not parse: {e}")))
 }
 
@@ -874,13 +874,13 @@ pub fn role_problems(
 /// to word.
 pub fn from_yaml<T: serde::de::DeserializeOwned>(
     text: &str,
-) -> std::result::Result<T, serde_yaml::Error> {
-    serde_yaml::from_str(text)
+) -> std::result::Result<T, crate::yaml::Error> {
+    crate::yaml::parse(text)
 }
 
 /// A board record as YAML, the way the board writes it (FEAT-176).
 pub fn to_yaml<T: Serialize>(value: &T) -> crate::Result<String> {
-    Ok(serde_yaml::to_string(value)?)
+    crate::yaml::to_string(value)
 }
 
 impl WorkflowFile {
@@ -889,18 +889,18 @@ impl WorkflowFile {
     pub fn content_rev(&self) -> String {
         let mut bare = self.clone();
         bare.process = None;
-        crate::hash::stable_hash(&serde_yaml::to_string(&bare).unwrap_or_default())
+        crate::hash::stable_hash(&crate::yaml::to_string(&bare).unwrap_or_default())
     }
 
     /// A process file from its YAML (or JSON) text (FEAT-176): the one reader of a process file
     /// a front end was handed. The error is the parser's own, for the caller to word.
-    pub fn from_yaml(text: &str) -> std::result::Result<WorkflowFile, serde_yaml::Error> {
-        serde_yaml::from_str(text)
+    pub fn from_yaml(text: &str) -> std::result::Result<WorkflowFile, crate::yaml::Error> {
+        crate::yaml::parse(text)
     }
 
     /// This file as YAML, as it is saved and exported (FEAT-176).
     pub fn to_yaml(&self) -> crate::Result<String> {
-        Ok(serde_yaml::to_string(self)?)
+        crate::yaml::to_string(self)
     }
 
     /// The body of `PUT /projects/{p}/config/workflow` that applies this file whole, gates,

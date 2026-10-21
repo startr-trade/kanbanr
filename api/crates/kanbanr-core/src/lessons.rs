@@ -167,7 +167,7 @@ fn path(store: &Store, id: &str) -> PathBuf {
 /// Every lesson, newest first. An absent file means none yet, which is not an error.
 pub fn load(store: &Store, id: &str) -> Result<Vec<Lesson>> {
     match std::fs::read_to_string(path(store, id)) {
-        Ok(s) if !s.trim().is_empty() => Ok(serde_yaml::from_str(&s)?),
+        Ok(s) if !s.trim().is_empty() => Ok(crate::yaml::from_str(&s)?),
         _ => Ok(Vec::new()),
     }
 }
@@ -178,7 +178,7 @@ fn save(store: &Store, id: &str, lessons: &[Lesson]) -> Result<()> {
         let _ = std::fs::remove_file(file);
         return Ok(());
     }
-    std::fs::write(file, serde_yaml::to_string(lessons)?)?;
+    std::fs::write(file, crate::yaml::to_string(lessons)?)?;
     Ok(())
 }
 

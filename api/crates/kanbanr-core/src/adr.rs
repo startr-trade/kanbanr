@@ -185,7 +185,7 @@ fn section_body<'a>(body: &'a str, name: &str) -> Option<&'a str> {
 /// are prose, and prose is not a broken ADR.
 pub fn parse(path: &str, text: &str) -> Option<Adr> {
     let (front, body) = crate::docs::split_front_matter(text);
-    let mut adr: Adr = serde_yaml::from_str(front?).ok()?;
+    let mut adr: Adr = crate::yaml::from_str(front?).ok()?;
     if adr.id.trim().is_empty() {
         return None;
     }
@@ -210,7 +210,7 @@ pub fn render(adr: &Adr) -> String {
         missing: Vec::new(),
         ..adr.clone()
     };
-    let front = serde_yaml::to_string(&front).unwrap_or_default();
+    let front = crate::yaml::to_string(&front).unwrap_or_default();
     crate::docs::with_front_matter(&front, &adr.body)
 }
 

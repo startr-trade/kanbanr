@@ -142,7 +142,7 @@ impl WebhookConfig {
     pub fn load_with_env(data_dir: &Path, env_url: Option<&str>) -> WebhookConfig {
         let mut cfg: WebhookConfig = std::fs::read_to_string(data_dir.join(CONFIG_FILE))
             .ok()
-            .and_then(|s| serde_yaml::from_str(&s).ok())
+            .and_then(|s| crate::yaml::from_str(&s).ok())
             .unwrap_or_default();
         if let Some(url) = env_url {
             let url = url.trim();

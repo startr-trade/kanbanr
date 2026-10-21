@@ -3259,23 +3259,23 @@ fn update_applies_on_request_and_keeps_occupied_statuses() {
     assert!(status.contains("ours v2 (board), current"), "{status}");
 
     // v3 drops Vision, where the shop's item sits: refused, nothing changed.
-    let mut v3: serde_yaml::Value = serde_yaml::from_str(&now).unwrap();
-    let statuses = v3["statuses"].as_sequence_mut().unwrap();
+    let mut v3: kanbanr_core::yaml::Value = kanbanr_core::yaml::from_str(&now).unwrap();
+    let statuses = v3["statuses"].as_array_mut().unwrap();
     statuses.retain(|s| s.as_str() != Some("Vision"));
     v3["default_state"] = "Business Arch".into();
     for key in ["displayed_states", "terminal_states", "no_op_states"] {
-        if let Some(list) = v3[key].as_sequence_mut() {
+        if let Some(list) = v3[key].as_array_mut() {
             list.retain(|s| s.as_str() != Some("Vision"));
         }
     }
-    let transitions = v3["transitions"].as_mapping_mut().unwrap();
+    let transitions = v3["transitions"].as_object_mut().unwrap();
     transitions.remove("Vision");
     for (_, tos) in transitions.iter_mut() {
-        tos.as_sequence_mut()
+        tos.as_array_mut()
             .unwrap()
             .retain(|s| s.as_str() != Some("Vision"));
     }
-    let v3 = serde_yaml::to_string(&v3).unwrap();
+    let v3 = kanbanr_core::yaml::to_string(&v3).unwrap();
     let file = base.join("v3.yaml");
     std::fs::write(&file, v3).unwrap();
     let saved = run_in(

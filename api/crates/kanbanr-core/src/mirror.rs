@@ -42,7 +42,7 @@ fn config_path(store: &Store, id: &str) -> PathBuf {
 pub fn load_config(store: &Store, id: &str) -> Result<MirrorConfig> {
     store.load_meta(id)?; // the project must exist
     match std::fs::read_to_string(config_path(store, id)) {
-        Ok(s) if !s.trim().is_empty() => Ok(serde_yaml::from_str(&s)?),
+        Ok(s) if !s.trim().is_empty() => Ok(crate::yaml::from_str(&s)?),
         _ => Ok(MirrorConfig::default()),
     }
 }
@@ -55,7 +55,7 @@ pub fn save_config(store: &Store, id: &str, config: &MirrorConfig) -> Result<()>
         let _ = std::fs::remove_file(path);
         return Ok(());
     }
-    std::fs::write(path, serde_yaml::to_string(config)?)?;
+    std::fs::write(path, crate::yaml::to_string(config)?)?;
     Ok(())
 }
 

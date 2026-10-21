@@ -938,7 +938,7 @@ mod tests {
         }];
         std::fs::write(
             folder.join("2099-01-01.yaml"),
-            serde_yaml::to_string(&later).unwrap(),
+            crate::yaml::to_string(&later).unwrap(),
         )
         .unwrap();
         let r = run(&store, "demo", &Wave::default()).unwrap();

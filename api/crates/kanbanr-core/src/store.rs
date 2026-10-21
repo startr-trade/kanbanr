@@ -226,14 +226,14 @@ impl Store {
 
     fn read_yaml<T: DeserializeOwned>(path: &Path) -> Result<T> {
         let text = std::fs::read_to_string(path)?;
-        Ok(serde_yaml::from_str(&text)?)
+        crate::yaml::from_str(&text)
     }
 
     fn write_yaml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let text = serde_yaml::to_string(value)?;
+        let text = crate::yaml::to_string(value)?;
         std::fs::write(path, text)?;
         Ok(())
     }

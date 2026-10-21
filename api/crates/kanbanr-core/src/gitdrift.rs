@@ -314,7 +314,7 @@ mod tests {
         let features = items
             .iter()
             .map(|(code, status)| {
-                serde_yaml::from_str(&format!(
+                crate::yaml::from_str(&format!(
                     "code: {code}\ntitle: t\nspecification: ''\nstatus: {status}\nmilestone: M\n\
                      created_at: '2026-10-19T00:00:00Z'\nupdated_at: '2026-10-19T00:00:00Z'\n"
                 ))

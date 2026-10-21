@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// The fields of a board file this version of kanbanr does not know (FEAT-151). See
 /// `docs/src/project/stability.md`: reading a newer board is safe, and so is rewriting it.
-pub type Extra = std::collections::BTreeMap<String, serde_yaml::Value>;
+pub type Extra = std::collections::BTreeMap<String, serde_json::Value>;
 
 /// How [`Extra`] is described in the published API (FEAT-177): keys a newer kanbanr wrote, of any
 /// shape. A YAML value always has a JSON form, so any JSON value is what a client can receive.
@@ -443,7 +443,7 @@ impl FeatureDefinition {
                 test.checked_rev = String::new();
             }
         }
-        crate::hash::stable_hash(&serde_yaml::to_string(&bare).unwrap_or_default())
+        crate::hash::stable_hash(&crate::yaml::to_string(&bare).unwrap_or_default())
     }
 
     /// Whether this definition is approved as it currently stands.

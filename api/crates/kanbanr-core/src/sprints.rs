@@ -73,13 +73,13 @@ fn path(store: &Store, id: &str) -> PathBuf {
 /// A project's sprints, oldest first. None is a normal state, never an error.
 pub fn load(store: &Store, id: &str) -> Result<Vec<Sprint>> {
     match std::fs::read_to_string(path(store, id)) {
-        Ok(s) if !s.trim().is_empty() => Ok(serde_yaml::from_str(&s)?),
+        Ok(s) if !s.trim().is_empty() => Ok(crate::yaml::from_str(&s)?),
         _ => Ok(Vec::new()),
     }
 }
 
 fn save(store: &Store, id: &str, sprints: &[Sprint]) -> Result<()> {
-    std::fs::write(path(store, id), serde_yaml::to_string(sprints)?)?;
+    std::fs::write(path(store, id), crate::yaml::to_string(sprints)?)?;
     Ok(())
 }
 

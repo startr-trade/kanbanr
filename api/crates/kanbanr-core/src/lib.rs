@@ -62,6 +62,7 @@ pub mod store;
 pub mod trace;
 pub mod validate;
 pub mod write;
+pub mod yaml;
 
 pub use charter::{Charter, Goal, Stakeholder};
 pub use config::ProjectConfig;
@@ -1416,7 +1417,7 @@ mod tests {
             .add_feature("demo", "Mirror", "# Mirror", "M", None)
             .unwrap();
 
-        let def: crate::models::FeatureDefinition = serde_yaml::from_str(
+        let def: crate::models::FeatureDefinition = crate::yaml::from_str(
             r#"
 statement: Mirror items to GitHub so collaborators see the board
 goals: [G-2]
@@ -1510,7 +1511,7 @@ requirements:
         )
         .unwrap();
         let f = store.add_feature("demo", title, "# x", "M", None).unwrap();
-        let def: crate::models::FeatureDefinition = serde_yaml::from_str(
+        let def: crate::models::FeatureDefinition = crate::yaml::from_str(
             "statement: s\nrequirements:\n  - kind: functional\n    text: THE SYSTEM SHALL x.\n    tests:\n      - name: t::x\n        kind: unit\n        state: planned\n",
         )
         .unwrap();
@@ -1560,7 +1561,7 @@ requirements:
             .add_feature("demo", "Shown", "# x", "M", None)
             .unwrap();
         let def = |text: &str| -> crate::models::FeatureDefinition {
-            serde_yaml::from_str(&format!(
+            crate::yaml::from_str(&format!(
                 "statement: s\nrequirements:\n  - kind: functional\n    text: {text}\n"
             ))
             .unwrap()
@@ -1901,13 +1902,13 @@ requirements:
     /// milestone, a change to the project config, and a save of the charter.
     #[test]
     fn unknown_fields_survive_move_task_state_and_edit() {
-        use serde_yaml::Value;
+        use crate::yaml::Value;
         let (store, d) = temp_store();
         new_project(&store, "demo");
         let f = store
             .add_feature("demo", "Newer", "# Newer", "M", None)
             .unwrap();
-        let def: crate::models::FeatureDefinition = serde_yaml::from_str(
+        let def: crate::models::FeatureDefinition = crate::yaml::from_str(
             "statement: s\nrequirements:\n  - kind: functional\n    text: THE SYSTEM SHALL keep it.\n",
         )
         .unwrap();
@@ -1941,14 +1942,14 @@ requirements:
         };
         let edit = |path: &std::path::Path, change: &dyn Fn(&mut Value)| {
             let mut v: Value =
-                serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+                crate::yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
             change(&mut v);
-            std::fs::write(path, serde_yaml::to_string(&v).unwrap()).unwrap();
+            std::fs::write(path, crate::yaml::to_string(&v).unwrap()).unwrap();
         };
         let newer = |v: &mut Value, key: &str| {
-            v.as_mapping_mut().unwrap().insert(
+            v.as_object_mut().unwrap().insert(
                 key.into(),
-                serde_yaml::from_str("{from: newer, n: [1, 2]}").unwrap(),
+                crate::yaml::from_str("{from: newer, n: [1, 2]}").unwrap(),
             );
         };
         edit(&feature_file(&f.code), &|v| {
@@ -1998,10 +1999,10 @@ requirements:
         crate::charter::save(&store, "demo", &charter).unwrap();
 
         let kept = |path: &std::path::Path, at: &dyn Fn(&Value) -> Value| {
-            let v: Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let v: Value = crate::yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
             assert_eq!(
                 at(&v),
-                serde_yaml::from_str::<Value>("{from: newer, n: [1, 2]}").unwrap(),
+                crate::yaml::from_str::<Value>("{from: newer, n: [1, 2]}").unwrap(),
                 "{}",
                 path.display()
             );
@@ -2066,7 +2067,7 @@ requirements:
         );
 
         // And a hand-written legacy yaml (no `definition` key at all) still parses.
-        let meta: crate::models::FeatureMeta = serde_yaml::from_str(&before).unwrap();
+        let meta: crate::models::FeatureMeta = crate::yaml::from_str(&before).unwrap();
         assert!(meta.definition.is_none());
     }
 
@@ -2128,7 +2129,7 @@ requirements:
 
     /// A definition that answers everything, so gate tests exercise approval and not gaps.
     fn full_definition(statement: &str) -> crate::models::FeatureDefinition {
-        serde_yaml::from_str(&format!(
+        crate::yaml::from_str(&format!(
             r#"
 statement: {statement}
 goals: [G-1]
@@ -2408,8 +2409,8 @@ requirements:
     #[test]
     fn workflow_files_round_trip() {
         let original = crate::config::preset("design-control").unwrap();
-        let text = serde_yaml::to_string(&original).unwrap();
-        let back: crate::config::WorkflowFile = serde_yaml::from_str(&text).unwrap();
+        let text = crate::yaml::to_string(&original).unwrap();
+        let back: crate::config::WorkflowFile = crate::yaml::from_str(&text).unwrap();
         assert_eq!(back, original);
         let config = back.clone().into_config("x");
         assert_eq!(crate::config::WorkflowFile::from_config(&config), original);
@@ -3658,7 +3659,7 @@ requirements:
         releases[1].state = crate::releases::ReleaseState::Shipped;
         std::fs::write(
             store.project_dir("demo").join("releases.yaml"),
-            serde_yaml::to_string(&releases).unwrap(),
+            crate::yaml::to_string(&releases).unwrap(),
         )
         .unwrap();
         let asked = entry(&ready).unwrap();
@@ -4152,7 +4153,7 @@ requirements:
         new_project(&store, "demo");
         adopt_charter(&store, "demo");
         let f = store.add_feature("demo", "Live", "", "M", None).unwrap();
-        let def: crate::models::FeatureDefinition = serde_yaml::from_str(
+        let def: crate::models::FeatureDefinition = crate::yaml::from_str(
             r#"
 statement: A statement
 goals: [G-1]
@@ -4203,7 +4204,7 @@ requirements:
         adopt_charter(&store, "demo");
         let f = store.add_feature("demo", "Spike", "", "M", None).unwrap();
         let def: crate::models::FeatureDefinition =
-            serde_yaml::from_str("exempt: throwaway spike, deleted on Friday\nstatement: \"\"\n")
+            crate::yaml::from_str("exempt: throwaway spike, deleted on Friday\nstatement: \"\"\n")
                 .unwrap();
         store
             .set_feature_definition("demo", &f.code, Some(def))
@@ -5486,9 +5487,9 @@ requirements:
         }
         let path = store.project_dir("demo").join("config.yaml");
         let text = std::fs::read_to_string(&path).unwrap();
-        let older: OlderConfig = serde_yaml::from_str(&text).unwrap();
-        let rewritten = serde_yaml::to_string(&older).unwrap();
-        let back: crate::config::ProjectConfig = serde_yaml::from_str(&rewritten).unwrap();
+        let older: OlderConfig = crate::yaml::from_str(&text).unwrap();
+        let rewritten = crate::yaml::to_string(&older).unwrap();
+        let back: crate::config::ProjectConfig = crate::yaml::from_str(&rewritten).unwrap();
         assert_eq!(
             back.process,
             store.load("demo").unwrap().config.process,
@@ -5503,7 +5504,7 @@ requirements:
         use crate::config::{Gate, WorkflowFile};
         let (store, _d) = temp_store();
         new_project(&store, "demo");
-        let before = serde_yaml::to_string(&store.load("demo").unwrap().config).unwrap();
+        let before = crate::yaml::to_string(&store.load("demo").unwrap().config).unwrap();
         let good: WorkflowFile = crate::config::preset("pdca").unwrap();
         assert!(good.problems().is_empty(), "{:?}", good.problems());
         let mut bad = Vec::new();
@@ -5557,7 +5558,7 @@ requirements:
                 "{file:?}"
             );
         }
-        let after = serde_yaml::to_string(&store.load("demo").unwrap().config).unwrap();
+        let after = crate::yaml::to_string(&store.load("demo").unwrap().config).unwrap();
         assert_eq!(after, before, "nothing was saved");
     }
 

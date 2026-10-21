@@ -81,8 +81,12 @@ pub enum CoreError {
     Refused(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("yaml error: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    /// A board file, or YAML a front end was handed, that does not parse (FEAT-187).
+    #[error(transparent)]
+    YamlDe(#[from] serde_saphyr::Error),
+    /// A record that could not be written as YAML (FEAT-187).
+    #[error(transparent)]
+    YamlSer(#[from] serde_saphyr::SerializeError),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -133,7 +137,7 @@ impl CoreError {
             // A workflow rule refused a step (FEAT-176): as with the repository, the request was
             // well formed and the item's state is what stood in the way.
             Refused(_) => 409,
-            Io(_) | Yaml(_) => 500,
+            Io(_) | YamlDe(_) | YamlSer(_) => 500,
         }
     }
 }
