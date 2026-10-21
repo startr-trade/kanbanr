@@ -1158,3 +1158,112 @@ fn daemon_serves_git_model_with_its_repository() {
     }
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// FEAT-212 R-12: a daemon started in the project folder plans a release's next step from that
+/// repository, and the promotion the monitor then posts — with the release tip the plan showed —
+/// takes exactly the steps the plan named. Started anywhere else, the plan says it needs the
+/// repository and is not ready.
+#[test]
+fn release_plan_route_matches_promote() {
+    let root = std::env::temp_dir().join(format!("kanbanr-plan-route-{}", std::process::id()));
+    // The board is asserted to be the scratch one by `release_scratch`.
+    let (home, work, board) = release_scratch(&root);
+    let start = |dir: &std::path::Path| -> (Daemon, String) {
+        let port = free_port();
+        let child = Command::new(cli())
+            .args([
+                "serve",
+                "--allow-writes",
+                "--bind",
+                &format!("127.0.0.1:{port}"),
+            ])
+            .current_dir(dir)
+            .env("HOME", &home)
+            .env("KANBANR_DATA_DIR", &board)
+            .spawn()
+            .expect("spawn kanbanr serve");
+        let daemon = Daemon(child);
+        let url = format!("http://127.0.0.1:{port}");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            assert!(Instant::now() < deadline, "daemon did not become ready");
+            match ureq::get(&format!("{url}/api/projects")).call() {
+                Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+                Err(_) => std::thread::sleep(Duration::from_millis(100)),
+            }
+        }
+        (daemon, url)
+    };
+    let get = |url: &str| -> serde_json::Value {
+        match ureq::get(url).call() {
+            Ok(r) => serde_json::from_str(&r.into_string().unwrap()).unwrap(),
+            Err(e) => panic!("no plan from the daemon: {e}"),
+        }
+    };
+
+    {
+        let (_daemon, url) = start(&work);
+        let plan = get(&format!(
+            "{url}/api/projects/shop/releases/v1.0.0/plan?fetch=1"
+        ));
+        assert_eq!(plan["button"], "Promote to candidate", "{plan}");
+        assert_eq!(plan["ready"], true, "{plan}");
+        assert_eq!(plan["repo"], true, "{plan}");
+        assert_eq!(
+            plan["steps"][0]["does"], "makes release/v1.0.0 from main",
+            "{plan}"
+        );
+        let body = serde_json::json!({
+            "stage": plan["to"],
+            "by": "A",
+            "expect": plan["release_tip"],
+        });
+        let done: serde_json::Value = match ureq::post(&format!(
+            "{url}/api/write/projects/shop/releases/v1.0.0/promote"
+        ))
+        .set("content-type", "application/json")
+        .send_string(&body.to_string())
+        {
+            Ok(r) => serde_json::from_str(&r.into_string().unwrap()).unwrap(),
+            Err(e) => panic!("promote through the daemon: {e}"),
+        };
+        let planned: Vec<&serde_json::Value> = plan["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["noop"] == false)
+            .collect();
+        let taken: Vec<&serde_json::Value> = done["steps"].as_array().unwrap().iter().collect();
+        assert_eq!(
+            taken, planned,
+            "the promotion took the steps the plan named"
+        );
+        assert_eq!(done["branch_created"], "release/v1.0.0");
+        assert_eq!(
+            done["next"],
+            "next: `kanbanr release promote v1.0.0` (Promote to test)"
+        );
+        let next = get(&format!("{url}/api/projects/shop/releases/v1.0.0/plan"));
+        assert_eq!(next["button"], "Promote to test", "{next}");
+        assert_eq!(releases_yaml(&board)[0]["stage"], "candidate");
+    }
+
+    // Started elsewhere: no repository, and the cut cannot be planned ready.
+    {
+        let (_daemon, url) = start(&root);
+        let plan = get(&format!(
+            "{url}/api/projects/shop/releases/v1.0.0/plan?stage=production"
+        ));
+        assert_eq!(plan["repo"], false, "{plan}");
+        assert_eq!(plan["ready"], false, "{plan}");
+        assert_eq!(plan["button"], "Cut v1.0.0", "{plan}");
+        assert!(
+            plan["missing"][0]
+                .as_str()
+                .unwrap()
+                .contains("needs the code repository"),
+            "{plan}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}

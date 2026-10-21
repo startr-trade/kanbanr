@@ -59,9 +59,12 @@ pub async fn read_passthrough(
     // OriginalUri keeps the `/api` prefix + query string; dispatch wants the path without `/api`.
     let pq = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
     let dpath = pq.strip_prefix("/api").unwrap_or(pq);
+    // A read never reaches the network (FEAT-212): a release plan's `fetch` is the CLI's alone.
+    let unfetched = without_fetch(dpath);
+    let dpath = unfetched.as_str();
     // The reads that look at the code repository get the one the daemon was started in, as
-    // release promotion does (FEAT-213): the git model, git doctor and the guard rails. Every
-    // other read answers from the board alone, as before.
+    // release promotion does (FEAT-213): the git model, git doctor, the guard rails and a
+    // release's plan (FEAT-212). Every other read answers from the board alone, as before.
     let repo = reads_code_repo(dpath)
         .then(|| repo_for(&st, dpath))
         .flatten();
@@ -246,8 +249,8 @@ fn repo_for<'a>(st: &'a AppState, dispatch_path: &str) -> Option<&'a std::path::
         .map(|(_, root)| root.as_path())
 }
 
-/// The reads that answer from the code repository (FEAT-213): `…/git/model`, `…/git/doctor` and
-/// `…/guards`, query string aside.
+/// The reads that answer from the code repository (FEAT-213): `…/git/model`, `…/git/doctor`,
+/// `…/guards` and `…/releases/<V>/plan` (FEAT-212), query string aside.
 fn reads_code_repo(dispatch_path: &str) -> bool {
     let path = dispatch_path.split('?').next().unwrap_or(dispatch_path);
     let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -256,7 +259,24 @@ fn reads_code_repo(dispatch_path: &str) -> bool {
         ["projects", _, "git", "model"]
             | ["projects", _, "git", "doctor"]
             | ["projects", _, "guards"]
+            | ["projects", _, "releases", _, "plan"]
     )
+}
+
+/// The path with any `fetch` query parameter dropped.
+fn without_fetch(dispatch_path: &str) -> String {
+    let Some((path, query)) = dispatch_path.split_once('?') else {
+        return dispatch_path.to_string();
+    };
+    let kept: Vec<&str> = query
+        .split('&')
+        .filter(|kv| kv.split('=').next() != Some("fetch"))
+        .collect();
+    if kept.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{}", kept.join("&"))
+    }
 }
 
 /// Run a daemon write through the shared dispatch+commit+push path, then notify SSE listeners.
