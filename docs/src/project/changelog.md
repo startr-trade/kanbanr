@@ -6,6 +6,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-21
+
 ### Added
 
 - **One method for every process, in the skill and the setup interview (FEAT-194).** The skill
@@ -1030,7 +1032,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/startr-trade/kanbanr/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/startr-trade/kanbanr/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/startr-trade/kanbanr/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/startr-trade/kanbanr/compare/v0.1.4...v0.1.5
