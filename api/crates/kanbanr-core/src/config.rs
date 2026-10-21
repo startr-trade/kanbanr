@@ -885,11 +885,12 @@ pub fn to_yaml<T: Serialize>(value: &T) -> crate::Result<String> {
 
 impl WorkflowFile {
     /// A hash of the process itself — everything but its header (FEAT-169). Two files that would
-    /// govern work the same way have the same rev, whatever they are called.
+    /// govern work the same way have the same rev, whatever they are called. Hashed from canonical
+    /// JSON (FEAT-187), so how the file was written does not change it.
     pub fn content_rev(&self) -> String {
         let mut bare = self.clone();
         bare.process = None;
-        crate::hash::stable_hash(&crate::yaml::to_string(&bare).unwrap_or_default())
+        crate::hash::stable_hash(&crate::hash::canonical_json(&bare))
     }
 
     /// A process file from its YAML (or JSON) text (FEAT-176): the one reader of a process file
