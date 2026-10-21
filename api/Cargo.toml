@@ -16,8 +16,9 @@ members = [
 version = "0.1.7"
 edition = "2024"
 # The minimum that compiles, which is a promise to anyone building this — not the version we
-# develop on (see rust-toolchain.toml). Edition 2024 needs 1.85; the let-chains clippy applied need 1.88.
-rust-version = "1.88"
+# develop on (see rust-toolchain.toml). Edition 2024 needs 1.85; the let-chains clippy applied need 1.88;
+# serde-saphyr, which reads and writes every board file (FEAT-187), needs 1.89.
+rust-version = "1.89"
 license = "MIT OR Apache-2.0"
 authors = ["the kanbanr authors"]
 repository = "https://github.com/startr-trade/kanbanr"
@@ -26,7 +27,8 @@ description = "Kanban task manager for Claude-driven development: a git-backed C
 [workspace.dependencies]
 kanbanr-core = { path = "crates/kanbanr-core" }
 serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
+# Every board file is read and written by kanbanr_core::yaml (FEAT-187): maintained, safe Rust.
+serde-saphyr = { version = "~2.0", default-features = false, features = ["serialize", "deserialize"] }
 serde_json = "1"
 anyhow = "1"
 thiserror = "1"

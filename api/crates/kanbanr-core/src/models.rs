@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// The fields of a board file this version of kanbanr does not know (FEAT-151). See
 /// `docs/src/project/stability.md`: reading a newer board is safe, and so is rewriting it.
-pub type Extra = std::collections::BTreeMap<String, serde_yaml::Value>;
+pub type Extra = std::collections::BTreeMap<String, serde_json::Value>;
 
 /// How [`Extra`] is described in the published API (FEAT-177): keys a newer kanbanr wrote, of any
 /// shape. A YAML value always has a JSON form, so any JSON value is what a client can receive.
@@ -427,6 +427,9 @@ impl FeatureDefinition {
     /// green means the work is progressing as agreed, and lapsing the approval for it would train
     /// people to re-approve reflexively, which is how a gate becomes a rubber stamp. Adding,
     /// removing or renaming a test DOES change the hash: what is verified is part of the deal.
+    ///
+    /// The hash is of the definition's canonical JSON (FEAT-187), not of its YAML: a revision is
+    /// about what was agreed, and must not lapse because a file was written differently.
     pub fn content_rev(&self) -> String {
         let mut bare = self.clone();
         bare.approval = None;
@@ -443,7 +446,7 @@ impl FeatureDefinition {
                 test.checked_rev = String::new();
             }
         }
-        crate::hash::stable_hash(&serde_yaml::to_string(&bare).unwrap_or_default())
+        crate::hash::stable_hash(&crate::hash::canonical_json(&bare))
     }
 
     /// Whether this definition is approved as it currently stands.
@@ -1140,4 +1143,44 @@ requirements:
         }
     };
     format!("{head}{requirements}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// FEAT-187 R-3: one definition, written two ways — quotes, flow or block style, key order,
+    /// indentation, a test's state — has one revision.
+    #[test]
+    fn content_rev_is_writer_independent() {
+        let block: FeatureDefinition = crate::yaml::from_str(concat!(
+            "statement: 'Do it: well'\n",
+            "goals:\n- G-1\n",
+            "zachman:\n  what: x\n  why: y\n",
+            "requirements:\n",
+            "- id: R-1\n",
+            "  kind: functional\n",
+            "  text: |-\n    THE SYSTEM SHALL\n    do it.\n",
+            "  tests:\n  - name: does_it\n    kind: unit\n",
+            "  x_newer: {b: 2, a: [1, two]}\n",
+        ))
+        .unwrap();
+        let flow: FeatureDefinition = crate::yaml::from_str(concat!(
+            r#"{"requirements": [{"x_newer": {"a": [1, "two"], "b": 2},"#,
+            r#" "tests": [{"kind": "unit", "name": "does_it", "state": "green"}],"#,
+            r#" "text": "THE SYSTEM SHALL\ndo it.", "kind": "functional", "id": "R-1"}],"#,
+            r#" "zachman": {"why": "y", "what": "x"}, "goals": ["G-1"],"#,
+            r#" "statement": "Do it: well"}"#,
+        ))
+        .unwrap();
+        assert_eq!(block.content_rev(), flow.content_rev());
+        // Written back by this build and read again: the same revision.
+        let again: FeatureDefinition =
+            crate::yaml::from_str(&crate::yaml::to_string(&flow).unwrap()).unwrap();
+        assert_eq!(again.content_rev(), block.content_rev());
+        // And the content still decides it.
+        let mut changed = block.clone();
+        changed.statement.push('!');
+        assert_ne!(changed.content_rev(), block.content_rev());
+    }
 }

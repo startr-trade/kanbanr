@@ -224,16 +224,16 @@ impl Store {
 
     // ---- raw yaml helpers ----------------------------------------------------------------
 
-    fn read_yaml<T: DeserializeOwned>(path: &Path) -> Result<T> {
+    pub(crate) fn read_yaml<T: DeserializeOwned>(path: &Path) -> Result<T> {
         let text = std::fs::read_to_string(path)?;
-        Ok(serde_yaml::from_str(&text)?)
+        crate::yaml::from_str(&text)
     }
 
-    fn write_yaml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    pub(crate) fn write_yaml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let text = serde_yaml::to_string(value)?;
+        let text = crate::yaml::to_string(value)?;
         std::fs::write(path, text)?;
         Ok(())
     }
@@ -286,14 +286,15 @@ impl Store {
     /// found. Failing by name beats failing silently. The other direction stays permissive: an
     /// older board is read as it is and brought up to date on its next write.
     fn read_config(&self, id: &str) -> Result<ProjectConfig> {
-        let config: ProjectConfig = Self::read_yaml(&self.project_dir(id).join("config.yaml"))?;
-        if config.schema_version > crate::config::CURRENT_SCHEMA_VERSION {
-            return Err(CoreError::SchemaTooNew {
-                found: config.schema_version,
-                understood: crate::config::CURRENT_SCHEMA_VERSION,
-            });
-        }
+        let config = self.read_config_unchecked(id)?;
+        crate::config::check_schema(config.schema_version, crate::config::CURRENT_SCHEMA_VERSION)?;
         Ok(config)
+    }
+
+    /// A project's config as it is on disk, whatever its schema: for the migration (FEAT-187),
+    /// which is what reads a board older than this build.
+    pub(crate) fn read_config_unchecked(&self, id: &str) -> Result<ProjectConfig> {
+        Self::read_yaml(&self.project_dir(id).join("config.yaml"))
     }
 
     /// Load a project's **metadata only**: every feature has `specification: String::new()` and no
@@ -474,7 +475,7 @@ impl Store {
     }
 
     /// Feature metadata yaml lives under `features/<status>/<code>.yaml`.
-    fn feature_path(&self, id: &str, status: &str, code: &str) -> PathBuf {
+    pub(crate) fn feature_path(&self, id: &str, status: &str, code: &str) -> PathBuf {
         self.status_dir(id, status).join(format!("{code}.yaml"))
     }
     /// Feature specification markdown lives under `features/<status>/features-spec/<code>.md`,
@@ -548,7 +549,7 @@ impl Store {
     /// (the source of truth), returning each paired with the status folder it was found in. No
     /// `.md` spec files are read. Driving the scan from the configured status list keeps status
     /// folders from colliding with `milestones/`, `schedules/`, `docs/`, etc. (FEAT-033)
-    fn read_feature_metas(
+    pub(crate) fn read_feature_metas(
         &self,
         id: &str,
         statuses: &[String],

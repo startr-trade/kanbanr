@@ -1267,7 +1267,7 @@ pub struct DefinitionCheck {
 /// Check a definition's text (YAML or JSON) by the rules the board applies (FEAT-052, FEAT-112),
 /// minus what needs a board to judge. Text that does not parse is refused, saying so.
 pub fn check_definition_text(text: &str) -> crate::Result<DefinitionCheck> {
-    let definition: FeatureDefinition = serde_yaml::from_str(text).map_err(|e| {
+    let definition: FeatureDefinition = crate::yaml::from_str(text).map_err(|e| {
         crate::CoreError::Refused(format!("invalid definition (YAML or JSON expected): {e}"))
     })?;
     // Not a gap that can be judged here: without the charter there is nothing to resolve an id
@@ -1454,14 +1454,14 @@ mod tests {
         let mut older = bare.clone();
         older.extra.insert(
             "affects_docs".into(),
-            serde_yaml::to_value(vec!["architecture/data.md"]).unwrap(),
+            serde_json::to_value(vec!["architecture/data.md"]).unwrap(),
         );
         assert_eq!(
-            serde_yaml::to_string(&def).unwrap(),
-            serde_yaml::to_string(&older).unwrap()
+            crate::yaml::to_string(&def).unwrap(),
+            crate::yaml::to_string(&older).unwrap()
         );
         let back: FeatureDefinition =
-            serde_yaml::from_str(&serde_yaml::to_string(&older).unwrap()).unwrap();
+            crate::yaml::from_str(&crate::yaml::to_string(&older).unwrap()).unwrap();
         assert_eq!(back.affects_docs, def.affects_docs);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1781,7 +1781,7 @@ mod tests {
         assert!(Check::GATEABLE.contains(&Check::SpecSections));
         assert_eq!(Check::SpecSections.name(), "spec_sections");
         assert!(Check::SpecSections.parameters().is_some());
-        let gate: crate::config::Gate = serde_yaml::from_str(
+        let gate: crate::config::Gate = crate::yaml::from_str(
             "requires:\n  - spec_sections\n  - spec_sections: [Design, Test plan]\n",
         )
         .expect("both forms read");
@@ -1828,7 +1828,7 @@ mod tests {
         assert!(Check::DiagramsValid.passes_when().contains("diagram lint"));
         assert_eq!(Check::DiagramsValid.parameters(), None);
         let gate: crate::config::Gate =
-            serde_yaml::from_str("requires: [diagrams_valid]\nwarns: [diagrams_valid]\n").unwrap();
+            crate::yaml::from_str("requires: [diagrams_valid]\nwarns: [diagrams_valid]\n").unwrap();
         assert_eq!(gate.requires, vec![Condition::Check(Check::DiagramsValid)]);
         assert_eq!(gate.warns, vec![Condition::Check(Check::DiagramsValid)]);
         assert!(

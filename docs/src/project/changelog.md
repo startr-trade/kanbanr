@@ -147,6 +147,22 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Changed
 
+- **A maintained YAML library, and revisions that do not depend on it (FEAT-187). Run
+  `kanbanr migrate` once.** Board files are read and written by
+  [serde-saphyr](https://crates.io/crates/serde-saphyr), through one module that sets its options,
+  instead of the deprecated `serde_yaml`. The content of each file is unchanged; mostly the quoting
+  differs, with double quotes where single quotes were used before. The `rev` of an approval, a
+  sign-off or a project's process record is now a hash of the record's canonical JSON, not of its
+  YAML text, so a YAML writer can no longer lapse an approval. This is schema 5, and every board is
+  stamped with it. A board from 0.1.7 or earlier is refused by every command until
+  `kanbanr migrate` has run. The migration re-pins each stored revision to the content it was
+  given for, read from the board's git history, rewrites every board file, and makes one commit.
+  So what was current stays current, and what had lapsed stays lapsed. A revision that history
+  cannot vouch for becomes `unverified` and reads as lapsed. The migration counts these, and
+  `kanbanr doctor` names each one to give again. An older kanbanr refuses a migrated board.
+  Building from source now needs Rust 1.89. See
+  [Upgrading a board to schema 5](https://kanbanr.startr.trade/releases/schema-5.html).
+
 - **One copy of every board rule, in core (FEAT-176).** The write recipe, code-repository git,
   commit and branch policy, workflow movement, test evidence, the process library, the issue
   mirror, `check`, and a dozen smaller rules moved from the CLI and the daemon into
@@ -193,6 +209,11 @@ All notable changes to kanbanr are documented here. The format follows
   the marker is in a linked worktree, kanbanr now resolves it from the main worktree.
 
 ### Security
+
+- **No unmaintained YAML parser, and no advisory exception (FEAT-187).** `serde_yaml` and
+  `unsafe-libyaml` are gone from the dependency tree, so `api/deny.toml` no longer lists
+  RUSTSEC-2024-0449 as an exception and ignores no advisory. serde-saphyr and its parser forbid
+  `unsafe` code.
 
 - **Distrusted emSign intermediates no longer trusted (FEAT-206).** `webpki-roots` goes to 1.0.10
   (RUSTSEC-2026-0381) and `rustls-webpki` to 0.103.16 (RUSTSEC-2026-0382): the certificate checks

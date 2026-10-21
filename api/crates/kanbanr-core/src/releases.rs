@@ -159,13 +159,13 @@ fn path(store: &Store, id: &str) -> PathBuf {
 /// A project's releases, in the order they were added. None is a normal state.
 pub fn load(store: &Store, id: &str) -> Result<Vec<Release>> {
     match std::fs::read_to_string(path(store, id)) {
-        Ok(s) if !s.trim().is_empty() => Ok(serde_yaml::from_str(&s)?),
+        Ok(s) if !s.trim().is_empty() => Ok(crate::yaml::from_str(&s)?),
         _ => Ok(Vec::new()),
     }
 }
 
 fn save(store: &Store, id: &str, releases: &[Release]) -> Result<()> {
-    std::fs::write(path(store, id), serde_yaml::to_string(releases)?)?;
+    std::fs::write(path(store, id), crate::yaml::to_string(releases)?)?;
     Ok(())
 }
 
@@ -925,7 +925,7 @@ mod tests {
             parent: "v1.0.0".into(),
             ..Default::default()
         };
-        let fix: crate::FeatureItem = serde_yaml::from_str(
+        let fix: crate::FeatureItem = crate::yaml::from_str(
             "code: FEAT-007\ntitle: Cart loses items\nspecification: ''\nstatus: Completed\n\
              milestone: M\ncreated_at: '2026-10-19T00:00:00Z'\nupdated_at: '2026-10-19T00:00:00Z'\n",
         )

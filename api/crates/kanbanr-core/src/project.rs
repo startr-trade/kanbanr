@@ -35,8 +35,8 @@ pub struct Marker {
 impl Marker {
     /// Parse a marker: a YAML mapping, or a legacy single line holding just the project name.
     pub fn parse(content: &str) -> Marker {
-        if let Ok(v @ serde_yaml::Value::Mapping(_)) = serde_yaml::from_str(content)
-            && let Ok(m) = serde_yaml::from_value::<Marker>(v)
+        if let Ok(v @ crate::yaml::Value::Object(_)) = crate::yaml::from_str(content)
+            && let Ok(m) = serde_json::from_value::<Marker>(v)
         {
             return Marker {
                 project: non_empty(m.project),
@@ -57,7 +57,7 @@ impl Marker {
             (Some(p), None) => format!("{p}\n"),
             _ => format!(
                 "# kanbanr: this folder's project and where its board lives (relative to this file)\n{}",
-                serde_yaml::to_string(self).unwrap_or_default()
+                crate::yaml::to_string(self).unwrap_or_default()
             ),
         }
     }

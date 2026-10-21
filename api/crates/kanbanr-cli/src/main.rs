@@ -514,6 +514,11 @@ enum Command {
     /// Write or refresh the board's README: what this repository is, its projects, and how to
     /// install kanbanr and see it as a board (FEAT-201). Text outside its markers is kept.
     Readme,
+    /// Bring a board written before schema 5 up to date, once (FEAT-187): every approval and
+    /// sign-off is re-pinned to its canonical revision, read from the board's own history, and every
+    /// file is rewritten, in one commit. Every other command refuses such a board until this has run.
+    /// What history cannot vouch for reads as lapsed, and is reported.
+    Migrate,
     /// Scan for integrity problems (dangling deps, unknown milestones, outdated schema). (FEAT-037)
     /// Defaults to the current/selected project; pass --all-projects for the whole portfolio.
     Doctor {
@@ -5664,6 +5669,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Doctor { all_projects } => run_doctor(cli, &client, *all_projects),
+        Command::Migrate => run_migrate(cli, &client),
         Command::Readme => {
             let resp = client.write(Method::Post, "/readme", Some(json!({})))?;
             let changed = serde_json::from_str::<Value>(&resp)?["changed"]
@@ -5820,6 +5826,70 @@ fn print_id_list(cli: &Cli, resp: &str, empty: &str) {
             }
         }
     }
+}
+
+/// `kanbanr migrate` (FEAT-187): core migrates and commits; this says what it did.
+fn run_migrate(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
+    let report = client.migrate()?;
+    for w in &report.push_failures {
+        eprintln!("kanbanr: {w}");
+    }
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    if report.projects.is_empty() {
+        println!(
+            "the board is at schema {}: nothing to migrate",
+            report.schema
+        );
+        return Ok(());
+    }
+    let ids: Vec<String> = report
+        .projects
+        .iter()
+        .map(|p| format!("{} (from {})", p.id, p.from))
+        .collect();
+    println!(
+        "migrated {} project(s) to schema {}: {}",
+        report.projects.len(),
+        report.schema,
+        ids.join(", ")
+    );
+    if !report.history {
+        println!("  the board has no git history to read, so no revision could be verified");
+    }
+    println!(
+        "  {} revision(s) re-pinned from the board's history; {} file(s) rewritten",
+        report.repinned, report.files_rewritten
+    );
+    let current: Vec<_> = report.unverified_current().collect();
+    if !report.unverified.is_empty() {
+        println!(
+            "  {} revision(s) could not be verified and now read as lapsed; {} of them decide \
+             something now:",
+            report.unverified.len(),
+            current.len()
+        );
+        for u in current {
+            match &u.code {
+                Some(code) => println!("    {}/{code}: {} — give it again", u.project, u.what),
+                None => println!(
+                    "    {}: its process — apply it again with `kanbanr process update`",
+                    u.project
+                ),
+            }
+        }
+    }
+    println!(
+        "  {}",
+        if report.committed {
+            "committed: \"migrate board to schema 5: canonical revisions, files rewritten\""
+        } else {
+            "nothing changed on disk, so nothing was committed"
+        }
+    );
+    Ok(())
 }
 
 fn run_doctor(cli: &Cli, client: &Backend, all_projects: bool) -> anyhow::Result<()> {

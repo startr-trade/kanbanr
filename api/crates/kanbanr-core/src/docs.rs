@@ -70,7 +70,7 @@ pub fn refs_of(text: &str) -> Vec<String> {
         #[serde(default)]
         refs: Vec<String>,
     }
-    serde_yaml::from_str::<Refs>(front)
+    crate::yaml::from_str::<Refs>(front)
         .unwrap_or_default()
         .refs
         .into_iter()

@@ -91,7 +91,7 @@ pub fn oldest_day(data_dir: &Path, project: &str) -> Option<String> {
 pub fn write_legacy_for_test(data_dir: &Path, project: &str, entries: &[Activity]) {
     let dir = data_dir.join("projects").join(project);
     let _ = std::fs::create_dir_all(&dir);
-    if let Ok(yaml) = serde_yaml::to_string(entries) {
+    if let Ok(yaml) = crate::yaml::to_string(entries) {
         let _ = std::fs::write(dir.join("activity.yaml"), yaml);
     }
 }
@@ -177,7 +177,7 @@ mod tests {
                 .collect();
             std::fs::write(
                 folder.join(format!("{day}.yaml")),
-                serde_yaml::to_string(&entries).unwrap(),
+                crate::yaml::to_string(&entries).unwrap(),
             )
             .unwrap();
         }
@@ -236,9 +236,10 @@ mod tests {
         assert_eq!(read_all(&dir, "demo").len(), 5);
         assert!(!dir.join("projects/demo/activity.yaml").exists());
         // The two same-day entries share one file.
-        let same_day: Vec<Activity> =
-            serde_yaml::from_str(&std::fs::read_to_string(folder.join("2026-09-03.yaml")).unwrap())
-                .unwrap();
+        let same_day: Vec<Activity> = crate::yaml::from_str(
+            &std::fs::read_to_string(folder.join("2026-09-03.yaml")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(same_day.len(), 2);
         let _ = std::fs::remove_dir_all(dir);
     }

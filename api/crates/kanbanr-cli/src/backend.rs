@@ -98,6 +98,12 @@ impl Backend {
         &self.store
     }
 
+    /// Migrate the board to schema 5, as one commit under the write lock (FEAT-187).
+    pub fn migrate(&self) -> Result<kanbanr_core::migrate::MigrationReport> {
+        kanbanr_core::migrate::run(&self.store, &self.data_dir, self.push)
+            .map_err(|e| anyhow!(e.to_string()))
+    }
+
     /// A read that needs the project's code repository (FEAT-189: the git model reads its
     /// branches).
     pub fn get_in(&self, path: &str, repo: Option<&std::path::Path>) -> Result<String> {

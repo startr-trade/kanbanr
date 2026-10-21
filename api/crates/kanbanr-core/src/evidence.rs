@@ -274,11 +274,11 @@ some unrelated line ... ok";
             milestones: vec![],
             features: vec![],
         };
-        let def: crate::models::FeatureDefinition = serde_yaml::from_str(&format!(
+        let def: crate::models::FeatureDefinition = crate::yaml::from_str(&format!(
             "requirements:\n  - id: R-1\n    text: x\n    tests:\n{tests}"
         ))
         .unwrap();
-        let f: crate::models::FeatureItem = serde_yaml::from_str(
+        let f: crate::models::FeatureItem = crate::yaml::from_str(
             "code: FEAT-001\ntitle: t\nstatus: Planned\nmilestone: MS-001\n\
              created_at: '2026-01-01T00:00:00Z'\nupdated_at: '2026-01-01T00:00:00Z'\n",
         )

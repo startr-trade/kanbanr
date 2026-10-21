@@ -1,0 +1,47 @@
+code: FEAT-002
+title: Approved then edited
+status: Planned
+milestone: MS-001
+kind: null
+priority: null
+start: null
+due: null
+estimate_days: null
+assignee: null
+team: null
+labels: []
+depends_on: []
+todo_lists: []
+definition:
+  statement: Approved then edited, and the edit lapsed it
+  goals: []
+  zachman:
+    what: The thing
+    how: 'By doing it: carefully'
+    where: crates/x
+    when: Now
+    who: Everyone
+    why: Because
+  requirements:
+  - id: R-1
+    kind: functional
+    text: THE SYSTEM SHALL do the thing.
+    tests:
+    - name: does_the_thing
+      kind: unit
+      state: planned
+  - id: R-2
+    kind: functional
+    text: |-
+      WHEN asked, THE SYSTEM SHALL answer
+      on two lines.
+    tests:
+    - name: answers_when_asked
+      kind: integration
+      state: planned
+  approval:
+    by: Fixture Maker
+    at: 2026-10-21T11:29:05.297173927Z
+    rev: a92ea0fd2e555ee8
+created_at: 2026-10-21T11:29:05.241098223Z
+updated_at: 2026-10-21T11:29:05.327932567Z

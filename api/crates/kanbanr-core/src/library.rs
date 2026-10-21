@@ -37,7 +37,7 @@ pub fn list_personal(dir: &Path) -> Result<Vec<(String, WorkflowFile)>> {
             continue;
         };
         let text = std::fs::read_to_string(&path)?;
-        out.push((name.to_string(), serde_yaml::from_str(&text)?));
+        out.push((name.to_string(), crate::yaml::from_str(&text)?));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
@@ -52,7 +52,9 @@ pub fn get(dir: &Path, name: &str) -> Result<Option<WorkflowFile>> {
     if !path.is_file() {
         return Ok(None);
     }
-    Ok(Some(serde_yaml::from_str(&std::fs::read_to_string(path)?)?))
+    Ok(Some(crate::yaml::from_str(&std::fs::read_to_string(
+        path,
+    )?)?))
 }
 
 /// Save a personal process, versioned as a board save is ([`crate::config::versioned`]).
@@ -68,7 +70,7 @@ pub fn save(
         std::fs::create_dir_all(dir)?;
         std::fs::write(
             dir.join(format!("{name}.yaml")),
-            serde_yaml::to_string(&file)?,
+            crate::yaml::to_string(&file)?,
         )?;
     }
     Ok(file)

@@ -1,0 +1,43 @@
+code: FEAT-009
+title: Defined, never approved
+status: Planned
+milestone: MS-001
+kind: null
+priority: null
+start: null
+due: null
+estimate_days: null
+assignee: null
+team: null
+labels: []
+depends_on: []
+todo_lists: []
+definition:
+  statement: Defined, never approved
+  goals: []
+  zachman:
+    what: The thing
+    how: 'By doing it: carefully'
+    where: crates/x
+    when: Now
+    who: Everyone
+    why: Because
+  requirements:
+  - id: R-1
+    kind: functional
+    text: THE SYSTEM SHALL do the thing.
+    tests:
+    - name: does_the_thing
+      kind: unit
+      state: planned
+  - id: R-2
+    kind: functional
+    text: |-
+      WHEN asked, THE SYSTEM SHALL answer
+      on two lines.
+    tests:
+    - name: answers_when_asked
+      kind: integration
+      state: planned
+created_at: 2026-10-21T11:29:06.213719001Z
+updated_at: 2026-10-21T11:29:06.251469932Z

@@ -24,10 +24,36 @@ use std::collections::BTreeMap;
 ///
 /// 4 — gates may only label stage roles, or be addressed to a role (`@build`) (FEAT-188). Stamped
 /// only then: an older reader would take the labels for declared gates, or never match `@build`.
-pub const CURRENT_SCHEMA_VERSION: u32 = 4;
+///
+/// 5 — every stored revision is a hash of canonical JSON, and the files are written by serde-saphyr
+/// (FEAT-187). Every board is stamped 5, gates or not: an older reader would hash the YAML text and
+/// read every approval as lapsed. A board below 5 is refused until `kanbanr migrate` re-pins its
+/// revisions ([`crate::migrate`]).
+pub const CURRENT_SCHEMA_VERSION: u32 = 5;
 
-/// What a board with no gates is stamped with: the storage layout of FEAT-071/FEAT-066.
-pub const BASE_SCHEMA_VERSION: u32 = 2;
+/// What every board this build writes is stamped with (FEAT-187): its revisions are canonical, so
+/// no reader before schema 5 may take it.
+pub const BASE_SCHEMA_VERSION: u32 = 5;
+
+/// The oldest schema this build reads without migrating (FEAT-187): revisions before it were
+/// hashed from YAML text.
+pub const MIN_READABLE_SCHEMA_VERSION: u32 = 5;
+
+/// Whether a reader that understands schemas up to `understood` may read a board stamped `found`
+/// (FEAT-072, FEAT-187): newer is refused by name; older than the canonical revisions needs
+/// `kanbanr migrate`.
+pub fn check_schema(found: u32, understood: u32) -> crate::Result<()> {
+    if found > understood {
+        return Err(crate::CoreError::SchemaTooNew { found, understood });
+    }
+    if found < MIN_READABLE_SCHEMA_VERSION {
+        return Err(crate::CoreError::NeedsMigration {
+            found,
+            needed: MIN_READABLE_SCHEMA_VERSION,
+        });
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -614,7 +640,7 @@ pub fn preset_bare(name: &str) -> crate::Result<WorkflowFile> {
                 known.join(", ")
             ))
         })?;
-    serde_yaml::from_str(text)
+    crate::yaml::from_str(text)
         .map_err(|e| crate::CoreError::Unsupported(format!("the {key} preset does not parse: {e}")))
 }
 
@@ -904,33 +930,34 @@ pub fn role_problems(
 /// to word.
 pub fn from_yaml<T: serde::de::DeserializeOwned>(
     text: &str,
-) -> std::result::Result<T, serde_yaml::Error> {
-    serde_yaml::from_str(text)
+) -> std::result::Result<T, crate::yaml::Error> {
+    crate::yaml::parse(text)
 }
 
 /// A board record as YAML, the way the board writes it (FEAT-176).
 pub fn to_yaml<T: Serialize>(value: &T) -> crate::Result<String> {
-    Ok(serde_yaml::to_string(value)?)
+    crate::yaml::to_string(value)
 }
 
 impl WorkflowFile {
     /// A hash of the process itself — everything but its header (FEAT-169). Two files that would
-    /// govern work the same way have the same rev, whatever they are called.
+    /// govern work the same way have the same rev, whatever they are called. Hashed from canonical
+    /// JSON (FEAT-187), so how the file was written does not change it.
     pub fn content_rev(&self) -> String {
         let mut bare = self.clone();
         bare.process = None;
-        crate::hash::stable_hash(&serde_yaml::to_string(&bare).unwrap_or_default())
+        crate::hash::stable_hash(&crate::hash::canonical_json(&bare))
     }
 
     /// A process file from its YAML (or JSON) text (FEAT-176): the one reader of a process file
     /// a front end was handed. The error is the parser's own, for the caller to word.
-    pub fn from_yaml(text: &str) -> std::result::Result<WorkflowFile, serde_yaml::Error> {
-        serde_yaml::from_str(text)
+    pub fn from_yaml(text: &str) -> std::result::Result<WorkflowFile, crate::yaml::Error> {
+        crate::yaml::parse(text)
     }
 
     /// This file as YAML, as it is saved and exported (FEAT-176).
     pub fn to_yaml(&self) -> crate::Result<String> {
-        Ok(serde_yaml::to_string(self)?)
+        crate::yaml::to_string(self)
     }
 
     /// The body of `PUT /projects/{p}/config/workflow` that applies this file whole, gates,
@@ -1235,20 +1262,11 @@ impl ProjectConfig {
             .unwrap_or_else(|| "Completed".to_string())
     }
 
-    /// The schema a config is stamped with: gates need a reader that enforces them.
+    /// The schema a config is stamped with. Gates once decided it (3 for declared gates, 4 for
+    /// role labels and `@role` gates, FEAT-113/FEAT-188); since canonical revisions (FEAT-187) every
+    /// board needs a reader of schema 5, which knows both.
     pub fn required_schema_version(&self) -> u32 {
-        if self.gates.is_empty() {
-            BASE_SCHEMA_VERSION
-        } else if !self.declares_gates()
-            || self.gates.keys().any(|k| k.starts_with(ROLE_KEY_PREFIX))
-        {
-            // Role labels alone, or a gate addressed to a role (FEAT-188): an older reader would
-            // take the labels for declared gates (losing the built-in rule) or never match the
-            // `@role` key — a guardrail silently gone either way, so it must refuse the board.
-            4
-        } else {
-            3
-        }
+        CURRENT_SCHEMA_VERSION
     }
 
     /// Does the workflow declare gates of its own (FEAT-188)? Gates that only label roles do not:
@@ -1432,23 +1450,23 @@ mod tests {
     fn diagrams_config_defaults_off_and_round_trips() {
         let config = config_of("default");
         assert!(!config.diagrams.strict);
-        let yaml = serde_yaml::to_string(&config).unwrap();
+        let yaml = crate::yaml::to_string(&config).unwrap();
         assert!(!yaml.contains("diagrams"), "{yaml}");
-        let back: ProjectConfig = serde_yaml::from_str(&yaml).unwrap();
+        let back: ProjectConfig = crate::yaml::from_str(&yaml).unwrap();
         assert_eq!(back.diagrams, DiagramsConfig::default());
 
         let mut strict = config.clone();
         strict.diagrams.strict = true;
-        let yaml = serde_yaml::to_string(&strict).unwrap();
+        let yaml = crate::yaml::to_string(&strict).unwrap();
         assert!(yaml.contains("diagrams:\n  strict: true"), "{yaml}");
-        let back: ProjectConfig = serde_yaml::from_str(&yaml).unwrap();
+        let back: ProjectConfig = crate::yaml::from_str(&yaml).unwrap();
         assert!(back.diagrams.strict);
 
         let newer = yaml.replace("strict: true", "strict: true\n  severity: high");
-        let back: ProjectConfig = serde_yaml::from_str(&newer).unwrap();
+        let back: ProjectConfig = crate::yaml::from_str(&newer).unwrap();
         assert!(back.diagrams.extra.contains_key("severity"));
         assert!(
-            serde_yaml::to_string(&back)
+            crate::yaml::to_string(&back)
                 .unwrap()
                 .contains("severity: high")
         );
@@ -1632,13 +1650,14 @@ mod tests {
         );
     }
 
-    /// FEAT-188: labels only, or a role-addressed gate, need a reader that knows roles.
+    /// FEAT-188: labels only, or a role-addressed gate, need a reader that knows roles — which
+    /// since FEAT-187 every board needs anyway: all are stamped 5, the schema of canonical revisions.
     #[test]
     fn schema_four_for_role_labels() {
-        assert_eq!(config_of("default").required_schema_version(), 4);
+        assert_eq!(config_of("default").required_schema_version(), 5);
         assert_eq!(
             config_of("togaf").required_schema_version(),
-            3,
+            5,
             "roles beside real gates"
         );
         let mut config = config_of("togaf");
@@ -1649,7 +1668,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(config.required_schema_version(), 4);
+        assert_eq!(config.required_schema_version(), 5);
         assert_eq!(
             ProjectConfig::default_for("p").required_schema_version(),
             BASE_SCHEMA_VERSION

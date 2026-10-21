@@ -14,6 +14,15 @@ pub enum CoreError {
     )]
     SchemaTooNew { found: u32, understood: u32 },
 
+    /// The board was written before revisions were canonical (FEAT-187). Reading it as it stands
+    /// would show every approval as lapsed, so it is refused until it is migrated, once.
+    #[error(
+        "this board was written by an earlier kanbanr (schema {found}; this build reads {needed}) \
+         — run `kanbanr migrate` once to bring it up to date: it re-pins every approval and \
+         sign-off to its canonical revision and rewrites the files, in one commit"
+    )]
+    NeedsMigration { found: u32, needed: u32 },
+
     #[error("project '{0}' not found")]
     ProjectNotFound(String),
     #[error("project '{0}' already exists")]
@@ -85,8 +94,12 @@ pub enum CoreError {
     Refused(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("yaml error: {0}")]
-    Yaml(#[from] serde_yaml::Error),
+    /// A board file, or YAML a front end was handed, that does not parse (FEAT-187).
+    #[error(transparent)]
+    YamlDe(#[from] serde_saphyr::Error),
+    /// A record that could not be written as YAML (FEAT-187).
+    #[error(transparent)]
+    YamlSer(#[from] serde_saphyr::SerializeError),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -108,6 +121,8 @@ impl CoreError {
             // rather than returning an empty board (FEAT-072). 409 is the honest code — the request
             // is fine, the server's state is what conflicts.
             SchemaTooNew { .. } => 409,
+            // Likewise for a board that must be migrated first (FEAT-187).
+            NeedsMigration { .. } => 409,
             ProjectExists(_)
             | FeatureExists(_)
             | MilestoneExists(_)
@@ -138,7 +153,7 @@ impl CoreError {
             // A workflow rule refused a step (FEAT-176): as with the repository, the request was
             // well formed and the item's state is what stood in the way.
             Refused(_) => 409,
-            Io(_) | Yaml(_) => 500,
+            Io(_) | YamlDe(_) | YamlSer(_) => 500,
         }
     }
 }

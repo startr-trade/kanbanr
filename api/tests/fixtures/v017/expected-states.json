@@ -1,0 +1,28 @@
+{
+  "made_by": "kanbanr 0.1.7 (git tag v0.1.7), with make-fixture.sh",
+  "observed_with": "kanbanr 0.1.7: `feature show` for approvals and sign-offs (it marks a lapsed sign-off), `process status --json` for process drift",
+  "projects": {
+    "demo": {
+      "items": {
+        "FEAT-001": { "approval": "current", "signoffs": {} },
+        "FEAT-002": { "approval": "lapsed", "signoffs": {} },
+        "FEAT-003": { "approval": "missing", "signoffs": {} },
+        "FEAT-004": { "approval": "ratified", "signoffs": {} },
+        "FEAT-005": { "approval": "lapsed", "signoffs": {} },
+        "FEAT-006": { "approval": "current", "signoffs": {} },
+        "FEAT-007": { "approval": "current", "signoffs": { "design-review": "current" } },
+        "FEAT-008": { "approval": "current", "signoffs": { "design-review": "lapsed" } },
+        "FEAT-009": { "approval": "missing", "signoffs": {} },
+        "FEAT-010": { "approval": "current", "signoffs": {} },
+        "FEAT-011": { "approval": "current", "signoffs": {} },
+        "FEAT-012": { "approval": "missing", "signoffs": {} },
+        "FEAT-013": { "approval": "current", "signoffs": {} },
+        "FEAT-014": { "approval": "current", "signoffs": { "design-review": "lapsed", "release": "current" } }
+      },
+      "process": null
+    },
+    "flow": { "items": {}, "process": { "edited": false, "newer": null, "gone": false } },
+    "drifted": { "items": {}, "process": { "edited": true, "newer": null, "gone": false } },
+    "behind": { "items": {}, "process": { "edited": false, "newer": 2, "gone": false } }
+  }
+}

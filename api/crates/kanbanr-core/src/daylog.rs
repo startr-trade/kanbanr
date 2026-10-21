@@ -72,7 +72,7 @@ fn day_files(data_dir: &Path, project: &str, name: &str) -> Vec<PathBuf> {
 fn read_file<T: DeserializeOwned>(file: &Path) -> Vec<T> {
     std::fs::read_to_string(file)
         .ok()
-        .and_then(|s| serde_yaml::from_str(&s).ok())
+        .and_then(|s| crate::yaml::from_str(&s).ok())
         .unwrap_or_default()
 }
 
@@ -142,7 +142,7 @@ pub fn append<T: Serialize + DeserializeOwned + Dated>(
     // Oldest first within a day: a day file then reads like a diary, and an append is a diff at the
     // end rather than a rewrite of the whole file.
     day.sort_by(|a, b| a.at().cmp(b.at()));
-    if let Ok(yaml) = serde_yaml::to_string(&day) {
+    if let Ok(yaml) = crate::yaml::to_string(&day) {
         let _ = std::fs::write(&file, yaml);
     }
 }
@@ -173,7 +173,7 @@ pub fn migrate<T: Serialize + DeserializeOwned + Dated>(
         let mut existing: Vec<T> = read_file(&file);
         existing.append(&mut day_entries);
         existing.sort_by(|a, b| a.at().cmp(b.at()));
-        let Ok(yaml) = serde_yaml::to_string(&existing) else {
+        let Ok(yaml) = crate::yaml::to_string(&existing) else {
             return; // leave the old file in place rather than half-migrating
         };
         if std::fs::write(&file, yaml).is_err() {

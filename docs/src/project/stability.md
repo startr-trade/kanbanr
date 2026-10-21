@@ -45,8 +45,15 @@ that makes this promise checkable — no new features.
   newer *format*.
 - **A newer board is refused, never misread.** A board that needs a newer kanbanr says so with its
   `schema_version`, and an older binary refuses to open it rather than silently ignoring what it
-  does not understand. This is why `schema_version` only rises when a board actually uses
-  something new (a workflow with gates is stamped 3; one without stays 2).
+  does not understand. `schema_version` rises only when an older binary would misread a board.
+  Gates once stamped a board 3 and role labels 4. Schema 5 changed how every revision is computed,
+  so every board is now stamped 5.
+- **Revisions are canonical.** The `rev` stored by an approval, a sign-off or a project's `process`
+  record is a hash of the record's canonical JSON: compact, with every key sorted. It does not
+  depend on how the YAML is written, so quoting, indentation or a new YAML library never lapses an
+  approval. Schema 5 introduced this (FEAT-187). A board from before schema 5 is refused by every
+  command until `kanbanr migrate` has run. The migration re-pins each revision from the board's own
+  history, in one commit; see [Upgrading a board to schema 5](../releases/schema-5.md).
 - **Deprecation before removal.** Something stable is first deprecated in a minor release — the
   changelog says so, and using it prints a warning naming its replacement — and is removed only in
   the next major version.

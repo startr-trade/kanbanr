@@ -25,7 +25,7 @@ mod tests {
             Rule {
                 name: "yaml",
                 why: "board YAML is read and written by core, so every board file has one reader",
-                hits: |_, l| l.contains("serde_yaml::"),
+                hits: |_, l| l.contains("serde_yaml::") || l.contains("serde_saphyr::"),
             },
             Rule {
                 name: "model-literal",
@@ -56,7 +56,7 @@ mod tests {
     const BASELINE: &[(&str, &str, usize)] = &[];
 
     /// Front-end crates may not depend directly on these: they are core's business.
-    const CORE_ONLY_DEPS: &[&str] = &["git2", "serde_yaml", "ears-classifier"];
+    const CORE_ONLY_DEPS: &[&str] = &["git2", "serde_yaml", "serde-saphyr", "ears-classifier"];
     /// Direct dependencies still to be removed (the dependency rule's baseline).
     const DEP_BASELINE: &[(&str, &str)] = &[];
 
@@ -193,6 +193,11 @@ mod tests {
             "yaml",
             "kanbanr-cli/src/main.rs",
             "let d = serde_yaml::from_str(&raw)?;"
+        ));
+        assert!(hit(
+            "yaml",
+            "kanbanr-server/src/routes.rs",
+            "let d: Value = serde_saphyr::from_str(&raw)?;"
         ));
         assert!(hit(
             "model-literal",

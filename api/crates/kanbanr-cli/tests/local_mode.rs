@@ -3259,23 +3259,23 @@ fn update_applies_on_request_and_keeps_occupied_statuses() {
     assert!(status.contains("ours v2 (board), current"), "{status}");
 
     // v3 drops Vision, where the shop's item sits: refused, nothing changed.
-    let mut v3: serde_yaml::Value = serde_yaml::from_str(&now).unwrap();
-    let statuses = v3["statuses"].as_sequence_mut().unwrap();
+    let mut v3: kanbanr_core::yaml::Value = kanbanr_core::yaml::from_str(&now).unwrap();
+    let statuses = v3["statuses"].as_array_mut().unwrap();
     statuses.retain(|s| s.as_str() != Some("Vision"));
     v3["default_state"] = "Business Arch".into();
     for key in ["displayed_states", "terminal_states", "no_op_states"] {
-        if let Some(list) = v3[key].as_sequence_mut() {
+        if let Some(list) = v3[key].as_array_mut() {
             list.retain(|s| s.as_str() != Some("Vision"));
         }
     }
-    let transitions = v3["transitions"].as_mapping_mut().unwrap();
+    let transitions = v3["transitions"].as_object_mut().unwrap();
     transitions.remove("Vision");
     for (_, tos) in transitions.iter_mut() {
-        tos.as_sequence_mut()
+        tos.as_array_mut()
             .unwrap()
             .retain(|s| s.as_str() != Some("Vision"));
     }
-    let v3 = serde_yaml::to_string(&v3).unwrap();
+    let v3 = kanbanr_core::yaml::to_string(&v3).unwrap();
     let file = base.join("v3.yaml");
     std::fs::write(&file, v3).unwrap();
     let saved = run_in(
@@ -5201,6 +5201,92 @@ fn new_board_has_a_readme() {
     assert!(!doctor.contains("kanbanr readme"), "{doctor}");
     let again = ok(run_in(&base, &work, &["readme"]));
     assert!(again.contains("up to date"), "{again}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap().flatten() {
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
+/// FEAT-187: a board kanbanr 0.1.7 made is refused by every command with the remedy, until
+/// `kanbanr migrate` brings it up to date in one commit; then it reads as 0.1.7 read it, and a
+/// second run has nothing to do.
+#[test]
+fn cli_migrate_brings_a_v017_board_up_to_date() {
+    let (base, work) = togaf_scratch("migrate");
+    let board = base.join("board");
+    copy_dir(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/v017/board"),
+        &board,
+    );
+    std::fs::rename(board.join("dot-git"), board.join(".git")).unwrap();
+    // L-41: the board is this test's own copy, in the temp dir, before the first write.
+    assert!(board.starts_with(std::env::temp_dir()));
+    let dir = board.to_str().unwrap();
+    let run = |args: &[&str]| {
+        let mut all = vec!["--data-dir", dir, "--project", "demo"];
+        all.extend_from_slice(args);
+        run_in(&base, &work, &all)
+    };
+    let text = |o: &Output| {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&o.stdout),
+            String::from_utf8_lossy(&o.stderr)
+        )
+    };
+
+    let refused = run(&["board"]);
+    assert!(!refused.status.success());
+    assert!(
+        text(&refused).contains("run `kanbanr migrate`"),
+        "{}",
+        text(&refused)
+    );
+
+    let migrated = run(&["migrate"]);
+    assert!(migrated.status.success(), "{}", text(&migrated));
+    let out = text(&migrated);
+    assert!(out.contains("migrated 4 project(s) to schema 5"), "{out}");
+    assert!(out.contains("committed"), "{out}");
+    assert!(!out.contains("could not be verified"), "{out}");
+
+    // What 0.1.7 had awaiting review (`review --pending --json` on the fixture), and nothing else.
+    let review = run(&["--json", "review", "--pending"]);
+    assert!(review.status.success(), "{}", text(&review));
+    let pending: serde_json::Value = serde_json::from_slice(&review.stdout).unwrap();
+    let mut got: Vec<String> = pending
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| format!("{} {}", e["code"].as_str().unwrap(), e["approval"]))
+        .collect();
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            "FEAT-002 \"lapsed\"",
+            "FEAT-003 \"missing\"",
+            "FEAT-005 \"lapsed\"",
+            "FEAT-009 \"missing\""
+        ]
+    );
+
+    let again = run(&["migrate"]);
+    assert!(again.status.success(), "{}", text(&again));
+    assert!(
+        text(&again).contains("nothing to migrate"),
+        "{}",
+        text(&again)
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
 

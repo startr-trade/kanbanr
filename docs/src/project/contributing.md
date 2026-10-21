@@ -96,6 +96,10 @@ diagram again (`npm run check:docs`, and a look at the book and the monitor in l
 - **TypeScript/React:** the UI is read-only and plain (`fetch` + `EventSource`); no state libraries.
   Keep components small and typed.
 - Prefer a single `kanbanr batch` / `dispatch` route over bespoke one-off code paths.
+- **Board files:** read and write them through `kanbanr_core::yaml` (`from_str`, `to_string`), never
+  a YAML crate directly. It sets the library's options in one place. A stored revision hashes
+  `kanbanr_core::hash::canonical_json` of the record, never its YAML text, so a change of writer
+  never lapses an approval (FEAT-187).
 - Update tests for behavior changes; `kanbanr-core` is where the engine tests live.
 - Update the relevant docs (the [Using kanbanr](../using/everyday.md) and [Architecture](../architecture/overview.md) chapters,
   the [skill](https://github.com/startr-trade/kanbanr/blob/main/skill/kanbanr/SKILL.md)) when you change a contract.
