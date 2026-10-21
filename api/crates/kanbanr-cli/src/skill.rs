@@ -261,6 +261,27 @@ mod tests {
         }
     }
 
+    /// FEAT-215 R-1: the skill states each sub-agent role's boundaries, and the coordinator's
+    /// duty to brief with them and keep the board current.
+    #[test]
+    fn skill_states_sub_agent_boundaries() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        for want in [
+            "### Sub-agents: what each may do",
+            "A **build** agent",
+            "A **design** agent",
+            "the brief states them **verbatim**",
+            "never: no `git push`, no `kanbanr sync`",
+            "so the board never lags the code",
+        ] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+    }
+
     /// FEAT-194 R-1: the skill states the method once, by stage role: a section with one
     /// subsection per role, naming the commands and gates that now carry each rule.
     #[test]

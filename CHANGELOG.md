@@ -26,6 +26,11 @@ All notable changes to kanbanr are documented here. The format follows
   the first included, and the Releases page offers no button; a patch, which carries its parent's
   fixes, still goes.
 
+- **The skill says what each sub-agent may do (FEAT-215).** When Claude hands work to a sub-agent,
+  the skill gives each role fixed boundaries, stated in the brief word for word: a build agent reads
+  everything, records task states and test evidence on its own item, commits only on its item's
+  branch and never pushes; a design agent is read-only. Claude keeps the board current as the agents
+  work, and takes back every question.
 - **The Workflow page shows the cadence, the git model and every guard rail (FEAT-213).** Below
   the stages: the sprint length and the running sprint; how often releases are cut, their stages
   with the cut marked, and each unshipped release at its stage; the git model in words (main, the

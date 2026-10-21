@@ -601,8 +601,34 @@ design before build, it adds `signoffs: [design-review]` to the same gate.
   from main; a fix to a release under test branches from `release/<V>`.
 - Commit with `kanbanr commit`: it fills in `Refs:` from the branch.
 - Subagents take one task at a time from the item's todo-list, with the approved definition and
-  that task as their brief.
+  that task as their brief, and the boundaries of their role (next section).
 - Never commit on main or on a line of integration (the hooks refuse), and never push.
+
+### Sub-agents: what each may do
+
+When you hand work to a sub-agent, its limits are not left to its judgement or to a one-off line
+in the brief. Each role has fixed boundaries, and the brief states them **verbatim**:
+
+| | A **build** agent (one item, in its own worktree) | A **design** agent |
+|---|---|---|
+| Read the board and the code | everything | everything |
+| Its item's record | `kanbanr task state <CODE> …` as each task starts and lands; `kanbanr test <CODE> R-n "<name>" green --rev <sha>` for a test it actually ran green | nothing |
+| Everything else on the board | refused: moves, approvals, sign-offs, definitions, specs, docs, other items, `batch`, config | refused |
+| Code | commits only on its item's branch, each naming the item | no edits, no commits |
+| Remote | never: no `git push`, no `kanbanr sync` | never |
+| Tests | on temporary boards only, never a real board | — |
+
+As the coordinator you:
+- put the role's table in every brief, word for word, with the item, its branch and its todo-list;
+- have build agents record their own progress, so the board never lags the code; and when you look
+  at an agent's branch, bring its item's tasks up to date at once, never waiting for its report;
+- take back every question and every piece of work outside the brief: the agent reports it, you
+  decide or ask the user, it never decides a design question itself;
+- give no agent a verdict to record, a stage to move or anything to push; those stay yours and the
+  user's.
+
+A sub-agent is not a way round the method: it works inside the same gates, on the same branch rules,
+and what it records is checked like anything else.
 
 ### At the integrate role
 
