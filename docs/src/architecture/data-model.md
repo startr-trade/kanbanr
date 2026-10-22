@@ -72,6 +72,10 @@ erDiagram
   Todo-lists are displayed newest-first; the status page shows only the not-fully-completed ones.
 - **There is no Schedule entity.** A "schedule" is derived: for a status, the milestones holding
   features in that status (dependency-ordered).
+- A FEATURE's **`code`** is its identity and filename. Where the project's `codes` map kinds to
+  prefixes (FEAT-217), a new item's code takes its kind's prefix (`DEF-001`, `MNT-001`), with a
+  counter per prefix — kinds sharing a prefix share its counter; otherwise it is `FEAT-<n>`. A
+  code is **never renamed** when the item's kind changes: it is in branches, trailers and links.
 
 
 ## Agent scopes

@@ -35,6 +35,7 @@ async function load(project: string): Promise<BoardIndex | null> {
       adrs: adrs.filter((a) => a.path).map((a) => ({ id: a.id, path: a.path as string })),
       goals: (charter?.goals ?? []).map((g) => g.id),
       docs: docs ? docPaths(docs) : [],
+      codes: p.config.codes,
     });
   } catch {
     return null;

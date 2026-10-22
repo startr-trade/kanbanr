@@ -34,6 +34,21 @@ sibling cannot be.
                 └── overview.md
 ```
 
+**Item codes** (FEAT-217). An item's file is named by its code. Where the project maps kinds to
+prefixes (`codes:` in `config.yaml`, set with `kanbanr config codes`), a new item's code says its
+kind — `DEF-001`, `MNT-004`, `FTR-012` — with a counter per prefix; otherwise every code is
+`FEAT-<n>`. Both kinds of code live side by side, and a code is never renamed when its item's kind
+changes.
+
+```yaml
+codes:
+  default: FEAT        # optional; absent = FEAT
+  kinds:               # kind (lowercase) -> prefix
+    bug: DEF
+    defect: DEF
+    feature: FTR
+```
+
 **Agent scopes** (FEAT-214). `scopes.yaml` holds every scope issued for the project: `id`, `role`
 (`design` or `build`), `item`, `operations`, `branch` and `base` (build), `issued_by`, `issued_at`,
 `expires_at`, `note`, and once claimed `worktree` (relative to the main worktree, so the board

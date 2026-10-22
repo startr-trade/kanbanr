@@ -17,6 +17,23 @@ All notable changes to kanbanr are documented here. The format follows
   cut the notes read as shipped and are not edited. The Releases page has a **Release notes**
   section for each release with a branch, and on a write-enabled monitor started in the project
   folder, **Edit notes** and **Save**. No separate item is needed to change a candidate's notes.
+
+- **An item's code says what kind of work it is (FEAT-217).** `kanbanr config codes --set
+  feature=FTR,defect=DEF,bug=DEF,chore=MNT,docs=DOC,spike=SPK` maps kinds to prefixes, and a new
+  item then takes its kind's prefix with a counter per prefix (`DEF-001`, `MNT-001`, `FTR-001`):
+  pass `--kind` at `feature add` (or `kind` in a batch). With no flag, `config codes` shows each
+  kind's prefix, the default and the next code per prefix. Existing codes are kept, and changing an
+  item's kind never renames it. A prefix is 2–6 uppercase letters and may not be `MS`, `ADR`, `SC`,
+  `SP`, `TL` or a milestone's; a bad one is refused naming the entry, and one a hand edit broke
+  stops new items from being coded and is a `doctor` error. References are still recognised by
+  this board's prefixes only — configured ones and those its items have — so `SHA-256` or
+  `RFC-3339` in a spec is never taken for an item, in the monitor or in `doctor`. A project that
+  sets no codes keeps `FEAT-` for everything, as before.
+
+## [0.3.0] - 2026-10-21
+
+### Added
+
 - **Agent scopes: what a sub-agent may do, enforced by kanbanr (FEAT-214).** Before starting a
   sub-agent, Claude runs `kanbanr scope issue <design|build> <CODE>`: the scope is recorded on the
   board (who issued it, the item, what it allows, the item's branch, when it expires: 8 hours by
@@ -1116,7 +1133,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/startr-trade/kanbanr/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/startr-trade/kanbanr/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/startr-trade/kanbanr/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/startr-trade/kanbanr/compare/v0.1.6...v0.1.7

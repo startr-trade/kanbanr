@@ -79,8 +79,9 @@ Write references as links where you mean them to be followed:
 | a goal | `/p/<project>/charter#G-1` |
 | an ADR or a doc | `/p/<project>/docs/file/<path>` |
 
-A code is a reference only when its prefix is one this board uses, so `UTF-8` and `ISO-9001` are
-left alone; code spans, code blocks and HTML comments are never read. `kanbanr doctor` reports a
+A code is a reference only when its prefix is one this board uses — one its codes configure
+(`kanbanr config codes`: `DEF`, `MNT` …, or `FEAT` when none are set) or one an existing item
+already has — so `UTF-8`, `ISO-9001`, `SHA-256` and `RFC-3339` are left alone; code spans, code blocks and HTML comments are never read. `kanbanr doctor` reports a
 reference to something the board does not have — an **error** for a link, which is meant to be
 followed, and a **warning** for a code named in prose. The monitor strikes the same ones through.
 

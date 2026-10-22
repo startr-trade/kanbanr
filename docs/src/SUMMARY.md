@@ -45,6 +45,7 @@
 - [Stability: what 1.0 promises](project/stability.md)
 - [Open-sourcing guide](project/open-sourcing.md)
 - [Release notes](releases/index.md)
+  - [0.3.0](releases/v0.3.0.md)
   - [0.2.1](releases/v0.2.1.md)
   - [0.2.0](releases/v0.2.0.md)
   - [Upgrading to schema 5](releases/schema-5.md)

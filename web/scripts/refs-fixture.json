@@ -1,12 +1,24 @@
 {
   "index": {
     "project": "shop",
+    "codes": {
+      "default": "FEAT",
+      "kinds": {
+        "defect": "DEF",
+        "bug": "DEF",
+        "feature": "FTR",
+        "spike": "SPK"
+      }
+    },
     "items": {
       "FEAT-012": [
         "R-1",
         "R-2"
       ],
-      "FEAT-013": []
+      "FEAT-013": [],
+      "DEF-001": [
+        "R-1"
+      ]
     },
     "milestones": [
       "MS-004"
@@ -171,6 +183,45 @@
           true
         ]
       ]
+    },
+    {
+      "name": "kind prefixes beside FEAT",
+      "markdown": "DEF-001/R-1 fixes FEAT-012; FTR-001 and SPK-004 are not made yet.",
+      "expect": [
+        [
+          "item",
+          "DEF-001/R-1",
+          1,
+          false,
+          false
+        ],
+        [
+          "item",
+          "FEAT-012",
+          1,
+          false,
+          false
+        ],
+        [
+          "item",
+          "FTR-001",
+          1,
+          false,
+          true
+        ],
+        [
+          "item",
+          "SPK-004",
+          1,
+          false,
+          true
+        ]
+      ]
+    },
+    {
+      "name": "standard ids are not codes",
+      "markdown": "SHA-256, RFC-3339, ISO-9001, UTF-8, CVE-2024-1234, DEF-1a",
+      "expect": []
     }
   ]
 }

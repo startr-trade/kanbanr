@@ -10,6 +10,8 @@ Scoping work, deciding on it and moving it all happen in the conversation: see
 | "Set up kanbanr for this project, states Backlog→Doing→Done, new features start in Backlog" | `kanbanr project init … --statuses Backlog,Doing,Done --default-state Backlog` |
 | "Add a Foundations milestone" | `kanbanr milestone add --name Foundations --code MS-001` |
 | "Track a feature for the login flow under MS-001 with a spec" | `kanbanr feature add --title "Login flow" --milestone MS-001 --spec "…"` |
+| "Log a defect: saving crashes" | `kanbanr feature add --title "Saving crashes" --milestone MS-001 --kind defect` (with `config codes` set, `--kind` chooses the code's prefix: `DEF-001`; a later kind change does not rename) |
+| "Make defects read DEF and chores MNT" | `kanbanr config codes --set defect=DEF,bug=DEF,chore=MNT` |
 | "Start a todo-list for this session on FEAT-001" | `kanbanr todo add FEAT-001 --description "session 1"` (→ TL-001) |
 | "Add tasks to TL-001" | `kanbanr task add FEAT-001 TL-001 --text "…"` |
 | "Start task T2 in TL-001" / "T2 is done" | `kanbanr task state FEAT-001 TL-001 T2 InProgress` / `Completed` |
