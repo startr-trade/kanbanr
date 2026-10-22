@@ -805,7 +805,9 @@ enum FeatureCmd {
         spec_file: Option<String>,
         #[arg(long)]
         code: Option<String>,
-        /// Work kind (feature / chore / bug / refactor / docs / recurring …).
+        /// Work kind (feature / chore / bug / refactor / docs / recurring …), and, when the
+        /// project maps kinds (`config codes`), the code's prefix: set it here, a later change
+        /// does not rename.
         #[arg(long)]
         kind: Option<String>,
         /// Priority (low / medium / high …).
@@ -992,6 +994,23 @@ enum ConfigCmd {
         /// Refuse writes whose diagrams have problems: on | off.
         #[arg(long, value_parser = ["on", "off"])]
         strict: Option<String>,
+    },
+    /// Which prefix an item's code gets from its kind (FEAT-217): `DEF-001` for a defect, with a
+    /// counter per prefix. Unset: `FEAT-` for everything. Existing codes are never renamed. With
+    /// no flag, shows each kind's prefix, the default and the next code per prefix.
+    Codes {
+        /// Map kinds to prefixes: `defect=DEF,chore=MNT`.
+        #[arg(long, value_delimiter = ',')]
+        set: Vec<String>,
+        /// Remove kinds' entries: `chore,docs`.
+        #[arg(long, value_delimiter = ',')]
+        unset: Vec<String>,
+        /// The prefix of a kind with no entry; `""` resets it to FEAT.
+        #[arg(long)]
+        default: Option<String>,
+        /// Remove every entry and the default: back to FEAT for everything.
+        #[arg(long, conflicts_with_all = ["set", "unset", "default"])]
+        clear: bool,
     },
     /// Architecture coverage rules (FEAT-197): every item at a stage, accepted ADR or doc under a
     /// folder is referenced from a view doc, or lists one. With no flag, shows each rule and how
@@ -7853,6 +7872,84 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                         r.source
                     ),
                 }
+            }
+            Ok(())
+        }
+        ConfigCmd::Codes {
+            set,
+            unset,
+            default,
+            clear,
+        } => {
+            let mut pairs = Map::new();
+            for entry in set.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                let Some((kind, prefix)) = entry.split_once('=') else {
+                    anyhow::bail!("--set takes KIND=PREFIX pairs, like defect=DEF: got '{entry}'");
+                };
+                let (kind, prefix) = (kind.trim(), prefix.trim());
+                if kind.is_empty() || prefix.is_empty() {
+                    anyhow::bail!("--set takes KIND=PREFIX pairs, like defect=DEF: got '{entry}'");
+                }
+                pairs.insert(kind.to_string(), json!(prefix));
+            }
+            let unset: Vec<&str> = unset
+                .iter()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let changing = *clear || !pairs.is_empty() || !unset.is_empty() || default.is_some();
+            let resp = if changing {
+                let mut body = json!({ "set": pairs, "unset": unset, "clear": clear });
+                if let Some(d) = default {
+                    body["default"] = json!(d);
+                }
+                client.write(
+                    Method::Put,
+                    &format!("/projects/{p}/config/codes"),
+                    Some(body),
+                )?
+            } else {
+                client.get(&format!("/projects/{p}/config/codes"))?
+            };
+            let v: Value = serde_json::from_str(&resp)?;
+            let default = v["default"].as_str().unwrap_or("FEAT").to_string();
+            let next_of = |prefix: &str| {
+                v["next"][prefix]
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("{prefix}-001"))
+            };
+            let mut lines = Vec::new();
+            if let Some(kinds) = v["kinds"].as_object() {
+                for (kind, prefix) in kinds {
+                    let prefix = prefix.as_str().unwrap_or_default();
+                    lines.push(format!("{kind:<12} {prefix:<6} {}", next_of(prefix)));
+                }
+            }
+            lines.push(format!(
+                "{:<12} {default:<6} {}",
+                "(other)",
+                next_of(&default)
+            ));
+            let in_use: Vec<String> = v["in_use"]
+                .as_object()
+                .map(|m| {
+                    m.iter()
+                        .map(|(prefix, n)| format!("{prefix} ({})", n.as_u64().unwrap_or(0)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            lines.push(if in_use.is_empty() {
+                "in use: none yet".to_string()
+            } else {
+                format!("in use: {}", in_use.join(", "))
+            });
+            if changing {
+                print_write(cli, &resp, lines.join("\n"));
+            } else if cli.json {
+                println!("{}", pretty(&resp));
+            } else {
+                println!("{}", lines.join("\n"));
             }
             Ok(())
         }
