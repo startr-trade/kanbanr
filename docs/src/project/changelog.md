@@ -6,8 +6,6 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-10-21
-
 ### Added
 
 - **An item's code says what kind of work it is (FEAT-217).** `kanbanr config codes --set
@@ -21,6 +19,11 @@ All notable changes to kanbanr are documented here. The format follows
   this board's prefixes only — configured ones and those its items have — so `SHA-256` or
   `RFC-3339` in a spec is never taken for an item, in the monitor or in `doctor`. A project that
   sets no codes keeps `FEAT-` for everything, as before.
+
+## [0.3.0] - 2026-10-21
+
+### Added
+
 - **Agent scopes: what a sub-agent may do, enforced by kanbanr (FEAT-214).** Before starting a
   sub-agent, Claude runs `kanbanr scope issue <design|build> <CODE>`: the scope is recorded on the
   board (who issued it, the item, what it allows, the item's branch, when it expires: 8 hours by
