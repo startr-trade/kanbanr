@@ -20,6 +20,16 @@ All notable changes to kanbanr are documented here. The format follows
   `RFC-3339` in a spec is never taken for an item, in the monitor or in `doctor`. A project that
   sets no codes keeps `FEAT-` for everything, as before.
 
+### Fixed
+
+- **`make ci` lets an agent's own progress through (FEAT-218).** The release gate's check that the
+  real board did not move during the run failed on a sub-agent's task and test updates made
+  meanwhile. A commit carrying an `Agent-Scope:` trailer now passes when its scope, as the board
+  held it at that commit, was an active build scope for the one item the commit records, and the
+  commit touches only that item, the activity, the events and the index. Issuing, claiming and
+  revoking a scope pass as your verdicts do. The run lists each by its scope; anything else still
+  fails the check.
+
 ## [0.3.0] - 2026-10-21
 
 ### Added
