@@ -501,7 +501,12 @@ pub fn message_verdict(facts: &RepoFacts, project: &Project, board: Option<&Boar
         }
         let suggestion = branch_item(project, facts.branch.as_deref())
             .map(|code| format!("Refs: kanbanr:{code}"))
-            .unwrap_or_else(|| "Refs: kanbanr:FEAT-001".to_string());
+            .unwrap_or_else(|| {
+                format!(
+                    "Refs: kanbanr:{}-001",
+                    project.config.codes.prefix_for(None)
+                )
+            });
         return Verdict::refuse(format!(
             "this commit says which code changed but not which item it serves.\n\
              Add a trailer:\n\n    {suggestion}\n\n\
@@ -838,6 +843,42 @@ mod tests {
             ))
             .contains("not on the board")
         );
+    }
+
+    /// FEAT-217 R-8: a kind-prefixed code round-trips through its `fix/` branch and its trailer,
+    /// and the hooks pass it; with no item on the branch, the suggested trailer uses the prefix a
+    /// new feature would get.
+    #[test]
+    fn kind_prefixed_codes_round_trip_branch_and_trailer() {
+        let mut p = board(false);
+        p.features[0].code = "DEF-001".into();
+        p.config.codes.kinds.extend([
+            ("defect".to_string(), "DEF".to_string()),
+            ("feature".to_string(), "FTR".to_string()),
+        ]);
+        let pattern = p.config.branch_pattern().to_string();
+        let fix = fix_twin(&pattern).unwrap();
+        let branch = branch_for(&fix, "DEF-001", "Crash on save");
+        assert_eq!(branch, "fix/DEF-001-crash-on-save");
+        assert_eq!(
+            item_code_from_branch(&pattern, &branch).as_deref(),
+            Some("DEF-001")
+        );
+        assert_eq!(branch_item(&p, Some(&branch)).as_deref(), Some("DEF-001"));
+        let on_fix = Some(branch.as_str());
+        assert!(branch_verdict(&on(on_fix, None), &p).is_allowed());
+        assert!(
+            refusal(commit_verdict(&on(on_fix, Some("wip")), &p)).contains("Refs: kanbanr:DEF-001")
+        );
+        let message = "fix: save\n\nRefs: kanbanr:DEF-001";
+        assert_eq!(parse_refs(message).len(), 1);
+        assert!(validate_refs(&p, &parse_refs(message)).is_empty());
+        assert!(commit_verdict(&on(on_fix, Some(message)), &p).is_allowed());
+        // A branch that names no item: the suggestion is in this board's codes.
+        let mut detached = on(Some("spike/x"), Some("wip"));
+        detached.has_commits = true;
+        let verdict = message_verdict(&detached, &p, None);
+        assert!(refusal(verdict).contains("Refs: kanbanr:FTR-001"));
     }
 
     /// The commit-msg rules: an escape passes and is said, documents and decisions resolve against
