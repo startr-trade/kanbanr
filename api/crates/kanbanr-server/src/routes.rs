@@ -63,8 +63,8 @@ pub async fn read_passthrough(
     let unfetched = without_fetch(dpath);
     let dpath = unfetched.as_str();
     // The reads that look at the code repository get the one the daemon was started in, as
-    // release promotion does (FEAT-213): the git model, git doctor, the guard rails and a
-    // release's plan (FEAT-212). Every other read answers from the board alone, as before.
+    // release promotion does (FEAT-213): the git model, git doctor, the guard rails, a release's
+    // plan (FEAT-212) and its notes (FEAT-216). Every other read answers from the board alone.
     let repo = reads_code_repo(dpath)
         .then(|| repo_for(&st, dpath))
         .flatten();
@@ -250,7 +250,8 @@ fn repo_for<'a>(st: &'a AppState, dispatch_path: &str) -> Option<&'a std::path::
 }
 
 /// The reads that answer from the code repository (FEAT-213): `…/git/model`, `…/git/doctor`,
-/// `…/guards` and `…/releases/<V>/plan` (FEAT-212), query string aside.
+/// `…/guards`, `…/releases/<V>/plan` (FEAT-212) and `…/releases/<V>/notes` (FEAT-216), query
+/// string aside.
 fn reads_code_repo(dispatch_path: &str) -> bool {
     let path = dispatch_path.split('?').next().unwrap_or(dispatch_path);
     let segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
@@ -260,6 +261,7 @@ fn reads_code_repo(dispatch_path: &str) -> bool {
             | ["projects", _, "git", "doctor"]
             | ["projects", _, "guards"]
             | ["projects", _, "releases", _, "plan"]
+            | ["projects", _, "releases", _, "notes"]
     )
 }
 

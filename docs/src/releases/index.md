@@ -9,6 +9,7 @@ needs a one-time board migration. Later releases before 1.0 take fixes, document
 work toward 1.0's [stability promise](../project/stability.md).
 - **[0.3.0](v0.3.0.md)**
 
+<!-- kanbanr: newest release notes go below this line -->
 - **[0.2.1](v0.2.1.md)** — fixes after 0.2.0: the book's diagram popup, the release's install
   check; `mermaid-lint` on crates.io.
 - **[0.2.0](v0.2.0.md)** — one method for every process, and a board format that will last. Every

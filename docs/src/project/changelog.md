@@ -8,6 +8,18 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **A release's notes are read and edited from the release (FEAT-216).** The notes `prepare`
+  drafts live on `release/<V>`, not in your checkout. `kanbanr release notes <V>` shows them and
+  where they are (`release/v0.3.0 @ 8f995e1: docs/src/releases/v0.3.0.md`, `--json` too);
+  `--file F` (`-` for stdin) or `--edit` (`$VISUAL`/`$EDITOR` on a copy) commits new text onto the
+  branch in one commit, nothing checked out, and applies the notes listings again, so a listing
+  added later reaches a candidate already made. The same text makes no commit; once the release is
+  cut the notes read as shipped and are not edited. The Releases page has a **Release notes**
+  section for each release with a branch, and on a write-enabled monitor started in the project
+  folder, **Edit notes** and **Save**. No separate item is needed to change a candidate's notes.
+  Notes saved once main has moved to the release move main with them and say to push it again;
+  with main past the release, nothing is saved.
+
 - **An item's code says what kind of work it is (FEAT-217).** `kanbanr config codes --set
   feature=FTR,defect=DEF,bug=DEF,chore=MNT,docs=DOC,spike=SPK` maps kinds to prefixes, and a new
   item then takes its kind's prefix with a counter per prefix (`DEF-001`, `MNT-001`, `FTR-001`):

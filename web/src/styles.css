@@ -590,6 +590,16 @@ input:focus-visible,
   border-color: var(--accent);
 }
 
+/* A release's notes, read and edited on its branch (FEAT-216): collapsed until opened, the editor
+   in the theme's own colours (it reuses `.reason`) and monospace, since the notes are markdown. */
+.release-notes { margin: 10px 0 0; }
+.release-notes > summary { cursor: pointer; }
+.notes-editor {
+  max-width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
 /* ---- sprint burndown (FEAT-123) ---- */
 .burndown { margin: 10px 0 0; }
 .burndown svg { width: 100%; max-width: 640px; height: auto; display: block; }

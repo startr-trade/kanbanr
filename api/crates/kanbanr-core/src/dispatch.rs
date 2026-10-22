@@ -1080,6 +1080,26 @@ fn dispatch_routes(
                 fetch,
             )?)
         }
+        // A release's notes as they are on release/<V> (FEAT-216), read with the code repository.
+        ("GET", ["projects", p, "releases", version, "notes"]) => ser(
+            &crate::releases::release_notes(store, p, &percent_decode(version), repo)?,
+        ),
+        // `{text, by}`: commit the notes onto release/<V>, nothing checked out (FEAT-216).
+        ("PUT", ["projects", p, "releases", version, "notes"]) => {
+            let Some(text) = str_field(b, "text") else {
+                return Err(CoreError::Unsupported(
+                    "saving release notes needs their text".into(),
+                ));
+            };
+            ser(&crate::releases::set_release_notes(
+                store,
+                p,
+                &percent_decode(version),
+                repo,
+                &text,
+                &str_field(b, "by").unwrap_or_default(),
+            )?)
+        }
         // The release stages with the gate in force on each (FEAT-212).
         ("GET", ["projects", p, "release-stages"]) => {
             ser(&store.load_meta(p)?.config.cadence.release_stage_views())
@@ -1881,6 +1901,9 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| "its next stage".into())
         ),
+        ["projects", _p, "releases", v, "notes"] => {
+            format!("release {}: notes edited", percent_decode(v))
+        }
         ["projects", _p, "releases", v, what] => format!("{what} release {}", percent_decode(v)),
         ["projects", _p, "sprints", c, what] => format!("{what} sprint {c}"),
         ["projects", _p, "docs", "folder"] => "configure doc folder".into(),

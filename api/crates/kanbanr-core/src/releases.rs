@@ -2236,6 +2236,241 @@ fn notes(
     out
 }
 
+/// A release's notes as they are on its release branch (FEAT-216): where they are, what they say,
+/// and whether they can still be edited. Derived, never stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ReleaseNotes {
+    pub version: String,
+    /// The release branch, `release/<V>`.
+    pub branch: String,
+    /// The notes file in the code repository: `release_prepare.notes` for this version.
+    pub path: String,
+    pub text: String,
+    /// The release branch's tip the text was read at, seven characters.
+    pub at: String,
+    /// The release has a branch and has not shipped.
+    pub editable: bool,
+    /// Why not, when not editable.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub why_not: String,
+}
+
+/// The release, its branch and its notes path, or why its notes cannot be found.
+fn notes_target(
+    store: &Store,
+    id: &str,
+    version: &str,
+) -> Result<(Project, Release, crate::releaseprep::Placeholders, String)> {
+    let project = cadence_on(store, id)?;
+    let release = load(store, id)?
+        .into_iter()
+        .find(|r| r.version == version)
+        .ok_or_else(|| CoreError::Unsupported(format!("no release {version}")))?;
+    let Some(template) = project.config.cadence.release_prepare.notes.clone() else {
+        return Err(CoreError::Unsupported(
+            "no release notes path is configured: `kanbanr config release-prepare --notes \
+             <path with {version}>`"
+                .into(),
+        ));
+    };
+    if release.branch.is_empty() {
+        return Err(CoreError::Unsupported(format!(
+            "{version} has no release branch yet: promote it to candidate first"
+        )));
+    }
+    let ph = crate::releaseprep::Placeholders::new(&release.version, &release.name, &today_ymd())
+        .map_err(CoreError::Unsupported)?;
+    let path = crate::releaseprep::expand(&template, &ph);
+    crate::releaseprep::check_repo_path(&path).map_err(CoreError::Unsupported)?;
+    Ok((project, release, ph, path))
+}
+
+fn notes_need_repo(version: &str) -> CoreError {
+    CoreError::Unsupported(format!(
+        "{version}'s notes are on its release branch, in the code repository: use the CLI from \
+         the project folder, or a monitor started there"
+    ))
+}
+
+fn branch_tip(repo: &Path, release: &Release) -> Result<String> {
+    coderepo::rev_parse(repo, &release.branch).map_err(|_| {
+        CoreError::Unsupported(format!(
+            "{} is not in this repository: run it from {}'s project folder",
+            release.branch, release.version
+        ))
+    })
+}
+
+/// The notes of `release` as read at `tip`.
+fn notes_at(release: &Release, path: &str, text: String, tip: &str) -> ReleaseNotes {
+    let shipped = release.state == ReleaseState::Shipped;
+    ReleaseNotes {
+        version: release.version.clone(),
+        branch: release.branch.clone(),
+        path: path.to_string(),
+        text,
+        at: short(tip).to_string(),
+        editable: !shipped,
+        why_not: if shipped {
+            format!(
+                "{} has shipped: its notes are as they shipped",
+                release.version
+            )
+        } else {
+            String::new()
+        },
+    }
+}
+
+/// A release's notes as they are at the tip of `release/<V>`, read without checking anything out
+/// (FEAT-216). Refused, plainly, when no notes path is configured, the release has no branch yet,
+/// there is no repository, or the file is not on the branch.
+pub fn release_notes(
+    store: &Store,
+    id: &str,
+    version: &str,
+    repo: Option<&Path>,
+) -> Result<ReleaseNotes> {
+    let (_, release, _, path) = notes_target(store, id, version)?;
+    let repo = repo.ok_or_else(|| notes_need_repo(version))?;
+    let tip = branch_tip(repo, &release)?;
+    let (_, text) = coderepo::read_blob(repo, &tip, &path)?.ok_or_else(|| {
+        CoreError::Unsupported(format!(
+            "{path} is not on {} at {}: nothing has written {version}'s notes yet",
+            release.branch,
+            short(&tip)
+        ))
+    })?;
+    Ok(notes_at(&release, &path, text, &tip))
+}
+
+/// What saving a release's notes did (FEAT-216).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NotesSaved {
+    /// The release branch's tip after the save: the tip as it was when nothing changed.
+    pub sha: String,
+    pub notes: ReleaseNotes,
+    /// Set when main held the release and was moved with the notes: what to do next.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub main_moved: String,
+}
+
+/// Commit `text` as a release's notes onto `release/<V>`, without checking it out (FEAT-216), and
+/// re-apply the configured notes listings. Nothing to change (the same text, every listing there)
+/// is no commit: the sha is then the tip as it was. Refused once the release has shipped, and when
+/// the branch is checked out in a worktree.
+///
+/// When main already holds the release (the stage that moves main has run), main is moved with
+/// the notes, so the commit to be tagged has them, and `main_moved` says to push it again; were
+/// main past the release, the save is refused before anything is committed.
+pub fn set_release_notes(
+    store: &Store,
+    id: &str,
+    version: &str,
+    repo: Option<&Path>,
+    text: &str,
+    by: &str,
+) -> Result<NotesSaved> {
+    use crate::releaseprep as prep;
+    let (project, release, ph, path) = notes_target(store, id, version)?;
+    if release.state == ReleaseState::Shipped {
+        return Err(CoreError::Unsupported(format!(
+            "{version} has shipped: its notes are as they shipped, and are not edited on its branch"
+        )));
+    }
+    let repo = repo.ok_or_else(|| notes_need_repo(version))?;
+    let branch = release.branch.clone();
+    let tip = branch_tip(repo, &release)?;
+    let read = |path: &str| -> Result<Option<String>> {
+        Ok(coderepo::read_blob(repo, &tip, path)?.map(|(_, t)| t))
+    };
+    let main = project
+        .config
+        .cadence
+        .main_branch
+        .clone()
+        .unwrap_or_else(|| coderepo::default_branch(repo));
+    // Main at the tip holds the release and moves with the notes; main past it cannot.
+    let main_tip = coderepo::rev_parse(repo, &main).ok();
+    let moves_main = main_tip.as_deref() == Some(tip.as_str());
+    if let Some(at) = main_tip
+        .as_deref()
+        .filter(|at| !moves_main && coderepo::is_ancestor(repo, &tip, at))
+    {
+        return Err(CoreError::Unsupported(format!(
+            "{main} is at {}, past {branch} at {}: notes saved on {branch} would not reach the \
+             commit to be tagged, so nothing was saved",
+            short(at),
+            short(&tip)
+        )));
+    }
+    let mut files: Vec<(String, String)> = Vec::new();
+    if read(&path)?.as_deref() != Some(text) {
+        files.push((path.clone(), text.to_string()));
+    }
+    for l in &project.config.cadence.release_prepare.notes_listings {
+        let listing = prep::expand(&l.path, &ph);
+        prep::check_repo_path(&listing).map_err(CoreError::Unsupported)?;
+        let current = match files.iter().find(|(p, _)| *p == listing) {
+            Some((_, c)) => c.clone(),
+            None => read(&listing)?.ok_or_else(|| {
+                CoreError::Unsupported(format!("{listing} does not exist on {branch}"))
+            })?,
+        };
+        if let Some(new) = prep::add_listing(
+            &current,
+            &prep::expand(&l.after, &ph),
+            &prep::expand(&l.entry, &ph),
+        )
+        .map_err(|e| CoreError::Unsupported(format!("{listing} {e}")))?
+        {
+            match files.iter_mut().find(|(p, _)| *p == listing) {
+                Some(f) => f.1 = new,
+                None => files.push((listing, new)),
+            }
+        }
+    }
+    if files.is_empty() {
+        return Ok(NotesSaved {
+            sha: tip.clone(),
+            notes: notes_at(&release, &path, text.to_string(), &tip),
+            main_moved: String::new(),
+        });
+    }
+    let by = if by.trim().is_empty() {
+        "someone"
+    } else {
+        by.trim()
+    };
+    let message = format!(
+        "Release {version}: notes\n\nEdited through kanbanr release notes by {by}.\n\n\
+         [no-ref] release notes, written by kanbanr\nKanbanr-Release: {version}\n"
+    );
+    let (_, new) = coderepo::commit_files(repo, &branch, &files, &message)?;
+    let mut main_moved = String::new();
+    if moves_main {
+        if let Err(e) = coderepo::fast_forward(repo, &main, &new) {
+            // Leave both as they were rather than main behind the notes.
+            let _ = coderepo::reset_branch_to(repo, &branch, &tip);
+            return Err(CoreError::Unsupported(format!(
+                "{main} held {version} but could not move with its notes ({e}), so nothing was \
+                 saved"
+            )));
+        }
+        main_moved = format!(
+            "{main} held {version}, so it moved with the notes to {}: push {main} again and wait \
+             for CI before the cut",
+            short(&new)
+        );
+    }
+    Ok(NotesSaved {
+        sha: new.clone(),
+        notes: notes_at(&release, &path, text.to_string(), &new),
+        main_moved,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{ProjectConfig, Store};
@@ -3203,6 +3438,255 @@ mod tests {
         }
         assert!(!coderepo::tag_exists(&repo, "v1"));
         assert_eq!(super::load(&store, "shop").unwrap()[0].stage, "candidate");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// A board and repository of this test's own, by canonical path, under the system temporary
+    /// directory — never a real board.
+    fn assert_own(store: &Store, dir: &Path, repo: &Path) {
+        let tmp = std::env::temp_dir().canonicalize().unwrap();
+        let board = store.data_dir().canonicalize().unwrap();
+        assert_eq!(board, dir.canonicalize().unwrap(), "the test's own board");
+        assert!(board.starts_with(&tmp), "{}", board.display());
+        assert!(repo.canonicalize().unwrap().starts_with(&tmp));
+    }
+
+    /// A release promoted to candidate with `prepare`, its notes drafted on release/v0.2.0.
+    fn notes_fixture(tag: &str) -> (Store, PathBuf, PathBuf) {
+        let (store, dir, repo) = board_and_repo(tag);
+        assert_own(&store, &dir, &repo);
+        prepare_fixture(&repo);
+        super::add(&store, "shop", "v0.2.0", "", "Gates").unwrap();
+        plan_done(&store, "v0.2.0");
+        configure(&store, &format!("{THREE}{PREPARE}"));
+        super::promote(&store, "shop", "v0.2.0", None, "Ada", "", Some(&repo)).unwrap();
+        (store, dir, repo)
+    }
+
+    /// FEAT-216 R-1: a release's notes are read at the tip of release/<V>, from the path the
+    /// config names, without checking it out; what is missing is said plainly.
+    #[test]
+    fn release_notes_read_from_the_release_branch() {
+        let (store, dir, repo) = notes_fixture("notes-read");
+        let tip = coderepo::rev_parse(&repo, "release/v0.2.0").unwrap();
+        let notes = super::release_notes(&store, "shop", "v0.2.0", Some(&repo)).unwrap();
+        assert_eq!(notes.path, "docs/releases/v0.2.0.md");
+        assert_eq!(notes.branch, "release/v0.2.0");
+        assert_eq!(notes.at, tip[..7]);
+        assert!(notes.text.starts_with("# v0.2.0 — Gates"), "{}", notes.text);
+        assert_eq!(
+            notes.text,
+            coderepo::read_blob(&repo, &tip, "docs/releases/v0.2.0.md")
+                .unwrap()
+                .unwrap()
+                .1
+        );
+        assert!(notes.editable && notes.why_not.is_empty());
+        // Nothing checked out: the notes are not in the working tree.
+        assert_eq!(coderepo::current_branch(&repo).as_deref(), Some("main"));
+        assert!(!repo.join("docs/releases/v0.2.0.md").exists());
+
+        let err = |v: &str, r: Option<&Path>| {
+            super::release_notes(&store, "shop", v, r)
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(err("v9", Some(&repo)).contains("no release v9"));
+        assert!(
+            err("v0.2.0", None).contains("in the code repository"),
+            "no repository"
+        );
+        super::add(&store, "shop", "v0.3.0", "", "").unwrap();
+        assert!(
+            err("v0.3.0", Some(&repo)).contains("promote it to candidate first"),
+            "no branch yet"
+        );
+        // The file absent at the tip: a branch nothing has prepared.
+        let mut rs = super::load(&store, "shop").unwrap();
+        rs.iter_mut()
+            .find(|r| r.version == "v0.3.0")
+            .unwrap()
+            .branch = "release/v0.3.0".into();
+        super::save(&store, "shop", &rs).unwrap();
+        coderepo::create_branch_from(&repo, "release/v0.3.0", "main").unwrap();
+        let absent = err("v0.3.0", Some(&repo));
+        assert!(
+            absent.contains("docs/releases/v0.3.0.md is not on release/v0.3.0"),
+            "{absent}"
+        );
+        // No notes path configured.
+        let mut c = store.load_meta("shop").unwrap().config.cadence;
+        c.release_prepare.notes = None;
+        store.set_cadence("shop", None, c).unwrap();
+        assert!(err("v0.2.0", Some(&repo)).contains("no release notes path is configured"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FEAT-216 R-2: edited notes are one commit onto release/<V>, nothing checked out; the same
+    /// text is no commit; a listing added to the config later is applied; a shipped release is
+    /// refused.
+    #[test]
+    fn set_release_notes_commits_onto_the_release_branch() {
+        let (store, dir, repo) = notes_fixture("notes-set");
+        let main_before = coderepo::rev_parse(&repo, "main").unwrap();
+        let tip = coderepo::rev_parse(&repo, "release/v0.2.0").unwrap();
+        let text = "# v0.2.0 — Gates\n\nRewritten by hand.\n";
+        let saved =
+            super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada").unwrap();
+        let (sha, notes) = (saved.sha, saved.notes);
+        assert!(
+            saved.main_moved.is_empty(),
+            "main does not hold the release"
+        );
+        assert_eq!(coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(), sha);
+        assert_eq!(notes.at, sha[..7]);
+        assert_eq!(notes.text, text);
+        assert_eq!(
+            coderepo::git(&repo, &["rev-list", "--count", &format!("{tip}..{sha}")]).unwrap(),
+            "1",
+            "one commit"
+        );
+        assert_eq!(
+            coderepo::read_blob(&repo, &sha, "docs/releases/v0.2.0.md")
+                .unwrap()
+                .unwrap()
+                .1,
+            text
+        );
+        let message = coderepo::git(&repo, &["log", "-1", "--format=%B", &sha]).unwrap();
+        assert!(message.starts_with("Release v0.2.0: notes\n"), "{message}");
+        assert!(message.contains("Edited through kanbanr release notes by Ada."));
+        assert!(message.contains("[no-ref] release notes, written by kanbanr"));
+        assert!(message.contains("Kanbanr-Release: v0.2.0"));
+        assert!(crate::scm::escape_reason(&message).is_some(), "{message}");
+        assert_eq!(coderepo::current_branch(&repo).as_deref(), Some("main"));
+        assert_eq!(coderepo::rev_parse(&repo, "main").unwrap(), main_before);
+        assert!(coderepo::is_clean(&repo));
+
+        // The same text: no commit.
+        let again = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada")
+            .unwrap()
+            .sha;
+        assert_eq!(again, sha, "nothing to change");
+        assert_eq!(coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(), sha);
+
+        // A listing added to the config later reaches the candidate on the next save.
+        let mut c = store.load_meta("shop").unwrap().config.cadence;
+        c.release_prepare
+            .notes_listings
+            .push(crate::releasegates::NotesListing {
+                path: "docs/SUMMARY.md".into(),
+                after: "- [Intro](intro.md)".into(),
+                entry: "  - [Notes {number}](releases/{version}.md)".into(),
+                ..Default::default()
+            });
+        store.set_cadence("shop", None, c).unwrap();
+        let listed = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada")
+            .unwrap()
+            .sha;
+        assert_ne!(listed, sha);
+        let summary = coderepo::read_blob(&repo, &listed, "docs/SUMMARY.md")
+            .unwrap()
+            .unwrap()
+            .1;
+        assert!(
+            summary.contains("- [Intro](intro.md)\n  - [Notes 0.2.0](releases/v0.2.0.md)\n"),
+            "{summary}"
+        );
+        assert_eq!(
+            summary.matches("  - [0.2.0](releases/v0.2.0.md)").count(),
+            1,
+            "the first listing is not repeated: {summary}"
+        );
+
+        // Checked out in a worktree: refused, as the prepare commit is.
+        let wt = repo.with_extension("wt");
+        let _ = std::fs::remove_dir_all(&wt);
+        coderepo::git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                &wt.to_string_lossy(),
+                "release/v0.2.0",
+            ],
+        )
+        .unwrap();
+        let busy = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), "x\n", "Ada")
+            .unwrap_err()
+            .to_string();
+        assert!(busy.contains("is checked out in"), "{busy}");
+        coderepo::git(
+            &repo,
+            &["worktree", "remove", "--force", &wt.to_string_lossy()],
+        )
+        .unwrap();
+
+        // Shipped: refused, and read as shipped.
+        let mut rs = super::load(&store, "shop").unwrap();
+        rs.iter_mut().find(|r| r.version == "v0.2.0").unwrap().state = super::ReleaseState::Shipped;
+        super::save(&store, "shop", &rs).unwrap();
+        let shipped = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), "y\n", "Ada")
+            .unwrap_err()
+            .to_string();
+        assert!(shipped.contains("has shipped"), "{shipped}");
+        assert_eq!(
+            coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(),
+            listed
+        );
+        let read = super::release_notes(&store, "shop", "v0.2.0", Some(&repo)).unwrap();
+        assert!(!read.editable && read.why_not.contains("has shipped"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FEAT-216 T6 (v0.3.0, 22 Oct 2026): notes saved once main holds the release move main with
+    /// them, and say to push it again; with main past the release, nothing is saved.
+    #[test]
+    fn saving_notes_moves_main_that_holds_the_release() {
+        let (store, dir, repo) = notes_fixture("notes-main");
+        let tip = coderepo::rev_parse(&repo, "release/v0.2.0").unwrap();
+        coderepo::fast_forward(&repo, "main", &tip).unwrap();
+        let saved = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            "# v0.2.0\n\nAfter main moved.\n",
+            "Ada",
+        )
+        .unwrap();
+        assert_ne!(saved.sha, tip);
+        assert_eq!(coderepo::rev_parse(&repo, "main").unwrap(), saved.sha);
+        assert!(
+            saved.main_moved.contains("main held v0.2.0")
+                && saved.main_moved.contains("push main again"),
+            "{}",
+            saved.main_moved
+        );
+        assert!(
+            coderepo::is_clean(&repo),
+            "the checked-out main moved cleanly"
+        );
+
+        // Main past the release: refused, and neither branch moves.
+        coderepo::git(&repo, &["commit", "-q", "--allow-empty", "-m", "on main"]).unwrap();
+        let main_now = coderepo::rev_parse(&repo, "main").unwrap();
+        let past = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), "z\n", "Ada")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            past.contains("past release/v0.2.0") && past.contains("nothing was saved"),
+            "{past}"
+        );
+        assert_eq!(
+            coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(),
+            saved.sha
+        );
+        assert_eq!(coderepo::rev_parse(&repo, "main").unwrap(), main_now);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }

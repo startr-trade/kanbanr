@@ -6999,6 +6999,138 @@ fn release_flow_as_lived_with_0_2_1() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// FEAT-216 R-3: `release notes <V>` shows the notes on release/<V> and where they are, `--json`
+/// carries them, and `--file` (or `--edit`) commits new text onto the branch with nothing checked
+/// out.
+#[test]
+fn cli_release_notes_shows_and_saves() {
+    let (base, work) = release_scratch("release-notes");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // Its own board, by canonical path.
+    let board = std::fs::canonicalize(ok(run_in(&base, &work, &["where"])).trim()).unwrap();
+    assert!(
+        board.starts_with(std::fs::canonicalize(&base).unwrap()),
+        "the test's own board: {}",
+        board.display()
+    );
+    for args in [
+        &[
+            "config",
+            "release-stage",
+            "candidate",
+            "--on-enter",
+            "branch,prepare",
+        ][..],
+        &[
+            "config",
+            "release-prepare",
+            "--notes",
+            "docs/releases/{version}.md",
+        ],
+    ] {
+        ok(run_in(&base, &work, args));
+    }
+    // Before the branch: said plainly.
+    let o = run_in(&base, &work, &["release", "notes", "v1.0.0"]);
+    assert!(!o.status.success());
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("promote it to candidate first"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    let tip = rev(&base, &work, "release/v1.0.0");
+
+    let shown = ok(run_in(&base, &work, &["release", "notes", "v1.0.0"]));
+    assert!(
+        shown.starts_with(&format!(
+            "release/v1.0.0 @ {}: docs/releases/v1.0.0.md\n",
+            &tip[..7]
+        )),
+        "{shown}"
+    );
+    assert!(shown.contains("# v1.0.0"), "{shown}");
+    let json: serde_json::Value = serde_json::from_str(&ok(run_in(
+        &base,
+        &work,
+        &["--json", "release", "notes", "v1.0.0"],
+    )))
+    .unwrap();
+    assert_eq!(json["path"], "docs/releases/v1.0.0.md");
+    assert_eq!(json["at"], &tip[..7]);
+    assert_eq!(json["editable"], true);
+
+    // --file: one commit onto release/v1.0.0, nothing checked out.
+    let draft = base.join("notes.md");
+    std::fs::write(&draft, "# v1.0.0\n\nWritten by hand.\n").unwrap();
+    let said = ok(run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "notes",
+            "v1.0.0",
+            "--file",
+            draft.to_str().unwrap(),
+        ],
+    ));
+    let new = rev(&base, &work, "release/v1.0.0");
+    assert_ne!(new, tip);
+    assert!(said.contains(&new[..7]), "{said}");
+    assert_eq!(
+        ok(git_in(&base, &work, &["rev-parse", &format!("{new}~1")])).trim(),
+        tip,
+        "one commit"
+    );
+    assert_eq!(
+        ok(git_in(
+            &base,
+            &work,
+            &["show", &format!("{new}:docs/releases/v1.0.0.md")]
+        )),
+        "# v1.0.0\n\nWritten by hand.\n"
+    );
+    let head = ok(git_in(&base, &work, &["symbolic-ref", "--short", "HEAD"]));
+    assert_eq!(head.trim(), "main");
+    assert!(!work.join("docs/releases/v1.0.0.md").exists());
+
+    // --edit: the editor's change is committed.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let editor = base.join("editor.sh");
+        std::fs::write(&editor, "#!/bin/sh\nprintf 'Edited.\\n' >> \"$1\"\n").unwrap();
+        std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let o = Command::new(cli())
+            .args(["release", "notes", "v1.0.0", "--edit"])
+            .current_dir(&work)
+            .env("HOME", base.join("home"))
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_PROCESSES_DIR")
+            .env_remove("VISUAL")
+            .env("EDITOR", &editor)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        ok(o);
+        let edited = rev(&base, &work, "release/v1.0.0");
+        assert_eq!(
+            ok(git_in(
+                &base,
+                &work,
+                &["show", &format!("{edited}:docs/releases/v1.0.0.md")]
+            )),
+            "# v1.0.0\n\nWritten by hand.\nEdited.\n"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A scratch code repo and its board under the temp dir, for the FEAT-217 tests: `git` and the
 /// CLI run in `work` with their own HOME, and the board is checked to be the test's own.
 struct CodesScratch {
