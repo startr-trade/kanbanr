@@ -7,8 +7,9 @@
 //! (`web/scripts/refs-fixture.json`), so the two cannot disagree about what a reference is.
 //!
 //! A token is a reference only when its shape belongs to this board: an item or milestone code
-//! with a prefix the board uses, an ADR id, a goal id when the charter has goals, or a doc path.
-//! That keeps `UTF-8`, `ISO-9001` and `RUSTSEC-2024-0449` out. Code — fenced, indented after a
+//! with a prefix the board uses (one its codes configure, or one an existing item has — FEAT-217),
+//! an ADR id, a goal id when the charter has goals, or a doc path. That keeps `UTF-8`, `ISO-9001`,
+//! `SHA-256` and `RUSTSEC-2024-0449` out. Code — fenced, indented after a
 //! blank line is not treated specially, inline spans — and HTML comments are skipped, and link
 //! text is not scanned twice: a markdown link is read once, by its target.
 
@@ -82,6 +83,9 @@ impl BoardIndex {
         let project = p.id.as_str();
         let mut index = BoardIndex {
             project: project.to_string(),
+            // FEAT-217: a configured prefix is this board's before any item has it (FEAT when
+            // nothing is configured, which a board with items already has).
+            item_prefixes: p.config.codes.prefixes(),
             ..Default::default()
         };
         for f in &p.features {
@@ -414,6 +418,8 @@ mod tests {
     #[derive(serde::Deserialize)]
     struct FixtureIndex {
         project: String,
+        #[serde(default)]
+        codes: crate::config::CodesConfig,
         items: BTreeMap<String, Vec<String>>,
         milestones: Vec<String>,
         adrs: BTreeMap<String, String>,
@@ -431,6 +437,7 @@ mod tests {
     fn index_of(f: &FixtureIndex) -> BoardIndex {
         let mut index = BoardIndex {
             project: f.project.clone(),
+            item_prefixes: f.codes.prefixes(),
             ..Default::default()
         };
         for (code, reqs) in &f.items {
