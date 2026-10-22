@@ -649,6 +649,24 @@
           }
         ]
       },
+      "CodesConfig": {
+        "additionalProperties": true,
+        "description": "Which prefix an item's code gets from its kind (FEAT-217). Absent: every item is `FEAT-`, as\nbefore, and absent stays absent on disk. Kinds sharing a prefix share its counter.",
+        "properties": {
+          "default": {
+            "description": "The prefix of a kind with no entry; absent means `FEAT`.",
+            "type": "string"
+          },
+          "kinds": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Kind (lowercase) to prefix.",
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
       "CommitLine": {
         "description": "One commit, as a list shows it.",
         "properties": {
@@ -2422,6 +2440,10 @@
           "cadence": {
             "$ref": "#/components/schemas/Cadence",
             "description": "Whether this project works in sprints and releases at all (FEAT-121). Off unless switched\non: many projects follow a different workflow, and data nobody asked for is clutter."
+          },
+          "codes": {
+            "$ref": "#/components/schemas/CodesConfig",
+            "description": "Which prefix an item's code gets from its kind (FEAT-217). Absent: `FEAT-` for every\nitem, and absent stays absent on disk."
           },
           "coverage": {
             "description": "Architecture coverage rules (FEAT-197): every subject of a kind — items in a stage range,\naccepted ADRs, docs under a folder — is referenced from a named doc, or lists one. They name\nthis project's doc paths, so they live here and not in a process. Absent: none, and nothing\nis read for coverage.",

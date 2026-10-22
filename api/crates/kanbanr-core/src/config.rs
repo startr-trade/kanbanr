@@ -2,7 +2,7 @@
 //! which states are displayed on the dashboard.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The schema version stamped onto freshly-written project configs. A legacy config that predates
 /// the field deserializes to `schema_version = 0` (via `#[serde(default)]`), letting `doctor` flag
@@ -117,6 +117,10 @@ pub struct ProjectConfig {
     /// only, and absent stays absent on disk.
     #[serde(default, skip_serializing_if = "DiagramsConfig::is_default")]
     pub diagrams: DiagramsConfig,
+    /// Which prefix an item's code gets from its kind (FEAT-217). Absent: `FEAT-` for every
+    /// item, and absent stays absent on disk.
+    #[serde(default, skip_serializing_if = "CodesConfig::is_default")]
+    pub codes: CodesConfig,
     /// Architecture coverage rules (FEAT-197): every subject of a kind — items in a stage range,
     /// accepted ADRs, docs under a folder — is referenced from a named doc, or lists one. They name
     /// this project's doc paths, so they live here and not in a process. Absent: none, and nothing
@@ -206,6 +210,171 @@ impl DiagramsConfig {
     pub fn is_default(&self) -> bool {
         *self == DiagramsConfig::default()
     }
+}
+
+/// The prefix every item got before codes said their kind (FEAT-217), and the default still.
+pub const LEGACY_ITEM_PREFIX: &str = "FEAT";
+
+/// Prefixes other board ids use: milestone, ADR, scope, sprint, todo-list (FEAT-217). `G-`, `R-`,
+/// `T` and `L-` are too short to be an item prefix anyway.
+pub const RESERVED_PREFIXES: &[&str] = &["MS", "ADR", "SC", "SP", "TL"];
+
+/// Which prefix an item's code gets from its kind (FEAT-217). Absent: every item is `FEAT-`, as
+/// before, and absent stays absent on disk. Kinds sharing a prefix share its counter.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CodesConfig {
+    /// The prefix of a kind with no entry; absent means `FEAT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    /// Kind (lowercase) to prefix.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub kinds: BTreeMap<String, String>,
+    /// Keys a newer kanbanr wrote here, kept and written back unchanged.
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
+    pub extra: crate::models::Extra,
+}
+
+/// A change to the codes, applied atomically by the store (FEAT-217).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CodesChange {
+    /// Kind to prefix, added or replaced.
+    #[serde(default)]
+    pub set: BTreeMap<String, String>,
+    /// Kinds whose entry is removed.
+    #[serde(default)]
+    pub unset: Vec<String>,
+    /// The default prefix; `Some("")` resets it to `FEAT`.
+    #[serde(default)]
+    pub default: Option<String>,
+    /// Remove every entry and the default first.
+    #[serde(default)]
+    pub clear: bool,
+}
+
+/// A kind as the codes map keys it: trimmed and lowercased.
+pub fn kind_key(kind: &str) -> String {
+    kind.trim().to_ascii_lowercase()
+}
+
+impl CodesConfig {
+    /// Nothing set: what an absent key means, and why it stays absent.
+    pub fn is_default(&self) -> bool {
+        *self == CodesConfig::default()
+    }
+
+    /// The default prefix in effect: the configured one, or `FEAT`.
+    pub fn default_prefix(&self) -> &str {
+        match self.default.as_deref() {
+            Some(d) if !d.is_empty() => d,
+            _ => LEGACY_ITEM_PREFIX,
+        }
+    }
+
+    /// The prefix an item of `kind` is coded with: its entry; an absent or empty kind is a
+    /// `feature`; a kind with no entry gets the default, which is `FEAT` when unset.
+    pub fn prefix_for(&self, kind: Option<&str>) -> &str {
+        let key = kind.map(kind_key).filter(|k| !k.is_empty());
+        let key = key.as_deref().unwrap_or("feature");
+        match self.kinds.get(key) {
+            Some(p) => p,
+            None => self.default_prefix(),
+        }
+    }
+
+    /// Every prefix these codes can give: the kinds' prefixes and the default.
+    pub fn prefixes(&self) -> BTreeSet<String> {
+        let mut set: BTreeSet<String> = self.kinds.values().cloned().collect();
+        set.insert(self.default_prefix().to_string());
+        set
+    }
+
+    /// These codes with `change` applied. Kind keys are normalised; unknown keys are kept.
+    pub fn apply(&self, change: &CodesChange) -> CodesConfig {
+        let mut next = self.clone();
+        if change.clear {
+            next.kinds.clear();
+            next.default = None;
+        }
+        let mut kinds = BTreeMap::new();
+        for (k, v) in &next.kinds {
+            kinds.insert(kind_key(k), v.clone());
+        }
+        for k in &change.unset {
+            kinds.remove(&kind_key(k));
+        }
+        for (k, v) in &change.set {
+            kinds.insert(kind_key(k), v.trim().to_string());
+        }
+        next.kinds = kinds;
+        if let Some(d) = &change.default {
+            let d = d.trim();
+            next.default = (!d.is_empty()).then(|| d.to_string());
+        }
+        next
+    }
+
+    /// What is wrong with these codes, each a sentence naming the entry; empty when valid.
+    /// `milestone_prefixes` are the prefixes of the project's milestone codes.
+    pub fn problems(&self, milestone_prefixes: &BTreeSet<String>) -> Vec<String> {
+        fn check(entry: &str, prefix: &str, milestones: &BTreeSet<String>) -> Option<String> {
+            let shaped =
+                (2..=6).contains(&prefix.len()) && prefix.chars().all(|c| c.is_ascii_uppercase());
+            if !shaped {
+                Some(format!(
+                    "codes: {entry} has prefix '{prefix}', which is not 2-6 uppercase letters"
+                ))
+            } else if RESERVED_PREFIXES.contains(&prefix) {
+                Some(format!(
+                    "codes: {entry} has prefix '{prefix}', which is reserved ({} are other ids)",
+                    RESERVED_PREFIXES.join(", ")
+                ))
+            } else if milestones.contains(prefix) {
+                Some(format!(
+                    "codes: {entry} has prefix '{prefix}', which a milestone's code uses"
+                ))
+            } else {
+                None
+            }
+        }
+        let mut out = Vec::new();
+        if let Some(d) = &self.default
+            && let Some(p) = check("the default", d, milestone_prefixes)
+        {
+            out.push(p);
+        }
+        let mut seen: BTreeMap<String, &str> = BTreeMap::new();
+        for (kind, prefix) in &self.kinds {
+            let key = kind_key(kind);
+            if key.is_empty() {
+                out.push(format!("codes: a kind is blank (its prefix is '{prefix}')"));
+                continue;
+            }
+            if let Some(first) = seen.insert(key.clone(), kind) {
+                out.push(format!(
+                    "codes: kinds '{first}' and '{kind}' are the same kind '{key}'"
+                ));
+            }
+            if let Some(p) = check(&format!("kind '{kind}'"), prefix, milestone_prefixes) {
+                out.push(p);
+            }
+        }
+        out
+    }
+}
+
+/// The prefixes a project's milestone codes use (`MS-001` -> `MS`), which no item prefix may take.
+pub fn milestone_prefixes<'a>(codes: impl IntoIterator<Item = &'a str>) -> BTreeSet<String> {
+    codes
+        .into_iter()
+        .filter_map(|c| c.rsplit_once('-').map(|(p, _)| p.to_string()))
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -687,6 +856,7 @@ impl WorkflowFile {
             process: None,
             method: Default::default(),
             diagrams: Default::default(),
+            codes: Default::default(),
             coverage: Vec::new(),
         };
         config.schema_version = config.required_schema_version();
@@ -1546,6 +1716,109 @@ mod tests {
 
     fn config_of(name: &str) -> ProjectConfig {
         preset_bare(name).unwrap().into_config("p")
+    }
+
+    fn codes(default: Option<&str>, kinds: &[(&str, &str)]) -> CodesConfig {
+        CodesConfig {
+            default: default.map(str::to_string),
+            kinds: kinds
+                .iter()
+                .map(|(k, p)| (k.to_string(), p.to_string()))
+                .collect(),
+            extra: Default::default(),
+        }
+    }
+
+    /// FEAT-217 R-3: no kind is a feature; a kind with no entry gets the default, or FEAT; no
+    /// codes at all is FEAT for everything.
+    #[test]
+    fn prefix_for_falls_back_to_feature_then_default() {
+        let none = CodesConfig::default();
+        assert_eq!(none.prefix_for(None), "FEAT");
+        assert_eq!(none.prefix_for(Some("defect")), "FEAT");
+        assert_eq!(none.prefixes(), BTreeSet::from(["FEAT".to_string()]));
+
+        let c = codes(
+            None,
+            &[("feature", "FTR"), ("defect", "DEF"), ("bug", "DEF")],
+        );
+        assert_eq!(c.prefix_for(None), "FTR");
+        assert_eq!(c.prefix_for(Some("  ")), "FTR");
+        assert_eq!(c.prefix_for(Some(" Defect ")), "DEF");
+        assert_eq!(c.prefix_for(Some("bug")), "DEF");
+        assert_eq!(c.prefix_for(Some("chore")), "FEAT");
+        let with_default = codes(Some("WRK"), &[("defect", "DEF")]);
+        assert_eq!(with_default.prefix_for(Some("chore")), "WRK");
+        assert_eq!(
+            with_default.prefix_for(None),
+            "WRK",
+            "no feature entry: the default"
+        );
+        assert_eq!(
+            with_default.prefixes(),
+            BTreeSet::from(["DEF".to_string(), "WRK".to_string()])
+        );
+        assert_eq!(codes(Some(""), &[]).prefix_for(None), "FEAT");
+    }
+
+    /// FEAT-217 R-5: a misshapen, reserved or milestone prefix, a blank kind and a duplicate kind
+    /// are each named; apply normalises keys, resets the default with "" and clears.
+    #[test]
+    fn codes_problems_name_the_entry() {
+        let ms = milestone_prefixes(["MS-001", "REL-002"]);
+        assert_eq!(ms, BTreeSet::from(["MS".to_string(), "REL".to_string()]));
+        assert!(
+            codes(Some("FEAT"), &[("feature", "FTR"), ("bug", "DEF")])
+                .problems(&ms)
+                .is_empty()
+        );
+        let cases: &[(CodesConfig, &str)] = &[
+            (codes(None, &[("defect", "def")]), "kind 'defect'"),
+            (codes(None, &[("defect", "D")]), "not 2-6 uppercase"),
+            (codes(None, &[("defect", "DEFECTS")]), "not 2-6 uppercase"),
+            (codes(None, &[("defect", "DE1")]), "not 2-6 uppercase"),
+            (codes(None, &[("spike", "ADR")]), "reserved"),
+            (codes(None, &[("spike", "TL")]), "reserved"),
+            (codes(Some("SC"), &[]), "the default"),
+            (codes(None, &[("release", "REL")]), "milestone"),
+            (codes(None, &[(" ", "DEF")]), "blank"),
+            (
+                codes(None, &[("Bug", "DEF"), ("bug", "DEF")]),
+                "same kind 'bug'",
+            ),
+        ];
+        for (c, needle) in cases {
+            let problems = c.problems(&ms);
+            assert_eq!(problems.len(), 1, "{c:?}: {problems:?}");
+            assert!(problems[0].contains(needle), "{needle}: {problems:?}");
+        }
+
+        let base = codes(Some("WRK"), &[("feature", "FTR")]);
+        let changed = base.apply(&CodesChange {
+            set: BTreeMap::from([(" Defect ".to_string(), " DEF ".to_string())]),
+            unset: vec!["FEATURE".into()],
+            default: Some(String::new()),
+            clear: false,
+        });
+        assert_eq!(changed, codes(None, &[("defect", "DEF")]));
+        let cleared = base.apply(&CodesChange {
+            clear: true,
+            ..Default::default()
+        });
+        assert!(cleared.is_default());
+    }
+
+    /// FEAT-217: absent codes stay absent on disk; set codes round-trip.
+    #[test]
+    fn codes_config_is_absent_until_set() {
+        let config = config_of("default");
+        let yaml = crate::yaml::to_string(&config).unwrap();
+        assert!(!yaml.contains("codes"), "{yaml}");
+        let mut set = config.clone();
+        set.codes = codes(None, &[("defect", "DEF")]);
+        let yaml = crate::yaml::to_string(&set).unwrap();
+        let back: ProjectConfig = crate::yaml::from_str(&yaml).unwrap();
+        assert_eq!(back.codes, set.codes);
     }
 
     /// FEAT-200 R-17: an absent `diagrams` key is off and stays absent on disk; strict round-trips;

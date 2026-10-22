@@ -363,6 +363,7 @@ fn build_project_config(store: &Store, name: &str, body: &Value) -> Result<Proje
                 process: None,
                 method: Default::default(),
                 diagrams: Default::default(),
+                codes: Default::default(),
                 coverage: Vec::new(),
             }
         }
