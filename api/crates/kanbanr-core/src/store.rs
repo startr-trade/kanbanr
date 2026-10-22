@@ -644,6 +644,20 @@ impl Store {
         milestone: &str,
         code: Option<String>,
     ) -> Result<FeatureItem> {
+        self.add_feature_of_kind(id, title, specification, milestone, code, None)
+    }
+
+    /// Add an item of `kind` (FEAT-217): without an explicit code, its code's prefix comes from
+    /// the project's codes, with a counter per prefix. The kind is recorded in the same write.
+    pub fn add_feature_of_kind(
+        &self,
+        id: &str,
+        title: &str,
+        specification: &str,
+        milestone: &str,
+        code: Option<String>,
+        kind: Option<&str>,
+    ) -> Result<FeatureItem> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let f = Self::add_feature_on(
@@ -653,6 +667,7 @@ impl Store {
             specification,
             milestone,
             code,
+            kind,
         )?;
         self.flush(id, &project, &pending)?;
         Ok(f)
@@ -665,6 +680,7 @@ impl Store {
         specification: &str,
         milestone: &str,
         code: Option<String>,
+        kind: Option<&str>,
     ) -> Result<FeatureItem> {
         // A milestone is required and must exist.
         if milestone.is_empty() {
@@ -674,7 +690,20 @@ impl Store {
         let existing: Vec<String> = project.features.iter().map(|f| f.code.clone()).collect();
         let code = match code {
             Some(c) => c,
-            None => validate::next_code("FEAT", &existing),
+            None => {
+                // FEAT-217: the prefix says the kind; codes a hand edit broke are refused, never
+                // guessed around.
+                let codes = &project.config.codes;
+                let milestones = crate::config::milestone_prefixes(
+                    project.milestones.iter().map(|m| m.code.as_str()),
+                );
+                if let Some(problem) = codes.problems(&milestones).into_iter().next() {
+                    return Err(CoreError::Unsupported(format!(
+                        "{problem} — fix with `kanbanr config codes`"
+                    )));
+                }
+                validate::next_code(codes.prefix_for(kind), &existing)
+            }
         };
         if !validate::valid_name(&code) {
             return Err(CoreError::InvalidName(code));
@@ -697,7 +726,10 @@ impl Store {
             specification: specification.to_string(),
             status: project.config.default_status(),
             milestone: milestone.to_string(),
-            kind: None,
+            kind: kind
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .map(str::to_string),
             priority: None,
             start: None,
             due: None,
@@ -2186,6 +2218,7 @@ impl Store {
                         &spec_text,
                         &ms,
                         code,
+                        kind.as_deref(),
                     )?;
                     let warnings =
                         crate::diagrams::lint_markdown(&format!("{} spec", f.code), &spec_text);
@@ -2993,6 +3026,21 @@ impl Store {
     ) -> Result<ProjectConfig> {
         let mut project = self.load(id)?;
         project.config.diagrams = diagrams;
+        self.save_config(id, &project.config)?;
+        Ok(project.config)
+    }
+
+    /// Change which prefix each kind's code gets (FEAT-217). An invalid result is refused with its
+    /// first problem, naming the entry, and nothing changes. Existing codes are never renamed.
+    pub fn set_codes(&self, id: &str, change: crate::config::CodesChange) -> Result<ProjectConfig> {
+        let mut project = self.load_meta(id)?;
+        let codes = project.config.codes.apply(&change);
+        let milestones =
+            crate::config::milestone_prefixes(project.milestones.iter().map(|m| m.code.as_str()));
+        if let Some(problem) = codes.problems(&milestones).into_iter().next() {
+            return Err(CoreError::Unsupported(problem));
+        }
+        project.config.codes = codes;
         self.save_config(id, &project.config)?;
         Ok(project.config)
     }
