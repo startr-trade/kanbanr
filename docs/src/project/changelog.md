@@ -6,6 +6,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-21
+
 ### Added
 
 - **An item's code says what kind of work it is (FEAT-217).** `kanbanr config codes --set
@@ -1118,7 +1120,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/startr-trade/kanbanr/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/startr-trade/kanbanr/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/startr-trade/kanbanr/compare/v0.1.7...v0.2.0
 [0.1.7]: https://github.com/startr-trade/kanbanr/compare/v0.1.6...v0.1.7
