@@ -2345,10 +2345,25 @@ pub fn release_notes(
     Ok(notes_at(&release, &path, text, &tip))
 }
 
+/// What saving a release's notes did (FEAT-216).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NotesSaved {
+    /// The release branch's tip after the save: the tip as it was when nothing changed.
+    pub sha: String,
+    pub notes: ReleaseNotes,
+    /// Set when main held the release and was moved with the notes: what to do next.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub main_moved: String,
+}
+
 /// Commit `text` as a release's notes onto `release/<V>`, without checking it out (FEAT-216), and
 /// re-apply the configured notes listings. Nothing to change (the same text, every listing there)
 /// is no commit: the sha is then the tip as it was. Refused once the release has shipped, and when
 /// the branch is checked out in a worktree.
+///
+/// When main already holds the release (the stage that moves main has run), main is moved with
+/// the notes, so the commit to be tagged has them, and `main_moved` says to push it again; were
+/// main past the release, the save is refused before anything is committed.
 pub fn set_release_notes(
     store: &Store,
     id: &str,
@@ -2356,7 +2371,7 @@ pub fn set_release_notes(
     repo: Option<&Path>,
     text: &str,
     by: &str,
-) -> Result<(String, ReleaseNotes)> {
+) -> Result<NotesSaved> {
     use crate::releaseprep as prep;
     let (project, release, ph, path) = notes_target(store, id, version)?;
     if release.state == ReleaseState::Shipped {
@@ -2370,6 +2385,26 @@ pub fn set_release_notes(
     let read = |path: &str| -> Result<Option<String>> {
         Ok(coderepo::read_blob(repo, &tip, path)?.map(|(_, t)| t))
     };
+    let main = project
+        .config
+        .cadence
+        .main_branch
+        .clone()
+        .unwrap_or_else(|| coderepo::default_branch(repo));
+    // Main at the tip holds the release and moves with the notes; main past it cannot.
+    let main_tip = coderepo::rev_parse(repo, &main).ok();
+    let moves_main = main_tip.as_deref() == Some(tip.as_str());
+    if let Some(at) = main_tip
+        .as_deref()
+        .filter(|at| !moves_main && coderepo::is_ancestor(repo, &tip, at))
+    {
+        return Err(CoreError::Unsupported(format!(
+            "{main} is at {}, past {branch} at {}: notes saved on {branch} would not reach the \
+             commit to be tagged, so nothing was saved",
+            short(at),
+            short(&tip)
+        )));
+    }
     let mut files: Vec<(String, String)> = Vec::new();
     if read(&path)?.as_deref() != Some(text) {
         files.push((path.clone(), text.to_string()));
@@ -2397,10 +2432,11 @@ pub fn set_release_notes(
         }
     }
     if files.is_empty() {
-        return Ok((
-            tip.clone(),
-            notes_at(&release, &path, text.to_string(), &tip),
-        ));
+        return Ok(NotesSaved {
+            sha: tip.clone(),
+            notes: notes_at(&release, &path, text.to_string(), &tip),
+            main_moved: String::new(),
+        });
     }
     let by = if by.trim().is_empty() {
         "someone"
@@ -2412,10 +2448,27 @@ pub fn set_release_notes(
          [no-ref] release notes, written by kanbanr\nKanbanr-Release: {version}\n"
     );
     let (_, new) = coderepo::commit_files(repo, &branch, &files, &message)?;
-    Ok((
-        new.clone(),
-        notes_at(&release, &path, text.to_string(), &new),
-    ))
+    let mut main_moved = String::new();
+    if moves_main {
+        if let Err(e) = coderepo::fast_forward(repo, &main, &new) {
+            // Leave both as they were rather than main behind the notes.
+            let _ = coderepo::reset_branch_to(repo, &branch, &tip);
+            return Err(CoreError::Unsupported(format!(
+                "{main} held {version} but could not move with its notes ({e}), so nothing was \
+                 saved"
+            )));
+        }
+        main_moved = format!(
+            "{main} held {version}, so it moved with the notes to {}: push {main} again and wait \
+             for CI before the cut",
+            short(&new)
+        );
+    }
+    Ok(NotesSaved {
+        sha: new.clone(),
+        notes: notes_at(&release, &path, text.to_string(), &new),
+        main_moved,
+    })
 }
 
 #[cfg(test)]
@@ -3480,8 +3533,13 @@ mod tests {
         let main_before = coderepo::rev_parse(&repo, "main").unwrap();
         let tip = coderepo::rev_parse(&repo, "release/v0.2.0").unwrap();
         let text = "# v0.2.0 — Gates\n\nRewritten by hand.\n";
-        let (sha, notes) =
+        let saved =
             super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada").unwrap();
+        let (sha, notes) = (saved.sha, saved.notes);
+        assert!(
+            saved.main_moved.is_empty(),
+            "main does not hold the release"
+        );
         assert_eq!(coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(), sha);
         assert_eq!(notes.at, sha[..7]);
         assert_eq!(notes.text, text);
@@ -3508,8 +3566,9 @@ mod tests {
         assert!(coderepo::is_clean(&repo));
 
         // The same text: no commit.
-        let (again, _) =
-            super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada").unwrap();
+        let again = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada")
+            .unwrap()
+            .sha;
         assert_eq!(again, sha, "nothing to change");
         assert_eq!(coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(), sha);
 
@@ -3524,8 +3583,9 @@ mod tests {
                 ..Default::default()
             });
         store.set_cadence("shop", None, c).unwrap();
-        let (listed, _) =
-            super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada").unwrap();
+        let listed = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada")
+            .unwrap()
+            .sha;
         assert_ne!(listed, sha);
         let summary = coderepo::read_blob(&repo, &listed, "docs/SUMMARY.md")
             .unwrap()
@@ -3579,6 +3639,54 @@ mod tests {
         );
         let read = super::release_notes(&store, "shop", "v0.2.0", Some(&repo)).unwrap();
         assert!(!read.editable && read.why_not.contains("has shipped"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FEAT-216 T6 (v0.3.0, 22 Oct 2026): notes saved once main holds the release move main with
+    /// them, and say to push it again; with main past the release, nothing is saved.
+    #[test]
+    fn saving_notes_moves_main_that_holds_the_release() {
+        let (store, dir, repo) = notes_fixture("notes-main");
+        let tip = coderepo::rev_parse(&repo, "release/v0.2.0").unwrap();
+        coderepo::fast_forward(&repo, "main", &tip).unwrap();
+        let saved = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            "# v0.2.0\n\nAfter main moved.\n",
+            "Ada",
+        )
+        .unwrap();
+        assert_ne!(saved.sha, tip);
+        assert_eq!(coderepo::rev_parse(&repo, "main").unwrap(), saved.sha);
+        assert!(
+            saved.main_moved.contains("main held v0.2.0")
+                && saved.main_moved.contains("push main again"),
+            "{}",
+            saved.main_moved
+        );
+        assert!(
+            coderepo::is_clean(&repo),
+            "the checked-out main moved cleanly"
+        );
+
+        // Main past the release: refused, and neither branch moves.
+        coderepo::git(&repo, &["commit", "-q", "--allow-empty", "-m", "on main"]).unwrap();
+        let main_now = coderepo::rev_parse(&repo, "main").unwrap();
+        let past = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), "z\n", "Ada")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            past.contains("past release/v0.2.0") && past.contains("nothing was saved"),
+            "{past}"
+        );
+        assert_eq!(
+            coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(),
+            saved.sha
+        );
+        assert_eq!(coderepo::rev_parse(&repo, "main").unwrap(), main_now);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }

@@ -8762,15 +8762,15 @@ fn release_notes(
     )?;
     let v: Value = serde_json::from_str(&resp)?;
     let sha = v["sha"].as_str().unwrap_or_default();
-    print_write(
-        cli,
-        &resp,
-        format!(
-            "{version}'s notes at {}; {}",
-            sha.get(..7).unwrap_or(sha),
-            notes_where(&v["notes"])
-        ),
+    let mut said = format!(
+        "{version}'s notes at {}; {}",
+        sha.get(..7).unwrap_or(sha),
+        notes_where(&v["notes"])
     );
+    if let Some(moved) = v["main_moved"].as_str().filter(|m| !m.is_empty()) {
+        said.push_str(&format!("\n{moved}"));
+    }
+    print_write(cli, &resp, said);
     Ok(())
 }
 

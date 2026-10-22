@@ -169,7 +169,7 @@ export const api = {
       "save release notes",
       `kanbanr release notes ${version} --edit`,
       "PUT",
-    ) as Promise<{ sha: string; notes: ReleaseNotes }>,
+    ) as Promise<{ sha: string; notes: ReleaseNotes; main_moved?: string }>,
   /** Add a planned release (FEAT-185), as `kanbanr release add` does. */
   addRelease: (id: string, version: string, target: string, name = "") =>
     writePost(

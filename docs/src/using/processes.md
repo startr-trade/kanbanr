@@ -494,6 +494,11 @@ after the release became a candidate reaches it. The notes can be edited until t
 after that they read as shipped. The Releases page shows the same notes under **Release notes**,
 with **Edit notes** on a write-enabled monitor started in the project folder.
 
+Notes saved after main has moved to the release move main with them, so the commit the cut tags
+has them; the save says so ("main held v0.3.0, so it moved with the notes to 4c1d2e9: push main
+again and wait for CI before the cut"). Until you push main again, the cut waits. If main has
+commits past the release, nothing is saved.
+
 ### Patch releases
 
 A fix to a release already in production gets a release of its own, a **patch**:

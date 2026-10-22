@@ -1091,15 +1091,14 @@ fn dispatch_routes(
                     "saving release notes needs their text".into(),
                 ));
             };
-            let (sha, notes) = crate::releases::set_release_notes(
+            ser(&crate::releases::set_release_notes(
                 store,
                 p,
                 &percent_decode(version),
                 repo,
                 &text,
                 &str_field(b, "by").unwrap_or_default(),
-            )?;
-            ser(&serde_json::json!({ "sha": sha, "notes": notes }))
+            )?)
         }
         // The release stages with the gate in force on each (FEAT-212).
         ("GET", ["projects", p, "release-stages"]) => {

@@ -312,7 +312,8 @@ function ReleaseNotesSection({
     setSaving(true);
     try {
       const done = await api.saveReleaseNotes(project, release.version, draft, who);
-      setSaid({ ok: true, text: `saved: ${done.notes.branch} @ ${done.sha.slice(0, 7)}` });
+      const saved = `saved: ${done.notes.branch} @ ${done.sha.slice(0, 7)}`;
+      setSaid({ ok: true, text: done.main_moved ? `${saved}. ${done.main_moved}` : saved });
       setDraft(null);
       setAgain((n) => n + 1);
     } catch (e) {
