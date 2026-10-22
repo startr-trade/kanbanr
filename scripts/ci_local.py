@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -483,8 +484,9 @@ def uses_equivalents() -> None:
 
 
 # A person's verdict on the board (FEAT-198): what the monitor or the CLI commits when someone
-# approves, ratifies, signs off or withdraws one. Tests cannot make these — the board fence stops
-# them reaching the board — so one made during a run is someone at work, not a leak.
+# approves, ratifies, signs off or withdraws one, or issues, claims or revokes an agent's scope
+# (FEAT-218). Tests cannot make these — the board fence stops them reaching the board — so one made
+# during a run is someone at work, not a leak.
 VERDICT_SUBJECTS = (
     "approve definition of ",
     "ratify ",
@@ -492,7 +494,9 @@ VERDICT_SUBJECTS = (
     "sign off ",
     "withdraw sign-off ",
 )
+SCOPE_SUBJECTS = ("issue agent scope ", "claim agent scope ", "revoke agent scope ")
 VERDICT_PATHS = ("features/", "activity/", "events/")
+AGENT_SCOPE = re.compile(r"^Agent-Scope: (SC-\d+)\b", re.M)
 
 
 def is_verdict_path(path: str) -> bool:
@@ -501,25 +505,99 @@ def is_verdict_path(path: str) -> bool:
     return len(parts) == 3 and parts[0] == "projects" and parts[2].startswith(VERDICT_PATHS)
 
 
-def verdict_only(board: Path, before: str, after: str) -> list[str] | None:
-    """The subjects of the commits `after` has beyond `before`, when every one is a verdict that
-    touches only feature, activity and event files; None when any is not, or history was rewritten."""
+def is_verdict(subject: str, files: list[str]) -> bool:
+    """A person's verdict, or their act on an agent's scope, touching only what that writes."""
+    if subject.startswith(VERDICT_SUBJECTS):
+        return all(is_verdict_path(f) for f in files)
+    if subject.startswith(SCOPE_SUBJECTS):
+        return all(
+            is_verdict_path(f) or (f.startswith("projects/") and f.endswith("/scopes.yaml") and f.count("/") == 2)
+            for f in files
+        )
+    return False
+
+
+def when(value: object) -> datetime | None:
+    """An RFC 3339 time as kanbanr writes it (nanoseconds, `Z`), or one YAML already parsed."""
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not isinstance(value, str) or not value:
+        return None
+    text = re.sub(r"(\.\d{6})\d+", r"\1", value.strip()).replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else None
+
+
+def scoped_write(board: Path, sha: str, files: list[str], subject: str, body: str) -> str | None:
+    """The scope id when commit `sha` is a build agent's own progress record (FEAT-218): an
+    `Agent-Scope:` trailer naming a build scope, read from the board at that commit, that was active
+    at its time; a task or test update of the scope's item; touching only that item's file, the
+    activity, the events and the index. None for anything else, or anything unreadable."""
+    found = AGENT_SCOPE.search(body)
+    if not found or not files or not all(f.startswith("projects/") and f.count("/") >= 2 for f in files):
+        return None
+    projects = {f.split("/")[1] for f in files}
+    if len(projects) != 1:
+        return None
+    scope_id, project = found.group(1), projects.pop()
+    ok, text = sh(["git", "show", f"{sha}:projects/{project}/scopes.yaml"], board)
+    try:
+        scopes = yaml.safe_load(text) if ok else None
+    except yaml.YAMLError:
+        return None
+    scope = next((s for s in scopes or [] if isinstance(s, dict) and s.get("id") == scope_id), None)
+    if scope is None or scope.get("role") != "build" or not scope.get("item"):
+        return None
+    item = str(scope["item"])
+    ok, at = sh(["git", "log", "-1", "--format=%cI", sha], board)
+    made, start = when(at.strip()) if ok else None, when(scope.get("claimed_at") or scope.get("issued_at"))
+    ends = [t for t in (when(scope.get("expires_at")), when(scope.get("revoked_at"))) if t]
+    # A commit's time has whole seconds; the claim's has nanoseconds.
+    if made is None or start is None or made < start.replace(microsecond=0) or any(made >= t for t in ends):
+        return None
+    if not (
+        (subject.startswith("update task ") and f"({item}/" in subject)
+        or (subject.startswith("test ") and f" of {item}/R-" in subject)
+        or re.fullmatch(r"record \d+ test result\(s\) from a run", subject)
+    ):
+        return None
+    root = f"projects/{project}/"
+    for f in files:
+        rest = f[len(root):]
+        own = rest.startswith("features/") and rest.count("/") == 2 and rest.endswith(f"/{item}.yaml")
+        if not (own or rest.startswith(("activity/", "events/")) or rest == "index.yaml"):
+            return None
+    return scope_id
+
+
+def allowed_during_run(board: Path, before: str, after: str) -> list[str] | None:
+    """What the commits `after` has beyond `before` were, one line each, when every one is a
+    person's verdict (`verdict: …`) or an agent's scoped write (`SC-4 for FEAT-1: …`); None when
+    any is neither, or history was rewritten."""
     if not sh(["git", "merge-base", "--is-ancestor", before, after], board)[0]:
         return None
     ok, shas = sh(["git", "rev-list", "--reverse", f"{before}..{after}"], board)
     if not ok:
         return None
-    subjects = []
+    lines = []
     for sha in shas.split():
         ok, subject = sh(["git", "log", "-1", "--format=%s", sha], board)
-        ok2, files = sh(["git", "diff-tree", "--no-commit-id", "--name-only", "-r", sha], board)
-        subject = subject.strip()
-        if not (ok and ok2 and subject.startswith(VERDICT_SUBJECTS)):
+        ok2, body = sh(["git", "log", "-1", "--format=%b", sha], board)
+        ok3, out = sh(["git", "diff-tree", "--no-commit-id", "--name-only", "-r", sha], board)
+        if not (ok and ok2 and ok3):
             return None
-        if not all(is_verdict_path(f) for f in files.split("\n") if f.strip()):
+        subject, files = subject.strip(), [f for f in out.split("\n") if f.strip()]
+        if is_verdict(subject, files):
+            lines.append(f"verdict: {subject}")
+            continue
+        scope = scoped_write(board, sha, files, subject, body)
+        if scope is None:
             return None
-        subjects.append(subject)
-    return subjects
+        lines.append(f"{scope}: {subject}")
+    return lines
 
 
 def board_state() -> tuple[Path, str, str] | None:
@@ -553,7 +631,7 @@ def main() -> int:
     # The fence (api/.cargo/config.toml) stops that; this proves it held for the whole run.
     board_before = board_state()
     ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_ci_local.py"], ROOT)
-    say("make ci: verdicts on the board are told apart from other changes", ok, out)
+    say("make ci: verdicts and agents' scoped writes on the board are told apart from other changes", ok, out)
     fresh_tree()
     lint_workflows()
     run_workflow_steps()
@@ -567,7 +645,7 @@ def main() -> int:
         if after is None or after[2] != status:
             verdicts = None
         elif after[1] != head:
-            verdicts = verdict_only(board, head, after[1])
+            verdicts = allowed_during_run(board, head, after[1])
         say(
             "make ci: the real board did not move during the run",
             verdicts is not None,
@@ -576,7 +654,11 @@ def main() -> int:
             + ("\n".join(after[1:]) if after else "unreadable"),
         )
         if verdicts:
-            print(f"    the real board took {len(verdicts)} verdict(s) during the run: " + "; ".join(verdicts))
+            people = sum(1 for v in verdicts if v.startswith("verdict: "))
+            print(
+                f"    the real board took {people} verdict(s) and {len(verdicts) - people} agent "
+                "write(s) during the run: " + "; ".join(verdicts)
+            )
     failed = [name for name, ok, _ in results if not ok]
     print("\nNot verified locally (runs only on GitHub):")
     for item in not_verified:
