@@ -43,6 +43,16 @@ export function prefixOf(code: string): string | null {
 }
 
 /** Build an index from what the monitor fetches. */
+/**
+ * Every prefix a project's codes can give an item (FEAT-217): each kind's prefix and the default,
+ * which is FEAT when unset. A port of `CodesConfig::prefixes`.
+ */
+export function codePrefixes(codes?: { default?: string; kinds?: Record<string, string> } | null): string[] {
+  const set = new Set(Object.values(codes?.kinds ?? {}));
+  set.add(codes?.default ? codes.default : "FEAT");
+  return [...set].sort();
+}
+
 export function makeIndex(parts: {
   project: string;
   items: { code: string; requirements: string[] }[];
@@ -50,10 +60,11 @@ export function makeIndex(parts: {
   adrs: { id: string; path: string }[];
   goals: string[];
   docs: string[];
+  codes?: { default?: string; kinds?: Record<string, string> } | null;
 }): BoardIndex {
   const index: BoardIndex = {
     project: parts.project,
-    itemPrefixes: new Set(),
+    itemPrefixes: new Set(codePrefixes(parts.codes)),
     milestonePrefixes: new Set(),
     items: new Map(),
     milestones: new Set(),

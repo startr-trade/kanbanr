@@ -390,6 +390,12 @@ export interface Milestone {
   depends_on: string[];
 }
 
+/** A project's codes (FEAT-217): kind (lowercase) to prefix, and the prefix of any other kind. */
+export interface CodesConfig {
+  default?: string;
+  kinds?: Record<string, string>;
+}
+
 export interface ProjectConfig {
   name: string;
   description: string;
@@ -403,6 +409,8 @@ export interface ProjectConfig {
   terminal_states?: string[];
   /** Entry criteria per status (FEAT-113). Absent: kanbanr's built-in rule applies. */
   gates?: Record<string, Gate>;
+  /** Which prefix an item's code gets from its kind (FEAT-217). Absent: FEAT for every item. */
+  codes?: CodesConfig;
   /** Days or story points (FEAT-121). */
   estimate_unit?: "days" | "points";
   /** Whether the project uses sprints and releases at all (FEAT-121). */
