@@ -94,6 +94,46 @@ fn vec_field(body: &Value, k: &str) -> Option<Vec<String>> {
     })
 }
 
+/// A project's codes as `config codes` shows them (FEAT-217): the effective default, each kind's
+/// prefix, and per prefix configured or in use, the next code and how many items have it.
+#[derive(Debug, Serialize)]
+pub struct CodesView {
+    pub default: String,
+    pub kinds: BTreeMap<String, String>,
+    pub next: BTreeMap<String, String>,
+    pub in_use: BTreeMap<String, usize>,
+}
+
+pub fn codes_view(project: &crate::Project) -> CodesView {
+    let codes = &project.config.codes;
+    let existing: Vec<String> = project.features.iter().map(|f| f.code.clone()).collect();
+    let mut in_use: BTreeMap<String, usize> = BTreeMap::new();
+    for code in &existing {
+        if let Some((prefix, n)) = code.rsplit_once('-')
+            && !prefix.is_empty()
+            && !n.is_empty()
+            && n.chars().all(|c| c.is_ascii_digit())
+        {
+            *in_use.entry(prefix.to_string()).or_default() += 1;
+        }
+    }
+    let mut prefixes = codes.prefixes();
+    prefixes.extend(in_use.keys().cloned());
+    let next = prefixes
+        .into_iter()
+        .map(|p| {
+            let code = crate::validate::next_code(&p, &existing);
+            (p, code)
+        })
+        .collect();
+    CodesView {
+        default: codes.default_prefix().to_string(),
+        kinds: codes.kinds.clone(),
+        next,
+        in_use,
+    }
+}
+
 /// If the body carries any optional feature attribute
 /// (kind/priority/due/assignee/team/labels/depends_on), apply them to `code` and return the
 /// serialized updated feature; otherwise `None`.
@@ -751,12 +791,14 @@ fn dispatch_routes(
         }
         ("POST", ["projects", p, "features"]) => {
             let spec = str_field(b, "specification").unwrap_or_default();
-            let f = store.add_feature(
+            let kind = str_field(b, "kind");
+            let f = store.add_feature_of_kind(
                 p,
                 &str_field(b, "title").unwrap_or_default(),
                 &spec,
                 &str_field(b, "milestone").unwrap_or_default(),
                 str_field(b, "code"),
+                kind.as_deref(),
             )?;
             let warnings = crate::diagrams::lint_markdown(&format!("{} spec", f.code), &spec);
             let attrs = maybe_apply_attrs(store, p, &f.code, b)?;
@@ -1246,6 +1288,18 @@ fn dispatch_routes(
                 extra: current.extra,
             };
             ser(&store.set_diagrams(p, diagrams)?.diagrams)
+        }
+        // Which prefix each kind's code gets, and the next code per prefix (FEAT-217).
+        ("GET", ["projects", p, "config", "codes"]) => ser(&codes_view(&store.load_meta(p)?)),
+        ("PUT", ["projects", p, "config", "codes"]) => {
+            let change: crate::config::CodesChange = if b.is_null() {
+                Default::default()
+            } else {
+                serde_json::from_value(b.clone())
+                    .map_err(|e| CoreError::Unsupported(format!("a codes change: {e}")))?
+            };
+            store.set_codes(p, change)?;
+            ser(&codes_view(&store.load_meta(p)?))
         }
         // Architecture coverage rules (FEAT-197): each rule and what it leaves uncovered; set from
         // YAML text (`text`, parsed here in core) or as `rules`, refused when invalid.
@@ -1880,6 +1934,55 @@ mod tests {
         )
         .unwrap();
         (store, dir)
+    }
+
+    /// FEAT-217: the codes routes show the next code per prefix and set the map; a feature POSTed
+    /// with a kind takes its prefix.
+    #[test]
+    fn codes_routes_show_set_and_allocate() {
+        let (store, dir) = release_board("codes-routes");
+        assert!(
+            std::fs::canonicalize(&dir)
+                .unwrap()
+                .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap())
+        );
+        let call = |method: &str, path: &str, body: Value| {
+            dispatch(&store, method, path, Some(&body))
+                .map(|s| serde_json::from_str::<Value>(&s).unwrap())
+        };
+        store
+            .add_milestone("shop", "M", "", vec![], Some("MS-001".into()))
+            .unwrap();
+        let view = call("GET", "/projects/shop/config/codes", Value::Null).unwrap();
+        assert_eq!(view["default"], "FEAT");
+        assert_eq!(view["next"], serde_json::json!({"FEAT": "FEAT-001"}));
+        let view = call(
+            "PUT",
+            "/projects/shop/config/codes",
+            serde_json::json!({"set": {"defect": "DEF", "feature": "FTR"}}),
+        )
+        .unwrap();
+        assert_eq!(view["kinds"]["defect"], "DEF");
+        let f = call(
+            "POST",
+            "/projects/shop/features",
+            serde_json::json!({"title": "Crash", "milestone": "MS-001", "kind": "defect"}),
+        )
+        .unwrap();
+        assert_eq!(f["code"], "DEF-001");
+        assert_eq!(f["kind"], "defect");
+        let view = call("GET", "/projects/shop/config/codes", Value::Null).unwrap();
+        assert_eq!(view["next"]["DEF"], "DEF-002");
+        assert_eq!(view["next"]["FTR"], "FTR-001");
+        assert_eq!(view["in_use"], serde_json::json!({"DEF": 1}));
+        let err = call(
+            "PUT",
+            "/projects/shop/config/codes",
+            serde_json::json!({"set": {"spike": "MS"}}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("kind 'spike'"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FEAT-212 R-1: a stage's gate is declared through its route, starting from the one in force,
