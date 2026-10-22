@@ -2696,8 +2696,12 @@ mod tests {
         promote("v1", "candidate").unwrap();
         on_release(&repo, "release/v1", "fix", "fixed\n");
         promote("v1", "main").unwrap();
-        // Pushed by path, so this clone's origin/main does not know yet.
+        // Pushed, but not yet fetched: this clone's origin/main does not know yet. A push by path
+        // leaves origin/main alone on Linux, but Windows's git matches the path to `origin` and
+        // moves it (FEAT-219), so it is put back to where it was.
+        let before = plain_git(&repo, &["rev-parse", "refs/remotes/origin/main"]);
         plain_git(&repo, &["push", "-q", &bare.to_string_lossy(), "main:main"]);
+        plain_git(&repo, &["update-ref", "refs/remotes/origin/main", &before]);
         let stale = super::plan_promotion(
             &store,
             "shop",

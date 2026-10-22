@@ -7,6 +7,7 @@ is new, changed and fixed, what does not work yet, and what to do when you upgra
 Features are frozen until 1.0, apart from the work agreed for it: 0.2.0 carries that work, and
 needs a one-time board migration. Later releases before 1.0 take fixes, documentation, and the
 work toward 1.0's [stability promise](../project/stability.md).
+- **[0.3.0](v0.3.0.md)**
 
 - **[0.2.1](v0.2.1.md)** — fixes after 0.2.0: the book's diagram popup, the release's install
   check; `mermaid-lint` on crates.io.
