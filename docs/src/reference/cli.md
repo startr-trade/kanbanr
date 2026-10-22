@@ -18,6 +18,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr config method [--on\|--off] [part…]` | the method — design before build, docs kept current, broken references reported — part by part: shown, turned off, or back on |
 | `kanbanr config coverage [--from-file F \| --clear]` | the project's architecture coverage rules: with no flag, each rule with how many of its subjects are uncovered and its source doc; `--from-file` sets them from YAML (refused, naming the rule, if invalid), `--clear` removes them |
 | `kanbanr config diagrams [--strict on\|off]` | whether a write whose Mermaid diagrams fail the lint is refused (strict) or written with the problems printed as warnings (the default); with no flag, shows the setting |
+| `kanbanr config codes [--set KIND=PREFIX,…] [--unset KIND,…] [--default PREFIX\|""] [--clear]` | which prefix a new item's code gets from its kind (`defect=DEF` codes a defect `DEF-001`, with a counter per prefix); with no flag, each kind's prefix, the default (`FEAT` unless set) and the next code per prefix. A prefix is 2–6 uppercase letters, not `MS`, `ADR`, `SC`, `SP`, `TL` or a milestone's; a bad one is refused, naming the entry. Existing codes are never renamed; unset, every item is `FEAT-` |
 | `kanbanr hooks install / status / uninstall` | the Claude Code hooks (session start, stop nudge, test capture, commit guard) |
 | `kanbanr serve [--ui-dir …]` | the read-only monitor over this board |
 | `kanbanr open` | open the running monitor in a browser |

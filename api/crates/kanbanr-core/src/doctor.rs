@@ -121,6 +121,7 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_coverage(store, &project, &mut report);
     scan_diagrams(store, &project, &mut report);
     scan_method_choice(&project, &mut report);
+    scan_codes(&project, &mut report);
     scan_identity(store, id, &mut report);
     scan_readme(store, id, &mut report);
     scan_remote_lag(store, id, &mut report);
@@ -740,6 +741,23 @@ fn scan_diagrams(store: &Store, project: &Project, report: &mut Report) {
     }
 }
 
+/// Codes a hand edit broke (FEAT-217): no item can be coded until they are fixed, so each problem
+/// is an error.
+fn scan_codes(project: &Project, report: &mut Report) {
+    let milestones =
+        crate::config::milestone_prefixes(project.milestones.iter().map(|m| m.code.as_str()));
+    for problem in project.config.codes.problems(&milestones) {
+        report.issues.push(Issue {
+            severity: Severity::Error,
+            project: project.id.clone(),
+            code: None,
+            message: format!(
+                "{problem} — new items cannot be coded; fix with `kanbanr config codes`"
+            ),
+        });
+    }
+}
+
 fn scan_method_choice(project: &Project, report: &mut Report) {
     if !project.config.method.chosen_at.is_empty() {
         return;
@@ -980,6 +998,49 @@ mod tests {
         )
         .unwrap();
         (store, dir)
+    }
+
+    /// FEAT-217 R-11: codes a hand edit broke are a doctor error naming the entry, and allocation
+    /// is refused naming the same problem; valid codes say nothing.
+    #[test]
+    fn doctor_reports_invalid_codes() {
+        let (store, dir) = fixture();
+        assert!(
+            std::fs::canonicalize(&dir)
+                .unwrap()
+                .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap())
+        );
+        let about_codes = |r: &Report| -> Vec<Issue> {
+            r.issues
+                .iter()
+                .filter(|i| i.message.starts_with("codes:"))
+                .cloned()
+                .collect()
+        };
+        store
+            .set_codes(
+                "demo",
+                crate::config::CodesChange {
+                    set: [("defect".to_string(), "DEF".to_string())].into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(about_codes(&run_project(&store, "demo").unwrap()).is_empty());
+
+        let mut cfg = store.read_project_config("demo").unwrap();
+        cfg.codes.kinds.insert("spike".into(), "ADR".into());
+        store.save_config("demo", &cfg).unwrap();
+        let issues = about_codes(&run_project(&store, "demo").unwrap());
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].severity, Severity::Error);
+        assert!(issues[0].message.contains("kind 'spike'"), "{issues:?}");
+        let err = store
+            .add_feature_of_kind("demo", "x", "", "M", None, Some("defect"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("kind 'spike'"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FEAT-200 R-11: doctor lists every diagram lint finding on the board — in each item's spec

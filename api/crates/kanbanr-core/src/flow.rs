@@ -236,6 +236,20 @@ mod tests {
         assert!(require_reachable(&config, "FEAT-001", "Planned", "Scheduled").is_ok());
     }
 
+    /// FEAT-217 R-8: a defect coded by its kind starts on its `fix/` branch, named by that code.
+    #[test]
+    fn a_kind_coded_defect_starts_on_its_fix_branch() {
+        let mut p = board("Planned", Some("defect"));
+        p.features[0].code = "DEF-001".into();
+        p.config.codes.kinds.insert("defect".into(), "DEF".into());
+        let plan = plan_start(&p, "DEF-001", None, Some(&repo(true))).unwrap();
+        assert_eq!(plan.branch.as_deref(), Some("fix/DEF-001-cart-keeps-items"));
+        assert_eq!(
+            crate::scm::branch_item(&p, plan.branch.as_deref()).as_deref(),
+            Some("DEF-001")
+        );
+    }
+
     #[test]
     fn start_plans_the_status_and_the_branch() {
         let plan =

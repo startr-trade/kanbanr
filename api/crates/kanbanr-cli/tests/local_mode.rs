@@ -6998,3 +6998,229 @@ fn release_flow_as_lived_with_0_2_1() {
     assert_eq!(remote_tags.trim(), "", "nothing was pushed");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A scratch code repo and its board under the temp dir, for the FEAT-217 tests: `git` and the
+/// CLI run in `work` with their own HOME, and the board is checked to be the test's own.
+struct CodesScratch {
+    base: PathBuf,
+    home: PathBuf,
+    work: PathBuf,
+}
+
+impl CodesScratch {
+    fn new(tag: &str) -> Self {
+        let base = std::env::temp_dir().join(format!("kanbanr-codes-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let s = CodesScratch {
+            home: base.join("home"),
+            work: base.join("code").join("shop"),
+            base,
+        };
+        std::fs::create_dir_all(&s.home).unwrap();
+        std::fs::create_dir_all(&s.work).unwrap();
+        s.git(&["init", "-q", "--initial-branch=main"]);
+        s.git(&["config", "user.name", "T"]);
+        s.git(&["config", "user.email", "t@x"]);
+        s.git(&[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ]);
+        s.ok(&[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ]);
+        // Its own board, by canonical path.
+        let wher = s.ok(&["where"]);
+        let board = std::fs::canonicalize(wher.trim()).unwrap();
+        assert_eq!(
+            board,
+            std::fs::canonicalize(s.base.join("code").join("shop.kanbanr")).unwrap(),
+            "the test's own board"
+        );
+        assert!(board.starts_with(std::fs::canonicalize(&s.base).unwrap()));
+        s.ok(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+        s
+    }
+
+    fn git(&self, args: &[&str]) -> String {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(&self.work)
+            .env("HOME", &self.home)
+            .env("GIT_AUTHOR_NAME", "T")
+            .env("GIT_AUTHOR_EMAIL", "t@x")
+            .env("GIT_COMMITTER_NAME", "T")
+            .env("GIT_COMMITTER_EMAIL", "t@x")
+            .output()
+            .expect("run git");
+        assert!(
+            o.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    }
+
+    fn exec(&self, args: &[&str]) -> Output {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&self.work)
+            .env("HOME", &self.home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    }
+
+    fn ok(&self, args: &[&str]) -> String {
+        let o = self.exec(args);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    }
+}
+
+impl Drop for CodesScratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}
+
+/// FEAT-217 R-12: `config codes` shows each kind's prefix, the default and the next code per
+/// prefix; --set, --unset, --default and --clear change them; a bad pair or prefix is refused.
+#[test]
+fn config_codes_sets_shows_and_clears() {
+    let s = CodesScratch::new("config");
+    let shown = s.ok(&["config", "codes"]);
+    assert!(
+        shown.contains("(other)") && shown.contains("FEAT-001"),
+        "{shown}"
+    );
+    assert!(shown.contains("in use: none yet"), "{shown}");
+
+    let set = s.ok(&["config", "codes", "--set", "defect=DEF,feature=FTR,bug=DEF"]);
+    assert!(set.contains("defect") && set.contains("DEF-001"), "{set}");
+    s.ok(&[
+        "feature",
+        "add",
+        "--title",
+        "Crash",
+        "--milestone",
+        "MS-001",
+        "--kind",
+        "defect",
+    ]);
+    s.ok(&["feature", "add", "--title", "Cart", "--milestone", "MS-001"]);
+    let shown = s.ok(&["config", "codes"]);
+    assert!(shown.contains("DEF-002"), "{shown}");
+    assert!(shown.contains("FTR-002"), "{shown}");
+    assert!(shown.contains("in use: DEF (1), FTR (1)"), "{shown}");
+    let j: serde_json::Value = serde_json::from_str(&s.ok(&["config", "codes", "--json"])).unwrap();
+    assert_eq!(j["kinds"]["bug"], "DEF");
+    assert_eq!(j["next"]["DEF"], "DEF-002");
+    assert_eq!(j["default"], "FEAT");
+
+    let changed = s.ok(&["config", "codes", "--unset", "bug", "--default", "WRK"]);
+    assert!(!changed.contains("bug"), "{changed}");
+    assert!(changed.contains("(other)      WRK"), "{changed}");
+    let back = s.ok(&["config", "codes", "--default", ""]);
+    assert!(back.contains("(other)      FEAT"), "{back}");
+
+    let bad = s.exec(&["config", "codes", "--set", "defect"]);
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("KIND=PREFIX"));
+    let reserved = s.exec(&["config", "codes", "--set", "spike=MS"]);
+    assert!(!reserved.status.success());
+    assert!(String::from_utf8_lossy(&reserved.stderr).contains("kind 'spike'"));
+
+    s.ok(&["config", "codes", "--clear"]);
+    let j: serde_json::Value = serde_json::from_str(&s.ok(&["config", "codes", "--json"])).unwrap();
+    assert_eq!(j["kinds"], serde_json::json!({}));
+    // The items keep their codes; a new one is FEAT- again.
+    let added = s.ok(&[
+        "feature",
+        "add",
+        "--title",
+        "Later",
+        "--milestone",
+        "MS-001",
+        "--kind",
+        "defect",
+    ]);
+    assert!(added.contains("FEAT-001"), "{added}");
+    let listed = s.ok(&["feature", "list"]);
+    assert!(
+        listed.contains("DEF-001") && listed.contains("FTR-001"),
+        "{listed}"
+    );
+}
+
+/// FEAT-217 R-8: a kind-coded defect starts on `fix/DEF-001-…`, `commit` fills its trailer, the
+/// hooks pass it, and `why` and the git doctor resolve it.
+#[test]
+fn kind_coded_item_start_commit_why() {
+    let s = CodesScratch::new("flow");
+    s.ok(&["config", "method", "--off"]);
+    s.ok(&["config", "codes", "--set", "defect=DEF,feature=FTR"]);
+    let added = s.ok(&[
+        "feature",
+        "add",
+        "--title",
+        "Crash on save",
+        "--milestone",
+        "MS-001",
+        "--kind",
+        "defect",
+    ]);
+    assert!(added.contains("DEF-001"), "{added}");
+    let started = s.ok(&["start", "DEF-001", "--unapproved", "test"]);
+    assert!(started.contains("fix/DEF-001-crash-on-save"), "{started}");
+    assert_eq!(
+        s.git(&["branch", "--show-current"]).trim(),
+        "fix/DEF-001-crash-on-save"
+    );
+    assert!(s.exec(&["git", "check-branch"]).status.success());
+
+    std::fs::create_dir_all(s.work.join("src")).unwrap();
+    std::fs::write(s.work.join("src").join("save.rs"), "fn save() {}\n").unwrap();
+    s.git(&["add", "-A"]);
+    s.ok(&["commit", "-m", "fix(save): do not crash"]);
+    let message = s.git(&["log", "-1", "--format=%B"]);
+    assert!(message.contains("Refs: kanbanr:DEF-001"), "{message}");
+    let msg_file = s.base.join("msg.txt");
+    std::fs::write(&msg_file, &message).unwrap();
+    assert!(
+        s.exec(&["git", "check-msg", msg_file.to_str().unwrap()])
+            .status
+            .success()
+    );
+
+    let why = s.ok(&["why", "src/save.rs:1"]);
+    assert!(why.contains("DEF-001"), "{why}");
+    assert!(why.contains("Crash on save"), "{why}");
+    let status = s.ok(&["git", "status"]);
+    assert!(status.contains("DEF-001"), "{status}");
+    let doctor = s.exec(&["git", "doctor"]);
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&doctor.stdout),
+        String::from_utf8_lossy(&doctor.stderr)
+    );
+    assert!(
+        !said.contains("names no item") && !said.contains("not on the board"),
+        "{said}"
+    );
+}

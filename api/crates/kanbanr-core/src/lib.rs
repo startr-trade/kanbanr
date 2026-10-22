@@ -163,6 +163,300 @@ mod tests {
         assert_eq!(validate::next_code("FEAT", &[]), "FEAT-001");
     }
 
+    /// The board a FEAT-217 test works on: its own temp dir, by canonical path.
+    fn own_board(store: &Store, dir: &tempdir::TempDirLike) {
+        let root = std::fs::canonicalize(&dir.path).unwrap();
+        assert!(
+            root.starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap()),
+            "a test board lives in the temp dir: {}",
+            root.display()
+        );
+        assert_eq!(std::fs::canonicalize(store.data_dir()).unwrap(), root);
+    }
+
+    fn kinds_change(pairs: &[(&str, &str)]) -> crate::config::CodesChange {
+        crate::config::CodesChange {
+            set: pairs
+                .iter()
+                .map(|(k, p)| (k.to_string(), p.to_string()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn kind_coded_project(store: &Store) {
+        new_project(store, "demo");
+        store
+            .set_codes(
+                "demo",
+                kinds_change(&[("feature", "FTR"), ("defect", "DEF"), ("bug", "DEF")]),
+            )
+            .unwrap();
+    }
+
+    /// FEAT-217 R-1: the prefix follows the kind, with a counter per prefix; kinds sharing a
+    /// prefix share its counter; the kind is recorded on the item.
+    #[test]
+    fn codes_follow_the_kind_with_a_counter_per_prefix() {
+        let (store, d) = temp_store();
+        own_board(&store, &d);
+        kind_coded_project(&store);
+        let add = |kind: Option<&str>| {
+            store
+                .add_feature_of_kind("demo", "x", "", "M", None, kind)
+                .unwrap()
+        };
+        let a = add(Some("defect"));
+        assert_eq!(a.code, "DEF-001");
+        assert_eq!(a.kind.as_deref(), Some("defect"));
+        assert_eq!(add(None).code, "FTR-001");
+        assert_eq!(add(Some("bug")).code, "DEF-002");
+        assert_eq!(add(Some(" Feature ")).code, "FTR-002");
+        assert_eq!(add(Some("chore")).code, "FEAT-001", "no entry: the default");
+        // An explicit code is taken as given.
+        let explicit = store
+            .add_feature_of_kind("demo", "x", "", "M", Some("DEF-010".into()), Some("defect"))
+            .unwrap();
+        assert_eq!(explicit.code, "DEF-010");
+        assert_eq!(add(Some("defect")).code, "DEF-011");
+        let reloaded = store.load("demo").unwrap();
+        assert_eq!(
+            reloaded.feature("DEF-001").unwrap().kind.as_deref(),
+            Some("defect")
+        );
+    }
+
+    /// FEAT-217 R-2: a project that sets no codes codes every item FEAT-<n>, whatever its kind.
+    #[test]
+    fn an_unconfigured_project_keeps_feat_codes() {
+        let (store, d) = temp_store();
+        own_board(&store, &d);
+        new_project(&store, "demo");
+        let a = store
+            .add_feature_of_kind("demo", "x", "", "M", None, Some("defect"))
+            .unwrap();
+        let b = store.add_feature("demo", "y", "", "M", None).unwrap();
+        assert_eq!((a.code.as_str(), b.code.as_str()), ("FEAT-001", "FEAT-002"));
+        let yaml =
+            std::fs::read_to_string(store.data_dir().join("projects/demo/config.yaml")).unwrap();
+        assert!(!yaml.contains("codes"), "{yaml}");
+    }
+
+    /// FEAT-217 R-4: changing a kind — attrs, batch feature.edit, a defect record — never renames.
+    #[test]
+    fn a_kind_change_never_renames() {
+        let (store, d) = temp_store();
+        own_board(&store, &d);
+        kind_coded_project(&store);
+        let f = store
+            .add_feature_of_kind("demo", "x", "", "M", None, None)
+            .unwrap();
+        assert_eq!(f.code, "FTR-001");
+        let edited = store
+            .set_feature_attrs(
+                "demo",
+                "FTR-001",
+                Some("defect".into()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            (edited.code.as_str(), edited.kind.as_deref()),
+            ("FTR-001", Some("defect"))
+        );
+        let ops: Vec<crate::batch::BatchOp> = serde_json::from_value(serde_json::json!([
+            {"op":"feature.edit","code":"FTR-001","kind":"bug"}
+        ]))
+        .unwrap();
+        store.apply_batch("demo", ops).unwrap();
+        let defect = crate::models::Defect {
+            found_in: "production".into(),
+            ..Default::default()
+        };
+        let after = store.set_defect("demo", "FTR-001", Some(defect)).unwrap();
+        assert_eq!(after.code, "FTR-001");
+        let p = store.load("demo").unwrap();
+        assert_eq!(p.features.len(), 1);
+        assert_eq!(p.feature("FTR-001").unwrap().kind.as_deref(), Some("bug"));
+    }
+
+    /// FEAT-217 R-5: an invalid change is refused naming the entry, and the config is unchanged.
+    #[test]
+    fn set_codes_refuses_and_changes_nothing() {
+        let (store, d) = temp_store();
+        own_board(&store, &d);
+        kind_coded_project(&store);
+        let path = store.data_dir().join("projects/demo/config.yaml");
+        let before = std::fs::read_to_string(&path).unwrap();
+        for (change, needle) in [
+            (kinds_change(&[("spike", "spk")]), "kind 'spike'"),
+            (kinds_change(&[("spike", "MS")]), "reserved"),
+            (kinds_change(&[(" ", "SPK")]), "blank"),
+            (
+                crate::config::CodesChange {
+                    default: Some("X".into()),
+                    ..Default::default()
+                },
+                "the default",
+            ),
+        ] {
+            let err = store.set_codes("demo", change).unwrap_err().to_string();
+            assert!(err.contains(needle), "{needle}: {err}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        }
+        // A milestone's prefix is refused too.
+        store
+            .add_milestone("demo", "Release", "", vec![], Some("REL-001".into()))
+            .unwrap();
+        let err = store
+            .set_codes("demo", kinds_change(&[("release", "REL")]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("milestone"), "{err}");
+        // Unset, default and clear change it.
+        let c = store
+            .set_codes(
+                "demo",
+                crate::config::CodesChange {
+                    unset: vec!["bug".into()],
+                    default: Some("WRK".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(!c.codes.kinds.contains_key("bug"));
+        assert_eq!(c.codes.default.as_deref(), Some("WRK"));
+        let c = store
+            .set_codes(
+                "demo",
+                crate::config::CodesChange {
+                    clear: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(c.codes.is_default());
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("codes"));
+    }
+
+    /// FEAT-217 R-6: a batch numbers each item by its own prefix in bundle order; aliases resolve
+    /// to the codes assigned.
+    #[test]
+    fn batch_numbers_each_kind_in_bundle_order() {
+        let (store, d) = temp_store();
+        own_board(&store, &d);
+        kind_coded_project(&store);
+        let ops: Vec<crate::batch::BatchOp> = serde_json::from_value(serde_json::json!([
+            {"op":"feature.add","ref":"a","title":"A","milestone":"M","kind":"defect"},
+            {"op":"feature.add","ref":"b","title":"B","milestone":"M"},
+            {"op":"feature.add","ref":"c","title":"C","milestone":"M","kind":"bug","depends_on":["a","b"]},
+            {"op":"feature.add","ref":"e","title":"E","milestone":"M","kind":"feature"},
+            {"op":"feature.move","code":"c","to":"Scheduled"}
+        ]))
+        .unwrap();
+        let results = store.apply_batch("demo", ops).unwrap();
+        let codes: Vec<&str> = results[..4]
+            .iter()
+            .map(|r| r["code"].as_str().unwrap())
+            .collect();
+        assert_eq!(codes, ["DEF-001", "FTR-001", "DEF-002", "FTR-002"]);
+        let p = store.load("demo").unwrap();
+        let c = p.feature("DEF-002").unwrap();
+        assert_eq!(c.depends_on, ["DEF-001", "FTR-001"]);
+        assert_eq!(c.status, "Scheduled");
+        assert_eq!(c.kind.as_deref(), Some("bug"));
+    }
+
+    /// FEAT-217 R-9: an unconfigured reader (an older kanbanr, in effect) loads a kind-coded item,
+    /// links it in prose, and allocates FEAT- around it.
+    #[test]
+    fn an_unconfigured_reader_handles_kind_coded_items() {
+        let (store, d) = temp_store();
+        own_board(&store, &d);
+        new_project(&store, "demo");
+        store
+            .add_feature_of_kind("demo", "x", "", "M", Some("DEF-001".into()), Some("defect"))
+            .unwrap();
+        let p = store.load("demo").unwrap();
+        assert!(p.config.codes.is_default());
+        assert_eq!(
+            p.feature("DEF-001").unwrap().kind.as_deref(),
+            Some("defect")
+        );
+        let index = crate::refs::BoardIndex::of(&store, &p).unwrap();
+        let found = crate::refs::find("Fixes DEF-001; see SHA-256.", &index);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(index.href(&found[0].reference).is_some());
+        let next = store
+            .add_feature_of_kind("demo", "y", "", "M", None, Some("defect"))
+            .unwrap();
+        assert_eq!(next.code, "FEAT-001");
+    }
+
+    /// FEAT-217 R-10: other config writes keep the codes.
+    #[test]
+    fn other_config_writes_keep_codes() {
+        let (store, d) = temp_store();
+        own_board(&store, &d);
+        kind_coded_project(&store);
+        let codes = store.read_project_config("demo").unwrap().codes;
+        assert!(!codes.is_default());
+        store
+            .set_diagrams(
+                "demo",
+                crate::config::DiagramsConfig {
+                    strict: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(store.read_project_config("demo").unwrap().codes, codes);
+        let cfg = store.read_project_config("demo").unwrap();
+        store
+            .set_workflow(
+                "demo",
+                cfg.statuses.clone(),
+                cfg.transitions.clone(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(store.read_project_config("demo").unwrap().codes, codes);
+        store.set_coverage("demo", Vec::new()).unwrap();
+        assert_eq!(store.read_project_config("demo").unwrap().codes, codes);
+    }
+
+    /// FEAT-217 R-11 (store): codes a hand edit broke refuse allocation, naming the problem; an
+    /// explicit code still goes through.
+    #[test]
+    fn invalid_codes_refuse_allocation() {
+        let (store, d) = temp_store();
+        own_board(&store, &d);
+        new_project(&store, "demo");
+        let mut cfg = store.read_project_config("demo").unwrap();
+        cfg.codes.kinds.insert("defect".into(), "def".into());
+        store.save_config("demo", &cfg).unwrap();
+        let err = store
+            .add_feature_of_kind("demo", "x", "", "M", None, Some("defect"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("kind 'defect'") && err.contains("config codes"),
+            "{err}"
+        );
+        assert!(store.load("demo").unwrap().features.is_empty());
+        store
+            .add_feature("demo", "x", "", "M", Some("FEAT-001".into()))
+            .unwrap();
+    }
+
     #[test]
     fn transition_validation_respects_config() {
         let (store, _d) = temp_store();

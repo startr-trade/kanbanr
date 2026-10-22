@@ -107,6 +107,7 @@ const index = makeIndex({
   adrs: Object.entries(fx.adrs).map(([id, path]) => ({ id, path })),
   goals: fx.goals,
   docs: fx.docs,
+  codes: fx.codes,
 });
 for (const c of fixture.cases) {
   const got = find(c.markdown, index).map((f) => [f.reference.kind, label(f.reference), f.line, f.explicit, isBroken(index, f)]);

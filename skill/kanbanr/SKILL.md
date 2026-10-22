@@ -997,6 +997,10 @@ A "feature item" is really a generic **work item** — use ONE item type for eve
 - `--due` — only if there's a real deadline.
 - `--depends-on FEAT-004,FEAT-007` — other features this one is **blocked by** (validated; no cycles).
 Set `--kind` at minimum on every item; it's what lets the board separate features from chores/bugs.
+**Pass `--kind` when creating, not after:** where the project maps kinds to prefixes
+(`kanbanr config codes`), the kind chooses the code (`DEF-001` for a defect, `MNT-001` for a
+chore, a counter per prefix), and a later kind change never renames it. Don't propose codes in the
+setup interview: a new project keeps `FEAT-` unless the user asks for kind prefixes.
 
 **Focus vs non-focus.** The dashboard is for **focus** (delivery) work. Recurring/ongoing and
 maintenance items are **non-focus background** — keep them OFF the board by putting them in a
@@ -1168,6 +1172,8 @@ Under a phased process, grow an item's definition stage by stage.
 Feature items (a milestone is REQUIRED; code auto-generates):
 ```
 kanbanr feature add --title "Login flow" --milestone MS-002 --spec "# Login\n…"   # or --spec-file path.md
+kanbanr feature add --title "Save crashes" --milestone MS-002 --kind defect       # DEF-001 where codes map defect=DEF
+kanbanr config codes [--set defect=DEF,chore=MNT] [--unset KIND] [--default P] [--clear]   # kind -> code prefix
 kanbanr feature list [--status Scheduled] [--milestone MS-002]
 kanbanr feature show FEAT-001
 kanbanr feature edit FEAT-001 [--title …] [--spec … | --spec-file …] [--milestone MS-003] [--code NEW]
