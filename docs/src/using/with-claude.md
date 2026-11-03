@@ -255,6 +255,9 @@ covers more than the one before, and the item's history keeps the trail. If you 
 design, ask for the whole definition up front: one plan and one approval then cover every stage
 where nothing changes.
 
+For a whole project on TOGAF with sprints and releases, from setup to a shipped release, see
+[A TOGAF project with sprints and releases](togaf-sprints-releases.md).
+
 ## What it looked like in practice
 
 These are from the walkthroughs that tested this flow before it shipped, on a TOGAF project and on

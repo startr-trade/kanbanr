@@ -11,6 +11,7 @@
 # Using kanbanr
 
 - [Working with Claude](using/with-claude.md)
+- [A TOGAF project with sprints and releases](using/togaf-sprints-releases.md)
 - [Everyday use](using/everyday.md)
 - [The method: why work exists](using/the-method.md)
 - [Evidence and measurement](using/evidence.md)
