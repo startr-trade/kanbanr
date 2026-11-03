@@ -6,6 +6,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A guide to running TOGAF, sprints and releases through Claude (DOC-001).** A new book chapter
+  follows one project from setup to a shipped release: what you say, what Claude does, what is yours
+  to decide, and how phases, sprints and releases meet. Every command and output in it comes from a
+  real run. It also says what surprises people: gates need a charter, an item merged but not yet
+  released carries over at a sprint close, and each item needs its `release` sign-off before main.
+
 ## [0.4.0] - 2026-10-22
 
 ### Added
