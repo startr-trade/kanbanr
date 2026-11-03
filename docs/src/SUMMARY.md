@@ -11,7 +11,6 @@
 # Using kanbanr
 
 - [Working with Claude](using/with-claude.md)
-- [A TOGAF project with sprints and releases](using/togaf-sprints-releases.md)
 - [Everyday use](using/everyday.md)
 - [The method: why work exists](using/the-method.md)
 - [Evidence and measurement](using/evidence.md)
@@ -24,6 +23,12 @@
 - [Multiple projects](using/projects.md)
 - [Portfolio: work across several projects](using/portfolio.md)
 - [Housekeeping and troubleshooting](using/housekeeping.md)
+
+# Process guides
+
+- [Choosing a guide](guides/index.md)
+- [TOGAF with Claude](guides/togaf-with-claude.md)
+- [TOGAF from the command line](guides/togaf-cli.md)
 
 # Reference
 

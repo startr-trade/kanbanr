@@ -256,7 +256,7 @@ design, ask for the whole definition up front: one plan and one approval then co
 where nothing changes.
 
 For a whole project on TOGAF with sprints and releases, from setup to a shipped release, see
-[A TOGAF project with sprints and releases](togaf-sprints-releases.md).
+[TOGAF with Claude](../guides/togaf-with-claude.md).
 
 ## What it looked like in practice
 
