@@ -5954,8 +5954,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             }
             // What is waiting is the daemon's answer, the one the Review page shows (FEAT-159):
             // never approved, lapsed, unratified, or waiting on a sign-off — and not live work
-            // already agreed, finished work, or ratified work. The CLI used to keep its own copy
-            // of the rule, and listed ratified and finished items as still waiting.
+            // already agreed, ratified work, or finished work unless its approval lapsed
+            // (DEF-013). The CLI used to keep its own copy of the rule, and listed ratified and
+            // finished items as still waiting.
             let queue: Vec<Value> = if *pending && code.is_none() {
                 serde_json::from_str(&client.get(&format!("/projects/{p}/review"))?)?
             } else {

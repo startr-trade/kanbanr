@@ -205,6 +205,15 @@ pub fn is_live_work(config: &crate::ProjectConfig, status: &str) -> bool {
     !is_terminal_status(config, status) && config.displayed_states.iter().any(|s| s == status)
 }
 
+/// Whether `status` is finished work: a terminal status that is not a no-op disposition
+/// (Completed and the declared terminal states; not Out-of-Scope). The review queue lists such
+/// an item only when its approval lapsed (DEF-013): FEAT-078 keeps never-approved finished work
+/// out, but an agreement that no longer covers the text is a question no other surface shows.
+/// One rule here, so the queue and any other surface cannot give different answers.
+pub fn is_finished_work(config: &crate::ProjectConfig, status: &str) -> bool {
+    is_terminal_status(config, status) && !config.is_no_op(status)
+}
+
 impl DependencyView {
     /// Build the status-aware view across every project in the store. `overlay`, when given,
     /// substitutes the in-memory state of one project for its on-disk state (matches

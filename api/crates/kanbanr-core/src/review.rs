@@ -40,6 +40,8 @@ pub struct ReviewEntry {
     pub rev: String,
     /// What the ordering keys on, and useful to a client besides.
     pub in_progress: bool,
+    /// The item is finished work (DEF-013): listed only because its approval lapsed.
+    pub finished: bool,
     /// The planned releases it could ship in, in file order (FEAT-185). Present whenever the
     /// release question is due, so a surface asking another question first can ask this one too.
     /// Empty: only a new release to choose.
@@ -71,9 +73,11 @@ pub fn pending(store: &Store, p: &str) -> Result<Vec<ReviewEntry>> {
         .features
         .iter()
         // Only where agreement can still change what happens (FEAT-078). Approving a
-        // Completed item records a signature, pinned to a definition hash, for work already
-        // merged; a deliberately Deferred one is not going to start. The same gate the
-        // doctor applies, so the two surfaces cannot give different answers to one question.
+        // Completed item that was never agreed to records a signature, pinned to a definition
+        // hash, for work already merged; a deliberately Deferred one is not going to start.
+        // The same gate the doctor applies, so the two surfaces cannot give different answers
+        // to one question. The exception is finished work whose approval lapsed (DEF-013): it
+        // was agreed once and the text has changed since, which nothing else on the board shows.
         .filter_map(|f| {
             let definition = f.definition.as_ref()?;
             let live = crate::graph::is_live_work(&project.config, &f.status);
@@ -82,7 +86,11 @@ pub fn pending(store: &Store, p: &str) -> Result<Vec<ReviewEntry>> {
             // It is asked here too (FEAT-109), with the predicate the doctor uses, so the
             // two surfaces cannot disagree about which items need a ratification.
             let unratified = !live && crate::doctor::unreconciled_bypass(definition);
-            if !live && !unratified {
+            let finished_lapsed = !live
+                && !unratified
+                && crate::graph::is_finished_work(&project.config, &f.status)
+                && definition.approval_state() == ApprovalState::Lapsed;
+            if !live && !unratified && !finished_lapsed {
                 return None;
             }
             // Sign-offs the next stage asks for are the same kind of question: a person's
@@ -137,17 +145,20 @@ pub fn pending(store: &Store, p: &str) -> Result<Vec<ReviewEntry>> {
                 definition: definition.clone(),
                 rev: definition.content_rev(),
                 in_progress: f.status != project.config.default_state,
+                finished: !live,
                 release_choices: asks_release.then(|| release_choices.clone()),
             })
         })
         .collect();
     // Work already built without agreement comes first (FEAT-109), then work being built
-    // without it, then work that has not started (FEAT-078 R-2). The release question
-    // comes after every approval and sign-off (FEAT-185).
+    // without it, then work that has not started (FEAT-078 R-2). Finished work whose approval
+    // lapsed follows all live decisions (DEF-013). The release question comes after every
+    // approval and sign-off (FEAT-185).
     pending.sort_by_key(|e| {
         (
             e.approval == ApprovalKind::Release,
             e.approval != ApprovalKind::Unratified,
+            e.finished,
             !e.in_progress,
             e.code.clone(),
         )
