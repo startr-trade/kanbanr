@@ -697,6 +697,9 @@ pub struct ReleasePlan {
     pub repo: bool,
     /// Nothing is planned into the release, so it cannot be promoted (R-17).
     pub empty: bool,
+    /// Things worth knowing that do not stop the promotion, e.g. a stale release date (DEF-001).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -899,6 +902,7 @@ fn work_out(
     let mut prep = None;
     let mut release_tip = String::new();
     let mut origin = None;
+    let mut warnings: Vec<String> = Vec::new();
     let mut conditions: Vec<PlanCondition> = Vec::new();
     let preview = cut_preview(store, id, version)?;
 
@@ -1215,6 +1219,14 @@ fn work_out(
                 blocks.push(why.clone());
                 tag_block.get_or_insert(why);
             }
+            // The notes and changelog carry the date a candidate was prepared on; main moving is
+            // when they are dated today (DEF-001). A promotion that prepares writes today's date.
+            let today = today_ymd();
+            let stale = match (&tip_before, will_have_branch && !prepares) {
+                (Some(t), true) => stale_dates(&project, &releases[index], repo, t, &today),
+                _ => Vec::new(),
+            };
+            let redates = moves && !main_at_tip && !left_behind && !stale.is_empty();
             if moves {
                 let (does, noop) = if main_at_tip {
                     (format!("{main} is already at {branch}"), true)
@@ -1231,6 +1243,11 @@ fn work_out(
                         format!("fast-forwards {main} to {branch} after its preparation commit"),
                         false,
                     )
+                } else if redates {
+                    (
+                        format!("dates the release {today} and fast-forwards {main} to {branch}"),
+                        false,
+                    )
                 } else {
                     (
                         format!(
@@ -1241,6 +1258,21 @@ fn work_out(
                     )
                 };
                 steps.push(step(ReleaseAction::MoveMain, does, noop, move_block));
+            }
+            if cut && !stale.is_empty() && !redates {
+                let mut dates = stale.clone();
+                dates.sort();
+                dates.dedup();
+                warnings.push(format!(
+                    "{version}'s notes and changelog are dated {}, and today is {today}: run \
+                     `kanbanr release redate {version}` to date them today{}",
+                    dates.join(" and "),
+                    if main_at_tip {
+                        format!(", then push {main} again")
+                    } else {
+                        String::new()
+                    }
+                ));
             }
             if tags {
                 let does = if prepares {
@@ -1511,6 +1543,7 @@ fn work_out(
         after,
         repo: repo.is_some(),
         empty,
+        warnings,
     };
     Ok(Worked {
         plan,
@@ -2000,6 +2033,20 @@ pub fn promote_with(
                 Ok(())
             })(),
             ReleaseAction::MoveMain => (|| {
+                // Main moves with the date of the day it moves (DEF-001).
+                let project = store.load_meta(id)?;
+                let at = coderepo::rev_parse(repo, &w.branch)?;
+                let ymd = today_ymd();
+                let files = redate_files(&project, &releases[index], repo, &at, &ymd)?;
+                if !files.is_empty() {
+                    let message = redate_message(version, &ymd, by);
+                    let (old, new) = coderepo::commit_files(repo, &w.branch, &files, &message)?;
+                    undo.push(Undo::RemoveCommit {
+                        branch: w.branch.clone(),
+                        old,
+                        new,
+                    });
+                }
                 let tip = coderepo::rev_parse(repo, &w.branch)?;
                 let previous = coderepo::fast_forward(repo, &w.main, &tip)?;
                 undo.push(Undo::ResetMain {
@@ -2345,6 +2392,249 @@ pub fn release_notes(
     Ok(notes_at(&release, &path, text, &tip))
 }
 
+/// The dates before `today` on the lines of a release's notes and changelog that carry one, at
+/// `tip`: what `redate_files` would change.
+fn stale_dates(
+    project: &Project,
+    release: &Release,
+    repo: &Path,
+    tip: &str,
+    today: &str,
+) -> Vec<String> {
+    dated_lines(project, release, repo, tip)
+        .into_iter()
+        .filter(|l| l.date.as_str() < today)
+        .map(|l| l.date)
+        .collect()
+}
+
+/// A file of a release that carries its date.
+struct DatedLine {
+    path: String,
+    text: String,
+    /// `YYYY-MM-DD`.
+    date: String,
+    /// The changelog heading (else the notes line).
+    changelog: bool,
+}
+
+/// The release notes and the changelog (with its copies) at `tip`, each with the date it carries;
+/// a file that is missing or has no date line is left out.
+fn dated_lines(project: &Project, release: &Release, repo: &Path, tip: &str) -> Vec<DatedLine> {
+    use crate::releaseprep as prep;
+    let cfg = &project.config.cadence.release_prepare;
+    let Ok(ph) = prep::Placeholders::new(&release.version, &release.name, &today_ymd()) else {
+        return Vec::new();
+    };
+    let read = |path: &str| {
+        prep::check_repo_path(path).ok()?;
+        coderepo::read_blob(repo, tip, path)
+            .ok()
+            .flatten()
+            .map(|(_, t)| t)
+    };
+    let mut out = Vec::new();
+    if let Some(n) = &cfg.notes {
+        let path = prep::expand(n, &ph);
+        if let Some(text) = read(&path)
+            && let Some(date) = prep::notes_date(&text)
+        {
+            out.push(DatedLine {
+                path,
+                text,
+                date,
+                changelog: false,
+            });
+        }
+    }
+    for path in cfg.changelog.iter().chain(cfg.changelog_copies.iter()) {
+        if let Some(text) = read(path)
+            && let Some(date) = prep::changelog_date(&text, &ph.number)
+        {
+            out.push(DatedLine {
+                path: path.clone(),
+                text,
+                date,
+                changelog: true,
+            });
+        }
+    }
+    out
+}
+
+/// The files of `release` at `tip` whose date is before `ymd`, with the text they should have:
+/// the notes, the changelog and each of its copies. Empty when there is nothing to date.
+fn redate_files(
+    project: &Project,
+    release: &Release,
+    repo: &Path,
+    tip: &str,
+    ymd: &str,
+) -> Result<Vec<(String, String)>> {
+    use crate::releaseprep as prep;
+    let ph = prep::Placeholders::new(&release.version, &release.name, ymd)
+        .map_err(CoreError::Unsupported)?;
+    Ok(dated_lines(project, release, repo, tip)
+        .into_iter()
+        .filter(|l| l.date.as_str() < ymd)
+        .filter_map(|l| {
+            let new = if l.changelog {
+                prep::redate_changelog(&l.text, &ph.number, ymd)
+            } else {
+                prep::redate_notes(&l.text, ymd)
+            };
+            new.map(|n| (l.path, n))
+        })
+        .collect())
+}
+
+fn redate_message(version: &str, ymd: &str, by: &str) -> String {
+    let by = if by.trim().is_empty() {
+        "someone"
+    } else {
+        by.trim()
+    };
+    format!(
+        "Release {version}: dated {ymd}\n\nDated through kanbanr by {by}.\n\n\
+         [no-ref] release date, written by kanbanr\nKanbanr-Release: {version}\n"
+    )
+}
+
+/// Whether main holds the release at `tip` and so moves with a commit on `branch`; main past the
+/// release cannot, and is refused before anything is committed. `carried` names what the commit
+/// carries, for the message.
+fn main_follows(repo: &Path, main: &str, branch: &str, tip: &str, carried: &str) -> Result<bool> {
+    let main_tip = coderepo::rev_parse(repo, main).ok();
+    let moves_main = main_tip.as_deref() == Some(tip);
+    if let Some(at) = main_tip
+        .as_deref()
+        .filter(|at| !moves_main && coderepo::is_ancestor(repo, tip, at))
+    {
+        return Err(CoreError::Unsupported(format!(
+            "{main} is at {}, past {branch} at {}: {carried} saved on {branch} would not reach the \
+             commit to be tagged, so nothing was saved",
+            short(at),
+            short(tip)
+        )));
+    }
+    Ok(moves_main)
+}
+
+/// Commit `files` onto `branch` and, when `moves_main`, fast-forward main to the commit. Returns
+/// the new tip and what to tell the person about main.
+#[allow(clippy::too_many_arguments)]
+fn commit_and_follow(
+    repo: &Path,
+    main: &str,
+    branch: &str,
+    version: &str,
+    tip: &str,
+    moves_main: bool,
+    files: &[(String, String)],
+    message: &str,
+    carried: &str,
+) -> Result<(String, String)> {
+    let (_, new) = coderepo::commit_files(repo, branch, files, message)?;
+    let mut main_moved = String::new();
+    if moves_main {
+        if let Err(e) = coderepo::fast_forward(repo, main, &new) {
+            // Leave both as they were rather than main behind the commit.
+            let _ = coderepo::reset_branch_to(repo, branch, tip);
+            return Err(CoreError::Unsupported(format!(
+                "{main} held {version} but could not move with its {carried} ({e}), so nothing \
+                 was saved"
+            )));
+        }
+        main_moved = format!(
+            "{main} held {version}, so it moved with the {carried} to {}: push {main} again and \
+             wait for CI before the cut",
+            short(&new)
+        );
+    }
+    Ok((new, main_moved))
+}
+
+/// Date a release's notes and changelog today, in one commit onto `release/<V>`, without checking
+/// it out (DEF-001). Main moves with it when it holds the release; `main_moved` then says to push
+/// again. Nothing to date (no notes or changelog, no date line, already today's) is no commit.
+/// Refused once the release has shipped.
+pub fn redate_release(
+    store: &Store,
+    id: &str,
+    version: &str,
+    repo: Option<&Path>,
+    by: &str,
+) -> Result<NotesSaved> {
+    use crate::releaseprep as prep;
+    let project = cadence_on(store, id)?;
+    let release = load(store, id)?
+        .into_iter()
+        .find(|r| r.version == version)
+        .ok_or_else(|| CoreError::Unsupported(format!("no release {version}")))?;
+    if release.state == ReleaseState::Shipped {
+        return Err(CoreError::Unsupported(format!(
+            "{version} has shipped: its notes and changelog are as they shipped, and are not \
+             re-dated"
+        )));
+    }
+    if release.branch.is_empty() {
+        return Err(CoreError::Unsupported(format!(
+            "{version} has no release branch yet: promote it to candidate first"
+        )));
+    }
+    let repo = repo.ok_or_else(|| notes_need_repo(version))?;
+    let branch = release.branch.clone();
+    let tip = branch_tip(repo, &release)?;
+    let ymd = today_ymd();
+    let path = match &project.config.cadence.release_prepare.notes {
+        Some(n) => {
+            let ph = prep::Placeholders::new(&release.version, &release.name, &ymd)
+                .map_err(CoreError::Unsupported)?;
+            prep::expand(n, &ph)
+        }
+        None => String::new(),
+    };
+    let notes_now = |at: &str| {
+        let text = coderepo::read_blob(repo, at, &path)
+            .ok()
+            .flatten()
+            .map(|(_, t)| t)
+            .unwrap_or_default();
+        notes_at(&release, &path, text, at)
+    };
+    let files = redate_files(&project, &release, repo, &tip, &ymd)?;
+    if files.is_empty() {
+        return Ok(NotesSaved {
+            sha: tip.clone(),
+            notes: notes_now(&tip),
+            main_moved: String::new(),
+        });
+    }
+    let main = project
+        .config
+        .cadence
+        .main_branch
+        .clone()
+        .unwrap_or_else(|| coderepo::default_branch(repo));
+    let moves_main = main_follows(repo, &main, &branch, &tip, "a new date")?;
+    let (new, main_moved) = commit_and_follow(
+        repo,
+        &main,
+        &branch,
+        version,
+        &tip,
+        moves_main,
+        &files,
+        &redate_message(version, &ymd, by),
+        "new date",
+    )?;
+    Ok(NotesSaved {
+        sha: new.clone(),
+        notes: notes_now(&new),
+        main_moved,
+    })
+}
+
 /// What saving a release's notes did (FEAT-216).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct NotesSaved {
@@ -2392,19 +2682,7 @@ pub fn set_release_notes(
         .clone()
         .unwrap_or_else(|| coderepo::default_branch(repo));
     // Main at the tip holds the release and moves with the notes; main past it cannot.
-    let main_tip = coderepo::rev_parse(repo, &main).ok();
-    let moves_main = main_tip.as_deref() == Some(tip.as_str());
-    if let Some(at) = main_tip
-        .as_deref()
-        .filter(|at| !moves_main && coderepo::is_ancestor(repo, &tip, at))
-    {
-        return Err(CoreError::Unsupported(format!(
-            "{main} is at {}, past {branch} at {}: notes saved on {branch} would not reach the \
-             commit to be tagged, so nothing was saved",
-            short(at),
-            short(&tip)
-        )));
-    }
+    let moves_main = main_follows(repo, &main, &branch, &tip, "notes")?;
     let mut files: Vec<(String, String)> = Vec::new();
     if read(&path)?.as_deref() != Some(text) {
         files.push((path.clone(), text.to_string()));
@@ -2447,23 +2725,9 @@ pub fn set_release_notes(
         "Release {version}: notes\n\nEdited through kanbanr release notes by {by}.\n\n\
          [no-ref] release notes, written by kanbanr\nKanbanr-Release: {version}\n"
     );
-    let (_, new) = coderepo::commit_files(repo, &branch, &files, &message)?;
-    let mut main_moved = String::new();
-    if moves_main {
-        if let Err(e) = coderepo::fast_forward(repo, &main, &new) {
-            // Leave both as they were rather than main behind the notes.
-            let _ = coderepo::reset_branch_to(repo, &branch, &tip);
-            return Err(CoreError::Unsupported(format!(
-                "{main} held {version} but could not move with its notes ({e}), so nothing was \
-                 saved"
-            )));
-        }
-        main_moved = format!(
-            "{main} held {version}, so it moved with the notes to {}: push {main} again and wait \
-             for CI before the cut",
-            short(&new)
-        );
-    }
+    let (new, main_moved) = commit_and_follow(
+        repo, &main, &branch, version, &tip, moves_main, &files, &message, "notes",
+    )?;
     Ok(NotesSaved {
         sha: new.clone(),
         notes: notes_at(&release, &path, text.to_string(), &new),
@@ -3687,6 +3951,129 @@ mod tests {
             saved.sha
         );
         assert_eq!(coderepo::rev_parse(&repo, "main").unwrap(), main_now);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// The notes and both changelogs of v0.2.0 dated `ymd`, committed onto its release branch, as
+    /// a candidate prepared on an earlier day has them.
+    fn date_candidate(repo: &Path, ymd: &str) -> String {
+        let tip = coderepo::rev_parse(repo, "release/v0.2.0").unwrap();
+        let at = |path: &str| coderepo::read_blob(repo, &tip, path).unwrap().unwrap().1;
+        let files: Vec<(String, String)> = vec![
+            (
+                "docs/releases/v0.2.0.md".to_string(),
+                crate::releaseprep::redate_notes(&at("docs/releases/v0.2.0.md"), ymd).unwrap(),
+            ),
+            (
+                "CHANGELOG.md".to_string(),
+                crate::releaseprep::redate_changelog(&at("CHANGELOG.md"), "0.2.0", ymd).unwrap(),
+            ),
+            (
+                "docs/changelog.md".to_string(),
+                crate::releaseprep::redate_changelog(&at("docs/changelog.md"), "0.2.0", ymd)
+                    .unwrap(),
+            ),
+        ];
+        coderepo::commit_files(repo, "release/v0.2.0", &files, "an earlier day")
+            .unwrap()
+            .1
+    }
+
+    /// DEF-001 R-1: the stage that moves main dates the notes and the changelog today, in one
+    /// commit onto the release branch, before main moves with it; the plan says so; the prepared
+    /// check still holds afterwards.
+    #[test]
+    fn move_main_redates_the_release() {
+        let (store, dir, repo) = notes_fixture("redate-move");
+        let old = date_candidate(&repo, "2026-01-01");
+        let plan = super::plan_promotion(
+            &store,
+            "shop",
+            "v0.2.0",
+            None,
+            "",
+            Some(&repo),
+            super::Fetch::No,
+        )
+        .unwrap();
+        let step = plan.steps.iter().find(|s| s.action.name() == "move_main");
+        assert!(
+            step.unwrap().does.starts_with("dates the release "),
+            "{:?}",
+            step
+        );
+        let done = super::promote(&store, "shop", "v0.2.0", None, "Ada", "", Some(&repo)).unwrap();
+        let tip = coderepo::rev_parse(&repo, "release/v0.2.0").unwrap();
+        assert_ne!(tip, old, "one commit dated the release");
+        assert_eq!(
+            coderepo::git(&repo, &["rev-list", "--count", &format!("{old}..{tip}")]).unwrap(),
+            "1"
+        );
+        assert_eq!(coderepo::rev_parse(&repo, "main").unwrap(), tip);
+        assert_eq!(done.main_moved.unwrap().1, tip);
+        let today = super::today_ymd();
+        let at = |path: &str| coderepo::read_blob(&repo, &tip, path).unwrap().unwrap().1;
+        assert!(at("docs/releases/v0.2.0.md").contains(&format!("_Released {today}._")));
+        for c in ["CHANGELOG.md", "docs/changelog.md"] {
+            assert!(at(c).contains(&format!("## [0.2.0] - {today}")), "{c}");
+        }
+        let message = coderepo::git(&repo, &["log", "-1", "--format=%B", &tip]).unwrap();
+        assert!(
+            message.starts_with(&format!("Release v0.2.0: dated {today}\n")),
+            "{message}"
+        );
+        assert!(message.contains("[no-ref]") && message.contains("Kanbanr-Release: v0.2.0"));
+        assert!(crate::scm::escape_reason(&message).is_some(), "{message}");
+        let project = store.load_meta("shop").unwrap();
+        assert!(super::prepared_at(&repo, &tip, &project, "v0.2.0", "release/v0.2.0").0);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-001 R-2: the cut's plan warns of a stale date, naming it and today and the command,
+    /// without refusing; `redate` commits today's date, moves main with it and says to push
+    /// again; with nothing stale it commits nothing; once shipped it refuses.
+    #[test]
+    fn cut_plan_warns_of_a_stale_date() {
+        let (store, dir, repo) = notes_fixture("redate-warn");
+        super::promote(&store, "shop", "v0.2.0", None, "Ada", "", Some(&repo)).unwrap();
+        let today = super::today_ymd();
+        let plan = |to: Option<&str>| {
+            super::plan_promotion(&store, "shop", "v0.2.0", to, "", Some(&repo), super::Fetch::No)
+                .unwrap()
+        };
+        assert!(plan(None).warnings.is_empty(), "dated today");
+        let old = date_candidate(&repo, "2026-01-01");
+        // Main held the release; it follows the stale commit, as it would have in time.
+        coderepo::fast_forward(&repo, "main", &old).unwrap();
+        let cut = plan(None);
+        assert!(cut.cut && cut.warnings.len() == 1, "{:?}", cut.warnings);
+        let said = &cut.warnings[0];
+        assert!(
+            said.contains("2026-01-01")
+                && said.contains(&today)
+                && said.contains("kanbanr release redate v0.2.0"),
+            "{said}"
+        );
+
+        let saved = super::redate_release(&store, "shop", "v0.2.0", Some(&repo), "Ada").unwrap();
+        assert_ne!(saved.sha, old);
+        assert_eq!(coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(), saved.sha);
+        assert_eq!(coderepo::rev_parse(&repo, "main").unwrap(), saved.sha);
+        assert!(saved.main_moved.contains("push main again"), "{}", saved.main_moved);
+        assert!(saved.notes.text.contains(&format!("_Released {today}._")));
+        assert!(plan(None).warnings.is_empty(), "no longer stale");
+        let again = super::redate_release(&store, "shop", "v0.2.0", Some(&repo), "Ada").unwrap();
+        assert_eq!(again.sha, saved.sha, "nothing to date");
+
+        let mut rs = super::load(&store, "shop").unwrap();
+        rs.iter_mut().find(|r| r.version == "v0.2.0").unwrap().state = super::ReleaseState::Shipped;
+        super::save(&store, "shop", &rs).unwrap();
+        let shipped = super::redate_release(&store, "shop", "v0.2.0", Some(&repo), "Ada")
+            .unwrap_err()
+            .to_string();
+        assert!(shipped.contains("has shipped"), "{shipped}");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }
