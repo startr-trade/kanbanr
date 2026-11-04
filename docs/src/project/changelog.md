@@ -8,6 +8,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **`git doctor` no longer calls merged work not integrated when no stage integrates (DEF-012).**
+  On a workflow with no stage holding the integrate role, commits serving an item at a stage after
+  build are left alone, since nothing else says where merging happens. Items at or before build, and
+  workflows that declare an integrate stage, are judged as before.
 - **Gates say so when there is no charter (DEF-004).** On a project with no charter, a move a gate
   would have refused still goes through, but now warns what the gate would have needed and that
   `kanbanr charter set` turns the gates on. A move the gate would have passed says nothing.
