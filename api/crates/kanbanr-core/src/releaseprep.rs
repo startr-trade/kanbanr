@@ -287,6 +287,136 @@ fn unreleased_link(line: &str) -> Option<(&str, (&str, &str))> {
     Some((label.trim(), (&url[..at], prev)))
 }
 
+const MONTHS: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+/// `YYYY-MM-DD` or `D Month YYYY` as `YYYY-MM-DD`.
+fn parse_date(s: &str) -> Option<String> {
+    let s = s.trim();
+    let b = s.as_bytes();
+    if b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && s.bytes()
+            .enumerate()
+            .all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+    {
+        return Some(s.to_string());
+    }
+    let mut it = s.split_whitespace();
+    let (d, m, y) = (it.next()?, it.next()?, it.next()?);
+    if it.next().is_some() {
+        return None;
+    }
+    let day: u32 = d.parse().ok()?;
+    let month = MONTHS.iter().position(|n| n.eq_ignore_ascii_case(m))? + 1;
+    let year: u32 = y.parse().ok().filter(|_| y.len() == 4)?;
+    Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+/// `ymd` written the way `like` is: ISO, or `D Month YYYY`.
+fn date_like(like: &str, ymd: &str) -> Option<String> {
+    let parsed = parse_date(ymd)?;
+    if like.trim().as_bytes().get(4) == Some(&b'-') {
+        return Some(parsed);
+    }
+    let month: usize = parsed[5..7].parse().ok()?;
+    let day: u32 = parsed[8..10].parse().ok()?;
+    Some(format!(
+        "{day} {} {}",
+        MONTHS.get(month.checked_sub(1)?)?,
+        &parsed[..4]
+    ))
+}
+
+/// The span of the date on the first notes line starting `_Released ` or `*Released `.
+fn notes_date_span(text: &str) -> Option<(usize, usize)> {
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        let lead = line.len() - line.trim_start().len();
+        let body = line.trim_start().trim_end();
+        for open in ["_Released ", "*Released "] {
+            if let Some(rest) = body.strip_prefix(open) {
+                let rest = rest.strip_suffix(&open[..1]).unwrap_or(rest);
+                let rest = rest.strip_suffix('.').unwrap_or(rest);
+                let start = at + lead + open.len();
+                return Some((start, start + rest.len()));
+            }
+        }
+        at += line.len();
+    }
+    None
+}
+
+/// The date the release notes carry, as `YYYY-MM-DD`.
+pub fn notes_date(text: &str) -> Option<String> {
+    let (s, e) = notes_date_span(text)?;
+    parse_date(&text[s..e])
+}
+
+/// `text` with the date on its first `_Released ...._` or `*Released ....*` line set to `ymd`, in
+/// the form it had. `None` when nothing changes or there is no such line.
+pub fn redate_notes(text: &str, ymd: &str) -> Option<String> {
+    let (s, e) = notes_date_span(text)?;
+    let new = date_like(&text[s..e], ymd)?;
+    if new == text[s..e] {
+        return None;
+    }
+    let mut out = text.to_string();
+    out.replace_range(s..e, &new);
+    Some(out)
+}
+
+/// The span of the date in the `## [{number}] - {date}` heading.
+fn changelog_date_span(text: &str, number: &str) -> Option<(usize, usize)> {
+    let want = format!("## [{number}]");
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        let lead = line.len() - line.trim_start().len();
+        if let Some(rest) = line.trim_start().trim_end().strip_prefix(&want) {
+            let rest_start = at + lead + want.len();
+            let dash = rest.find('-')?;
+            let after = &rest[dash + 1..];
+            let date = after.trim_start();
+            let start = rest_start + dash + 1 + (after.len() - date.len());
+            return Some((start, start + date.len()));
+        }
+        at += line.len();
+    }
+    None
+}
+
+/// The date of the changelog heading for `number`, as `YYYY-MM-DD`.
+pub fn changelog_date(text: &str, number: &str) -> Option<String> {
+    let (s, e) = changelog_date_span(text, number)?;
+    parse_date(&text[s..e])
+}
+
+/// `text` with the date of the `## [{number}] - {date}` heading set to `ymd`. `None` when nothing
+/// changes or there is no such heading.
+pub fn redate_changelog(text: &str, number: &str, ymd: &str) -> Option<String> {
+    let (s, e) = changelog_date_span(text, number)?;
+    let new = date_like(&text[s..e], ymd)?;
+    if new == text[s..e] {
+        return None;
+    }
+    let mut out = text.to_string();
+    out.replace_range(s..e, &new);
+    Some(out)
+}
+
 /// `text` with `entry` directly below the first line equal (trimmed) to `after`. `None` when the
 /// entry is already there; a refusal when `after` is not.
 pub fn add_listing(text: &str, after: &str, entry: &str) -> Result<Option<String>, String> {
@@ -441,5 +571,41 @@ mod tests {
             None
         );
         assert!(add_listing(summary, "- [Elsewhere]", entry).is_err());
+    }
+
+    /// DEF-001: the date in the notes and the changelog heading is set, keeping its form.
+    #[test]
+    fn redating_keeps_the_form() {
+        let iso = "# v1\n\n_Released 2026-10-22._\n\nbody\n";
+        assert_eq!(
+            redate_notes(iso, "2026-11-01").unwrap(),
+            "# v1\n\n_Released 2026-11-01._\n\nbody\n"
+        );
+        let long = "# v1\n\n*Released 22 October 2026.*\n\n_Released 1 May 2026._\n";
+        assert_eq!(
+            redate_notes(long, "2026-11-01").unwrap(),
+            "# v1\n\n*Released 1 November 2026.*\n\n_Released 1 May 2026._\n"
+        );
+        assert_eq!(notes_date(long).as_deref(), Some("2026-10-22"));
+        assert_eq!(redate_notes(iso, "2026-10-22"), None, "same date");
+        assert_eq!(redate_notes("no date line\n", "2026-11-01"), None);
+        assert_eq!(notes_date("no date line\n"), None);
+
+        let log = "## [Unreleased]\n\n## [0.4.0] - 2026-10-22\n\n- x\n\n## [0.3.0] - 2026-10-21\n";
+        assert_eq!(
+            redate_changelog(log, "0.4.0", "2026-11-01").unwrap(),
+            "## [Unreleased]\n\n## [0.4.0] - 2026-11-01\n\n- x\n\n## [0.3.0] - 2026-10-21\n"
+        );
+        assert_eq!(changelog_date(log, "0.4.0").as_deref(), Some("2026-10-22"));
+        assert_eq!(redate_changelog(log, "0.4.0", "2026-10-22"), None);
+        assert_eq!(redate_changelog(log, "0.9.0", "2026-11-01"), None);
+        assert_eq!(
+            redate_changelog("## [1.0.0] - 1 May 2026\n", "1.0.0", "2026-11-01").unwrap(),
+            "## [1.0.0] - 1 November 2026\n"
+        );
+        assert_eq!(
+            redate_changelog("## [1.0.0] - 2026-05-01", "1.0.0", "2026-11-01").unwrap(),
+            "## [1.0.0] - 2026-11-01"
+        );
     }
 }
