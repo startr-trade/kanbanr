@@ -14,6 +14,11 @@ All notable changes to kanbanr are documented here. The format follows
   what surprises people: gates need a charter, an item merged but not yet released carries over at a
   sprint close, and each item needs its `release` sign-off before main.
 
+- **The stability page matches 0.4 (DOC-002).** It no longer says the feature set is frozen: until
+  1.0 nothing is promised and releases may add. It now lists `scopes.yaml`, the `codes`,
+  `release_gates` and `release_prepare` settings, and the `Agent-Scope:` trailer and pre-push hook,
+  and names agent scopes, release stages and kind codes as experimental in 1.0, stable from 1.1.
+
 ## [0.4.0] - 2026-10-22
 
 ### Added
