@@ -5327,6 +5327,50 @@ fn git_doctor_unfinished_commits_on_line() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-012 R-1: on a workflow with no integrate role, commits on a line serving an item at a
+/// stage after build are not reported as not integrated.
+#[test]
+fn git_doctor_no_integrate_role_status_past_build_is_clean() {
+    let (base, work) = togaf_scratch("gd-no-integrate");
+    git_model_board(&base, &work, true, false);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // The default workflow labels Completed as the integrate stage; take the label off, so no
+    // stage holds the role. Written to this test's own board, under the temporary directory.
+    let board = base.join("code").join("shop.kanbanr");
+    assert!(board.starts_with(std::env::temp_dir()));
+    let file = board.join("projects/shop/config.yaml");
+    let mut config: kanbanr_core::yaml::Value =
+        kanbanr_core::yaml::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    config["gates"]["Completed"]["roles"] = kanbanr_core::yaml::Value::Array(Vec::new());
+    std::fs::write(&file, kanbanr_core::yaml::to_string(&config).unwrap()).unwrap();
+
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    ok(run_in(&base, &work, &["move", "FEAT-001", "In Progress"]));
+    ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
+    ok(git_in(&base, &work, &["checkout", "-q", "sprint/SP-001"]));
+    commit_file_in(
+        &base,
+        &work,
+        "cart.txt",
+        "cart\n",
+        "cart\n\nRefs: kanbanr:FEAT-001",
+    );
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+
+    let found = run_in(&base, &work, &["git", "doctor"]);
+    let said = String::from_utf8_lossy(&found.stdout);
+    assert!(!said.contains("not integrated"), "{said}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-191 R-3: branches that name nothing on the board, and a release fix the line lacks, are
 /// warnings; a forward merge clears the latter; spikes are never reported.
 #[test]

@@ -400,6 +400,28 @@ pub fn is_integrated(config: &ProjectConfig, status: &str) -> bool {
         || (crate::graph::is_terminal_status(config, status) && !config.is_no_op(status))
 }
 
+/// Could work at `status` have been integrated? True where `is_integrated`; and, on a workflow
+/// with no integrate role, true for a status after the build stage, because nothing says where
+/// merging happens and the workflow's own order is the only evidence. Used where a false
+/// "not integrated" is the cost of guessing wrong (git doctor's commit check).
+pub fn may_be_integrated(config: &ProjectConfig, status: &str) -> bool {
+    if is_integrated(config, status) {
+        return true;
+    }
+    let roles = config.roles();
+    if roles.status(Role::Integrate).is_some() {
+        return false;
+    }
+    let position = |s: &str| config.statuses.iter().position(|x| x == s);
+    let Some(at) = position(status) else {
+        return false;
+    };
+    match roles.status(Role::Build) {
+        Some(build) => position(build).is_some_and(|b| at > b),
+        None => !config.is_no_op(status),
+    }
+}
+
 /// Is an item at `status` finished (FEAT-191)? Done by the workflow's rule, or at the release-role
 /// stage.
 pub fn is_finished(config: &ProjectConfig, status: &str) -> bool {
@@ -1142,5 +1164,28 @@ mod tests {
             assert!(!code.contains(call), "{name} passes push to git");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-012 R-3: a declared integrate role decides what is integrated; with none declared, a
+    /// status after the build stage may be.
+    #[test]
+    fn a_declared_integrate_role_decides_what_is_integrated() {
+        let gate = |role: &str| crate::config::Gate {
+            roles: vec![role.into()],
+            ..Default::default()
+        };
+        // Deferred, Planned, Scheduled, Completed, ...: build at Planned.
+        let mut c = ProjectConfig::default_for("p");
+        c.gates.insert("Planned".into(), gate("build"));
+        assert!(c.roles().status(Role::Integrate).is_none());
+        assert!(may_be_integrated(&c, "Scheduled"));
+        assert!(!may_be_integrated(&c, "Planned"));
+        assert!(!may_be_integrated(&c, "Deferred"));
+        assert!(!may_be_integrated(&c, "Nowhere"));
+
+        c.gates.insert("Completed".into(), gate("integrate"));
+        assert!(may_be_integrated(&c, "Completed"));
+        assert!(!may_be_integrated(&c, "Scheduled"));
+        assert!(!may_be_integrated(&c, "Planned"));
     }
 }
