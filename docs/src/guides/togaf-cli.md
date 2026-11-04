@@ -1,12 +1,10 @@
-# A TOGAF project with sprints and releases
+# TOGAF, sprints and releases from the command line
 
-This chapter follows one project through Claude from setup to a shipped release, with TOGAF phases
-as the board, sprints as the timebox and releases as what ships. You talk to Claude; Claude drives
-kanbanr; you make the decisions and do the pushing.
+This guide takes a project from setup to a shipped release using TOGAF phases, sprints and releases,
+with you running each command. To work by talking to Claude instead, see
+[TOGAF with Claude](togaf-with-claude.md).
 
-Read [Working with Claude](with-claude.md) first if you haven't. The commands and output here come
-from a real run on a scratch project. They are what Claude runs for you, so you can recognise them
-or run them yourself. What you say to Claude is only an example: use your own words.
+The commands and output come from a real run on a scratch project.
 
 ## Three clocks
 
@@ -34,9 +32,7 @@ flowchart LR
 
 ## Setting it up
 
-**You say:** "Start using kanbanr for this project. Use TOGAF, with sprints and releases."
-
-**Claude does** the setup in plan mode, and accepting the plan applies it:
+In your project folder:
 
 ```text
 kanbanr init shop
@@ -45,8 +41,7 @@ kanbanr config cadence --sprints on --releases on --git-model on
 kanbanr git install-hooks
 ```
 
-**You decide:** where the board lives, whether the git model is on, and what the project is for.
-The plan shows what the git model will do, and nothing is pushed for you:
+`kanbanr git model` shows what the git model will do. Nothing is pushed for you:
 
 ```text
 topology:   sprints and releases
@@ -137,11 +132,6 @@ when it is cut. If you always cut the release before closing the sprint, you can
 
 ## Planning a sprint
 
-**You say:** "Start a two-week sprint for carts surviving a return, and put the cart restore in it
-for 1.0."
-
-**Claude does:**
-
 ```text
 kanbanr sprint add --start 2026-11-03 --length 2w --goal "Carts survive a return"
 kanbanr sprint start SP-001
@@ -152,28 +142,26 @@ kanbanr release plan v1.0.0 FEAT-001
 ```
 
 Starting the sprint makes the `sprint/SP-001` branch from main without switching your checkout.
-Items in the sprint branch from it. **You decide** what goes in, and the estimates if you use them.
+Items in the sprint branch from it.
 
 A sprint and a release don't have to line up. One release can take items from several sprints, and
 one sprint can feed several releases.
 
 ## One item, phase by phase
 
-Each move below is refused until its gate is met. The refusal says what's missing, and Claude comes
-to you with whatever only you can answer. [Working with Claude](with-claude.md#a-worked-example-one-feature-through-togaf)
-shows those conversations in detail.
+Each move is refused until its gate is met, and the refusal says what's missing.
 
-| Phase | What must be true to enter | Who decides what |
+| Phase | What must be true to enter | Commands |
 |---|---|---|
-| **Vision** | Nothing | You agree what it is and why |
-| **Business Arch** | Statement, goal, who, what, why, requirements, approval | You approve the definition |
-| **System Design** | How, where, approval | You approve again, because the definition grew |
-| **Implementation** | A test named for every requirement, approval, a `## Design` section in the spec, the `design-review` sign-off | You sign off the design |
-| **Migration** | Requirements proven by green tests, docs updated, the `docs-folded` sign-off | You sign off the docs |
-| **Operations** | Green tests, the `release` sign-off | You sign off the release; the cut does the move |
+| **Vision** | Nothing | `kanbanr feature add` |
+| **Business Arch** | Statement, goal, who, what, why, requirements, approval | `kanbanr feature define`, `kanbanr approve` |
+| **System Design** | How, where, approval | `kanbanr feature define`, `kanbanr approve` |
+| **Implementation** | A test named for every requirement, approval, a `## Design` section in the spec, the `design-review` sign-off | `kanbanr feature edit`, `kanbanr signoff`, `kanbanr start` |
+| **Migration** | Requirements proven by green tests, docs updated, the `docs-folded` sign-off | `kanbanr test`, `kanbanr signoff`, `kanbanr move` |
+| **Operations** | Green tests, the `release` sign-off | `kanbanr signoff`; the cut does the move |
 
-**An edit lapses your approval.** When Claude adds the design to the definition, the next move says
-so, and you approve the larger definition:
+**An edit lapses your approval.** When the definition changes, the next move says so, and you approve
+the larger definition:
 
 ```text
 cannot move FEAT-001 to 'System Design': approval lapsed — the definition changed after it was approved.
@@ -195,18 +183,18 @@ created feat/FEAT-001-restore-the-cart from sprint/SP-001
 error: unsupported operation: cannot move FEAT-001 to 'Implementation': the spec has no 'Design' section…
 ```
 
-Once the gate is met, run `kanbanr start` again. Claude commits with `kanbanr commit`, which adds
+Once the gate is met, run `kanbanr start` again. Commit with `kanbanr commit`, which adds
 `Refs: kanbanr:FEAT-001` to the commit.
 
-**Migration is where the merge happens.** Claude records the test results, you sign off the docs,
-and the move merges the branch into the sprint's:
+**Migration is where the merge happens.** Record the test results and the docs sign-off, and the move
+merges the branch into the sprint's:
 
 ```text
 FEAT-001 -> Migration
 merged feat/FEAT-001-restore-the-cart into sprint/SP-001 (dee5a5918fb8)
 ```
 
-Your checkout stays on the item's branch, so ask Claude to switch you back when you want the line.
+Your checkout stays on the item's branch, so switch back when you want the line.
 
 **Give the `release` sign-off before promoting to main.** Promoting needs every item able to reach
 Operations, and each item needs its own sign-off to get there. Without it the promotion is refused,
@@ -219,10 +207,8 @@ v1.0.0 cannot go to main yet — nothing was changed:
 
 ## Handing work to sub-agents
 
-The design ends in a task list, which Claude can hand to a cheaper sub-agent, without asking it to
-make design decisions. A sub-agent's limits are enforced, so you don't have to trust the brief.
-
-**Claude does**, from a branch other than the item's, which the agent needs for its own worktree:
+A scope limits what an agent working in its own worktree may do, and kanbanr enforces it. Issue one
+from a branch other than the item's, which the agent needs for its worktree:
 
 ```text
 kanbanr scope issue build FEAT-002 --note "task T1"
@@ -237,27 +223,25 @@ refused by agent scope SC-001 (build, FEAT-002): `approve definition of FEAT-002
 refused by agent scope SC-001: agents never push. The coordinator reviews the branch and pushes it.
 ```
 
-When the agent finishes its tasks, the item stays where it is and Claude reviews the branch.
-**You decide** nothing here beyond the gates: the moves and sign-offs stay with you and Claude. See
-[Sub-agents and agent scopes](with-claude.md#sub-agents-and-agent-scopes).
+When the agent finishes its tasks, the item stays where it is until you review the branch and move
+it. See [Sub-agents and agent scopes](../using/with-claude.md#sub-agents-and-agent-scopes).
 
 ## Releasing
 
-Release in this order, and you won't have to go back. Each promotion runs from the Releases page on
-a write-enabled monitor, or by asking Claude. `--plan` shows what a promotion would do and changes
-nothing.
+Release in this order, and you won't have to go back. `kanbanr release promote v1.1.0 --plan` shows
+what a promotion would do and changes nothing.
 
-| Step | Who | What happens |
+| Step | Command | What happens |
 |---|---|---|
-| 1. Promote to **candidate** | You | Makes `release/v1.1.0` from the sprint's branch, and commits the version, the changelog heading and draft notes onto it |
-| 2. Write the notes | Claude, then you | The draft only lists requirements. Rewrite it for readers |
-| 3. Run your full checks | Claude | Your project's own gate, over the release |
-| 4. Sign off each item | You | The `release` sign-off, if not already given |
-| 5. Promote to **main** | You | Fast-forwards main to the release, without tagging |
-| 6. Push main, wait for CI | You | `git push origin main` |
-| 7. **Cut** | You | Tags main, ships the items and moves them to Operations |
-| 8. Push the tag | You | `git push origin v1.1.0` |
-| 9. Merge forward | Claude | `kanbanr git forward v1.1.0` brings the release's commits into the sprint's branch |
+| 1. Candidate | `kanbanr release promote v1.1.0 candidate` | Makes `release/v1.1.0` from the sprint's branch, and commits the version, the changelog heading and draft notes onto it |
+| 2. Write the notes | `kanbanr release notes v1.1.0 --edit` | The draft only lists requirements. Rewrite it for readers |
+| 3. Run your full checks | Your project's own | Over the release |
+| 4. Sign off each item | `kanbanr signoff FEAT-001 release` | If not already given |
+| 5. Main | `kanbanr release promote v1.1.0 main` | Fast-forwards main to the release, without tagging |
+| 6. Push main, wait for CI | `git push origin main` | |
+| 7. Cut | `kanbanr release promote v1.1.0 production` | Tags main, ships the items and moves them to Operations |
+| 8. Push the tag | `git push origin v1.1.0` | |
+| 9. Merge forward | `kanbanr git forward v1.1.0` | Brings the release's commits into the sprint's branch |
 
 The cut stays refused until main is pushed:
 
@@ -292,8 +276,6 @@ A later date in the changelog heading needs a commit on the release branch.
 
 ## Closing the sprint
 
-**You say:** "Close the sprint and run a retro."
-
 ```text
 kanbanr sprint close SP-002
 kanbanr retro --sprint SP-002
@@ -302,18 +284,6 @@ kanbanr retro --sprint SP-002
 Closing changes the board only. In this setup main moves at the cut, so no branch moves and no tag
 is made. With no sprint running, there's no line for new items to branch from, so start the next
 sprint before starting any item.
-
-## Who does what
-
-| | You | Claude |
-|---|---|---|
-| **Definitions** | Answer what only you know, approve | Draft them, ask, and keep the spec current |
-| **Design** | Sign off `design-review` | Write the design and its task list |
-| **Code and tests** | Review | Build it, or issue scopes to sub-agents; record tasks and results |
-| **Merging an item** | Sign off `docs-folded` | Update the docs and move it; kanbanr merges |
-| **Sprints** | What goes in, when it closes | Create, plan and close them as you ask |
-| **Releases** | Each promotion and each `release` sign-off | Draft the notes, run the checks, merge forward |
-| **GitHub** | **Every push** of code, tags and the board | Nothing |
 
 ## When things go wrong
 
@@ -324,7 +294,7 @@ sprint before starting any item.
 | `carried FEAT-001 → backlog` at a sprint close | The item is merged, but not done for the sprint | Plan it into the next sprint, or mark Migration done |
 | `FEAT-001 would carry over` at a promotion | The item can't reach Operations yet | Do what the line names, often `kanbanr signoff FEAT-001 release` |
 | `does not exist on release/v1.1.0` at candidate | A file named in `release-prepare` isn't on the sprint's branch | Commit it on an item's branch and merge that first |
-| A defect in a shipped release | It needs a fix on its own | See [Patch releases](processes.md#patch-releases) |
+| A defect in a shipped release | It needs a fix on its own | See [Patch releases](../using/processes.md#patch-releases) |
 
 A move can also go past its gate with `--override "<reason>"`, and the reason stays on the item. Save
 it for real exceptions.

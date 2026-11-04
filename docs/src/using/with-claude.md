@@ -17,6 +17,9 @@ Three things are worth knowing up front:
 
 The [Review page](the-monitor.md) and the plain commands still work, for anyone who prefers them.
 
+This chapter explains how the conversation works under any process. To follow one project from setup
+to a shipped release, see the [Process guides](../guides/index.md).
+
 ## Setting up: the cadence and the git model
 
 When Claude sets kanbanr up for a project, it asks where the board lives, which process to use,
@@ -42,6 +45,9 @@ pushing:    never automatic — you review and push
 The plan quotes that output under *Branching*, lists which stage holds each role (design, build,
 integrate, release) under *Process*, and says that the method's gates are on. Approving the plan
 applies it. What each role then asks for is in [The method by stage role](the-method.md#the-method-by-stage-role).
+
+Not sure which process to pick? [Choosing a guide](../guides/index.md) lists the processes that have
+a guide, and [Processes](processes.md) compares all of them and their gates.
 
 ## Starting work: a plan you accept
 
@@ -256,7 +262,7 @@ design, ask for the whole definition up front: one plan and one approval then co
 where nothing changes.
 
 For a whole project on TOGAF with sprints and releases, from setup to a shipped release, see
-[A TOGAF project with sprints and releases](togaf-sprints-releases.md).
+[TOGAF with Claude](../guides/togaf-with-claude.md).
 
 ## What it looked like in practice
 
@@ -304,3 +310,6 @@ The same conversation, with only as many decisions as each workflow asks for:
 | PDCA | one approval at Do; a review sign-off at Act |
 | design control | approval, plus sign-offs at Review and Validation |
 | your own process | whatever its gates ask, as the table above |
+
+For the whole journey under one process, including its sprints and releases, see the
+[Process guides](../guides/index.md).
