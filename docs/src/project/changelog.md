@@ -64,6 +64,14 @@ All notable changes to kanbanr are documented here. The format follows
   configures one, instead of the generated requirements list. The generated text is used only
   when there is no such file or it cannot be read.
 
+### Fixed
+
+- **A release cut later no longer ships the date of its candidate (DEF-001).** v0.4.0 was prepared
+  on 22 October and cut on 1 November, and shipped saying 22 October. The stage that moves main now
+  dates the release notes and the changelog heading today, in one commit, before main moves. If main
+  moved already, the cut's plan warns and names the dates, and the new `kanbanr release redate`
+  dates them today.
+
 ## [0.4.0] - 2026-10-22
 
 ### Added

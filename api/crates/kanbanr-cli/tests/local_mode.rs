@@ -7116,6 +7116,82 @@ fn release_flow_as_lived_with_0_2_1() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-001 R-3: `release redate <V>` commits today's date onto release/<V>, nothing checked out;
+/// with nothing stale it commits nothing; the cut's plan warns while the date is stale.
+#[test]
+fn cli_release_redate() {
+    let (base, work) = release_scratch("release-redate");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let board = std::fs::canonicalize(ok(run_in(&base, &work, &["where"])).trim()).unwrap();
+    assert!(board.starts_with(std::fs::canonicalize(&base).unwrap()));
+    for args in [
+        &[
+            "config",
+            "release-stage",
+            "candidate",
+            "--on-enter",
+            "branch,prepare",
+        ][..],
+        &[
+            "config",
+            "release-prepare",
+            "--notes",
+            "docs/releases/{version}.md",
+        ],
+    ] {
+        ok(run_in(&base, &work, args));
+    }
+    ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    // A candidate prepared on an earlier day.
+    let draft = base.join("notes.md");
+    std::fs::write(&draft, "# v1.0.0\n\n_Released 2026-01-01._\n\nBody.\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "notes",
+            "v1.0.0",
+            "--file",
+            draft.to_str().unwrap(),
+        ],
+    ));
+    let before = rev(&base, &work, "release/v1.0.0");
+
+    let said = ok(run_in(&base, &work, &["release", "redate", "v1.0.0"]));
+    let after = rev(&base, &work, "release/v1.0.0");
+    assert_ne!(after, before);
+    assert!(said.contains(&after[..7]), "{said}");
+    assert_eq!(
+        ok(git_in(&base, &work, &["rev-parse", &format!("{after}~1")])).trim(),
+        before,
+        "one commit"
+    );
+    let notes = ok(git_in(
+        &base,
+        &work,
+        &["show", &format!("{after}:docs/releases/v1.0.0.md")],
+    ));
+    assert!(
+        notes.contains("_Released 20") && !notes.contains("2026-01-01") && notes.contains("Body."),
+        "{notes}"
+    );
+    let subject = ok(git_in(&base, &work, &["log", "-1", "--format=%s", &after]));
+    assert!(subject.starts_with("Release v1.0.0: dated "), "{subject}");
+    assert_eq!(
+        ok(git_in(&base, &work, &["symbolic-ref", "--short", "HEAD"])).trim(),
+        "main"
+    );
+
+    // Nothing stale: no commit.
+    ok(run_in(&base, &work, &["release", "redate", "v1.0.0"]));
+    assert_eq!(rev(&base, &work, "release/v1.0.0"), after);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-216 R-3: `release notes <V>` shows the notes on release/<V> and where they are, `--json`
 /// carries them, and `--file` (or `--edit`) commits new text onto the branch with nothing checked
 /// out.

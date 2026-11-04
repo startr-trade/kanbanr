@@ -502,6 +502,22 @@ has them; the save says so ("main held v0.3.0, so it moved with the notes to 4c1
 again and wait for CI before the cut"). Until you push main again, the cut waits. If main has
 commits past the release, nothing is saved.
 
+#### The release date
+
+The notes (`_Released <date>._`) and the changelog heading (`## [<number>] - <date>`) carry the day
+the release was prepared. The stage that moves main dates them today first, in one commit onto
+`release/<V>` (`Release v0.3.0: dated 2026-11-01`), and main moves with it; `--plan` shows the step
+as "dates the release 2026-11-01 and fast-forwards main". If main has already moved, the cut's plan
+warns instead, naming the date the files carry, today's date and the command:
+
+```bash
+kanbanr release redate v0.3.0   # one commit onto release/v0.3.0; main moves with it if it holds the release
+```
+
+When main moved with it, the command says to push main again and wait for CI before the cut. Once
+the release has shipped it refuses. A project with no notes or changelog configured, or a file
+with no date line, has nothing to date.
+
 ### Patch releases
 
 A fix to a release already in production gets a release of its own, a **patch**:
