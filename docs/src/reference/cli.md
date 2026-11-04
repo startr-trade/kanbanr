@@ -2,7 +2,7 @@
 
 ## Complete command reference
 
-Everything the CLI does, grouped by what you are trying to find out. `--json` works on every read.
+Everything the CLI does, grouped by what you are trying to find out. `--json` works on every read and prints one JSON document. The four exceptions have a named format or a document body as their payload: `export`, `graph` and `gantt` take `--format`, and `doc show` prints the file.
 
 **Setting up and looking around**
 

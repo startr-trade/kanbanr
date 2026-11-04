@@ -11,6 +11,9 @@ All notable changes to kanbanr are documented here. The format follows
 - **Gates say so when there is no charter (DEF-004).** On a project with no charter, a move a gate
   would have refused still goes through, but now warns what the gate would have needed and that
   `kanbanr charter set` turns the gates on. A move the gate would have passed says nothing.
+- **`--json` works on `feature show`, `why` and `board` (DEF-009).** They printed text despite the
+  flag, and a failed parse of that text is how an item's spec got blanked. They now print one JSON
+  document, `feature show` the same as `export --format json`; a test parses every read command.
 
 ### Added
 

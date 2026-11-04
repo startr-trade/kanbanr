@@ -2509,8 +2509,41 @@ fn print_gaps(gaps: &[String]) {
 /// requirement outright; failing that, `git blame` finds the commit that wrote it and its trailer
 /// names one; failing that, the line has no reference and the command says so rather than
 /// guessing from the file's neighbours.
-fn run_why(cli: &Cli, client: &Backend, target: &str) -> anyhow::Result<()> {
-    let p = require_project(cli)?;
+/// What `why` found, built once so the text and `--json` answers cannot disagree (DEF-009 R-2).
+#[derive(serde::Serialize)]
+struct WhyAnswer {
+    target: String,
+    /// Where the references came from; `None` when the code carries none.
+    source: Option<String>,
+    references: Vec<WhyRef>,
+}
+
+#[derive(serde::Serialize)]
+struct WhyRef {
+    reference: String,
+    items: Vec<WhyItem>,
+    goal: Option<String>,
+    purpose: Option<String>,
+    decisions: Vec<String>,
+    documents: Vec<String>,
+    /// Set when the trace for this reference could not be read.
+    error: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct WhyItem {
+    code: String,
+    title: String,
+    requirements: Vec<WhyRequirement>,
+}
+
+#[derive(serde::Serialize)]
+struct WhyRequirement {
+    id: String,
+    text: String,
+}
+
+fn why_answer(client: &Backend, p: &str, target: &str) -> anyhow::Result<WhyAnswer> {
     let (path, line) = match target.rsplit_once(':') {
         Some((path, number)) if number.chars().all(|c| c.is_ascii_digit()) => {
             (path, number.parse::<usize>().ok())
@@ -2530,51 +2563,111 @@ fn run_why(cli: &Cli, client: &Backend, target: &str) -> anyhow::Result<()> {
     let blamed = line.and_then(|n| blame_refs(&root, path, n));
 
     let (source, refs) = match (&annotated, &blamed) {
-        (Some(refs), _) => ("the annotation on the code", refs.clone()),
-        (None, Some((sha, refs))) if !refs.is_empty() => (
-            Box::leak(format!("commit {sha}").into_boxed_str()) as &str,
-            refs.clone(),
-        ),
+        (Some(refs), _) => ("the annotation on the code".to_string(), refs.clone()),
+        (None, Some((sha, refs))) if !refs.is_empty() => (format!("commit {sha}"), refs.clone()),
         _ => {
-            println!(
-                "{target} carries no reference, and the commit that wrote it named none.\n\
-                 Nothing on the board explains this code — which is the finding, not an error."
-            );
-            return Ok(());
+            return Ok(WhyAnswer {
+                target: target.to_string(),
+                source: None,
+                references: Vec::new(),
+            });
         }
     };
 
-    println!("{target} — from {source}: {}\n", refs.join(", "));
-    for reference in &refs {
+    let mut references = Vec::new();
+    for reference in refs {
         let resp = client.get(&format!(
             "/projects/{p}/trace?subject={}",
-            urlencode(reference)
+            urlencode(&reference)
         ));
+        let mut r = WhyRef {
+            reference,
+            items: Vec::new(),
+            goal: None,
+            purpose: None,
+            decisions: Vec::new(),
+            documents: Vec::new(),
+            error: None,
+        };
         match resp {
             Ok(resp) => {
                 let t: kanbanr_core::trace::Trace = serde_json::from_str(&resp)?;
-                for item in &t.items {
-                    for r in &item.requirements {
-                        println!("  requirement  {}/{}: {}", item.code, r.id, r.text.trim());
-                    }
-                    if item.requirements.is_empty() {
-                        println!("  item         {} — {}", item.code, item.title);
-                    }
-                }
-                if let Some(goal) = &t.goal {
-                    println!("  goal         {goal}");
-                }
-                if let Some(purpose) = &t.purpose {
-                    println!("  purpose      {purpose}");
-                }
-                if !t.decisions.is_empty() {
-                    println!("  decisions    {}", t.decisions.join(", "));
-                }
-                if !t.documents.is_empty() {
-                    println!("  Documented in: {}", t.documents.join(", "));
-                }
+                r.items = t
+                    .items
+                    .iter()
+                    .map(|item| WhyItem {
+                        code: item.code.clone(),
+                        title: item.title.clone(),
+                        requirements: item
+                            .requirements
+                            .iter()
+                            .map(|q| WhyRequirement {
+                                id: q.id.clone(),
+                                text: q.text.trim().to_string(),
+                            })
+                            .collect(),
+                    })
+                    .collect();
+                r.goal = t.goal;
+                r.purpose = t.purpose;
+                r.decisions = t.decisions;
+                r.documents = t.documents;
             }
-            Err(e) => println!("  {reference}: {e}"),
+            Err(e) => r.error = Some(e.to_string()),
+        }
+        references.push(r);
+    }
+    Ok(WhyAnswer {
+        target: target.to_string(),
+        source: Some(source),
+        references,
+    })
+}
+
+fn run_why(cli: &Cli, client: &Backend, target: &str) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let answer = why_answer(client, &p, target)?;
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&answer)?);
+        return Ok(());
+    }
+    let Some(source) = &answer.source else {
+        println!(
+            "{target} carries no reference, and the commit that wrote it named none.\n\
+             Nothing on the board explains this code — which is the finding, not an error."
+        );
+        return Ok(());
+    };
+    let names: Vec<&str> = answer
+        .references
+        .iter()
+        .map(|r| r.reference.as_str())
+        .collect();
+    println!("{target} — from {source}: {}\n", names.join(", "));
+    for r in &answer.references {
+        if let Some(e) = &r.error {
+            println!("  {}: {e}", r.reference);
+            continue;
+        }
+        for item in &r.items {
+            for q in &item.requirements {
+                println!("  requirement  {}/{}: {}", item.code, q.id, q.text);
+            }
+            if item.requirements.is_empty() {
+                println!("  item         {} — {}", item.code, item.title);
+            }
+        }
+        if let Some(goal) = &r.goal {
+            println!("  goal         {goal}");
+        }
+        if let Some(purpose) = &r.purpose {
+            println!("  purpose      {purpose}");
+        }
+        if !r.decisions.is_empty() {
+            println!("  decisions    {}", r.decisions.join(", "));
+        }
+        if !r.documents.is_empty() {
+            println!("  Documented in: {}", r.documents.join(", "));
         }
     }
     Ok(())
@@ -6204,7 +6297,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         Command::Board => {
             let p = require_project(cli)?;
-            print_board(&get_project(&client, &p)?);
+            let project = get_project(&client, &p)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&board_json(&project))?);
+            } else {
+                print_board(&project);
+            }
             Ok(())
         }
         Command::Portfolio(cmd) => run_portfolio(cli, &client, cmd),
@@ -7591,8 +7689,16 @@ fn run_feature(cli: &Cli, client: &Backend, cmd: &FeatureCmd) -> anyhow::Result<
             Ok(())
         }
         FeatureCmd::Show { code } => {
-            let resp = client.get(&format!("/projects/{p}/features/{code}/export?format=md"))?;
-            println!("{resp}");
+            // --json prints the item as `export --format json` does (DEF-009 R-1).
+            let format = if cli.json { "json" } else { "md" };
+            let resp = client.get(&format!(
+                "/projects/{p}/features/{code}/export?format={format}"
+            ))?;
+            if cli.json {
+                println!("{}", pretty(&resp));
+            } else {
+                println!("{resp}");
+            }
             Ok(())
         }
         FeatureCmd::Edit {
@@ -9529,14 +9635,46 @@ fn print_doc_tree(folder: &DocFolder, depth: usize) {
     }
 }
 
+/// The board's states in order, each with the items in it: the one grouping `print_board` and
+/// `board_json` share, so the text and `--json` cannot disagree (DEF-009 R-3).
+fn board_columns(project: &Project) -> Vec<(&String, Vec<&kanbanr_core::FeatureItem>)> {
+    project
+        .config
+        .board_states()
+        .iter()
+        .map(|state| {
+            let items = project
+                .features
+                .iter()
+                .filter(|f| &f.status == state)
+                .collect();
+            (state, items)
+        })
+        .collect()
+}
+
+fn board_json(project: &Project) -> Value {
+    let states: Vec<Value> = board_columns(project)
+        .into_iter()
+        .map(|(state, items)| {
+            json!({
+                "state": state,
+                "count": items.len(),
+                "items": items.iter().map(|f| json!({
+                    "code": f.code,
+                    "title": f.title,
+                    "done": f.done_count(),
+                    "total": f.task_count(),
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    json!({ "project": project.id, "states": states })
+}
+
 fn print_board(project: &Project) {
     println!("# {} board\n", project.id);
-    for state in project.config.board_states() {
-        let items: Vec<_> = project
-            .features
-            .iter()
-            .filter(|f| &f.status == state)
-            .collect();
+    for (state, items) in board_columns(project) {
         println!("## {} ({})", state, items.len());
         for f in items {
             println!(
