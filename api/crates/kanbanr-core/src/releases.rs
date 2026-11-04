@@ -4040,8 +4040,16 @@ mod tests {
         super::promote(&store, "shop", "v0.2.0", None, "Ada", "", Some(&repo)).unwrap();
         let today = super::today_ymd();
         let plan = |to: Option<&str>| {
-            super::plan_promotion(&store, "shop", "v0.2.0", to, "", Some(&repo), super::Fetch::No)
-                .unwrap()
+            super::plan_promotion(
+                &store,
+                "shop",
+                "v0.2.0",
+                to,
+                "",
+                Some(&repo),
+                super::Fetch::No,
+            )
+            .unwrap()
         };
         assert!(plan(None).warnings.is_empty(), "dated today");
         let old = date_candidate(&repo, "2026-01-01");
@@ -4059,9 +4067,16 @@ mod tests {
 
         let saved = super::redate_release(&store, "shop", "v0.2.0", Some(&repo), "Ada").unwrap();
         assert_ne!(saved.sha, old);
-        assert_eq!(coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(), saved.sha);
+        assert_eq!(
+            coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(),
+            saved.sha
+        );
         assert_eq!(coderepo::rev_parse(&repo, "main").unwrap(), saved.sha);
-        assert!(saved.main_moved.contains("push main again"), "{}", saved.main_moved);
+        assert!(
+            saved.main_moved.contains("push main again"),
+            "{}",
+            saved.main_moved
+        );
         assert!(saved.notes.text.contains(&format!("_Released {today}._")));
         assert!(plan(None).warnings.is_empty(), "no longer stale");
         let again = super::redate_release(&store, "shop", "v0.2.0", Some(&repo), "Ada").unwrap();

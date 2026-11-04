@@ -7034,7 +7034,13 @@ fn cli_release_redate() {
     ok(run_in(
         &base,
         &work,
-        &["release", "notes", "v1.0.0", "--file", draft.to_str().unwrap()],
+        &[
+            "release",
+            "notes",
+            "v1.0.0",
+            "--file",
+            draft.to_str().unwrap(),
+        ],
     ));
     let before = rev(&base, &work, "release/v1.0.0");
 

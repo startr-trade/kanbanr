@@ -8798,7 +8798,10 @@ fn redate_release(
     let by = verdict_author(cli, by)?;
     let resp = client.write_in(
         Method::Post,
-        &format!("/projects/{p}/releases/{}/redate", urlencode_segment(version)),
+        &format!(
+            "/projects/{p}/releases/{}/redate",
+            urlencode_segment(version)
+        ),
         Some(json!({ "by": by })),
         code_repo().as_deref(),
     )?;
