@@ -14,6 +14,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Guides for every built-in process (DOC-003).** The Process guides section now covers default,
+  scheduled, PDCA, design control, Scrum and agile, each with Claude and from the command line, and
+  Working with Claude links them from each process's row. Its table now lists what each process
+  really asks for.
+
 - **Process guides, starting with TOGAF, sprints and releases (DOC-001).** The book has a new
   Process guides section. Each process has a guide you follow by talking to Claude and deciding on
   the monitor, with no commands to learn, and a separate one from the command line. They also say
