@@ -848,6 +848,20 @@ fn dispatch_routes(
             // `unapproved` reason is recorded rather than silently allowed.
             // `override` is the name since gates became declarable (FEAT-113); `unapproved` stays.
             let reason = str_field(b, "override").or_else(|| str_field(b, "unapproved"));
+            // A dry run judges the move — status, edge and gate — and changes nothing, so a caller
+            // can learn a move would be refused before it makes a branch (DEF-007).
+            if is_dry_run(Some(b)) {
+                let warnings = store.gate_preview(
+                    p,
+                    code,
+                    &str_field(b, "to").unwrap_or_default(),
+                    reason.as_deref(),
+                )?;
+                return ser(&json!({
+                    "dry_run": true,
+                    "gate_warnings": warnings.iter().map(|g| &g.message).collect::<Vec<_>>(),
+                }));
+            }
             // With the git model on, a move that integrates merges the item's branch (FEAT-190).
             let moved = crate::gitmodel::move_item(
                 store,

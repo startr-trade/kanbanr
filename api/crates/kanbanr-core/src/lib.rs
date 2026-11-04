@@ -2647,6 +2647,41 @@ requirements:
         (store, d, f.code)
     }
 
+    /// DEF-007: a dry run of the move route judges the move and changes nothing.
+    #[test]
+    fn move_dry_run_judges_the_gate_and_changes_nothing() {
+        use serde_json::json;
+        let (store, _d, code) = gated_board(crate::config::Gate {
+            requires: vec![crate::readiness::Condition::Check(
+                crate::readiness::Check::Approved,
+            )],
+            ..Default::default()
+        });
+        let path = format!("/projects/demo/features/{code}/move");
+        let before = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        let err = crate::dispatch::dispatch(
+            &store,
+            "POST",
+            &path,
+            Some(&json!({"to": "Scheduled", "dry_run": true})),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("not approved"), "{err}");
+        let out = crate::dispatch::dispatch(
+            &store,
+            "POST",
+            &path,
+            Some(&json!({"to": "Scheduled", "dry_run": true, "override": "outage"})),
+        )
+        .unwrap();
+        assert!(out.contains("dry_run"), "{out}");
+        let after = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.history.len(), before.history.len());
+        assert!(after.definition.unwrap().started_unapproved.is_empty());
+    }
+
     /// FEAT-116 R-1: every preset applies cleanly — it passes the same validation as a hand-written
     /// workflow — and brings its gates with it.
     #[test]
