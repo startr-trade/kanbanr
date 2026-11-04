@@ -30,6 +30,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **doctor no longer reports a shipped release's book links as broken (DEF-016).** A release's board
+  document is the notes as they shipped, and its relative links resolve in the book, not on the
+  board. doctor now skips document links in `releases/` and still reports unknown items,
+  requirements, milestones and goals there, and broken links in every other doc.
 - **Redefining an item from a file keeps its sign-offs and approval history (DEF-008).** `feature
   define` dropped the approval history and the sign-offs when the file held none, though a
   redefinition must lapse an agreement, not erase the record of who gave it. Both are now carried

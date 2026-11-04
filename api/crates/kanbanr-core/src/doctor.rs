@@ -543,7 +543,12 @@ fn scan_references(store: &Store, project: &Project, report: &mut Report) {
         let Ok(text) = store.read_doc(&project.id, path) else {
             continue;
         };
+        let shipped = path.starts_with("releases/");
         for found in crate::refs::find(&text, &index) {
+            // A release's document is the notes as they shipped: its document links are the book's.
+            if shipped && matches!(found.reference, crate::refs::Ref::Doc { .. }) {
+                continue;
+            }
             if index.is_broken(&found) {
                 push(None, &format!("docs/{path}"), &found);
             }
@@ -1146,6 +1151,67 @@ mod tests {
                 (Severity::Error, "docs/architecture/data.md:1 refers to nowhere.md, which this board does not have".to_string()),
             ]
         );
+    }
+
+    fn broken_doc_messages(store: &Store) -> Vec<(Severity, String)> {
+        run_project(store, "demo")
+            .unwrap()
+            .issues
+            .into_iter()
+            .filter(|i| i.message.contains("which this board does not have"))
+            .map(|i| (i.severity, i.message))
+            .collect()
+    }
+
+    /// DEF-016 R-1: a shipped release's relative book links are not reported as broken.
+    #[test]
+    fn shipped_notes_book_links_are_not_broken() {
+        let (store, _dir) = fixture();
+        store
+            .write_doc(
+                "demo",
+                "releases/v1.0.0.md",
+                "See [p](../using/processes.md).",
+            )
+            .unwrap();
+        assert_eq!(broken_doc_messages(&store), vec![]);
+    }
+
+    /// DEF-016 R-2: an item a shipped release names that the board lacks is still reported.
+    #[test]
+    fn shipped_notes_still_report_an_unknown_item() {
+        let (store, _dir) = fixture();
+        store
+            .write_doc(
+                "demo",
+                "releases/v1.0.0.md",
+                "Fixes [x](/p/demo/feature/FEAT-999) and [p](../using/processes.md).",
+            )
+            .unwrap();
+        assert_eq!(
+            broken_doc_messages(&store),
+            vec![(
+                Severity::Error,
+                "docs/releases/v1.0.0.md:1 refers to FEAT-999, which this board does not have"
+                    .to_string()
+            )]
+        );
+    }
+
+    /// DEF-016 R-3: a doc outside releases/ still reports a broken link.
+    #[test]
+    fn other_docs_still_report_a_broken_link() {
+        let (store, _dir) = fixture();
+        store
+            .write_doc(
+                "demo",
+                "architecture/x.md",
+                "See [p](../using/processes.md).",
+            )
+            .unwrap();
+        let got = broken_doc_messages(&store);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0, Severity::Error);
     }
 
     /// FEAT-180 R-4 (doctor): a declared doc the board does not have is an error; an item whose
