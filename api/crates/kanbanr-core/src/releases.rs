@@ -2063,7 +2063,8 @@ pub fn promote_with(
                 let mut notes = cut.notes;
                 // The notes that shipped, when there are some at the tip, replace the generated
                 // text; a read that fails keeps the generated notes.
-                let shipped_notes = repo.and_then(|r| shipped_notes_at(r, store, id, &w, &cut.release));
+                let shipped_notes =
+                    repo.and_then(|r| shipped_notes_at(r, store, id, &w, &cut.release));
                 let wrote = shipped_notes.is_some();
                 if let Some(text) = shipped_notes {
                     notes = text;
@@ -3160,6 +3161,42 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.ends_with("v0.2.0 is already at candidate"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-005 R-1: the cut writes the notes file at the tagged commit to the board's release
+    /// document; the generated text is only for a release with no such file.
+    #[test]
+    fn cut_copies_the_shipped_notes_to_the_board() {
+        let (store, dir, repo) = board_and_repo("shipped-notes");
+        prepare_fixture(&repo);
+        super::add(&store, "shop", "v0.2.0", "", "Gates").unwrap();
+        plan_done(&store, "v0.2.0");
+        configure(
+            &store,
+            &format!(
+                "release_stages: [candidate, production]\nrelease_gates:\n  \
+                 candidate: {{ on_enter: [branch, prepare] }}\n  production: {{ on_enter: [tag] }}\n{PREPARE}"
+            ),
+        );
+        super::promote(&store, "shop", "v0.2.0", None, "Ada", "", Some(&repo)).unwrap();
+        // The notes are written by hand on the release branch before the cut.
+        let written = "# v0.2.0 — Gates\n\nWritten by hand, and shipped.\n";
+        coderepo::commit_files(
+            &repo,
+            "release/v0.2.0",
+            &[("docs/releases/v0.2.0.md".to_string(), written.to_string())],
+            "notes",
+        )
+        .unwrap();
+        let done = super::promote(&store, "shop", "v0.2.0", None, "Ada", "", Some(&repo)).unwrap();
+        assert_eq!(done.tagged, "v0.2.0");
+        assert_eq!(done.notes.as_deref(), Some(written));
+        assert_eq!(
+            store.read_doc("shop", "releases/v0.2.0.md").unwrap(),
+            written
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }
