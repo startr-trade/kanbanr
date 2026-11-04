@@ -7356,3 +7356,121 @@ fn kind_coded_item_start_commit_why() {
         "{said}"
     );
 }
+
+/// DEF-002: an empty or whitespace-only --spec-file is refused for add and edit, naming the file,
+/// and changes nothing; `--spec ""` still clears a spec on purpose.
+#[test]
+fn spec_file_refuses_an_empty_file() {
+    let base = std::env::temp_dir().join(format!("kanbanr-specfile-{}", std::process::id()));
+    let data = base.join("data");
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    assert!(data.starts_with(std::env::temp_dir()));
+
+    let run = |args: &[&str]| -> Output {
+        Command::new(cli())
+            .args(args)
+            .env("HOME", &home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env("KANBANR_DATA_DIR", &data)
+            .env_remove("KANBANR_SERVER_URL")
+            .env_remove("KANBANR_LOCAL")
+            .output()
+            .expect("run kanbanr CLI")
+    };
+    let ok = |args: &[&str]| -> String {
+        let o = run(args);
+        assert!(
+            o.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+
+    ok(&["identity", "--name", "Tester", "--email", "t@example.com"]);
+    ok(&[
+        "--project",
+        "demo",
+        "project",
+        "init",
+        "demo",
+        "--description",
+        "d",
+    ]);
+    ok(&[
+        "--project",
+        "demo",
+        "milestone",
+        "add",
+        "--name",
+        "M",
+        "--code",
+        "MS-1",
+    ]);
+    ok(&[
+        "--project",
+        "demo",
+        "feature",
+        "add",
+        "--title",
+        "Keep",
+        "--milestone",
+        "MS-1",
+        "--spec",
+        "Original spec",
+    ]);
+
+    let empty = base.join("empty.md");
+    let blank = base.join("blank.md");
+    std::fs::write(&empty, "").unwrap();
+    std::fs::write(&blank, "  \n\t\n").unwrap();
+    for f in [&empty, &blank] {
+        let path = f.to_str().unwrap();
+        for args in [
+            vec![
+                "--project",
+                "demo",
+                "feature",
+                "add",
+                "--title",
+                "Other",
+                "--milestone",
+                "MS-1",
+                "--spec-file",
+                path,
+            ],
+            vec![
+                "--project",
+                "demo",
+                "feature",
+                "edit",
+                "FEAT-001",
+                "--spec-file",
+                path,
+            ],
+        ] {
+            let o = run(&args);
+            assert!(!o.status.success(), "{args:?} should be refused");
+            let err = String::from_utf8_lossy(&o.stderr);
+            assert!(err.contains(path) && err.contains("is empty"), "{err}");
+        }
+    }
+    let shown = ok(&["--project", "demo", "feature", "show", "FEAT-001"]);
+    assert!(shown.contains("Original spec"), "{shown}");
+    let list = ok(&["--project", "demo", "feature", "list"]);
+    assert!(!list.contains("Other"), "{list}");
+
+    ok(&[
+        "--project",
+        "demo",
+        "feature",
+        "edit",
+        "FEAT-001",
+        "--spec",
+        "",
+    ]);
+    let shown = ok(&["--project", "demo", "feature", "show", "FEAT-001"]);
+    assert!(!shown.contains("Original spec"), "{shown}");
+}

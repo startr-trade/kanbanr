@@ -18,6 +18,11 @@ All notable changes to kanbanr are documented here. The format follows
   1.0 nothing is promised and releases may add. It now lists `scopes.yaml`, the `codes`,
   `release_gates` and `release_prepare` settings, and the `Agent-Scope:` trailer and pre-push hook,
   and names agent scopes, release stages and kind codes as experimental in 1.0, stable from 1.1.
+### Fixed
+
+- **An empty spec file no longer blanks an item's spec (DEF-002).** `--spec-file` on `feature add`
+  and `feature edit` refuses a file that is empty or only whitespace, names it, and changes
+  nothing. To clear a spec on purpose, pass `--spec ""`.
 
 ## [0.4.0] - 2026-10-22
 
