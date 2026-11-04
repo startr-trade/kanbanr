@@ -42,7 +42,9 @@ pushing:    never automatic — you review and push
 automation: on — start, sprints and the hooks follow this model
 ```
 
-Then agree the charter before creating items:
+Then agree the charter before creating items. Without one, moves that should be refused still
+succeed, but each says what the gate would have needed and that `kanbanr charter set` turns the
+gates on:
 
 ```text
 kanbanr charter set --file charter.yaml
@@ -272,8 +274,9 @@ v1.0.0       shipped  production   target —           1 item(s)
 ```
 
 **Freeze the candidate.** Once a release is a candidate, send anything new to the next release and
-change only its notes. **Promoting moves main, not your checkout.** **Check the date before the cut:**
-the notes are dated when the candidate is made, and can't be edited after the cut.
+change only its notes. **Promoting moves main, not your checkout.** **The date follows the release:**
+promoting to main dates the notes and changelog today. If main moved earlier and the cut comes
+later, the cut's `--plan` warns, and `kanbanr release redate v1.0.0` dates them today.
 
 ## Feedback on a release
 

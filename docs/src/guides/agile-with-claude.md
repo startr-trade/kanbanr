@@ -133,8 +133,9 @@ change only the notes.
 
 **Promoting moves main, not your checkout.** GitHub won't change until you push.
 
-**Check the date before you cut.** The notes and changelog are dated when the candidate is made. If the
-cut comes later, ask Claude to correct them first, because shipped notes can't be edited.
+**The date follows the release.** Promoting to main dates the notes and changelog today. If main moved
+earlier and the cut comes later, the page warns you: ask Claude to re-date them before you cut,
+because shipped notes can't be edited.
 
 ## Closing the sprint
 

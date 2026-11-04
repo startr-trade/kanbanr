@@ -239,6 +239,10 @@ through; `kanbanr doctor` lists the same ones. A requirement link lands on that 
 
 ![An item's page](../images/feature.png)
 
+The **Review** page also lists a finished item whose approval lapsed, labelled with its status,
+after all the live decisions. The work is done, but the definition changed after you approved it:
+approving again covers what it says now. A finished item that was never approved isn't listed.
+
 Before you approve, the **Review** page parses every Mermaid diagram the item's brief covers — its
 spec and each doc in its `affects_docs` — with Pele, the library that draws them (FEAT-200). Each
 one that does not parse is listed under **Diagrams** with its file, diagram number and line, and a

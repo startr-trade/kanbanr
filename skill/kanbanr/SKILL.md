@@ -515,8 +515,10 @@ view behind: add the links each one names before you move the item on.
 - **Subagents inherit, never invent.** A coordinator passes the approved definition to each
   subagent as its brief. A subagent that finds work outside it returns a **proposed change to the
   definition**, not merged code.
-- The gate is dormant for projects with no charter, and for items created before the charter was
-  adopted — so adopting the method never breaks an existing board.
+- A project with no charter isn't refused: a move its gate would stop goes through with a warning
+  naming what was missing and that `kanbanr charter set` turns the gates on. Tell the user what it
+  says. Items created before the charter was adopted stay exempt, so adopting the method never
+  breaks an existing board.
 
 ## The method by stage role
 
@@ -690,6 +692,9 @@ branches; fix it before going on.
   `--edit` commits new text there, nothing checked out, until the cut. When the user asks where
   the notes are or wants them changed, use this — never a fix item, never a checkout of
   `release/<V>`. The Releases page shows them too, with Edit on a write-enabled monitor.
+- **The date follows the release.** Entering the stage that moves main dates the notes and changelog
+  today. If main moved earlier, the cut's plan warns: run `kanbanr release redate <V>` before the
+  cut, and say to push main again if it says so.
 - Plan items into a release before promoting it: a release with nothing planned is refused. So a
   release starts with `release add`, then `release plan <V> <CODE>…`, then promoting it to its
   first stage (candidate), which makes `release/<V>`; `release add` has no `--branch`.
@@ -1143,6 +1148,7 @@ kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # ship the finished items, write notes, carry the rest
 kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # next or named stage, doing what its gates say (default candidate → test → staging → production: the first makes release/<V>; the last is the cut — fast-forwards main and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
 kanbanr release promote v0.1.0 [<stage>] --plan [--fetch]  # what it would do and still needs; changes nothing
+kanbanr release redate v0.1.0                     # date the notes and changelog today, before the cut
 kanbanr release notes v0.1.0 [--file F | --edit]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut
 kanbanr release stages                            # each stage: requires, on_enter, declared or default
 kanbanr config release-stage main --requires items_finished --on-enter move_main [--clear]
@@ -1167,6 +1173,12 @@ phases: it is a real commitment, the default suits most work, and it cannot be c
 once items are in flight.
 
 Under a phased process, grow an item's definition stage by stage.
+- **A named manual test is an open check.** `kanbanr check` lists `manual test not run: R-n: <name>`
+  without blocking. Tell the user, and don't call the item done until someone has run it.
+- **A finished item on the Review page** is there because its approval lapsed: ask the user to read
+  what changed and approve again, or say why the change doesn't need it.
+- **Guides for each built-in process** are in the book, under Process guides. Point a user there
+  when they ask how a whole project runs under their process.
 - **Before each move,** run `kanbanr check <CODE>`. It names what the next stage needs: fill in
   that, and not everything at once.
 - **Approval is renewed as the definition grows.** Each change lapses the approval, so ask the

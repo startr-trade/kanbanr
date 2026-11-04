@@ -225,7 +225,8 @@ kanbanr signoff FEAT-042 design-review --note "held 30 Sep" --doc reviews/checko
   page offers a **Sign off** button for each one the next stage is waiting on.
 - **Where it can be given:** the review queue offers a sign-off only for the stage the item
   reaches next, and only once that stage's other requirements are met. A workflow that lets an
-  item skip ahead doesn't get the later stage's sign-off offered early.
+  item skip ahead doesn't get the later stage's sign-off offered early. A finished item is listed
+  only when its approval lapsed, and then only to approve again.
 - **Who gives it:** a sign-off is a person's agreement. Claude asks for it and never gives it.
 - **Taking it back:** a sign-off given in error is withdrawn with a reason:
 
