@@ -128,6 +128,10 @@ Follow this order and you won't have to go back:
 | 9 | You | Terminal: `git push origin v1.0.0`, then wait for the release workflow |
 | 10 | Claude | Say "The release is out. Bring it forward into the sprint" |
 
+**The release date is today's.** Moving main dates the notes and changelog with the day it happens.
+If the Releases page warns that they carry an earlier date, say "Date the release today", and push
+main again if Claude says to.
+
 **Each button says what it will do**, and stays greyed out with the reason until it's ready. If it
 says an item would carry over, that item usually needs its **Sign off release**.
 

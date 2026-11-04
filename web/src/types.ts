@@ -556,6 +556,8 @@ export interface ReleasePlan {
   repo: boolean;
   /** Nothing is planned into the release (FEAT-212 R-17). */
   empty: boolean;
+  /** Worth knowing, not stopping: e.g. the notes carry an earlier date (DEF-001). */
+  warnings?: string[];
 }
 
 export interface Gate {

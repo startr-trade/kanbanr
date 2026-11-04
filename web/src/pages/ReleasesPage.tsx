@@ -213,6 +213,15 @@ function ReleaseButton({
   }
   return (
     <div className="release-action">
+      {plan.data.warnings?.length ? (
+        <ul className="dep-list small">
+          {plan.data.warnings.map((w) => (
+            <li key={w}>
+              <span className="chip warn">warning</span> <Inline text={w} />
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="review-actions">
         {action.button ? (
           <button

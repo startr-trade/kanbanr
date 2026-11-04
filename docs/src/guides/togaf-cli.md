@@ -243,6 +243,10 @@ what a promotion would do and changes nothing.
 | 8. Push the tag | `git push origin v1.1.0` | |
 | 9. Merge forward | `kanbanr git forward v1.1.0` | Brings the release's commits into the sprint's branch |
 
+The notes and the changelog heading carry the day the candidate was prepared. Step 5 dates them
+today before it moves main. If main moved before then, the cut's `--plan` warns, and
+`kanbanr release redate v1.1.0` dates them today. Push main again if it says so.
+
 The cut stays refused until main is pushed:
 
 ```text

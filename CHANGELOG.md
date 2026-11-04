@@ -14,6 +14,14 @@ All notable changes to kanbanr are documented here. The format follows
   what surprises people: gates need a charter, an item merged but not yet released carries over at a
   sprint close, and each item needs its `release` sign-off before main.
 
+### Fixed
+
+- **A release cut later no longer ships the date of its candidate (DEF-001).** v0.4.0 was prepared
+  on 22 October and cut on 1 November, and shipped saying 22 October. The stage that moves main now
+  dates the release notes and the changelog heading today, in one commit, before main moves. If main
+  moved already, the cut's plan warns and names the dates, and the new `kanbanr release redate`
+  dates them today.
+
 ## [0.4.0] - 2026-10-22
 
 ### Added
