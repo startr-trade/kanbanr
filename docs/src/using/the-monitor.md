@@ -202,6 +202,9 @@ flowchart TD
 - **Feature page** (an *epic*): the **Specification** (rendered markdown) and a **tile per
   todo-list** (newest first), each tile holding that list's tasks, plus markdown/JSON export.
   Add a new todo-list per work session — they persist, so multi-session work is never lost.
+  On a project that works in releases, a chip beside the status says which release shipped the
+  item ("Released in v0.4.0"), which it is planned for and not released yet, or that it is in none.
+  Completed is not released: only that chip says an item has shipped.
 - **Milestone page**: the milestones it **depends on**, plus its **feature items as tiles**.
 - **Schedule**: a *derived* view — for each displayed status, the milestones that contain
   feature items in that status, dependency-ordered. Nothing to create; it always reflects reality.

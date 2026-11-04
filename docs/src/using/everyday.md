@@ -43,5 +43,8 @@ the rest of the project you don't have to say anything about kanbanr — Claude 
   In progress) and what it finished (→ Completed, spec/docs updated, status moved).
 - When moving a feature **out of `Deferred`**, Claude first reviews its spec for **staleness**.
 - **Feature items are never deleted** — to retire one it's moved to a no-op state.
+- **Completed is not released.** On a project that works in releases, `kanbanr feature show` and the
+  item's page carry a `Release` line: released in a version, planned for one and not released yet,
+  or in no release. Read it before saying an item has shipped.
 - For several changes at once, Claude sends **one bundled `kanbanr batch` call** (new/edited
   feature items, status moves, new todo-lists + items, task-state updates, doc changes).
