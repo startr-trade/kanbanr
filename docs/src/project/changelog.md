@@ -14,6 +14,14 @@ All notable changes to kanbanr are documented here. The format follows
   what surprises people: gates need a charter, an item merged but not yet released carries over at a
   sprint close, and each item needs its `release` sign-off before main.
 
+### Fixed
+
+- **The retro's proven count and defect lines read as they mean (DEF-006).** `requirements proven
+  by a green test: 56/56` now adds `(1 with a test still open)` when a proven requirement also has
+  a test that is not green; `--json` gains `evidence.proven_with_open_test` and `proven` is
+  unchanged. The two defect lines are worded apart: `added as defect items` (scope that joined as
+  a defect) and `defects recorded with their cause` (items carrying a cause).
+
 ## [0.4.0] - 2026-10-22
 
 ### Added

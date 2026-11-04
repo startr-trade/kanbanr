@@ -140,6 +140,10 @@ pub struct Defects {
 pub struct Evidence {
     pub requirements: usize,
     pub proven: usize,
+    /// Of the proven requirements, those that also have a test not green: proven keeps its
+    /// meaning (one green test), and this says how many of them are not wholly settled.
+    #[serde(default)]
+    pub proven_with_open_test: usize,
     /// Finished items whose requirements are not all proven: done by status, not by evidence.
     pub finished_unproven: Vec<String>,
 }
@@ -293,6 +297,9 @@ pub fn run(store: &Store, id: &str, wave: &Wave) -> Result<Retro> {
                 let green = r.tests.iter().any(|t| t.state == TestState::Green);
                 if green {
                     retro.evidence.proven += 1;
+                    if r.tests.iter().any(|t| t.state != TestState::Green) {
+                        retro.evidence.proven_with_open_test += 1;
+                    }
                 } else {
                     unproven += 1;
                 }
@@ -483,7 +490,7 @@ pub fn markdown(r: &Retro) -> String {
         growth.unclassified.len()
     );
     for (title, list) in [
-        ("added as defects", &growth.defects),
+        ("added as defect items", &growth.defects),
         ("split out of other work", &growth.split),
         ("added without a recorded cause", &growth.unclassified),
     ] {
@@ -493,7 +500,7 @@ pub fn markdown(r: &Retro) -> String {
     }
     let _ = writeln!(
         out,
-        "- defects: {} ({} escaped)",
+        "- defects recorded with their cause: {} ({} escaped)",
         r.defects.total, r.defects.escaped
     );
     if !r.defects.self_inflicted.is_empty() {
@@ -527,9 +534,13 @@ pub fn markdown(r: &Retro) -> String {
             r.rework.join(", ")
         );
     }
+    let open = match r.evidence.proven_with_open_test {
+        0 => String::new(),
+        n => format!(" ({n} with a test still open)"),
+    };
     let _ = writeln!(
         out,
-        "- requirements proven by a green test: {}/{}",
+        "- requirements proven by a green test: {}/{}{open}",
         r.evidence.proven, r.evidence.requirements
     );
     if !r.evidence.finished_unproven.is_empty() {
@@ -721,6 +732,88 @@ mod tests {
         assert_eq!(
             r.defects.self_inflicted,
             vec![format!("{} ← {}", defect.code, first.code)]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn proven_says_how_many_have_a_test_open() {
+        let (store, dir) = fixture();
+        let f = store.add_feature("demo", "Cart", "", "MS-1", None).unwrap();
+        let test = |name: &str| TestRef {
+            name: name.into(),
+            ..Default::default()
+        };
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "THE SYSTEM SHALL hold the cart.".into(),
+                        tests: vec![test("cart::holds"), test("manual: looks right")],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        store
+            .set_test_state(
+                "demo",
+                &f.code,
+                "R-1",
+                "cart::holds",
+                TestState::Green,
+                Some("abc"),
+            )
+            .unwrap();
+        complete(&store, &f.code);
+
+        let r = run(&store, "demo", &Wave::default()).unwrap();
+        assert_eq!((r.evidence.proven, r.evidence.requirements), (1, 1));
+        assert_eq!(r.evidence.proven_with_open_test, 1);
+        assert!(
+            markdown(&r).contains("proven by a green test: 1/1 (1 with a test still open)"),
+            "{}",
+            markdown(&r)
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn defect_lines_are_told_apart() {
+        let (store, dir) = fixture();
+        let first = store
+            .add_feature("demo", "The work", "", "MS-1", None)
+            .unwrap();
+        store
+            .move_feature("demo", &first.code, "Scheduled")
+            .unwrap();
+        let defect = store
+            .add_feature("demo", "It breaks", "", "MS-1", None)
+            .unwrap();
+        store
+            .set_defect(
+                "demo",
+                &defect.code,
+                Some(Defect {
+                    introduced_by: first.code.clone(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let wave = Wave {
+            milestone: Some("MS-1".into()),
+            ..Default::default()
+        };
+        let md = markdown(&run(&store, "demo", &wave).unwrap());
+        assert!(md.contains("added as defect items:"), "{md}");
+        assert!(!md.contains("added as defects:"), "{md}");
+        assert!(
+            md.contains("- defects recorded with their cause: 1 (0 escaped)"),
+            "{md}"
         );
         let _ = std::fs::remove_dir_all(dir);
     }
