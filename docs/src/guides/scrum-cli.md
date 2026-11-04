@@ -66,7 +66,9 @@ In Scrum the integrate stage is **Done**, so that is where an item's branch merg
 ### The charter comes first
 
 **The gates are not enforced until the project has a charter**, and an item created before the
-charter was adopted is exempt from them. So agree the charter before creating any items:
+charter was adopted is exempt from them. Without one, moves that should be refused still succeed,
+but each says what the gate would have needed and that `kanbanr charter set` turns the gates on.
+So agree the charter before creating any items:
 
 ```text
 kanbanr charter set --file charter.yaml
@@ -347,8 +349,10 @@ merged release/v1.0.0 forward into sprint/SP-001 (a76f622b0e74)
 **Freeze the candidate.** Once a release is a candidate, send anything new to the next release, and
 change only its notes.
 
-**Check the date before the cut.** The notes and the changelog heading are dated when the candidate
-is made. If the cut comes later, correct the notes first, because they can't be edited afterwards.
+**The date follows the release.** The notes and the changelog heading are dated when the candidate is
+made, and promoting to main dates them today. If main moved earlier and the cut comes later, the
+cut's `--plan` warns, and `kanbanr release redate v1.0.0` dates them today. Notes can't be edited
+after the cut.
 
 ## Closing the sprint
 

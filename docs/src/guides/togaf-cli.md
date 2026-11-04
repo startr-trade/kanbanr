@@ -274,9 +274,10 @@ again:
 main held v1.1.0, so it moved with the notes to 0360a99: push main again and wait for CI before the cut
 ```
 
-**Check the date before the cut.** The notes and the changelog heading are dated when the candidate
-is made. If the cut comes later, correct the notes first, because they can't be edited afterwards.
-A later date in the changelog heading needs a commit on the release branch.
+**The date follows the release.** The notes and the changelog heading are dated when the candidate is
+made, and promoting to main dates them today. If main moved earlier and the cut comes later, the
+cut's `--plan` warns, and `kanbanr release redate v1.1.0` dates them today. Notes can't be edited
+after the cut.
 
 ## Closing the sprint
 

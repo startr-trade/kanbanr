@@ -4,7 +4,8 @@
 
 Everything above tracks *what* is being built. This section is about *why* — the part a board
 normally loses. You rarely write any of it by hand: Claude drafts it in a plan and asks what it
-cannot infer — see [Working with Claude](with-claude.md). It is opt-in: a project with no charter behaves exactly as it always did, and items
+cannot infer — see [Working with Claude](with-claude.md). It is opt-in: a project with no charter isn't refused anything, though a move a gate would have
+stopped says what was missing and that `kanbanr charter set` turns the gates on. Items
 created before a charter was adopted are never reported against it.
 
 ### The charter — what the project is for

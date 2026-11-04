@@ -146,8 +146,9 @@ change until you push.
 **If you save notes after promoting to main,** main moves with them. The page tells you to push main
 again and wait for CI before the cut.
 
-**Check the date before you cut.** The notes and changelog are dated when the candidate is made. If
-the cut comes later, ask Claude to correct them first, because shipped notes can't be edited.
+**The date follows the release.** Promoting to main dates the notes and changelog today. If main moved
+earlier and the cut comes later, the page warns you: ask Claude to re-date them before you cut,
+because shipped notes can't be edited.
 
 ## Closing the sprint
 

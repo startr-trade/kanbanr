@@ -43,7 +43,9 @@ automation: on — start, sprints and the hooks follow this model
 ### The charter comes first
 
 **The gates are not enforced until the project has a charter**, and an item created before the
-charter was adopted is exempt from them. So agree the charter before creating any items:
+charter was adopted is exempt from them. Without one, moves that should be refused still succeed,
+but each says what the gate would have needed and that `kanbanr charter set` turns the gates on.
+So agree the charter before creating any items:
 
 ```text
 kanbanr charter set --file charter.yaml

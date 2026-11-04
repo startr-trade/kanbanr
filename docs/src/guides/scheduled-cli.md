@@ -59,7 +59,9 @@ pushing:    never automatic — you review and push
 automation: on — start, sprints and the hooks follow this model
 ```
 
-Agree a charter before creating items, because gates are not enforced without one:
+Agree a charter before creating items, because gates are not enforced without one. A move that
+should be refused still succeeds, but says what the gate would have needed and that
+`kanbanr charter set` turns the gates on:
 
 ```text
 kanbanr charter set --file <tmp>/charter.yaml

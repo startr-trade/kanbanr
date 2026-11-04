@@ -16,6 +16,10 @@ kanbanr adr list [--for FEAT-001] | adr supersede ADR-0007 --replaces ADR-0003 |
 kanbanr adr accept ADR-0007 | adr reject ADR-0007 --reason "…"   # the user's verdict
 ```
 
+On a line not committed yet, `why` says so and names the item its branch belongs to, or says the
+branch names none. An annotation on the code still comes first. `kanbanr why --json` gives the same
+answer as data.
+
 One item, one branch, and every commit says what it serves. The hooks refuse a commit on the
 default branch, a branch that names no item, and a message with no reference — and they let through
 merges, reverts, `spike/*` branches, and a recorded escape (`[no-ref] <why>` in the message, which
@@ -54,7 +58,7 @@ terms, and changes nothing:
 | Finding | |
 |---|---|
 | an integrated item whose branch is not merged into its line | error |
-| commits on a line serving only items that are not integrated | error |
+| commits on a line serving only items that are not integrated. With no integrate stage in the workflow, an item past its build stage counts as possibly integrated, so its commits aren't reported | error |
 | a commit naming an item the board does not have | error |
 | a branch naming no item, or an item, sprint or release the board does not have | warning |
 | a release branch with fixes its line lacks (`kanbanr git forward <VERSION>`) | warning |

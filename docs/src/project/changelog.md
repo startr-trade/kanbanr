@@ -30,6 +30,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **The book and the skill match this release (DOC-006).** The no-charter warning, the date set when
+  main moves, `why` on an uncommitted line, `git doctor` with no integrate stage and lapsed approvals
+  on finished items are all described as they now behave, and the skill tells Claude about them.
+
 - **doctor no longer reports a shipped release's book links as broken (DEF-016).** A release's board
   document is the notes as they shipped, and its relative links resolve in the book, not on the
   board. doctor now skips document links in `releases/` and still reports unknown items,
