@@ -30,6 +30,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **Redefining an item from a file keeps its sign-offs and approval history (DEF-008).** `feature
+  define` dropped the approval history and the sign-offs when the file held none, though a
+  redefinition must lapse an agreement, not erase the record of who gave it. Both are now carried
+  forward in order, each entry once, and read as lapsed if the content changed.
 - **`scripts/ci_local.py --help` no longer starts the whole gate (DEF-010).** The script now reads its
   arguments first: `-h` and `--help` print the usage and exit 0, and any other argument is named,
   refused with exit 2 and runs no check. `make ci` passes none and is unchanged.

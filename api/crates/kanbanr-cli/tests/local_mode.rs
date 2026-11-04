@@ -3736,6 +3736,57 @@ fn cli_signoff_withdraw_round_trip() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-008 R-4: defining an item from a file that leaves out its history keeps the approval, the
+/// approval history and the sign-offs, which then read as lapsed rather than gone.
+#[test]
+fn feature_define_from_a_file_keeps_history() {
+    let (base, work) = togaf_scratch("define-keeps-history");
+    togaf_board(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let show = || -> serde_json::Value {
+        let out = ok(run_in(
+            &base,
+            &work,
+            &["feature", "show", "FEAT-001", "--json"],
+        ));
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["signoff", "FEAT-001", "design-review"],
+    ));
+    let before = show();
+    let held = |v: &serde_json::Value, key: &str| v["definition"][key].as_array().map(Vec::len);
+    assert!(held(&before, "approvals").unwrap_or(0) >= 1, "{before}");
+    assert_eq!(held(&before, "signoffs"), Some(1), "{before}");
+
+    let file = base.join("redefined.yaml");
+    std::fs::write(&file, "statement: A different statement entirely\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            file.to_str().unwrap(),
+        ],
+    ));
+    let after = show();
+    for key in ["approvals", "signoffs", "approval"] {
+        assert_eq!(
+            after["definition"][key], before["definition"][key],
+            "{key}: {after}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-192 R-1: inside a linked git worktree (`.claude/worktrees/w1`), the committed marker's
 /// relative board path is resolved from the main worktree, so commands find the board with no
 /// extra environment variables.
