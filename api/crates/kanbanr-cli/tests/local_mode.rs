@@ -7851,3 +7851,252 @@ fn why_still_reports_a_committed_orphan_line() {
     assert!(!said.contains("not committed yet"), "{said}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A scratch repository with a board, one charter goal and one defined item (DEF-009). Under
+/// `std::env::temp_dir()` so the CLI never walks up to the real board.
+struct JsonFixture {
+    work: PathBuf,
+    home: PathBuf,
+}
+
+impl JsonFixture {
+    fn new(name: &str) -> Self {
+        let base = std::env::temp_dir().join(format!("kanbanr-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let home = base.join("home");
+        let work = base.join("code").join("shop");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&work).unwrap();
+        let fx = JsonFixture { work, home };
+        let git = |args: &[&str]| {
+            let o = Command::new("git")
+                .args(args)
+                .current_dir(&fx.work)
+                .env("HOME", &fx.home)
+                .env("GIT_AUTHOR_NAME", "T")
+                .env("GIT_AUTHOR_EMAIL", "t@x")
+                .env("GIT_COMMITTER_NAME", "T")
+                .env("GIT_COMMITTER_EMAIL", "t@x")
+                .output()
+                .expect("run git");
+            assert!(o.status.success(), "git {args:?}");
+        };
+        git(&["init", "--initial-branch=main"]);
+        git(&[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ]);
+        fx.run(&[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ]);
+        // The board must be this test's own before anything else writes to it.
+        let board = fx.run(&["where"]);
+        assert!(board.contains(&*base.to_string_lossy()), "{board}");
+        fx.run(&["config", "method", "--off"]);
+        fx.run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
+        let charter = base.join("charter.yaml");
+        std::fs::write(
+            &charter,
+            "purpose: A cart that survives a closed tab\ngoals:\n  - id: G-1\n    statement: A returning shopper resumes where they left off\n",
+        )
+        .unwrap();
+        fx.run(&["charter", "set", "--file", charter.to_str().unwrap()]);
+        fx.run(&[
+            "feature",
+            "add",
+            "--title",
+            "Cart recovery",
+            "--milestone",
+            "MS-001",
+        ]);
+        let def = base.join("def.yaml");
+        std::fs::write(
+            &def,
+            "statement: Keep a cart for 7 days\ngoals: [G-1]\n\
+             requirements:\n  - kind: functional\n    text: \"WHEN a cart is abandoned, THE SYSTEM SHALL retain it for 7 days.\"\n\
+             \x20   tests:\n      - name: cart::retains\n        kind: unit\n        state: planned\n",
+        )
+        .unwrap();
+        fx.run(&[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            def.to_str().unwrap(),
+        ]);
+        fx
+    }
+
+    fn exec(&self, args: &[&str]) -> Output {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&self.work)
+            .env("HOME", &self.home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    }
+
+    fn run(&self, args: &[&str]) -> String {
+        let o = self.exec(args);
+        assert!(
+            o.status.success(),
+            "cmd {args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    }
+
+    fn json(&self, args: &[&str]) -> serde_json::Value {
+        let out = self.run(args);
+        serde_json::from_str(&out).unwrap_or_else(|e| panic!("{args:?} is not JSON ({e}): {out}"))
+    }
+}
+
+/// DEF-009 R-1: `feature show --json` is the item, the same document as `export --format json`.
+#[test]
+fn feature_show_json_is_the_item() {
+    let fx = JsonFixture::new("def009-show");
+    let shown = fx.json(&["--json", "feature", "show", "FEAT-001"]);
+    let exported = fx.json(&["export", "FEAT-001", "--format", "json"]);
+    assert_eq!(shown["code"], "FEAT-001");
+    assert_eq!(shown["code"], exported["code"]);
+    assert_eq!(shown["specification"], exported["specification"]);
+}
+
+/// DEF-009 R-2: `why --json` names the requirement and the goal behind an annotated line.
+#[test]
+fn why_json_names_the_requirement_and_goal() {
+    let fx = JsonFixture::new("def009-why");
+    std::fs::create_dir_all(fx.work.join("src")).unwrap();
+    std::fs::write(
+        fx.work.join("src").join("cart.rs"),
+        "// Carts outlive the tab that made them (FEAT-001 R-1).\nfn retain() {}\n",
+    )
+    .unwrap();
+    let why = fx.json(&["--json", "why", "src/cart.rs:2"]);
+    assert_eq!(why["target"], "src/cart.rs:2");
+    assert_eq!(why["source"], "the annotation on the code");
+    let r = &why["references"][0];
+    assert_eq!(r["items"][0]["code"], "FEAT-001");
+    assert_eq!(r["items"][0]["requirements"][0]["id"], "R-1");
+    assert!(
+        r["items"][0]["requirements"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("retain it for 7 days")
+    );
+    assert!(r["goal"].as_str().unwrap().contains("G-1"), "{r}");
+}
+
+/// DEF-009 R-2: a line nobody claimed is a document with no references, not a sentence.
+#[test]
+fn why_json_without_a_reference_is_empty_not_text() {
+    let fx = JsonFixture::new("def009-why-none");
+    std::fs::write(fx.work.join("stray.rs"), "fn nobody_asked() {}\n").unwrap();
+    let why = fx.json(&["--json", "why", "stray.rs:1"]);
+    assert!(why["source"].is_null(), "{why}");
+    assert_eq!(why["references"].as_array().unwrap().len(), 0);
+    // A path outside the repository is an error, not a document.
+    let missing = fx.exec(&["--json", "why", "nope.rs:1"]);
+    assert!(!missing.status.success());
+    assert!(missing.stdout.is_empty());
+}
+
+/// DEF-009 R-3: `board --json` lists each state, in board order, with its items.
+#[test]
+fn board_json_lists_states_and_items() {
+    let fx = JsonFixture::new("def009-board");
+    let board = fx.json(&["--json", "board"]);
+    assert_eq!(board["project"], "shop");
+    let states = board["states"].as_array().unwrap();
+    assert!(states.len() > 1, "{board}");
+    let holding: Vec<_> = states
+        .iter()
+        .filter(|s| s["count"].as_u64().unwrap() > 0)
+        .collect();
+    assert_eq!(holding.len(), 1, "{board}");
+    let item = &holding[0]["items"][0];
+    assert_eq!(item["code"], "FEAT-001");
+    assert_eq!(item["title"], "Cart recovery");
+    assert!(item["total"].is_number() && item["done"].is_number());
+}
+
+/// DEF-009 R-4: every read command that takes `--json` prints JSON with it. Not in the list, on
+/// purpose, because their payload is a named format or a document body: `export`, `graph` and
+/// `gantt` (take `--format`) and `doc show` (prints the file). A new read command that ignores
+/// the flag is added here and caught.
+#[test]
+fn every_read_command_prints_json_with_the_flag() {
+    let fx = JsonFixture::new("def009-sweep");
+    std::fs::write(fx.work.join("stray.rs"), "fn nobody_asked() {}\n").unwrap();
+    let reads: &[&[&str]] = &[
+        &["feature", "show", "FEAT-001"],
+        &["why", "stray.rs:1"],
+        &["board"],
+        &["feature", "list"],
+        &["ready"],
+        &["blocked"],
+        &["impact", "FEAT-001"],
+        &["critical-path"],
+        &["doctor"],
+        &["report"],
+        &["review", "--pending"],
+        &["check", "FEAT-001"],
+        &["trace", "FEAT-001"],
+        &["lessons"],
+        &["adr", "list"],
+        &["sprint", "list"],
+        &["release", "list"],
+        &["milestone", "list"],
+        &["todo", "list", "FEAT-001"],
+        &["charter", "show"],
+        &["scope", "list"],
+        &["activity"],
+        &["where"],
+        &["tests"],
+        &["sources"],
+    ];
+    let mut failures = Vec::new();
+    for read in reads {
+        let mut args = vec!["--json"];
+        args.extend_from_slice(read);
+        let o = fx.exec(&args);
+        let out = String::from_utf8_lossy(&o.stdout);
+        if serde_json::from_str::<serde_json::Value>(&out).is_err() {
+            failures.push(format!(
+                "{args:?} did not print JSON (exit {:?}): {out}\n{}",
+                o.status.code(),
+                String::from_utf8_lossy(&o.stderr)
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
+}
+
+/// DEF-009 with DEF-011: an uncommitted line answers `--json` too, naming the branch's item.
+#[test]
+fn why_json_on_an_uncommitted_line_names_the_branch_item() {
+    let (base, work) = why_scratch("why-json-uncommitted");
+    let started = run_in(&base, &work, &["start", "FEAT-001"]);
+    assert!(started.status.success(), "{started:?}");
+    std::fs::write(work.join("new.rs"), "fn new() {}\n").unwrap();
+    let out = run_in(&base, &work, &["--json", "why", "new.rs:1"]);
+    assert!(out.status.success(), "{out:?}");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["uncommitted"], true, "{v}");
+    assert_eq!(v["references"][0]["reference"], "FEAT-001", "{v}");
+    let _ = std::fs::remove_dir_all(&base);
+}

@@ -26,6 +26,9 @@ All notable changes to kanbanr are documented here. The format follows
   definition changed after it was approved now appears in the review queue, after live work and
   labelled with its status, with the Approve button, so re-approving finished work needs no terminal.
   Never-approved finished items and no-op dispositions stay out.
+- **`--json` works on `feature show`, `why` and `board` (DEF-009).** They printed text despite the
+  flag, and a failed parse of that text is how an item's spec got blanked. They now print one JSON
+  document, `feature show` the same as `export --format json`; a test parses every read command.
 
 ### Added
 
