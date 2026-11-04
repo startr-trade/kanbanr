@@ -1062,6 +1062,11 @@ impl Store {
                 if def.started_unapproved.trim().is_empty() {
                     def.started_unapproved = prev.started_unapproved.clone();
                 }
+                // The history and the sign-offs are append-only logs, so they too are carried:
+                // each entry keeps its `rev`, which is what reads it as lapsed once the content
+                // changed.
+                def.approvals = merge_history(&prev.approvals, std::mem::take(&mut def.approvals));
+                def.signoffs = merge_history(&prev.signoffs, std::mem::take(&mut def.signoffs));
             }
             def
         });
@@ -3664,6 +3669,18 @@ pub(crate) struct GateOutcome {
 pub enum Capability {
     Sprints,
     Releases,
+}
+
+/// The earlier entries of an append-only log in their order, then each incoming entry not already
+/// among them, in its order. Nothing is removed; an entry the incoming list repeats is kept once.
+fn merge_history<T: PartialEq + Clone>(previous: &[T], incoming: Vec<T>) -> Vec<T> {
+    let mut merged = previous.to_vec();
+    for entry in incoming {
+        if !merged.contains(&entry) {
+            merged.push(entry);
+        }
+    }
+    merged
 }
 
 #[cfg(test)]
