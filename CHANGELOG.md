@@ -8,6 +8,9 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **`scripts/ci_local.py --help` no longer starts the whole gate (DEF-010).** The script now reads its
+  arguments first: `-h` and `--help` print the usage and exit 0, and any other argument is named,
+  refused with exit 2 and runs no check. `make ci` passes none and is unchanged.
 - **Gates say so when there is no charter (DEF-004).** On a project with no charter, a move a gate
   would have refused still goes through, but now warns what the gate would have needed and that
   `kanbanr charter set` turns the gates on. A move the gate would have passed says nothing.

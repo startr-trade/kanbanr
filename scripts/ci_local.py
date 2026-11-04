@@ -22,6 +22,7 @@ Needs: bash, git, python3 with PyYAML, cargo, node/npm, docker (actionlint, Powe
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import shutil
@@ -627,7 +628,18 @@ def board_state() -> tuple[Path, str, str] | None:
     return board, head.strip(), status
 
 
-def main() -> int:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Read the command line before any work starts: `--help` and a mistyped flag run no check."""
+    parser = argparse.ArgumentParser(
+        prog="scripts/ci_local.py",
+        description=(__doc__ or "").split("\n\n")[0],
+        epilog="Takes no other arguments; it always runs every check.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parse_args(argv)
     print(f"make ci: a clean copy of the tracked tree at {TREE}\n", flush=True)
     # A test that reaches the real board writes to someone's data, and its push publishes it.
     # The fence (api/.cargo/config.toml) stops that; this proves it held for the whole run.
