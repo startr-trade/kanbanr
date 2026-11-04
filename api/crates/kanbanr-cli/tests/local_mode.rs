@@ -6554,10 +6554,7 @@ fn a_coordinator_worktree_commits_under_the_ordinary_hooks() {
     );
     std::fs::write(wt.join("f.txt"), "x").unwrap();
     fx.ok_git(&wt, &["add", "f.txt"]);
-    let commit = fx.git(
-        &wt,
-        &["commit", "-q", "-m", "x\n\nRefs: kanbanr:FEAT-002"],
-    );
+    let commit = fx.git(&wt, &["commit", "-q", "-m", "x\n\nRefs: kanbanr:FEAT-002"]);
     assert!(
         commit.status.success(),
         "{}",
@@ -6579,10 +6576,7 @@ fn an_agent_worktree_without_a_scope_is_still_refused() {
     assert!(err.contains("this is an agent worktree"), "{err}");
     std::fs::write(wt.join("f.txt"), "x").unwrap();
     fx.ok_git(&wt, &["add", "f.txt"]);
-    let commit = fx.git(
-        &wt,
-        &["commit", "-q", "-m", "x\n\nRefs: kanbanr:FEAT-001"],
-    );
+    let commit = fx.git(&wt, &["commit", "-q", "-m", "x\n\nRefs: kanbanr:FEAT-001"]);
     assert!(!commit.status.success());
     assert!(String::from_utf8_lossy(&commit.stderr).contains("no agent scope is bound to it"));
 }
