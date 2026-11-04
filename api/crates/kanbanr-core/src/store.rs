@@ -3671,6 +3671,18 @@ pub enum Capability {
     Releases,
 }
 
+/// The earlier entries of an append-only log in their order, then each incoming entry not already
+/// among them, in its order. Nothing is removed; an entry the incoming list repeats is kept once.
+fn merge_history<T: PartialEq + Clone>(previous: &[T], incoming: Vec<T>) -> Vec<T> {
+    let mut merged = previous.to_vec();
+    for entry in incoming {
+        if !merged.contains(&entry) {
+            merged.push(entry);
+        }
+    }
+    merged
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3877,16 +3889,4 @@ mod tests {
         assert!(store.load("demo").unwrap().features.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
-}
-
-/// The earlier entries of an append-only log in their order, then each incoming entry not already
-/// among them, in its order. Nothing is removed; an entry the incoming list repeats is kept once.
-fn merge_history<T: PartialEq + Clone>(previous: &[T], incoming: Vec<T>) -> Vec<T> {
-    let mut merged = previous.to_vec();
-    for entry in incoming {
-        if !merged.contains(&entry) {
-            merged.push(entry);
-        }
-    }
-    merged
 }
