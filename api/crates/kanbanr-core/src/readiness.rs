@@ -1335,6 +1335,26 @@ pub struct ItemCheck {
     /// What each next stage asks; empty when the item's readiness could not be read.
     pub next: Vec<NextGate>,
     pub rev: Option<String>,
+    /// Manual tests not yet green, as `R-4: <name>` (DEF-003). A note, never a gap.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_manual: Vec<String>,
+}
+
+/// The manual tests of an item that are not green, as `R-4: <name>` (DEF-003): a check nobody
+/// ran is named, though it does not count against readiness.
+pub fn open_manual_tests(feature: &FeatureItem) -> Vec<String> {
+    let Some(def) = &feature.definition else {
+        return Vec::new();
+    };
+    def.requirements
+        .iter()
+        .flat_map(|r| {
+            r.tests
+                .iter()
+                .filter(|t| t.kind.eq_ignore_ascii_case("manual") && t.state != TestState::Green)
+                .map(move |t| format!("{}: {}", r.id, t.name))
+        })
+        .collect()
 }
 
 /// What `kanbanr check` reports over its scope (FEAT-176).
@@ -1389,6 +1409,7 @@ pub fn check_board(
                     .collect(),
                 next: view.as_ref().map(|v| v.next.clone()).unwrap_or_default(),
                 rev: view.and_then(|v| v.rev),
+                open_manual: open_manual_tests(f),
             }
         })
         .collect();
@@ -1700,6 +1721,26 @@ mod tests {
         .expect("a minimal item");
         f.definition = def;
         f
+    }
+
+    /// DEF-003 R-1: a manual test not green is named with its requirement; a green one, or one of
+    /// another kind, is not.
+    #[test]
+    fn open_manual_tests_are_named() {
+        let mut open = requirement("R-4", "edit", &[("Edit and Save", TestState::Planned)]);
+        open.tests[0].kind = "manual".into();
+        let mut done = requirement("R-5", "view", &[("Look", TestState::Green)]);
+        done.tests[0].kind = "manual".into();
+        let auto = requirement("R-6", "auto", &[("t", TestState::Red)]);
+        let f = item(Some(FeatureDefinition {
+            requirements: vec![open, done, auto],
+            ..Default::default()
+        }));
+        assert_eq!(
+            open_manual_tests(&f),
+            vec!["R-4: Edit and Save".to_string()]
+        );
+        assert!(open_manual_tests(&item(None)).is_empty());
     }
 
     /// FEAT-112 R-2: with no gates, each surface's list reproduces what that surface reported

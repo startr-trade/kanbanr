@@ -2957,6 +2957,69 @@ fn check_names_what_the_next_stage_needs() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-003 R-1: check names a manual test with no result, beside the item, and still exits 0.
+#[test]
+fn check_names_an_open_manual_test() {
+    let base = std::env::temp_dir().join(format!("kanbanr-open-manual-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let work = base.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["feature", "add", "--title", "Cart", "--milestone", "MS-001"],
+    ));
+    let def = base.join("def.yaml");
+    std::fs::write(
+        &def,
+        "statement: Keep a cart\nrequirements:\n  - id: R-1\n    text: WHEN a cart is edited, THE SYSTEM SHALL save it\n    tests:\n      - name: Edit and Save\n        kind: manual\n",
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    let out = ok(run_in(&base, &work, &["check", "FEAT-001"]));
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        said.contains("manual test not run: R-1: Edit and Save"),
+        "{said}"
+    );
+    let json = ok(run_in(&base, &work, &["check", "FEAT-001", "--json"]));
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(v[0]["open_manual"][0], "R-1: Edit and Save");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-129: Windows gives a program's main thread 1 MiB of stack, and every command — even
 /// `--version` — overflowed it in a debug build, so the whole suite failed on Windows while Linux,
 /// with 8 MiB, never noticed. A 1 MiB stack limit reproduces Windows' main thread here.

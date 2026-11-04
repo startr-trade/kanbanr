@@ -23,6 +23,11 @@ All notable changes to kanbanr are documented here. The format follows
 - **An empty spec file no longer blanks an item's spec (DEF-002).** `--spec-file` on `feature add`
   and `feature edit` refuses a file that is empty or only whitespace, names it, and changes
   nothing. To clear a spec on purpose, pass `--spec ""`.
+### Fixed
+
+- **`kanbanr check` names a manual test nobody ran (DEF-003).** A manual test that is not green is
+  listed under its item as `manual test not run: R-4: <name>`, and as `open_manual` in `--json`.
+  It is a note, not a gap: readiness and the exit status are unchanged.
 
 ## [0.4.0] - 2026-10-22
 
