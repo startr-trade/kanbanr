@@ -637,7 +637,9 @@ Then:
 - when the agent's work has been reviewed, revoke the scope: `kanbanr scope revoke SC-… --reason
   done`. `kanbanr scope list` shows what is in force; `kanbanr scope renew SC-… --for 4h` extends
   one;
-- never issue scopes from inside an agent: an agent's worktree refuses it.
+- never issue scopes from inside an agent: an agent's worktree refuses it;
+- put your own worktree, for a merge or a finished item, under `.claude/worktrees/` too, with a
+  name that does not start `agent-`: only `agent-*` worktrees are refused without a scope.
 
 A build scope needs its item at the build stage and kanbanr's hooks installed
 (`kanbanr git install-hooks`, which adds the pre-push hook). It finds or makes the item branch;
