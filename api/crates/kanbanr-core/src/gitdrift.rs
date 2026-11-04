@@ -236,7 +236,7 @@ pub fn check(
             if known.is_empty()
                 || known
                     .iter()
-                    .any(|f| gitmodel::is_integrated(config, &f.status))
+                    .any(|f| gitmodel::may_be_integrated(config, &f.status))
             {
                 continue;
             }
@@ -313,6 +313,7 @@ pub fn scan(store: &Store, id: &str, root: &Path) -> Result<Vec<Issue>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Role;
     use crate::sprints::SprintState;
 
     fn project(items: &[(&str, &str)], sprints: bool) -> Project {
@@ -451,6 +452,55 @@ mod tests {
                 .filter(|i| i.severity == Severity::Error)
                 .count(),
             2,
+            "{m:?}"
+        );
+    }
+
+    /// DEF-012 R-1, R-2: with no integrate role, a status after the build stage is not reported as
+    /// unintegrated; the build stage itself still is.
+    #[test]
+    fn commits_for_work_past_build_are_not_errors_without_an_integrate_role() {
+        let mut p = project(
+            &[
+                ("FEAT-001", "Completed"),
+                ("FEAT-002", "In Progress"),
+                ("FEAT-003", "Ongoing"),
+            ],
+            true,
+        );
+        // Only the build role is declared: nothing says where merging happens.
+        for gate in p.config.gates.values_mut() {
+            gate.roles.retain(|r| r == "build");
+        }
+        assert!(p.config.roles().status(Role::Integrate).is_none());
+        assert_eq!(p.config.roles().status(Role::Build), Some("In Progress"));
+        let sprints = [Sprint {
+            code: "SP-001".into(),
+            state: SprintState::Active,
+            ..Default::default()
+        }];
+        let f = facts(&["main", "sprint/SP-001"], &["main"]);
+        let model = gitmodel::derive(&p.config, &sprints, &f);
+        let mut d = DriftFacts {
+            branches: f,
+            ..Default::default()
+        };
+        d.line_commits.insert(
+            "sprint/SP-001".into(),
+            vec![
+                commit('a', "wip\n\nRefs: kanbanr:FEAT-002"),
+                commit('b', "done\n\nRefs: kanbanr:FEAT-001"),
+                commit('c', "more\n\nRefs: kanbanr:FEAT-003"),
+            ],
+        );
+        let issues = check(&p, &sprints, &[], &model, &d);
+        let m = messages(&issues);
+        assert!(
+            m.iter().any(|x| x.contains("serving FEAT-002") && x.ends_with("not integrated")),
+            "{m:?}"
+        );
+        assert!(
+            !m.iter().any(|x| x.contains("FEAT-001") || x.contains("FEAT-003")),
             "{m:?}"
         );
     }
