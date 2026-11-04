@@ -2515,6 +2515,10 @@ struct WhyAnswer {
     target: String,
     /// Where the references came from; `None` when the code carries none.
     source: Option<String>,
+    /// The line is not committed yet (DEF-011): `references` then holds the item its branch
+    /// names, if it names one, and `branch` the branch.
+    uncommitted: bool,
+    branch: Option<String>,
     references: Vec<WhyRef>,
 }
 
@@ -2543,7 +2547,7 @@ struct WhyRequirement {
     text: String,
 }
 
-fn why_answer(client: &Backend, p: &str, target: &str) -> anyhow::Result<WhyAnswer> {
+fn why_answer(cli: &Cli, client: &Backend, p: &str, target: &str) -> anyhow::Result<WhyAnswer> {
     let (path, line) = match target.rsplit_once(':') {
         Some((path, number)) if number.chars().all(|c| c.is_ascii_digit()) => {
             (path, number.parse::<usize>().ok())
@@ -2562,6 +2566,22 @@ fn why_answer(client: &Backend, p: &str, target: &str) -> anyhow::Result<WhyAnsw
     // 2) The commit that last touched it, and what its trailer says.
     let blamed = line.and_then(|n| blame_refs(&root, path, n));
 
+    // 3) A line not yet committed has no commit to ask. With no annotation, the branch is the
+    // only witness: say so, and name the item it belongs to (DEF-011).
+    if annotated.is_none()
+        && line.is_some_and(|n| blame_sha(&root, path, n).is_some_and(|s| is_uncommitted(&s)))
+    {
+        let ctx = scm_context(cli, client)?;
+        let refs = branch_item(&ctx).map(|code| vec![code]).unwrap_or_default();
+        return Ok(WhyAnswer {
+            target: target.to_string(),
+            source: None,
+            uncommitted: true,
+            branch: ctx.branch.clone(),
+            references: why_references(client, p, refs)?,
+        });
+    }
+
     let (source, refs) = match (&annotated, &blamed) {
         (Some(refs), _) => ("the annotation on the code".to_string(), refs.clone()),
         (None, Some((sha, refs))) if !refs.is_empty() => (format!("commit {sha}"), refs.clone()),
@@ -2569,11 +2589,24 @@ fn why_answer(client: &Backend, p: &str, target: &str) -> anyhow::Result<WhyAnsw
             return Ok(WhyAnswer {
                 target: target.to_string(),
                 source: None,
+                uncommitted: false,
+                branch: None,
                 references: Vec::new(),
             });
         }
     };
 
+    Ok(WhyAnswer {
+        target: target.to_string(),
+        source: Some(source),
+        uncommitted: false,
+        branch: None,
+        references: why_references(client, p, refs)?,
+    })
+}
+
+/// The trace of each reference; one that cannot be read carries its error instead.
+fn why_references(client: &Backend, p: &str, refs: Vec<String>) -> anyhow::Result<Vec<WhyRef>> {
     let mut references = Vec::new();
     for reference in refs {
         let resp = client.get(&format!(
@@ -2617,18 +2650,33 @@ fn why_answer(client: &Backend, p: &str, target: &str) -> anyhow::Result<WhyAnsw
         }
         references.push(r);
     }
-    Ok(WhyAnswer {
-        target: target.to_string(),
-        source: Some(source),
-        references,
-    })
+    Ok(references)
 }
 
 fn run_why(cli: &Cli, client: &Backend, target: &str) -> anyhow::Result<()> {
     let p = require_project(cli)?;
-    let answer = why_answer(client, &p, target)?;
+    let answer = why_answer(cli, client, &p, target)?;
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&answer)?);
+        return Ok(());
+    }
+    if answer.uncommitted {
+        match answer.references.first() {
+            Some(r) => {
+                println!(
+                    "{target} is not committed yet, so no commit names a reference. \
+                     The branch {} belongs to {}: that is the item this work is for.\n",
+                    answer.branch.as_deref().unwrap_or(""),
+                    r.reference
+                );
+                print_why_references(&answer.references);
+            }
+            None => println!(
+                "{target} is not committed yet, so no commit names a reference, and this branch \
+                 names no item. Commit it on an item's branch (kanbanr start <CODE>) and it will \
+                 be traced."
+            ),
+        }
         return Ok(());
     }
     let Some(source) = &answer.source else {
@@ -2644,7 +2692,12 @@ fn run_why(cli: &Cli, client: &Backend, target: &str) -> anyhow::Result<()> {
         .map(|r| r.reference.as_str())
         .collect();
     println!("{target} — from {source}: {}\n", names.join(", "));
-    for r in &answer.references {
+    print_why_references(&answer.references);
+    Ok(())
+}
+
+fn print_why_references(references: &[WhyRef]) {
+    for r in references {
         if let Some(e) = &r.error {
             println!("  {}: {e}", r.reference);
             continue;
@@ -2670,7 +2723,6 @@ fn run_why(cli: &Cli, client: &Backend, target: &str) -> anyhow::Result<()> {
             println!("  Documented in: {}", r.documents.join(", "));
         }
     }
-    Ok(())
 }
 
 /// A code annotation: `(FEAT-046 R-2)` or `(FEAT-046)` in a comment. Looks at the line itself,
@@ -2719,17 +2771,31 @@ fn parse_annotation(line: &str) -> Option<Vec<String>> {
     }
 }
 
-/// The references in the trailer of the commit that last touched this line.
-fn blame_refs(root: &Path, path: &str, line: usize) -> Option<(String, Vec<String>)> {
+/// The id of the commit that last touched this line, or the all-zero id for a line not yet
+/// committed. A file git does not track counts as uncommitted too.
+fn blame_sha(root: &Path, path: &str, line: usize) -> Option<String> {
     // -C -M follow the line through moves and copies, which is what makes blame survive the
     // refactors that would otherwise lose the link.
     let range = format!("{line},{line}");
-    let out = coderepo::git(
+    match coderepo::git(
         root,
         &["blame", "-C", "-M", "-L", &range, "--porcelain", "--", path],
-    )
-    .ok()?;
-    let sha = out.split_whitespace().next()?.to_string();
+    ) {
+        Ok(out) => Some(out.split_whitespace().next()?.to_string()),
+        Err(_) => coderepo::git(root, &["ls-files", "--error-unmatch", "--", path])
+            .is_err()
+            .then(|| "0".repeat(40)),
+    }
+}
+
+/// Whether blame's id is the placeholder git gives a line that is not in any commit.
+fn is_uncommitted(sha: &str) -> bool {
+    sha.chars().all(|c| c == '0')
+}
+
+/// The references in the trailer of the commit that last touched this line.
+fn blame_refs(root: &Path, path: &str, line: usize) -> Option<(String, Vec<String>)> {
+    let sha = blame_sha(root, path, line)?;
     let message = coderepo::git(root, &["log", "-1", "--format=%B", &sha]).ok()?;
     let refs: Vec<String> = kanbanr_core::scm::parse_refs(&message)
         .into_iter()

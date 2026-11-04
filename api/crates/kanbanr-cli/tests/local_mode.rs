@@ -1924,6 +1924,12 @@ fn cli_trace_and_why_follow_the_chain_in_both_directions() {
 
     // A line nobody claimed says so, rather than borrowing the file's other references.
     std::fs::write(work.join("src").join("stray.rs"), "fn nobody_asked() {}\n").unwrap();
+    assert!(git(&["add", "-A"]).status.success());
+    assert!(
+        git(&["commit", "-q", "-m", "[no-ref] a stray line"])
+            .status
+            .success()
+    );
     let orphan = run(&["why", "src/stray.rs:1"]);
     assert!(orphan.contains("carries no reference"), "{orphan}");
 
@@ -5327,6 +5333,50 @@ fn git_doctor_unfinished_commits_on_line() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-012 R-1: on a workflow with no integrate role, commits on a line serving an item at a
+/// stage after build are not reported as not integrated.
+#[test]
+fn git_doctor_no_integrate_role_status_past_build_is_clean() {
+    let (base, work) = togaf_scratch("gd-no-integrate");
+    git_model_board(&base, &work, true, false);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // The default workflow labels Completed as the integrate stage; take the label off, so no
+    // stage holds the role. Written to this test's own board, under the temporary directory.
+    let board = base.join("code").join("shop.kanbanr");
+    assert!(board.starts_with(std::env::temp_dir()));
+    let file = board.join("projects/shop/config.yaml");
+    let mut config: kanbanr_core::yaml::Value =
+        kanbanr_core::yaml::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    config["gates"]["Completed"]["roles"] = kanbanr_core::yaml::Value::Array(Vec::new());
+    std::fs::write(&file, kanbanr_core::yaml::to_string(&config).unwrap()).unwrap();
+
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    ok(run_in(&base, &work, &["move", "FEAT-001", "In Progress"]));
+    ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
+    ok(git_in(&base, &work, &["checkout", "-q", "sprint/SP-001"]));
+    commit_file_in(
+        &base,
+        &work,
+        "cart.txt",
+        "cart\n",
+        "cart\n\nRefs: kanbanr:FEAT-001",
+    );
+    ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+
+    let found = run_in(&base, &work, &["git", "doctor"]);
+    let said = String::from_utf8_lossy(&found.stdout);
+    assert!(!said.contains("not integrated"), "{said}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-191 R-3: branches that name nothing on the board, and a release fix the line lacks, are
 /// warnings; a forward merge clears the latter; spikes are never reported.
 #[test]
@@ -7668,6 +7718,140 @@ fn spec_file_refuses_an_empty_file() {
     assert!(!shown.contains("Original spec"), "{shown}");
 }
 
+/// Set up for the `why` tests on uncommitted lines (DEF-011): a repo with one committed file, an
+/// approved item and no branch for it yet.
+fn why_scratch(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (base, work) = togaf_scratch(name);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    ok(git_in(&base, &work, &["init", "--initial-branch=main"]));
+    ok(git_in(&base, &work, &["config", "user.name", "T"]));
+    ok(git_in(&base, &work, &["config", "user.email", "t@x"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(&base, &work, &["config", "method", "--off"]));
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["feature", "add", "--title", "Cart", "--milestone", "MS-001"],
+    ));
+    let def = base.join("def.yaml");
+    std::fs::write(&def, "statement: Keep a cart\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    ok(run_in(&base, &work, &["approve", "FEAT-001"]));
+    std::fs::write(work.join("a.rs"), "fn committed() {}\n").unwrap();
+    ok(git_in(&base, &work, &["add", "-A"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["commit", "-q", "-m", "[no-ref] a file"],
+    ));
+    (base, work)
+}
+
+/// Appends an unstaged tail to the committed file and writes a new untracked file.
+fn why_dirty(work: &std::path::Path, tail: &str) {
+    let mut text = std::fs::read_to_string(work.join("a.rs")).unwrap();
+    text.push_str(tail);
+    std::fs::write(work.join("a.rs"), text).unwrap();
+    std::fs::write(work.join("new.rs"), "fn brand_new() {}\n").unwrap();
+}
+
+/// DEF-011 R-1: an uncommitted line on an item's branch is reported as not committed, with the
+/// item the branch belongs to.
+#[test]
+fn why_names_the_branch_item_for_an_uncommitted_line() {
+    let (base, work) = why_scratch("why-uncommitted-item");
+    let started = run_in(&base, &work, &["start", "FEAT-001"]);
+    assert!(started.status.success());
+    why_dirty(&work, "fn fresh() {}\n");
+    for target in ["a.rs:2", "new.rs:1"] {
+        let out = run_in(&base, &work, &["why", target]);
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(said.contains("is not committed yet"), "{said}");
+        assert!(said.contains("belongs to FEAT-001"), "{said}");
+        assert!(!said.contains("Nothing on the board explains"), "{said}");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-011 R-2: off an item's branch, an uncommitted line is still not committed, and no item is
+/// named.
+#[test]
+fn why_says_uncommitted_when_no_branch_names_an_item() {
+    let (base, work) = why_scratch("why-uncommitted-none");
+    why_dirty(&work, "fn fresh() {}\n");
+    for target in ["a.rs:2", "new.rs:1"] {
+        let out = run_in(&base, &work, &["why", target]);
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(said.contains("not committed yet"), "{said}");
+        assert!(said.contains("names no item"), "{said}");
+        assert!(!said.contains("Nothing on the board explains"), "{said}");
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-011 R-3: an annotation on an uncommitted line still answers.
+#[test]
+fn why_prefers_the_annotation_on_an_uncommitted_line() {
+    let (base, work) = why_scratch("why-uncommitted-annotated");
+    why_dirty(&work, "// kept for a week (FEAT-001)\nfn fresh() {}\n");
+    let out = run_in(&base, &work, &["why", "a.rs:3"]);
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(said.contains("from the annotation on the code"), "{said}");
+    assert!(!said.contains("not committed yet"), "{said}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-011 R-4: a committed line that no commit or annotation names still carries no reference.
+#[test]
+fn why_still_reports_a_committed_orphan_line() {
+    let (base, work) = why_scratch("why-committed-orphan");
+    let out = run_in(&base, &work, &["why", "a.rs:1"]);
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(said.contains("carries no reference"), "{said}");
+    assert!(!said.contains("not committed yet"), "{said}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A scratch repository with a board, one charter goal and one defined item (DEF-009). Under
 /// `std::env::temp_dir()` so the CLI never walks up to the real board.
 struct JsonFixture {
@@ -7900,4 +8084,19 @@ fn every_read_command_prints_json_with_the_flag() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
+}
+
+/// DEF-009 with DEF-011: an uncommitted line answers `--json` too, naming the branch's item.
+#[test]
+fn why_json_on_an_uncommitted_line_names_the_branch_item() {
+    let (base, work) = why_scratch("why-json-uncommitted");
+    let started = run_in(&base, &work, &["start", "FEAT-001"]);
+    assert!(started.status.success(), "{started:?}");
+    std::fs::write(work.join("new.rs"), "fn new() {}\n").unwrap();
+    let out = run_in(&base, &work, &["--json", "why", "new.rs:1"]);
+    assert!(out.status.success(), "{out:?}");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["uncommitted"], true, "{v}");
+    assert_eq!(v["references"][0]["reference"], "FEAT-001", "{v}");
+    let _ = std::fs::remove_dir_all(&base);
 }

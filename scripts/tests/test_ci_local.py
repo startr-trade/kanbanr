@@ -201,5 +201,35 @@ class ScopedWrites(Board):
         self.assert_fails("a scope act that touches the config")
 
 
+class CommandLine(unittest.TestCase):
+    """The script's command line (DEF-010): help and a mistyped flag never start the gate."""
+
+    SCRIPT = Path(ci_local.__file__).resolve()
+    FIRST_LINE = "make ci: a clean copy"
+
+    def run_script(self, *cmd: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            list(cmd), cwd=ci_local.ROOT, capture_output=True, text=True, timeout=30
+        )
+
+    def test_help_prints_usage_and_runs_nothing(self) -> None:
+        for flag in ("--help", "-h"):
+            r = self.run_script(sys.executable, str(self.SCRIPT), flag)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("usage:", r.stdout)
+            self.assertNotIn(self.FIRST_LINE, r.stdout)
+
+    def test_unknown_argument_is_refused_and_runs_nothing(self) -> None:
+        r = self.run_script(sys.executable, str(self.SCRIPT), "--bogus")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("unrecognized arguments: --bogus", r.stderr)
+        self.assertNotIn(self.FIRST_LINE, r.stdout)
+
+    def test_ci_local_sh_passes_help_through(self) -> None:
+        r = self.run_script("sh", "scripts/ci-local.sh", "--help")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("usage:", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
