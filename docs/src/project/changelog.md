@@ -14,6 +14,12 @@ All notable changes to kanbanr are documented here. The format follows
   what surprises people: gates need a charter, an item merged but not yet released carries over at a
   sprint close, and each item needs its `release` sign-off before main.
 
+### Fixed
+
+- **An empty spec file no longer blanks an item's spec (DEF-002).** `--spec-file` on `feature add`
+  and `feature edit` refuses a file that is empty or only whitespace, names it, and changes
+  nothing. To clear a spec on purpose, pass `--spec ""`.
+
 ## [0.4.0] - 2026-10-22
 
 ### Added

@@ -4739,7 +4739,14 @@ fn run_remote(cli: &Cli, client: &Backend, cmd: &RemoteCmd) -> anyhow::Result<()
 
 fn read_spec(spec: Option<String>, spec_file: Option<String>) -> anyhow::Result<Option<String>> {
     if let Some(path) = spec_file {
-        Ok(Some(std::fs::read_to_string(path)?))
+        let text = std::fs::read_to_string(&path)?;
+        // A failed export can leave an empty file; saving it would erase the spec.
+        if text.trim().is_empty() {
+            anyhow::bail!(
+                "{path} is empty: nothing was changed. To clear a spec on purpose, pass --spec \"\""
+            );
+        }
+        Ok(Some(text))
     } else {
         Ok(spec)
     }
