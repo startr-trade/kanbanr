@@ -5,21 +5,34 @@ surfaces below: nothing listed as **stable** changes incompatibly before 2.0. Th
 promise, written down so you can rely on it and contributors can check a change against it
 (`ADR-0012` on the board records the decision).
 
-Until 1.0.0 the feature set is frozen: the 0.1.x releases take fixes, documentation, and the work
-that makes this promise checkable — no new features.
+Until 1.0.0 nothing is promised: a release may add to any surface below, and the changelog says
+what changed. `schema_version` still guards a board: an older kanbanr refuses a board it would
+misread.
 
 ## Stable from 1.0
 
 | Surface | What is kept |
 |---|---|
-| **The board on disk** | The folder layout (`projects/<id>/` with `config.yaml`, `charter.yaml`, `features/<status>/<CODE>.yaml`, `milestones/`, `docs/`, `lessons.yaml`, `sprints.yaml`, `releases.yaml`), the board's saved processes (`processes/<name>.yaml`), and the meaning of every documented field. A board written by any 1.x opens in every later 1.x. |
-| **`config.yaml`** | Statuses, transitions, gates and their check vocabulary, cadence settings, `schema_version`, and the `process` record of where the workflow came from. A workflow file you wrote for 1.0 loads in every 1.x. |
+| **The board on disk** | The folder layout (`projects/<id>/` with `config.yaml`, `charter.yaml`, `features/<status>/<CODE>.yaml`, `milestones/`, `docs/`, `lessons.yaml`, `sprints.yaml`, `releases.yaml`, `scopes.yaml`), the board's saved processes (`processes/<name>.yaml`), and the meaning of every documented field. A board written by any 1.x opens in every later 1.x. |
+| **`config.yaml`** | Statuses, transitions, gates and their check vocabulary, cadence settings (including `release_gates` and `release_prepare`), `codes`, `schema_version`, and the `process` record of where the workflow came from. A workflow file you wrote for 1.0 loads in every 1.x. |
 | **Process files** | The workflow file format, its `process:` header (name, description, version), and the personal library's place, `~/.kanbanr/processes/` (or `KANBANR_PROCESSES_DIR`). |
 | **The `.kanbanr` marker** | Its fields (`project`, `data_dir`) and how the board is found from it. |
 | **CLI commands and flags** | Every documented command and flag keeps its name and meaning. Exit status: `0` on success and non-zero on failure, with `kanbanr check` (and `check --file`) exiting non-zero when something is missing, so scripts and CI can rely on it. |
 | **`--json` output** | Every field a command's `--json` prints keeps its name, type and meaning. |
 | **The read API** | Version 1 of the public read routes `kanbanr serve` answers: the routes, parameters, media types, fields and documented values that its [OpenAPI document](../reference/http-api.md#the-openapi-document) (`GET /api/openapi.json`) describes. A breaking change is published as v2 under `/api/v2/…`, with v1 kept for a deprecation period. |
-| **The Claude Code integration** | The commit trailer (`Refs: kanbanr:FEAT-…`), the hook commands the skill and plugin register, and `kanbanr skill install` / `hooks install` writing them where Claude Code finds them. |
+| **The Claude Code integration** | The commit trailers (`Refs: kanbanr:FEAT-…` and `Agent-Scope:`), the hook commands the skill and plugin register (including the pre-push hook), and `kanbanr skill install` / `hooks install` writing them where Claude Code finds them. |
+
+## Experimental in 1.0, stable from 1.1
+
+These are days old and have had no outside use, so 1.0 does not promise them. They are promised
+stable from 1.1 (the maintainer's decision, 3 November 2026). Until then they may change, with the
+changelog saying so.
+
+| Surface | What it covers |
+|---|---|
+| **Agent scopes** | `scopes.yaml`, the `kanbanr scope` commands and the `Agent-Scope:` trailer. |
+| **Release stages** | The `release_stages`, `release_gates` and `release_prepare` settings, and the `kanbanr release` commands that use them. |
+| **Kind codes** | The `codes` setting and the `--kind` flag that picks an item's prefix. |
 
 ## Not covered
 
