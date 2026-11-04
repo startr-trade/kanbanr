@@ -125,7 +125,10 @@ A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (sem
 
 ### When a gate isn't met
 
-- **A blocking gate** refuses the move and lists everything missing.
+- **A blocking gate** refuses the move and lists everything missing. On a project with no
+  charter nothing is refused: the move goes through with one warning saying what the gate would
+  have needed and that `kanbanr charter set` turns the gates on. A move the gate would have passed
+  says nothing.
 - **`docs_cover`** names each rule the item fails and the view doc to add it to:
   `[zachman] FEAT-012 is not referenced from architecture/zachman.md — add a link to it there`.
   Add the link in that doc, then move again. A move that passes still prints any rule it now

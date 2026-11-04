@@ -46,7 +46,8 @@ Ask for the things that make the rest of this guide work:
 > before anything is tagged.
 
 **Do the charter first.** Gates aren't enforced until a project has one, and items created before it
-are exempt. Claude asks for the project's purpose and goals. Every item then links to a goal.
+are exempt. Without one, a move that a gate would have refused still goes through, with a warning
+saying what was missing. Claude asks for the project's purpose and goals. Every item then links to a goal.
 
 > Open the monitor, with writes on.
 

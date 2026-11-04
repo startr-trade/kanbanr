@@ -1585,11 +1585,12 @@ impl Store {
         reason: Option<&str>,
     ) -> Result<GateOutcome> {
         let pass = GateOutcome::default();
-        if charter.adopted_at.trim().is_empty() {
-            return Ok(pass);
-        }
+        // With no adopted charter the gates are not enforced, but the project should learn that:
+        // the gate is judged as usual and what it would have refused comes back as one warning.
+        // Nothing is said when the move would have passed, so the warning never fires on everything.
+        let no_charter = charter.adopted_at.trim().is_empty();
         let feature = project.feature(code)?;
-        if crate::before(&feature.created_at, &charter.adopted_at) {
+        if !no_charter && crate::before(&feature.created_at, &charter.adopted_at) {
             return Ok(pass);
         }
         let gates = project.config.effective_gates();
@@ -1599,14 +1600,41 @@ impl Store {
         if !gate.applies_to(feature.kind.as_deref()) {
             return Ok(pass);
         }
+        // There are no goals to judge against without a charter, so the goal checks are left out.
         let goal_ids = charter.goal_ids();
+        let known = (!no_charter).then_some(&goal_ids);
         // Judged as if the item were already there (FEAT-197): what a stage asks of its items
         // applies to the item entering it.
         let mut failing =
-            crate::readiness::evaluate_entering(feature, Some(&goal_ids), &gate.requires, ctx, to);
+            crate::readiness::evaluate_entering(feature, known, &gate.requires, ctx, to);
         failing.extend(crate::readiness::signoff_gaps(feature, &gate.signoffs));
+        if no_charter {
+            failing.retain(|g| {
+                !matches!(
+                    g.check,
+                    crate::readiness::Check::Goals | crate::readiness::Check::GoalsKnown
+                )
+            });
+            if failing.is_empty() {
+                return Ok(pass);
+            }
+            let missing: Vec<&str> = failing.iter().map(|g| g.message.as_str()).collect();
+            return Ok(GateOutcome {
+                warnings: vec![crate::readiness::Gap {
+                    check: crate::readiness::Check::Definition,
+                    requirement: None,
+                    level: crate::readiness::Level::Warning,
+                    label: "no charter".into(),
+                    message: format!(
+                        "no charter, so gates are not enforced; this move would have needed: {}. \
+                         Turn them on: kanbanr charter set",
+                        missing.join("; ")
+                    ),
+                }],
+            });
+        }
         let mut warnings =
-            crate::readiness::evaluate_entering(feature, Some(&goal_ids), &gate.warns, ctx, to);
+            crate::readiness::evaluate_entering(feature, known, &gate.warns, ctx, to);
         if failing.is_empty() {
             return Ok(GateOutcome { warnings });
         }

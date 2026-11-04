@@ -4190,6 +4190,69 @@ requirements:
         assert_eq!(moved.history.last().unwrap().override_reason, None);
     }
 
+    /// A project with no charter, and a blocking gate on Scheduled (DEF-004).
+    fn uncharted_board(gate: crate::config::Gate) -> (Store, tempdir::TempDirLike, String) {
+        use crate::models::FeatureDefinition;
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart for 7 days".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Scheduled".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        (store, d, f.code)
+    }
+
+    /// DEF-004 R-1: with no charter a move the gate would have refused goes through, and says what
+    /// was missing and how to turn the gates on.
+    #[test]
+    fn no_charter_warns_what_a_gate_would_refuse() {
+        use crate::readiness::{Check, Condition};
+        let (store, _d, code) = uncharted_board(crate::config::Gate {
+            requires: vec![
+                Condition::Check(Check::Requirements),
+                Condition::Check(Check::Goals),
+            ],
+            ..Default::default()
+        });
+        let (moved, warnings) = store
+            .move_feature_gated("demo", &code, "Scheduled", None)
+            .unwrap();
+        assert_eq!(moved.status, "Scheduled");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        let said = &warnings[0].message;
+        assert!(said.contains("no requirements"), "{said}");
+        assert!(said.contains("kanbanr charter set"), "{said}");
+        assert!(
+            !said.contains("goal link"),
+            "goals have no charter to judge by: {said}"
+        );
+    }
+
+    /// DEF-004 R-2: with no charter a move the gate would have passed says nothing.
+    #[test]
+    fn no_charter_is_silent_when_the_gate_would_pass() {
+        use crate::readiness::{Check, Condition};
+        let (store, _d, code) = uncharted_board(crate::config::Gate {
+            requires: vec![Condition::Check(Check::Statement)],
+            ..Default::default()
+        });
+        let (moved, warnings) = store
+            .move_feature_gated("demo", &code, "Scheduled", None)
+            .unwrap();
+        assert_eq!(moved.status, "Scheduled");
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
     /// FEAT-113 R-3: an override passes a blocking gate, and the reason stays in the history.
     #[test]
     fn an_override_is_recorded_in_history() {
@@ -6794,9 +6857,13 @@ requirements:
             .unwrap();
         assert_eq!(moved.status, "Scheduled");
         assert!(moved.definition.is_none());
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        // The gate's own warning comes after the one about having no charter (DEF-004).
+        let warning = warnings
+            .iter()
+            .find(|g| g.check == crate::readiness::Check::DocsUpdated)
+            .expect("the default docs are said");
         assert_eq!(
-            warnings[0].message,
+            warning.message,
             format!(
                 "{} has no definition: the stage's default docs (architecture/zachman.md, \
                  architecture/catalog.md, architecture/data.md) are not recorded",
