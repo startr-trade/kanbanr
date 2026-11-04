@@ -361,8 +361,8 @@ the **last one is always the cut**. Every move is recorded on the release with w
 - **A middle stage** is a board change only.
 - **Back a stage** — staging to test after a failed check — needs `--reason`, which is recorded.
   Nothing moves back from production.
-- **The last stage** is the cut. It ships the finished items, writes the notes, tags the code
-  repository with the version and **fast-forwards the main branch** to the release, so main's tip
+- **The last stage** is the cut. It ships the finished items, writes the notes (the notes file at the tagged commit when one is
+  configured, otherwise a generated list), tags the code repository with the version and **fast-forwards the main branch** to the release, so main's tip
   is exactly the tagged commit. Before anything changes it checks that the working tree has no
   uncommitted changes, that the release branch exists, that the tag does not, and that main has no
   commits the release lacks; any failure refuses with its reason and **changes nothing**. If main
