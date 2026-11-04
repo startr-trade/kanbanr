@@ -6,6 +6,12 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gates say so when there is no charter (DEF-004).** On a project with no charter, a move a gate
+  would have refused still goes through, but now warns what the gate would have needed and that
+  `kanbanr charter set` turns the gates on. A move the gate would have passed says nothing.
+
 ### Added
 
 - **Process guides, starting with TOGAF, sprints and releases (DOC-001).** The book has a new
