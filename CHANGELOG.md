@@ -14,6 +14,12 @@ All notable changes to kanbanr are documented here. The format follows
   what surprises people: gates need a charter, an item merged but not yet released carries over at a
   sprint close, and each item needs its `release` sign-off before main.
 
+### Fixed
+
+- **`kanbanr check` names a manual test nobody ran (DEF-003).** A manual test that is not green is
+  listed under its item as `manual test not run: R-4: <name>`, and as `open_manual` in `--json`.
+  It is a note, not a gap: readiness and the exit status are unchanged.
+
 ## [0.4.0] - 2026-10-22
 
 ### Added

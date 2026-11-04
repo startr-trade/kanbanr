@@ -5827,6 +5827,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                         println!("    {}", gap.as_str().unwrap_or(""));
                     }
                 }
+                // A manual test nobody ran: a note, not a gap (DEF-003).
+                for open in r["open_manual"].as_array().into_iter().flatten() {
+                    println!("    manual test not run: {}", open.as_str().unwrap_or(""));
+                }
                 // The next stage: what it is for, and what moving on still needs.
                 for next in r["next"].as_array().into_iter().flatten() {
                     let status = next["status"].as_str().unwrap_or("");

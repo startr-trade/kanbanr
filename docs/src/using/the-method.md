@@ -97,6 +97,9 @@ stamped with the project revision it saw. Name a test exactly as your runner pri
 an older revision is reported as **stale evidence**, not as proof; re-running the suite refreshes
 it. Mark a check a person performs as `kind: manual` — it is exempt from the rot sweep, so use it
 only when a person really did it.
+`kanbanr check` names each manual test that is not yet green, as `manual test not run: R-4: <name>`
+(`open_manual` in `--json`). It is a note, not a gap: readiness and the exit status do not change,
+but an unrun check is seen before you call the item done.
 
 ## The method by stage role
 
