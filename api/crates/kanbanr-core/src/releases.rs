@@ -2061,6 +2061,13 @@ pub fn promote_with(
         match cut_with(store, id, version, Some(change)) {
             Ok(cut) => {
                 let mut notes = cut.notes;
+                // The notes that shipped, when there are some at the tip, replace the generated
+                // text; a read that fails keeps the generated notes.
+                let shipped_notes = repo.and_then(|r| shipped_notes_at(r, store, id, &w, &cut.release));
+                let wrote = shipped_notes.is_some();
+                if let Some(text) = shipped_notes {
+                    notes = text;
+                }
                 if w.patch && !forward.is_empty() {
                     notes.push_str(&format!("\n## To merge forward into {integration}\n\n"));
                     for c in &forward {
@@ -2070,6 +2077,8 @@ pub fn promote_with(
                             c.subject
                         ));
                     }
+                }
+                if wrote || (w.patch && !forward.is_empty()) {
                     store.write_doc(id, &cut.release.notes_doc, &notes)?;
                 }
                 done.release = cut.release;
@@ -2097,6 +2106,27 @@ pub fn promote_with(
     done.forward_into = integration;
     done.next = next_hint(store, id, version, repo, &done, &w.main);
     Ok(done)
+}
+
+/// The configured notes file at the release tip, when there is one to read (DEF-005).
+fn shipped_notes_at(
+    repo: &Path,
+    store: &Store,
+    id: &str,
+    w: &Worked,
+    release: &Release,
+) -> Option<String> {
+    let project = store.load_meta(id).ok()?;
+    let template = project.config.cadence.release_prepare.notes.as_ref()?;
+    let ph = crate::releaseprep::Placeholders::new(&release.version, &release.name, &today_ymd())
+        .ok()?;
+    let path = crate::releaseprep::expand(template, &ph);
+    crate::releaseprep::check_repo_path(&path).ok()?;
+    let tip = coderepo::rev_parse(repo, &w.branch).ok()?;
+    coderepo::read_blob(repo, &tip, &path)
+        .ok()
+        .flatten()
+        .map(|(_, t)| t)
 }
 
 /// Why a plan that is not ready is refused: a back move's reason or an "already at" as before;

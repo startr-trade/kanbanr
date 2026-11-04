@@ -14,6 +14,13 @@ All notable changes to kanbanr are documented here. The format follows
   what surprises people: gates need a charter, an item merged but not yet released carries over at a
   sprint close, and each item needs its `release` sign-off before main.
 
+### Fixed
+
+- **The board's copy of a release's notes is the notes that shipped (DEF-005).** At the cut, the
+  `releases/<V>.md` board doc holds the written notes file at the tagged commit when the project
+  configures one, instead of the generated requirements list. The generated text is used only
+  when there is no such file or it cannot be read.
+
 ## [0.4.0] - 2026-10-22
 
 ### Added
