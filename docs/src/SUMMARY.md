@@ -29,6 +29,18 @@
 - [Choosing a guide](guides/index.md)
 - [TOGAF with Claude](guides/togaf-with-claude.md)
 - [TOGAF from the command line](guides/togaf-cli.md)
+- [The default workflow with Claude](guides/default-with-claude.md)
+- [The default workflow from the command line](guides/default-cli.md)
+- [Scheduled with Claude](guides/scheduled-with-claude.md)
+- [Scheduled from the command line](guides/scheduled-cli.md)
+- [PDCA with Claude](guides/pdca-with-claude.md)
+- [PDCA from the command line](guides/pdca-cli.md)
+- [Design control with Claude](guides/design-control-with-claude.md)
+- [Design control from the command line](guides/design-control-cli.md)
+- [Scrum with Claude](guides/scrum-with-claude.md)
+- [Scrum from the command line](guides/scrum-cli.md)
+- [Agile with Claude](guides/agile-with-claude.md)
+- [Agile from the command line](guides/agile-cli.md)
 
 # Reference
 

@@ -25,7 +25,7 @@ kanbanr project init shop --workflow pdca      # choose at creation
 | `scheduled` | Planned → Scheduled → Completed | the built-in rule, plus the method |
 | `togaf` | Vision → Business Arch → System Design → Implementation → Migration → Operations | the definition grows phase by phase |
 | `pdca` | Plan → Do → Check → Act | agreement to start, evidence to check, a review sign-off to act |
-| `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs at review and validation |
+| `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs before verification and before release |
 | `scrum` | Backlog → Ready → In Progress → Review → Testing → Done → Released | Definition of Ready and of Done; work starts in the sprint; sprints, releases and points on |
 | `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on |
 

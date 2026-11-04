@@ -46,8 +46,8 @@ The plan quotes that output under *Branching*, lists which stage holds each role
 integrate, release) under *Process*, and says that the method's gates are on. Approving the plan
 applies it. What each role then asks for is in [The method by stage role](the-method.md#the-method-by-stage-role).
 
-Not sure which process to pick? [Choosing a guide](../guides/index.md) lists the processes that have
-a guide, and [Processes](processes.md) compares all of them and their gates.
+Not sure which process to pick? [Choosing a guide](../guides/index.md) lists every process and its
+guides, and [Processes](processes.md) compares them and their gates.
 
 ## Starting work: a plan you accept
 
@@ -303,13 +303,15 @@ Claude mentions it once and asks whether to update. It never updates on its own.
 
 The same conversation, with only as many decisions as each workflow asks for:
 
-| Workflow | Your decisions per item |
-|---|---|
-| default (Kanban) | one approval to start; Completed when the tests are green |
-| Scrum | its size as a question at Ready (the Definition of Ready); approval and its sprint to start; Done needs green tests |
-| PDCA | one approval at Do; a review sign-off at Act |
-| design control | approval, plus sign-offs at Review and Validation |
-| your own process | whatever its gates ask, as the table above |
+| Workflow | Your decisions per item | Guide |
+|---|---|---|
+| default (Kanban) | approval and `design-review` to start; `docs-folded` to complete. The move to Completed doesn't ask for green tests, so ask Claude to record them first | [Default](../guides/default-with-claude.md) |
+| scheduled | approval and `design-review` to schedule; `docs-folded` to complete. Completed doesn't ask for green tests either | [Scheduled](../guides/scheduled-with-claude.md) |
+| PDCA | approval and `design-review` at Do; `docs-folded` at Check; a `review` sign-off at Act | [PDCA](../guides/pdca-with-claude.md) |
+| design control | approval and `design-review` at Design; `verification-review` before Verification; `docs-folded` at Validation; `validation` to reach Released | [Design control](../guides/design-control-with-claude.md) |
+| Scrum | its size as a question at Ready (the Definition of Ready); approval, `design-review` and its sprint to start; green tests and `docs-folded` for Done; the release is yours to promote and cut | [Scrum](../guides/scrum-with-claude.md) |
+| agile | approval at Design; `design-review` at Develop; green tests and `docs-folded` at Review; the release is yours to promote and cut | [Agile](../guides/agile-with-claude.md) |
+| your own process | whatever its gates ask, as the table above | |
 
 For the whole journey under one process, including its sprints and releases, see the
 [Process guides](../guides/index.md).
