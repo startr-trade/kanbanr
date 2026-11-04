@@ -10,6 +10,13 @@ The board viewer is pluggable — this extension is the VS Code viewer plus a th
 wrapper over the same single runtime. It holds no project state of its own; it
 shells out to the `kanbanr` binary and frames the live monitor.
 
+## Getting started
+
+[![Getting started with kanbanr: a 2-minute video](https://img.youtube.com/vi/eBe9Z-OrenE/maxresdefault.jpg)](https://youtu.be/eBe9Z-OrenE)
+
+*A 2-minute video: installing kanbanr, the first board, goals and workflows. Installing this
+extension itself is covered under [Install](#install).*
+
 ## What it does
 
 This extension contributes the following commands (Command Palette → `kanbanr:`):
