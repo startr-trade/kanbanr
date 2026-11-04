@@ -1235,6 +1235,90 @@ mod tests {
     }
 
     #[test]
+    fn redefine_keeps_the_approval_history() {
+        use crate::models::FeatureDefinition;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let f = store
+            .add_feature("demo", "Cart", "spec", "M", None)
+            .unwrap();
+        let def = FeatureDefinition {
+            statement: "Keep a cart for 7 days".into(),
+            ..Default::default()
+        };
+        store
+            .set_feature_definition("demo", &f.code, Some(def.clone()))
+            .unwrap();
+        store.approve_feature("demo", &f.code, "the user").unwrap();
+        store
+            .unapprove_feature("demo", &f.code, "the user", "why")
+            .unwrap();
+        let after = store
+            .set_feature_definition("demo", &f.code, Some(def))
+            .unwrap();
+        let history = &after.definition.unwrap().approvals;
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].verdict, "approved");
+        assert_eq!(history[1].verdict, "withdrawn");
+    }
+
+    #[test]
+    fn redefine_keeps_the_signoffs_and_lapses_them() {
+        use crate::models::FeatureDefinition;
+        let (store, _d, code) = gated_board(crate::config::Gate {
+            signoffs: vec!["design-review".into()],
+            ..Default::default()
+        });
+        let signed = store
+            .signoff_feature("demo", &code, "design-review", "Ada L", "", "")
+            .unwrap();
+        let old = signed.definition.unwrap();
+        assert!(old.signoff_current("design-review").is_some());
+        let after = store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(FeatureDefinition {
+                    statement: "A different statement entirely".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let def = after.definition.unwrap();
+        assert_eq!(def.signoffs, old.signoffs, "the entry remains");
+        assert!(
+            def.signoff_current("design-review").is_none(),
+            "and reads as lapsed"
+        );
+        assert!(def.signoff_latest("design-review").is_some());
+    }
+
+    #[test]
+    fn redefine_does_not_double_history_the_file_holds() {
+        use crate::models::FeatureDefinition;
+        let (store, _d, code) = gated_board(crate::config::Gate {
+            signoffs: vec!["design-review".into()],
+            ..Default::default()
+        });
+        let signed = store
+            .signoff_feature("demo", &code, "design-review", "Ada L", "", "")
+            .unwrap();
+        let old = signed.definition.unwrap();
+        let mut incoming: FeatureDefinition = old.clone();
+        let mut extra = old.signoffs[0].clone();
+        extra.id = "release".into();
+        incoming.signoffs.push(extra.clone());
+        let after = store
+            .set_feature_definition("demo", &code, Some(incoming))
+            .unwrap();
+        let def = after.definition.unwrap();
+        assert_eq!(def.approvals, old.approvals, "approvals once each");
+        assert_eq!(def.signoffs.len(), old.signoffs.len() + 1);
+        assert_eq!(&def.signoffs[..old.signoffs.len()], &old.signoffs[..]);
+        assert_eq!(def.signoffs.last().unwrap(), &extra, "the new one last");
+    }
+
+    #[test]
     fn auto_completion_records_the_move_like_any_other() {
         let (store, _d) = temp_store();
         new_project(&store, "demo");
