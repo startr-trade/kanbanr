@@ -34,6 +34,13 @@ All notable changes to kanbanr are documented here. The format follows
 - **`kanbanr check` names a manual test nobody ran (DEF-003).** A manual test that is not green is
   listed under its item as `manual test not run: R-4: <name>`, and as `open_manual` in `--json`.
   It is a note, not a gap: readiness and the exit status are unchanged.
+### Fixed
+
+- **The retro's proven count and defect lines read as they mean (DEF-006).** `requirements proven
+  by a green test: 56/56` now adds `(1 with a test still open)` when a proven requirement also has
+  a test that is not green; `--json` gains `evidence.proven_with_open_test` and `proven` is
+  unchanged. The two defect lines are worded apart: `added as defect items` (scope that joined as
+  a defect) and `defects recorded with their cause` (items carrying a cause).
 
 ## [0.4.0] - 2026-10-22
 
