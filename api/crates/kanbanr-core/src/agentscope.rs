@@ -33,6 +33,9 @@ pub const POINTER_FILE: &str = "kanbanr-scope.yaml";
 pub const TRAILER: &str = "Agent-Scope";
 /// Where Claude Code makes an agent's worktree, relative to the main worktree.
 pub const AGENT_WORKTREES: &str = ".claude/worktrees";
+/// The name Claude Code gives an agent's worktree under [`AGENT_WORKTREES`]. A worktree there with
+/// another name is a person's or a coordinator's own.
+pub const AGENT_WORKTREE_PREFIX: &str = "agent-";
 /// How long a scope lasts unless the coordinator says otherwise (Q3).
 pub const DEFAULT_HOURS: u32 = 8;
 /// The longest a scope may last; it is renewable (Q3).
@@ -306,9 +309,16 @@ impl WorktreeFacts {
         }
     }
 
-    /// Is this a worktree Claude Code made for an agent?
+    /// Is this a worktree Claude Code made for an agent? It lies under `.claude/worktrees/` and its
+    /// folder name starts with `agent-`; a worktree with a scope bound to it is an agent's whatever
+    /// its name, which `resolve_with` checks apart from this.
     pub fn under_agent_worktrees(&self) -> bool {
-        self.linked && self.root.starts_with(self.main_root.join(AGENT_WORKTREES))
+        self.linked
+            && self.root.starts_with(self.main_root.join(AGENT_WORKTREES))
+            && self
+                .root
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with(AGENT_WORKTREE_PREFIX))
     }
 }
 
@@ -1742,6 +1752,30 @@ mod tests {
             resolve_with(&scopes, Some(&wt("", Some("main"))), None, NOW),
             ProcessScope::Unscoped
         );
+    }
+
+    /// DEF-017 R-3 (and R-1, R-2 at the resolver): only a worktree named `agent-*` is an agent's
+    /// by its place; a scope bound to a worktree holds it whatever it is called.
+    #[test]
+    fn a_bound_scope_holds_whatever_the_worktree_is_called() {
+        let refused = |p: &ProcessScope| matches!(p, ProcessScope::Refused { .. });
+        let mut s = scope(Role::Build);
+        s.worktree = Some(".claude/worktrees/coordinator".into());
+        let scopes = [s];
+        let coord = wt(".claude/worktrees/coordinator", Some("main"));
+        assert!(!coord.under_agent_worktrees());
+        // Bound, the pointer gone: still refused.
+        assert!(refused(&resolve_with(&scopes, Some(&coord), None, NOW)));
+        // Unbound and not named agent-*: the ordinary hooks.
+        let free = wt(".claude/worktrees/merge-v05", Some("main"));
+        assert_eq!(
+            resolve_with(&scopes, Some(&free), None, NOW),
+            ProcessScope::Unscoped
+        );
+        // Named agent-*, unbound: refused.
+        let agent = wt(".claude/worktrees/agent-q", Some("main"));
+        assert!(agent.under_agent_worktrees());
+        assert!(refused(&resolve_with(&scopes, Some(&agent), None, NOW)));
     }
 
     /// FEAT-214 R-5: a commit under a build scope lands only on its branch, names its item, and

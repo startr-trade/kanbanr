@@ -34,6 +34,12 @@ All notable changes to kanbanr are documented here. The format follows
   document is the notes as they shipped, and its relative links resolve in the book, not on the
   board. doctor now skips document links in `releases/` and still reports unknown items,
   requirements, milestones and goals there, and broken links in every other doc.
+- **A worktree the coordinator makes under `.claude/worktrees` can commit (DEF-017).** kanbanr
+  treated every worktree there as an agent's, so a coordinator resolving a merge in its own was
+  refused, and could not be scoped at all once its item had finished. Now only a worktree named
+  `agent-*`, the name Claude Code gives an agent's, is refused without a scope; a scope bound to a
+  worktree still holds it whatever it is called.
+
 - **Redefining an item from a file keeps its sign-offs and approval history (DEF-008).** `feature
   define` dropped the approval history and the sign-offs when the file held none, though a
   redefinition must lapse an agreement, not erase the record of who gave it. Both are now carried

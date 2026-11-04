@@ -157,7 +157,11 @@ commits on feat/FEAT-214-agent-scopes naming FEAT-214. Report what you needed to
 not work around it.
 ```
 
-A worktree under `.claude/worktrees/` with no scope bound to it is refused every write and commit.
+A worktree under `.claude/worktrees/` whose name starts with `agent-`, the name Claude Code gives an
+agent's, is refused every write and commit while no scope is bound to it. A worktree you or the
+coordinator make there for your own work, such as one to resolve a merge, takes any other name and
+commits under the ordinary hooks; once a scope is bound to a worktree, it holds whatever the
+worktree is called.
 When the agent finishes its item's last task, the item stays where it is: Claude moves it. Every
 write and commit an agent makes is recorded as you, by the agent for its item: on the activity
 entry and the event, and as an `Agent-Scope:` trailer on the board commit and the code commit.

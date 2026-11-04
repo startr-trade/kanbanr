@@ -6533,6 +6533,54 @@ fn agent_worktree_without_scope_is_refused() {
     );
 }
 
+/// DEF-017 R-1: a worktree under `.claude/worktrees/` whose name does not start with `agent-`, with
+/// no scope bound to it, is a person's or coordinator's own: board writes and commits go through
+/// the ordinary hooks, although the board holds scopes.
+#[test]
+fn a_coordinator_worktree_commits_under_the_ordinary_hooks() {
+    let fx = ScopeFx::new("coordinator");
+    // The board now holds a scope, so it is governed.
+    fx.ok(&fx.work, &["scope", "issue", "build", "FEAT-001"]);
+    // On an item's branch, as the ordinary hooks want; FEAT-002 has no scope.
+    let rel = ".claude/worktrees/merge-v05";
+    fx.ok_git(
+        &fx.work,
+        &["worktree", "add", "-q", rel, "-b", "feat/FEAT-002-merge"],
+    );
+    let wt = fx.work.join(rel);
+    fx.ok(
+        &wt,
+        &["task", "state", "FEAT-002", "TL-001", "T1", "InProgress"],
+    );
+    std::fs::write(wt.join("f.txt"), "x").unwrap();
+    fx.ok_git(&wt, &["add", "f.txt"]);
+    let commit = fx.git(&wt, &["commit", "-q", "-m", "x\n\nRefs: kanbanr:FEAT-002"]);
+    assert!(
+        commit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+}
+
+/// DEF-017 R-2: a worktree named `agent-*` with no scope bound is still refused its board writes
+/// and commits.
+#[test]
+fn an_agent_worktree_without_a_scope_is_still_refused() {
+    let fx = ScopeFx::new("agentrefused");
+    fx.ok(&fx.work, &["scope", "issue", "build", "FEAT-001"]);
+    let wt = fx.worktree("agent-unbound");
+    let err = fx.refused(
+        &wt,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
+    );
+    assert!(err.contains("this is an agent worktree"), "{err}");
+    std::fs::write(wt.join("f.txt"), "x").unwrap();
+    fx.ok_git(&wt, &["add", "f.txt"]);
+    let commit = fx.git(&wt, &["commit", "-q", "-m", "x\n\nRefs: kanbanr:FEAT-001"]);
+    assert!(!commit.status.success());
+    assert!(String::from_utf8_lossy(&commit.stderr).contains("no agent scope is bound to it"));
+}
+
 /// FEAT-214 R-5: under a build scope, commits land only on its branch and name its item — refused
 /// by the git hooks and by the Claude Code guard alike; a design scope commits nothing.
 #[test]
