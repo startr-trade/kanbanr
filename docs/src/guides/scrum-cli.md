@@ -377,7 +377,7 @@ The retro opens like this:
 - sprint SP-001: 3 of 3 points done
 - ran: 2026-11-04 → 2026-11-04
 - scope: 1 to begin with, 0 added (0 defect(s), 0 split, 0 unaccounted for)
-- defects: 0 (0 escaped)
+- defects recorded with their cause: 0 (0 escaped)
 - cycle time: p50 0m, p90 0m, max 0m
 - requirements proven by a green test: 1/1
 ```
