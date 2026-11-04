@@ -439,7 +439,7 @@ function Brief({
         </Link>
         {item.approval === "lapsed"
           ? ` · approved once, then the definition changed — agreeing again covers what it says now${
-              item.finished ? ". The work is done; agreeing again covers what the definition says now." : ""
+              item.finished ? ". The work is done." : ""
             }`
           : ratify
             ? " · built under a recorded bypass — ratifying agrees to it after the fact, and the record says so"
