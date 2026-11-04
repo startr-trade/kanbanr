@@ -496,11 +496,13 @@ mod tests {
         let issues = check(&p, &sprints, &[], &model, &d);
         let m = messages(&issues);
         assert!(
-            m.iter().any(|x| x.contains("serving FEAT-002") && x.ends_with("not integrated")),
+            m.iter()
+                .any(|x| x.contains("serving FEAT-002") && x.ends_with("not integrated")),
             "{m:?}"
         );
         assert!(
-            !m.iter().any(|x| x.contains("FEAT-001") || x.contains("FEAT-003")),
+            !m.iter()
+                .any(|x| x.contains("FEAT-001") || x.contains("FEAT-003")),
             "{m:?}"
         );
     }
