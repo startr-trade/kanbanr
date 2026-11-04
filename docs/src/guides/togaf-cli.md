@@ -175,11 +175,10 @@ created feat/FEAT-001-restore-the-cart from sprint/SP-001
 FEAT-001 -> Implementation
 ```
 
-If the gate isn't met, the branch is still created and your checkout moves to it, but the item
-stays where it is:
+If the gate isn't met, nothing is created: no branch is made, your checkout stays where it was and
+the item stays where it is. The refusal says what is missing:
 
 ```text
-created feat/FEAT-001-restore-the-cart from sprint/SP-001
 error: unsupported operation: cannot move FEAT-001 to 'Implementation': the spec has no 'Design' section…
 ```
 

@@ -2862,6 +2862,60 @@ fn start_branches_where_the_gate_says() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-007 R-1: a start the gate refuses says what is missing, makes no branch and leaves the
+/// checkout on the branch it was on.
+#[test]
+fn start_refused_by_its_gate_makes_no_branch() {
+    let (base, work) = togaf_scratch("start-refused");
+    togaf_board(&base, &work);
+    for phase in ["Business Arch", "System Design"] {
+        let o = run_in(&base, &work, &["move", "FEAT-001", phase]);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    }
+    let o = run_in(
+        &base,
+        &work,
+        &["unapprove", "FEAT-001", "--reason", "scope changed"],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let refused = run_in(&base, &work, &["start", "FEAT-001"]);
+    assert!(!refused.status.success(), "the gate refuses the start");
+    let why = String::from_utf8_lossy(&refused.stderr);
+    assert!(why.contains("not approved"), "{why}");
+    let branches = String::from_utf8_lossy(&git_in(&base, &work, &["branch"]).stdout).to_string();
+    assert!(!branches.contains("feat/"), "{branches}");
+    let on = git_in(&base, &work, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    assert_eq!(String::from_utf8_lossy(&on.stdout).trim(), "main");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-007 R-2: `--override` still makes the branch and moves the item.
+#[test]
+fn start_with_override_still_branches() {
+    let (base, work) = togaf_scratch("start-override");
+    togaf_board(&base, &work);
+    for phase in ["Business Arch", "System Design"] {
+        let o = run_in(&base, &work, &["move", "FEAT-001", phase]);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    }
+    let o = run_in(
+        &base,
+        &work,
+        &["unapprove", "FEAT-001", "--reason", "scope changed"],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let started = run_in(&base, &work, &["start", "FEAT-001", "--override", "outage"]);
+    assert!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    let said = String::from_utf8_lossy(&started.stdout);
+    assert!(said.contains("created feat/FEAT-001"), "{said}");
+    assert!(said.contains("FEAT-001 -> Implementation"), "{said}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-115 R-2: `finish` ends at a terminal the workflow allows from where the item is, and
 /// otherwise names the path — it no longer jumps to the first terminal regardless.
 #[test]

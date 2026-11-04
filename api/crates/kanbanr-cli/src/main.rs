@@ -3930,6 +3930,20 @@ fn run_start(
     let facts = root.as_deref().map(|r| coderepo::repo_facts(r, None));
     let plan = kanbanr_core::flow::plan_start(&project, code, to, facts.as_ref())?;
     let status = plan.status;
+    // Ask the gate before any git call: a refused start must leave the checkout where it was
+    // (DEF-007). The dry run changes nothing, and its refusal is the one the move would give.
+    if !plan.already {
+        let mut body = json!({ "to": status, "dry_run": true });
+        if let Some(reason) = unapproved {
+            body["unapproved"] = json!(reason);
+        }
+        client.write_in(
+            Method::Post,
+            &format!("/projects/{p}/features/{code}/move"),
+            Some(body),
+            code_repo().as_deref(),
+        )?;
+    }
     if !no_branch && root.is_none() {
         println!("not a git repository: moving {code} without a branch");
     }

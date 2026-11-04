@@ -14,6 +14,13 @@ All notable changes to kanbanr are documented here. The format follows
   what surprises people: gates need a charter, an item merged but not yet released carries over at a
   sprint close, and each item needs its `release` sign-off before main.
 
+### Fixed
+
+- **`kanbanr start` no longer leaves you on a new branch when the gate refuses (DEF-007).** It asks
+  the gate first, with a dry run of the move, and makes or switches to the branch only once the
+  move would pass. A refused start says what is missing and leaves the checkout as it was.
+  `--override` still branches and moves the item.
+
 ## [0.4.0] - 2026-10-22
 
 ### Added

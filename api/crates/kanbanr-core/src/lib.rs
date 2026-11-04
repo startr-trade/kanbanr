@@ -2652,7 +2652,9 @@ requirements:
     fn move_dry_run_judges_the_gate_and_changes_nothing() {
         use serde_json::json;
         let (store, _d, code) = gated_board(crate::config::Gate {
-            requires: vec![crate::readiness::Condition::Check(crate::readiness::Check::Approved)],
+            requires: vec![crate::readiness::Condition::Check(
+                crate::readiness::Check::Approved,
+            )],
             ..Default::default()
         });
         let path = format!("/projects/demo/features/{code}/move");
