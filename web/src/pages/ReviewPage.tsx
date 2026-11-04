@@ -148,6 +148,9 @@ export default function ReviewPage() {
           {items.some((i) => i.approval === "unratified")
             ? " Work already finished under a recorded bypass is listed first, to ratify."
             : null}
+          {items.some((i) => i.finished)
+            ? " Finished work whose definition changed after approval is listed last."
+            : null}
           {isReadOnly() ? (
             <>
               {" "}
@@ -421,7 +424,9 @@ function Brief({
               : whichRelease
                 ? "ready for release: which one?"
               : item.approval === "lapsed"
-                ? "approval lapsed"
+                ? item.finished
+                  ? `${item.status}: approval lapsed`
+                  : "approval lapsed"
                 : "never approved"}
         </span>
         {approved ? <span className="chip done">{outcome}</span> : null}
@@ -433,7 +438,9 @@ function Brief({
           open {item.code}
         </Link>
         {item.approval === "lapsed"
-          ? " · approved once, then the definition changed — agreeing again covers what it says now"
+          ? ` · approved once, then the definition changed — agreeing again covers what it says now${
+              item.finished ? ". The work is done; agreeing again covers what the definition says now." : ""
+            }`
           : ratify
             ? " · built under a recorded bypass — ratifying agrees to it after the fact, and the record says so"
             : null}

@@ -955,6 +955,95 @@ mod tests {
         );
     }
 
+    /// DEF-013: a finished item whose approval lapsed was agreed once and the text then changed,
+    /// so it is listed (after live work) and can be approved again; never-approved, current and
+    /// no-op ones stay out.
+    #[test]
+    fn the_review_queue_lists_finished_work_whose_approval_lapsed() {
+        use crate::models::FeatureDefinition;
+        use serde_json::{Value, json};
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        let define = |code: &str, statement: &str| {
+            store
+                .set_feature_definition(
+                    "demo",
+                    code,
+                    Some(FeatureDefinition {
+                        statement: statement.into(),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        };
+        let approve = |code: &str| {
+            crate::dispatch::dispatch(
+                &store,
+                "POST",
+                &format!("/projects/demo/features/{code}/approve"),
+                Some(&json!({ "by": "Ada L" })),
+            )
+            .unwrap();
+        };
+        let queue = || -> Vec<Value> {
+            let out =
+                crate::dispatch::dispatch(&store, "GET", "/projects/demo/review", None).unwrap();
+            serde_json::from_str(&out).unwrap()
+        };
+        let item = |title: &str| {
+            store
+                .add_feature("demo", title, "spec", "M", None)
+                .unwrap()
+                .code
+        };
+        let finish = |code: &str| {
+            store.move_feature("demo", code, "Scheduled").unwrap();
+            store.move_feature("demo", code, "Completed").unwrap();
+        };
+
+        let live = item("Live");
+        define(&live, "Live work");
+        let lapsed = item("Lapsed");
+        define(&lapsed, "Before");
+        approve(&lapsed);
+        define(&lapsed, "After");
+        finish(&lapsed);
+        let current = item("Current");
+        define(&current, "Agreed");
+        approve(&current);
+        finish(&current);
+        let never = item("Never");
+        define(&never, "Never agreed");
+        finish(&never);
+        let dropped = item("Dropped");
+        define(&dropped, "Before");
+        approve(&dropped);
+        define(&dropped, "After");
+        store
+            .move_feature("demo", &dropped, "Out-of-Scope")
+            .unwrap();
+
+        let q = queue();
+        let codes: Vec<&str> = q.iter().filter_map(|v| v["code"].as_str()).collect();
+        assert_eq!(codes, [live.as_str(), lapsed.as_str()], "{q:?}");
+        assert_eq!(q[0]["finished"], false);
+        assert_eq!(q[1]["finished"], true);
+        assert_eq!(q[1]["approval"], "lapsed");
+        assert_eq!(q[1]["status"], "Completed");
+
+        crate::dispatch::dispatch(
+            &store,
+            "POST",
+            &format!("/projects/demo/features/{lapsed}/approve"),
+            Some(&json!({ "by": "Ada L", "shown_rev": q[1]["rev"] })),
+        )
+        .unwrap();
+        assert!(
+            !queue().iter().any(|v| v["code"] == lapsed.as_str()),
+            "a re-approved finished item leaves the queue"
+        );
+    }
+
     /// FEAT-080: agreement given AFTER the work is a different claim from agreement given before
     /// it, and the record has to be able to say which. Twenty-nine items on this board were
     /// reconciled by approving them late, each indistinguishable from prior agreement — which

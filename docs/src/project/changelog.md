@@ -11,6 +11,10 @@ All notable changes to kanbanr are documented here. The format follows
 - **Gates say so when there is no charter (DEF-004).** On a project with no charter, a move a gate
   would have refused still goes through, but now warns what the gate would have needed and that
   `kanbanr charter set` turns the gates on. A move the gate would have passed says nothing.
+- **The Review page lists finished items whose approval lapsed (DEF-013).** A Completed item whose
+  definition changed after it was approved now appears in the review queue, after live work and
+  labelled with its status, with the Approve button, so re-approving finished work needs no terminal.
+  Never-approved finished items and no-op dispositions stay out.
 
 ### Added
 

@@ -267,6 +267,8 @@ export interface PendingReview {
   /** `unratified`: finished under a recorded bypass and never agreed to (FEAT-109). */
   /** `release`: agreed, and its next stage is the end — which planned release is it in (FEAT-185)? */
   approval: "missing" | "lapsed" | "unratified" | "signoff" | "release";
+  /** Finished work listed only because its approval lapsed (DEF-013). */
+  finished?: boolean;
   /** Sign-offs the item's next stage is waiting on (FEAT-117). */
   signoffs_needed?: string[];
   /** Present when the item is ready for release and in none: the planned releases, in file order
