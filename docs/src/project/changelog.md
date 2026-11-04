@@ -24,6 +24,10 @@ All notable changes to kanbanr are documented here. The format follows
   the monitor, with no commands to learn, and a separate one from the command line. They also say
   what surprises people: gates need a charter, an item merged but not yet released carries over at a
   sprint close, and each item needs its `release` sign-off before main.
+- **An item says which release shipped it (FTR-001).** On a project that works in releases, an
+  item's page and `feature show` now say "Released in v0.4.0", "Planned for v0.5.0, not released
+  yet" or "Not in a release", so a Completed item is not mistaken for a released one. The JSON
+  export gains an optional `release_line` field.
 
 - **The stability page matches 0.4 (DOC-002).** It no longer says the feature set is frozen: until
   1.0 nothing is promised and releases may add. It now lists `scopes.yaml`, the `codes`,

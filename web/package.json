@@ -15,6 +15,7 @@
     "check:card-text": "node scripts/check-card-text.mjs",
     "check:release-action": "node scripts/check-release-action.mjs",
     "check:release-notes": "node scripts/check-release-notes.mjs",
+    "check:release-line": "node scripts/check-release-line.mjs",
     "check:workflow": "node scripts/check-workflow-sections.mjs",
     "check:api-types": "node scripts/check-api-types.mjs",
     "check:diagram-lint": "node scripts/check-diagram-lint.mjs",

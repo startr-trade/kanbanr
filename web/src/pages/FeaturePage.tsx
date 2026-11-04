@@ -13,6 +13,7 @@ import {
   zachmanColumns,
 } from "../types";
 import type { Feature, Requirement, Signoff, TestRef } from "../types";
+import { releaseLine } from "../releaseLine";
 import { byAgentText, liveScopes, scopeBanner, scopeRows } from "../agentScopes";
 
 /** Dedicated page for one feature (epic): Specification + a tile per todo-list (newest first). */
@@ -21,6 +22,11 @@ export default function FeaturePage() {
   const tick = useLiveTick(api.projectEvents(project));
   const { data, error, loading } = useAsync(() => api.getProject(project), [project, tick]);
   useScrollToHash(!!data);
+  const usesReleases = data?.config.cadence?.releases === true;
+  const releases = useAsync(
+    () => (usesReleases ? api.getReleases(project) : Promise.resolve([])),
+    [project, tick, usesReleases],
+  );
 
   if (loading && !data) return <Loading />;
   if (error) return <ErrorBox error={error} />;
@@ -29,6 +35,8 @@ export default function FeaturePage() {
   const feature = data.features.find((f) => f.code === code);
   if (!feature) return <ErrorBox error={`Feature ${code} not found`} />;
   const p = featureProgress(feature);
+  // Nothing until the releases have loaded, so the chip never flashes "Not in a release".
+  const line = releases.data ? releaseLine(feature, releases.data, usesReleases) : null;
   const lists = listsNewestFirst(feature.todo_lists);
 
   return (
@@ -50,6 +58,7 @@ export default function FeaturePage() {
             {feature.milestone}
           </Link>
         )}
+        {line && <span className="chip release">{line}</span>}
         <span className="chip tasks">
           {p.done}/{p.total} tasks
         </span>

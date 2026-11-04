@@ -62,7 +62,7 @@ pub fn project_to_markdown(project: &Project) -> String {
     feats.sort_by(|a, b| a.code.cmp(&b.code));
     for f in feats {
         let ms = project.milestone(&f.milestone).ok();
-        out.push_str(&to_markdown(f, ms));
+        out.push_str(&to_markdown(f, ms, None));
         out.push_str("\n---\n\n");
     }
     out
@@ -426,7 +426,13 @@ fn blank_as_gap(s: &str) -> String {
 }
 
 /// Render a feature as a self-contained markdown brief Claude can act on.
-pub fn to_markdown(feature: &FeatureItem, milestone: Option<&Milestone>) -> String {
+///
+/// `release` is the item's release line (`releases::release_line`), printed after the milestone.
+pub fn to_markdown(
+    feature: &FeatureItem,
+    milestone: Option<&Milestone>,
+    release: Option<&str>,
+) -> String {
     let mut out = String::new();
     out.push_str(&format!("# {} — {}\n\n", feature.code, feature.title));
     out.push_str(&format!("- **Status:** {}\n", feature.status));
@@ -434,6 +440,9 @@ pub fn to_markdown(feature: &FeatureItem, milestone: Option<&Milestone>) -> Stri
         out.push_str(&format!("- **Milestone:** {} ({})\n", m.name, m.code));
     } else if !feature.milestone.is_empty() {
         out.push_str(&format!("- **Milestone:** {}\n", feature.milestone));
+    }
+    if let Some(line) = release {
+        out.push_str(&format!("- **Release:** {line}\n"));
     }
     out.push_str(&format!(
         "- **Tasks:** {}/{} completed across {} todo-list(s)\n\n",
@@ -504,13 +513,108 @@ pub struct FeatureExport<'a> {
     pub feature: &'a FeatureItem,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub milestone_detail: Option<&'a Milestone>,
+    /// Which release shipped it, or will (FTR-001). Absent without releases.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_line: Option<&'a str>,
 }
 
 /// Render a feature as pretty JSON (includes resolved milestone when available).
-pub fn to_json(feature: &FeatureItem, milestone: Option<&Milestone>) -> serde_json::Result<String> {
+pub fn to_json(
+    feature: &FeatureItem,
+    milestone: Option<&Milestone>,
+    release: Option<&str>,
+) -> serde_json::Result<String> {
     let export = FeatureExport {
         feature,
         milestone_detail: milestone,
+        release_line: release,
     };
     serde_json::to_string_pretty(&export)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::releases::Release;
+    use crate::store::Project;
+    use crate::{FeatureItem, ProjectConfig};
+
+    fn item(code: &str, release: Option<&str>) -> FeatureItem {
+        let mut f: FeatureItem = crate::yaml::from_str(&format!(
+            "code: {code}\ntitle: T\nspecification: ''\nstatus: Completed\nmilestone: ''\n\
+             created_at: '2026-10-19T00:00:00Z'\nupdated_at: '2026-10-19T00:00:00Z'\n"
+        ))
+        .unwrap();
+        f.release = release.map(String::from);
+        f
+    }
+
+    fn project(releases_on: bool) -> Project {
+        let mut config = ProjectConfig::default_for("shop");
+        config.cadence.releases = releases_on;
+        Project {
+            id: "shop".into(),
+            config,
+            features: vec![],
+            milestones: vec![],
+        }
+    }
+
+    fn releases() -> Vec<Release> {
+        vec![
+            Release {
+                version: "v1.0.0".into(),
+                shipped: vec!["FEAT-001".into()],
+                ..Default::default()
+            },
+            Release {
+                version: "v1.0.1".into(),
+                parent: "v1.0.0".into(),
+                shipped: vec!["FEAT-001".into()],
+                ..Default::default()
+            },
+            Release {
+                version: "v1.1.0".into(),
+                ..Default::default()
+            },
+        ]
+    }
+
+    /// FTR-001 R-1: shipped, planned, and in no release each read differently.
+    #[test]
+    fn item_says_its_release() {
+        let p = project(true);
+        let rs = releases();
+        let line = |f: &FeatureItem| crate::releases::release_line(&p, &rs, f);
+        assert_eq!(
+            line(&item("FEAT-001", Some("v1.0.0"))).as_deref(),
+            Some("Released in v1.0.0")
+        );
+        assert_eq!(
+            line(&item("FEAT-002", Some("v1.1.0"))).as_deref(),
+            Some("Planned for v1.1.0, not released yet")
+        );
+        assert_eq!(
+            line(&item("FEAT-003", None)).as_deref(),
+            Some("Not in a release")
+        );
+        let md = super::to_markdown(&item("FEAT-002", None), None, Some("Not in a release"));
+        assert!(md.contains("- **Release:** Not in a release\n"), "{md}");
+        let json = super::to_json(&item("FEAT-002", None), None, Some("Not in a release")).unwrap();
+        assert!(
+            json.contains("\"release_line\": \"Not in a release\""),
+            "{json}"
+        );
+    }
+
+    /// FTR-001 R-2: a project without releases shows no release line.
+    #[test]
+    fn no_release_line_without_releases() {
+        let p = project(false);
+        let f = item("FEAT-001", Some("v1.0.0"));
+        assert_eq!(crate::releases::release_line(&p, &releases(), &f), None);
+        let md = super::to_markdown(&f, None, None);
+        assert!(!md.contains("**Release:**"), "{md}");
+        let json = super::to_json(&f, None, None).unwrap();
+        assert!(!json.contains("release_line"), "{json}");
+    }
 }

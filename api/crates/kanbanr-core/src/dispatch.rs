@@ -783,10 +783,15 @@ fn dispatch_routes(
             let project = store.load(p)?;
             let feature = project.feature(code)?;
             let ms = project.milestone(&feature.milestone).ok();
+            let line = if project.config.cadence.releases {
+                crate::releases::release_line(&project, &crate::releases::load(store, p)?, feature)
+            } else {
+                None
+            };
             match query_param(query, "format").as_deref() {
-                Some("json") => export::to_json(feature, ms)
+                Some("json") => export::to_json(feature, ms, line.as_deref())
                     .map_err(|e| CoreError::Unsupported(format!("export: {e}"))),
-                _ => Ok(export::to_markdown(feature, ms)),
+                _ => Ok(export::to_markdown(feature, ms, line.as_deref())),
             }
         }
         ("POST", ["projects", p, "features"]) => {

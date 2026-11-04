@@ -165,6 +165,24 @@ pub fn load(store: &Store, id: &str) -> Result<Vec<Release>> {
     }
 }
 
+/// Which release an item shipped in, or will (FTR-001). None when the project does not work in
+/// releases. A release that shipped the item wins, the earliest one, so a patch's parent is named
+/// rather than the patch that keeps it.
+pub fn release_line(project: &Project, releases: &[Release], item: &FeatureItem) -> Option<String> {
+    if !project.config.cadence.releases {
+        return None;
+    }
+    if let Some(r) = releases.iter().find(|r| r.shipped.contains(&item.code)) {
+        return Some(format!("Released in {}", r.version));
+    }
+    match item.release.as_deref() {
+        Some(v) if releases.iter().any(|r| r.version == v) => {
+            Some(format!("Planned for {v}, not released yet"))
+        }
+        _ => Some("Not in a release".to_string()),
+    }
+}
+
 fn save(store: &Store, id: &str, releases: &[Release]) -> Result<()> {
     std::fs::write(path(store, id), crate::yaml::to_string(releases)?)?;
     Ok(())
