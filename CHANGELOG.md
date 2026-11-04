@@ -8,6 +8,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **`why` explains a line not yet committed (DEF-011).** A line that is still uncommitted, with no
+  annotation, used to answer "Nothing on the board explains this code". It now says the line is not
+  committed yet and names the item the current branch belongs to, or says the branch names none.
+
 - **Gates say so when there is no charter (DEF-004).** On a project with no charter, a move a gate
   would have refused still goes through, but now warns what the gate would have needed and that
   `kanbanr charter set` turns the gates on. A move the gate would have passed says nothing.

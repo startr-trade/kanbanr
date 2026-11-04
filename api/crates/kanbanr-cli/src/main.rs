@@ -2529,6 +2529,30 @@ fn run_why(cli: &Cli, client: &Backend, target: &str) -> anyhow::Result<()> {
     // 2) The commit that last touched it, and what its trailer says.
     let blamed = line.and_then(|n| blame_refs(&root, path, n));
 
+    // 3) A line not yet committed has no commit to ask. With no annotation, the branch is the
+    // only witness: say so, and name the item it belongs to (DEF-011).
+    if annotated.is_none()
+        && line.is_some_and(|n| blame_sha(&root, path, n).is_some_and(|s| is_uncommitted(&s)))
+    {
+        let ctx = scm_context(cli, client)?;
+        match (branch_item(&ctx), ctx.branch.as_deref()) {
+            (Some(code), branch) => {
+                println!(
+                    "{target} is not committed yet, so no commit names a reference. \
+                     The branch {} belongs to {code}: that is the item this work is for.\n",
+                    branch.unwrap_or("")
+                );
+                print_trace_for(client, &p, &code)?;
+            }
+            _ => println!(
+                "{target} is not committed yet, so no commit names a reference, and this branch \
+                 names no item. Commit it on an item's branch (kanbanr start <CODE>) and it will \
+                 be traced."
+            ),
+        }
+        return Ok(());
+    }
+
     let (source, refs) = match (&annotated, &blamed) {
         (Some(refs), _) => ("the annotation on the code", refs.clone()),
         (None, Some((sha, refs))) if !refs.is_empty() => (
@@ -2546,36 +2570,43 @@ fn run_why(cli: &Cli, client: &Backend, target: &str) -> anyhow::Result<()> {
 
     println!("{target} — from {source}: {}\n", refs.join(", "));
     for reference in &refs {
-        let resp = client.get(&format!(
-            "/projects/{p}/trace?subject={}",
-            urlencode(reference)
-        ));
-        match resp {
-            Ok(resp) => {
-                let t: kanbanr_core::trace::Trace = serde_json::from_str(&resp)?;
-                for item in &t.items {
-                    for r in &item.requirements {
-                        println!("  requirement  {}/{}: {}", item.code, r.id, r.text.trim());
-                    }
-                    if item.requirements.is_empty() {
-                        println!("  item         {} — {}", item.code, item.title);
-                    }
+        print_trace_for(client, &p, reference)?;
+    }
+    Ok(())
+}
+
+/// One reference's trace, printed under a `why` answer: its requirements or item, then the goal,
+/// purpose, decisions and documents it reaches.
+fn print_trace_for(client: &Backend, p: &str, reference: &str) -> anyhow::Result<()> {
+    let resp = client.get(&format!(
+        "/projects/{p}/trace?subject={}",
+        urlencode(reference)
+    ));
+    match resp {
+        Ok(resp) => {
+            let t: kanbanr_core::trace::Trace = serde_json::from_str(&resp)?;
+            for item in &t.items {
+                for r in &item.requirements {
+                    println!("  requirement  {}/{}: {}", item.code, r.id, r.text.trim());
                 }
-                if let Some(goal) = &t.goal {
-                    println!("  goal         {goal}");
-                }
-                if let Some(purpose) = &t.purpose {
-                    println!("  purpose      {purpose}");
-                }
-                if !t.decisions.is_empty() {
-                    println!("  decisions    {}", t.decisions.join(", "));
-                }
-                if !t.documents.is_empty() {
-                    println!("  Documented in: {}", t.documents.join(", "));
+                if item.requirements.is_empty() {
+                    println!("  item         {} — {}", item.code, item.title);
                 }
             }
-            Err(e) => println!("  {reference}: {e}"),
+            if let Some(goal) = &t.goal {
+                println!("  goal         {goal}");
+            }
+            if let Some(purpose) = &t.purpose {
+                println!("  purpose      {purpose}");
+            }
+            if !t.decisions.is_empty() {
+                println!("  decisions    {}", t.decisions.join(", "));
+            }
+            if !t.documents.is_empty() {
+                println!("  Documented in: {}", t.documents.join(", "));
+            }
         }
+        Err(e) => println!("  {reference}: {e}"),
     }
     Ok(())
 }
@@ -2626,17 +2657,31 @@ fn parse_annotation(line: &str) -> Option<Vec<String>> {
     }
 }
 
-/// The references in the trailer of the commit that last touched this line.
-fn blame_refs(root: &Path, path: &str, line: usize) -> Option<(String, Vec<String>)> {
+/// The id of the commit that last touched this line, or the all-zero id for a line not yet
+/// committed. A file git does not track counts as uncommitted too.
+fn blame_sha(root: &Path, path: &str, line: usize) -> Option<String> {
     // -C -M follow the line through moves and copies, which is what makes blame survive the
     // refactors that would otherwise lose the link.
     let range = format!("{line},{line}");
-    let out = coderepo::git(
+    match coderepo::git(
         root,
         &["blame", "-C", "-M", "-L", &range, "--porcelain", "--", path],
-    )
-    .ok()?;
-    let sha = out.split_whitespace().next()?.to_string();
+    ) {
+        Ok(out) => Some(out.split_whitespace().next()?.to_string()),
+        Err(_) => coderepo::git(root, &["ls-files", "--error-unmatch", "--", path])
+            .is_err()
+            .then(|| "0".repeat(40)),
+    }
+}
+
+/// Whether blame's id is the placeholder git gives a line that is not in any commit.
+fn is_uncommitted(sha: &str) -> bool {
+    sha.chars().all(|c| c == '0')
+}
+
+/// The references in the trailer of the commit that last touched this line.
+fn blame_refs(root: &Path, path: &str, line: usize) -> Option<(String, Vec<String>)> {
+    let sha = blame_sha(root, path, line)?;
     let message = coderepo::git(root, &["log", "-1", "--format=%B", &sha]).ok()?;
     let refs: Vec<String> = kanbanr_core::scm::parse_refs(&message)
         .into_iter()
