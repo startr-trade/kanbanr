@@ -1100,6 +1100,17 @@ fn dispatch_routes(
                 &str_field(b, "by").unwrap_or_default(),
             )?)
         }
+        // `{by}`: date the release's notes and changelog today, one commit onto release/<V>, main
+        // moving with it when it holds the release (DEF-001).
+        ("POST", ["projects", p, "releases", version, "redate"]) => {
+            ser(&crate::releases::redate_release(
+                store,
+                p,
+                &percent_decode(version),
+                repo,
+                &str_field(b, "by").unwrap_or_default(),
+            )?)
+        }
         // The release stages with the gate in force on each (FEAT-212).
         ("GET", ["projects", p, "release-stages"]) => {
             ser(&store.load_meta(p)?.config.cadence.release_stage_views())
@@ -1903,6 +1914,9 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         ),
         ["projects", _p, "releases", v, "notes"] => {
             format!("release {}: notes edited", percent_decode(v))
+        }
+        ["projects", _p, "releases", v, "redate"] => {
+            format!("release {}: dated today", percent_decode(v))
         }
         ["projects", _p, "releases", v, what] => format!("{what} release {}", percent_decode(v)),
         ["projects", _p, "sprints", c, what] => format!("{what} sprint {c}"),

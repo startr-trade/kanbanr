@@ -1238,6 +1238,16 @@ enum ReleaseCmd {
         #[arg(long)]
         by: Option<String>,
     },
+    /// Date a release's notes and changelog today, in one commit onto `release/<VERSION>` —
+    /// nothing checked out — for a release prepared on an earlier day. Main moves with it when it
+    /// holds the release, and you push it again. Refused once the release has shipped (DEF-001).
+    /// Run it from the project folder.
+    Redate {
+        version: String,
+        /// Who dated it (default: the board's commit identity).
+        #[arg(long)]
+        by: Option<String>,
+    },
     /// Cut a release: ship its finished items, write its notes, carry the rest.
     Cut {
         version: String,
@@ -8544,6 +8554,9 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             *edit,
             by.as_ref(),
         )?,
+        ReleaseCmd::Redate { version, by } => {
+            redate_release(cli, client, &p, version, by.as_ref())?
+        }
         ReleaseCmd::Promote {
             version,
             stage,
@@ -8764,6 +8777,35 @@ fn release_notes(
     let sha = v["sha"].as_str().unwrap_or_default();
     let mut said = format!(
         "{version}'s notes at {}; {}",
+        sha.get(..7).unwrap_or(sha),
+        notes_where(&v["notes"])
+    );
+    if let Some(moved) = v["main_moved"].as_str().filter(|m| !m.is_empty()) {
+        said.push_str(&format!("\n{moved}"));
+    }
+    print_write(cli, &resp, said);
+    Ok(())
+}
+
+/// `release redate` (DEF-001): date the notes and the changelog today on `release/<V>`.
+fn redate_release(
+    cli: &Cli,
+    client: &Backend,
+    p: &str,
+    version: &str,
+    by: Option<&String>,
+) -> anyhow::Result<()> {
+    let by = verdict_author(cli, by)?;
+    let resp = client.write_in(
+        Method::Post,
+        &format!("/projects/{p}/releases/{}/redate", urlencode_segment(version)),
+        Some(json!({ "by": by })),
+        code_repo().as_deref(),
+    )?;
+    let v: Value = serde_json::from_str(&resp)?;
+    let sha = v["sha"].as_str().unwrap_or_default();
+    let mut said = format!(
+        "{version} dated at {}; {}",
         sha.get(..7).unwrap_or(sha),
         notes_where(&v["notes"])
     );
@@ -9036,6 +9078,9 @@ fn print_release_plan(
                 c["why"].as_str().unwrap_or_default()
             );
         }
+    }
+    for w in plan["warnings"].as_array().into_iter().flatten() {
+        println!("  warning: {}", w.as_str().unwrap_or_default());
     }
     if plan["ready"] == true {
         println!(
