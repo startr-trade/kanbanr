@@ -6,6 +6,28 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Guides for every built-in process (DOC-003).** The Process guides section now covers default,
+  scheduled, PDCA, design control, Scrum and agile, each with Claude and from the command line, and
+  Working with Claude links them from each process's row. Its table now lists what each process
+  really asks for.
+
+- **Process guides, starting with TOGAF, sprints and releases (DOC-001).** The book has a new
+  Process guides section. Each process has a guide you follow by talking to Claude and deciding on
+  the monitor, with no commands to learn, and a separate one from the command line. They also say
+  what surprises people: gates need a charter, an item merged but not yet released carries over at a
+  sprint close, and each item needs its `release` sign-off before main.
+- **An item says which release shipped it (FTR-001).** On a project that works in releases, an
+  item's page and `feature show` now say "Released in v0.4.0", "Planned for v0.5.0, not released
+  yet" or "Not in a release", so a Completed item is not mistaken for a released one. The JSON
+  export gains an optional `release_line` field.
+
+- **The stability page matches 0.4 (DOC-002).** It no longer says the feature set is frozen: until
+  1.0 nothing is promised and releases may add. It now lists `scopes.yaml`, the `codes`,
+  `release_gates` and `release_prepare` settings, and the `Agent-Scope:` trailer and pre-push hook,
+  and names agent scopes, release stages and kind codes as experimental in 1.0, stable from 1.1.
+
 ### Fixed
 
 - **`scripts/ci_local.py --help` no longer starts the whole gate (DEF-010).** The script now reads its
@@ -30,59 +52,29 @@ All notable changes to kanbanr are documented here. The format follows
   flag, and a failed parse of that text is how an item's spec got blanked. They now print one JSON
   document, `feature show` the same as `export --format json`; a test parses every read command.
 
-### Added
-
-- **Guides for every built-in process (DOC-003).** The Process guides section now covers default,
-  scheduled, PDCA, design control, Scrum and agile, each with Claude and from the command line, and
-  Working with Claude links them from each process's row. Its table now lists what each process
-  really asks for.
-
-- **Process guides, starting with TOGAF, sprints and releases (DOC-001).** The book has a new
-  Process guides section. Each process has a guide you follow by talking to Claude and deciding on
-  the monitor, with no commands to learn, and a separate one from the command line. They also say
-  what surprises people: gates need a charter, an item merged but not yet released carries over at a
-  sprint close, and each item needs its `release` sign-off before main.
-- **An item says which release shipped it (FTR-001).** On a project that works in releases, an
-  item's page and `feature show` now say "Released in v0.4.0", "Planned for v0.5.0, not released
-  yet" or "Not in a release", so a Completed item is not mistaken for a released one. The JSON
-  export gains an optional `release_line` field.
-
-- **The stability page matches 0.4 (DOC-002).** It no longer says the feature set is frozen: until
-  1.0 nothing is promised and releases may add. It now lists `scopes.yaml`, the `codes`,
-  `release_gates` and `release_prepare` settings, and the `Agent-Scope:` trailer and pre-push hook,
-  and names agent scopes, release stages and kind codes as experimental in 1.0, stable from 1.1.
-### Fixed
-
 - **An empty spec file no longer blanks an item's spec (DEF-002).** `--spec-file` on `feature add`
   and `feature edit` refuses a file that is empty or only whitespace, names it, and changes
   nothing. To clear a spec on purpose, pass `--spec ""`.
-### Fixed
 
 - **`kanbanr check` names a manual test nobody ran (DEF-003).** A manual test that is not green is
   listed under its item as `manual test not run: R-4: <name>`, and as `open_manual` in `--json`.
   It is a note, not a gap: readiness and the exit status are unchanged.
-### Fixed
 
 - **The retro's proven count and defect lines read as they mean (DEF-006).** `requirements proven
   by a green test: 56/56` now adds `(1 with a test still open)` when a proven requirement also has
   a test that is not green; `--json` gains `evidence.proven_with_open_test` and `proven` is
   unchanged. The two defect lines are worded apart: `added as defect items` (scope that joined as
   a defect) and `defects recorded with their cause` (items carrying a cause).
-### Fixed
 
 - **`kanbanr start` no longer leaves you on a new branch when the gate refuses (DEF-007).** It asks
   the gate first, with a dry run of the move, and makes or switches to the branch only once the
   move would pass. A refused start says what is missing and leaves the checkout as it was.
   `--override` still branches and moves the item.
 
-### Fixed
-
 - **The board's copy of a release's notes is the notes that shipped (DEF-005).** At the cut, the
   `releases/<V>.md` board doc holds the written notes file at the tagged commit when the project
   configures one, instead of the generated requirements list. The generated text is used only
   when there is no such file or it cannot be read.
-
-### Fixed
 
 - **A release cut later no longer ships the date of its candidate (DEF-001).** v0.4.0 was prepared
   on 22 October and cut on 1 November, and shipped saying 22 October. The stage that moves main now
