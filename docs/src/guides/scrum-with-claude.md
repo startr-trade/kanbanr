@@ -42,8 +42,8 @@ flowchart LR
 Claude asks where the board should live and what the project is for. It then writes a plan showing
 the process, the branches it will use and where each one merges. **Accepting the plan applies it.**
 
-> Agree a charter with me first, then set up release stages so that main is pushed and CI has seen it
-> before anything is tagged.
+> Agree a charter with me first, then set up release stages so that main has to be pushed before
+> anything is tagged. Use only candidate, main and production.
 
 **Do the charter first.** Gates aren't enforced until a project has one, and items created before it
 are exempt. Claude asks for the project's purpose and goals. Every item then links to a goal.

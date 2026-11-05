@@ -42,12 +42,19 @@ the process, the branches it will use and where each one merges. **Accepting the
 
 Ask for the things that make the rest of this guide work:
 
-> Agree a charter with me first, then set up release stages so that main is pushed and CI has seen it
-> before anything is tagged.
+> Agree a charter with me first, then set up release stages so that main has to be pushed before
+> anything is tagged. Use only candidate, main and production.
 
 **Do the charter first.** Gates aren't enforced until a project has one, and items created before it
 are exempt. Without one, a move that a gate would have refused still goes through, with a warning
 saying what was missing. Claude asks for the project's purpose and goals. Every item then links to a goal.
+
+**CI is yours to check.** kanbanr can see that main was pushed, but it can't see whether CI passed, so
+you look at CI yourself before the cut.
+
+**Name the stages you want.** Otherwise you get the defaults, which include `test` and `staging`.
+Those two record that a release passed a point and do nothing else: nothing builds or deploys when
+you promote to them. Add them when you have a pipeline and environments behind them.
 
 > Open the monitor, with writes on.
 
@@ -61,10 +68,17 @@ back to the backlog. If your sprints end before your releases do, say so:
 
 ## Planning a sprint
 
-> Start a two-week sprint for carts surviving a return. Put the cart restore in it, for release 1.0.
+Setup offers to create a first sprint and a first release. Use them rather than asking for new ones,
+because a sprint can be closed but not edited or deleted, so settle its dates and goal during setup.
 
-Claude creates the sprint and its branch, adds the item and plans it into the sprint and the release.
-Your checkout doesn't move.
+> Start the first sprint. We need saved carts: shoppers should be able to come back to their basket.
+> Put that in the sprint, for the first release.
+
+Claude starts the sprint and creates its branch, creates the item at Vision, and plans it into the
+sprint and the release. Your checkout doesn't move.
+
+**Keep 1.0 for something people can use.** Name your first release v0.1.0 unless it really is ready
+for them.
 
 A sprint and a release don't have to line up. One release can take items from several sprints.
 
@@ -73,16 +87,16 @@ A sprint and a release don't have to line up. One release can take items from se
 Ask for the work in your own words, and Claude asks only what it can't work out. Each phase has a
 gate. When something's missing, Claude either drafts it or brings it to you.
 
-> We need saved carts: shoppers should be able to come back to their basket. Take it to Business Arch.
+> Take saved carts to Business Arch.
 
 | Phase | What Claude does | What you do on the Review page |
 |---|---|---|
-| **Vision** | Writes what it is and why | Nothing yet |
+| **Vision** | Writes what it is and why | Nothing yet. The page may offer **Approve**, but it isn't needed here and lapses when the definition grows |
 | **Business Arch** | Drafts who, what, why and the requirements | **Approve** |
 | **System Design** | Proposes how and where, and checks that against the requirements | **Approve** again, because the definition grew |
-| **Implementation** | Writes the design and its task list, and names a test for each requirement | **Sign off design-review** |
-| **Migration** | Builds on the item's branch, runs the tests and updates the docs | **Sign off docs-folded** |
-| **Operations** | Nothing: the cut moves it here | **Sign off release** |
+| **Implementation** | Writes the design and its task list, and names a test for each requirement | **Approve** again, then **Sign off design-review** |
+| **Migration** | Builds on the item's branch, runs the tests and updates the docs | **Sign off docs-folded**, which appears once the docs are updated |
+| **Operations** | Nothing: your sign-off or the cut moves it here | **Sign off release** |
 
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
@@ -91,9 +105,22 @@ you've approved it, so check back after approving.
 saw. If the definition changes, your approval lapses and the item returns to the Review page. Read
 what changed, then approve again.
 
+**Claude may ask you in a question instead.** It can also say that accepting a plan is your approval.
+These record the same approval as the Review page. If you'd rather decide on the page, tell Claude.
+
+**A design can bring decisions with it.** Claude drafts each one as a decision record, and you use
+**Accept** or **Reject** on the Review page.
+
+**A sign-off doesn't lapse when the design changes.** Changing the design in the item's spec leaves
+**design-review** standing, so ask Claude to bring you any corrections it makes during the build.
+
+**Operations doesn't mean shipped yet.** Once all an item's tasks are done, **Sign off release** moves
+it to Operations straight away, even though the phase says "Released and running". The **Releases**
+page tells you what has shipped.
+
 **Just ask to move it on:**
 
-> Move the cart restore on to System Design.
+> Move saved carts on to System Design.
 
 If something's missing, Claude tells you what and either fixes it or asks you. Nothing moves past a
 gate unless you say why, and that reason stays on the item.
@@ -114,6 +141,9 @@ it finishes, Claude reviews the branch and brings you any decisions.
 
 ## Releasing
 
+Start once every item in the release has reached Migration. **Promote to candidate** is offered as
+soon as the release holds an item, even while work is still going on.
+
 Follow this order and you won't have to go back:
 
 | Step | Who | Do this |
@@ -125,8 +155,8 @@ Follow this order and you won't have to go back:
 | 5 | You | **Review** page: **Sign off release** on each item, if you haven't already |
 | 6 | You | **Releases** page: **Promote to main**. This moves main to the release, without tagging |
 | 7 | You | Terminal: `git push origin main`, then wait for CI to go green |
-| 8 | You | **Releases** page: **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Operations |
-| 9 | You | Terminal: `git push origin v1.0.0`, then wait for the release workflow |
+| 8 | You | **Releases** page: **Check again**, then, with CI green, **Cut v0.1.0**. This tags main and moves any item not already there to Operations |
+| 9 | You | Terminal: `git push origin v0.1.0`, then wait for the release workflow |
 | 10 | Claude | Say "The release is out. Bring it forward into the sprint" |
 
 **The release date is today's.** Moving main dates the notes and changelog with the day it happens.
@@ -163,7 +193,7 @@ because new items branch from the running sprint.
 | | You | Claude |
 |---|---|---|
 | **Definitions** | Answer what only you know, then **Approve** | Draft them, ask, and keep the spec current |
-| **Design** | **Sign off design-review** | Write the design and its task list |
+| **Design** | **Sign off design-review**, and **Accept** or **Reject** each decision | Write the design, its decisions and its task list |
 | **Code and tests** | Review what you want to | Build, or give the work to sub-agents, and record results |
 | **Merging an item** | **Sign off docs-folded** | Update the docs and move the item |
 | **Sprints** | Say what goes in and when it closes | Create, plan and close them |
@@ -176,9 +206,11 @@ because new items branch from the running sprint.
 |---|---|---|
 | Moves go through that shouldn't | No charter, or the item is older than it | Ask Claude to agree a charter before creating items |
 | An item is back on the Review page | Its definition changed after you approved it | Read the change, then **Approve** again |
+| An item says it's waiting for a sign-off, but the Review page has nothing | A sign-off appears once the stage's other requirements are met | Ask Claude what's left. It's often the docs |
 | An item goes to the backlog when a sprint closes | It's merged but not done for that sprint | Ask Claude to plan it into the next sprint, or count Migration as done |
 | A promotion says an item would carry over | It can't reach Operations yet | Do what the page says, usually **Sign off release** |
 | **Cut** stays greyed out after you pushed | The page hasn't read the push yet | **Check again** |
+| GitHub rejects your first push, naming the `workflow` scope | Your sign-in can't add files under `.github/workflows` yet | Ask Claude for the command that adds it, then push again |
 | A defect in a shipped release | It needs its own fix | Ask Claude for a patch release, and see [Patch releases](../using/processes.md#patch-releases) |
 
 ## What Claude runs
@@ -190,6 +222,7 @@ You never need these, but here they are if you're curious, or if you want to che
 |---|---|
 | Set up the process | `kanbanr config workflow --preset togaf` |
 | Sprints, releases and branches | `kanbanr config cadence --sprints on --releases on --git-model on` |
+| Release stages | `kanbanr config cadence --release-stages`, `kanbanr config release-stage` |
 | A sprint | `kanbanr sprint add`, `kanbanr sprint start`, `kanbanr sprint plan` |
 | A release | `kanbanr release add`, `kanbanr release plan` |
 | Moving an item | `kanbanr move` |

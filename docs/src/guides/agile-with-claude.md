@@ -42,8 +42,8 @@ Claude asks where the board should live and what the project is for, then writes
 the plan applies it.** The agile process turns sprints and releases on by default, and Claude also
 turns on the git model, so branches are made for you.
 
-> Agree a charter with me first, then set up release stages so that main is pushed and CI has seen it
-> before anything is tagged.
+> Agree a charter with me first, then set up release stages so that main has to be pushed before
+> anything is tagged. Use only candidate, main and production.
 
 Every item links to a goal in the charter. The recommended release stages are candidate, main and
 production. Production, the cut, is refused until main is pushed.

@@ -81,7 +81,8 @@ charter saved for 'shop': 1 goal(s) G-1
 ### Release stages
 
 By default a release has four stages and the cut does everything at once. We recommend three, so
-that main is pushed and CI has seen it before anything is tagged:
+that main has to be pushed before anything is tagged. kanbanr can't see whether CI passed, so check
+that yourself before the cut:
 
 ```text
 kanbanr config cadence --release-stages candidate,main,production

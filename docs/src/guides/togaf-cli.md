@@ -80,8 +80,8 @@ staging        —                                  —                         
 production     —                                  move_main, tag                 the cut, default
 ```
 
-We recommend three stages instead, so that main is pushed and CI has seen it before anything is
-tagged:
+We recommend three stages instead, so that main has to be pushed before anything is tagged.
+kanbanr can't see whether CI passed, so check that yourself before the cut:
 
 ```text
 kanbanr config cadence --release-stages candidate,main,production
@@ -103,7 +103,8 @@ file must already be on the sprint's branch, or promoting to candidate is refuse
 
 ### Decide when an item is done for its sprint
 
-Under the TOGAF preset only **Operations** counts as done, and items reach Operations at the cut.
+Under the TOGAF preset only **Operations** counts as done, and items reach Operations at the cut, or
+at their `release` sign-off once all their tasks are done.
 So if you close a sprint before its release is cut, an item that is merged and sitting in Migration
 is carried over, to the backlog by default:
 
@@ -159,7 +160,7 @@ Each move is refused until its gate is met, and the refusal says what's missing.
 | **System Design** | How, where, approval | `kanbanr feature define`, `kanbanr approve` |
 | **Implementation** | A test named for every requirement, approval, a `## Design` section in the spec, the `design-review` sign-off | `kanbanr feature edit`, `kanbanr signoff`, `kanbanr start` |
 | **Migration** | Requirements proven by green tests, docs updated, the `docs-folded` sign-off | `kanbanr test`, `kanbanr signoff`, `kanbanr move` |
-| **Operations** | Green tests, the `release` sign-off | `kanbanr signoff`; the cut does the move |
+| **Operations** | Green tests, the `release` sign-off | `kanbanr signoff`, which makes the move once all the item's tasks are done; otherwise the cut does |
 
 **An edit lapses your approval.** When the definition changes, the next move says so, and you approve
 the larger definition:
@@ -239,7 +240,7 @@ what a promotion would do and changes nothing.
 | 4. Sign off each item | `kanbanr signoff FEAT-001 release` | If not already given |
 | 5. Main | `kanbanr release promote v1.1.0 main` | Fast-forwards main to the release, without tagging |
 | 6. Push main, wait for CI | `git push origin main` | |
-| 7. Cut | `kanbanr release promote v1.1.0 production` | Tags main, ships the items and moves them to Operations |
+| 7. Cut | `kanbanr release promote v1.1.0 production` | Tags main, ships the items and moves any not already there to Operations |
 | 8. Push the tag | `git push origin v1.1.0` | |
 | 9. Merge forward | `kanbanr git forward v1.1.0` | Brings the release's commits into the sprint's branch |
 
