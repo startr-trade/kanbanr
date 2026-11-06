@@ -55,7 +55,10 @@ Expose it beyond localhost only behind a reverse proxy you control.
 window onto your own files. To reach it from another machine, **don't change the bind**; instead put
 a **reverse proxy** in front that terminates **TLS** and adds **authentication**, proxying to the
 unchanged `127.0.0.1:8080`. (kanbanr deliberately ships none of this — sharing is otherwise the git
-remote's job; see [the architecture overview](../architecture/overview.md).) Two minimal working examples:
+remote's job; see [the architecture overview](../architecture/overview.md).) Behind such a proxy the
+monitor is for reading: name the proxy's host in `KANBANR_ALLOWED_HOSTS`, and take decisions on the
+monitor on your own machine, because it accepts a write only from its own `http://` page. Two minimal
+working examples:
 
 **Caddy** (automatic HTTPS + basic auth) — `Caddyfile`:
 
