@@ -1572,7 +1572,9 @@ fn work_out(
                         "{required} has not been entered: the release is at {}",
                         if from.is_empty() { "no stage" } else { &from }
                     ),
-                    format!("promote {version} to {required} first: kanbanr release promote {version} {required}"),
+                    format!(
+                        "promote {version} to {required} first: kanbanr release promote {version} {required}"
+                    ),
                 )
             };
             conditions.push(PlanCondition {
@@ -4771,7 +4773,11 @@ mod tests {
         let after = find(crate::releasegates::ReleaseCheck::StagePassed);
         assert_eq!(after.stage, "tag");
         assert!(!after.holds && after.detail.contains("ci has not been entered"));
-        assert!(after.fix.contains("promote v1 to ci first"), "{}", after.fix);
+        assert!(
+            after.fix.contains("promote v1 to ci first"),
+            "{}",
+            after.fix
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }

@@ -8367,11 +8367,23 @@ fn release_promote_plan_names_the_unmerged_items() {
     let made = ok(run_in(
         &base,
         &work,
-        &["--json", "feature", "add", "--title", "Still going", "--milestone", "MS-001"],
+        &[
+            "--json",
+            "feature",
+            "add",
+            "--title",
+            "Still going",
+            "--milestone",
+            "MS-001",
+        ],
     ));
     let made: serde_json::Value = serde_json::from_str(&made).unwrap();
     let behind = made["code"].as_str().unwrap().to_string();
-    ok(run_in(&base, &work, &["release", "plan", "v1.0.0", &behind]));
+    ok(run_in(
+        &base,
+        &work,
+        &["release", "plan", "v1.0.0", &behind],
+    ));
     ok(run_in(
         &base,
         &work,
@@ -8392,7 +8404,10 @@ fn release_promote_plan_names_the_unmerged_items() {
     ));
     assert!(said.contains("items_merged"), "{said}");
     assert!(said.contains(&format!("{behind} is at Planned")), "{said}");
-    assert!(said.contains(&format!("{behind}: move it to Completed")), "{said}");
+    assert!(
+        said.contains(&format!("{behind}: move it to Completed")),
+        "{said}"
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -8413,7 +8428,13 @@ fn release_stage_accepts_items_merged_and_after() {
     ok(run_in(
         &base,
         &work,
-        &["config", "release-stage", "candidate", "--requires", "items_merged"],
+        &[
+            "config",
+            "release-stage",
+            "candidate",
+            "--requires",
+            "items_merged",
+        ],
     ));
     ok(run_in(
         &base,

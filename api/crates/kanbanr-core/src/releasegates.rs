@@ -694,8 +694,9 @@ mod tests {
             cadence("release_stages: [a, b]\nrelease_gates: { b: { requires: [stage_passed] } }\n")
                 .unwrap_err();
         assert!(err.contains("`after`"), "{err}");
-        let ok = cadence("release_stages: [a, b]\nrelease_gates: { a: { requires: [items_merged] } }\n")
-            .unwrap();
+        let ok =
+            cadence("release_stages: [a, b]\nrelease_gates: { a: { requires: [items_merged] } }\n")
+                .unwrap();
         assert_eq!(ok.release_gates["a"].requires, [ReleaseCheck::ItemsMerged]);
     }
 
@@ -722,8 +723,9 @@ mod tests {
         let older: Older = crate::yaml::from_str("after: [b]\non_enter: [tag]\n").unwrap();
         assert!(crate::yaml::to_string(&older).unwrap().contains("after"));
         // Absent when empty.
-        let plain = cadence("release_stages: [a, b]\nrelease_gates: { a: { on_enter: [branch] } }\n")
-            .unwrap();
+        let plain =
+            cadence("release_stages: [a, b]\nrelease_gates: { a: { on_enter: [branch] } }\n")
+                .unwrap();
         assert!(!crate::yaml::to_string(&plain).unwrap().contains("after"));
     }
 }
