@@ -111,8 +111,9 @@ These record the same approval as the Review page. If you'd rather decide on the
 **A design can bring decisions with it.** Claude drafts each one as a decision record, and you use
 **Accept** or **Reject** on the Review page.
 
-**A sign-off doesn't lapse when the design changes.** Changing the design in the item's spec leaves
-**design-review** standing, so ask Claude to bring you any corrections it makes during the build.
+**A changed spec comes back to you.** Your **design-review** covers the item's spec as you saw it. If
+the spec changes afterwards, even outside the Design, the item returns to the Review page showing
+only what changed, and you sign again.
 
 **Operations doesn't mean shipped yet.** Once all an item's tasks are done, **Sign off release** moves
 it to Operations straight away, even though the phase says "Released and running". The **Releases**

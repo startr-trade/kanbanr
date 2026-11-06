@@ -170,6 +170,12 @@ removed, the next move says so, and you approve again:
 cannot move FEAT-001 to 'System Design': approval lapsed — the definition changed after it was approved.
 ```
 
+**A changed spec comes back for sign-off.** A `design-review` sign-off covers the whole spec as it
+was when you gave it. If the spec changes afterwards, even outside `## Design`, the sign-off reads
+"changed since sign-off", and `kanbanr review --pending` lists the item as `spec_changed` with the
+changed lines. Sign again with `kanbanr signoff FEAT-001 design-review`. Pass `--spec-rev` with the
+`spec_rev` the queue gave to refuse the sign-off if the spec moved on since you read it.
+
 **Code starts at Implementation.** `kanbanr start` makes the item's branch from the sprint's branch,
 and moves the item if its gate is met:
 

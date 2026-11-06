@@ -319,6 +319,10 @@ same whichever you use. A read-only monitor shows the command instead.
   it. This is `kanbanr release plan <VERSION> <CODE>`, plus `kanbanr release add` for a new one.
   The question comes after any approval or sign-off the item is waiting on. Once the item is in a
   release, it leaves the queue.
+- **Spec changed since sign-off.** A sign-off whose gate asks for spec sections, such as
+  design-review, covers the whole spec as it was when you gave it. If the spec changes later, the
+  item returns to the Review page showing only the changed lines, with the whole spec on request,
+  and you sign again. The item's page marks the sign-off "changed since sign-off".
 - **Promote.** Each release on the Releases page shows its stage, with the stage history on hover,
   and one button named for its next step — **Promote to \<next stage\>**, or **Cut \<VERSION\>**
   for the last — until it ships. This is `kanbanr release promote <VERSION>`. Beside the button,

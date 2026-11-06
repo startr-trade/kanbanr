@@ -194,6 +194,8 @@ export interface Signoff {
   rev: string;
   /** A hash per part of the definition it covered (FTR-018). */
   parts?: Record<string, string>;
+  /** A hash of the whole spec it covered, when its gate asks for spec sections (FTR-023). */
+  spec_rev?: string;
   note?: string;
   doc?: string;
   status?: string;
@@ -271,7 +273,8 @@ export interface PendingReview {
   /** `unratified`: finished under a recorded bypass and never agreed to (FEAT-109). */
   /** `release`: agreed, and its next stage is the end — which planned release is it in (FEAT-185)? */
   /** `added`: approved, then text was added that now needs a decision (FTR-018). */
-  approval: "missing" | "lapsed" | "unratified" | "signoff" | "release" | "added";
+  /** `spec_changed`: the spec a sign-off pinned changed after it was given (FTR-023). */
+  approval: "missing" | "lapsed" | "unratified" | "signoff" | "release" | "added" | "spec_changed";
   /** Parts added, changed and removed since the last decision (FTR-018), by part key. */
   changes?: { added: string[]; changed: string[]; removed: string[] };
   /** Finished work listed only because its approval lapsed (DEF-013). */
@@ -285,6 +288,20 @@ export interface PendingReview {
   rev?: string;
   started_unapproved?: string;
   definition: FeatureDefinition;
+  /** The hash of the spec's current text, when the sign-off asked pins the spec (FTR-023). */
+  spec_rev?: string;
+  /** The spec that sign-off pins, with what changed since the last one (FTR-023). */
+  spec?: SpecBrief;
+}
+
+export interface SpecBrief {
+  signoff: string;
+  text: string;
+  /** False when the earlier sign-off's text is missing from the board. */
+  previous_kept: boolean;
+  signed_by: string;
+  signed_at: string;
+  diff: { op: "same" | "added" | "removed"; text: string }[];
 }
 
 /** One thing an item is missing, as the daemon's readiness engine reports it (FEAT-112). The rules

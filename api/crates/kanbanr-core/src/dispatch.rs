@@ -80,6 +80,26 @@ fn shown_rev(store: &Store, p: &str, code: &str, b: &Value) -> Result<()> {
     Ok(())
 }
 
+/// A sign-off that pins the spec covers the text the person was shown (FTR-023). When the request
+/// names the hash of the spec it was given on, it is refused if the spec has moved on since.
+fn shown_spec_rev(store: &Store, p: &str, code: &str, name: &str, b: &Value) -> Result<()> {
+    let Some(shown) = str_field(b, "spec_rev").filter(|r| !r.trim().is_empty()) else {
+        return Ok(());
+    };
+    let project = store.load(p)?;
+    if !project.config.signoff_pins_spec(name) {
+        return Ok(());
+    }
+    let now = crate::readiness::spec_pin(&project.feature(code)?.specification).1;
+    if now != shown.trim() {
+        return Err(CoreError::Unsupported(format!(
+            "{code}'s spec changed after it was shown (shown {shown}, now {now}): show the brief \
+             again and ask again; nothing was recorded"
+        )));
+    }
+    Ok(())
+}
+
 fn str_field(body: &Value, k: &str) -> Option<String> {
     body.get(k).and_then(|v| v.as_str()).map(String::from)
 }
@@ -945,6 +965,7 @@ fn dispatch_routes(
             )?),
         ("POST", ["projects", p, "features", code, "signoff", name]) => ser(&{
             shown_rev(store, p, code, b)?;
+            shown_spec_rev(store, p, code, &percent_decode(name), b)?;
             store.signoff_feature(
                 p,
                 code,
@@ -1990,6 +2011,82 @@ mod tests {
         )
         .unwrap();
         (store, dir)
+    }
+
+    /// FTR-023 R-9: a sign-off sent with the hash of a spec that has since changed is refused, and
+    /// nothing is recorded.
+    #[test]
+    fn a_signoff_on_a_design_that_moved_on_is_refused() {
+        let (store, _dir) = release_board("signoff-moved-on");
+        store
+            .add_milestone("shop", "M", "", vec![], Some("MS-001".into()))
+            .unwrap();
+        let f = store
+            .add_feature("shop", "Cart", "## Design\nUse a map.", "MS-001", None)
+            .unwrap();
+        store
+            .set_feature_definition(
+                "shop",
+                &f.code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Scheduled".to_string(),
+            crate::config::Gate {
+                requires: vec![crate::readiness::Condition::Check(
+                    crate::readiness::Check::SpecSections,
+                )],
+                signoffs: vec!["design-review".into()],
+                ..Default::default()
+            },
+        );
+        store.set_gates("shop", gates).unwrap();
+        let shown = crate::readiness::spec_pin("## Design\nUse a map.").1;
+        store
+            .edit_feature(
+                "shop",
+                &f.code,
+                None,
+                Some("## Design\nUse a vec.".into()),
+                None,
+                None,
+            )
+            .unwrap();
+        let path = format!("/projects/shop/features/{}/signoff/design-review", f.code);
+        let err = dispatch(
+            &store,
+            "POST",
+            &path,
+            Some(&serde_json::json!({"by": "Ada", "spec_rev": shown})),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("spec changed after it was shown"), "{err}");
+        let after = store.load("shop").unwrap();
+        assert!(
+            after
+                .feature(&f.code)
+                .unwrap()
+                .definition
+                .as_ref()
+                .unwrap()
+                .signoffs
+                .is_empty()
+        );
+        // Shown the current text, it is recorded.
+        let now = crate::readiness::spec_pin("## Design\nUse a vec.").1;
+        dispatch(
+            &store,
+            "POST",
+            &path,
+            Some(&serde_json::json!({"by": "Ada", "spec_rev": now})),
+        )
+        .unwrap();
     }
 
     /// FEAT-217: the codes routes show the next code per prefix and set the map; a feature POSTed

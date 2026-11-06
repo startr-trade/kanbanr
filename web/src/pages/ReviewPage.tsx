@@ -7,7 +7,7 @@ import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
 import { zachmanColumns } from "../types";
-import type { Adr, PendingReview } from "../types";
+import type { Adr, PendingReview, SpecBrief } from "../types";
 import { approveBlocker, checkBlocks, type DiagramProblem } from "../diagramCheck";
 
 /**
@@ -88,7 +88,7 @@ export default function ReviewPage() {
     const code = item.code;
     setBusy(code);
     try {
-      await api.signoff(project, code, name, who, item.rev ?? "");
+      await api.signoff(project, code, name, who, item.rev ?? "", item.spec_rev ?? "");
       setDone((d) => ({ ...d, [code]: `signed off ${name}` }));
     } catch (e) {
       setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
@@ -365,6 +365,75 @@ function problemHref(project: string, code: string, p: DiagramProblem): string {
     : `/p/${enc(project)}/feature/${enc(code)}`;
 }
 
+/** Context kept around each change, and the shortest run of unchanged lines worth folding (FTR-023). */
+const DIFF_CONTEXT = 2;
+
+type DiffRow = { op: "same" | "added" | "removed" | "fold"; text: string };
+
+/** The changed lines with two lines of context; each longer unchanged run folds to a count. */
+function foldDiff(diff: SpecBrief["diff"]): DiffRow[] {
+  const rows: DiffRow[] = [];
+  let i = 0;
+  while (i < diff.length) {
+    if (diff[i].op !== "same") {
+      rows.push(diff[i]);
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < diff.length && diff[j].op === "same") j++;
+    const run = diff.slice(i, j);
+    const head = i === 0 ? 0 : DIFF_CONTEXT;
+    const tail = j === diff.length ? 0 : DIFF_CONTEXT;
+    if (run.length > 4) {
+      rows.push(...run.slice(0, head));
+      const hidden = run.length - head - tail;
+      rows.push({ op: "fold", text: `… ${hidden} unchanged ${hidden === 1 ? "line" : "lines"}` });
+      rows.push(...run.slice(run.length - tail));
+    } else {
+      rows.push(...run);
+    }
+    i = j;
+  }
+  return rows;
+}
+
+/** The spec a sign-off pins: only what changed since the last sign-off, the whole spec on request. */
+function SpecDiff({ spec, changed }: { spec: SpecBrief; changed: boolean }) {
+  const whole = <Markdown source={spec.text} />;
+  if (spec.diff.length > 0) {
+    return (
+      <div className="spec-diff">
+        <h3>The spec, changed since sign-off</h3>
+        <pre className="diff">
+          {foldDiff(spec.diff).map((r, n) => (
+            <div key={n} className={`diff-${r.op}`} style={{ color: r.op === "added" ? "var(--ok, #1a7f37)" : r.op === "removed" ? "var(--bad, #cf222e)" : undefined }}>
+              {r.op === "added" ? "+ " : r.op === "removed" ? "− " : "  "}
+              {r.text}
+            </div>
+          ))}
+        </pre>
+        <details>
+          <summary>Show the whole spec</summary>
+          {whole}
+        </details>
+      </div>
+    );
+  }
+  return (
+    <div className="spec-diff">
+      <h3>The spec this sign-off covers</h3>
+      {changed && !spec.previous_kept ? (
+        <p className="muted small">
+          The text signed off on {spec.signed_at.slice(0, 10)} wasn't kept on this board (it was signed before
+          kanbanr kept it), so the whole spec is shown.
+        </p>
+      ) : null}
+      {whole}
+    </div>
+  );
+}
+
 function Brief({
   project,
   item,
@@ -398,6 +467,8 @@ function Brief({
   const dimensions = zachmanColumns(def.zachman).filter((d) => d.answer.trim());
   const ratify = item.approval === "unratified";
   const waitingOnSignoff = item.approval === "signoff";
+  // The design was signed off, then the spec changed (FTR-023): signing again is the answer.
+  const specChanged = item.approval === "spec_changed";
   // Ready for release and in none (FEAT-185); asked beside any other question this item has.
   const releaseChoices = item.release_choices;
   const whichRelease = item.approval === "release";
@@ -488,6 +559,10 @@ function Brief({
               ? `waiting on sign-off: ${signoffs.join(", ")}`
               : whichRelease
                 ? "ready for release: which one?"
+              : specChanged
+                ? item.finished
+                  ? `${item.status}: spec changed since sign-off`
+                  : "spec changed since sign-off"
               : item.approval === "added"
                 ? item.finished
                   ? `${item.status}: added since approval`
@@ -506,7 +581,9 @@ function Brief({
         <Link to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(item.code)}`}>
           open {item.code}
         </Link>
-        {item.approval === "added"
+        {specChanged
+          ? ` · signed off by ${item.spec?.signed_by ?? ""} on ${(item.spec?.signed_at ?? "").slice(0, 10)}; since then the spec changed. Signing again covers it as it stands now.`
+          : item.approval === "added"
           ? " · approved once; since then text was only added. Approving again covers what it says now."
           : item.approval === "lapsed"
           ? ` · approved once, then the definition changed — agreeing again covers what it says now${
@@ -537,6 +614,8 @@ function Brief({
         definitionBody
       )}
 
+      {item.spec ? <SpecDiff spec={item.spec} changed={specChanged} /> : null}
+
       {diagrams.failed || diagrams.problems.length > 0 ? (
         <div className="diagram-problems">
           <h3>Diagrams</h3>
@@ -561,7 +640,7 @@ function Brief({
           <span className="chip done">{outcome} — it leaves this list on the next refresh</span>
         ) : writable ? (
           <>
-            {waitingOnSignoff || whichRelease ? null : (
+            {waitingOnSignoff || specChanged || whichRelease ? null : (
               <button
                 className="btn btn-primary"
                 onClick={onApprove}
@@ -574,7 +653,7 @@ function Brief({
             {signoffs.map((name) => (
               <button
                 key={name}
-                className={`btn ${waitingOnSignoff ? "btn-primary" : ""}`}
+                className={`btn ${waitingOnSignoff || specChanged ? "btn-primary" : ""}`}
                 onClick={() => onSignoff(name)}
                 disabled={busy}
               >

@@ -238,6 +238,20 @@ mod tests {
         assert!(skill.contains("`diagrams_valid` gate"));
     }
 
+    /// FTR-023: the skill says a design-review covers the whole spec as it was when given.
+    #[test]
+    fn skill_says_design_review_covers_the_whole_spec() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        assert!(
+            skill.contains("**A design-review covers the whole spec as it was when given.**"),
+            "the skill says a design-review covers the whole spec"
+        );
+    }
+
     /// FEAT-197 R-16 (its automatable half): the skill says when to list the view docs, index a
     /// new ADR, fix coverage warnings before a move and run doctor before a sprint merge or a cut,
     /// what a `docs_cover` gate asks, and names `config coverage`. Whether the guidance matches the

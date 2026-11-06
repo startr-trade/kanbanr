@@ -417,7 +417,8 @@ them **one at a time**: show the brief in a sentence or three, then **one AskUse
 verdicts that item can take — from the table above — plus **"Change it"** and **"Skip"**:
 
 - **Approve / Ratify / Sign off \<name\>** → record it at once:
-  `kanbanr approve|ratify <CODE> --rev <rev>` · `kanbanr signoff <CODE> <name> --rev <rev>`.
+  `kanbanr approve|ratify <CODE> --rev <rev>` · `kanbanr signoff <CODE> <name> --rev <rev>`, adding
+  `--spec-rev <spec_rev>` when the entry has one (a sign-off that pins the spec).
 - **Accept / Reject** a proposed decision → `kanbanr adr accept|reject <ADR> [--reason "…"]`.
 - **Which release?** An entry with `"approval": "release"` (or any entry that has
   `release_choices`) is an item ready for release and in none. Ask which planned release it
@@ -554,6 +555,13 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
 Leaving the design role, the build stage's gate asks for `spec_sections: [Design]` and the
 `design-review` sign-off. Ask **Sign off design-review** once the section exists; the user gives
 it, never you.
+
+**A design-review covers the whole spec as it was when given.** Any edit to the spec afterwards (a
+correction, a note, a link) brings the sign-off back to the Review page, with only the change shown.
+Make spec edits after design-review together, not one by one. Then say the sign-off is waiting again
+on the Review page; don't ask the user to carry on in a question. A queue entry with
+`"approval": "spec_changed"` carries `spec_rev` and the diff; pass `--spec-rev <spec_rev>` with the
+sign-off so it is refused if the spec moved on after the user was shown it.
 
 ### The design stage: the spec carries the build-ready design
 
