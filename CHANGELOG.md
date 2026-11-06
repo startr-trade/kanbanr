@@ -8,6 +8,17 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **An approval lapses only when the text you approved changes (FTR-018).** Adding to a definition
+  no longer lapses its approval: each approval, ratification and sign-off now records a hash per
+  part of the definition (`parts`), and an approval whose parts are all unchanged but which gained
+  new ones reads `extended`. Before the build stage the additions wait for the next decision, such
+  as `design-review`, which reviews them; from the build stage on a gate that asks for no sign-off
+  refuses the move and names the additions, and the Review page lists the item as `added`. Changing
+  or removing approved text still lapses it. The Review page shows the parts added or changed
+  first, with the approved text collapsed. Additive to the API: the `extended` approval state, the
+  `added` review entry, `changes` on review entries and `parts` on approvals and sign-offs.
+  Records from an older kanbanr have no parts and lapse on any change, as before.
+
 - **Guides for every built-in process (DOC-003).** The Process guides section now covers default,
   scheduled, PDCA, design control, Scrum and agile, each with Claude and from the command line, and
   Working with Claude links them from each process's row. Its table now lists what each process

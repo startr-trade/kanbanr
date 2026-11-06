@@ -404,7 +404,10 @@ or define the item, then record the approval with the revision you showed —
 back, revise it; nothing is recorded.
 
 Moving an item on to a stage that asks for more is the same loop: plan the growth, the user
-accepts, record the approval again (the earlier one lapsed when the definition grew).
+accepts, record the next decision the stage asks for. Adding to an approved definition keeps the
+approval; what you add is shown and reviewed at the next decision the stage asks for (usually
+design-review). Changing or removing approved text lapses it, and the item returns to the Review
+page.
 
 ### Waiting decisions: work the queue as questions
 
@@ -422,7 +425,7 @@ verdicts that item can take — from the table above — plus **"Change it"** an
   choices the monitor's Review page offers. Then run `kanbanr release plan <VERSION> <CODE>`. For a
   new release, ask its version and target date, then run
   `kanbanr release add <VERSION> --target YYYY-MM-DD` before the plan.
-- **Change it** → ask what, revise the definition; it returns to the queue (its approval lapses).
+- **Change it** → ask what, revise the definition; it returns to the queue if the change alters or removes approved text.
 - **Skip** → leave it, and move to the next.
 
 **A verdict is recorded only from the user's explicit choice in that plan or question — never
@@ -510,8 +513,8 @@ view behind: add the links each one names before you move the item on.
   approver is refused, so never invent `--by`: if it fails, the board has no identity and the user
   sets one with `kanbanr identity`.
 - kanbanr enforces the gates: a move into a stage whose gate needs `approved` is refused unless the
-  definition's approval is current. Change the definition after approval and it **lapses** — scope
-  cannot drift silently past a yes.
+  definition's approval is current. Change or remove approved text and it **lapses**; added text is
+  reviewed at the next decision — scope cannot drift silently past a yes.
 - **Subagents inherit, never invent.** A coordinator passes the approved definition to each
   subagent as its brief. A subagent that finds work outside it returns a **proposed change to the
   definition**, not merged code.
@@ -1175,14 +1178,16 @@ once items are in flight.
 Under a phased process, grow an item's definition stage by stage.
 - **A named manual test is an open check.** `kanbanr check` lists `manual test not run: R-n: <name>`
   without blocking. Tell the user, and don't call the item done until someone has run it.
-- **A finished item on the Review page** is there because its approval lapsed: ask the user to read
-  what changed and approve again, or say why the change doesn't need it.
+- **A finished item on the Review page** is there because its approval lapsed or text was added since: ask
+  the user to read what changed and approve again, or say why the change doesn't need it.
 - **Guides for each built-in process** are in the book, under Process guides. Point a user there
   when they ask how a whole project runs under their process.
 - **Before each move,** run `kanbanr check <CODE>`. It names what the next stage needs: fill in
   that, and not everything at once.
-- **Approval is renewed as the definition grows.** Each change lapses the approval, so ask the
-  user to approve again before the move.
+- **Growth keeps the approval; changes lapse it.** Adding to the definition leaves the approval
+  standing, to be reviewed at the next decision (before build) or at once (from build on, when the
+  Review page shows it as `added`). Changing or removing approved text lapses it, so ask the user
+  to approve again before the move.
 - **A sign-off (`kanbanr signoff`) is the user's**, like an approval: ask for it, never record it
   yourself.
 - **Overrides:** `--override "<reason>"` gets past a gate on the record. Use it only when the

@@ -1196,6 +1196,7 @@ impl Store {
             by: by.to_string(),
             at: at.clone(),
             rev: rev.clone(),
+            parts: definition.part_revs(),
         });
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
@@ -1252,6 +1253,7 @@ impl Store {
             by: by.to_string(),
             at: at.clone(),
             rev: rev.clone(),
+            parts: definition.part_revs(),
         });
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
@@ -1359,6 +1361,7 @@ impl Store {
             by: by.trim().to_string(),
             at: at.clone(),
             rev,
+            parts: definition.part_revs(),
             note: note.trim().to_string(),
             doc: doc.trim().to_string(),
             status,
@@ -1612,6 +1615,13 @@ impl Store {
         // applies to the item entering it.
         let mut failing =
             crate::readiness::evaluate_entering(feature, known, &gate.requires, ctx, to);
+        failing.extend(crate::readiness::additions_gap(
+            feature,
+            &gate.requires,
+            &gate.signoffs,
+            ctx,
+            to,
+        ));
         failing.extend(crate::readiness::signoff_gaps(feature, &gate.signoffs));
         if no_charter {
             failing.retain(|g| {
@@ -2524,6 +2534,7 @@ impl Store {
                         by: by.unwrap_or_else(|| "unknown".to_string()),
                         at: now_rfc3339(),
                         rev: definition.content_rev(),
+                        parts: definition.part_revs(),
                     });
                     feature.updated_at = now_rfc3339();
                     pending.persist_features.insert(resolved.clone());

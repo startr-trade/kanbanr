@@ -401,8 +401,7 @@ fn push(
 /// approval is not an answer: the definition changed, so the agreement no longer covers what was
 /// built, and the question is open again.
 pub(crate) fn unreconciled_bypass(def: &crate::models::FeatureDefinition) -> bool {
-    use crate::models::ApprovalState::{Current, Ratified};
-    !def.started_unapproved.trim().is_empty() && !matches!(def.approval_state(), Current | Ratified)
+    !def.started_unapproved.trim().is_empty() && !def.approval_state().is_agreed()
 }
 
 /// Live work under the method: not finished, on the board, and created since adoption. The first two

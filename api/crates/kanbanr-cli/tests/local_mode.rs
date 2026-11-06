@@ -8199,3 +8199,102 @@ fn why_json_on_an_uncommitted_line_names_the_branch_item() {
     assert_eq!(v["references"][0]["reference"], "FEAT-001", "{v}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FTR-018 R-6, R-7: one approval carries an item through the phases while its definition grows;
+/// the design review, asked for by the build stage's gate, reviews everything added, and the
+/// approval then reads current. The approvals log holds the one `approved` entry.
+#[test]
+fn togaf_item_reaches_implementation_with_one_approval() {
+    let (base, work) = togaf_scratch("one-approval");
+    togaf_board(&base, &work);
+    let ok = |args: &[&str]| -> String {
+        let o = run_in(&base, &work, args);
+        assert!(
+            o.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    // The build stage asks for approval and a design review.
+    let process = base.join("process2.yaml");
+    std::fs::write(
+        &process,
+        r#"statuses: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+default_state: Vision
+displayed_states: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+terminal_states: [Operations]
+transitions:
+  Vision: [Business Arch]
+  Business Arch: [System Design, Vision]
+  System Design: [Implementation, Business Arch]
+  Implementation: [Migration, System Design]
+  Migration: [Operations, Implementation]
+  Operations: [Migration]
+gates:
+  Business Arch:
+    requires: [definition, approved]
+  System Design:
+    requires: [approved]
+  Implementation:
+    roles: [build]
+    requires: [approved]
+    signoffs: [design-review]
+    on_enter: [branch]
+"#,
+    )
+    .unwrap();
+    ok(&[
+        "config",
+        "workflow",
+        "--from-file",
+        process.to_str().unwrap(),
+    ]);
+    let grow = |yaml: &str| {
+        let def = base.join("grown.yaml");
+        std::fs::write(&def, yaml).unwrap();
+        ok(&[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            def.to_str().unwrap(),
+        ]);
+    };
+
+    // The definition grows through each phase; the approval from Vision stands.
+    grow("statement: Keep a cart\nzachman:\n  who: shoppers\n  what: a cart\n  why: to buy\n");
+    ok(&["move", "FEAT-001", "Business Arch"]);
+    grow(concat!(
+        "statement: Keep a cart\n",
+        "zachman:\n  who: shoppers\n  what: a cart\n  why: to buy\n  how: server side\n  where: api\n",
+    ));
+    ok(&["move", "FEAT-001", "System Design"]);
+
+    // Implementation is a build stage: the move is refused until the design review is given.
+    let refused = run_in(&base, &work, &["move", "FEAT-001", "Implementation"]);
+    assert!(!refused.status.success());
+    let why = String::from_utf8_lossy(&refused.stderr);
+    assert!(why.contains("design-review"), "{why}");
+    ok(&["signoff", "FEAT-001", "design-review"]);
+    ok(&["move", "FEAT-001", "Implementation"]);
+
+    let shown = ok(&["feature", "show", "FEAT-001"]);
+    assert!(
+        shown.contains("Approved") || shown.contains("approved"),
+        "{shown}"
+    );
+    assert!(!shown.to_lowercase().contains("lapsed"), "{shown}");
+    let log = ok(&["feature", "show", "FEAT-001", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&log).unwrap();
+    let approvals = v["definition"]["approvals"].as_array().unwrap();
+    assert_eq!(
+        approvals
+            .iter()
+            .filter(|a| a["verdict"] == "approved")
+            .count(),
+        1,
+        "{approvals:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}

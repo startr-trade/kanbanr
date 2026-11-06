@@ -4,6 +4,12 @@ use crate::models::{FeatureItem, Milestone, TaskState};
 use crate::store::Project;
 use serde::Serialize;
 
+/// "N part(s) added since: keys" for an approval that has only grown (FTR-018).
+fn added_since(def: &crate::models::FeatureDefinition) -> String {
+    let added = def.part_changes().map(|c| c.added).unwrap_or_default();
+    format!("{} part(s) added since: {}", added.len(), added.join(", "))
+}
+
 /// Render an ENTIRE project as one portable markdown bundle: a board summary, the milestones, then
 /// every feature item in full. Good for a snapshot/report or handing the whole plan to Claude.
 pub fn project_to_markdown(project: &Project) -> String {
@@ -232,6 +238,15 @@ pub fn definition_brief(feature: &FeatureItem) -> String {
                 )
             })
             .unwrap_or_default(),
+        crate::models::ApprovalState::Extended => {
+            let approver = def.approval.as_ref();
+            format!(
+                "approved by {} on {}, with {}",
+                approver.map_or("", |a| a.by.as_str()),
+                approver.map_or("", |a| a.at.get(..10).unwrap_or(&a.at)),
+                added_since(def)
+            )
+        }
         crate::models::ApprovalState::Lapsed => {
             "**approval lapsed** — the definition changed after it was approved".to_string()
         }
@@ -291,6 +306,16 @@ fn definition_sections(def: &crate::models::FeatureDefinition) -> String {
                     "- **Approved** by {} on {}\n",
                     a.by,
                     a.at.get(..10).unwrap_or(&a.at)
+                ));
+            }
+        }
+        crate::models::ApprovalState::Extended => {
+            if let Some(a) = &def.approval {
+                out.push_str(&format!(
+                    "- **Approved** by {} on {}, with {}\n",
+                    a.by,
+                    a.at.get(..10).unwrap_or(&a.at),
+                    added_since(def)
                 ));
             }
         }

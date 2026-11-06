@@ -80,8 +80,9 @@ missing, Claude drafts it or brings it to you.
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
 
-**Each approval covers exactly the text you saw.** If the definition changes, your approval lapses and
-the item returns to the Review page. Read what changed, then approve again.
+**Each approval covers the text you saw.** Adding to the definition keeps the approval, and what was
+added is reviewed at the next decision. Changing or removing approved text lapses it, and the item
+returns to the Review page. Read what changed, then approve again.
 
 **Just ask to move it on:**
 

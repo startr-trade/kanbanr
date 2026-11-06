@@ -239,9 +239,13 @@ through; `kanbanr doctor` lists the same ones. A requirement link lands on that 
 
 ![An item's page](../images/feature.png)
 
-The **Review** page also lists a finished item whose approval lapsed, labelled with its status,
-after all the live decisions. The work is done, but the definition changed after you approved it:
-approving again covers what it says now. A finished item that was never approved isn't listed.
+The **Review** page also lists a finished item whose approval lapsed or that gained text since
+you approved it, labelled with its status, after all the live decisions. The work is done, but the
+definition changed after you approved it: approving again covers what it says now.
+
+Where text was added to an approved definition, or changed or removed, the brief shows those parts
+first, marked **added** or **changed**, and collapses the approved text that is unchanged. Adding
+keeps the approval and waits for the next decision; changing or removing approved text lapses it. A finished item that was never approved isn't listed.
 
 Before you approve, the **Review** page parses every Mermaid diagram the item's brief covers — its
 spec and each doc in its `affects_docs` — with Pele, the library that draws them (FEAT-200). Each

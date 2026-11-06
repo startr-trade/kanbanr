@@ -6123,6 +6123,23 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             }
             for feature in &features {
                 print!("{}", kanbanr_core::export::definition_brief(feature));
+                // What was added since the last decision (FTR-018), from the queue's entry.
+                if let Some(entry) = queue.iter().find(|v| v["code"] == feature.code.as_str()) {
+                    let added: Vec<&str> = entry["changes"]["added"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|k| k.as_str())
+                        .collect();
+                    if !added.is_empty() {
+                        let also = if entry["approval"] == "signoff" {
+                            "also "
+                        } else {
+                            ""
+                        };
+                        println!("{also}added since approval: {}", added.join(", "));
+                    }
+                }
                 println!();
             }
             // Agreed items whose one open question is which release they ship in (FEAT-185):

@@ -138,13 +138,14 @@ export default function ReviewPage() {
       ) : items.length === 0 ? (
         <p className="muted">
           Nothing is waiting for agreement. An item appears here when its definition has never been
-          approved, or when the definition changed after a yes — which lapses the approval rather
-          than silently keeping it.
+          approved, or when approved text was changed or removed, which lapses the approval, or when
+          text was added once the item is being built.
         </p>
       ) : (
         <p className="muted">
           {items.length} item{items.length === 1 ? "" : "s"} waiting. Approving records agreement
-          pinned to the definition below: change it afterwards and the approval lapses.
+          pinned to the definition below: change or remove approved text afterwards and the approval
+          lapses; added text is reviewed at the next decision.
           {items.some((i) => i.approval === "unratified")
             ? " Work already finished under a recorded bypass is listed first, to ratify."
             : null}
@@ -410,42 +411,13 @@ function Brief({
   const diagrams = useDiagramCheck(project, item.code, tick);
   const blocker = approveBlocker(diagrams);
 
-  return (
-    <details className="review-item" id={item.code} open={defaultOpen}>
-      {/* The summary is the row you scan; the brief is what you expand to read. */}
-      <summary>
-        <code className="taskkey">{item.code}</code>
-        <span className="review-title">{item.title}</span>
-        <span className={`chip ${item.approval === "missing" ? "" : "warn"}`}>
-          {ratify
-            ? `${item.status} without agreement`
-            : waitingOnSignoff
-              ? `waiting on sign-off: ${signoffs.join(", ")}`
-              : whichRelease
-                ? "ready for release: which one?"
-              : item.approval === "lapsed"
-                ? item.finished
-                  ? `${item.status}: approval lapsed`
-                  : "approval lapsed"
-                : "never approved"}
-        </span>
-        {approved ? <span className="chip done">{outcome}</span> : null}
-      </summary>
-
-      <div className="review-body">
-      <p className="muted small">
-        <Link to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(item.code)}`}>
-          open {item.code}
-        </Link>
-        {item.approval === "lapsed"
-          ? ` · approved once, then the definition changed — agreeing again covers what it says now${
-              item.finished ? ". The work is done." : ""
-            }`
-          : ratify
-            ? " · built under a recorded bypass — ratifying agrees to it after the fact, and the record says so"
-            : null}
-      </p>
-
+  // Parts added or changed since the last decision lead; the rest is collapsed (FTR-018).
+  const changes =
+    item.changes && (item.changes.added.length > 0 || item.changes.changed.length > 0 || item.changes.removed.length > 0)
+      ? item.changes
+      : undefined;
+  const definitionBody = (
+    <>
       {def.statement ? <Markdown source={`> ${def.statement}`} /> : null}
       {(def.goals ?? []).length > 0 && (
         <div className="tile-states">
@@ -499,6 +471,70 @@ function Brief({
             </div>
           ))}
         </div>
+      )}
+    </>
+  );
+
+  return (
+    <details className="review-item" id={item.code} open={defaultOpen}>
+      {/* The summary is the row you scan; the brief is what you expand to read. */}
+      <summary>
+        <code className="taskkey">{item.code}</code>
+        <span className="review-title">{item.title}</span>
+        <span className={`chip ${item.approval === "missing" ? "" : "warn"}`}>
+          {ratify
+            ? `${item.status} without agreement`
+            : waitingOnSignoff
+              ? `waiting on sign-off: ${signoffs.join(", ")}`
+              : whichRelease
+                ? "ready for release: which one?"
+              : item.approval === "added"
+                ? item.finished
+                  ? `${item.status}: added since approval`
+                  : "added since approval"
+              : item.approval === "lapsed"
+                ? item.finished
+                  ? `${item.status}: approval lapsed`
+                  : "approval lapsed"
+                : "never approved"}
+        </span>
+        {approved ? <span className="chip done">{outcome}</span> : null}
+      </summary>
+
+      <div className="review-body">
+      <p className="muted small">
+        <Link to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(item.code)}`}>
+          open {item.code}
+        </Link>
+        {item.approval === "added"
+          ? " · approved once; since then text was only added. Approving again covers what it says now."
+          : item.approval === "lapsed"
+          ? ` · approved once, then the definition changed — agreeing again covers what it says now${
+              item.finished ? ". The work is done." : ""
+            }`
+          : ratify
+            ? " · built under a recorded bypass — ratifying agrees to it after the fact, and the record says so"
+            : null}
+      </p>
+
+      {changes ? (
+        <Changes
+          item={item}
+          changes={changes}
+          heading={
+            waitingOnSignoff
+              ? "Also reviewed by this sign-off: added since approval"
+              : "Since your last decision"
+          }
+        />
+      ) : null}
+      {changes ? (
+        <details className="review-unchanged">
+          <summary>The approved text, unchanged</summary>
+          {definitionBody}
+        </details>
+      ) : (
+        definitionBody
       )}
 
       {diagrams.failed || diagrams.problems.length > 0 ? (
@@ -613,5 +649,64 @@ function Brief({
       </div>
       </div>
     </details>
+  );
+}
+
+/** The text of one definition part, by its key (FTR-018): `statement`, `goals/<id>`,
+ * `zachman/<column>`, `requirements/<id>` and `requirements/<id>/tests/<name>`. */
+function partText(def: NonNullable<PendingReview["definition"]>, key: string): string {
+  if (key === "statement") return def.statement ?? "";
+  if (key.startsWith("goals/")) return key.slice("goals/".length);
+  if (key.startsWith("zachman/")) {
+    const column = key.slice("zachman/".length);
+    const found = zachmanColumns(def.zachman).find((d) => d.column.toLowerCase() === column);
+    return found ? `${found.column}. ${found.answer}` : column;
+  }
+  if (key.startsWith("requirements/")) {
+    const rest = key.slice("requirements/".length);
+    // A test's name may hold "/", so split on the tests marker and never on every slash.
+    const at = rest.indexOf("/tests/");
+    const id = at < 0 ? rest : rest.slice(0, at);
+    const requirement = (def.requirements ?? []).find((r, i) => (r.id || `#${i}`) === id);
+    if (at < 0) return requirement ? `${requirement.id} ${requirement.text}` : id;
+    const name = rest.slice(at + "/tests/".length);
+    const test = (requirement?.tests ?? []).find((t) => t.name === name);
+    return test ? `${id} test ${test.name}${test.kind ? ` (${test.kind})` : ""}` : name;
+  }
+  return key;
+}
+
+/** What was added or changed since the last decision, first on the brief (FTR-018). */
+function Changes({
+  item,
+  changes,
+  heading,
+}: {
+  item: PendingReview;
+  changes: NonNullable<PendingReview["changes"]>;
+  heading: string;
+}) {
+  const def = item.definition ?? {};
+  return (
+    <div className="review-changes">
+      <h3>{heading}</h3>
+      <ul className="dep-list">
+        {changes.added.map((k) => (
+          <li key={`a-${k}`}>
+            <span className="chip tasks">added</span> {partText(def, k)}
+          </li>
+        ))}
+        {changes.changed.map((k) => (
+          <li key={`c-${k}`}>
+            <span className="chip warn">changed</span> {partText(def, k)}
+          </li>
+        ))}
+        {changes.removed.map((k) => (
+          <li key={`r-${k}`}>
+            <code>{k}</code> removed
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

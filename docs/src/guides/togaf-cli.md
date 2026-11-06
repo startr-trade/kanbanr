@@ -162,8 +162,9 @@ Each move is refused until its gate is met, and the refusal says what's missing.
 | **Migration** | Requirements proven by green tests, docs updated, the `docs-folded` sign-off | `kanbanr test`, `kanbanr signoff`, `kanbanr move` |
 | **Operations** | Green tests, the `release` sign-off | `kanbanr signoff`, which makes the move once all the item's tasks are done; otherwise the cut does |
 
-**An edit lapses your approval.** When the definition changes, the next move says so, and you approve
-the larger definition:
+**Adding keeps your approval; changing lapses it.** Text added to the definition is reviewed at the
+next decision, such as `kanbanr signoff FEAT-001 design-review`. When approved text is changed or
+removed, the next move says so, and you approve again:
 
 ```text
 cannot move FEAT-001 to 'System Design': approval lapsed — the definition changed after it was approved.

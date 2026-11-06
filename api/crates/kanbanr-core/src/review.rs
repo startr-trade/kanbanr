@@ -21,6 +21,9 @@ pub enum ApprovalKind {
     Missing,
     /// Approved, then the definition changed.
     Lapsed,
+    /// Approved, then the definition gained parts that now need a decision (FTR-018): the item is
+    /// at or past its build stage, or its next stage would refuse the additions.
+    Added,
 }
 
 /// One item waiting for agreement.
@@ -42,6 +45,10 @@ pub struct ReviewEntry {
     pub in_progress: bool,
     /// The item is finished work (DEF-013): listed only because its approval lapsed.
     pub finished: bool,
+    /// The parts added, changed and removed since the last decision (FTR-018); present on
+    /// `lapsed`, `added` and `signoff` entries that have a baseline to compare with.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changes: Option<crate::models::PartChanges>,
     /// The planned releases it could ship in, in file order (FEAT-185). Present whenever the
     /// release question is due, so a surface asking another question first can ask this one too.
     /// Empty: only a new release to choose.
@@ -89,7 +96,10 @@ pub fn pending(store: &Store, p: &str) -> Result<Vec<ReviewEntry>> {
             let finished_lapsed = !live
                 && !unratified
                 && crate::graph::is_finished_work(&project.config, &f.status)
-                && definition.approval_state() == ApprovalState::Lapsed;
+                && matches!(
+                    definition.approval_state(),
+                    ApprovalState::Lapsed | ApprovalState::Extended
+                );
             if !live && !unratified && !finished_lapsed {
                 return None;
             }
@@ -115,6 +125,18 @@ pub fn pending(store: &Store, p: &str) -> Result<Vec<ReviewEntry>> {
                             ))
                         })
                 });
+            // Text added to an approval needs a decision at once from the build stage on (a
+            // finished item is always past it), or when the next stage would refuse it
+            // (FTR-018). Before that the additions wait inside the sign-off that stage asks for.
+            let extended = definition.approval_state() == ApprovalState::Extended;
+            let additions_due = extended
+                && (!live
+                    || ctx.builds(&f.status)
+                    || next.as_ref().is_some_and(|n| {
+                        n.requires_gaps
+                            .iter()
+                            .any(|g| g.label == "added since approval")
+                    }));
             let signoffs_needed: Vec<String> = next
                 .filter(|n| n.requires_gaps.is_empty())
                 .map(|n| n.signoffs_needed)
@@ -124,18 +146,32 @@ pub fn pending(store: &Store, p: &str) -> Result<Vec<ReviewEntry>> {
                 // Agreed is agreed, however late — a ratified item is not still a
                 // decision waiting to be made, so it leaves the queue (FEAT-080) — unless
                 // its next stage is waiting on a sign-off.
-                ApprovalState::Current | ApprovalState::Ratified if !signoffs_needed.is_empty() => {
+                ApprovalState::Current | ApprovalState::Ratified | ApprovalState::Extended
+                    if !signoffs_needed.is_empty() =>
+                {
                     ApprovalKind::Signoff
                 }
+                ApprovalState::Extended if additions_due => ApprovalKind::Added,
                 // Agreed, and nothing to sign: the one question left is the release.
-                ApprovalState::Current | ApprovalState::Ratified if asks_release => {
+                ApprovalState::Current | ApprovalState::Ratified | ApprovalState::Extended
+                    if asks_release =>
+                {
                     ApprovalKind::Release
                 }
-                ApprovalState::Current | ApprovalState::Ratified => return None,
+                ApprovalState::Current | ApprovalState::Ratified | ApprovalState::Extended => {
+                    return None;
+                }
                 ApprovalState::Missing => ApprovalKind::Missing,
                 ApprovalState::Lapsed => ApprovalKind::Lapsed,
             };
+            let changes = matches!(
+                approval,
+                ApprovalKind::Lapsed | ApprovalKind::Added | ApprovalKind::Signoff
+            )
+            .then(|| definition.part_changes())
+            .flatten();
             Some(ReviewEntry {
+                changes,
                 code: f.code.clone(),
                 title: f.title.clone(),
                 status: f.status.clone(),

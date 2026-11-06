@@ -305,6 +305,11 @@ pub struct Signoff {
     pub at: String,
     /// The definition content it covered.
     pub rev: String,
+    /// A hash of each part of the definition it covered (FTR-018), keyed as
+    /// [`FeatureDefinition::part_revs`]. Empty on a record an older kanbanr wrote: such a record is
+    /// no baseline, and any change to the definition lapses it.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub parts: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
     /// A board doc holding the record — minutes, a checklist.
@@ -396,6 +401,11 @@ pub struct Approval {
     pub by: String,
     pub at: String,
     pub rev: String,
+    /// A hash of each part of the definition it covered (FTR-018), keyed as
+    /// [`FeatureDefinition::part_revs`]. Empty on a record an older kanbanr wrote: such a record is
+    /// no baseline, and any change to the definition lapses it.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub parts: std::collections::BTreeMap<String, String>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -421,6 +431,27 @@ pub enum ApprovalState {
     /// the question was answered later — which is a real resolution, and not the same thing as
     /// prior agreement, so it reads differently wherever it is shown.
     Ratified,
+    /// Approved, and since then the definition has only gained parts: everything approved is
+    /// present and unchanged (FTR-018). The additions wait for the next decision.
+    Extended,
+}
+
+impl ApprovalState {
+    /// Is the definition agreed to, as far as a gate asking for `approved` goes? Whether an
+    /// `Extended` approval is enough depends on the stage (see `readiness::additions_gap`).
+    pub fn is_agreed(self) -> bool {
+        matches!(self, Self::Current | Self::Ratified | Self::Extended)
+    }
+}
+
+/// What differs between the parts a decision covered and the definition now (FTR-018). Keys are
+/// those of [`FeatureDefinition::part_revs`], sorted.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PartChanges {
+    pub added: Vec<String>,
+    pub changed: Vec<String>,
+    pub removed: Vec<String>,
 }
 
 impl FeatureDefinition {
@@ -453,14 +484,138 @@ impl FeatureDefinition {
         crate::hash::stable_hash(&crate::hash::canonical_json(&bare))
     }
 
-    /// Whether this definition is approved as it currently stands.
+    /// A hash of each part of the definition, by a stable key (FTR-018): `statement`,
+    /// `goals/<id>`, `zachman/<column>`, `zachman/extra/<key>`, `design_doc`, `exempt`,
+    /// `requirements/<id>` (or `requirements/#<index>` with no id) with its tests left out,
+    /// `requirements/<id>/tests/<name>`, and `extra/<key>`. Blank text is no part. What
+    /// [`Self::content_rev`] leaves out is left out here, so a part changing always changes the
+    /// content hash too.
+    pub fn part_revs(&self) -> std::collections::BTreeMap<String, String> {
+        fn hash<T: Serialize + ?Sized>(value: &T) -> String {
+            crate::hash::stable_hash(&crate::hash::canonical_json(value))
+        }
+        let mut parts = std::collections::BTreeMap::new();
+        if !self.statement.trim().is_empty() {
+            parts.insert("statement".to_string(), hash(&self.statement));
+        }
+        for goal in &self.goals {
+            parts.insert(format!("goals/{goal}"), hash(goal));
+        }
+        for (column, answer) in self.zachman.columns() {
+            if !answer.trim().is_empty() {
+                parts.insert(format!("zachman/{}", column.to_lowercase()), hash(answer));
+            }
+        }
+        for (key, value) in &self.zachman.extra {
+            parts.insert(format!("zachman/extra/{key}"), hash(value));
+        }
+        if !self.design_doc.is_empty() {
+            parts.insert("design_doc".to_string(), hash(&self.design_doc));
+        }
+        if !self.exempt.is_empty() {
+            parts.insert("exempt".to_string(), hash(&self.exempt));
+        }
+        for (index, requirement) in self.requirements.iter().enumerate() {
+            let key = if requirement.id.is_empty() {
+                format!("requirements/#{index}")
+            } else {
+                format!("requirements/{}", requirement.id)
+            };
+            let mut bare = requirement.clone();
+            bare.tests = Vec::new();
+            parts.insert(key.clone(), hash(&bare));
+            for test in &requirement.tests {
+                let mut test = test.clone();
+                test.state = TestState::default();
+                test.checked_rev = String::new();
+                parts.insert(format!("{key}/tests/{}", test.name), hash(&test));
+            }
+        }
+        for (key, value) in &self.extra {
+            parts.insert(format!("extra/{key}"), hash(value));
+        }
+        parts
+    }
+
+    /// Do `new`'s parts keep every one of `old`'s unchanged and add at least one? An empty `old`
+    /// is no baseline, so nothing extends it.
+    pub fn extends(
+        old: &std::collections::BTreeMap<String, String>,
+        new: &std::collections::BTreeMap<String, String>,
+    ) -> bool {
+        !old.is_empty()
+            && old.iter().all(|(k, v)| new.get(k) == Some(v))
+            && new.keys().any(|k| !old.contains_key(k))
+    }
+
+    /// The last given sign-off, at or after the approval, whose parts extend the approval's: a
+    /// decision made on the additions (FTR-018). A sign-off given while the approval had lapsed
+    /// carries a changed or missing part, so it never qualifies.
+    fn reviewing_signoff(&self) -> Option<&Signoff> {
+        let approval = self.approval.as_ref()?;
+        self.signoffs.iter().rev().find(|s| {
+            s.verdict.is_given()
+                && !crate::before(&s.at, &approval.at)
+                && Self::extends(&approval.parts, &s.parts)
+        })
+    }
+
+    /// The parts the definition is judged against: the reviewing sign-off's, else the approval's.
+    fn baseline_parts(&self) -> Option<&std::collections::BTreeMap<String, String>> {
+        let parts = match self.reviewing_signoff() {
+            Some(s) => &s.parts,
+            None => &self.approval.as_ref()?.parts,
+        };
+        (!parts.is_empty()).then_some(parts)
+    }
+
+    /// What was added, changed and removed since the last decision, or `None` when there is no
+    /// baseline with parts or nothing differs.
+    pub fn part_changes(&self) -> Option<PartChanges> {
+        let baseline = self.baseline_parts()?;
+        let now = self.part_revs();
+        let mut changes = PartChanges::default();
+        for (key, rev) in &now {
+            match baseline.get(key) {
+                None => changes.added.push(key.clone()),
+                Some(old) if old != rev => changes.changed.push(key.clone()),
+                Some(_) => {}
+            }
+        }
+        changes.removed = baseline
+            .keys()
+            .filter(|k| !now.contains_key(*k))
+            .cloned()
+            .collect();
+        (!changes.added.is_empty() || !changes.changed.is_empty() || !changes.removed.is_empty())
+            .then_some(changes)
+    }
+
+    /// Whether this definition is approved as it currently stands. The whole-content hash is
+    /// compared first; part hashes are computed only when it differs.
     pub fn approval_state(&self) -> ApprovalState {
-        match &self.approval {
-            None => ApprovalState::Missing,
-            Some(a) if a.rev != self.content_rev() => ApprovalState::Lapsed,
-            // Current, but say WHICH kind of current: the last verdict decides.
-            Some(_) if self.was_ratified() => ApprovalState::Ratified,
-            Some(_) => ApprovalState::Current,
+        let Some(a) = &self.approval else {
+            return ApprovalState::Missing;
+        };
+        let rev = self.content_rev();
+        // Current, but say WHICH kind of current: the last verdict decides.
+        let current = || {
+            if self.was_ratified() {
+                ApprovalState::Ratified
+            } else {
+                ApprovalState::Current
+            }
+        };
+        if a.rev == rev {
+            return current();
+        }
+        // A sign-off that reviewed the additions, given on this very text.
+        if self.reviewing_signoff().is_some_and(|s| s.rev == rev) {
+            return current();
+        }
+        match self.baseline_parts() {
+            Some(baseline) if Self::extends(baseline, &self.part_revs()) => ApprovalState::Extended,
+            _ => ApprovalState::Lapsed,
         }
     }
 
@@ -1186,5 +1341,251 @@ mod tests {
         let mut changed = block.clone();
         changed.statement.push('!');
         assert_ne!(changed.content_rev(), block.content_rev());
+    }
+
+    /// A definition with every kind of part, for the FTR-018 tests.
+    fn full_definition() -> FeatureDefinition {
+        let mut d = FeatureDefinition {
+            statement: "Do it".into(),
+            goals: vec!["G-1".into(), "G-3".into()],
+            design_doc: "design/x.md".into(),
+            exempt: "spike".into(),
+            requirements: vec![Requirement {
+                id: "R-1".into(),
+                text: "THE SYSTEM SHALL do it".into(),
+                tests: vec![TestRef {
+                    name: "does/it".into(),
+                    kind: "unit".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        d.zachman.what = "a thing".into();
+        d.zachman.why = "because".into();
+        d.zachman.extra.insert("newer".into(), serde_json::json!(1));
+        d.extra
+            .insert("newer_key".into(), serde_json::json!([1, 2]));
+        d
+    }
+
+    /// Approve `d` as the CLI does: the whole hash and the parts.
+    fn approve(d: &mut FeatureDefinition) {
+        d.approval = Some(Approval {
+            by: "Ada".into(),
+            at: "2026-11-06T10:00:00Z".into(),
+            rev: d.content_rev(),
+            parts: d.part_revs(),
+            ..Default::default()
+        });
+    }
+
+    fn sign_off(d: &mut FeatureDefinition, at: &str) {
+        d.signoffs.push(Signoff {
+            id: "design-review".into(),
+            by: "Ada".into(),
+            at: at.into(),
+            rev: d.content_rev(),
+            parts: d.part_revs(),
+            ..Default::default()
+        });
+    }
+
+    /// FTR-018 R-1: a part for every piece of a definition, blank answers excepted.
+    #[test]
+    fn part_revs_name_every_part_of_a_definition() {
+        let keys: Vec<String> = full_definition().part_revs().into_keys().collect();
+        assert_eq!(
+            keys,
+            [
+                "design_doc",
+                "exempt",
+                "extra/newer_key",
+                "goals/G-1",
+                "goals/G-3",
+                "requirements/R-1",
+                "requirements/R-1/tests/does/it",
+                "statement",
+                "zachman/extra/newer",
+                "zachman/what",
+                "zachman/why",
+            ]
+        );
+        let mut no_id = full_definition();
+        no_id.requirements[0].id.clear();
+        assert!(no_id.part_revs().contains_key("requirements/#0"));
+    }
+
+    /// FTR-018 R-1: whatever `content_rev` hashes, a part hashes, and what it leaves out stays out.
+    #[test]
+    fn part_revs_cover_every_field_content_rev_hashes() {
+        let base = full_definition();
+        let mutations: Vec<(&str, Box<dyn Fn(&mut FeatureDefinition)>)> = vec![
+            ("statement", Box::new(|d| d.statement.push('!'))),
+            ("goal", Box::new(|d| d.goals[0] = "G-9".into())),
+            ("what", Box::new(|d| d.zachman.what.push('!'))),
+            ("how", Box::new(|d| d.zachman.how = "x".into())),
+            (
+                "zachman extra",
+                Box::new(|d| {
+                    d.zachman.extra.insert("newer".into(), serde_json::json!(2));
+                }),
+            ),
+            ("design_doc", Box::new(|d| d.design_doc.push('!'))),
+            ("exempt", Box::new(|d| d.exempt.push('!'))),
+            ("req text", Box::new(|d| d.requirements[0].text.push('!'))),
+            (
+                "req kind",
+                Box::new(|d| d.requirements[0].kind = RequirementKind::Nfr),
+            ),
+            (
+                "req violates",
+                Box::new(|d| d.requirements[0].violates = "X/R-1".into()),
+            ),
+            (
+                "test name",
+                Box::new(|d| d.requirements[0].tests[0].name.push('!')),
+            ),
+            (
+                "test kind",
+                Box::new(|d| d.requirements[0].tests[0].kind = "e2e".into()),
+            ),
+            (
+                "extra",
+                Box::new(|d| {
+                    d.extra.insert("newer_key".into(), serde_json::json!(3));
+                }),
+            ),
+        ];
+        for (what, mutate) in &mutations {
+            let mut d = base.clone();
+            mutate(&mut d);
+            assert_ne!(d.content_rev(), base.content_rev(), "{what}: content_rev");
+            assert_ne!(d.part_revs(), base.part_revs(), "{what}: part_revs");
+        }
+        // Evidence and verdicts are neither content nor a part.
+        let mut d = base.clone();
+        d.requirements[0].tests[0].state = TestState::Green;
+        d.requirements[0].tests[0].checked_rev = "abc".into();
+        approve(&mut d);
+        sign_off(&mut d, "2026-11-06T11:00:00Z");
+        d.affects_docs.push("a.md".into());
+        assert_eq!(d.part_revs(), base.part_revs());
+    }
+
+    /// FTR-018 R-2: a goal, a Zachman answer, a requirement or a test added keeps the approval.
+    #[test]
+    fn adding_parts_extends_an_approval() {
+        let mut base = full_definition();
+        approve(&mut base);
+        assert_eq!(base.approval_state(), ApprovalState::Current);
+        let additions: Vec<Box<dyn Fn(&mut FeatureDefinition)>> = vec![
+            Box::new(|d| d.goals.push("G-5".into())),
+            Box::new(|d| d.zachman.how = "by hashing".into()),
+            Box::new(|d| {
+                d.requirements.push(Requirement {
+                    id: "R-2".into(),
+                    text: "THE SYSTEM SHALL more".into(),
+                    ..Default::default()
+                })
+            }),
+            Box::new(|d| {
+                d.requirements[0].tests.push(TestRef {
+                    name: "another".into(),
+                    ..Default::default()
+                })
+            }),
+        ];
+        for add in &additions {
+            let mut d = base.clone();
+            add(&mut d);
+            assert_eq!(d.approval_state(), ApprovalState::Extended);
+            let changes = d.part_changes().unwrap();
+            assert_eq!(changes.added.len(), 1);
+            assert!(changes.changed.is_empty() && changes.removed.is_empty());
+        }
+        // Test evidence moving is no change at all.
+        let mut d = base.clone();
+        d.requirements[0].tests[0].state = TestState::Green;
+        assert_eq!(d.approval_state(), ApprovalState::Current);
+    }
+
+    /// FTR-018 R-3: a part changed or removed lapses, with or without an addition beside it.
+    #[test]
+    fn changing_or_removing_an_approved_part_lapses() {
+        let mut base = full_definition();
+        base.requirements.push(Requirement {
+            id: "R-2".into(),
+            text: "second".into(),
+            ..Default::default()
+        });
+        approve(&mut base);
+        let lapses: Vec<Box<dyn Fn(&mut FeatureDefinition)>> = vec![
+            Box::new(|d| d.statement.push('!')),
+            Box::new(|d| d.goals.retain(|g| g != "G-3")),
+            Box::new(|d| d.requirements[0].tests[0].name = "renamed".into()),
+            Box::new(|d| d.requirements.reverse()),
+            Box::new(|d| {
+                d.statement.push('!');
+                d.zachman.how = "an addition beside the change".into();
+            }),
+            Box::new(|d| d.zachman.what.clear()),
+        ];
+        for (i, change) in lapses.iter().enumerate() {
+            let mut d = base.clone();
+            change(&mut d);
+            assert_eq!(d.approval_state(), ApprovalState::Lapsed, "case {i}");
+        }
+        let mut d = base.clone();
+        d.statement.push('!');
+        let changes = d.part_changes().unwrap();
+        assert_eq!(changes.changed, ["statement"]);
+    }
+
+    /// FTR-018 R-4: a record with no parts, from an older kanbanr, lapses on any change.
+    #[test]
+    fn an_approval_without_parts_lapses_on_any_change() {
+        let mut d = full_definition();
+        approve(&mut d);
+        d.approval.as_mut().unwrap().parts.clear();
+        assert_eq!(d.approval_state(), ApprovalState::Current);
+        d.zachman.how = "an addition".into();
+        assert_eq!(d.approval_state(), ApprovalState::Lapsed);
+        assert!(d.part_changes().is_none());
+        // Nothing is written back: no parts key appears on an unchanged record.
+        let yaml = crate::yaml::to_string(d.approval.as_ref().unwrap()).unwrap();
+        assert!(!yaml.contains("parts"));
+    }
+
+    /// FTR-018 R-7: a sign-off given on the grown text reviews the additions.
+    #[test]
+    fn a_signoff_on_an_extended_definition_reviews_the_additions() {
+        let mut d = full_definition();
+        approve(&mut d);
+        d.zachman.how = "by hashing".into();
+        assert_eq!(d.approval_state(), ApprovalState::Extended);
+        sign_off(&mut d, "2026-11-06T11:00:00Z");
+        assert_eq!(d.approval_state(), ApprovalState::Current);
+        assert!(d.part_changes().is_none());
+        // It grows again: extended against the sign-off, listing only the new part.
+        d.zachman.when = "always".into();
+        assert_eq!(d.approval_state(), ApprovalState::Extended);
+        assert_eq!(d.part_changes().unwrap().added, ["zachman/when"]);
+        // A change to what the sign-off reviewed lapses.
+        d.zachman.how = "otherwise".into();
+        assert_eq!(d.approval_state(), ApprovalState::Lapsed);
+    }
+
+    /// FTR-018 R-8: a sign-off given while the approval had lapsed does not restore it.
+    #[test]
+    fn a_signoff_does_not_restore_a_lapsed_approval() {
+        let mut d = full_definition();
+        approve(&mut d);
+        d.statement.push('!');
+        d.zachman.how = "an addition".into();
+        assert_eq!(d.approval_state(), ApprovalState::Lapsed);
+        sign_off(&mut d, "2026-11-06T11:00:00Z");
+        assert_eq!(d.approval_state(), ApprovalState::Lapsed);
     }
 }

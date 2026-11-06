@@ -47,8 +47,9 @@ kanbanr approve FEAT-001     # records agreement, pinned to the definition's con
 kanbanr start FEAT-001       # refuses without a current approval
 ```
 
-Approval is pinned to a hash of the definition, so editing the definition afterwards **lapses** the
-approval rather than silently keeping it. The escape is explicit and recorded:
+Approval is pinned to a hash of each part of the definition, so changing or removing approved text
+afterwards **lapses** the approval rather than silently keeping it. Adding to the definition keeps
+the approval, and the additions are reviewed at the next decision. The escape is explicit and recorded:
 `kanbanr start FEAT-001 --override "why you are going ahead anyway"` (`--unapproved` still works), which stays on the item and
 is reported by `doctor` until it is reviewed.
 

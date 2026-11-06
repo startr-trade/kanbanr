@@ -91,19 +91,19 @@ gate. When something's missing, Claude either drafts it or brings it to you.
 
 | Phase | What Claude does | What you do on the Review page |
 |---|---|---|
-| **Vision** | Writes what it is and why | Nothing yet. The page may offer **Approve**, but it isn't needed here and lapses when the definition grows |
+| **Vision** | Writes what it is and why | Nothing yet. The page may offer **Approve**, but it isn't needed here |
 | **Business Arch** | Drafts who, what, why and the requirements | **Approve** |
-| **System Design** | Proposes how and where, and checks that against the requirements | **Approve** again, because the definition grew |
-| **Implementation** | Writes the design and its task list, and names a test for each requirement | **Approve** again, then **Sign off design-review** |
+| **System Design** | Proposes how and where, and checks that against the requirements | Nothing: the approval stands while the definition grows |
+| **Implementation** | Writes the design and its task list, and names a test for each requirement | **Sign off design-review**, which also reviews what was added |
 | **Migration** | Builds on the item's branch, runs the tests and updates the docs | **Sign off docs-folded**, which appears once the docs are updated |
 | **Operations** | Nothing: your sign-off or the cut moves it here | **Sign off release** |
 
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
 
-**You'll approve more than once, and that's deliberate.** Each approval covers exactly the text you
-saw. If the definition changes, your approval lapses and the item returns to the Review page. Read
-what changed, then approve again.
+**You approve once, and review what's added.** Each approval covers the text you saw. Adding answers
+keeps it, and the Review page shows what was added when the next decision comes, usually the design
+review. Changing or removing what you approved lapses it, and the item returns to the Review page.
 
 **Claude may ask you in a question instead.** It can also say that accepting a plan is your approval.
 These record the same approval as the Review page. If you'd rather decide on the page, tell Claude.

@@ -240,8 +240,8 @@ browser?"), and you accept the plan. That's approval 1.
 **System Design.** Now only `[MISSING: How] [MISSING: Where]`. Claude proposes the design and checks
 it against the requirement you agreed: "server-side storage keyed by account satisfies R-1 across
 devices; browser storage would not". It asks for a quality target. The definition grew, so the
-earlier approval lapsed (`Approval lapsed — the definition changed after it was approved`), and
-accepting this plan approves the larger definition. That's approval 2. The gate's warning (`R-2 is
+earlier approval stands, since text was only added, and the additions are reviewed at the next
+decision, the design review. Nothing to approve here. The gate's warning (`R-2 is
 a quality requirement with no scenario`) is in the plan for you to fix or accept. The architecture
 decision is drafted as *proposed* for you to accept.
 

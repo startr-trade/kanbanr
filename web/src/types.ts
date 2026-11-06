@@ -192,6 +192,8 @@ export interface Signoff {
   at: string;
   /** The definition content it covered; empty on a withdrawal. */
   rev: string;
+  /** A hash per part of the definition it covered (FTR-018). */
+  parts?: Record<string, string>;
   note?: string;
   doc?: string;
   status?: string;
@@ -214,6 +216,8 @@ export interface Approval {
   by: string;
   at: string;
   rev: string;
+  /** A hash per part of the definition the approval covered (FTR-018). */
+  parts?: Record<string, string>;
 }
 
 export interface Requirement {
@@ -266,7 +270,10 @@ export interface PendingReview {
   status: string;
   /** `unratified`: finished under a recorded bypass and never agreed to (FEAT-109). */
   /** `release`: agreed, and its next stage is the end — which planned release is it in (FEAT-185)? */
-  approval: "missing" | "lapsed" | "unratified" | "signoff" | "release";
+  /** `added`: approved, then text was added that now needs a decision (FTR-018). */
+  approval: "missing" | "lapsed" | "unratified" | "signoff" | "release" | "added";
+  /** Parts added, changed and removed since the last decision (FTR-018), by part key. */
+  changes?: { added: string[]; changed: string[]; removed: string[] };
   /** Finished work listed only because its approval lapsed (DEF-013). */
   finished?: boolean;
   /** Sign-offs the item's next stage is waiting on (FEAT-117). */
