@@ -434,6 +434,10 @@ pub struct Cadence {
     /// result of for the release tip (FTR-002). Empty by default.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commit_gates: Vec<String>,
+    /// The commit gate whose result judges a release's tag (FTR-026). Unset: the first of
+    /// `commit_gates`. A result counts only when recorded after the tag was made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag_gate: Option<String>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(

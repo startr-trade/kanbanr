@@ -1087,6 +1087,20 @@ fn dispatch_routes(
                 },
             )?)
         }
+        // FTR-026: `{version, by, link?, notes?}`: a patch release started from the release's
+        // failed tag result, with a defect carrying the run's link and the notes.
+        ("POST", ["projects", p, "releases", version, "patch-from-tag"]) => {
+            ser(&crate::releases::patch_from_failed_tag(
+                store,
+                p,
+                &percent_decode(version),
+                &str_field(b, "version").unwrap_or_default(),
+                &str_field(b, "by").unwrap_or_default(),
+                &str_field(b, "link").unwrap_or_default(),
+                &str_field(b, "notes").unwrap_or_default(),
+                repo,
+            )?)
+        }
         // What promoting a release would do, with nothing changed (FEAT-212): `?stage=` (default
         // the next), `?reason=` for a move back, `?fetch=1` to fetch main first (the CLI's
         // `--plan --fetch`; the monitor never asks).
@@ -1183,6 +1197,16 @@ fn dispatch_routes(
                 .collect();
             let mut cadence = store.load_meta(p)?.config.cadence;
             cadence.commit_gates = names;
+            ser(&store.set_cadence(p, None, cadence)?)
+        }
+        // `{gate}`: the commit gate whose result judges a release's tag; empty goes back to the
+        // first commit gate (FTR-026).
+        ("PUT", ["projects", p, "config", "tag-gate"]) => {
+            let gate = str_field(b, "gate")
+                .map(|g| g.trim().to_string())
+                .filter(|g| !g.is_empty());
+            let mut cadence = store.load_meta(p)?.config.cadence;
+            cadence.tag_gate = gate;
             ser(&store.set_cadence(p, None, cadence)?)
         }
         // The release stages with the gate in force on each (FEAT-212).
@@ -1452,6 +1476,7 @@ fn dispatch_routes(
                 release_prepare: current.release_prepare.clone(),
                 // FTR-002: the gates a release stage requires have a route of their own.
                 commit_gates: current.commit_gates.clone(),
+                tag_gate: current.tag_gate.clone(),
                 sprints: bool_field(b, "sprints").unwrap_or(current.sprints),
                 releases: bool_field(b, "releases").unwrap_or(current.releases),
                 sprint_length_days: b
@@ -1987,6 +2012,11 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
             )
         }
         ["projects", _p, "config", "commit-gates"] => "set the commit gates".into(),
+        ["projects", _p, "config", "tag-gate"] => "set the tag gate".into(),
+        ["projects", _p, "releases", v, "patch-from-tag"] => format!(
+            "start a patch release from the failed tag of {}",
+            percent_decode(v)
+        ),
         ["projects", _p, "config", what] => format!("update config: {what}"),
         ["projects", _p, "coverage"] => "config: coverage rules".into(),
         ["projects", _p, "sprints"] => "add a sprint".into(),
@@ -2173,7 +2203,7 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("only the last stage"), "{err}");
+        assert!(err.contains("'tag' is placed at both"), "{err}");
         let err = call(
             "PUT",
             "/projects/shop/config/release-stages/staging",

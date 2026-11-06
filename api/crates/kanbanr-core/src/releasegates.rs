@@ -93,15 +93,19 @@ pub enum ReleaseCheck {
     Pushed,
     /// Every gate in `cadence.commit_gates` has a passed result recorded for the release tip.
     GatePassed,
+    /// The newest result of the tag gate for the tag commit, recorded since the tag, is passed
+    /// (FTR-026). Only a stage after the tag can require it.
+    TagPassed,
 }
 
 impl ReleaseCheck {
-    pub const ALL: [ReleaseCheck; 5] = [
+    pub const ALL: [ReleaseCheck; 6] = [
         ReleaseCheck::ItemsFinished,
         ReleaseCheck::Prepared,
         ReleaseCheck::MainAtRelease,
         ReleaseCheck::Pushed,
         ReleaseCheck::GatePassed,
+        ReleaseCheck::TagPassed,
     ];
 
     pub fn name(self) -> &'static str {
@@ -111,6 +115,7 @@ impl ReleaseCheck {
             ReleaseCheck::MainAtRelease => "main_at_release",
             ReleaseCheck::Pushed => "pushed",
             ReleaseCheck::GatePassed => "gate_passed",
+            ReleaseCheck::TagPassed => "tag_passed",
         }
     }
 
@@ -131,6 +136,9 @@ impl ReleaseCheck {
             }
             ReleaseCheck::GatePassed => {
                 "every gate in commit_gates has a passed result for the release tip"
+            }
+            ReleaseCheck::TagPassed => {
+                "your CI's newest result for the tag commit, recorded since the tag, is passed"
             }
         }
     }
@@ -240,8 +248,10 @@ pub struct ReleaseStageView {
     pub purpose: String,
     pub requires: Vec<ReleaseCheck>,
     pub on_enter: Vec<ReleaseAction>,
-    /// The last stage: entering it is the cut.
+    /// The stage holding the tag action: entering it is the cut. With no stage after it, the last.
     pub cut: bool,
+    /// A stage after the cut: a confirmation by the user, which runs no action (FTR-026).
+    pub after_cut: bool,
     /// The project declares this stage's gate; otherwise it is the default.
     pub declared: bool,
 }
@@ -250,7 +260,7 @@ impl Cadence {
     /// The release stages with their gates in force, in order.
     pub fn release_stage_views(&self) -> Vec<ReleaseStageView> {
         let gates = self.effective_release_gates();
-        let last = gates.len().saturating_sub(1);
+        let cut = self.cut_index();
         gates
             .into_iter()
             .enumerate()
@@ -260,16 +270,37 @@ impl Cadence {
                 purpose: g.purpose,
                 requires: g.requires,
                 on_enter: g.on_enter,
-                cut: i == last,
+                cut: i == cut,
+                after_cut: i > cut,
             })
             .collect()
+    }
+
+    /// The index of the stage holding the `tag` action, the cut (FTR-026); the last stage when
+    /// none holds it. Stages after it are confirmations by the user.
+    pub fn cut_index(&self) -> usize {
+        let gates = self.effective_release_gates();
+        gates
+            .iter()
+            .position(|(_, g)| g.on_enter.contains(&ReleaseAction::Tag))
+            .unwrap_or(gates.len().saturating_sub(1))
+    }
+
+    /// The gate whose result judges a release's tag: `tag_gate`, else the first commit gate.
+    pub fn tag_gate_name(&self) -> Option<String> {
+        self.tag_gate
+            .clone()
+            .filter(|g| !g.trim().is_empty())
+            .or_else(|| self.commit_gates.first().cloned())
     }
 
     /// Every release stage with the gate in force: its declared one, or the default that reproduces
     /// what stages did before they could act (FEAT-183):
     ///
     /// - the first stage `[branch]`, unless a declared gate holds `branch`;
-    /// - the last stage `[move_main, tag]`, without `move_main` if a declared gate holds it;
+    /// - the last stage `[move_main, tag]`, without `move_main` if a declared gate holds it and
+    ///   without `tag` if a declared gate holds that (the stages after the tag only confirm,
+    ///   FTR-026);
     /// - a single stage `[branch, move_main, tag]`;
     /// - a middle stage nothing.
     pub fn effective_release_gates(&self) -> Vec<(String, ReleaseGate)> {
@@ -280,7 +311,7 @@ impl Cadence {
                 .iter()
                 .any(|(k, g)| stages.contains(k) && g.on_enter.contains(&a))
         };
-        stages
+        let mut gates = stages
             .iter()
             .enumerate()
             .map(|(i, s)| {
@@ -301,10 +332,15 @@ impl Cadence {
                     }
                 } else if i == n - 1 {
                     let mut v = vec![];
-                    if !declared_holds(ReleaseAction::MoveMain) {
+                    // `move_main` after a declared `tag` would be refused: that stage only confirms.
+                    if !declared_holds(ReleaseAction::MoveMain)
+                        && !declared_holds(ReleaseAction::Tag)
+                    {
                         v.push(ReleaseAction::MoveMain);
                     }
-                    v.push(ReleaseAction::Tag);
+                    if !declared_holds(ReleaseAction::Tag) {
+                        v.push(ReleaseAction::Tag);
+                    }
                     v
                 } else {
                     vec![]
@@ -317,7 +353,21 @@ impl Cadence {
                     },
                 )
             })
-            .collect()
+            .collect::<Vec<_>>();
+        // The first stage after the tag with no declared gate asks for the tag's passed result.
+        if let Some(cut) = gates
+            .iter()
+            .position(|(_, g)| g.on_enter.contains(&ReleaseAction::Tag))
+        {
+            if let Some((name, g)) = gates.get_mut(cut + 1)
+                && !self.release_gates.contains_key(name)
+                && !self.commit_gates.is_empty()
+            {
+                g.requires = vec![ReleaseCheck::TagPassed];
+                g.purpose = "Confirm what you checked here".to_string();
+            }
+        }
+        gates
     }
 
     /// Whether `stage` declares its own gate (rather than taking the default).
@@ -341,29 +391,22 @@ impl Cadence {
         }
         let effective = self.effective_release_gates();
         if self.commit_gates.is_empty()
-            && let Some((stage, _)) = effective
-                .iter()
-                .find(|(_, g)| g.requires.contains(&ReleaseCheck::GatePassed))
+            && let Some((stage, _)) = effective.iter().find(|(_, g)| {
+                g.requires.contains(&ReleaseCheck::GatePassed)
+                    || g.requires.contains(&ReleaseCheck::TagPassed)
+            })
         {
             return Err(format!(
-                "release stage '{stage}' requires gate_passed but no commit gate is named: run \
+                "release stage '{stage}' requires a passed gate result but no commit gate is named: run \
                  `kanbanr config commit-gates ci` first"
             ));
         }
         for g in &self.commit_gates {
             crate::gates::check_name(g).map_err(|e| format!("commit gate: {e}"))?;
         }
-        let last = effective.len().saturating_sub(1);
         let mut at: std::collections::BTreeMap<ReleaseAction, usize> = Default::default();
         for (i, (stage, gate)) in effective.iter().enumerate() {
             for a in &gate.on_enter {
-                if *a == ReleaseAction::Tag && i != last {
-                    return Err(format!(
-                        "release stage '{stage}' tags, but only the last stage ({}) can: the tag \
-                         is the cut",
-                        effective[last].0
-                    ));
-                }
                 if let Some(prev) = at.insert(*a, i) {
                     return Err(if prev == i {
                         format!("release stage '{stage}' lists '{}' twice", a.name())
@@ -377,6 +420,33 @@ impl Cadence {
                     });
                 }
             }
+        }
+        let cut = self.cut_index();
+        for (i, (stage, gate)) in effective.iter().enumerate() {
+            if i > cut
+                && let Some(a) = gate.on_enter.first()
+            {
+                return Err(format!(
+                    "release stage '{stage}' comes after the tag and can only confirm: it cannot {}",
+                    a.name()
+                ));
+            }
+            if i <= cut && gate.requires.contains(&ReleaseCheck::TagPassed) {
+                return Err(format!(
+                    "release stage '{stage}' requires tag_passed, but it does not come after the \
+                     tag: only a stage after the tag ({}) can",
+                    effective[cut].0
+                ));
+            }
+        }
+        if let Some(g) = &self.tag_gate
+            && !self.commit_gates.contains(g)
+        {
+            return Err(format!(
+                "the tag gate '{g}' is not one of the commit gates ({}): name it with `kanbanr \
+                 config commit-gates` first",
+                self.commit_gates.join(", ")
+            ));
         }
         let place = |a: ReleaseAction| at.get(&a).copied();
         if let (Some(m), Some(t)) = (place(ReleaseAction::MoveMain), place(ReleaseAction::Tag))
@@ -532,8 +602,8 @@ mod tests {
              move_main, tag",
         );
         refused(
-            "release_stages: [a, b]\nrelease_gates: { a: { on_enter: [branch, tag] } }\n",
-            "only the last stage (b) can",
+            "release_stages: [a, b]\nrelease_gates: { a: { on_enter: [branch, tag] }, b: { on_enter: [move_main] } }\n",
+            "release stage 'b' comes after the tag and can only confirm: it cannot move_main",
         );
         refused(
             "release_stages: [a, b, c]\nrelease_gates: { a: { on_enter: [branch] }, b: { on_enter: [branch] } }\n",
@@ -612,5 +682,61 @@ mod tests {
                 ("c".to_string(), vec!["move_main", "tag"]),
             ]
         );
+    }
+    /// FTR-026 R-1: a stage after the tag can only confirm; `tag_passed` belongs only to such a
+    /// stage and `tag_gate` must be a commit gate.
+    #[test]
+    fn a_stage_after_the_tag_can_only_confirm() {
+        let refused = |yaml: &str, says: &str| {
+            let err = cadence(yaml).unwrap().validate_release_gates().unwrap_err();
+            assert!(err.contains(says), "{yaml}\n-> {err}");
+        };
+        refused(
+            "release_stages: [a, b, c]\nrelease_gates: { b: { on_enter: [tag] }, c: { on_enter: [prepare] } }\n",
+            "release stage 'c' comes after the tag and can only confirm: it cannot prepare",
+        );
+        refused(
+            "release_stages: [a, b, c]\ncommit_gates: [ci]\nrelease_gates: { b: { requires: [tag_passed] } }\n",
+            "requires tag_passed",
+        );
+        refused(
+            "release_stages: [a, b]\ncommit_gates: [ci]\ntag_gate: other\n",
+            "the tag gate 'other' is not one of the commit gates",
+        );
+        let ok = cadence(
+            "release_stages: [a, b, c, d]\ncommit_gates: [ci]\nrelease_gates: { b: { on_enter: [move_main] }, c: { on_enter: [tag] } }\n",
+        )
+        .unwrap();
+        ok.validate_release_gates().unwrap();
+        let views = ok.release_stage_views();
+        assert!(views[2].cut && !views[2].after_cut);
+        assert!(views[3].after_cut && !views[3].cut);
+        // The first stage after the tag asks for the tag's passed result when a commit gate is named.
+        assert_eq!(views[3].requires, [ReleaseCheck::TagPassed]);
+        assert_eq!(ok.cut_index(), 2);
+        assert_eq!(ok.tag_gate_name().as_deref(), Some("ci"));
+    }
+
+    /// FTR-026 R-1: the tag may sit at any stage; the default places it at the last unless a
+    /// declared gate holds it.
+    #[test]
+    fn tag_at_a_middle_stage_is_allowed() {
+        let c = cadence(
+            "release_stages: [a, b, c]\nrelease_gates: { b: { on_enter: [move_main, tag] } }\n",
+        )
+        .unwrap();
+        c.validate_release_gates().unwrap();
+        assert_eq!(
+            actions(&c),
+            [
+                ("a".to_string(), vec!["branch"]),
+                ("b".to_string(), vec!["move_main", "tag"]),
+                ("c".to_string(), vec![]),
+            ]
+        );
+        assert_eq!(c.cut_index(), 1);
+        // With no commit gate named, no condition is synthesised.
+        assert!(c.effective_release_gates()[2].1.requires.is_empty());
+        assert_eq!(Cadence::default().cut_index(), 3);
     }
 }

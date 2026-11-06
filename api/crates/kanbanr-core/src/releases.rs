@@ -13,6 +13,7 @@
 //! Stored in `projects/<id>/releases.yaml`; notes go to the board doc `releases/<version>.md`.
 
 use crate::coderepo;
+use crate::config::Cadence;
 use crate::error::{CoreError, Result};
 use crate::models::{Extra, FeatureItem};
 use crate::releasegates::{ReleaseAction, ReleaseCheck};
@@ -81,6 +82,17 @@ pub struct Release {
     /// The cut release this patches (FEAT-184); empty for an ordinary release.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub parent: String,
+    /// When the stage holding the tag action was entered (FTR-026), RFC 3339. A release that is
+    /// tagged and still `Planned` is waiting for the stages after the tag.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tagged_at: String,
+    /// The full sha the tag names (FTR-026).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tag_commit: String,
+    /// The patch release that replaced this one after its tag's CI run failed (FTR-026). The tag
+    /// stays in git; the release never ships.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub superseded_by: String,
     /// Keys this version does not know, kept and written back unchanged, so an older binary never
     /// deletes what a newer one recorded (as `Cadence` does, FEAT-151).
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
@@ -175,12 +187,151 @@ pub fn release_line(project: &Project, releases: &[Release], item: &FeatureItem)
     if let Some(r) = releases.iter().find(|r| r.shipped.contains(&item.code)) {
         return Some(format!("Released in {}", r.version));
     }
-    match item.release.as_deref() {
-        Some(v) if releases.iter().any(|r| r.version == v) => {
-            Some(format!("Planned for {v}, not released yet"))
+    match item
+        .release
+        .as_deref()
+        .and_then(|v| releases.iter().find(|r| r.version == v))
+    {
+        Some(r) if !r.superseded_by.is_empty() => {
+            Some(format!("Superseded by {}", r.superseded_by))
         }
-        _ => Some("Not in a release".to_string()),
+        Some(r) if !r.tagged_at.is_empty() => {
+            Some(format!("Tagged in {}, not released yet", r.version))
+        }
+        Some(r) => Some(format!("Planned for {}, not released yet", r.version)),
+        None => Some("Not in a release".to_string()),
     }
+}
+
+/// What starting a patch release from a failed tag did (FTR-026).
+#[derive(Debug, Clone, Serialize)]
+pub struct PatchFromTag {
+    pub release: Release,
+    /// The defect filed, carrying the failed run's link and the user's notes.
+    pub defect: String,
+    /// The items planned into the tagged release that moved into the patch, the defect first.
+    pub planned: Vec<String>,
+}
+
+/// Start a patch release from a tag whose recorded result is failed (FTR-026): file a defect
+/// carrying the failed run's link and the user's notes, plan it and the tagged release's items into
+/// a new patch branched from the tag, and mark the tagged release as superseded by it (its tag
+/// stays in the repository). Nothing is written unless the patch's branch is made; if a later
+/// board write fails the patch is taken back.
+#[allow(clippy::too_many_arguments)]
+pub fn patch_from_failed_tag(
+    store: &Store,
+    id: &str,
+    parent: &str,
+    version: &str,
+    by: &str,
+    run_link: &str,
+    notes: &str,
+    repo: Option<&Path>,
+) -> Result<PatchFromTag> {
+    let project = cadence_on(store, id)?;
+    let parent = parent.trim();
+    let releases = load(store, id)?;
+    let p = releases
+        .iter()
+        .find(|r| r.version == parent)
+        .ok_or_else(|| CoreError::Unsupported(format!("no release {parent}")))?;
+    if p.tagged_at.is_empty() || p.state == ReleaseState::Shipped || !p.superseded_by.is_empty() {
+        return Err(CoreError::Unsupported(format!(
+            "{parent} is not a tagged release waiting on its CI result, so there is no failed tag \
+             to patch"
+        )));
+    }
+    let failed = tag_result(store, id, &project.config.cadence, p)
+        .and_then(|t| t.result)
+        .filter(|r| !r.passed);
+    let Some(failed) = failed else {
+        return Err(CoreError::Unsupported(format!(
+            "{parent}'s tag has no failed result recorded: record the failed run first \
+             (kanbanr gate record <gate> --failed --commit <sha>)"
+        )));
+    };
+    let link = if run_link.trim().is_empty() {
+        failed.url.clone()
+    } else {
+        run_link.trim().to_string()
+    };
+    let moved: Vec<String> = {
+        let mut codes: Vec<String> = project
+            .features
+            .iter()
+            .filter(|f| f.release.as_deref() == Some(parent))
+            .map(|f| f.code.clone())
+            .collect();
+        codes.sort();
+        codes
+    };
+    let milestone = moved
+        .first()
+        .and_then(|c| project.features.iter().find(|f| f.code == *c))
+        .map(|f| f.milestone.clone())
+        .or_else(|| project.milestones.first().map(|m| m.code.clone()))
+        .ok_or_else(|| {
+            CoreError::Unsupported("the defect needs a milestone, and the project has none".into())
+        })?;
+    let patch = add_patch(store, id, version, "", "", parent, by, repo)?;
+    let undo = |store: &Store, e: CoreError| {
+        let _ = remove_release(store, id, &patch.version);
+        if let Some(repo) = repo {
+            let _ = coderepo::delete_branch(repo, &format!("release/{}", patch.version));
+        }
+        e
+    };
+    let mut spec = format!("The CI run for the {parent} tag failed.\n");
+    if !link.is_empty() {
+        spec.push_str(&format!("\nRun: {link}\n"));
+    }
+    if !notes.trim().is_empty() {
+        spec.push_str(&format!("\n{}\n", notes.trim()));
+    }
+    let defect = match store.add_feature_of_kind(
+        id,
+        &format!("Fix the failed CI run on {parent}"),
+        &spec,
+        &milestone,
+        None,
+        Some("defect"),
+    ) {
+        Ok(d) => d,
+        Err(e) => return Err(undo(store, e)),
+    };
+    let mut planned = vec![defect.code.clone()];
+    planned.extend(moved);
+    for code in &planned {
+        if let Err(e) = store.set_feature_release(id, code, Some(patch.version.clone())) {
+            for c in planned.iter().skip(1) {
+                let _ = store.set_feature_release(id, c, Some(parent.to_string()));
+            }
+            return Err(undo(store, e));
+        }
+    }
+    let mut all = load(store, id)?;
+    if let Some(r) = all.iter_mut().find(|r| r.version == parent) {
+        r.superseded_by = patch.version.clone();
+    }
+    if let Err(e) = save(store, id, &all) {
+        return Err(undo(store, e));
+    }
+    let release = load(store, id)?
+        .into_iter()
+        .find(|r| r.version == patch.version)
+        .unwrap_or(patch);
+    Ok(PatchFromTag {
+        release,
+        defect: defect.code,
+        planned,
+    })
+}
+
+fn remove_release(store: &Store, id: &str, version: &str) -> Result<()> {
+    let mut all = load(store, id)?;
+    all.retain(|r| r.version != version);
+    save(store, id, &all)
 }
 
 fn save(store: &Store, id: &str, releases: &[Release]) -> Result<()> {
@@ -249,7 +400,8 @@ pub fn add_patch(
         .iter()
         .find(|r| r.version == parent)
         .ok_or_else(not_cut)?;
-    if p.state != ReleaseState::Shipped {
+    // A tag is a cut even before the release ships (FTR-026): a patch may start from it.
+    if p.state != ReleaseState::Shipped && p.tagged_at.is_empty() {
         return Err(not_cut());
     }
     let first = project
@@ -425,12 +577,46 @@ pub struct Cut {
 /// gate), release notes are written from their definitions, and the rest is carried to the next
 /// planned release — or back to unplanned — with the reason it did not make it.
 pub fn cut(store: &Store, id: &str, version: &str) -> Result<Cut> {
-    cut_with(store, id, version, None)
+    ship_release(store, id, version, None)
 }
 
-/// The cut, recording the stage change that made it when there is one (FEAT-183). Either way the
-/// release ends at the last stage: a cut release is in production, whichever command cut it.
-fn cut_with(store: &Store, id: &str, version: &str, change: Option<StageChange>) -> Result<Cut> {
+/// Record that the stage holding the tag action was entered (FTR-026): `tagged_at`, the commit the
+/// tag names (read from the repository when there is one) and the stage change. Ships nothing: the
+/// release stays `Planned` and its items stay where they are until the last stage is confirmed.
+pub fn tag_release(
+    store: &Store,
+    id: &str,
+    version: &str,
+    repo: Option<&Path>,
+    change: Option<StageChange>,
+) -> Result<()> {
+    cadence_on(store, id)?;
+    let mut releases = load(store, id)?;
+    let release = releases
+        .iter_mut()
+        .find(|r| r.version == version)
+        .ok_or_else(|| CoreError::Unsupported(format!("no release {version}")))?;
+    release.tagged_at = crate::now_rfc3339();
+    release.tag_commit = repo
+        .and_then(|r| coderepo::rev_parse(r, &format!("refs/tags/{version}")).ok())
+        .unwrap_or_default();
+    if let Some(change) = change {
+        release.stage = change.stage.clone();
+        release.stages.push(change);
+    }
+    save(store, id, &releases)
+}
+
+/// Ship a release (FTR-026): its planned items that are finished move to their end status, the
+/// notes are written, `shipped_at` is recorded and what could not ship is carried. Records the
+/// stage change that made it when there is one (FEAT-183). Either way the release ends at the last
+/// stage: a shipped release is in production, whichever command shipped it.
+fn ship_release(
+    store: &Store,
+    id: &str,
+    version: &str,
+    change: Option<StageChange>,
+) -> Result<Cut> {
     let project = cadence_on(store, id)?;
     let charter = crate::charter::load(store, id)?;
     let ctx = crate::readiness::Context::load(store, id, &project.config);
@@ -687,8 +873,15 @@ pub struct ReleasePlan {
     pub to: String,
     /// `forward`, `back` or `again`.
     pub direction: String,
-    /// This promotion is the cut.
+    /// This promotion enters the stage that tags: the cut.
     pub cut: bool,
+    /// This promotion enters a stage after the cut: a confirmation by the user (FTR-026).
+    pub confirm: bool,
+    /// This promotion enters the last stage: it ships the release (FTR-026).
+    pub ships: bool,
+    /// The recorded CI result for the tag, once the release is tagged and not shipped (FTR-026).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<TagResult>,
     /// What the one button says: "Promote to main", "Cut v0.2.1", "Promote to main again".
     pub button: String,
     pub conditions: Vec<PlanCondition>,
@@ -718,6 +911,100 @@ pub struct ReleasePlan {
     /// Things worth knowing that do not stop the promotion, e.g. a stale release date (DEF-001).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+}
+
+/// The newest result recorded for a release's tag (FTR-026), read from the board only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct TagResult {
+    /// The commit the tag names.
+    pub commit: String,
+    /// The gate that judges it (`cadence.tag_gate`, else the first commit gate).
+    pub gate: String,
+    /// `passed`, `failed` or `none`.
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<crate::gates::GateResult>,
+}
+
+/// The tag's recorded result: the newest result of the tag gate for the tag commit, recorded since
+/// the tag was made, so a pass from before the tag does not stand in for a run on the tagged
+/// commit. A release not tagged yet has none. Results that cannot be read count as none.
+pub fn tag_result(
+    store: &Store,
+    id: &str,
+    cadence: &Cadence,
+    release: &Release,
+) -> Option<TagResult> {
+    if release.tagged_at.is_empty() || release.state == ReleaseState::Shipped {
+        return None;
+    }
+    let gate = cadence.tag_gate_name().unwrap_or_default();
+    let result = if gate.is_empty() || release.tag_commit.is_empty() {
+        None
+    } else {
+        crate::gates::results(store, id, None)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| {
+                r.name == gate
+                    && r.commit == release.tag_commit
+                    && crate::cmp_instants(&r.at, &release.tagged_at) != std::cmp::Ordering::Less
+            })
+            .next_back()
+    };
+    let state = match &result {
+        None => "none",
+        Some(r) if r.passed => "passed",
+        Some(_) => "failed",
+    };
+    Some(TagResult {
+        commit: release.tag_commit.clone(),
+        gate,
+        state: state.to_string(),
+        result,
+    })
+}
+
+/// Whether the tag's recorded result is passed: held, what was found and what to do.
+fn tag_passed(
+    store: &Store,
+    id: &str,
+    cadence: &Cadence,
+    release: &Release,
+) -> (bool, String, String) {
+    let fix = "run your CI on the tag, then record its verdict (kanbanr gate record <gate> \
+               --passed --commit <sha> [--url <link>]); if it failed: start a patch release"
+        .to_string();
+    let Some(t) = tag_result(store, id, cadence, release) else {
+        return (
+            false,
+            "the release has not been tagged yet".to_string(),
+            "promote the release to the stage that tags it first".to_string(),
+        );
+    };
+    let sha = short(&t.commit).to_string();
+    let fix = fix.replace("<sha>", &sha).replace("<gate>", &t.gate);
+    match t.result {
+        None => (
+            false,
+            "no result recorded for the tag since it was made".to_string(),
+            fix,
+        ),
+        Some(r) if r.passed => (
+            true,
+            format!("{} passed on {sha} (recorded by {})", t.gate, r.by),
+            String::new(),
+        ),
+        Some(r) => {
+            let note = if r.note.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", r.note)
+            };
+            (false, format!("{} failed on {sha}{note}", t.gate), fix)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -894,6 +1181,12 @@ fn work_out(
             "{version} has shipped: a release never moves back from production"
         )));
     }
+    if !release.superseded_by.is_empty() {
+        return Err(CoreError::Unsupported(format!(
+            "{version} was superseded by {}: it never ships, and its tag stays in the repository",
+            release.superseded_by
+        )));
+    }
     let from = release.stage.clone();
     let current = stages.iter().position(|s| *s == from);
     let target = match to.map(str::trim).filter(|s| !s.is_empty()) {
@@ -918,7 +1211,12 @@ fn work_out(
         Direction::Forward
     };
     let last = stages.len() - 1;
-    let cut = direction == Direction::Forward && target == last;
+    let cut_stage = cadence.cut_index();
+    let cut = direction == Direction::Forward
+        && current.is_none_or(|c| c < cut_stage)
+        && target >= cut_stage;
+    let confirm = direction == Direction::Forward && target > cut_stage;
+    let ships = direction == Direction::Forward && target == last;
     let entered: Vec<usize> = match direction {
         Direction::Forward => (current.map_or(0, |c| c + 1)..=target).collect(),
         Direction::Again => vec![target],
@@ -1034,6 +1332,10 @@ fn work_out(
                         true,
                         format!("this promotion fast-forwards {main} to {branch}"),
                     ),
+                    ReleaseCheck::TagPassed => {
+                        let (holds, detail, _) = tag_passed(store, id, cadence, &release);
+                        (holds, detail)
+                    }
                     _ => (
                         false,
                         "needs the code repository, which is not here (the monitor reads it only \
@@ -1045,6 +1347,8 @@ fn work_out(
                     String::new()
                 } else if *c == ReleaseCheck::ItemsFinished {
                     carried_fix(&preview)
+                } else if *c == ReleaseCheck::TagPassed {
+                    tag_passed(store, id, cadence, &release).2
                 } else {
                     needs_repo_text(version, &stage)
                 };
@@ -1523,6 +1827,7 @@ fn work_out(
                         version,
                         &branch,
                     ),
+                    ReleaseCheck::TagPassed => tag_passed(store, id, cadence, &release),
                 };
                 conditions.push(PlanCondition {
                     check: *c,
@@ -1560,8 +1865,12 @@ fn work_out(
         }
     }
     let button_for = |i: usize| {
-        if i == last {
+        if i == cut_stage {
             format!("Cut {version}")
+        } else if i > cut_stage && i == last {
+            format!("Confirm {}: ship {version}", stages[i])
+        } else if i > cut_stage {
+            format!("Confirm {}", stages[i])
         } else {
             format!("Promote to {}", stages[i])
         }
@@ -1573,12 +1882,29 @@ fn work_out(
     };
     let after = if direction == Direction::Back {
         String::new()
-    } else if target == last {
-        if has(ReleaseAction::Tag) {
+    } else if target == cut_stage {
+        let push = if has(ReleaseAction::Tag) {
             format!("push the tag: `git push origin {version}`")
         } else {
             String::new()
+        };
+        if cut_stage < last {
+            let then = format!(
+                "run your CI on the tag and record the result, then {}",
+                button_for(target + 1)
+            );
+            if push.is_empty() {
+                then
+            } else {
+                format!("{push}, {then}")
+            }
+        } else {
+            push
         }
+    } else if target == last {
+        String::new()
+    } else if target > cut_stage {
+        format!("then {}", button_for(target + 1))
     } else {
         let next = &gates[target + 1].1;
         let push = if next.requires.contains(&ReleaseCheck::Pushed) {
@@ -1627,12 +1953,15 @@ fn work_out(
         }
         .to_string(),
         cut,
+        confirm,
+        ships,
+        tag: tag_result(store, id, cadence, &release),
         button,
         ready: missing.is_empty(),
         missing,
         conditions,
         steps,
-        preview: if cut { preview } else { Vec::new() },
+        preview: if ships { preview } else { Vec::new() },
         tag_commit,
         release_tip,
         needs_reason,
@@ -2191,9 +2520,9 @@ pub fn promote_with(
     }
 
     // The board.
-    if w.plan.cut {
-        // The cut reads the release from the board, so a branch just made is recorded first; if
-        // the cut is refused, the branch and the record are both taken back.
+    if w.plan.ships || w.plan.cut {
+        // Tagging and shipping read the release from the board, so a branch just made is recorded
+        // first; if either is refused, the branch and the record are both taken back.
         let mut saved = false;
         if !done.branch_created.is_empty() {
             if let Err(e) = save(store, id, &releases) {
@@ -2202,7 +2531,32 @@ pub fn promote_with(
             saved = true;
             done.release = releases[index].clone();
         }
-        match cut_with(store, id, version, Some(change)) {
+        // The stage holding the tag action was entered: the tag is a fact about the code, and
+        // the release is not shipped by it unless it is also the last stage (FTR-026).
+        if w.plan.cut {
+            let tag_change = (!w.plan.ships).then(|| change.clone());
+            if let Err(e) = tag_release(store, id, version, repo, tag_change) {
+                let err = undo_all(repo, undo, e);
+                if saved {
+                    let _ = save(store, id, &original);
+                }
+                return Err(err);
+            }
+            saved = true;
+            if !w.plan.ships {
+                done.release = load(store, id)?
+                    .into_iter()
+                    .find(|r| r.version == version)
+                    .unwrap_or_else(|| done.release.clone());
+            }
+        }
+        if !w.plan.ships {
+            done.forward_merge = forward;
+            done.forward_into = integration;
+            done.next = next_hint(store, id, version, repo, &done, &w.main);
+            return Ok(done);
+        }
+        match ship_release(store, id, version, Some(change)) {
             Ok(cut) => {
                 let mut notes = cut.notes;
                 // The notes that shipped, when there are some at the tip, replace the generated
@@ -2329,14 +2683,25 @@ fn next_hint(
             _ => String::new(),
         };
     }
+    // A tag just made is pushed first, then the stages after it are confirmed (FTR-026).
+    let pushed = if done.tagged.is_empty() {
+        String::new()
+    } else if done.main_moved.is_some() {
+        format!("push {main} and the tag: `git push {remote} {main} {version}`; ")
+    } else {
+        format!("push the tag: `git push {remote} {version}`; ")
+    };
     match plan_promotion(store, id, version, None, "", repo, Fetch::No) {
-        Ok(p) if p.ready => format!("next: `kanbanr release promote {version}` ({})", p.button),
+        Ok(p) if p.ready => format!(
+            "{pushed}next: `kanbanr release promote {version}` ({})",
+            p.button
+        ),
         Ok(p) => format!(
-            "next: {}, then {}",
+            "{pushed}next: {}, then {}",
             p.missing.first().cloned().unwrap_or_default(),
             p.button
         ),
-        Err(_) => String::new(),
+        Err(_) => pushed.trim_end_matches("; ").to_string(),
     }
 }
 
@@ -4462,5 +4827,318 @@ mod tests {
         assert!(shipped.contains("has shipped"), "{shipped}");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
+    }
+    // ---- FTR-026: release stages that follow the tag ----
+
+    /// Candidate branches, main moves, `tag` tags; `staging` after it only confirms.
+    const STAGED: &str = "release_stages: [candidate, main, tag, staging]\n\
+         release_gates:\n  candidate: { on_enter: [branch] }\n  \
+         main: { on_enter: [move_main] }\n  tag: { on_enter: [tag] }\n";
+
+    fn staged(name: &str, yaml: &str) -> (Store, PathBuf, PathBuf) {
+        let (store, dir, repo) = board_and_repo(name);
+        configure(&store, yaml);
+        let mut c = store.load_meta("shop").unwrap().config.cadence;
+        c.commit_gates = vec!["ci".into()];
+        store.set_cadence("shop", None, c).unwrap();
+        (store, dir, repo)
+    }
+
+    fn go(store: &Store, repo: &Path, to: &str) -> super::Promoted {
+        super::promote(store, "shop", "v1", Some(to), "Ada", "", Some(repo)).unwrap()
+    }
+
+    fn v1(store: &Store) -> super::Release {
+        super::load(store, "shop")
+            .unwrap()
+            .into_iter()
+            .find(|r| r.version == "v1")
+            .unwrap()
+    }
+
+    fn tagged(name: &str, yaml: &str) -> (Store, PathBuf, PathBuf, String) {
+        let (store, dir, repo) = staged(name, yaml);
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        go(&store, &repo, "tag");
+        let sha = v1(&store).tag_commit;
+        (store, dir, repo, sha)
+    }
+
+    fn now_result(store: &Store, commit: &str, passed: bool) {
+        record_gate(store, "ci", commit, passed, &crate::now_rfc3339());
+    }
+
+    fn plan_to(store: &Store, repo: &Path, to: &str) -> super::ReleasePlan {
+        super::plan_promotion(
+            store,
+            "shop",
+            "v1",
+            Some(to),
+            "",
+            Some(repo),
+            super::Fetch::No,
+        )
+        .unwrap()
+    }
+
+    fn clean(dir: &Path, repo: &Path) {
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    /// FTR-026 R-1: the stage that tags records `tagged_at` and the tag's commit, and ships nothing.
+    #[test]
+    fn the_tag_stage_tags_but_does_not_ship_when_stages_follow() {
+        let (store, dir, repo) = staged("ftr026-tag", STAGED);
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        let t = go(&store, &repo, "tag");
+        assert_eq!(t.tagged, "v1");
+        let r = v1(&store);
+        assert_eq!(r.state, super::ReleaseState::Planned);
+        assert!(!r.tagged_at.is_empty());
+        assert_eq!(r.tag_commit, coderepo::rev_parse(&repo, "v1").unwrap());
+        assert_eq!((r.stage.as_str(), r.shipped_at.as_str()), ("tag", ""));
+        assert!(coderepo::tag_exists(&repo, "v1"));
+        assert!(t.notes.is_none() && t.preview.is_empty());
+        clean(&dir, &repo);
+    }
+
+    /// FTR-026 R-1: between the tag and the last stage the items stay where they are.
+    #[test]
+    fn items_stay_held_between_the_tag_and_the_last_stage() {
+        let (store, dir, repo, sha) = tagged("ftr026-held", STAGED);
+        let before = store.load("shop").unwrap().features.clone();
+        let r = v1(&store);
+        assert!(r.shipped.is_empty() && r.notes_doc.is_empty() && r.carried.is_empty());
+        let after = store.load("shop").unwrap().features;
+        assert_eq!(
+            before
+                .iter()
+                .map(|f| (&f.code, &f.status, &f.release))
+                .collect::<Vec<_>>(),
+            after
+                .iter()
+                .map(|f| (&f.code, &f.status, &f.release))
+                .collect::<Vec<_>>()
+        );
+        // The plan for the last stage is a confirmation that ships, and waits for a result.
+        let plan = plan_to(&store, &repo, "staging");
+        assert!(plan.confirm && plan.ships && !plan.cut && !plan.ready);
+        assert_eq!(plan.button, "Confirm staging: ship v1");
+        now_result(&store, &sha, true);
+        assert!(plan_to(&store, &repo, "staging").ready);
+        clean(&dir, &repo);
+    }
+
+    /// FTR-026 R-2: a confirmation is a stage change with who, when and the note, and runs nothing.
+    #[test]
+    fn a_confirmation_records_who_when_and_the_note() {
+        let (store, dir, repo, sha) = tagged(
+            "ftr026-note",
+            "release_stages: [candidate, main, tag, test, staging]\n\
+             release_gates:\n  candidate: { on_enter: [branch] }\n  \
+             main: { on_enter: [move_main] }\n  tag: { on_enter: [tag] }\n",
+        );
+        now_result(&store, &sha, true);
+        let plan = plan_to(&store, &repo, "test");
+        assert!(
+            plan.confirm && !plan.ships && plan.steps.is_empty(),
+            "{plan:#?}"
+        );
+        assert_eq!(plan.button, "Confirm test");
+        let done = super::promote(
+            &store,
+            "shop",
+            "v1",
+            Some("test"),
+            "Grace",
+            "smoke test passed",
+            Some(&repo),
+        )
+        .unwrap();
+        assert!(done.steps.is_empty());
+        let r = v1(&store);
+        let last = r.stages.last().unwrap();
+        assert_eq!(
+            (last.stage.as_str(), last.by.as_str(), last.reason.as_str()),
+            ("test", "Grace", "smoke test passed")
+        );
+        assert!(!last.at.is_empty());
+        assert_eq!(r.state, super::ReleaseState::Planned);
+        clean(&dir, &repo);
+    }
+
+    /// FTR-026 R-3: entering the last stage ships the release: items move, notes are written.
+    #[test]
+    fn the_last_stage_ships_the_release_and_moves_the_items() {
+        let (store, dir, repo, sha) = tagged("ftr026-ship", STAGED);
+        let code = store
+            .load("shop")
+            .unwrap()
+            .features
+            .iter()
+            .find(|f| f.release.as_deref() == Some("v1"))
+            .unwrap()
+            .code
+            .clone();
+        now_result(&store, &sha, true);
+        let done =
+            super::promote(&store, "shop", "v1", None, "Ada", "all good", Some(&repo)).unwrap();
+        assert_eq!(done.release.state, super::ReleaseState::Shipped);
+        assert!(!done.release.shipped_at.is_empty());
+        assert_eq!(done.release.shipped, vec![code]);
+        assert_eq!(done.release.stage, "staging");
+        assert!(done.notes.is_some() && !done.release.notes_doc.is_empty());
+        assert_eq!(done.release.tag_commit, sha);
+        clean(&dir, &repo);
+    }
+
+    /// FTR-026 R-3, R-8: a project whose tag stage is the last tags and ships in one move, as
+    /// before.
+    #[test]
+    fn a_project_whose_tag_stage_is_last_ships_at_the_tag_as_before() {
+        let (store, dir, repo) = board_and_repo("ftr026-asbefore");
+        let plan = plan_to(&store, &repo, "production");
+        assert!(plan.cut && plan.ships && !plan.confirm);
+        go(&store, &repo, "candidate");
+        let cut = go(&store, &repo, "production");
+        assert_eq!(cut.release.state, super::ReleaseState::Shipped);
+        assert_eq!(cut.tagged, "v1");
+        assert!(coderepo::tag_exists(&repo, "v1"));
+        assert_eq!(cut.release.shipped.len(), 1);
+        clean(&dir, &repo);
+    }
+
+    /// FTR-026 R-8: a release written before the tag fields existed reads and writes back unchanged.
+    #[test]
+    fn an_older_board_reads_without_change() {
+        let old = "- version: v0.9.0\n  state: shipped\n  shipped_at: 2026-10-01T00:00:00Z\n  \
+                   shipped:\n  - FEAT-001\n  stage: production\n";
+        let releases: Vec<super::Release> = crate::yaml::from_str(old).unwrap();
+        assert!(releases[0].tagged_at.is_empty() && releases[0].superseded_by.is_empty());
+        assert_eq!(crate::yaml::to_string(&releases).unwrap(), old);
+    }
+
+    /// FTR-026 R-4: the plan carries the tag's newest recorded result since the tag.
+    #[test]
+    fn the_plan_carries_the_tag_result() {
+        let (store, dir, repo, sha) = tagged("ftr026-result", STAGED);
+        let tag = |store: &Store| plan_to(store, &repo, "staging").tag.unwrap();
+        let t = tag(&store);
+        assert_eq!(
+            (t.state.as_str(), t.commit.as_str(), t.gate.as_str()),
+            ("none", sha.as_str(), "ci")
+        );
+        // A pass from before the tag does not stand in for a run on the tagged commit.
+        record_gate(&store, "ci", &sha, true, "2020-01-01T00:00:00Z");
+        assert_eq!(tag(&store).state, "none");
+        now_result(&store, &sha, false);
+        let t = tag(&store);
+        assert_eq!(t.state, "failed");
+        assert_eq!(t.result.unwrap().note, "two tests red");
+        now_result(&store, &sha, true);
+        assert_eq!(tag(&store).state, "passed");
+        // A release not tagged yet has none.
+        let (store2, dir2, repo2) = staged("ftr026-untagged", STAGED);
+        go(&store2, &repo2, "candidate");
+        assert!(plan_to(&store2, &repo2, "main").tag.is_none());
+        clean(&dir, &repo);
+        clean(&dir2, &repo2);
+    }
+
+    /// FTR-026 R-5: a red or missing result withholds the next stage.
+    #[test]
+    fn a_red_tag_result_withholds_the_next_stage() {
+        let (store, dir, repo, sha) = tagged("ftr026-red", STAGED);
+        let err = super::promote(&store, "shop", "v1", None, "Ada", "", Some(&repo))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("no result recorded for the tag since it was made"),
+            "{err}"
+        );
+        now_result(&store, &sha, false);
+        let err = super::promote(&store, "shop", "v1", None, "Ada", "", Some(&repo))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("ci failed on") && err.contains("two tests red"),
+            "{err}"
+        );
+        assert!(err.contains("start a patch release"), "{err}");
+        assert_eq!(v1(&store).stage, "tag");
+        clean(&dir, &repo);
+    }
+
+    /// FTR-026 R-6: a patch from a red tag files a defect, plans it and the items into the patch,
+    /// and supersedes the parent.
+    #[test]
+    fn a_patch_from_a_red_tag_files_a_defect_and_supersedes_the_parent() {
+        let (store, dir, repo, sha) = tagged("ftr026-patch", STAGED);
+        let item = store.load("shop").unwrap().features[0].code.clone();
+        let refused = super::patch_from_failed_tag(
+            &store,
+            "shop",
+            "v1",
+            "v1.0.1",
+            "Ada",
+            "",
+            "",
+            Some(&repo),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(refused.contains("no failed result"), "{refused}");
+        now_result(&store, &sha, true);
+        assert!(
+            super::patch_from_failed_tag(
+                &store,
+                "shop",
+                "v1",
+                "v1.0.1",
+                "Ada",
+                "",
+                "",
+                Some(&repo)
+            )
+            .is_err()
+        );
+        now_result(&store, &sha, false);
+        let made = super::patch_from_failed_tag(
+            &store,
+            "shop",
+            "v1",
+            "v1.0.1",
+            "Ada",
+            "https://ci.example/run/9",
+            "two tests red on arm",
+            Some(&repo),
+        )
+        .unwrap();
+        assert_eq!(made.release.parent, "v1");
+        assert!(coderepo::branch_exists(&repo, "release/v1.0.1"));
+        assert_eq!(made.planned, vec![made.defect.clone(), item.clone()]);
+        let board = store.load("shop").unwrap();
+        let defect = board
+            .features
+            .iter()
+            .find(|f| f.code == made.defect)
+            .unwrap();
+        assert_eq!(defect.release.as_deref(), Some("v1.0.1"));
+        assert_eq!(defect.kind.as_deref(), Some("defect"));
+        assert!(defect.specification.contains("https://ci.example/run/9"));
+        assert!(defect.specification.contains("two tests red on arm"));
+        let moved = board.features.iter().find(|f| f.code == item).unwrap();
+        assert_eq!(moved.release.as_deref(), Some("v1.0.1"));
+        let parent = v1(&store);
+        assert_eq!(parent.superseded_by, "v1.0.1");
+        assert!(coderepo::tag_exists(&repo, "v1"), "the tag stays");
+        let err = super::promote(&store, "shop", "v1", None, "Ada", "", Some(&repo))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("superseded by v1.0.1"), "{err}");
+        clean(&dir, &repo);
     }
 }

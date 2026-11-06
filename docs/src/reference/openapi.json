@@ -465,6 +465,10 @@
           "sprints": {
             "default": false,
             "type": "boolean"
+          },
+          "tag_gate": {
+            "description": "The commit gate whose result judges a release's tag (FTR-026). Unset: the first of\n`commit_gates`. A result counts only when recorded after the tag was made.",
+            "type": "string"
           }
         },
         "required": [
@@ -2837,6 +2841,11 @@
             "const": "gate_passed",
             "description": "Every gate in `cadence.commit_gates` has a passed result recorded for the release tip.",
             "type": "string"
+          },
+          {
+            "const": "tag_passed",
+            "description": "The newest result of the tag gate for the tag commit, recorded since the tag, is passed\n(FTR-026). Only a stage after the tag can require it.",
+            "type": "string"
           }
         ]
       },
@@ -2879,8 +2888,12 @@
             },
             "type": "array"
           },
+          "confirm": {
+            "description": "This promotion enters a stage after the cut: a confirmation by the user (FTR-026).",
+            "type": "boolean"
+          },
           "cut": {
-            "description": "This promotion is the cut.",
+            "description": "This promotion enters the stage that tags: the cut.",
             "type": "boolean"
           },
           "direction": {
@@ -2927,11 +2940,19 @@
             "description": "Whether the code repository was there to read.",
             "type": "boolean"
           },
+          "ships": {
+            "description": "This promotion enters the last stage: it ships the release (FTR-026).",
+            "type": "boolean"
+          },
           "steps": {
             "items": {
               "$ref": "#/components/schemas/PlanStep"
             },
             "type": "array"
+          },
+          "tag": {
+            "$ref": "#/components/schemas/TagResult",
+            "description": "The recorded CI result for the tag, once the release is tagged and not shipped (FTR-026)."
           },
           "tag_commit": {
             "$ref": "#/components/schemas/CommitLine",
@@ -2957,6 +2978,8 @@
           "to",
           "direction",
           "cut",
+          "confirm",
+          "ships",
           "button",
           "conditions",
           "steps",
@@ -3070,6 +3093,18 @@
           "state": {
             "$ref": "#/components/schemas/ReleaseState",
             "default": "planned"
+          },
+          "superseded_by": {
+            "description": "The patch release that replaced this one after its tag's CI run failed (FTR-026). The tag\nstays in git; the release never ships.",
+            "type": "string"
+          },
+          "tag_commit": {
+            "description": "The full sha the tag names (FTR-026).",
+            "type": "string"
+          },
+          "tagged_at": {
+            "description": "When the stage holding the tag action was entered (FTR-026), RFC 3339. A release that is\ntagged and still `Planned` is waiting for the stages after the tag.",
+            "type": "string"
           },
           "target": {
             "description": "Target date, `YYYY-MM-DD`.",
@@ -3536,6 +3571,32 @@
         },
         "required": [
           "name"
+        ],
+        "type": "object"
+      },
+      "TagResult": {
+        "description": "The newest result recorded for a release's tag (FTR-026), read from the board only.",
+        "properties": {
+          "commit": {
+            "description": "The commit the tag names.",
+            "type": "string"
+          },
+          "gate": {
+            "description": "The gate that judges it (`cadence.tag_gate`, else the first commit gate).",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/GateResult"
+          },
+          "state": {
+            "description": "`passed`, `failed` or `none`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit",
+          "gate",
+          "state"
         ],
         "type": "object"
       },
