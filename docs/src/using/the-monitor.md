@@ -94,8 +94,19 @@ server {
 }
 ```
 
-The proxy enforces who gets in and encrypts the connection; kanbanr behind it stays read-only, so an
-authenticated viewer still can't mutate your board — writes only ever happen through the local CLI.
+The proxy enforces who gets in and encrypts the connection. The monitor answers only for the
+loopback names (`localhost`, `127.0.0.1`, `[::1]`), the address it is bound to and the hosts named in
+the `KANBANR_ALLOWED_HOSTS` variable, so name the proxy's host there, as a comma-separated list of
+`name[:port]` (for example `KANBANR_ALLOWED_HOSTS=board.example.com kanbanr serve`). A request for any
+other host gets a 403 that says so. A monitor started without `--allow-writes` stays read-only, so an
+authenticated viewer can't mutate your board through it.
+
+A monitor started with `--allow-writes`, or through `kanbanr review --ui`, takes writes only from its
+own page. At each start it makes a new random token and puts it in the page it serves; a write needs
+that token, and when the browser sends an `Origin` it must be the monitor's own. It sends no
+cross-origin headers, so no other page open in your browser can read the board through it or record a
+decision. A script that posted to a write route without the token is refused, with a message that
+says why.
 
 ### Hosting the monitor elsewhere
 
@@ -129,12 +140,12 @@ The bundle contains no secrets. The daemon it reads stays the access boundary:
 
 - it is read-only unless started with `--allow-writes`;
 - it binds to localhost by default;
-- it sends permissive CORS headers, so a monitor on another origin can read it and receive live
-  updates. Anyone who can reach the daemon can read the board.
+- it sends no cross-origin headers, so a bundle served from another origin cannot read it. Anyone
+  who can reach the daemon with an accepted host can read the board.
 
 To publish a board, put the daemon behind a reverse proxy with TLS and authentication, as above,
-and set `apiBase` to the proxy's address. If you serve the bundle and the API from the same origin,
-`"apiBase": "/api"` avoids cross-origin requests entirely.
+and serve the bundle and the API from the same origin, with `"apiBase": "/api"`. Name the proxy's
+host in `KANBANR_ALLOWED_HOSTS`.
 
 The monitor the binary serves reads the same `config.json`, with the defaults: `/api`, browser
 routing, and decisions offered when the daemon allows writes.
