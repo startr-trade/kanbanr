@@ -10,7 +10,8 @@
 //! `cadence.release_prepare` says what the `prepare` action writes onto `release/<V>`: the version
 //! files, the dated changelog heading and its copies, a notes draft and where it is listed.
 
-use crate::config::Cadence;
+use crate::config::{Cadence, RECOMMENDED_RELEASE_STAGES};
+use std::collections::BTreeMap;
 use crate::models::Extra;
 use serde::{Deserialize, Serialize};
 
@@ -298,6 +299,64 @@ impl Cadence {
                 after_cut: i > cut,
             })
             .collect()
+    }
+
+    /// The stages, gates and commit gates a project gets when it turns releases on and names none
+    /// (FTR-020): candidate branches and prepares, main moves main once the items are finished,
+    /// and tag, the cut, needs main at the release and pushed. With `has_ci` it also needs a
+    /// passed `ci` result for that commit, and `ci` is the commit gate.
+    pub fn recommended(has_ci: bool) -> (Vec<String>, BTreeMap<String, ReleaseGate>, Vec<String>) {
+        let gate = |purpose: &str, requires: &[ReleaseCheck], on_enter: &[ReleaseAction]| {
+            ReleaseGate {
+                purpose: purpose.to_string(),
+                requires: requires.to_vec(),
+                on_enter: on_enter.to_vec(),
+                ..ReleaseGate::default()
+            }
+        };
+        let mut tag_requires = vec![ReleaseCheck::MainAtRelease, ReleaseCheck::Pushed];
+        if has_ci {
+            tag_requires.push(ReleaseCheck::GatePassed);
+        }
+        let stages = RECOMMENDED_RELEASE_STAGES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let gates = BTreeMap::from([
+            (
+                "candidate".to_string(),
+                gate(
+                    "Make the release branch and prepare it",
+                    &[],
+                    &[ReleaseAction::Branch, ReleaseAction::Prepare],
+                ),
+            ),
+            (
+                "main".to_string(),
+                gate(
+                    "Move main to the release once its items are finished",
+                    &[ReleaseCheck::ItemsFinished],
+                    &[ReleaseAction::MoveMain],
+                ),
+            ),
+            (
+                "tag".to_string(),
+                gate(
+                    "Cut the release: tag it once main is at the release and pushed",
+                    &tag_requires,
+                    &[ReleaseAction::Tag],
+                ),
+            ),
+        ]);
+        let commit_gates = if has_ci { vec!["ci".to_string()] } else { vec![] };
+        (stages, gates, commit_gates)
+    }
+
+    /// Whether the stage names and gates are exactly the recommended ones for this project's
+    /// `has_ci`, so nothing in them was chosen by the project.
+    pub fn is_recommended(&self) -> bool {
+        let (stages, gates, _) = Cadence::recommended(self.has_ci);
+        self.release_stages == stages && self.release_gates == gates
     }
 
     /// The index of the stage holding the `tag` action, the cut (FTR-026); the last stage when

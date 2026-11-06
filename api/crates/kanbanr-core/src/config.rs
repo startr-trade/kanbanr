@@ -438,6 +438,10 @@ pub struct Cadence {
     /// `commit_gates`. A result counts only when recorded after the tag was made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag_gate: Option<String>,
+    /// The project has CI, so the recommended `tag` stage also requires a passed `ci` result for
+    /// the release tip (FTR-020). Off by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_ci: bool,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -451,6 +455,10 @@ pub struct Cadence {
 
 /// The stages a release moves through when a project names none (FEAT-183).
 pub const DEFAULT_RELEASE_STAGES: [&str; 4] = ["candidate", "test", "staging", "production"];
+
+/// The stages a project gets when it turns releases on and names none (FTR-020). The third is the
+/// cut; stages a project adds after it follow the tag.
+pub const RECOMMENDED_RELEASE_STAGES: [&str; 3] = ["candidate", "main", "tag"];
 
 impl Cadence {
     pub fn is_off(&self) -> bool {
@@ -1721,6 +1729,33 @@ impl ProjectConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FTR-020 R-1: the recommended table passes validation, with and without CI, and is what the
+    /// effective gates yield.
+    #[test]
+    fn turning_releases_on_sets_the_recommended_stages() {
+        for has_ci in [false, true] {
+            let (stages, gates, commit_gates) = Cadence::recommended(has_ci);
+            assert_eq!(stages, RECOMMENDED_RELEASE_STAGES);
+            assert_eq!(commit_gates.is_empty(), !has_ci);
+            let c = Cadence {
+                releases: true,
+                has_ci,
+                release_stages: stages,
+                release_gates: gates.clone(),
+                commit_gates,
+                ..Cadence::default()
+            };
+            c.validate_release_gates().unwrap();
+            assert!(c.is_recommended());
+            let effective = c.effective_release_gates();
+            assert_eq!(effective.len(), 3);
+            for (stage, gate) in effective {
+                assert_eq!(gate, gates[&stage]);
+            }
+            assert_eq!(c.cut_index(), 2);
+        }
+    }
 
     fn config_of(name: &str) -> ProjectConfig {
         preset_bare(name).unwrap().into_config("p")

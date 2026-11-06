@@ -1484,6 +1484,8 @@ fn dispatch_routes(
                 // FTR-002: the gates a release stage requires have a route of their own.
                 commit_gates: current.commit_gates.clone(),
                 tag_gate: current.tag_gate.clone(),
+                // FTR-020: whether the project has CI; kept when the body does not say.
+                has_ci: bool_field(b, "has_ci").unwrap_or(current.has_ci),
                 sprints: bool_field(b, "sprints").unwrap_or(current.sprints),
                 releases: bool_field(b, "releases").unwrap_or(current.releases),
                 sprint_length_days: b
