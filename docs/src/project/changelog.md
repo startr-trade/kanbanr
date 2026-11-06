@@ -8,6 +8,17 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Turning releases on gives release stages that each do something (FTR-020).** A project that
+  turns releases on, and names no stages and declares no stage gate, now gets `candidate` (branch
+  and prepare), `main` (move main once the items are finished) and `tag` (the cut, needing main at
+  the release and pushed), written into the board's config. `kanbanr config cadence --has-ci on`
+  also makes `tag` require a passed `ci` result for the release tip, on a board whose stages are
+  still the recommended ones. A board that has releases on already, or names its own stages, is left
+  alone, and one with no stages named keeps reading `candidate`, `test`, `staging` and
+  `production`. Changing the stages of a board whose gates are still the recommended ones drops
+  those gates instead of refusing. A stage before the cut with no condition and no action is
+  warned about when configured, and marked `does nothing` in `kanbanr release stages` and the
+  `inert` field of the release-stages route.
 - **Release stages can follow the tag, with the tag's CI result on the Releases page (FTR-026).**
   The stage holding the `tag` action is now the cut and tags the commit, recording `tagged_at` and
   the commit, but ships nothing unless it is also the last stage. Each later stage is a

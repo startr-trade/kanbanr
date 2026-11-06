@@ -80,17 +80,26 @@ charter saved for 'shop': 1 goal(s) G-1
 
 ### Release stages
 
-By default a release has four stages and the cut does everything at once. We recommend three, so
-that main has to be pushed before anything is tagged. kanbanr can't see whether CI passed. Look at your CI yourself, then record what it said with
-`kanbanr gate record ci --passed --url <link to the run>`. To have the cut require that, run
-`kanbanr config commit-gates ci` and add `gate_passed` to the production stage's `--requires`
-([Gate results](../using/processes.md#gate-results)):
+A project that turns releases on gets three stages, `candidate`, `main` and `tag`, with their gates
+written into the board's config, so you can see and edit them. Main has to be pushed before
+anything is tagged. The commands below also make candidate wait for `items_merged`, which the
+default does not. kanbanr can't see whether CI passed. Look at your CI yourself, then record what it
+said with `kanbanr gate record ci --passed --url <link to the run>`. Say the project has CI with
+`kanbanr config cadence --has-ci on` and the `tag` stage requires that result
+([Gate results](../using/processes.md#gate-results)); without the flag it requires only
+`main_at_release` and `pushed`.
+
+A board made before 0.6 that has releases on and names no stages keeps the four it had,
+`candidate`, `test`, `staging` and `production`. `test` and `staging` do nothing, and kanbanr says so
+when you configure them and in `kanbanr release stages`. To move such a board to the three, run
+`kanbanr config cadence --release-stages candidate,main,tag`, then the `release-stage` lines below.
+Stages you add after `tag` follow the cut and are confirmed by you.
 
 ```text
-kanbanr config cadence --release-stages candidate,main,production
+kanbanr config cadence --release-stages candidate,main,tag
 kanbanr config release-stage candidate --requires items_merged --on-enter branch,prepare
 kanbanr config release-stage main --requires items_finished --on-enter move_main
-kanbanr config release-stage production --requires main_at_release,pushed --on-enter tag
+kanbanr config release-stage tag --requires main_at_release,pushed --on-enter tag
 kanbanr config release-prepare --version-file package.json --changelog CHANGELOG.md --notes "docs/releases/{version}.md"
 ```
 
@@ -98,7 +107,7 @@ kanbanr config release-prepare --version-file package.json --changelog CHANGELOG
 STAGE          REQUIRES                           ON ENTER
 candidate      items_merged                       branch, prepare
 main           items_finished                     move_main
-production     main_at_release, pushed            tag                            the cut
+tag            main_at_release, pushed            tag                            the cut
 ```
 
 To stop a release being promoted while work is still going on, have the candidate stage require
@@ -282,7 +291,7 @@ v1.0.0: Promote to candidate (— → candidate)
 | 3. Run your full checks | Your project's own | Over the release |
 | 4. Main | `kanbanr release promote v1.0.0 main` | Fast-forwards main to the release, without tagging |
 | 5. Push main, wait for CI | `git push origin main` | |
-| 6. Cut | `kanbanr release promote v1.0.0 production` | Tags main, ships the items and moves them to Released |
+| 6. Cut | `kanbanr release promote v1.0.0 tag` | Tags main, ships the items and moves them to Released |
 | 7. Push the tag | `git push origin v1.0.0` | |
 | 8. Merge forward | `kanbanr git forward v1.0.0` | Brings the release's commits into the sprint's branch |
 
@@ -359,7 +368,7 @@ To <tmp>/origin.git
 The cut, then the tag push:
 
 ```text
-v1.0.0 -> production; tagged v1.0.0, where main already is
+v1.0.0 -> tag; tagged v1.0.0, where main already is
   tags 59e2014 "Release v1.0.0" as v1.0.0
   shipped 1 item(s); notes in releases/v1.0.0.md
   merge these forward into sprint/SP-001 (`kanbanr git forward v1.0.0` with the git model on, or by hand):
@@ -377,7 +386,7 @@ The item is now Released, and the release is shipped:
 
 ```text
 - **Status:** Released
-v1.0.0       shipped  production   target —           1 item(s)
+v1.0.0       shipped  tag          target —           1 item(s)
 ```
 
 Merge forward so the sprint's branch has the release commit:

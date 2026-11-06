@@ -354,10 +354,19 @@ once cut; the Gantt adds the sprints as a lane and the releases as milestones:
 
 ### Release stages
 
-A release moves through the environments it is deployed to before production. By default they are
-`candidate → test → staging → production`; a project names its own with
-`kanbanr config cadence --release-stages candidate,qa,uat,live`. Each stage must appear once, and
-the **stage that tags is the cut**, by default the last. Every move is recorded on the release with who made it and when.
+A release moves through the environments it is deployed to before production. A project that turns
+releases on gets `candidate → main → tag`, with the gates described under [Stages that act](#stages-that-act)
+written into its config; a project that has said it has CI (`kanbanr config cadence --has-ci on`)
+also needs a passed `ci` result at `tag`. A board with releases on from before 0.6 that names no
+stages keeps `candidate → test → staging → production`, where `test` and `staging` do nothing. A
+project names its own with `kanbanr config cadence --release-stages candidate,qa,uat,live`. Each
+stage must appear once, and the **stage that tags is the cut**, by default the last.
+
+A stage that has no condition, no earlier-stage requirement and no action, and comes before the cut,
+only records that the release passed it. kanbanr says so in the same response when you configure
+one, and marks it `does nothing` in `kanbanr release stages` and on the Releases page. The change
+is still accepted. Changing the stages of a project whose gates are still the three recommended ones
+drops those gates and takes the defaults for the new stages. Every move is recorded on the release with who made it and when.
 
 - **The first stage** makes the branch `release/<VERSION>` from the integration branch, without
   checking it out.
@@ -387,18 +396,18 @@ so it is promoted with nothing of its own planned.
 
 #### Stages that act
 
-That is the default. A stage can instead say what must hold before a release enters it
+That is what a stage does when it has no gate. A stage can instead say what must hold before a release enters it
 (`requires`) and what entering it does (`on_enter`), as an item's status has a gate. The rules sit
 beside the stage names, under `cadence.release_gates`, keyed by stage name:
 
 ```yaml
 cadence:
-  release_stages: [candidate, main, production]   # names only; the last is the cut
+  release_stages: [candidate, main, tag]   # names only; the stage holding `tag` is the cut
   release_gates:
-    candidate:  { on_enter: [branch, prepare] }
-    main:       { purpose: "main holds the release; push it and let CI run",
-                  requires: [items_finished], on_enter: [move_main] }
-    production: { requires: [main_at_release, pushed], on_enter: [tag] }
+    candidate: { on_enter: [branch, prepare] }
+    main:      { purpose: "main holds the release; push it and let CI run",
+                 requires: [items_finished], on_enter: [move_main] }
+    tag:       { requires: [main_at_release, pushed], on_enter: [tag] }
 ```
 
 | action | does |

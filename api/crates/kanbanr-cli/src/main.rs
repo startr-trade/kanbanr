@@ -1046,7 +1046,8 @@ enum ConfigCmd {
         /// How often a release is cut: per_sprint | every_n | on_demand.
         #[arg(long)]
         release: Option<String>,
-        /// The stages a release moves through, in order; the last is the cut (FEAT-183). Default:
+        /// The stages a release moves through, in order; the stage holding `tag` is the cut
+        /// (FEAT-183). Turning releases on gives candidate,main,tag; a board from before 0.6 keeps
         /// candidate,test,staging,production.
         #[arg(long, value_delimiter = ',')]
         release_stages: Option<Vec<String>>,

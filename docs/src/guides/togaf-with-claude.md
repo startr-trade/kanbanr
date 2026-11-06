@@ -43,7 +43,7 @@ the process, the branches it will use and where each one merges. **Accepting the
 Ask for the things that make the rest of this guide work:
 
 > Agree a charter with me first, then set up release stages so that main has to be pushed before
-> anything is tagged. Use only candidate, main and production.
+> anything is tagged.
 
 **Do the charter first.** Gates aren't enforced until a project has one, and items created before it
 are exempt. Without one, a move that a gate would have refused still goes through, with a warning
@@ -61,7 +61,12 @@ CI passed. You look at CI yourself, then record what it said on the **Releases**
 result**, with a link to the run if you like). A release stage can require that result before the
 cut. Claude tells you when it is missing and never records it for you.
 
-**Name the stages you want.** Otherwise you get the defaults, which include `test` and `staging`.
+**The stages are candidate, main and tag.** A project that turns releases on gets these three, each
+doing something: candidate prepares the release, main moves main once the items are finished, and tag
+cuts the release once main is pushed. If you have CI, say so and the tag waits for your recorded
+result. Ask for other stages only if you have a pipeline behind them. Releases on a board made before
+this keep the four they had, `test` and `staging` among them. Those two do nothing, and Claude says so
+when you configure them.
 Those two record that a release passed a point and do nothing else: nothing builds or deploys when
 you promote to them. Add them when you have a pipeline and environments behind them.
 
