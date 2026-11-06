@@ -32,6 +32,19 @@ fn free_port() -> u16 {
     }
 }
 
+/// The token the monitor gave its own page at this start (DEF-024). A write carries it, as the
+/// page does; a monitor without writes has one too, and answers a write route it lacks with a 404.
+fn page_token(url: &str) -> String {
+    let html = ureq::get(&format!("{url}/"))
+        .call()
+        .expect("the monitor serves its page")
+        .into_string()
+        .unwrap();
+    let marker = "<meta name=\"kanbanr-token\" content=\"";
+    let start = html.find(marker).expect("the page carries a token") + marker.len();
+    html[start..start + html[start..].find('"').unwrap()].to_string()
+}
+
 struct Daemon(Child);
 impl Drop for Daemon {
     fn drop(&mut self) {
@@ -261,6 +274,7 @@ fn review_and_approve_through_the_daemon() {
             "{url}/api/write/projects/demo/features/FEAT-001/approve"
         ))
         .set("content-type", "application/json")
+        .set("x-kanbanr-token", &page_token(&url))
         .send_string(r#"{"by": "someone"}"#);
         match refused {
             Err(ureq::Error::Status(404 | 405, _)) => {}
@@ -280,6 +294,7 @@ fn review_and_approve_through_the_daemon() {
         "{url}/api/write/projects/demo/features/FEAT-001/approve"
     ))
     .set("content-type", "application/json")
+    .set("x-kanbanr-token", &page_token(&url))
     .send_string(r#"{"by": "reviewed in the monitor"}"#)
     .expect("approve through the daemon");
 
@@ -304,6 +319,7 @@ fn review_and_approve_through_the_daemon() {
         "{url}/api/write/projects/demo/features/FEAT-001/move"
     ))
     .set("content-type", "application/json")
+    .set("x-kanbanr-token", &page_token(&url))
     .send_string(r#"{"to": "In Progress"}"#)
     .expect("move through the daemon");
     assert_eq!(
@@ -336,12 +352,14 @@ fn review_and_approve_through_the_daemon() {
         "{url}/api/write/projects/demo/features/FEAT-001/signoff/design-review"
     ))
     .set("content-type", "application/json")
+    .set("x-kanbanr-token", &page_token(&url))
     .send_string(r#"{"by": "reviewed in the monitor"}"#)
     .expect("sign off through the daemon");
     let withdraw =
         format!("{url}/api/write/projects/demo/features/FEAT-001/signoff/design-review/withdraw");
     match ureq::post(&withdraw)
         .set("content-type", "application/json")
+        .set("x-kanbanr-token", &page_token(&url))
         .send_string(r#"{"by": "reviewed in the monitor", "reason": " "}"#)
     {
         Err(ureq::Error::Status(400, _)) => {}
@@ -349,6 +367,7 @@ fn review_and_approve_through_the_daemon() {
     }
     ureq::post(&withdraw)
         .set("content-type", "application/json")
+        .set("x-kanbanr-token", &page_token(&url))
         .send_string(r#"{"by": "reviewed in the monitor", "reason": "signed before the review"}"#)
         .expect("withdraw through the daemon");
     let feature = get(&format!("{url}/api/projects/demo"));
@@ -897,6 +916,7 @@ fn promote_through_the_daemon_uses_the_repository_it_was_started_in() {
             "{url}/api/write/projects/shop/releases/{version}/promote"
         ))
         .set("content-type", "application/json")
+        .set("x-kanbanr-token", &page_token(url))
         .send_string(r#"{"stage": "candidate", "by": "A"}"#)
         {
             Ok(r) => (r.status(), r.into_string().unwrap()),
@@ -1079,6 +1099,7 @@ fn monitor_promote_matches_cli() {
         "{url}/api/write/projects/shop/releases/v1.0.0/promote"
     ))
     .set("content-type", "application/json")
+    .set("x-kanbanr-token", &page_token(&url))
     .send_string(r#"{"stage": "candidate", "by": "A"}"#)
     {
         Ok(r) => r.into_string().unwrap(),
@@ -1250,6 +1271,7 @@ fn release_plan_route_matches_promote() {
             "{url}/api/write/projects/shop/releases/v1.0.0/promote"
         ))
         .set("content-type", "application/json")
+        .set("x-kanbanr-token", &page_token(&url))
         .send_string(&body.to_string())
         {
             Ok(r) => serde_json::from_str(&r.into_string().unwrap()).unwrap(),
@@ -1355,6 +1377,7 @@ fn release_notes_route_reads_and_saves_with_the_daemons_repository() {
         "{url}/api/write/projects/shop/releases/v1.0.0/notes"
     ))
     .set("content-type", "application/json")
+    .set("x-kanbanr-token", &page_token(&url))
     .send_string(&body.to_string())
     {
         Ok(r) => serde_json::from_str(&r.into_string().unwrap()).unwrap(),
@@ -1373,4 +1396,121 @@ fn release_notes_route_reads_and_saves_with_the_daemons_repository() {
         "nothing checked out"
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// DEF-024: the monitor's own page writes with the token it was given and its own origin, and a
+/// sign-off it sends that way is recorded as the CLI would record it. The same request without the
+/// token is refused and records nothing.
+#[test]
+fn writes_from_the_page_record_a_signoff() {
+    let base = std::env::temp_dir().join(format!("kanbanr-page-write-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let data = base.join("data");
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    let run = |args: &[&str]| {
+        let o = Command::new(cli())
+            .args(args)
+            .env("HOME", &home)
+            .env("KANBANR_DATA_DIR", &data)
+            .env_remove("KANBANR_SERVER_URL")
+            .output()
+            .expect("run cli");
+        assert!(
+            o.status.success(),
+            "cmd {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
+    let p = ["--project", "demo"];
+    run(&["identity", "--name", "Tester", "--email", "t@example.com"]);
+    run(&[&p[..], &["project", "init", "demo"][..]].concat());
+    run(&[&p[..], &["config", "method", "--off"][..]].concat());
+    run(&[
+        &p[..],
+        &["milestone", "add", "--name", "M", "--code", "MS-1"][..],
+    ]
+    .concat());
+    run(&[
+        &p[..],
+        &["feature", "add", "--title", "Cart", "--milestone", "MS-1"][..],
+    ]
+    .concat());
+
+    let def = base.join("def.yaml");
+    std::fs::write(
+        &def,
+        "statement: Keep a cart for 7 days\n\
+         requirements:\n  - kind: functional\n    text: \"THE SYSTEM SHALL retain the cart.\"\n\
+         \x20   tests:\n      - name: cart::retains\n        kind: unit\n        state: planned\n",
+    )
+    .unwrap();
+    run(&[
+        &p[..],
+        &[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            def.to_str().unwrap(),
+        ][..],
+    ]
+    .concat());
+
+    let port = free_port();
+    let child = Command::new(cli())
+        .args([
+            "serve",
+            "--bind",
+            &format!("127.0.0.1:{port}"),
+            "--allow-writes",
+        ])
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &data)
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let _daemon = Daemon(child);
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        assert!(Instant::now() < deadline, "daemon did not become ready");
+        match ureq::get(&format!("{url}/api/projects")).call() {
+            Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    let signoff = format!("{url}/api/write/projects/demo/features/FEAT-001/signoff/design-review");
+    let data_git = |args: &[&str]| -> String {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&data)
+            .output()
+            .expect("run git");
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+
+    // Without the token the page was given, nothing is recorded.
+    match ureq::post(&signoff)
+        .set("content-type", "application/json")
+        .set("origin", &url)
+        .send_string(r#"{"by": "reviewed in the monitor"}"#)
+    {
+        Err(ureq::Error::Status(403, _)) => {}
+        other => panic!("a write without the token must be refused: {other:?}"),
+    }
+    let log = data_git(&["log", "--format=%s"]);
+    assert!(!log.contains("sign off design-review"), "{log}");
+
+    // As the page sends it, the sign-off is recorded.
+    ureq::post(&signoff)
+        .set("content-type", "application/json")
+        .set("x-kanbanr-token", &page_token(&url))
+        .set("origin", &url)
+        .send_string(r#"{"by": "reviewed in the monitor"}"#)
+        .expect("sign off as the page does");
+    let log = data_git(&["log", "--format=%s"]);
+    assert!(log.contains("sign off design-review"), "{log}");
+
+    let _ = std::fs::remove_dir_all(&base);
 }

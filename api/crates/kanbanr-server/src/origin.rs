@@ -68,7 +68,7 @@ impl Guard {
         match host {
             Some(h) => {
                 let h = h.trim().to_ascii_lowercase();
-                self.hosts.iter().any(|known| *known == h)
+                self.hosts.contains(&h)
             }
             None => false,
         }

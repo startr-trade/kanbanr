@@ -194,7 +194,7 @@ pub async fn run(
                         // Missing or half-written: serve what worked last rather than a blank page.
                         _ => last_good.lock().map(|c| c.clone()).unwrap_or_default(),
                     };
-                    axum::response::Html(with_token(&with_root_base(&html), &token)).into_response()
+                    axum::response::Html(with_root_base(&with_token(&html, &token))).into_response()
                 }
             });
         eprintln!("serving SPA from {dir}");
@@ -206,7 +206,7 @@ pub async fn run(
         let index = files
             .get("index.html")
             .map(|html| {
-                with_token(&with_root_base(&String::from_utf8_lossy(html)), &token).into_bytes()
+                with_root_base(&with_token(&String::from_utf8_lossy(html), &token)).into_bytes()
             })
             .unwrap_or_else(|| {
                 with_token(
