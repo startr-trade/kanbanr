@@ -261,6 +261,59 @@ mod tests {
         }
     }
 
+    /// The skill's text.
+    fn skill_md() -> String {
+        SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap()
+    }
+
+    /// FTR-024 R-1, R-2: every verdict goes to the Review or Releases page, with what is waiting
+    /// said in one message; with no monitor on writes Claude offers to start one, never records.
+    #[test]
+    fn skill_sends_decisions_to_the_monitor() {
+        let skill = skill_md();
+        for want in [
+            "## Agreement before work: decided on the pages",
+            "You never record a verdict, and never ask for one in a plan or a question",
+            "kanbanr open --check",
+            "kanbanr review --ui",
+        ] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+        for gone in [
+            "work the queue as questions",
+            "The user accepting the plan is their approval",
+        ] {
+            assert!(!skill.contains(gone), "the skill no longer says {gone:?}");
+        }
+    }
+
+    /// FTR-024 R-6: plan mode is for setup and the process, and never while a sub-agent runs.
+    #[test]
+    fn skill_keeps_plan_mode_for_setup_and_process() {
+        let skill = skill_md();
+        assert!(skill.contains("never while a sub-agent is running"));
+        assert!(skill.contains("### A new item: scope it in the conversation"));
+        assert!(!skill.contains("scope it in plan mode"));
+    }
+
+    /// FTR-024 R-7: progress is reported as changes, not events.
+    #[test]
+    fn skill_reports_changes_not_events() {
+        let skill = skill_md();
+        assert!(skill.contains("**report changes, not events.**"));
+        assert!(skill.contains("Never write 'already reported'"));
+    }
+
+    /// FTR-024 R-8: rework goes on the item's todo-list before anyone starts it.
+    #[test]
+    fn skill_adds_rework_before_starting_it() {
+        assert!(skill_md().contains("**put rework on the board before it starts.**"));
+    }
+
     /// FEAT-215 R-1: the skill states each sub-agent role's boundaries, and the coordinator's
     /// duty to brief with them and keep the board current.
     #[test]
