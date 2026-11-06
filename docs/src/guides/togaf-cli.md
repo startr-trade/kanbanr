@@ -72,9 +72,8 @@ kanbanr charter set --file charter.yaml
 
 A project that turns releases on gets three stages, `candidate`, `main` and `tag`, with the gates
 below written into the board's config, so you can see and edit them. Main has to be pushed
-before anything is tagged. The commands below also make candidate wait for `items_merged`, which the
-default does not.
-kanbanr can't see whether CI passed. Look at it yourself, then record what it said:
+before anything is tagged. Candidate waits for `items_merged`, so the release branch is made only once the items are
+merged; the commands below set the same thing. kanbanr can't see whether CI passed. Look at it yourself, then record what it said:
 `kanbanr gate record ci --passed --url <link to the run>`. Say the project has CI with
 `kanbanr config cadence --has-ci on` and the `tag` stage requires that result
 (`gate_passed`, with `ci` as the commit gate); without the flag it requires only `main_at_release`

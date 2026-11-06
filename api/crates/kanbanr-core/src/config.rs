@@ -1822,6 +1822,55 @@ mod tests {
         assert_eq!(c.commit_gates, ["ci"]);
     }
 
+    /// FTR-021 R-5: the recommended candidate stage waits for the items to be merged, and a board
+    /// that turns releases on is given it.
+    #[test]
+    fn the_recommended_candidate_requires_items_merged() {
+        for has_ci in [false, true] {
+            let (_, gates, _) = Cadence::recommended(has_ci);
+            assert_eq!(gates["candidate"].requires, [ReleaseCheck::ItemsMerged]);
+        }
+        let board = Board::new();
+        let c = board.change(|c| c.releases = true).unwrap();
+        assert_eq!(
+            c.release_gates["candidate"].requires,
+            [ReleaseCheck::ItemsMerged]
+        );
+        assert!(c.is_recommended());
+    }
+
+    /// FTR-021 R-5: gates a board already holds are never changed by reading it, nor by a write
+    /// that does not turn releases on.
+    #[test]
+    fn existing_gates_gain_no_condition_by_reading() {
+        let c = crate::yaml::from_str::<Cadence>(
+            "releases: true\nrelease_stages: [candidate, main, tag]\nrelease_gates: { candidate: { on_enter: [branch] }, tag: { on_enter: [tag] } }\n",
+        )
+        .unwrap();
+        assert!(c.release_gates["candidate"].requires.is_empty());
+        assert!(c.effective_release_gates()[0].1.requires.is_empty());
+        let board = Board::new();
+        board.change(|c| c.releases = true).unwrap();
+        board
+            .change(|c| {
+                c.release_gates
+                    .get_mut("candidate")
+                    .unwrap()
+                    .requires
+                    .clear()
+            })
+            .unwrap();
+        let c = board.change(|c| c.sprints = true).unwrap();
+        assert!(c.release_gates["candidate"].requires.is_empty());
+        // A board with no stages keeps the four it always had, with no condition added.
+        let old = Cadence::default();
+        assert!(
+            old.effective_release_gates()
+                .iter()
+                .all(|(_, g)| g.requires.is_empty())
+        );
+    }
+
     /// FTR-020 R-2: saying later that the project has CI adds the requirement to the untouched
     /// recommended tag stage.
     #[test]

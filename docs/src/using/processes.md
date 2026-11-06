@@ -356,7 +356,7 @@ once cut; the Gantt adds the sprints as a lane and the releases as milestones:
 
 A release moves through the environments it is deployed to before production. A project that turns
 releases on gets `candidate → main → tag`, with the gates described under [Stages that act](#stages-that-act)
-written into its config; a project that has said it has CI (`kanbanr config cadence --has-ci on`)
+written into its config, where `candidate` waits for `items_merged`; a project that has said it has CI (`kanbanr config cadence --has-ci on`)
 also needs a passed `ci` result at `tag`. A board with releases on from before 0.6 that names no
 stages keeps `candidate → test → staging → production`, where `test` and `staging` do nothing. A
 project names its own with `kanbanr config cadence --release-stages candidate,qa,uat,live`. Each

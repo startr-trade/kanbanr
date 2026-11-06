@@ -314,8 +314,8 @@ impl Cadence {
     }
 
     /// The stages, gates and commit gates a project gets when it turns releases on and names none
-    /// (FTR-020): candidate branches and prepares, main moves main once the items are finished,
-    /// and tag, the cut, needs main at the release and pushed. With `has_ci` it also needs a
+    /// (FTR-020): candidate branches and prepares once the items are merged (FTR-021), main moves
+    /// main once the items are finished, and tag, the cut, needs main at the release and pushed. With `has_ci` it also needs a
     /// passed `ci` result for that commit, and `ci` is the commit gate.
     pub fn recommended(has_ci: bool) -> (Vec<String>, BTreeMap<String, ReleaseGate>, Vec<String>) {
         let gate =
@@ -337,8 +337,8 @@ impl Cadence {
             (
                 "candidate".to_string(),
                 gate(
-                    "Make the release branch and prepare it",
-                    &[],
+                    "Make the release branch and prepare it once its items are merged",
+                    &[ReleaseCheck::ItemsMerged],
                     &[ReleaseAction::Branch, ReleaseAction::Prepare],
                 ),
             ),
