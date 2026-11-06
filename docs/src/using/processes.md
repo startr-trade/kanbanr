@@ -409,6 +409,7 @@ cadence:
 | `prepared` | the release tip carries the version, the changelog heading and the notes | promote to the stage that prepares |
 | `main_at_release` | main is at the release tip | promote to the stage with `move_main` |
 | `pushed` | the release tip is on main's remote-tracking branch (`origin/main`) | push main (`git push origin main`), then wait for CI |
+| `gate_passed` | every gate named in `commit_gates` has a passed result recorded for the release tip | look at your CI, then record its verdict (see below) |
 
 A stage with no gate of its own keeps the default:
 
@@ -431,6 +432,31 @@ it may already be pushed.
 
 `pushed` reads the remote-tracking branch. A promotion fetches main first; offline, it judges from
 the last fetch and says so. kanbanr never pushes: pushing main and the tag is yours.
+
+### Gate results
+
+kanbanr runs no CI and asks no server what it said. You look at your CI, then record its verdict
+for a commit; a stage that requires `gate_passed` reads what was recorded. Name the gates a project
+requires once, then record each verdict as it comes in:
+
+```bash
+kanbanr config commit-gates ci                       # the gates gate_passed requires (none clears them)
+kanbanr config release-stage production --requires main_at_release,gate_passed --on-enter tag
+kanbanr gate record ci --passed --url <link to the run> [--commit <REV>] [--note …]
+kanbanr gate list [--name ci] [--commit <REV>]       # newest first
+```
+
+A result is a file of its own under the project's `gates/<name>/`, and none is rewritten: the newest
+result of a gate for the commit decides, and a result for another commit says nothing. `--commit`
+defaults to HEAD; a pass with no commit named is refused while the working tree has uncommitted
+changes, because it would not be about HEAD. The Releases page offers the same as a **Record result**
+form where a promotion lacks a result, and shows the command on a read-only monitor.
+
+A promotion that would itself add a commit to the release branch (`prepare`) cannot be covered: no
+result can exist for a commit that is not made yet, so promote to the stage that prepares first and
+record the result once it is on the branch. `make ci` records its own run as the gate `local`, a
+failure always and a pass only on a clean working tree; add `local` to `commit_gates` to require it.
+Claude never records a result for you.
 
 ```bash
 kanbanr config release-stage candidate --on-enter branch,prepare

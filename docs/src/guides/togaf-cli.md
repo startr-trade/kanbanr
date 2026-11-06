@@ -81,7 +81,9 @@ production     —                                  move_main, tag              
 ```
 
 We recommend three stages instead, so that main has to be pushed before anything is tagged.
-kanbanr can't see whether CI passed, so check that yourself before the cut:
+kanbanr can't see whether CI passed. Look at it yourself, then record what it said, and have the
+cut require it with `kanbanr config commit-gates ci` and `--requires main_at_release,pushed,gate_passed`:
+`kanbanr gate record ci --passed --url <link to the run>`.
 
 ```text
 kanbanr config cadence --release-stages candidate,main,production

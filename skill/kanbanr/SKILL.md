@@ -701,6 +701,11 @@ branches; fix it before going on.
 - Claude runs `kanbanr release promote <V>` (check first with `--plan`) and tells the user the
   `next:` line it prints. **The user pushes main and the tag**, by hand; a cut that requires
   `pushed` waits until main is pushed (and CI has run on it).
+- **A CI result is the user's to record.** A stage that requires `gate_passed` needs a recorded
+  passed result for the release tip. kanbanr never asks a server; the user looks at their CI and
+  records the verdict on the Releases page (or `kanbanr gate record <gate> --passed`). When it is
+  missing, say what the plan names and where to record it. **Never run `kanbanr gate record`
+  yourself**, and never pass it a verdict you did not see.
 - A patch is `kanbanr release add <V> --patch-of <P>`: `release/<V>` is made from `<P>`'s tag. A fix
   integrated into a release branch reaches the line through `kanbanr git forward <V>`, which the
   move says is needed; it is never done for you.
@@ -1148,6 +1153,7 @@ kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # ship the finished items, write notes, carry the rest
 kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # next or named stage, doing what its gates say (default candidate → test → staging → production: the first makes release/<V>; the last is the cut — fast-forwards main and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
 kanbanr release promote v0.1.0 [<stage>] --plan [--fetch]  # what it would do and still needs; changes nothing
+kanbanr gate list [--name ci] [--commit REV]   # recorded gate results, newest first (reading is yours; `gate record` is the user's)
 kanbanr release redate v0.1.0                     # date the notes and changelog today, before the cut
 kanbanr release notes v0.1.0 [--file F | --edit]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut
 kanbanr release stages                            # each stage: requires, on_enter, declared or default

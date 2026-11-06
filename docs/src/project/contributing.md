@@ -49,6 +49,10 @@ and a sub-agent's task and test updates on its own item under an active scope, w
 and lets through. The fence covers `cargo run` in `api/` too: run `target/debug/kanbanr` against a real
 board instead.
 
+`make ci` also records its verdict as the gate `local` for HEAD (`kanbanr gate record local`): a
+failure always, a pass only when the working tree is clean. A project that wants its local run
+required adds `local` to `kanbanr config commit-gates`.
+
 Run the same checks CI runs before opening a PR — all of them, in one command:
 
 ```bash
