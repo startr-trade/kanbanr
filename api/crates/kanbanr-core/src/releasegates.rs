@@ -358,14 +358,12 @@ impl Cadence {
         if let Some(cut) = gates
             .iter()
             .position(|(_, g)| g.on_enter.contains(&ReleaseAction::Tag))
+            && let Some((name, g)) = gates.get_mut(cut + 1)
+            && !self.release_gates.contains_key(name)
+            && !self.commit_gates.is_empty()
         {
-            if let Some((name, g)) = gates.get_mut(cut + 1)
-                && !self.release_gates.contains_key(name)
-                && !self.commit_gates.is_empty()
-            {
-                g.requires = vec![ReleaseCheck::TagPassed];
-                g.purpose = "Confirm what you checked here".to_string();
-            }
+            g.requires = vec![ReleaseCheck::TagPassed];
+            g.purpose = "Confirm what you checked here".to_string();
         }
         gates
     }

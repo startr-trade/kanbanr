@@ -946,12 +946,11 @@ pub fn tag_result(
         crate::gates::results(store, id, None)
             .unwrap_or_default()
             .into_iter()
-            .filter(|r| {
+            .rfind(|r| {
                 r.name == gate
                     && r.commit == release.tag_commit
                     && crate::cmp_instants(&r.at, &release.tagged_at) != std::cmp::Ordering::Less
             })
-            .next_back()
     };
     let state = match &result {
         None => "none",
