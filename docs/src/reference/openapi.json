@@ -2846,6 +2846,16 @@
             "const": "tag_passed",
             "description": "The newest result of the tag gate for the tag commit, recorded since the tag, is passed\n(FTR-026). Only a stage after the tag can require it.",
             "type": "string"
+          },
+          {
+            "const": "items_merged",
+            "description": "Every item planned into the release is at the integrate stage or later.",
+            "type": "string"
+          },
+          {
+            "const": "stage_passed",
+            "description": "The release has been promoted into a stage a gate names in `after`. Only a plan names it\n(a gate lists `after`, not this), so it is not in `ALL`.",
+            "type": "string"
           }
         ]
       },
@@ -2853,6 +2863,13 @@
         "additionalProperties": true,
         "description": "One release stage's rules: what it is for, what must hold to enter it, and what entering it\ndoes.",
         "properties": {
+          "after": {
+            "description": "Earlier stages the release must have been promoted into before it enters this one.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "on_enter": {
             "items": {
               "$ref": "#/components/schemas/ReleaseAction"

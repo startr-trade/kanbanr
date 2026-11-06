@@ -58,7 +58,12 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
     missing.push({ text: NO_REPO, fix: `run \`${command}\` from the project folder` });
     // A gate result needs the release tip, which the plan carries whether or not the repository
     // could be read; without a tip there is nothing to record against.
-    const wanted = (c: { check: string }) => c.check === "items_finished" || (c.check === "gate_passed" && plan.release_tip);
+    // items_merged and stage_passed read the board and the release's history, not the repository.
+    const wanted = (c: { check: string }) =>
+      c.check === "items_finished" ||
+      c.check === "items_merged" ||
+      c.check === "stage_passed" ||
+      (c.check === "gate_passed" && plan.release_tip);
     for (const c of plan.conditions.filter((c) => !c.holds && wanted(c))) {
       missing.push({ text: `${c.check}: ${c.detail}`, fix: c.fix ?? "" });
     }

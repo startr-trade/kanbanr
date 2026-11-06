@@ -1081,15 +1081,19 @@ enum ConfigCmd {
         /// What the stage is for, in a sentence.
         #[arg(long)]
         purpose: Option<String>,
-        /// Conditions: items_finished, prepared, main_at_release, pushed, gate_passed ("" for none).
+        /// Conditions: items_finished, prepared, main_at_release, pushed, gate_passed,
+        /// items_merged ("" for none).
         #[arg(long, value_delimiter = ',')]
         requires: Option<Vec<String>>,
+        /// Earlier stages the release must have been promoted into first ("" for none).
+        #[arg(long, value_delimiter = ',')]
+        after: Option<Vec<String>>,
         /// Actions, applied in this order whatever the order given: branch, prepare, move_main,
         /// tag ("" for none).
         #[arg(long, value_delimiter = ',')]
         on_enter: Option<Vec<String>>,
         /// Remove the stage's own gate: it acts as the default again.
-        #[arg(long, conflicts_with_all = ["purpose", "requires", "on_enter"])]
+        #[arg(long, conflicts_with_all = ["purpose", "requires", "after", "on_enter"])]
         clear: bool,
     },
     /// What a release's `prepare` action commits onto `release/<V>` (FEAT-212). With no flag,
@@ -8312,6 +8316,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             stage,
             purpose,
             requires,
+            after,
             on_enter,
             clear,
         } => {
@@ -8336,6 +8341,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 Some(obj(vec![
                     ("purpose", purpose.clone().map(|x| json!(x))),
                     ("requires", list(requires)),
+                    ("after", list(after)),
                     ("on_enter", list(on_enter)),
                     ("clear", clear.then(|| json!(true))),
                 ])),
@@ -9612,10 +9618,20 @@ fn print_release_stages(cli: &Cli, client: &Backend, p: &str) -> anyhow::Result<
         if s["declared"] != true {
             note.push("default");
         }
+        let mut requires = names(&s["requires"]);
+        if let Some(after) = s["after"].as_array().filter(|a| !a.is_empty()) {
+            let after: Vec<&str> = after.iter().filter_map(Value::as_str).collect();
+            let text = format!("after {}", after.join(", "));
+            requires = if requires == "—" {
+                text
+            } else {
+                format!("{requires}, {text}")
+            };
+        }
         println!(
             "{:<14} {:<34} {:<30} {}",
             s["name"].as_str().unwrap_or_default(),
-            names(&s["requires"]),
+            requires,
             names(&s["on_enter"]),
             note.join(", ")
         );

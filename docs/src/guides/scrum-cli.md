@@ -88,7 +88,7 @@ that main has to be pushed before anything is tagged. kanbanr can't see whether 
 
 ```text
 kanbanr config cadence --release-stages candidate,main,production
-kanbanr config release-stage candidate --on-enter branch,prepare
+kanbanr config release-stage candidate --requires items_merged --on-enter branch,prepare
 kanbanr config release-stage main --requires items_finished --on-enter move_main
 kanbanr config release-stage production --requires main_at_release,pushed --on-enter tag
 kanbanr config release-prepare --version-file package.json --changelog CHANGELOG.md --notes "docs/releases/{version}.md"
@@ -96,10 +96,25 @@ kanbanr config release-prepare --version-file package.json --changelog CHANGELOG
 
 ```text
 STAGE          REQUIRES                           ON ENTER
-candidate      —                                  branch, prepare
+candidate      items_merged                       branch, prepare
 main           items_finished                     move_main
 production     main_at_release, pushed            tag                            the cut
 ```
+
+To stop a release being promoted while work is still going on, have the candidate stage require
+`items_merged`: every item planned into the release must be at the integrate stage or later (for
+TOGAF, Migration), and the plan names each item that is not, with the status it is at. And to stop a
+named promotion jumping over a stage, list it in `--after`: kanbanr then refuses to enter the stage
+until the release has been promoted into the one named. For example, with a `ci` stage you record
+yourself:
+
+```text
+kanbanr config cadence --release-stages candidate,main,ci,tag
+kanbanr config release-stage tag --after ci
+```
+
+kanbanr records that the stage was entered, not that CI passed. To require a recorded CI result as
+well, use `gate_passed`.
 
 The `release-prepare` line names your own files. The version file must already be on the sprint's
 branch, or promoting to candidate is refused.

@@ -687,7 +687,8 @@ branches; fix it before going on.
   result is; never confirm a stage, start a patch from a failed tag, or record the result for the
   user.** Those are their verdicts.
 - Stages can act (`kanbanr release stages`, `kanbanr config release-stage`): each may require
-  `items_finished`, `prepared`, `main_at_release`, `pushed`, and do `branch`, `prepare`,
+  `items_finished`, `prepared`, `main_at_release`, `pushed`, `items_merged` (every planned item at the integrate
+  stage or later), or name earlier stages in `--after` (the release must have been promoted into each), and do `branch`, `prepare`,
   `move_main`, `tag` on entry. A refusal lists every missing condition with its fix; nothing changed.
 - **A release prepares itself.** The stage with `prepare` commits the version files, the dated
   changelog heading and a notes draft onto `release/<V>` (`kanbanr config release-prepare`). Never
@@ -1165,7 +1166,7 @@ kanbanr gate list [--name ci] [--commit REV]   # recorded gate results, newest f
 kanbanr release redate v0.1.0                     # date the notes and changelog today, before the cut
 kanbanr release notes v0.1.0 [--file F | --edit]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut
 kanbanr release stages                            # each stage: requires, on_enter, declared or default
-kanbanr config release-stage main --requires items_finished --on-enter move_main [--clear]
+kanbanr config release-stage main --requires items_finished --on-enter move_main [--after ci] [--clear]
 kanbanr config release-prepare --version-file api/Cargo.toml --changelog CHANGELOG.md --notes 'docs/src/releases/{version}.md'
 kanbanr config release-prepare --version-file 'api/Cargo.lock=name = "a"\nversion = "{version}"' --version-file 'api/Cargo.lock=name = "b"\nversion = "{version}"'   # one file, several entries, each applied
 kanbanr release add v0.1.1 --patch-of v0.1.0      # a patch: release/v0.1.1 from v0.1.0's tag, at the first stage

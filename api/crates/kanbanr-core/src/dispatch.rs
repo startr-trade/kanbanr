@@ -1213,7 +1213,7 @@ fn dispatch_routes(
         ("GET", ["projects", p, "release-stages"]) => {
             ser(&store.load_meta(p)?.config.cadence.release_stage_views())
         }
-        // `{purpose?, requires?, on_enter?, clear?}`: declare a stage's gate, starting from the
+        // `{purpose?, requires?, after?, on_enter?, clear?}`: declare a stage's gate, starting from the
         // one in force, or clear it back to the default (FEAT-212).
         ("PUT", ["projects", p, "config", "release-stages", stage]) => {
             let stage = percent_decode(stage);
@@ -1238,6 +1238,13 @@ fn dispatch_routes(
                 if let Some(v) = b.get("requires").filter(|v| !v.is_null()) {
                     gate.requires = serde_json::from_value(v.clone())
                         .map_err(|e| CoreError::Unsupported(e.to_string()))?;
+                }
+                if let Some(after) = vec_field(b, "after") {
+                    gate.after = after
+                        .into_iter()
+                        .map(|a| a.trim().to_string())
+                        .filter(|a| !a.is_empty())
+                        .collect();
                 }
                 if let Some(v) = b.get("on_enter").filter(|v| !v.is_null()) {
                     gate.on_enter = serde_json::from_value(v.clone())

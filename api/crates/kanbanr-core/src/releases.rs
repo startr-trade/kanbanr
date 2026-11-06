@@ -19,6 +19,7 @@ use crate::models::{Extra, FeatureItem};
 use crate::releasegates::{ReleaseAction, ReleaseCheck};
 use crate::store::{Capability, Project, Store};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 const RELEASES_FILE: &str = "releases.yaml";
@@ -1223,6 +1224,8 @@ fn work_out(
     };
     let mut actions: Vec<(ReleaseAction, String)> = Vec::new();
     let mut requires: Vec<(ReleaseCheck, String)> = Vec::new();
+    // (the stage that must have been entered, the stage requiring it)
+    let mut afters: Vec<(String, String)> = Vec::new();
     for &i in &entered {
         let (name, gate) = &gates[i];
         for a in &gate.on_enter {
@@ -1233,6 +1236,11 @@ fn work_out(
         for c in &gate.requires {
             if !requires.iter().any(|(x, _)| x == c) {
                 requires.push((*c, name.clone()));
+            }
+        }
+        for a in &gate.after {
+            if !afters.iter().any(|(x, _)| x == a) {
+                afters.push((a.clone(), name.clone()));
             }
         }
     }
@@ -1255,6 +1263,7 @@ fn work_out(
     if empty {
         actions.clear();
         requires.clear();
+        afters.clear();
     }
     let has = |a: ReleaseAction| actions.iter().any(|(x, _)| *x == a);
     let stage_holding = |a: ReleaseAction| {
@@ -1321,6 +1330,7 @@ fn work_out(
             for (c, s) in &requires {
                 let (holds, detail) = match c {
                     ReleaseCheck::ItemsFinished => items_finished(&preview),
+                    ReleaseCheck::ItemsMerged => items_merged(&project, version),
                     ReleaseCheck::Prepared if cadence.release_prepare.writes_nothing() => {
                         (true, "nothing is configured to prepare".to_string())
                     }
@@ -1348,6 +1358,8 @@ fn work_out(
                     carried_fix(&preview)
                 } else if *c == ReleaseCheck::TagPassed {
                     tag_passed(store, id, cadence, &release).2
+                } else if *c == ReleaseCheck::ItemsMerged {
+                    merged_fix(&project, version)
                 } else {
                     needs_repo_text(version, &stage)
                 };
@@ -1702,6 +1714,10 @@ fn work_out(
                         let (holds, detail) = items_finished(&preview);
                         (holds, detail, carried_fix(&preview))
                     }
+                    ReleaseCheck::ItemsMerged => {
+                        let (holds, detail) = items_merged(&project, version);
+                        (holds, detail, merged_fix(&project, version))
+                    }
                     ReleaseCheck::Prepared => {
                         let fix = match stage_holding(ReleaseAction::Prepare) {
                             Some(p) => format!("promote {version} to {p}, which prepares it"),
@@ -1817,6 +1833,10 @@ fn work_out(
                             }
                         }
                     }
+                    // Only a plan names it; the `after` conditions are added below.
+                    ReleaseCheck::StagePassed => {
+                        (true, "judged through after".to_string(), String::new())
+                    }
                     ReleaseCheck::GatePassed => gate_passed(
                         store,
                         id,
@@ -1836,6 +1856,38 @@ fn work_out(
                     fix: if holds { String::new() } else { fix },
                 });
             }
+        }
+    }
+    // `after`: read against the history before this move, so a promotion that enters the required
+    // stage and the requiring one together does not count (FTR-021).
+    if !afters.is_empty() {
+        let done = entered_stages(&release, &stages);
+        for (required, holder) in &afters {
+            let (holds, detail, fix) = if done.contains(required) {
+                let c = release.stages.iter().rev().find(|c| c.stage == *required);
+                let when = c.map_or(String::new(), |c| {
+                    format!(" on {} by {}", c.at.get(..10).unwrap_or(&c.at), c.by)
+                });
+                (true, format!("{required} was entered{when}"), String::new())
+            } else {
+                (
+                    false,
+                    format!(
+                        "{required} has not been entered: the release is at {}",
+                        if from.is_empty() { "no stage" } else { &from }
+                    ),
+                    format!(
+                        "promote {version} to {required} first: kanbanr release promote {version} {required}"
+                    ),
+                )
+            };
+            conditions.push(PlanCondition {
+                check: ReleaseCheck::StagePassed,
+                stage: holder.clone(),
+                holds,
+                detail,
+                fix,
+            });
         }
     }
 
@@ -2006,6 +2058,77 @@ fn items_finished(preview: &[CutPreview]) -> (bool, String) {
     } else {
         (false, format!("{} would carry over", carried.join(", ")))
     }
+}
+
+/// The planned items that are not merged yet, with the status each is at (the `items_merged`
+/// check). An item in a no-op status is not counted.
+fn unmerged(project: &Project, version: &str) -> (usize, Vec<(String, String)>) {
+    let planned: Vec<_> = project
+        .features
+        .iter()
+        .filter(|f| f.release.as_deref() == Some(version) && !project.config.is_no_op(&f.status))
+        .collect();
+    let behind = planned
+        .iter()
+        .filter(|f| !crate::gitmodel::is_integrated(&project.config, &f.status))
+        .map(|f| (f.code.clone(), f.status.clone()))
+        .collect();
+    (planned.len(), behind)
+}
+
+fn items_merged(project: &Project, version: &str) -> (bool, String) {
+    let (planned, behind) = unmerged(project, version);
+    if behind.is_empty() {
+        (true, format!("{planned} planned item(s), all merged"))
+    } else {
+        let list: Vec<String> = behind
+            .iter()
+            .map(|(c, s)| format!("{c} is at {s}"))
+            .collect();
+        (false, list.join(", "))
+    }
+}
+
+fn merged_fix(project: &Project, version: &str) -> String {
+    let roles = project.config.roles();
+    let target = roles
+        .status(crate::config::Role::Integrate)
+        .map(str::to_string)
+        .or_else(|| {
+            let c = &project.config;
+            let end = |s: &&String| crate::graph::is_terminal_status(c, s) && !c.is_no_op(s);
+            c.statuses.iter().rev().find(end).cloned()
+        })
+        .unwrap_or_default();
+    unmerged(project, version)
+        .1
+        .iter()
+        .map(|(c, _)| {
+            format!(
+                "{c}: move it to {target} (that merges its branch), or plan it into another release"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// The stages of `stages` (the project's, in order) the release has been moved forward into. The
+/// stage changes are read oldest first: a change into a stage at or after the previous one counts,
+/// a change back to an earlier stage does not, and a stage a named promotion jumped over leaves no
+/// change (FTR-021). A change to a stage no longer in the list never counts.
+pub fn entered_stages(release: &Release, stages: &[String]) -> BTreeSet<String> {
+    let mut entered = BTreeSet::new();
+    let mut previous: Option<usize> = None;
+    for c in &release.stages {
+        let Some(at) = stages.iter().position(|s| *s == c.stage) else {
+            continue;
+        };
+        if previous.is_none_or(|p| at >= p) {
+            entered.insert(c.stage.clone());
+        }
+        previous = Some(at);
+    }
+    entered
 }
 
 fn carried_fix(preview: &[CutPreview]) -> String {
@@ -5139,5 +5262,200 @@ mod tests {
             .to_string();
         assert!(err.contains("superseded by v1.0.1"), "{err}");
         clean(&dir, &repo);
+    }
+
+    // ---- FTR-021: items_merged and after ----
+
+    const MERGED: &str = "release_stages: [candidate, main]\n\
+         release_gates:\n  candidate: { requires: [items_merged] }\n";
+
+    /// The `items_merged` condition of the plan to candidate, judged with no repository.
+    fn merged_condition(store: &Store) -> super::PlanCondition {
+        let plan = super::plan_promotion(
+            store,
+            "shop",
+            "v1",
+            Some("candidate"),
+            "",
+            None,
+            super::Fetch::No,
+        )
+        .unwrap();
+        plan.conditions
+            .into_iter()
+            .find(|c| c.check == crate::releasegates::ReleaseCheck::ItemsMerged)
+            .expect("the plan lists items_merged")
+    }
+
+    /// An item planned into v1 as well, left at `status`.
+    fn plan_also(store: &Store, status: Option<&str>) -> String {
+        let mut codes: Vec<String> = store
+            .load("shop")
+            .unwrap()
+            .features
+            .into_iter()
+            .filter(|f| f.release.as_deref() == Some("v1"))
+            .map(|f| f.code)
+            .collect();
+        let code = store
+            .add_feature("shop", "Still going", "", "M", None)
+            .unwrap()
+            .code;
+        if let Some(status) = status {
+            store
+                .move_feature_approved("shop", &code, status, None)
+                .unwrap();
+        }
+        codes.push(code.clone());
+        super::plan(store, "shop", "v1", &codes).unwrap();
+        code
+    }
+
+    #[test]
+    fn items_merged_holds_when_every_planned_item_is_integrated() {
+        let (store, dir, repo) = board_and_repo("merged-holds");
+        configure(&store, MERGED);
+        let c = merged_condition(&store);
+        assert!(c.holds, "{c:?}");
+        assert_eq!(c.detail, "1 planned item(s), all merged");
+        assert!(c.fix.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn items_merged_refuses_an_item_still_in_implementation() {
+        let (store, dir, repo) = board_and_repo("merged-refuses");
+        configure(&store, MERGED);
+        let code = plan_also(&store, Some("Scheduled"));
+        let c = merged_condition(&store);
+        assert!(!c.holds);
+        assert_eq!(c.detail, format!("{code} is at Scheduled"));
+        assert!(
+            c.fix.contains(&format!("{code}: move it to Completed")),
+            "{}",
+            c.fix
+        );
+        // and the promotion is refused, naming it
+        let err = super::promote(&store, "shop", "v1", Some("candidate"), "Ada", "", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("items_merged") && err.contains(&code), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn items_merged_ignores_an_item_in_a_no_op_status() {
+        let (store, dir, repo) = board_and_repo("merged-noop");
+        configure(&store, MERGED);
+        plan_also(&store, Some("No Action"));
+        let c = merged_condition(&store);
+        assert!(c.holds, "{c:?}");
+        assert_eq!(c.detail, "1 planned item(s), all merged");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    fn release_at(stages: &[&str]) -> super::Release {
+        super::Release {
+            version: "v1".into(),
+            stages: stages
+                .iter()
+                .map(|s| super::StageChange {
+                    stage: s.to_string(),
+                    by: "Ada L".into(),
+                    at: "2026-11-05T10:00:00Z".into(),
+                    reason: String::new(),
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn order() -> Vec<String> {
+        ["candidate", "ci", "tag"].map(String::from).to_vec()
+    }
+
+    #[test]
+    fn after_holds_once_the_named_stage_was_entered() {
+        let entered = super::entered_stages(&release_at(&["candidate", "ci"]), &order());
+        assert!(entered.contains("ci") && entered.contains("candidate"));
+        assert!(!entered.contains("tag"));
+        assert!(super::entered_stages(&release_at(&[]), &order()).is_empty());
+    }
+
+    #[test]
+    fn moving_back_to_a_stage_is_not_entering_it() {
+        // ci, then back to candidate: candidate was not entered by moving back to it
+        let entered = super::entered_stages(&release_at(&["ci", "candidate"]), &order());
+        assert!(entered.contains("ci"));
+        assert!(!entered.contains("candidate"), "{entered:?}");
+        // a stage the project no longer has never counts
+        let entered = super::entered_stages(&release_at(&["gone", "ci"]), &order());
+        assert_eq!(entered.len(), 1);
+    }
+
+    /// A named promotion that jumps over a stage listed in `after` is refused until it is entered.
+    #[test]
+    fn a_named_promotion_cannot_jump_over_a_stage_listed_in_after() {
+        let (store, dir, repo) = board_and_repo("after-jump");
+        configure(
+            &store,
+            "release_stages: [candidate, ci, tag]\n\
+             release_gates:\n  candidate: { on_enter: [branch] }\n  \
+             tag: { after: [ci], on_enter: [move_main, tag] }\n",
+        );
+        let promote =
+            |to: &str| super::promote(&store, "shop", "v1", Some(to), "Ada", "", Some(&repo));
+        promote("candidate").unwrap();
+        let err = promote("tag").unwrap_err().to_string();
+        assert!(
+            err.contains("stage_passed") && err.contains("ci has not been entered"),
+            "{err}"
+        );
+        assert!(err.contains("kanbanr release promote v1 ci"), "{err}");
+        // entering ci and the tag stage in one promotion is the same jump
+        promote("ci").unwrap();
+        let cut = promote("tag").unwrap();
+        assert_eq!(cut.tagged, "v1");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn items_merged_and_after_are_judged_without_a_repository() {
+        let (store, dir, repo) = board_and_repo("no-repo");
+        configure(
+            &store,
+            "release_stages: [candidate, ci, tag]\n\
+             release_gates:\n  candidate: { requires: [items_merged] }\n  \
+             tag: { after: [ci] }\n",
+        );
+        plan_also(&store, Some("Scheduled"));
+        let plan = super::plan_promotion(
+            &store,
+            "shop",
+            "v1",
+            Some("tag"),
+            "",
+            None,
+            super::Fetch::No,
+        )
+        .unwrap();
+        let find = |check| plan.conditions.iter().find(|c| c.check == check).unwrap();
+        let merged = find(crate::releasegates::ReleaseCheck::ItemsMerged);
+        assert!(!merged.holds && merged.detail.contains("is at Scheduled"));
+        assert!(!merged.detail.contains("repository"), "{}", merged.detail);
+        let after = find(crate::releasegates::ReleaseCheck::StagePassed);
+        assert_eq!(after.stage, "tag");
+        assert!(!after.holds && after.detail.contains("ci has not been entered"));
+        assert!(
+            after.fix.contains("promote v1 to ci first"),
+            "{}",
+            after.fix
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }
