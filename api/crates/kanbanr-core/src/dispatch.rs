@@ -1136,6 +1136,55 @@ fn dispatch_routes(
                 &str_field(b, "by").unwrap_or_default(),
             )?)
         }
+        // Recorded gate results, oldest first (FTR-002). `?name=` and `?commit=` narrow them.
+        ("GET", ["projects", p, "gate-results"]) => {
+            let name = query_param(query, "name");
+            let commit = query_param(query, "commit").filter(|c| !c.is_empty());
+            let mut all = crate::gates::results(store, p, name.as_deref())?;
+            if let Some(c) = commit {
+                all.retain(|r| r.commit.starts_with(&c));
+            }
+            ser(&all)
+        }
+        // `{name, commit, passed, by, url?, note?, source?}`: keep a gate result as a new file
+        // (FTR-002). The time is the server's; `source` is `person` unless `local`.
+        ("POST", ["projects", p, "gate-results"]) => {
+            let need = |k: &str| {
+                str_field(b, k)
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+                    .ok_or_else(|| CoreError::Unsupported(format!("a gate result needs '{k}'")))
+            };
+            let passed = bool_field(b, "passed")
+                .ok_or_else(|| CoreError::Unsupported("a gate result needs 'passed'".into()))?;
+            let result = crate::gates::GateResult {
+                name: need("name")?,
+                commit: need("commit")?,
+                passed,
+                by: need("by")?,
+                at: crate::now_rfc3339(),
+                source: str_field(b, "source")
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or_else(|| "person".into()),
+                url: str_field(b, "url").unwrap_or_default().trim().to_string(),
+                note: str_field(b, "note").unwrap_or_default().trim().to_string(),
+            };
+            crate::gates::record(store, p, &result)?;
+            ser(&result)
+        }
+        // `{gates: [name…]}`: the gates `gate_passed` requires; empty clears them (FTR-002).
+        ("PUT", ["projects", p, "config", "commit-gates"]) => {
+            let names: Vec<String> = vec_field(b, "gates")
+                .unwrap_or_default()
+                .iter()
+                .map(|g| g.trim().to_string())
+                .filter(|g| !g.is_empty())
+                .collect();
+            let mut cadence = store.load_meta(p)?.config.cadence;
+            cadence.commit_gates = names;
+            ser(&store.set_cadence(p, None, cadence)?)
+        }
         // The release stages with the gate in force on each (FEAT-212).
         ("GET", ["projects", p, "release-stages"]) => {
             ser(&store.load_meta(p)?.config.cadence.release_stage_views())
@@ -1401,6 +1450,8 @@ fn dispatch_routes(
                 // a cadence write that does not name them keeps them.
                 release_gates: current.release_gates.clone(),
                 release_prepare: current.release_prepare.clone(),
+                // FTR-002: the gates a release stage requires have a route of their own.
+                commit_gates: current.commit_gates.clone(),
                 sprints: bool_field(b, "sprints").unwrap_or(current.sprints),
                 releases: bool_field(b, "releases").unwrap_or(current.releases),
                 sprint_length_days: b
@@ -1925,6 +1976,17 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
                 if on { "on" } else { "off" }
             )
         }
+        ["projects", _p, "gate-results"] => {
+            let f = |k: &str| body.and_then(|b| str_field(b, k)).unwrap_or_default();
+            let passed = body.and_then(|b| bool_field(b, "passed")).unwrap_or(false);
+            format!(
+                "record gate {} {} on {}",
+                f("name"),
+                if passed { "passed" } else { "failed" },
+                f("commit").chars().take(7).collect::<String>()
+            )
+        }
+        ["projects", _p, "config", "commit-gates"] => "set the commit gates".into(),
         ["projects", _p, "config", what] => format!("update config: {what}"),
         ["projects", _p, "coverage"] => "config: coverage rules".into(),
         ["projects", _p, "sprints"] => "add a sprint".into(),

@@ -760,6 +760,76 @@ fn short(sha: &str) -> &str {
     &sha[..sha.len().min(7)]
 }
 
+/// Whether every gate in `commit_gates` has a passed result recorded for `tip` (FTR-002). Reads
+/// the board's recorded results only: no server is asked. Returns held, the detail and the fix.
+fn gate_passed(
+    store: &Store,
+    id: &str,
+    commit_gates: &[String],
+    tip: Option<&str>,
+    prepares: bool,
+    version: &str,
+    branch: &str,
+) -> (bool, String, String) {
+    let fix_for = |sha: &str| {
+        format!(
+            "look at your CI for {}, then record its verdict: kanbanr gate record <gate> \
+             --passed --commit {sha} [--url <link>], or the Record result form on the Releases \
+             page",
+            short(sha)
+        )
+    };
+    if prepares {
+        return (
+            false,
+            "the preparation commit this promotion makes has no result yet".to_string(),
+            format!(
+                "promote {version} to the stage that prepares it first, and record the result \
+                 once it is on the branch"
+            ),
+        );
+    }
+    let Some(tip) = tip else {
+        return (
+            false,
+            format!("{branch} does not exist yet"),
+            fix_for("<sha>"),
+        );
+    };
+    let results = crate::gates::results(store, id, None).unwrap_or_default();
+    let mut recorded = Vec::new();
+    for name in commit_gates {
+        match crate::gates::newest(&results, name, tip) {
+            None => {
+                return (
+                    false,
+                    format!("{name} has no recorded result for {}", short(tip)),
+                    fix_for(tip),
+                );
+            }
+            Some(r) if !r.passed => {
+                let note = if r.note.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", r.note)
+                };
+                return (
+                    false,
+                    format!("{name} failed on {}{note}", short(tip)),
+                    fix_for(tip),
+                );
+            }
+            Some(r) => recorded.push(format!(
+                "{name} passed on {} (recorded by {}, {})",
+                short(tip),
+                r.by,
+                r.at.get(..10).unwrap_or(&r.at)
+            )),
+        }
+    }
+    (true, recorded.join("; "), String::new())
+}
+
 fn today_ymd() -> String {
     let d = crate::sprints::today();
     format!("{:04}-{:02}-{:02}", d.year(), u8::from(d.month()), d.day())
@@ -1444,6 +1514,15 @@ fn work_out(
                             }
                         }
                     }
+                    ReleaseCheck::GatePassed => gate_passed(
+                        store,
+                        id,
+                        &cadence.commit_gates,
+                        tip_before.as_deref(),
+                        prepares,
+                        version,
+                        &branch,
+                    ),
                 };
                 conditions.push(PlanCondition {
                     check: *c,
@@ -3041,6 +3120,213 @@ mod tests {
         coderepo::git(repo, &["checkout", "-q", branch]).unwrap();
         commit_file(repo, file, text, "fix on the release");
         coderepo::git(repo, &["checkout", "-q", "main"]).unwrap();
+    }
+
+    // ---- FTR-002: gate_passed ----
+
+    /// Candidate makes the branch; production tags and needs `ci` to have passed on the tip.
+    const GATED: &str = "release_stages: [candidate, production]\n\
+         release_gates:\n  candidate: { on_enter: [branch] }\n  \
+         production: { requires: [gate_passed], on_enter: [move_main, tag] }\n";
+
+    fn gated(tag: &str, gates: &[&str]) -> (Store, PathBuf, PathBuf, String) {
+        gated_after(tag, gates, |_| {})
+    }
+
+    /// [`gated`], with `before` run on the repository first (a commit the release branch starts from).
+    fn gated_after(
+        tag: &str,
+        gates: &[&str],
+        before: impl FnOnce(&Path),
+    ) -> (Store, PathBuf, PathBuf, String) {
+        let (store, dir, repo) = board_and_repo(tag);
+        before(&repo);
+        let mut c = store.load_meta("shop").unwrap().config.cadence;
+        let given: crate::config::Cadence = crate::yaml::from_str(GATED).unwrap();
+        c.release_stages = given.release_stages;
+        c.release_gates = given.release_gates;
+        c.commit_gates = gates.iter().map(|g| g.to_string()).collect();
+        store.set_cadence("shop", None, c).unwrap();
+        super::promote(
+            &store,
+            "shop",
+            "v1",
+            Some("candidate"),
+            "Ada",
+            "",
+            Some(&repo),
+        )
+        .unwrap();
+        let tip = coderepo::rev_parse(&repo, "release/v1").unwrap();
+        (store, dir, repo, tip)
+    }
+
+    fn gate_condition(store: &Store, repo: &Path) -> super::PlanCondition {
+        let plan = super::plan_promotion(
+            store,
+            "shop",
+            "v1",
+            Some("production"),
+            "",
+            Some(repo),
+            super::Fetch::No,
+        )
+        .unwrap();
+        plan.conditions
+            .into_iter()
+            .find(|c| c.check == crate::releasegates::ReleaseCheck::GatePassed)
+            .unwrap()
+    }
+
+    fn record_gate(store: &Store, name: &str, commit: &str, passed: bool, at: &str) {
+        let r = crate::gates::GateResult {
+            name: name.into(),
+            commit: commit.into(),
+            passed,
+            by: "Ada L".into(),
+            at: at.into(),
+            source: "person".into(),
+            note: if passed { "" } else { "two tests red" }.into(),
+            ..Default::default()
+        };
+        crate::gates::record(store, "shop", &r).unwrap();
+    }
+
+    #[test]
+    fn gate_passed_holds_on_a_recorded_pass() {
+        let (store, dir, repo, tip) = gated("gp-holds", &["ci"]);
+        record_gate(&store, "ci", &tip, true, "2026-11-04T10:00:00Z");
+        let c = gate_condition(&store, &repo);
+        assert!(c.holds, "{c:?}");
+        assert!(c.detail.contains("ci passed on"), "{}", c.detail);
+        assert!(c.detail.contains("Ada L"), "{}", c.detail);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn gate_passed_refuses_without_a_pass() {
+        let (store, dir, repo, tip) = gated("gp-refuse", &["ci", "local"]);
+        let c = gate_condition(&store, &repo);
+        assert!(!c.holds);
+        assert!(
+            c.detail.contains("ci has no recorded result"),
+            "{}",
+            c.detail
+        );
+        assert!(c.fix.contains("kanbanr gate record"), "{}", c.fix);
+        // a failure is named with its note
+        record_gate(&store, "ci", &tip, false, "2026-11-04T10:00:00Z");
+        let c = gate_condition(&store, &repo);
+        assert!(!c.holds);
+        assert!(c.detail.contains("ci failed on"), "{}", c.detail);
+        assert!(c.detail.contains("two tests red"), "{}", c.detail);
+        // every gate must pass: ci passed, local still has nothing
+        record_gate(&store, "ci", &tip, true, "2026-11-04T11:00:00Z");
+        let c = gate_condition(&store, &repo);
+        assert!(!c.holds);
+        assert!(
+            c.detail.contains("local has no recorded result"),
+            "{}",
+            c.detail
+        );
+        record_gate(&store, "local", &tip, true, "2026-11-04T11:05:00Z");
+        assert!(gate_condition(&store, &repo).holds);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn a_pass_for_another_commit_does_not_count() {
+        let (store, dir, repo, _tip) = gated("gp-other", &["ci"]);
+        record_gate(&store, "ci", &"d".repeat(40), true, "2026-11-04T10:00:00Z");
+        let c = gate_condition(&store, &repo);
+        assert!(!c.holds);
+        assert!(c.detail.contains("no recorded result"), "{}", c.detail);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn gate_passed_does_not_cover_the_preparation_commit() {
+        let (store, dir, repo, tip) = gated_after("gp-prep", &["ci"], |repo| {
+            commit_file(
+                repo,
+                "Cargo.toml",
+                "[package]\nversion = \"0.1.0\"\n",
+                "manifest",
+            );
+        });
+        record_gate(&store, "ci", &tip, true, "2026-11-04T10:00:00Z");
+        // production now also prepares: the commit it adds cannot have a result yet
+        let mut c = store.load_meta("shop").unwrap().config.cadence;
+        c.release_gates.get_mut("production").unwrap().on_enter = vec![
+            crate::releasegates::ReleaseAction::Prepare,
+            crate::releasegates::ReleaseAction::MoveMain,
+            crate::releasegates::ReleaseAction::Tag,
+        ];
+        c.release_prepare = crate::yaml::from_str::<crate::config::Cadence>(
+            "release_prepare: { version_files: [{ path: Cargo.toml }] }\n",
+        )
+        .unwrap()
+        .release_prepare;
+        store.set_cadence("shop", None, c).unwrap();
+        let c = gate_condition(&store, &repo);
+        assert!(!c.holds);
+        assert!(c.detail.contains("preparation commit"), "{}", c.detail);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn no_gate_required_changes_nothing() {
+        // No stage requires gate_passed and commit_gates is empty: the plan has no such
+        // condition and the cadence reads and writes as before.
+        let (store, dir, repo) = board_and_repo("gp-none");
+        let plan = super::plan_promotion(
+            &store,
+            "shop",
+            "v1",
+            None,
+            "",
+            Some(&repo),
+            super::Fetch::No,
+        )
+        .unwrap();
+        assert!(
+            plan.conditions
+                .iter()
+                .all(|c| c.check != crate::releasegates::ReleaseCheck::GatePassed)
+        );
+        let c = store.load_meta("shop").unwrap().config.cadence;
+        assert!(c.commit_gates.is_empty());
+        assert!(!crate::yaml::to_string(&c).unwrap().contains("commit_gates"));
+        // and a stage cannot require it while no gate is named
+        let mut c = c;
+        c.release_gates.insert(
+            "production".into(),
+            crate::releasegates::ReleaseGate {
+                requires: vec![crate::releasegates::ReleaseCheck::GatePassed],
+                ..Default::default()
+            },
+        );
+        let err = c.validate_release_gates().unwrap_err();
+        assert!(err.contains("kanbanr config commit-gates"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn gate_passed_reads_only_recorded_results() {
+        // The judgement is a read of the board's own files: the same plan, with the repository's
+        // remotes taken away and no network in reach, still judges from what was recorded.
+        let (store, dir, repo, tip) = gated("gp-local", &["ci"]);
+        assert!(!gate_condition(&store, &repo).holds);
+        record_gate(&store, "ci", &tip, true, "2026-11-04T10:00:00Z");
+        assert!(gate_condition(&store, &repo).holds);
+        assert!(coderepo::git(&repo, &["remote"]).unwrap().trim().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     /// FEAT-212 R-4: a condition an action of the same promotion makes true counts as met —

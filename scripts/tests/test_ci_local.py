@@ -201,6 +201,39 @@ class ScopedWrites(Board):
         self.assert_fails("a scope act that touches the config")
 
 
+class RecordsItsVerdict(unittest.TestCase):
+    """`make ci` records its own verdict as the gate `local` for HEAD (FTR-002 R-4)."""
+
+    HEAD = "a" * 40
+
+    def test_a_pass_on_a_clean_tree_is_recorded(self) -> None:
+        args = ci_local.gate_record_args(True, self.HEAD, False, [])
+        self.assertEqual(args[:3], ["gate", "record", "local"])
+        self.assertIn("--passed", args)
+        self.assertNotIn("--failed", args)
+        self.assertEqual(args[args.index("--source") + 1], "local")
+        self.assertEqual(args[args.index("--commit") + 1], self.HEAD)
+
+    def test_a_failure_names_the_failing_steps(self) -> None:
+        args = ci_local.gate_record_args(False, self.HEAD, False, ["lint", "tests"])
+        self.assertIn("--failed", args)
+        self.assertNotIn("--passed", args)
+        self.assertEqual(args[args.index("--note") + 1], "failed: lint, tests")
+
+
+class NoPassForADirtyTree(unittest.TestCase):
+    """A pass for a tree with uncommitted changes is not about HEAD (FTR-002 R-4)."""
+
+    HEAD = "b" * 40
+
+    def test_no_pass_is_recorded(self) -> None:
+        self.assertIsNone(ci_local.gate_record_args(True, self.HEAD, True, []))
+
+    def test_a_failure_is_still_recorded(self) -> None:
+        args = ci_local.gate_record_args(False, self.HEAD, True, ["tests"])
+        self.assertIn("--failed", args)
+
+
 class CommandLine(unittest.TestCase):
     """The script's command line (DEF-010): help and a mistyped flag never start the gate."""
 

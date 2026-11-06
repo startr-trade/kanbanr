@@ -49,8 +49,10 @@ Ask for the things that make the rest of this guide work:
 are exempt. Without one, a move that a gate would have refused still goes through, with a warning
 saying what was missing. Claude asks for the project's purpose and goals. Every item then links to a goal.
 
-**CI is yours to check.** kanbanr can see that main was pushed, but it can't see whether CI passed, so
-you look at CI yourself before the cut.
+**You record CI's verdict.** kanbanr can see that main was pushed, but it never asks a server whether
+CI passed. You look at CI yourself, then record what it said on the **Releases** page (**Record
+result**, with a link to the run if you like). A release stage can require that result before the
+cut. Claude tells you when it is missing and never records it for you.
 
 **Name the stages you want.** Otherwise you get the defaults, which include `test` and `staging`.
 Those two record that a release passed a point and do nothing else: nothing builds or deploys when

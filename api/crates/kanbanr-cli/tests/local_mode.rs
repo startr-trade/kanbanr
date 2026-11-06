@@ -8302,3 +8302,158 @@ fn why_json_on_an_uncommitted_line_names_the_branch_item() {
     assert_eq!(v["references"][0]["reference"], "FEAT-001", "{v}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FTR-002 R-1: a recorded gate result is a new file beside the earlier ones, and `gate list`
+/// shows them newest first.
+#[test]
+fn gate_record_writes_a_result_and_gate_list_shows_it() {
+    let (base, work) = release_scratch("gate-record");
+    let head = String::from_utf8_lossy(&git_in(&base, &work, &["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_string();
+    let rec = run_in(
+        &base,
+        &work,
+        &[
+            "gate",
+            "record",
+            "ci",
+            "--passed",
+            "--url",
+            "https://runs.example/1",
+            "--note",
+            "all green",
+        ],
+    );
+    assert!(
+        rec.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rec.stderr)
+    );
+    let said = String::from_utf8_lossy(&rec.stdout);
+    assert!(
+        said.contains("gate ci passed on") && said.contains(&head[..7]),
+        "{said}"
+    );
+    // A second, failing run is kept beside the first.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let rec = run_in(
+        &base,
+        &work,
+        &["gate", "record", "ci", "--failed", "--note", "two red"],
+    );
+    assert!(
+        rec.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rec.stderr)
+    );
+
+    let list = run_in(&base, &work, &["--json", "gate", "list", "--name", "ci"]);
+    assert!(
+        list.status.success(),
+        "{}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let rows = v.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{v}");
+    assert_eq!(rows[0]["passed"], false, "newest first: {v}");
+    assert_eq!(rows[1]["passed"], true, "{v}");
+    assert_eq!(rows[1]["commit"], head, "{v}");
+    assert_eq!(rows[1]["url"], "https://runs.example/1", "{v}");
+    assert_eq!(rows[1]["source"], "person", "{v}");
+    let text = run_in(&base, &work, &["gate", "list", "--commit", "HEAD"]);
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("FAILED") && text.contains("passed"), "{text}");
+    // Two files, in the board's gates folder.
+    let where_ = run_in(&base, &work, &["where", "--json"]);
+    let w: serde_json::Value = serde_json::from_slice(&where_.stdout).unwrap();
+    let dir =
+        std::path::PathBuf::from(w["data_dir"].as_str().unwrap()).join("projects/shop/gates/ci");
+    assert_eq!(std::fs::read_dir(dir).unwrap().count(), 2);
+    // A bad link is refused with the rule.
+    let bad = run_in(
+        &base,
+        &work,
+        &["gate", "record", "ci", "--passed", "--url", "ftp://x"],
+    );
+    assert!(!bad.status.success());
+    assert!(
+        String::from_utf8_lossy(&bad.stderr).contains("http"),
+        "{bad:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-002 R-5: a pass with no commit named, over uncommitted changes, is refused; naming the
+/// commit, or recording a failure, is not.
+#[test]
+fn gate_record_refuses_a_pass_on_a_dirty_tree() {
+    let (base, work) = release_scratch("gate-dirty");
+    std::fs::write(work.join("app.txt"), "changed\n").unwrap();
+    let o = run_in(&base, &work, &["gate", "record", "ci", "--passed"]);
+    assert!(!o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("uncommitted changes") && err.contains("--commit"),
+        "{err}"
+    );
+    let o = run_in(
+        &base,
+        &work,
+        &["gate", "record", "ci", "--passed", "--commit", "HEAD"],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let o = run_in(&base, &work, &["gate", "record", "ci", "--failed"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-002 R-7: the route the Releases page posts to records the result and the route that lists
+/// them shows it.
+#[test]
+fn gates_route_records_what_the_page_posts() {
+    let (base, work) = release_scratch("gate-route");
+    let head = String::from_utf8_lossy(&git_in(&base, &work, &["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_string();
+    let where_ = run_in(&base, &work, &["where", "--json"]);
+    let w: serde_json::Value = serde_json::from_slice(&where_.stdout).unwrap();
+    let data_dir = std::path::PathBuf::from(w["data_dir"].as_str().unwrap());
+    assert!(
+        data_dir.starts_with(&base),
+        "the test's own board: {data_dir:?}"
+    );
+    let store = kanbanr_core::Store::new(data_dir);
+    let post = serde_json::json!({
+        "name": "ci", "commit": head, "passed": true, "by": "Ada L",
+        "url": "https://runs.example/9", "note": "from the page"
+    });
+    let done = kanbanr_core::dispatch::dispatch(
+        &store,
+        "POST",
+        "/projects/shop/gate-results",
+        Some(&post),
+    )
+    .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&done).unwrap();
+    assert_eq!(v["source"], "person", "{v}");
+    let listed = kanbanr_core::dispatch::dispatch(
+        &store,
+        "GET",
+        &format!("/projects/shop/gate-results?name=ci&commit={head}"),
+        None,
+    )
+    .unwrap();
+    let rows: serde_json::Value = serde_json::from_str(&listed).unwrap();
+    assert_eq!(rows[0]["by"], "Ada L", "{rows}");
+    assert_eq!(rows[0]["note"], "from the page", "{rows}");
+    // Without a commit or a verdict the route says what is missing.
+    let bad = serde_json::json!({"name": "ci", "by": "Ada L", "passed": true});
+    let err =
+        kanbanr_core::dispatch::dispatch(&store, "POST", "/projects/shop/gate-results", Some(&bad))
+            .unwrap_err()
+            .to_string();
+    assert!(err.contains("commit"), "{err}");
+    let _ = std::fs::remove_dir_all(&base);
+}

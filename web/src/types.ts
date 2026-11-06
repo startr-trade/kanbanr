@@ -423,6 +423,8 @@ export interface ProjectConfig {
     release?: string;
     /** The stages a release moves through; the last is the cut (FEAT-183). */
     release_stages?: string[];
+    /** The gates a stage needing `gate_passed` requires a passed result of (FTR-002). */
+    commit_gates?: string[];
     integration_branch?: string;
     main_branch?: string;
     /** Branching follows the git model the cadence implies (FEAT-189). */
@@ -517,9 +519,21 @@ export interface CutPreview {
   why?: string;
 }
 
+/** A gate's verdict recorded for one commit (FTR-002). */
+export interface GateResult {
+  name: string;
+  commit: string;
+  passed: boolean;
+  by: string;
+  at: string;
+  source: "person" | "local";
+  url?: string;
+  note?: string;
+}
+
 /** One condition of a release stage a promotion enters, and whether it holds (FEAT-212). */
 export interface PlanCondition {
-  check: "items_finished" | "prepared" | "main_at_release" | "pushed";
+  check: "items_finished" | "prepared" | "main_at_release" | "pushed" | "gate_passed";
   stage: string;
   holds: boolean;
   detail: string;

@@ -53,7 +53,10 @@ kanbanr charter set --file charter.yaml
 ### Release stages
 
 We recommend three stages, so that main has to be pushed before anything is tagged. kanbanr can't
-see whether CI passed, so check that yourself before the cut:
+see whether CI passed. Look at your CI yourself, then record what it said with
+`kanbanr gate record ci --passed --url <link to the run>`. To have the cut require that, run
+`kanbanr config commit-gates ci` and add `gate_passed` to the production stage's `--requires`
+([Gate results](../using/processes.md#gate-results)):
 
 ```text
 kanbanr config cadence --release-stages candidate,main,production

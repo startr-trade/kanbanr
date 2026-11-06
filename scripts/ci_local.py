@@ -628,6 +628,40 @@ def board_state() -> tuple[Path, str, str] | None:
     return board, head.strip(), status
 
 
+def gate_record_args(ok: bool, head: str, dirty: bool, failed_steps: list[str]) -> list[str] | None:
+    """The `kanbanr` arguments that record this run as the gate `local` for `head` (FTR-002).
+
+    A failure is always recorded; a pass only when the working tree is clean, because a pass for a
+    tree with uncommitted changes is not about `head`. None means record nothing."""
+    base = ["gate", "record", "local", "--source", "local", "--commit", head]
+    if not ok:
+        return [*base, "--failed", "--note", "failed: " + ", ".join(failed_steps)]
+    if dirty:
+        return None
+    return [*base, "--passed"]
+
+
+def record_gate(ok: bool, failed_steps: list[str]) -> None:
+    """Record the run's verdict on the board, after every check. It never changes the exit code."""
+    exe = shutil.which("kanbanr")
+    if not exe:
+        print("gate local not recorded: kanbanr is not on PATH")
+        return
+    head_ok, head = sh(["git", "rev-parse", "HEAD"], ROOT)
+    status_ok, status = sh(["git", "status", "--porcelain"], ROOT)
+    if not (head_ok and status_ok):
+        print("gate local not recorded: could not read the repository's HEAD and status")
+        return
+    args = gate_record_args(ok, head.strip(), bool(status.strip()), failed_steps)
+    if args is None:
+        print("gate local not recorded: uncommitted changes")
+        return
+    env = {k: v for k, v in os.environ.items() if k not in ("KANBANR_BOARD_FENCE", "KANBANR_DATA_DIR")}
+    rec_ok, out = sh([exe, *args], ROOT, env)
+    last = out.strip().splitlines()[-1] if out.strip() else ""
+    print(f"gate local {'recorded' if rec_ok else 'not recorded'}" + (f": {last}" if last else ""))
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Read the command line before any work starts: `--help` and a mistyped flag run no check."""
     parser = argparse.ArgumentParser(
@@ -674,6 +708,7 @@ def main(argv: list[str] | None = None) -> int:
                 "write(s) during the run: " + "; ".join(verdicts)
             )
     failed = [name for name, ok, _ in results if not ok]
+    record_gate(not failed, failed)
     print("\nNot verified locally (runs only on GitHub):")
     for item in not_verified:
         print(f"  - {item}")

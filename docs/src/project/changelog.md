@@ -8,6 +8,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **A release stage can require that the gate passed (FTR-002).** A new release check,
+  `gate_passed`, needs a recorded passed result for the release tip from every gate named by
+  `kanbanr config commit-gates`. You look at your CI and record its verdict with
+  `kanbanr gate record <gate> --passed --url <link>` or the Releases page's Record result form;
+  kanbanr never asks a server. A result is a file of its own and the newest for the commit decides,
+  so a pass for another commit counts for nothing. `make ci` records its own run as the gate
+  `local` (a pass only on a clean tree). A project that names no gate sees no change.
+
 - **Guides for every built-in process (DOC-003).** The Process guides section now covers default,
   scheduled, PDCA, design control, Scrum and agile, each with Claude and from the command line, and
   Working with Claude links them from each process's row. Its table now lists what each process

@@ -243,6 +243,11 @@ enum Command {
     /// them on: `kanbanr config cadence --releases on`.
     #[command(subcommand)]
     Release(ReleaseCmd),
+    /// Gate results (FTR-002): the verdict of your CI, or of `make ci`, recorded against one
+    /// commit. kanbanr runs no gate and asks no server; a release stage that requires
+    /// `gate_passed` reads what was recorded here.
+    #[command(subcommand)]
+    Gate(GateCmd),
     /// Record that an item was sliced out of another, so a wave's growth can be accounted for.
     SplitFrom {
         code: String,
@@ -1058,6 +1063,11 @@ enum ConfigCmd {
         #[arg(long, value_parser = ["on", "off"])]
         git_model: Option<String>,
     },
+    /// The gates a release stage needing `gate_passed` requires a passed result of for the release
+    /// tip (FTR-002): `kanbanr config commit-gates ci`. With none given, clears them.
+    CommitGates {
+        names: Vec<String>,
+    },
     /// A release stage's gate (FEAT-212): what must hold before a release enters it, and what
     /// entering it does. Starts from the gate in force (`release stages`); `--clear` goes back to
     /// the default.
@@ -1066,7 +1076,7 @@ enum ConfigCmd {
         /// What the stage is for, in a sentence.
         #[arg(long)]
         purpose: Option<String>,
-        /// Conditions: items_finished, prepared, main_at_release, pushed ("" for none).
+        /// Conditions: items_finished, prepared, main_at_release, pushed, gate_passed ("" for none).
         #[arg(long, value_delimiter = ',')]
         requires: Option<Vec<String>>,
         /// Actions, applied in this order whatever the order given: branch, prepare, move_main,
@@ -1169,6 +1179,46 @@ enum ConfigCmd {
         /// statuses/transitions/default/terminal from the diagram.
         #[arg(long, value_name = "FILE")]
         from_mermaid: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum GateCmd {
+    /// Record a gate's verdict for a commit, as a new result beside the earlier ones. Look at
+    /// your CI first, then record what it said.
+    Record {
+        /// The gate: `ci`, `local`, `security`... (lowercase letters, digits, - and _).
+        name: String,
+        /// The run passed.
+        #[arg(long, conflicts_with = "failed", required_unless_present = "failed")]
+        passed: bool,
+        /// The run failed.
+        #[arg(long)]
+        failed: bool,
+        /// The commit the verdict is about (default: HEAD of this repository).
+        #[arg(long, value_name = "REV")]
+        commit: Option<String>,
+        /// A link to the run, http or https.
+        #[arg(long)]
+        url: Option<String>,
+        /// A note, such as what failed.
+        #[arg(long)]
+        note: Option<String>,
+        /// Who gave the verdict (default: the board's commit identity).
+        #[arg(long)]
+        by: Option<String>,
+        /// `local` for the project's own `make ci` run (default: person).
+        #[arg(long, hide = true, value_parser = ["person", "local"])]
+        source: Option<String>,
+    },
+    /// The recorded results, newest first.
+    List {
+        /// Only this gate.
+        #[arg(long)]
+        name: Option<String>,
+        /// Only results for this commit.
+        #[arg(long, value_name = "REV")]
+        commit: Option<String>,
     },
 }
 
@@ -1797,6 +1847,7 @@ fn command_access(cmd: &Command) -> Access {
         | Command::Lesson(_)
         | Command::Sprint(_)
         | Command::Release(_)
+        | Command::Gate(_)
         | Command::Commit { .. }
         | Command::Tests { .. }
         | Command::Sources { .. }
@@ -6284,6 +6335,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         Command::Sprint(cmd) => run_sprint(cli, &client, cmd),
         Command::Release(cmd) => run_release(cli, &client, cmd),
+        Command::Gate(cmd) => run_gate(cli, &client, cmd),
         Command::Todo(cmd) => run_todo(cli, &client, cmd),
         Command::Task(cmd) => run_task(cli, &client, cmd),
         Command::Milestone(cmd) => run_milestone(cli, &client, cmd),
@@ -8207,6 +8259,20 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             }
             Ok(())
         }
+        ConfigCmd::CommitGates { names } => {
+            let resp = client.write(
+                Method::Put,
+                &format!("/projects/{p}/config/commit-gates"),
+                Some(json!({ "gates": names })),
+            )?;
+            let said = if names.is_empty() {
+                "commit gates cleared".to_string()
+            } else {
+                format!("commit gates: {}", names.join(", "))
+            };
+            print_write(cli, &resp, said);
+            Ok(())
+        }
         ConfigCmd::ReleaseStage {
             stage,
             purpose,
@@ -8685,6 +8751,125 @@ fn merge_version_files(current: &Value, flags: &[String], clear: bool) -> Vec<Va
         }
     }
     files
+}
+
+fn run_gate(cli: &Cli, client: &Backend, cmd: &GateCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    match cmd {
+        GateCmd::Record {
+            name,
+            passed,
+            failed: _,
+            commit,
+            url,
+            note,
+            by,
+            source,
+        } => {
+            let repo = code_repo();
+            let root = repo.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "this is not inside a code repository, so there is no commit to record"
+                )
+            })?;
+            // A pass with no commit named is about HEAD, which a dirty tree makes untrue.
+            if *passed && commit.is_none() && !coderepo::is_clean(root) {
+                anyhow::bail!(
+                    "the working tree has uncommitted changes, so a pass would not be about HEAD: \
+                     commit them, or name the commit with --commit"
+                );
+            }
+            let rev = commit.as_deref().unwrap_or("HEAD");
+            let sha = coderepo::rev_parse(root, rev)
+                .map_err(|e| anyhow::anyhow!("'{rev}' is not a commit here: {e}"))?;
+            let by = verdict_author(cli, by.as_ref())?;
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/gate-results"),
+                Some(obj(vec![
+                    ("name", Some(json!(name))),
+                    ("commit", Some(json!(sha))),
+                    ("passed", Some(json!(*passed))),
+                    ("by", Some(json!(by))),
+                    ("url", url.clone().map(|u| json!(u))),
+                    ("note", note.clone().map(|n| json!(n))),
+                    ("source", source.clone().map(|s| json!(s))),
+                ])),
+            )?;
+            print_write(
+                cli,
+                &resp,
+                format!(
+                    "gate {name} {} on {}, recorded by {by}",
+                    if *passed { "passed" } else { "failed" },
+                    &sha[..7]
+                ),
+            );
+            Ok(())
+        }
+        GateCmd::List { name, commit } => {
+            let sha = match commit {
+                Some(rev) => {
+                    let root = code_repo().ok_or_else(|| {
+                        anyhow::anyhow!("--commit needs a code repository to resolve '{rev}' in")
+                    })?;
+                    Some(
+                        coderepo::rev_parse(&root, rev)
+                            .map_err(|e| anyhow::anyhow!("'{rev}' is not a commit here: {e}"))?,
+                    )
+                }
+                None => None,
+            };
+            let mut q: Vec<String> = Vec::new();
+            if let Some(n) = name {
+                q.push(format!("name={}", urlencode_segment(n)));
+            }
+            if let Some(c) = &sha {
+                q.push(format!("commit={c}"));
+            }
+            let path = if q.is_empty() {
+                format!("/projects/{p}/gate-results")
+            } else {
+                format!("/projects/{p}/gate-results?{}", q.join("&"))
+            };
+            let resp = client.get(&path)?;
+            let mut rows: Vec<Value> = serde_json::from_str(&resp)?;
+            rows.reverse();
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else if rows.is_empty() {
+                println!("(no gate results recorded)");
+            } else {
+                for r in &rows {
+                    let g = |k: &str| r[k].as_str().unwrap_or("").to_string();
+                    let commit = g("commit");
+                    let mut line = format!(
+                        "{:<10} {:<6} {}  {}  {}",
+                        g("name"),
+                        if r["passed"].as_bool().unwrap_or(false) {
+                            "passed"
+                        } else {
+                            "FAILED"
+                        },
+                        &commit[..commit.len().min(7)],
+                        g("at"),
+                        g("by"),
+                    );
+                    if g("source") == "local" {
+                        line.push_str("  (local)");
+                    }
+                    if !g("url").is_empty() {
+                        line.push_str(&format!("  {}", g("url")));
+                    }
+                    if !g("note").is_empty() {
+                        line.push_str(&format!("  - {}", g("note")));
+                    }
+                    println!("{line}");
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<()> {
@@ -9766,6 +9951,81 @@ fn print_board(project: &Project) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The text between `from` and `to` in `source` (to the end when `to` is None).
+    fn between<'a>(source: &'a str, from: &str, to: Option<&str>) -> &'a str {
+        let start = source.find(from).unwrap_or_else(|| panic!("no '{from}'"));
+        let rest = &source[start..];
+        match to {
+            Some(to) => {
+                &rest[..rest[from.len()..]
+                    .find(to)
+                    .map_or(rest.len(), |i| i + from.len())]
+            }
+            None => rest,
+        }
+    }
+
+    /// FTR-002 R-9: the gate commands, messages, page and guide text say CI, the run or the
+    /// remote, and name no CI product, git host or workflow file.
+    #[test]
+    fn gate_text_names_no_ci_product() {
+        let core = include_str!("../../kanbanr-core/src/gates.rs");
+        let releases = include_str!("../../kanbanr-core/src/releases.rs");
+        let gates_rs = between(core, "//! Gate results", Some("#[cfg(test)]"));
+        let gate_arm = between(releases, "fn gate_passed(", Some("fn today_ymd"));
+        let this = include_str!("main.rs");
+        let help = between(this, "enum GateCmd {", Some("enum ReleaseCmd"));
+        let run = between(this, "fn run_gate(", Some("fn run_release("));
+        let page = include_str!("../../../../web/src/pages/ReleasesPage.tsx");
+        let form = between(
+            page,
+            "function RecordResult(",
+            Some("function ReleaseNotesSection"),
+        );
+        let guide = include_str!("../../../../docs/src/using/processes.md");
+        let guide = between(guide, "### Gate results", Some("\n## "));
+        let cli_ref = include_str!("../../../../docs/src/reference/cli.md");
+        let named = [
+            "github",
+            "gitlab",
+            "bitbucket",
+            "jenkins",
+            "circleci",
+            "travis",
+            "buildkite",
+            "teamcity",
+            "azure",
+            ".github",
+            "workflow file",
+            "workflows/",
+        ];
+        let mut found = Vec::new();
+        for (where_, text) in [
+            ("gates.rs", gates_rs),
+            ("the gate_passed judgement", gate_arm),
+            ("GateCmd help", help),
+            ("gate command messages", run),
+            ("the Record result form", form),
+            ("the gate guide section", guide),
+        ] {
+            let lower = text.to_lowercase();
+            for n in named {
+                if lower.contains(n) {
+                    found.push(format!("{where_} names '{n}'"));
+                }
+            }
+        }
+        for line in cli_ref.lines().filter(|l| l.contains("kanbanr gate ")) {
+            let lower = line.to_lowercase();
+            for n in named {
+                if lower.contains(n) {
+                    found.push(format!("the cli reference names '{n}': {line}"));
+                }
+            }
+        }
+        assert!(found.is_empty(), "{found:#?}");
+    }
 
     /// FEAT-212 R-8: `config release-prepare --version-file` keeps several entries for one path,
     /// each with its own match, in order, through the config and back; an exact duplicate is kept
