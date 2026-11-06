@@ -134,6 +134,10 @@ when it is cut. If you always cut the release before closing the sprint, you can
 
 ## Planning a sprint
 
+Setup creates no sprint or release; make them when you are ready. A sprint can be changed until it
+starts (`kanbanr sprint edit SP-001 --goal "…" --start 2026-11-10`), and an empty sprint or release
+made by mistake is removed with `kanbanr sprint remove SP-001` or `kanbanr release remove v1.0.0`.
+
 ```text
 kanbanr sprint add --start 2026-11-03 --length 2w --goal "Carts survive a return"
 kanbanr sprint start SP-001

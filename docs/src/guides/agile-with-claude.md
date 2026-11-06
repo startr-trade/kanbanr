@@ -56,7 +56,8 @@ Keep it open. Every decision below happens there.
 
 > Start a two-week sprint for carts surviving a return. Put the cart restore in it, for release 1.0.
 
-Claude creates the sprint and its branch, adds the item and plans it into the sprint and the release.
+Setup doesn't create a sprint or a release, so Claude asks the sprint's goal and first day, and the
+release's version and target, when you first ask. Then it creates the sprint and its branch, adds the item and plans it into the sprint and the release.
 Your checkout doesn't move. A sprint and a release don't have to line up: one release can take items
 from several sprints.
 
