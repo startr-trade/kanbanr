@@ -292,7 +292,11 @@ mod perf {
         (store, dir)
     }
 
-    /// DEF-022 R-4: the review queue on 2,500 commits, 70 items and 470 doc references.
+    /// The most the queue may take on the generated board: under a third of the 15.0 s measured
+    /// before DEF-022, and under a second.
+    const BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// DEF-022 R-4: the review queue on 2,500 commits, 70 items and 490 doc references.
     /// Run: `cargo test -p kanbanr-core --release review::perf -- --ignored --nocapture`
     #[test]
     #[ignore = "a timing measure; run it on its own in release"]
@@ -303,6 +307,32 @@ mod perf {
         let elapsed = started.elapsed();
         eprintln!("review::pending: {} entries in {elapsed:?}", queue.len());
         assert_eq!(queue.len(), 70);
+        assert!(
+            elapsed <= BUDGET,
+            "{elapsed:?} is over the budget {BUDGET:?}"
+        );
+
+        // The shared history answers as the walk of each doc alone does.
+        let project = store.load("demo").unwrap();
+        let docs = store.project_dir("demo").join("docs");
+        let history = crate::git::DocHistory::default();
+        for f in &project.features {
+            let since = f.entered_status_at();
+            for doc in &f.definition.as_ref().unwrap().affects_docs {
+                let path = docs.join(crate::readiness::affects_doc_key(doc));
+                assert_eq!(
+                    history.changed_since(&path, since),
+                    crate::git::doc_changed_since_single_walk(&path, since),
+                    "{} {doc}",
+                    f.code
+                );
+            }
+        }
+        eprintln!("history: {:?}", history.stats());
+        assert_eq!(
+            history.stats(),
+            crate::git::HistoryStats { opens: 1, walks: 1 }
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
