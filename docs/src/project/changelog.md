@@ -6,6 +6,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-06
+
 ### Added
 
 - **Guides for every built-in process (DOC-003).** The Process guides section now covers default,
@@ -1246,7 +1248,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/startr-trade/kanbanr/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/startr-trade/kanbanr/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/startr-trade/kanbanr/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/startr-trade/kanbanr/compare/v0.2.0...v0.2.1
