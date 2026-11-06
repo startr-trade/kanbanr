@@ -7,6 +7,8 @@ You don't need to learn any commands:
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page, promotions and the
   cut on the **Releases** page.
+  Claude tells you what is waiting there and links to it. It never records a decision, and it
+  doesn't ask for one in a plan or a question.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [TOGAF from the command line](togaf-cli.md).
@@ -105,8 +107,7 @@ you've approved it, so check back after approving.
 saw. If the definition changes, your approval lapses and the item returns to the Review page. Read
 what changed, then approve again.
 
-**Claude may ask you in a question instead.** It can also say that accepting a plan is your approval.
-These record the same approval as the Review page. If you'd rather decide on the page, tell Claude.
+**You decide on the Review page.** Claude tells you what's waiting there and links to it, and never records a decision for you. kanbanr refuses if it tries. If the monitor isn't running, Claude offers to start it.
 
 **A design can bring decisions with it.** Claude drafts each one as a decision record, and you use
 **Accept** or **Reject** on the Review page.

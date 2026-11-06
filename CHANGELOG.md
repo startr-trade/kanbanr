@@ -8,6 +8,16 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Claude takes decisions one way, and keeps quiet while it works (FTR-024).** Claude sends every
+  verdict to the monitor's Review and Releases pages, says what is waiting there, and never
+  records one or asks for one in a plan or a question. Plan mode is kept for setup and process
+  changes, and never used while a sub-agent runs. Progress is reported as changes, not events, and
+  rework goes on the item's todo-list before it starts. New: `kanbanr open --check` reports whether
+  the monitor is up and accepts writes, with its Review and Releases addresses; the guard refuses
+  verdict commands (`approve`, `ratify`, `unapprove`, `signoff`, `adr accept|reject`,
+  `release promote` without `--plan`, `release cut`) run by Claude in a folder that keeps a board;
+  and a build scope is refused for an item with no open task.
+
 - **Guides for every built-in process (DOC-003).** The Process guides section now covers default,
   scheduled, PDCA, design control, Scrum and agile, each with Claude and from the command line, and
   Working with Claude links them from each process's row. Its table now lists what each process
