@@ -1610,6 +1610,21 @@ impl ProjectConfig {
         self.role_status(Role::Build)
     }
 
+    /// Does sign-off `name` pin the spec (FTR-023)? True when a gate that lists it under `signoffs`
+    /// also requires spec sections. Derived from the process, so it needs no configuration.
+    pub fn signoff_pins_spec(&self, name: &str) -> bool {
+        use crate::readiness::{Check, Condition};
+        self.effective_gates().values().any(|g| {
+            g.signoffs.iter().any(|s| s == name)
+                && g.requires.iter().any(|c| {
+                    matches!(
+                        c,
+                        Condition::SpecSections { .. } | Condition::Check(Check::SpecSections)
+                    )
+                })
+        })
+    }
+
     /// The gates this workflow enforces: the declared ones, or — when none are declared — today's
     /// rules, synthesised so that no existing board changes behaviour (FEAT-113).
     ///
@@ -1957,6 +1972,17 @@ mod tests {
                 "{name}"
             );
             assert!(i.signoffs.contains(&"docs-folded".to_string()), "{name}");
+        }
+    }
+
+    /// FTR-023: a sign-off pins the spec when a gate that lists it also asks for spec sections.
+    #[test]
+    fn signoff_covers_spec_follows_the_gates_that_ask_for_spec_sections() {
+        for (name, _) in presets() {
+            let config = preset(name).unwrap().into_config("p");
+            assert!(config.signoff_pins_spec("design-review"), "{name}");
+            assert!(!config.signoff_pins_spec("docs-folded"), "{name}");
+            assert!(!config.signoff_pins_spec("nobody"), "{name}");
         }
     }
 

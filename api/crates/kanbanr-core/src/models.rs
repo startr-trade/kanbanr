@@ -310,6 +310,11 @@ pub struct Signoff {
     /// no baseline, and any change to the definition lapses it.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub parts: std::collections::BTreeMap<String, String>,
+    /// A hash of the whole normalised spec it covered (FTR-023), when a gate that lists this
+    /// sign-off also asks for spec sections. Empty on a record an older kanbanr wrote, or one no
+    /// gate pins: such a sign-off is judged by the definition alone.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub spec_rev: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
     /// A board doc holding the record — minutes, a checklist.
@@ -335,6 +340,13 @@ pub struct Signoff {
     )]
     #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
+}
+
+impl Signoff {
+    /// Does `spec` hash to the one this sign-off pinned? True when it pinned none.
+    fn spec_matches(&self, spec: &str) -> bool {
+        self.spec_rev.is_empty() || crate::readiness::spec_pin(spec).1 == self.spec_rev
+    }
 }
 
 /// Whether a sign-off entry gives the sign-off or takes it back (FEAT-182).
@@ -625,7 +637,9 @@ impl FeatureDefinition {
     }
 
     /// Is sign-off `id` recorded against the definition as it now stands? The latest entry counts,
-    /// and only if it gives the sign-off: a withdrawal after it takes it back (FEAT-182).
+    /// and only if it gives the sign-off: a withdrawal after it takes it back (FEAT-182). This
+    /// judges the definition alone; prefer [`FeatureItem::signoff_current`] wherever the spec is
+    /// loaded (FTR-023).
     pub fn signoff_current(&self, id: &str) -> Option<&Signoff> {
         let rev = self.content_rev();
         self.signoff_latest(id)
@@ -952,6 +966,24 @@ pub struct IssueLink {
 }
 
 impl FeatureItem {
+    /// Is sign-off `id` current: recorded against the definition as it stands and, when it pinned
+    /// the spec, against the spec as it stands (FTR-023)?
+    pub fn signoff_current(&self, id: &str) -> Option<&Signoff> {
+        self.definition
+            .as_ref()?
+            .signoff_current(id)
+            .filter(|s| s.spec_matches(&self.specification))
+    }
+
+    /// The latest sign-off `id` when the definition still matches but the spec it pinned has
+    /// changed since it was given (FTR-023).
+    pub fn signoff_spec_changed(&self, id: &str) -> Option<&Signoff> {
+        self.definition
+            .as_ref()?
+            .signoff_current(id)
+            .filter(|s| !s.spec_matches(&self.specification))
+    }
+
     /// When the item entered its current status: the last move into it, else its creation
     /// (FEAT-180). A board edited by hand can carry a status no move led to; creation is then the
     /// honest answer, since nothing says when it got there.

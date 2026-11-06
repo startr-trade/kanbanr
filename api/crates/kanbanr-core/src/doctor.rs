@@ -814,7 +814,14 @@ fn describe(r: &crate::refs::Ref) -> String {
 
 fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
     let known: BTreeSet<&str> = project.config.statuses.iter().map(String::as_str).collect();
-    const EXPECTED: [&str; 5] = ["features", "milestones", "docs", "activity", "events"];
+    const EXPECTED: [&str; 6] = [
+        "features",
+        "milestones",
+        "docs",
+        "activity",
+        "events",
+        "pins",
+    ];
     let Ok(entries) = std::fs::read_dir(store.project_dir(&project.id)) else {
         return;
     };

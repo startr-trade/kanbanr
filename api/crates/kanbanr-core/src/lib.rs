@@ -4497,6 +4497,47 @@ requirements:
             .unwrap();
     }
 
+    /// FTR-023 R-1, R-2: a design sign-off pins the whole spec it was given on, and keeps its text.
+    #[test]
+    fn a_design_signoff_pins_the_design_it_was_given_on() {
+        let (store, _d, code) = skip_board(vec![crate::readiness::Condition::SpecSections {
+            spec_sections: vec!["Design".into()],
+        }]);
+        let spec = "## Why\nA cart.\n\n## Design\nUse a map.\n";
+        store
+            .edit_feature("demo", &code, None, Some(spec.into()), None, None)
+            .unwrap();
+        store
+            .signoff_feature("demo", &code, "design-review", "Ada L", "", "")
+            .unwrap();
+        let (text, rev) = crate::readiness::spec_pin(spec);
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        let given = f.signoff_current("design-review").unwrap();
+        assert_eq!(given.spec_rev, rev);
+        assert_eq!(store.spec_pin_text("demo", &code, &rev), Some(text));
+        // A sign-off no gate pins carries no pin.
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert!(f.signoff_current("release").unwrap().spec_rev.is_empty());
+        // One changed line outside ## Design, and it no longer stands.
+        store
+            .edit_feature(
+                "demo",
+                &code,
+                None,
+                Some(spec.replace("A cart.", "A basket.")),
+                None,
+                None,
+            )
+            .unwrap();
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert!(f.signoff_current("design-review").is_none());
+        assert!(f.signoff_spec_changed("design-review").is_some());
+        assert!(f.signoff_current("release").is_some());
+    }
+
     /// FEAT-114 R-3: a sign-off that cannot say who gave it is not evidence of anything.
     #[test]
     fn a_signoff_needs_an_identity() {

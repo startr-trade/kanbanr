@@ -262,6 +262,19 @@ impl Condition {
     }
 }
 
+/// The spec as a sign-off pins it, and its hash (FTR-023). Line endings become LF, trailing
+/// whitespace is stripped from each line, and blank lines at the start and end are dropped, so a
+/// file rewritten without any change of words pins the same. An empty spec pins `""`.
+pub fn spec_pin(spec: &str) -> (String, String) {
+    let lines: Vec<&str> = spec.lines().map(str::trim_end).collect();
+    let text = lines.join("\n").trim_matches('\n').to_string();
+    if text.is_empty() {
+        return (String::new(), String::new());
+    }
+    let rev = crate::hash::stable_hash(&text);
+    (text, rev)
+}
+
 /// The sign-offs among `names` that are not recorded against the definition as it stands.
 pub fn signoff_gaps(feature: &FeatureItem, names: &[String]) -> Vec<Gap> {
     let def = feature.definition.as_ref();
@@ -269,9 +282,18 @@ pub fn signoff_gaps(feature: &FeatureItem, names: &[String]) -> Vec<Gap> {
         .iter()
         .filter_map(|name| {
             let latest = def.and_then(|d| d.signoff_latest(name));
-            let current = def.and_then(|d| d.signoff_current(name));
+            let current = feature.signoff_current(name);
             match (latest, current) {
                 (_, Some(_)) => None,
+                (Some(_), None) if feature.signoff_spec_changed(name).is_some() => Some(gap(
+                    Check::Signoff,
+                    None,
+                    &format!("sign-off '{name}': spec changed"),
+                    format!(
+                        "the spec changed after sign-off '{name}' was given, so it no longer \
+                         covers what will be built: the Review page shows what changed"
+                    ),
+                )),
                 // Taken back (FEAT-182): say so, with the reason, rather than "lapsed".
                 (Some(w), None) if !w.verdict.is_given() => Some(gap(
                     Check::Signoff,
@@ -701,13 +723,7 @@ pub fn next_gates(
             let signoffs_needed = gate
                 .signoffs
                 .iter()
-                .filter(|name| {
-                    feature
-                        .definition
-                        .as_ref()
-                        .and_then(|d| d.signoff_current(name))
-                        .is_none()
-                })
+                .filter(|name| feature.signoff_current(name).is_none())
                 .cloned()
                 .collect();
             gaps.extend(signoffs);
@@ -1527,6 +1543,79 @@ mod check_tests {
 mod tests {
     use super::*;
     use crate::models::{Requirement, TestRef};
+
+    /// An item whose design-review pinned `spec`, then holding `now` as its spec (FTR-023).
+    fn pinned_item(spec: &str, now: &str) -> FeatureItem {
+        let mut def = crate::models::FeatureDefinition {
+            statement: "Keep a cart".into(),
+            ..Default::default()
+        };
+        def.signoffs.push(crate::models::Signoff {
+            id: "design-review".into(),
+            by: "Ada".into(),
+            rev: def.content_rev(),
+            spec_rev: spec_pin(spec).1,
+            ..Default::default()
+        });
+        let mut item: FeatureItem = crate::yaml::from_str(
+            "code: FTR-1\ntitle: T\nspecification: ''\nstatus: Build\nmilestone: ''\n\
+             created_at: '2026-11-06T00:00:00Z'\nupdated_at: '2026-11-06T00:00:00Z'\n",
+        )
+        .unwrap();
+        item.definition = Some(def);
+        item.specification = now.into();
+        item
+    }
+
+    /// FTR-023 R-3: whitespace at line ends, line endings and outer blank lines are not changes.
+    #[test]
+    fn spec_pin_ignores_trailing_whitespace() {
+        let base = "## Why\nA cart.\n\n## Design\nUse a map.";
+        let rev = spec_pin(base).1;
+        assert!(!rev.is_empty());
+        assert_eq!(
+            spec_pin("\n\n## Why  \r\nA cart.\t\r\n\r\n## Design\r\nUse a map.\r\n\n").1,
+            rev
+        );
+        assert_ne!(spec_pin("## Why\nA cart!\n\n## Design\nUse a map.").1, rev);
+        assert_ne!(spec_pin(&format!("{base}\nMore.")).1, rev);
+        assert_ne!(spec_pin(&format!("{base}\n\n## Notes\nx")).1, rev);
+        assert_eq!(spec_pin("  \n\n"), (String::new(), String::new()));
+    }
+
+    /// FTR-023 R-2: a change anywhere in the spec lapses a sign-off that pinned it.
+    #[test]
+    fn a_changed_spec_lapses_its_signoff() {
+        let names = vec!["design-review".to_string()];
+        let spec = "## Why\nA cart.\n\n## Design\nUse a map.";
+        assert!(signoff_gaps(&pinned_item(spec, spec), &names).is_empty());
+        for edited in [
+            "## Why\nA basket.\n\n## Design\nUse a map.",
+            "## Why\nA cart.\n\n## Design\nUse a vec.",
+            "## Why\nA cart.\n\n## Design\nUse a map.\n\n## Notes\nnew",
+        ] {
+            let gaps = signoff_gaps(&pinned_item(spec, edited), &names);
+            assert_eq!(gaps.len(), 1, "{edited}");
+            assert_eq!(gaps[0].label, "sign-off 'design-review': spec changed");
+            assert!(gaps[0].message.contains("the spec changed after sign-off"));
+        }
+    }
+
+    /// FTR-023 R-12: a sign-off with no spec pin is judged by the definition alone.
+    #[test]
+    fn a_signoff_without_a_spec_pin_is_judged_as_before() {
+        let names = vec!["design-review".to_string()];
+        let mut item = pinned_item("", "anything at all");
+        item.definition.as_mut().unwrap().signoffs[0].spec_rev = String::new();
+        assert!(signoff_gaps(&item, &names).is_empty());
+        item.specification = "something else".into();
+        assert!(signoff_gaps(&item, &names).is_empty());
+        item.definition.as_mut().unwrap().statement = "Keep a cart longer".into();
+        assert_eq!(
+            signoff_gaps(&item, &names)[0].label,
+            "sign-off 'design-review' lapsed"
+        );
+    }
 
     /// A board in a temp git repository with one item declaring `architecture/data.md` (FEAT-180).
     fn docs_board(tag: &str) -> (crate::Store, std::path::PathBuf, String) {

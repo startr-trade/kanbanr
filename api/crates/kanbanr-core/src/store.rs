@@ -53,6 +53,9 @@ struct Pending {
     remove_features: std::collections::BTreeSet<(String, String)>,
     /// Milestone codes to (re)write.
     persist_milestones: std::collections::BTreeSet<String>,
+    /// Spec pins to keep (FTR-023), by path: the normalised text a sign-off covered. Written
+    /// before the feature files so a sign-off never points at text that wasn't kept.
+    pins: std::collections::BTreeMap<PathBuf, String>,
 }
 
 pub struct Store {
@@ -325,15 +328,36 @@ impl Store {
     /// (`spec_sections`, FEAT-179), which a metadata-only load leaves empty.
     pub fn load_for_gates(&self, id: &str) -> Result<Project> {
         let project = self.load_meta(id)?;
-        if project
-            .config
-            .effective_gates()
-            .values()
-            .any(|g| g.reads_spec())
+        // A pinned sign-off needs the spec whatever the gates ask now: with the Design part turned
+        // off, the empty spec would read every pinned sign-off as changed (FTR-023).
+        let pinned = project.features.iter().any(|f| {
+            f.definition
+                .as_ref()
+                .is_some_and(|d| d.signoffs.iter().any(|s| !s.spec_rev.is_empty()))
+        });
+        if pinned
+            || project
+                .config
+                .effective_gates()
+                .values()
+                .any(|g| g.reads_spec())
         {
             return self.load(id);
         }
         Ok(project)
+    }
+
+    /// Where the spec a sign-off covered is kept (FTR-023): content-addressed, keyed by code.
+    fn pin_path(&self, id: &str, code: &str, spec_rev: &str) -> PathBuf {
+        self.project_dir(id)
+            .join("pins")
+            .join(code)
+            .join(format!("{spec_rev}.md"))
+    }
+
+    /// The spec text kept for a sign-off, or `None` when it is missing (FTR-023).
+    pub fn spec_pin_text(&self, id: &str, code: &str, spec_rev: &str) -> Option<String> {
+        std::fs::read_to_string(self.pin_path(id, code, spec_rev)).ok()
     }
 
     /// Load a single feature's specification body on demand. Scans the configured status folders
@@ -598,6 +622,16 @@ impl Store {
         // Bring an older board's layout up to date before writing into it (FEAT-071), so the two
         // shapes never have to coexist in a single write.
         self.migrate_layout(id, &project.config.statuses);
+        // Pins are content-addressed: written once, never changed (FTR-023).
+        for (path, text) in &pending.pins {
+            if path.exists() {
+                continue;
+            }
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::write(path, text)?;
+        }
         for code in &pending.persist_features {
             if let Some(f) = project.features.iter().find(|f| &f.code == code) {
                 self.persist_feature(id, f)?;
@@ -1345,8 +1379,18 @@ impl Store {
         }
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
+        let pins_spec = project.config.signoff_pins_spec(signoff);
         let feature = project.feature_mut(code)?;
         let status = feature.status.clone();
+        // A sign-off whose gate asks for spec sections pins the whole spec and keeps its text.
+        let mut spec_rev = String::new();
+        if pins_spec {
+            let (text, rev) = crate::readiness::spec_pin(&feature.specification);
+            if !rev.is_empty() {
+                pending.pins.insert(self.pin_path(id, code, &rev), text);
+                spec_rev = rev;
+            }
+        }
         let definition = feature.definition.as_mut().ok_or_else(|| {
             CoreError::Unsupported(format!(
                 "{code} has no definition to sign off — a sign-off covers a definition, so write one \
@@ -1362,6 +1406,7 @@ impl Store {
             at: at.clone(),
             rev,
             parts: definition.part_revs(),
+            spec_rev,
             note: note.trim().to_string(),
             doc: doc.trim().to_string(),
             status,
