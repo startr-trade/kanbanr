@@ -357,14 +357,14 @@ once cut; the Gantt adds the sprints as a lane and the releases as milestones:
 A release moves through the environments it is deployed to before production. By default they are
 `candidate → test → staging → production`; a project names its own with
 `kanbanr config cadence --release-stages candidate,qa,uat,live`. Each stage must appear once, and
-the **last one is always the cut**. Every move is recorded on the release with who made it and when.
+the **stage that tags is the cut**, by default the last. Every move is recorded on the release with who made it and when.
 
 - **The first stage** makes the branch `release/<VERSION>` from the integration branch, without
   checking it out.
 - **A middle stage** is a board change only.
 - **Back a stage** — staging to test after a failed check — needs `--reason`, which is recorded.
   Nothing moves back from production.
-- **The last stage** is the cut. It ships the finished items, writes the notes (the notes file at the tagged commit when one is
+- **The cut** is the stage holding the `tag` action, the last stage by default. It ships the finished items, writes the notes (the notes file at the tagged commit when one is
   configured, otherwise a generated list), tags the code repository with the version and **fast-forwards the main branch** to the release, so main's tip
   is exactly the tagged commit. Before anything changes it checks that the working tree has no
   uncommitted changes, that the release branch exists, that the tag does not, and that main has no
@@ -372,6 +372,9 @@ the **last one is always the cut**. Every move is recorded on the release with w
   has moved on, merge main into the release branch and promote again. If the board step fails after
   the tag and the fast-forward, both are undone. `kanbanr release cut <VERSION> --tag` is the same
   as promoting to the last stage; a plain `release cut` changes only the board.
+
+  With stages after the cut (see [Stages after the tag](#stages-after-the-tag)), the cut tags and
+  ships nothing, and the last stage ships.
 
 A release that has no branch yet gets `release/<VERSION>` made first whichever stage it is promoted
 to, so a process with a single stage (both first and the cut) works, and so does a promotion that
@@ -403,7 +406,7 @@ cadence:
 | `branch` | makes `release/<V>` from the line of integration, nothing checked out |
 | `prepare` | one commit on `release/<V>`: the version files, the dated changelog heading and its copies, the notes draft and its listings (see below) |
 | `move_main` | fast-forwards main to the release tip; refused if main has commits the release lacks (a patch of an older release leaves main where it is) |
-| `tag` | tags the release tip `<V>` ("Release <V>"); the last stage only |
+| `tag` | tags the release tip `<V>` ("Release <V>"); the stage holding it is the cut, and any stage after it only confirms |
 
 | condition | holds when | fix shown |
 |---|---|---|
@@ -412,6 +415,7 @@ cadence:
 | `main_at_release` | main is at the release tip | promote to the stage with `move_main` |
 | `pushed` | the release tip is on main's remote-tracking branch (`origin/main`) | push main (`git push origin main`), then wait for CI |
 | `gate_passed` | every gate named in `commit_gates` has a passed result recorded for the release tip | look at your CI, then record its verdict (see below) |
+| `tag_passed` | the newest result of the tag gate for the tag commit, recorded since the tag was made, is passed; only a stage after the tag can require it | run your CI on the tag and record its verdict, or start a patch release if it failed |
 
 A stage with no gate of its own keeps the default:
 
@@ -419,7 +423,8 @@ A stage with no gate of its own keeps the default:
 |---|---|
 | the first | `branch` (unless another stage holds it) |
 | a middle one | nothing |
-| the last | `move_main, tag` (without `move_main` if another stage holds it) |
+| the last | `move_main, tag` (without `move_main` if another stage holds it, and without `tag` if another stage holds that) |
+| the first after the tag | nothing, and `tag_passed` required when `commit_gates` names a gate |
 | the only one | `branch, move_main, tag` |
 
 A promotion takes the actions of every stage it passes or enters, in the order `branch`, `prepare`,
@@ -434,6 +439,40 @@ it may already be pushed.
 
 `pushed` reads the remote-tracking branch. A promotion fetches main first; offline, it judges from
 the last fetch and says so. kanbanr never pushes: pushing main and the tag is yours.
+
+### Stages after the tag
+
+A tag says which commit the release is. Whether that commit works, and where it has been run, is
+for you to say. Put stages after the one holding `tag` and each is a confirmation: the release
+stays unshipped, its items stay where they are, and the stage runs no action.
+
+```yaml
+cadence:
+  release_stages: [candidate, main, tag, staging, production]
+  release_gates:
+    candidate: { on_enter: [branch, prepare] }
+    main:      { requires: [items_finished], on_enter: [move_main] }
+    tag:       { requires: [main_at_release, pushed], on_enter: [tag] }
+  commit_gates: [ci]
+```
+
+- Promoting into `tag` tags the commit and records `tagged_at` and the commit on the release.
+- The Releases page shows the newest result of the tag gate (`tag_gate`, else the first commit
+  gate) for that commit, recorded after the tag, with its link and note. With none, it offers
+  **Record result**.
+- The first stage after the tag requires a passed result. On a failed one the page offers **Check
+  again** (re-reads the board after you rerun your CI and record the new result) and **Start a
+  patch release**.
+- Each confirmation is `kanbanr release promote <V> --note "what you checked"` or the page's
+  **Confirm** button. It records who, when and the note on the release, and nothing else.
+- Confirming the last stage ships the release: finished items move to their last status, the notes
+  are written and `shipped_at` is recorded. A project with no stage after the tag ships at the tag.
+- **Start a patch release** (`kanbanr release add <V2> --patch-of <V> --from-failed-tag [--link …]
+  [--notes …]`) files a defect carrying the failed run's link and your notes, plans it and the
+  release's items into a new patch branched from the tag, and marks the release superseded by it.
+  The tag stays in git. `kanbanr config tag-gate <name>` picks the gate that judges the tag.
+
+kanbanr never contacts a CI server or the remote: you run your CI, and you record what it said.
 
 ### Gate results
 

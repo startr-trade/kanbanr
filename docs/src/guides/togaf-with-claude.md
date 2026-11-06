@@ -49,6 +49,13 @@ Ask for the things that make the rest of this guide work:
 are exempt. Without one, a move that a gate would have refused still goes through, with a warning
 saying what was missing. Claude asks for the project's purpose and goals. Every item then links to a goal.
 
+**Releases can have stages after the tag.** The tag only says which commit the release is. Stages
+after it, such as staging or production, are for you to confirm once you have seen the release
+work there. The release ships, and its items reach their last status, when you confirm the last
+one. If CI fails on the tag, record the failed result and choose **Start a patch release**: Claude
+files the defect with the run's link and your notes, and the failed release is marked superseded.
+Claude tells you where the release is and never confirms a stage for you.
+
 **You record CI's verdict.** kanbanr can see that main was pushed, but it never asks a server whether
 CI passed. You look at CI yourself, then record what it said on the **Releases** page (**Record
 result**, with a link to the run if you like). A release stage can require that result before the
@@ -157,7 +164,7 @@ Follow this order and you won't have to go back:
 | 5 | You | **Review** page: **Sign off release** on each item, if you haven't already |
 | 6 | You | **Releases** page: **Promote to main**. This moves main to the release, without tagging |
 | 7 | You | Terminal: `git push origin main`, then wait for CI to go green |
-| 8 | You | **Releases** page: **Check again**, then, with CI green, **Cut v0.1.0**. This tags main and moves any item not already there to Operations |
+| 8 | You | **Releases** page: **Check again**, then, with CI green, **Cut v0.1.0**. This tags main. If your stages continue after the tag, the page shows the result you recorded for it; when it is green, **Confirm** each later stage with a note of what you checked. Confirming the last one moves any item not already there to Operations |
 | 9 | You | Terminal: `git push origin v0.1.0`, then wait for the release workflow |
 | 10 | Claude | Say "The release is out. Bring it forward into the sprint" |
 

@@ -681,6 +681,11 @@ branches; fix it before going on.
   first stage makes `release/<V>` and the last, production, is the cut: kanbanr brings main up to
   the release (a fast-forward, refused with nothing changed if main has commits the release lacks)
   and tags the version.
+- Stages can follow the tag (`tag_passed`): the stage holding `tag` is the cut and ships nothing;
+  each later stage is the user's confirmation (`kanbanr release promote <V> --note …`, or the
+  Releases page), and the last one ships. **Report where the release is and what the tag's CI
+  result is; never confirm a stage, start a patch from a failed tag, or record the result for the
+  user.** Those are their verdicts.
 - Stages can act (`kanbanr release stages`, `kanbanr config release-stage`): each may require
   `items_finished`, `prepared`, `main_at_release`, `pushed`, and do `branch`, `prepare`,
   `move_main`, `tag` on entry. A refusal lists every missing condition with its fix; nothing changed.

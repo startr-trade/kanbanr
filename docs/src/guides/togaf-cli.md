@@ -103,6 +103,28 @@ production     main_at_release, pushed            tag                           
 The `release-prepare` line names your own files. The notes file is created for you, but the version
 file must already be on the sprint's branch, or promoting to candidate is refused and nothing changes.
 
+
+#### Stages after the tag
+
+The stage that tags is the cut, but it does not have to be the last. Add stages after it, for the
+places you run the release before it counts as out, and each becomes a confirmation you give:
+
+```text
+kanbanr config cadence --release-stages candidate,main,tag,staging,production
+kanbanr config release-stage tag --on-enter tag
+kanbanr config commit-gates ci
+```
+
+Promoting to `tag` tags the commit and ships nothing. The Releases page then shows the result you
+recorded for the tag and asks for the next stage only after a passed one. Each stage after the
+tag, `staging` and `production` here, is confirmed with
+`kanbanr release promote <VERSION> --note "what you checked"`. Confirming the last stage ships the
+release: the items reach their last status and the notes are written. If your CI fails on the tag,
+record the failed result and run `kanbanr release add <NEW VERSION> --patch-of <VERSION>
+--from-failed-tag --link <run> --notes "what you saw"`: it files a defect with the link and your
+notes, plans it and the release's items into a patch branched from the tag, and marks the failed
+release as superseded. The tag stays in git.
+
 ### Decide when an item is done for its sprint
 
 Under the TOGAF preset only **Operations** counts as done, and items reach Operations when their release is cut.

@@ -8,6 +8,17 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Release stages can follow the tag, with the tag's CI result on the Releases page (FTR-026).**
+  The stage holding the `tag` action is now the cut and tags the commit, recording `tagged_at` and
+  the commit, but ships nothing unless it is also the last stage. Each later stage is a
+  confirmation you give, with an optional note (`kanbanr release promote <V> --note …`), and
+  confirming the last one ships the release and moves its items to their last status. The
+  Releases page shows the result you recorded for the tag (`kanbanr config tag-gate`, else the
+  first commit gate), offers **Check again** or **Start a patch release** when it is red, and the
+  next confirmation when it is green. `kanbanr release add <V> --patch-of <T> --from-failed-tag`
+  files a defect with the run's link and your notes, plans it and the release's items into a patch
+  and supersedes the failed release. A project with no stage after the tag behaves as before.
+
 - **A release stage can require that the gate passed (FTR-002).** A new release check,
   `gate_passed`, needs a recorded passed result for the release tip from every gate named by
   `kanbanr config commit-gates`. You look at your CI and record its verdict with
