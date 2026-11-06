@@ -7,7 +7,7 @@ releases. You don't need to learn any commands:
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page, promotions and the
   cut on the **Releases** page.
-- **You push from your terminal.** Nothing reaches GitHub until you do.
+- **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [Agile from the command line](agile-cli.md). For the other
 processes, see the [guides index](index.md) and [Processes](../using/processes.md).
@@ -131,7 +131,7 @@ the item's page, and its scope on the **Workflow** page.
 **Freeze the candidate.** Once a release is a candidate, send anything new to the next release and
 change only the notes.
 
-**Promoting moves main, not your checkout.** GitHub won't change until you push.
+**Promoting moves main, not your checkout.** Your remote server won't change until you push.
 
 **The date follows the release.** Promoting to main dates the notes and changelog today. If main moved
 earlier and the cut comes later, the page warns you: ask Claude to re-date them before you cut,
@@ -157,7 +157,7 @@ will say so.
 | **Merging an item** | **Sign off docs-folded** | Update the docs and move the item |
 | **Sprints** | Say what goes in and when it closes | Create, plan and close them |
 | **Releases** | Each **Promote** and the **Cut** | Write the notes, run the checks, bring it forward |
-| **GitHub** | **Every push** of code and tags, and the board | Nothing |
+| **Remote server** | **Every push** of code and tags, and the board | Nothing |
 
 ## What Claude runs
 

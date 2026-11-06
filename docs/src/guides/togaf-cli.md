@@ -258,7 +258,7 @@ The cut stays refused until main is pushed:
 change only its notes. Reopening a candidate for each thing you find is how a release never closes.
 
 **Promoting moves main, not your checkout.** If you're on the sprint's branch you'll stay there, and
-GitHub won't change until you push.
+your remote server won't change until you push.
 
 **The notes live on the release branch**, so they aren't in your checkout. Read and change them from
 the release itself:

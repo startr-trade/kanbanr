@@ -9,7 +9,7 @@ You don't need to learn any commands:
 - **You talk to Claude** for everything except decisions and pushes. Use your own words. The ones
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page.
-- **You push from your terminal.** Nothing reaches GitHub until you do.
+- **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [Design control from the command line](design-control-cli.md).
 For the other processes, see the [guides index](index.md) and
@@ -125,7 +125,7 @@ Claude tells you. Then you push `main` from your terminal.
 | **Code and tests** | Review what you want to | Build, or give the work to sub-agents, and record results |
 | **Merging** | **Sign off docs-folded** | Update the docs and move the item |
 | **Release** | **Sign off validation** | Move the item |
-| **GitHub** | **Every push** | Nothing |
+| **Remote server** | **Every push** | Nothing |
 
 ## When things go wrong
 

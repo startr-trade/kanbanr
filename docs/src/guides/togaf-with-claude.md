@@ -7,7 +7,7 @@ You don't need to learn any commands:
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page, promotions and the
   cut on the **Releases** page.
-- **You push from your terminal.** Nothing reaches GitHub until you do.
+- **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [TOGAF from the command line](togaf-cli.md).
 
@@ -170,8 +170,8 @@ says an item would carry over, that item usually needs its **Sign off release**.
 release, and change only the notes. Reopening a candidate for each thing you find is how a release
 never closes.
 
-**Promoting moves main, not your checkout.** You may still be on the sprint's branch, and GitHub won't
-change until you push.
+**Promoting moves main, not your checkout.** You may still be on the sprint's branch, and your remote
+server won't change until you push.
 
 **If you save notes after promoting to main,** main moves with them. The page tells you to push main
 again and wait for CI before the cut.
@@ -198,7 +198,7 @@ because new items branch from the running sprint.
 | **Merging an item** | **Sign off docs-folded** | Update the docs and move the item |
 | **Sprints** | Say what goes in and when it closes | Create, plan and close them |
 | **Releases** | Each **Promote**, each **Sign off release**, and the **Cut** | Write the notes, run the checks, bring it forward |
-| **GitHub** | **Every push** of code and tags, and the board | Nothing |
+| **Remote server** | **Every push** of code and tags, and the board | Nothing |
 
 ## When things go wrong
 
@@ -210,7 +210,7 @@ because new items branch from the running sprint.
 | An item goes to the backlog when a sprint closes | It's merged but not done for that sprint | Ask Claude to plan it into the next sprint, or count Migration as done |
 | A promotion says an item would carry over | It can't reach Operations yet | Do what the page says, usually **Sign off release** |
 | **Cut** stays greyed out after you pushed | The page hasn't read the push yet | **Check again** |
-| GitHub rejects your first push, naming the `workflow` scope | Your sign-in can't add files under `.github/workflows` yet | Ask Claude for the command that adds it, then push again |
+| Your remote server rejects your first push, naming a permission | Your sign-in can't change some files yet, often your CI's own files | Ask Claude what the message means, then grant it and push again |
 | A defect in a shipped release | It needs its own fix | Ask Claude for a patch release, and see [Patch releases](../using/processes.md#patch-releases) |
 
 ## What Claude runs

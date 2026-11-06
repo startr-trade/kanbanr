@@ -6,7 +6,7 @@ finish. You don't need to learn any commands:
 - **You talk to Claude** for everything except decisions and pushes. Use your own words. The ones
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page.
-- **You push from your terminal.** Nothing reaches GitHub until you do.
+- **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [The default workflow from the command line](default-cli.md).
 To compare processes, see the [Process guides](index.md) and
@@ -115,7 +115,7 @@ progress on the item's page, and Claude reviews its branch before bringing you a
 | **Design** | **Sign off design-review** | Write the design and its task list |
 | **Code and tests** | Review what you want to | Build, record results, update the docs |
 | **Finishing** | **Sign off docs-folded** | Move the item and merge |
-| **GitHub** | **Every push** | Nothing |
+| **Remote server** | **Every push** | Nothing |
 
 ## When things go wrong
 

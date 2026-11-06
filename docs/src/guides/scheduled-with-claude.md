@@ -6,7 +6,7 @@ Scheduled, Completed. It has no sprints and no releases. You don't need to learn
 - **You talk to Claude** for everything except decisions and pushes. Use your own words. The ones
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page.
-- **You push from your terminal.** Nothing reaches GitHub until you do.
+- **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [Scheduled from the command line](scheduled-cli.md). To
 compare processes, see [Process guides](index.md) and
@@ -105,7 +105,7 @@ Claude can't push. After an item merges, Claude may point out that its branch ca
 | **Design** | **Sign off design-review** | Write it into the spec |
 | **Code and tests** | Review what you want to | Build, or give the work to sub-agents, and record results |
 | **Finishing** | **Sign off docs-folded** | Update the docs and move the item |
-| **GitHub** | **Every push** | Nothing |
+| **Remote server** | **Every push** | Nothing |
 
 ## When things go wrong
 

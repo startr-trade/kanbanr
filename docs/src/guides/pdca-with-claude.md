@@ -5,7 +5,7 @@ This guide takes one item through Plan, Do, Check and Act. You don't need to lea
 - **You talk to Claude** for everything except decisions and pushes. Use your own words. The ones
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page.
-- **You push from your terminal.** Nothing reaches GitHub until you do.
+- **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [PDCA from the command line](pdca-cli.md). For the other
 processes, see the [guide index](index.md) and [Processes](../using/processes.md).
@@ -86,8 +86,8 @@ test. The tests are recorded against the commit they ran on.
 writes what the next cycle should change. To run another cycle on the same item, ask Claude to move
 it back to Plan.
 
-After the merge your checkout may still be on the item's branch. `main` has moved, but GitHub hasn't
-until you push.
+After the merge your checkout may still be on the item's branch. `main` has moved, but your remote
+server hasn't until you push.
 
 ## Handing work to sub-agents
 
@@ -106,7 +106,7 @@ Claude reviews the branch and brings you any decisions.
 | **Code and tests** | Review what you want to | Build, or hand to sub-agents, and record results |
 | **Merging an item** | **Sign off docs-folded** | Update the docs and move the item to Check |
 | **Closing the cycle** | **Sign off review** | Write what the next cycle should change, and move to Act |
-| **GitHub** | **Every push** | Nothing |
+| **Remote server** | **Every push** | Nothing |
 
 ## When things go wrong
 
