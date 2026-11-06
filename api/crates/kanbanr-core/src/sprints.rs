@@ -543,4 +543,54 @@ mod tests {
         assert_eq!(remaining(&store), [16.0, 16.0, 16.0, 11.0, 11.0]);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// FTR-025 R-1: under TOGAF an item at Migration is finished for the sprint, so closing the
+    /// sprint carries only the item still at Vision.
+    #[test]
+    fn a_togaf_item_at_migration_is_not_carried_over() {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-sprints-togaf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        let togaf = crate::config::preset("togaf").unwrap();
+        let mut config = ProjectConfig::default_for("shop");
+        config.statuses = togaf.statuses.clone();
+        config.default_state = togaf.default_state.clone();
+        config.displayed_states = togaf.displayed_states.clone();
+        config.terminal_states = togaf.terminal_states.clone();
+        config.no_op_states = togaf.no_op_states.clone();
+        config.transitions = togaf.transitions.clone();
+        config.gates = togaf.gates.clone();
+        store.init_project("shop", config).unwrap();
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/shop/config/cadence",
+            Some(&serde_json::json!({"sprints": true})),
+        )
+        .unwrap();
+        store
+            .add_milestone("shop", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let early = store.add_feature("shop", "A", "", "M", None).unwrap();
+        let late = store.add_feature("shop", "B", "", "M", None).unwrap();
+        let mut f = store
+            .load("shop")
+            .unwrap()
+            .feature(&late.code)
+            .unwrap()
+            .clone();
+        // Gates are not the subject: write the item at Migration and drop its Vision file.
+        let old = store.feature_path("shop", &f.status, &f.code);
+        f.status = "Migration".into();
+        store.persist_feature_for_test("shop", &f).unwrap();
+        std::fs::remove_file(old).unwrap();
+        let sp = super::add(&store, "shop", "2026-10-05", Some(5), "", None, "").unwrap();
+        let codes = vec![early.code.clone(), late.code.clone()];
+        super::plan(&store, "shop", &sp.code, &codes).unwrap();
+        let closed = super::close(&store, "shop", "SP-001", Some("backlog")).unwrap();
+        let carried: Vec<&str> = closed.carried.iter().map(|c| c.code.as_str()).collect();
+        assert_eq!(carried, [early.code.as_str()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

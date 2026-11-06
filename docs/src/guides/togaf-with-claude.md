@@ -60,11 +60,9 @@ you promote to them. Add them when you have a pipeline and environments behind t
 
 Keep it open. Claude gives you the address, and every decision below happens there.
 
-**Decide when an item is done for its sprint.** Under TOGAF only Operations counts as done, and items
-reach Operations when a release is cut. So closing a sprint before its release sends merged items
-back to the backlog. If your sprints end before your releases do, say so:
-
-> Our sprints often end before the release. Count Migration as done for a sprint.
+**Sprints and Migration.** Migration counts as done for a sprint, and Operations is when the release
+ships the item. So closing a sprint before its release is cut carries over only work that has not
+merged.
 
 ## Planning a sprint
 

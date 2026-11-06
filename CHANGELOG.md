@@ -8,6 +8,9 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **TOGAF fits sprints and releases without changing it (FTR-025).** Migration counts as done for a
+  sprint, so closing a sprint carries over only unmerged work. A project's sprints, releases, release
+  stages, branches, git model, release gates and prepare steps no longer make it a different process.
 - **Guides for every built-in process (DOC-003).** The Process guides section now covers default,
   scheduled, PDCA, design control, Scrum and agile, each with Claude and from the command line, and
   Working with Claude links them from each process's row. Its table now lists what each process

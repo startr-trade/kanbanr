@@ -449,6 +449,21 @@ impl Cadence {
         *self == Cadence::default()
     }
 
+    /// This cadence without what belongs to the project's own environments and files: release
+    /// stages, branches, the git model, release gates and prepare steps. The rhythm is kept
+    /// (FTR-025).
+    pub fn project_facts_cleared(&self) -> Cadence {
+        Cadence {
+            release_stages: Vec::new(),
+            integration_branch: None,
+            main_branch: None,
+            git_model: false,
+            release_gates: BTreeMap::new(),
+            release_prepare: Default::default(),
+            ..self.clone()
+        }
+    }
+
     /// The release stages in force: the project's own list, else the default. The first makes the
     /// release branch, the last is the cut (FEAT-183).
     pub fn stages(&self) -> Vec<String> {
@@ -1716,6 +1731,40 @@ mod tests {
 
     fn config_of(name: &str) -> ProjectConfig {
         preset_bare(name).unwrap().into_config("p")
+    }
+
+    /// FTR-025 R-1: Migration finishes an item for the sprint views; Operations ships it.
+    #[test]
+    fn togaf_counts_migration_as_done() {
+        let togaf = config_of("togaf");
+        assert!(togaf.counts_as_done("Migration"));
+        assert!(togaf.counts_as_done("Operations"));
+        assert!(!togaf.counts_as_done("Implementation"));
+        assert!(!togaf.counts_as_done("Vision"));
+    }
+
+    /// FTR-025: a project's own facts are set aside, its rhythm is kept.
+    #[test]
+    fn project_facts_cleared_keeps_the_rhythm() {
+        let c = Cadence {
+            sprints: true,
+            releases: true,
+            sprint_length_days: Some(14),
+            release: Some("per_sprint".into()),
+            release_stages: vec!["a".into(), "b".into()],
+            integration_branch: Some("dev".into()),
+            main_branch: Some("main".into()),
+            git_model: true,
+            release_gates: [("a".to_string(), Default::default())].into(),
+            release_prepare: Default::default(),
+            extra: Default::default(),
+        }
+        .project_facts_cleared();
+        assert!(c.sprints && c.releases);
+        assert_eq!(c.sprint_length_days, Some(14));
+        assert_eq!(c.release.as_deref(), Some("per_sprint"));
+        assert!(c.release_stages.is_empty() && c.integration_branch.is_none());
+        assert!(c.main_branch.is_none() && !c.git_model && c.release_gates.is_empty());
     }
 
     fn codes(default: Option<&str>, kinds: &[(&str, &str)]) -> CodesConfig {
