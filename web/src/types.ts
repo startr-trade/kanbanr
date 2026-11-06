@@ -485,6 +485,12 @@ export interface Release {
   stages?: { stage: string; by: string; at: string; reason?: string }[];
   /** The code branch, made on entering the first stage. */
   branch?: string;
+  /** When the stage that tags was entered (FTR-026); a tagged release still `planned` is waiting on its later stages. */
+  tagged_at?: string;
+  /** The commit the tag names. */
+  tag_commit?: string;
+  /** The patch release that replaced it after its tag's CI run failed; its tag stays in git. */
+  superseded_by?: string;
 }
 
 /** A release's notes as they are on its branch `release/<V>` (FEAT-216). */
@@ -533,7 +539,7 @@ export interface GateResult {
 
 /** One condition of a release stage a promotion enters, and whether it holds (FEAT-212). */
 export interface PlanCondition {
-  check: "items_finished" | "prepared" | "main_at_release" | "pushed" | "gate_passed";
+  check: "items_finished" | "prepared" | "main_at_release" | "pushed" | "gate_passed" | "tag_passed";
   stage: string;
   holds: boolean;
   detail: string;
@@ -549,13 +555,28 @@ export interface PlanStep {
   blocked?: string;
 }
 
+/** The newest result recorded for a release's tag (FTR-026). */
+export interface TagResult {
+  commit: string;
+  gate: string;
+  state: "passed" | "failed" | "none";
+  result?: GateResult;
+}
+
 /** What promoting a release would do, with nothing changed (FEAT-212). */
 export interface ReleasePlan {
   version: string;
   from: string;
   to: string;
   direction: string;
+  /** This promotion enters the stage that tags. */
   cut: boolean;
+  /** This promotion enters a stage after the cut: a confirmation by the user (FTR-026). */
+  confirm: boolean;
+  /** This promotion enters the last stage and ships the release (FTR-026). */
+  ships: boolean;
+  /** The tag's recorded CI result, while the release is tagged and not shipped (FTR-026). */
+  tag?: TagResult;
   /** What the one button says: "Promote to main", "Cut v0.2.1". */
   button: string;
   conditions: PlanCondition[];

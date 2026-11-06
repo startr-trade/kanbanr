@@ -25,6 +25,10 @@ export interface ReleaseAction {
   gate?: { commit: string; record: string };
   /** A line shown instead of a button, when there is none to offer. */
   note?: string;
+  /** A stage after the tag: the button confirms what the user checked, with an optional note (FTR-026). */
+  confirm: boolean;
+  /** A failed result for the tag: look again after a rerun, or start a patch release (FTR-026). */
+  secondary: ("runAgain" | "startPatch")[];
 }
 
 /** When the daemon was not started in the project folder, it cannot read the code repository. */
@@ -43,6 +47,8 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
       missing: [{ text, fix: "" }],
       command: `kanbanr release plan ${plan.version} <CODE>…`,
       note: text,
+      confirm: false,
+      secondary: [],
     };
   }
   const does = plan.steps.filter((s) => !s.noop && !s.blocked).map((s) => s.does);
@@ -68,8 +74,19 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
       if (!missing.some((x) => x.text === m || x.fix === m)) missing.push({ text: m, fix: "" });
     }
   }
+  // A confirmation after the tag waits for a passed result for the tag; when the plan names no
+  // condition for it (a project that has no commit gate to judge by judges nothing), the result
+  // is still the thing to wait for if one is being judged (FTR-026).
+  const judged = plan.confirm && plan.tag != null && plan.tag.gate !== "";
+  const tagBlocked = judged && plan.tag?.state !== "passed";
   if (plan.ready && plan.repo) missing = [];
-  const preview = plan.cut
+  if (tagBlocked && !missing.some((m) => m.text.startsWith("tag_passed"))) {
+    missing.push({
+      text: plan.tag?.state === "failed" ? `the tag's ${plan.tag.gate} result is failed` : "no result recorded for the tag since it was made",
+      fix: "run your CI on the tag, then record its verdict",
+    });
+  }
+  const preview = plan.ships
     ? {
         tag: plan.tag_commit
           ? `${plan.tag_commit.sha.slice(0, 7)}${plan.tag_commit.sha ? " " : ""}${plan.tag_commit.subject}`.trim()
@@ -87,10 +104,12 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
     gate,
     button: writable,
     label: plan.button,
-    enabled: writable && plan.ready && plan.repo,
+    enabled: writable && plan.ready && plan.repo && !tagBlocked,
     does,
     preview,
     missing,
     command,
+    confirm: plan.confirm,
+    secondary: plan.confirm && plan.tag?.state === "failed" ? ["runAgain", "startPatch"] : [],
   };
 }

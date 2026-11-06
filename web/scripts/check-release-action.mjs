@@ -15,6 +15,8 @@ const base = {
   to: "main",
   direction: "forward",
   cut: false,
+  confirm: false,
+  ships: false,
   button: "Promote to main",
   conditions: [{ check: "items_finished", stage: "main", holds: true, detail: "2 planned item(s), all finished" }],
   steps: [{ action: "move_main", stage: "main", does: "fast-forwards main to release/v0.3.0 (abc1234)", noop: false }],
@@ -31,6 +33,7 @@ const cut = {
   from: "main",
   to: "production",
   cut: true,
+  ships: true,
   button: "Cut v0.3.0",
   conditions: [
     { check: "main_at_release", stage: "production", holds: true, detail: "main is at release/v0.3.0" },
@@ -139,6 +142,36 @@ a = releaseAction({ ...ungated, release_tip: "" }, true);
 expect("gate missing, no tip: no form", a.gate === undefined, a);
 a = releaseAction(cut, true);
 expect("no gate condition: no form", a.gate === undefined, a);
+
+// FTR-026: a stage after the tag is a confirmation, offered only after a passed result for the tag.
+const confirm = {
+  ...base,
+  from: "tag",
+  to: "staging",
+  confirm: true,
+  ships: true,
+  button: "Confirm staging: ship v0.3.0",
+  conditions: [{ check: "tag_passed", stage: "staging", holds: true, detail: "ci passed on abc1234 (recorded by Ada L)" }],
+  steps: [],
+  preview: [{ code: "FEAT-1", ships: true }],
+  tag: { commit: "abc1234def5678", gate: "ci", state: "passed", result: { passed: true, by: "Ada L" } },
+};
+a = releaseAction(confirm, true);
+expect("confirm after a pass: the button confirms and is enabled", a.confirm && a.enabled && a.label === "Confirm staging: ship v0.3.0" && a.secondary.length === 0, a);
+const red = {
+  ...confirm,
+  ready: false,
+  conditions: [{ check: "tag_passed", stage: "staging", holds: false, detail: "ci failed on abc1234", fix: "start a patch release" }],
+  missing: ["start a patch release"],
+  tag: { commit: "abc1234def5678", gate: "ci", state: "failed", result: { passed: false, by: "Ada L", note: "two red" } },
+};
+a = releaseAction(red, true);
+expect("confirm after a failure: not enabled, run again or patch", !a.enabled && a.secondary.join() === "runAgain,startPatch" && a.missing.some((m) => m.text.startsWith("tag_passed")), a);
+const none = { ...red, ready: true, conditions: [], missing: [], tag: { commit: "abc1234def5678", gate: "ci", state: "none" } };
+a = releaseAction(none, true);
+expect("confirm with no result: not enabled even if the plan has no condition", !a.enabled && a.missing.length === 1 && a.secondary.length === 0, a);
+a = releaseAction({ ...none, tag: { commit: "abc1234def5678", gate: "", state: "none" } }, true);
+expect("confirm with no gate to judge by: enabled", a.enabled, a);
 
 if (problems.length) {
   for (const p of problems) console.error(`web::release_button_says_what_it_does — ${p}`);
