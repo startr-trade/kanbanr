@@ -6273,6 +6273,13 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 &resp,
                 format!("{code}: sign-off '{name}' recorded by {who}"),
             );
+            if !cli.json
+                && let Some(held) = serde_json::from_str::<Value>(&resp)
+                    .ok()
+                    .and_then(|v| v["auto_advance_held"].as_str().map(str::to_string))
+            {
+                eprintln!("  {held}");
+            }
             Ok(())
         }
         Command::Sprint(cmd) => run_sprint(cli, &client, cmd),

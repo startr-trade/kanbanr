@@ -224,9 +224,7 @@ pub fn waits_for_cut<'a>(
     if !config.cadence.releases {
         return None;
     }
-    item.release
-        .as_deref()
-        .filter(|v| unshipped.contains(*v))
+    item.release.as_deref().filter(|v| unshipped.contains(*v))
 }
 
 impl DependencyView {

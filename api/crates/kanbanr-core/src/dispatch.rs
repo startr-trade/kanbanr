@@ -943,17 +943,23 @@ fn dispatch_routes(
                 &approver(b)?,
                 &str_field(b, "reason").unwrap_or_default(),
             )?),
-        ("POST", ["projects", p, "features", code, "signoff", name]) => ser(&{
+        ("POST", ["projects", p, "features", code, "signoff", name]) => {
             shown_rev(store, p, code, b)?;
-            store.signoff_feature(
+            let (feature, held) = store.signoff_feature_reported(
                 p,
                 code,
                 &percent_decode(name),
                 &approver(b)?,
                 &str_field(b, "note").unwrap_or_default(),
                 &str_field(b, "doc").unwrap_or_default(),
-            )?
-        }),
+            )?;
+            let mut out = serde_json::to_value(&feature)
+                .map_err(|e| CoreError::Unsupported(e.to_string()))?;
+            if let Some(held) = held {
+                out["auto_advance_held"] = json!(held);
+            }
+            ser(&out)
+        }
         ("POST", ["projects", p, "features", code, "todos"]) => ser(&store.add_todo_list(
             p,
             code,

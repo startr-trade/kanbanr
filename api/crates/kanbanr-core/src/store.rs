@@ -1329,6 +1329,21 @@ impl Store {
         note: &str,
         doc: &str,
     ) -> Result<FeatureItem> {
+        self.signoff_feature_reported(id, code, signoff, by, note, doc)
+            .map(|(f, _)| f)
+    }
+
+    /// As [`Store::signoff_feature`], also returning why the sign-off did not finish an item whose
+    /// tasks are all done, when it did not (DEF-019): the same words `task` shows.
+    pub fn signoff_feature_reported(
+        &self,
+        id: &str,
+        code: &str,
+        signoff: &str,
+        by: &str,
+        note: &str,
+        doc: &str,
+    ) -> Result<(FeatureItem, Option<String>)> {
         let signoff = signoff.trim();
         if signoff.is_empty() {
             return Err(CoreError::Unsupported(
@@ -1369,13 +1384,15 @@ impl Store {
         pending.persist_features.insert(updated.code.clone());
         // The sign-off may have been the last thing holding finished work (FEAT-204): finish it as
         // the last task would have, through the same gates and holds.
+        let mut held = None;
         if updated.all_tasks_completed() {
             let charter = crate::charter::load(self, id)?;
             let ctx = crate::readiness::Context::load(self, id, &project.config);
-            updated = Self::auto_advance_on(&mut project, &mut pending, &charter, &ctx, code)?.0;
+            (updated, held) =
+                Self::auto_advance_on(&mut project, &mut pending, &charter, &ctx, code)?;
         }
         self.flush(id, &project, &pending)?;
-        Ok(updated)
+        Ok((updated, held))
     }
 
     /// Withdraw sign-off `signoff` on an item (FEAT-182): appends a withdrawal, keeping the earlier
@@ -1535,6 +1552,7 @@ impl Store {
 
     /// The one gated move, shared by the route and the batch path — the batch is the primary way
     /// work is started, so exempting it would make every gate decorative.
+    #[allow(clippy::too_many_arguments)]
     fn gated_move_on(
         project: &mut Project,
         pending: &mut Pending,
@@ -1559,7 +1577,7 @@ impl Store {
         {
             return Err(CoreError::Unsupported(format!(
                 "{code} is planned into {v}, which has not been cut: it reaches {to} when {v} \
-                 ships. To move it yourself, give a reason (--reason)"
+                 ships. To move it yourself, give a reason (--override <reason>)"
             )));
         }
         let outcome = Self::check_gate(project, charter, ctx, code, to, reason)?;

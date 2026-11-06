@@ -3836,7 +3836,10 @@ requirements:
             .unwrap();
         assert_eq!(f.status, "Scheduled");
         let held = held.expect("and says why");
-        assert!(held.contains("v0.1.0") && held.contains("Completed"), "{held}");
+        assert!(
+            held.contains("v0.1.0") && held.contains("Completed"),
+            "{held}"
+        );
         assert!(held.contains("has not been cut"), "{held}");
     }
 
@@ -3856,7 +3859,10 @@ requirements:
             )
             .unwrap();
         assert_eq!(out[0]["status"], "Scheduled", "{out:?}");
-        assert!(out[0]["held"].as_str().unwrap().contains("v0.1.0"), "{out:?}");
+        assert!(
+            out[0]["held"].as_str().unwrap().contains("v0.1.0"),
+            "{out:?}"
+        );
     }
 
     /// DEF-019 R-3: the cut moves an item that waited for it.
@@ -3870,7 +3876,7 @@ requirements:
             .set_task_state_reported("demo", &code, &tl, "T1", TaskState::Completed)
             .unwrap();
         let cut = crate::releases::cut(&store, "demo", "v0.1.0").unwrap();
-        assert_eq!(cut.release.shipped, [code.clone()]);
+        assert_eq!(cut.release.shipped, std::slice::from_ref(&code));
         let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
         assert_eq!(f.status, "Completed");
         assert_eq!(f.history.last().unwrap().to, "Completed");
@@ -3887,7 +3893,10 @@ requirements:
             .move_feature_approved("demo", &code, "Completed", None)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("v0.1.0") && err.contains("--reason"), "{err}");
+        assert!(
+            err.contains("v0.1.0") && err.contains("--override"),
+            "{err}"
+        );
         let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
         assert_eq!(f.status, "Scheduled");
     }
@@ -3941,7 +3950,11 @@ requirements:
         ) -> Option<String> {
             crate::graph::waits_for_cut(config, un, i).map(str::to_string)
         }
-        assert_eq!(wait(&project.config, &unshipped, &item), None, "releases off");
+        assert_eq!(
+            wait(&project.config, &unshipped, &item),
+            None,
+            "releases off"
+        );
         project.config.cadence.releases = true;
         assert_eq!(
             wait(&project.config, &unshipped, &item),

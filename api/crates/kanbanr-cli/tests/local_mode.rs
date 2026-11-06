@@ -3947,6 +3947,99 @@ fn plan_finished_item(base: &std::path::Path, work: &std::path::Path, version: &
     code
 }
 
+/// DEF-019 R-8: a sign-off on an item planned into an uncut release leaves it in place and the
+/// CLI names the release and the end status.
+#[test]
+fn signoff_release_says_the_item_waits_for_the_cut() {
+    let (base, work) = togaf_scratch("waits-for-cut");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    // The test's own board, never the repository's.
+    assert!(work.starts_with(std::env::temp_dir()));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--releases", "on"],
+    ));
+    ok(run_in(&base, &work, &["release", "add", "v0.1.0"]));
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    let made = ok(run_in(
+        &base,
+        &work,
+        &[
+            "--json",
+            "feature",
+            "add",
+            "--title",
+            "Waits",
+            "--milestone",
+            "MS-001",
+        ],
+    ));
+    let made: serde_json::Value = serde_json::from_slice(&made.stdout).unwrap();
+    let code = made["code"].as_str().unwrap().to_string();
+    let def = base.join("def.yaml");
+    std::fs::write(&def, "statement: Waits for the cut\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &["feature", "define", &code, "--file", def.to_str().unwrap()],
+    ));
+    ok(run_in(&base, &work, &["move", &code, "In Progress"]));
+    ok(run_in(
+        &base,
+        &work,
+        &["todo", "add", &code, "--description", "work"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["task", "add", &code, "TL-001", "--text", "one"],
+    ));
+    ok(run_in(&base, &work, &["release", "plan", "v0.1.0", &code]));
+
+    let o = ok(run_in(
+        &base,
+        &work,
+        &["task", "state", &code, "TL-001", "T1", "Completed"],
+    ));
+    let said = String::from_utf8_lossy(&o.stderr).to_string();
+    assert!(
+        said.contains("v0.1.0") && said.contains("has not been cut"),
+        "{said}"
+    );
+
+    let o = ok(run_in(&base, &work, &["signoff", &code, "release"]));
+    let said = String::from_utf8_lossy(&o.stderr).to_string();
+    assert!(
+        said.contains("v0.1.0") && said.contains("has not been cut") && said.contains("Completed"),
+        "{said}"
+    );
+    let shown = ok(run_in(&base, &work, &["--json", "feature", "show", &code]));
+    let shown: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown["status"], "In Progress", "{shown}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// The commit a name points at in the scratch repository, or "" when it names none.
 fn rev(base: &std::path::Path, work: &std::path::Path, name: &str) -> String {
     let o = git_in(base, work, &["rev-parse", "--verify", "--quiet", name]);
@@ -5012,7 +5105,17 @@ fn fixes_forward_merged() {
         "fixed\n",
         "fix: cart\n\nRefs: kanbanr:FEAT-002",
     );
-    let said = ok(run_in(&base, &work, &["move", "FEAT-002", "Completed"]));
+    let said = ok(run_in(
+        &base,
+        &work,
+        &[
+            "move",
+            "FEAT-002",
+            "Completed",
+            "--override",
+            "fix integrated into the release under test",
+        ],
+    ));
     assert!(said.contains("into release/v1"), "{said}");
     assert!(said.contains("kanbanr git forward v1"), "{said}");
 
