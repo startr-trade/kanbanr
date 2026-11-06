@@ -199,6 +199,13 @@
           "by": {
             "type": "string"
           },
+          "parts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "A hash of each part of the definition it covered (FTR-018), keyed as\n[`FeatureDefinition::part_revs`]. Empty on a record an older kanbanr wrote: such a record is\nno baseline, and any change to the definition lapses it.",
+            "type": "object"
+          },
           "rev": {
             "type": "string"
           }
@@ -270,6 +277,11 @@
           {
             "const": "lapsed",
             "description": "Approved, then the definition changed.",
+            "type": "string"
+          },
+          {
+            "const": "added",
+            "description": "Approved, then the definition gained parts that now need a decision (FTR-018): the item is\nat or past its build stage, or its next stage would refuse the additions.",
             "type": "string"
           }
         ]
@@ -1295,6 +1307,10 @@
             "description": "The release this item is planned into (FEAT-120), for projects that use releases.",
             "type": "string"
           },
+          "release_line": {
+            "description": "Which release shipped it, or will (FTR-001). Absent without releases.",
+            "type": "string"
+          },
           "source": {
             "$ref": "#/components/schemas/Source",
             "description": "Where this feature was imported from, if it was (FEAT-042)."
@@ -2190,6 +2206,35 @@
           }
         ]
       },
+      "PartChanges": {
+        "description": "What differs between the parts a decision covered and the definition now (FTR-018). Keys are\nthose of [`FeatureDefinition::part_revs`], sorted.",
+        "properties": {
+          "added": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "changed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "removed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "added",
+          "changed",
+          "removed"
+        ],
+        "type": "object"
+      },
       "PlanCondition": {
         "description": "One condition of a stage entered or passed, and whether it holds (FEAT-212).",
         "properties": {
@@ -2885,6 +2930,13 @@
           },
           "version": {
             "type": "string"
+          },
+          "warnings": {
+            "description": "Things worth knowing that do not stop the promotion, e.g. a stale release date (DEF-001).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -3092,11 +3144,19 @@
             "$ref": "#/components/schemas/ApprovalKind",
             "description": "What is being asked."
           },
+          "changes": {
+            "$ref": "#/components/schemas/PartChanges",
+            "description": "The parts added, changed and removed since the last decision (FTR-018); present on\n`lapsed`, `added` and `signoff` entries that have a baseline to compare with."
+          },
           "code": {
             "type": "string"
           },
           "definition": {
             "$ref": "#/components/schemas/FeatureDefinition"
+          },
+          "finished": {
+            "description": "The item is finished work (DEF-013): listed only because its approval lapsed.",
+            "type": "boolean"
           },
           "in_progress": {
             "description": "What the ordering keys on, and useful to a client besides.",
@@ -3139,7 +3199,8 @@
           "started_unapproved",
           "definition",
           "rev",
-          "in_progress"
+          "in_progress",
+          "finished"
         ],
         "type": "object"
       },
@@ -3186,6 +3247,13 @@
           },
           "note": {
             "type": "string"
+          },
+          "parts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "A hash of each part of the definition it covered (FTR-018), keyed as\n[`FeatureDefinition::part_revs`]. Empty on a record an older kanbanr wrote: such a record is\nno baseline, and any change to the definition lapses it.",
+            "type": "object"
           },
           "reason": {
             "description": "Why it was withdrawn. Giving a sign-off needs no reason; taking one back does.",

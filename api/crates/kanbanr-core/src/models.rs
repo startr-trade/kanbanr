@@ -1308,6 +1308,8 @@ requirements:
 mod tests {
     use super::*;
 
+    type Mutation = Box<dyn Fn(&mut FeatureDefinition)>;
+
     /// FEAT-187 R-3: one definition, written two ways — quotes, flow or block style, key order,
     /// indentation, a test's state — has one revision.
     #[test]
@@ -1421,7 +1423,7 @@ mod tests {
     #[test]
     fn part_revs_cover_every_field_content_rev_hashes() {
         let base = full_definition();
-        let mutations: Vec<(&str, Box<dyn Fn(&mut FeatureDefinition)>)> = vec![
+        let mutations: Vec<(&str, Mutation)> = vec![
             ("statement", Box::new(|d| d.statement.push('!'))),
             ("goal", Box::new(|d| d.goals[0] = "G-9".into())),
             ("what", Box::new(|d| d.zachman.what.push('!'))),
@@ -1480,7 +1482,7 @@ mod tests {
         let mut base = full_definition();
         approve(&mut base);
         assert_eq!(base.approval_state(), ApprovalState::Current);
-        let additions: Vec<Box<dyn Fn(&mut FeatureDefinition)>> = vec![
+        let additions: Vec<Mutation> = vec![
             Box::new(|d| d.goals.push("G-5".into())),
             Box::new(|d| d.zachman.how = "by hashing".into()),
             Box::new(|d| {
@@ -1521,7 +1523,7 @@ mod tests {
             ..Default::default()
         });
         approve(&mut base);
-        let lapses: Vec<Box<dyn Fn(&mut FeatureDefinition)>> = vec![
+        let lapses: Vec<Mutation> = vec![
             Box::new(|d| d.statement.push('!')),
             Box::new(|d| d.goals.retain(|g| g != "G-3")),
             Box::new(|d| d.requirements[0].tests[0].name = "renamed".into()),
