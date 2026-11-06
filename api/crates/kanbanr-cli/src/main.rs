@@ -1062,6 +1062,10 @@ enum ConfigCmd {
         /// branches, lines taking merges only. on | off; off by default.
         #[arg(long, value_parser = ["on", "off"])]
         git_model: Option<String>,
+        /// The project has CI (FTR-020): the recommended `tag` stage then also waits for a passed
+        /// `ci` result for the release tip. on | off; off by default.
+        #[arg(long, value_parser = ["on", "off"])]
+        has_ci: Option<String>,
     },
     /// The gates a release stage needing `gate_passed` requires a passed result of for the release
     /// tip (FTR-002): `kanbanr config commit-gates ci`. With none given, clears them.
@@ -8439,8 +8443,10 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             integration_branch,
             main_branch,
             git_model,
+            has_ci,
         } => {
             let body = obj(vec![
+                ("has_ci", has_ci.as_deref().map(|v| json!(v == "on"))),
                 ("git_model", git_model.as_deref().map(|v| json!(v == "on"))),
                 ("sprints", sprints.as_deref().map(|v| json!(v == "on"))),
                 ("releases", releases.as_deref().map(|v| json!(v == "on"))),

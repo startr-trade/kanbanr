@@ -3871,6 +3871,12 @@ fn process_checks_lists_roles() {
 /// A code repository on `main` with one commit and its own commit identity, beside a board with
 /// releases on and `v1.0.0` added — the shape FEAT-183's promotions act on.
 fn release_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    release_scratch_with(tag, true)
+}
+
+/// As [`release_scratch`]; with `old_stages` false, the stages are the ones releases get when
+/// turned on (FTR-020), not the four the other tests walk through.
+fn release_scratch_with(tag: &str, old_stages: bool) -> (std::path::PathBuf, std::path::PathBuf) {
     let (base, work) = togaf_scratch(tag);
     let ok = |o: Output| {
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
@@ -3908,6 +3914,18 @@ fn release_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
         &work,
         &["config", "cadence", "--releases", "on"],
     ));
+    if old_stages {
+        ok(run_in(
+            &base,
+            &work,
+            &[
+                "config",
+                "cadence",
+                "--release-stages",
+                "candidate,test,staging,production",
+            ],
+        ));
+    }
     ok(run_in(&base, &work, &["release", "add", "v1.0.0"]));
     // A release with nothing planned into it is never promoted (FEAT-212 R-17).
     ok(run_in(
@@ -8709,5 +8727,30 @@ fn release_stage_accepts_items_merged_and_after() {
         "{}",
         String::from_utf8_lossy(&o.stderr)
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-020 R-2: `--has-ci on` sets the flag; on the untouched recommended stages the tag then
+/// waits for CI, and `off` clears the flag.
+#[test]
+fn config_cadence_has_ci_sets_the_flag() {
+    let (base, work) = release_scratch_with("has-ci", false);
+    let json = |args: &[&str]| -> serde_json::Value {
+        let o = run_in(&base, &work, args);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        serde_json::from_slice(&o.stdout).unwrap()
+    };
+    let before = json(&["--json", "release", "stages"]);
+    assert_eq!(before[2]["requires"], serde_json::json!(["main_at_release", "pushed"]));
+    let c = json(&["--json", "config", "cadence", "--has-ci", "on"]);
+    assert_eq!(c["cadence"]["has_ci"], true, "{c}");
+    assert_eq!(c["cadence"]["commit_gates"], serde_json::json!(["ci"]));
+    let after = json(&["--json", "release", "stages"]);
+    assert_eq!(
+        after[2]["requires"],
+        serde_json::json!(["main_at_release", "pushed", "gate_passed"])
+    );
+    let c = json(&["--json", "config", "cadence", "--has-ci", "off"]);
+    assert!(c["cadence"]["has_ci"].is_null() || c["cadence"]["has_ci"] == false, "{c}");
     let _ = std::fs::remove_dir_all(&base);
 }

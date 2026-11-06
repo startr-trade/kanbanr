@@ -352,6 +352,36 @@ impl Cadence {
         (stages, gates, commit_gates)
     }
 
+    /// What to tell a project that has just said it has CI but whose stages do not wait for it:
+    /// they were chosen by the project, so no gate was changed (FTR-020).
+    pub fn has_ci_note(&self, previous: &Cadence) -> Option<String> {
+        let waits = self
+            .effective_release_gates()
+            .iter()
+            .any(|(_, g)| g.requires.contains(&ReleaseCheck::GatePassed));
+        (self.has_ci && !previous.has_ci && self.releases && !waits).then(|| {
+            "no release stage waits for CI. To require it at the tag: kanbanr config release-stage \
+             tag --requires main_at_release,pushed,gate_passed and kanbanr config commit-gates ci"
+                .to_string()
+        })
+    }
+
+    /// This cadence without what kanbanr wrote itself when releases were turned on or CI was
+    /// declared: the recommended stages and gates, the `ci` commit gate and the flag (FTR-020).
+    /// What a process is compared with, since a process names none of them.
+    pub fn without_recommended_defaults(&self) -> Cadence {
+        let mut c = self.clone();
+        if c.is_recommended() {
+            c.release_stages.clear();
+            c.release_gates.clear();
+            if c.has_ci && c.commit_gates == ["ci"] {
+                c.commit_gates.clear();
+            }
+            c.has_ci = false;
+        }
+        c
+    }
+
     /// Whether the stage names and gates are exactly the recommended ones for this project's
     /// `has_ci`, so nothing in them was chosen by the project.
     pub fn is_recommended(&self) -> bool {

@@ -3196,6 +3196,41 @@ impl Store {
         cadence: crate::config::Cadence,
     ) -> Result<ProjectConfig> {
         let mut project = self.load(id)?;
+        let mut cadence = cadence;
+        // FTR-020: the recommended stages and gates are written when the choice is made, never on
+        // a read, and only over what the project did not choose itself.
+        let previous = project.config.cadence.clone();
+        if cadence.has_ci
+            && !previous.has_ci
+            && previous.is_recommended()
+            && previous.commit_gates.is_empty()
+            && cadence.release_stages == previous.release_stages
+            && cadence.release_gates == previous.release_gates
+            && cadence.commit_gates.is_empty()
+        {
+            // Still exactly the recommended stages: the tag now waits for CI.
+            let (_, gates, commit_gates) = crate::config::Cadence::recommended(true);
+            cadence.release_gates = gates;
+            cadence.commit_gates = commit_gates;
+        } else if cadence.releases
+            && !previous.releases
+            && cadence.release_stages.is_empty()
+            && cadence.release_gates.is_empty()
+        {
+            let (stages, gates, commit_gates) = crate::config::Cadence::recommended(cadence.has_ci);
+            cadence.release_stages = stages;
+            cadence.release_gates = gates;
+            if cadence.commit_gates.is_empty() {
+                cadence.commit_gates = commit_gates;
+            }
+        } else if previous.is_recommended()
+            && cadence.release_gates == previous.release_gates
+            && cadence.release_stages != previous.release_stages
+            && !cadence.release_stages.is_empty()
+        {
+            // The gates were never the project's choice: the new stages take the defaults.
+            cadence.release_gates.clear();
+        }
         if let Some(release) = cadence.release.as_deref()
             && !["per_sprint", "every_n", "on_demand"].contains(&release)
         {

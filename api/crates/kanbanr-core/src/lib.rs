@@ -3159,7 +3159,11 @@ requirements:
             &store,
             "PUT",
             "/projects/demo/config/cadence",
-            Some(&json!({"releases": true})),
+            // The four stages an older board has; turning releases on now gives other ones.
+            Some(&json!({
+                "releases": true,
+                "release_stages": ["candidate", "test", "staging", "production"],
+            })),
         )
         .unwrap();
         crate::releases::add(&store, "demo", "v0.1.0", "2026-10-31", "First cut").unwrap();

@@ -3447,7 +3447,10 @@ mod tests {
             &store,
             "PUT",
             "/projects/shop/config/cadence",
-            Some(&serde_json::json!({"releases": true})),
+            Some(&serde_json::json!({
+                "releases": true,
+                "release_stages": ["candidate", "test", "staging", "production"],
+            })),
         )
         .unwrap();
         super::add(&store, "shop", "v1", "", "").unwrap();

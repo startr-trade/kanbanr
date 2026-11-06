@@ -528,6 +528,11 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
             // keeps the project's own; if its stages no longer fit them, the refusal names the fix.
             if cadence.release_gates.is_empty() {
                 cadence.release_gates = config.cadence.release_gates.clone();
+                // The kept gates name the project's stages (the recommended ones, FTR-020), so a
+                // process that names none keeps those too.
+                if cadence.release_stages.is_empty() {
+                    cadence.release_stages = config.cadence.release_stages.clone();
+                }
             }
             if cadence.release_prepare.is_empty() {
                 cadence.release_prepare = config.cadence.release_prepare.clone();
