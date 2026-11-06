@@ -214,6 +214,21 @@ pub fn is_finished_work(config: &crate::ProjectConfig, status: &str) -> bool {
     is_terminal_status(config, status) && !config.is_no_op(status)
 }
 
+/// The release an item waits on: it ends only when that release is cut (DEF-019). None when the
+/// project does not work in releases, the item is planned into none, or its release is cut.
+pub fn waits_for_cut<'a>(
+    config: &crate::ProjectConfig,
+    unshipped: &BTreeSet<String>,
+    item: &'a FeatureItem,
+) -> Option<&'a str> {
+    if !config.cadence.releases {
+        return None;
+    }
+    item.release
+        .as_deref()
+        .filter(|v| unshipped.contains(*v))
+}
+
 impl DependencyView {
     /// Build the status-aware view across every project in the store. `overlay`, when given,
     /// substitutes the in-memory state of one project for its on-disk state (matches

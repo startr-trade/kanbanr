@@ -320,6 +320,9 @@ pub struct Context {
     /// What the coverage rules' source docs reference (FEAT-197), read only when the project has
     /// rules and some gate asks for `docs_cover`.
     pub coverage: Option<std::sync::Arc<crate::coverage::Snapshot>>,
+    /// The versions of the releases not yet cut, when the project works in releases (DEF-019).
+    /// An item planned into one waits for the cut before it reaches its end status.
+    pub unshipped_releases: std::collections::BTreeSet<String>,
 }
 
 impl Context {
@@ -336,6 +339,18 @@ impl Context {
             },
             docs_dir: Some(store.project_dir(id).join("docs")),
             coverage: Self::coverage(store, id, config),
+            unshipped_releases: if config.cadence.releases {
+                crate::releases::load(store, id)
+                    .map(|rs| {
+                        rs.into_iter()
+                            .filter(|r| r.state != crate::releases::ReleaseState::Shipped)
+                            .map(|r| r.version)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Default::default()
+            },
         }
     }
 

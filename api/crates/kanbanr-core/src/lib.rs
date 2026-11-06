@@ -3776,6 +3776,37 @@ requirements:
         );
     }
 
+    /// DEF-019 R-4: an item waits for the cut only when the project works in releases and its
+    /// release is not cut; no release, a cut release, or releases off leave it free to finish.
+    #[test]
+    fn an_item_in_no_release_still_finishes_on_its_last_task() {
+        let (store, _d, code) = gated_board(crate::config::Gate::default());
+        let mut project = store.load("demo").unwrap();
+        let unshipped: std::collections::BTreeSet<String> = ["v0.1.0".to_string()].into();
+        let mut item = project.feature(&code).unwrap().clone();
+        item.release = Some("v0.1.0".into());
+        fn wait(
+            config: &crate::ProjectConfig,
+            un: &std::collections::BTreeSet<String>,
+            i: &FeatureItem,
+        ) -> Option<String> {
+            crate::graph::waits_for_cut(config, un, i).map(str::to_string)
+        }
+        assert_eq!(wait(&project.config, &unshipped, &item), None, "releases off");
+        project.config.cadence.releases = true;
+        assert_eq!(
+            wait(&project.config, &unshipped, &item),
+            Some("v0.1.0".to_string())
+        );
+        assert_eq!(
+            wait(&project.config, &Default::default(), &item),
+            None,
+            "a release that was cut"
+        );
+        item.release = None;
+        assert_eq!(wait(&project.config, &unshipped, &item), None, "no release");
+    }
+
     /// FEAT-115 R-3: finishing the last task does not carry an item past its end status's gate —
     /// it stays, and says why; once the gate is met, the next task write advances it.
     #[test]
