@@ -114,6 +114,32 @@ a = releaseAction(empty, true);
 expect("empty release: no button", !a.button && !a.enabled && a.label === "", a);
 expect("empty release: only the sentence", a.note === empty.missing[0] && a.command === "kanbanr release plan v0.3.0 <CODE>…", a);
 
+// FTR-002: an unmet gate_passed offers recording a result for the release tip, never reading one.
+const ungated = {
+  ...cut,
+  ready: false,
+  conditions: [
+    cut.conditions[0],
+    {
+      check: "gate_passed",
+      stage: "production",
+      holds: false,
+      detail: "ci has no recorded result for abc1234",
+      fix: "look at your CI for abc1234, then record its verdict: kanbanr gate record <gate> --passed --commit <sha>",
+    },
+  ],
+  missing: ["look at your CI for abc1234, then record its verdict"],
+};
+a = releaseAction(ungated, true);
+expect("gate missing: disabled, names the result", !a.enabled && a.missing.some((m) => m.text.startsWith("gate_passed: ci has no recorded result")), a);
+expect("gate missing: the form is for the release tip", a.gate?.commit === "abc1234def" && a.gate.record.includes("kanbanr gate record <gate> --passed --commit abc1234def"), a);
+a = releaseAction({ ...ungated, repo: false }, true);
+expect("gate missing, no repo: still shown with the tip", a.missing.some((m) => m.text.startsWith("gate_passed:")), a);
+a = releaseAction({ ...ungated, release_tip: "" }, true);
+expect("gate missing, no tip: no form", a.gate === undefined, a);
+a = releaseAction(cut, true);
+expect("no gate condition: no form", a.gate === undefined, a);
+
 if (problems.length) {
   for (const p of problems) console.error(`web::release_button_says_what_it_does — ${p}`);
   process.exit(1);

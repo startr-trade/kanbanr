@@ -141,6 +141,8 @@ export default function ReleasesPage() {
                     release={r}
                     tick={tick}
                     writable={writable}
+                    gates={config.cadence?.commit_gates ?? []}
+                    who={who}
                     busy={busy}
                     onPromote={promote}
                     outcome={outcome[r.version]}
@@ -184,11 +186,15 @@ function ReleaseButton({
   busy,
   onPromote,
   outcome,
+  gates,
+  who,
 }: {
   project: string;
   release: Release;
   tick: number;
   writable: boolean;
+  gates: string[];
+  who: string | null;
   busy: string | null;
   onPromote: (r: Release, to: string, expect: string) => void;
   outcome?: string;
@@ -269,6 +275,20 @@ function ReleaseButton({
               </li>
             ))}
           </ul>
+          {action.gate ? (
+            <RecordResult
+              project={project}
+              commit={action.gate.commit}
+              gates={gates}
+              writable={writable}
+              who={who}
+              command={action.gate.record}
+              onRecorded={() => {
+                setHideOutcome(true);
+                setAgain((n) => n + 1);
+              }}
+            />
+          ) : null}
           <button
             className="btn"
             onClick={() => {
@@ -281,6 +301,88 @@ function ReleaseButton({
           </button>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Record what your CI said about the commit a promotion needs (FTR-002): which gate, passed or
+ * failed, a link to the run and a note. kanbanr asks no server; a person records the verdict. On a
+ * read-only monitor it shows the command instead.
+ */
+function RecordResult({
+  project,
+  commit,
+  gates,
+  writable,
+  who,
+  command,
+  onRecorded,
+}: {
+  project: string;
+  commit: string;
+  gates: string[];
+  writable: boolean;
+  who: string | null;
+  command: string;
+  onRecorded: () => void;
+}) {
+  const [gate, setGate] = useState(gates[0] ?? "ci");
+  const [url, setUrl] = useState("");
+  const [note, setNote] = useState("");
+  const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
+  if (!writable || !who) {
+    return (
+      <p className="small">
+        Record your CI's verdict from the project folder: <code>{command}</code>
+      </p>
+    );
+  }
+  const record = async (passed: boolean) => {
+    try {
+      await api.recordGate(project, gate, commit, passed, who, url.trim(), note.trim());
+      setSaid({ ok: true, text: `${gate} ${passed ? "passed" : "failed"} on ${commit.slice(0, 7)}` });
+      setUrl("");
+      setNote("");
+      onRecorded();
+    } catch (e) {
+      setSaid({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    }
+  };
+  return (
+    <div className="small">
+      <p>
+        <strong>Record result</strong> for <code>{commit.slice(0, 7)}</code>, as your CI showed it:
+      </p>
+      <p>
+        <select value={gate} onChange={(e) => setGate(e.target.value)} aria-label="Gate">
+          {(gates.length ? gates : ["ci"]).map((g) => (
+            <option key={g}>{g}</option>
+          ))}
+        </select>{" "}
+        <input
+          type="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="link to the run (optional)"
+          aria-label="Link to the run"
+        />{" "}
+        <input
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="note (optional)"
+          aria-label="Note"
+        />
+      </p>
+      <p className="review-actions">
+        <button className="btn btn-primary" onClick={() => record(true)}>
+          Passed
+        </button>
+        <button className="btn" onClick={() => record(false)}>
+          Failed
+        </button>
+        {said ? <span className={`chip ${said.ok ? "done" : "warn"}`}>{said.text}</span> : null}
+      </p>
     </div>
   );
 }

@@ -190,6 +190,17 @@ export const api = {
       "promote a release",
       `kanbanr release promote ${version}${stage ? ` ${stage}` : ""}`,
     ),
+  /**
+   * Record a gate's verdict for a commit (FTR-002), through the route `kanbanr gate record` uses.
+   * What your CI said, as a person saw it: kanbanr asks no server.
+   */
+  recordGate: (id: string, name: string, commit: string, passed: boolean, by: string, url = "", note = "") =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/gate-results`,
+      { name, commit, passed, by, ...(url ? { url } : {}), ...(note ? { note } : {}) },
+      "record a gate result",
+      `kanbanr gate record ${name} ${passed ? "--passed" : "--failed"} --commit ${commit}`,
+    ),
   /** Every architecture decision on the board, newest first (FEAT-057). */
   getAdrs: (id: string) => getJson<Adr[]>(apiUrl(`/projects/${encodeURIComponent(id)}/adrs`)),
   /** The user's verdict on a proposed decision (FEAT-153), through the route `kanbanr adr accept`

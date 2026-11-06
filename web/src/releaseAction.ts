@@ -21,6 +21,8 @@ export interface ReleaseAction {
   missing: { text: string; fix: string }[];
   /** The CLI command that does the same thing. */
   command: string;
+  /** An unmet `gate_passed`: the commit a result is needed for, and the command that records it. */
+  gate?: { commit: string; record: string };
   /** A line shown instead of a button, when there is none to offer. */
   note?: string;
 }
@@ -48,7 +50,10 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
   if (!plan.repo && plan.steps.length + plan.conditions.length > 0) {
     // Everything that reads the repository would say the same thing: say it once, with the way out.
     missing.push({ text: NO_REPO, fix: `run \`${command}\` from the project folder` });
-    for (const c of plan.conditions.filter((c) => !c.holds && c.check === "items_finished")) {
+    // A gate result needs the release tip, which the plan carries whether or not the repository
+    // could be read; without a tip there is nothing to record against.
+    const wanted = (c: { check: string }) => c.check === "items_finished" || (c.check === "gate_passed" && plan.release_tip);
+    for (const c of plan.conditions.filter((c) => !c.holds && wanted(c))) {
       missing.push({ text: `${c.check}: ${c.detail}`, fix: c.fix ?? "" });
     }
   } else {
@@ -73,7 +78,13 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
         carries: (plan.preview ?? []).filter((p) => !p.ships).map((p) => ({ code: p.code, why: p.why ?? "" })),
       }
     : undefined;
+  const unmetGate = plan.conditions.find((c) => !c.holds && c.check === "gate_passed");
+  const gate =
+    unmetGate && plan.release_tip && !plan.ready
+      ? { commit: plan.release_tip, record: `kanbanr gate record <gate> --passed --commit ${plan.release_tip}` }
+      : undefined;
   return {
+    gate,
     button: writable,
     label: plan.button,
     enabled: writable && plan.ready && plan.repo,
