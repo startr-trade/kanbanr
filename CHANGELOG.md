@@ -30,6 +30,13 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **The Review page no longer slows down as a board grows (DEF-022).** The `docs_updated` check
+  opened the board's repository and walked its history again for every doc an item declares. It now
+  opens it once and walks it once per request, and the Review page refetches once after a burst of
+  board changes settles. On a generated board of 2,500 commits and 70 items naming 490 docs, the
+  review queue went from 15.0 s to 0.05 s. `kanbanr check` and `doctor` share the check and gain
+  too; their answers are unchanged.
+
 - **The book and the skill match this release (DOC-006).** The no-charter warning, the date set when
   main moves, `why` on an uncommitted line, `git doctor` with no integrate stage and lapsed approvals
   on finished items are all described as they now behave, and the skill tells Claude about them.
