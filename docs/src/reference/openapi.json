@@ -411,6 +411,13 @@
         "additionalProperties": true,
         "description": "A project's rhythm (FEAT-121): whether it has sprints and releases, and their defaults.",
         "properties": {
+          "commit_gates": {
+            "description": "The gates (`ci`, `local`, ...) a release stage needing `gate_passed` requires a passed\nresult of for the release tip (FTR-002). Empty by default.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "git_model": {
             "description": "Branching follows the derived git model (FEAT-189): where `start` branches, sprint\nbranches, and lines of integration taking merges only. Off by default, so no board changes.",
             "type": "boolean"
@@ -1295,6 +1302,10 @@
             "description": "The release this item is planned into (FEAT-120), for projects that use releases.",
             "type": "string"
           },
+          "release_line": {
+            "description": "Which release shipped it, or will (FTR-001). Absent without releases.",
+            "type": "string"
+          },
           "source": {
             "$ref": "#/components/schemas/Source",
             "description": "Where this feature was imported from, if it was (FEAT-042)."
@@ -1631,6 +1642,47 @@
             "type": "array"
           }
         },
+        "type": "object"
+      },
+      "GateResult": {
+        "properties": {
+          "at": {
+            "description": "RFC 3339, UTC.",
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "commit": {
+            "description": "The full commit the result is about.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "source": {
+            "description": "`person` or `local`.",
+            "type": "string"
+          },
+          "url": {
+            "description": "A link to the run, `http(s)` only.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "commit",
+          "passed",
+          "by",
+          "at",
+          "source"
+        ],
         "type": "object"
       },
       "Goal": {
@@ -2780,6 +2832,11 @@
             "const": "pushed",
             "description": "The release tip is on main's remote-tracking branch.",
             "type": "string"
+          },
+          {
+            "const": "gate_passed",
+            "description": "Every gate in `cadence.commit_gates` has a passed result recorded for the release tip.",
+            "type": "string"
           }
         ]
       },
@@ -2885,6 +2942,13 @@
           },
           "version": {
             "type": "string"
+          },
+          "warnings": {
+            "description": "Things worth knowing that do not stop the promotion, e.g. a stale release date (DEF-001).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -3098,6 +3162,10 @@
           "definition": {
             "$ref": "#/components/schemas/FeatureDefinition"
           },
+          "finished": {
+            "description": "The item is finished work (DEF-013): listed only because its approval lapsed.",
+            "type": "boolean"
+          },
           "in_progress": {
             "description": "What the ordering keys on, and useful to a client besides.",
             "type": "boolean"
@@ -3139,7 +3207,8 @@
           "started_unapproved",
           "definition",
           "rev",
-          "in_progress"
+          "in_progress",
+          "finished"
         ],
         "type": "object"
       },
@@ -4438,6 +4507,68 @@
           }
         },
         "summary": "The schedule as a Mermaid gantt diagram, by milestone"
+      }
+    },
+    "/api/projects/{project}/gate-results": {
+      "get": {
+        "operationId": "getProjectsGateResults",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only this gate's results.",
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only results for the commit with this hash (or prefix).",
+            "in": "query",
+            "name": "commit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GateResult"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The gate results recorded for the project, oldest first: which gate, which commit, passed or failed, who and when"
       }
     },
     "/api/projects/{project}/gates": {

@@ -91,14 +91,17 @@ pub enum ReleaseCheck {
     MainAtRelease,
     /// The release tip is on main's remote-tracking branch.
     Pushed,
+    /// Every gate in `cadence.commit_gates` has a passed result recorded for the release tip.
+    GatePassed,
 }
 
 impl ReleaseCheck {
-    pub const ALL: [ReleaseCheck; 4] = [
+    pub const ALL: [ReleaseCheck; 5] = [
         ReleaseCheck::ItemsFinished,
         ReleaseCheck::Prepared,
         ReleaseCheck::MainAtRelease,
         ReleaseCheck::Pushed,
+        ReleaseCheck::GatePassed,
     ];
 
     pub fn name(self) -> &'static str {
@@ -107,6 +110,7 @@ impl ReleaseCheck {
             ReleaseCheck::Prepared => "prepared",
             ReleaseCheck::MainAtRelease => "main_at_release",
             ReleaseCheck::Pushed => "pushed",
+            ReleaseCheck::GatePassed => "gate_passed",
         }
     }
 
@@ -124,6 +128,9 @@ impl ReleaseCheck {
             ReleaseCheck::Pushed => {
                 "the release tip is on main's remote-tracking branch (for a patch left behind, on \
                  any remote-tracking branch)"
+            }
+            ReleaseCheck::GatePassed => {
+                "every gate in commit_gates has a passed result for the release tip"
             }
         }
     }
@@ -333,6 +340,19 @@ impl Cadence {
             }
         }
         let effective = self.effective_release_gates();
+        if self.commit_gates.is_empty()
+            && let Some((stage, _)) = effective
+                .iter()
+                .find(|(_, g)| g.requires.contains(&ReleaseCheck::GatePassed))
+        {
+            return Err(format!(
+                "release stage '{stage}' requires gate_passed but no commit gate is named: run \
+                 `kanbanr config commit-gates ci` first"
+            ));
+        }
+        for g in &self.commit_gates {
+            crate::gates::check_name(g).map_err(|e| format!("commit gate: {e}"))?;
+        }
         let last = effective.len().saturating_sub(1);
         let mut at: std::collections::BTreeMap<ReleaseAction, usize> = Default::default();
         for (i, (stage, gate)) in effective.iter().enumerate() {

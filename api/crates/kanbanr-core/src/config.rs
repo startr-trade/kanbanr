@@ -430,6 +430,10 @@ pub struct Cadence {
         skip_serializing_if = "crate::releasegates::ReleasePrepare::is_empty"
     )]
     pub release_prepare: crate::releasegates::ReleasePrepare,
+    /// The gates (`ci`, `local`, ...) a release stage needing `gate_passed` requires a passed
+    /// result of for the release tip (FTR-002). Empty by default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commit_gates: Vec<String>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(

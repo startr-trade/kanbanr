@@ -36,6 +36,7 @@ pub mod evidence;
 pub mod export;
 pub mod flow;
 pub mod gantt;
+pub mod gates;
 pub mod git;
 pub mod gitdrift;
 pub mod gitmodel;
