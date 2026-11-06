@@ -8354,3 +8354,88 @@ fn gates_route_records_what_the_page_posts() {
     assert!(err.contains("commit"), "{err}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FTR-021 R-3: the plan to a stage requiring `items_merged` names each item not merged and the
+/// status it is at, and what to do.
+#[test]
+fn release_promote_plan_names_the_unmerged_items() {
+    let (base, work) = release_scratch("merged-plan");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let made = ok(run_in(
+        &base,
+        &work,
+        &["--json", "feature", "add", "--title", "Still going", "--milestone", "MS-001"],
+    ));
+    let made: serde_json::Value = serde_json::from_str(&made).unwrap();
+    let behind = made["code"].as_str().unwrap().to_string();
+    ok(run_in(&base, &work, &["release", "plan", "v1.0.0", &behind]));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "release-stage",
+            "candidate",
+            "--requires",
+            "items_merged",
+            "--on-enter",
+            "branch",
+        ],
+    ));
+    let said = ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "--plan"],
+    ));
+    assert!(said.contains("items_merged"), "{said}");
+    assert!(said.contains(&format!("{behind} is at Planned")), "{said}");
+    assert!(said.contains(&format!("{behind}: move it to Completed")), "{said}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-021 R-6: `--requires items_merged` and `--after` are accepted, shown in `release stages`,
+/// and a stage that is not an earlier one of the project is refused.
+#[test]
+fn release_stage_accepts_items_merged_and_after() {
+    let (base, work) = release_scratch("merged-config");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--release-stages", "candidate,ci,tag"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "release-stage", "candidate", "--requires", "items_merged"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "release-stage", "tag", "--after", "ci"],
+    ));
+    let stages = ok(run_in(&base, &work, &["release", "stages"]));
+    assert!(stages.contains("items_merged"), "{stages}");
+    assert!(stages.contains("after ci"), "{stages}");
+    let json: serde_json::Value =
+        serde_json::from_str(&ok(run_in(&base, &work, &["--json", "release", "stages"]))).unwrap();
+    assert_eq!(json[2]["after"], serde_json::json!(["ci"]));
+    let o = run_in(
+        &base,
+        &work,
+        &["config", "release-stage", "ci", "--after", "tag"],
+    );
+    assert!(!o.status.success());
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("not an earlier stage"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
