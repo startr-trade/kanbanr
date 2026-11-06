@@ -173,6 +173,18 @@ expect("confirm with no result: not enabled even if the plan has no condition", 
 a = releaseAction({ ...none, tag: { commit: "abc1234def5678", gate: "", state: "none" } }, true);
 expect("confirm with no gate to judge by: enabled", a.enabled, a);
 
+const inert = { ...base, to: "test", button: "Promote to test", conditions: [], steps: [] };
+a = releaseAction(inert, true);
+expect(
+  "a promotion to an inert stage says nothing happens",
+  a.button && a.enabled && a.note === undefined && a.does.includes("Nothing happens when you promote to test: it only records that the release passed it."),
+  a,
+);
+a = releaseAction({ ...none, conditions: [], steps: [] }, true);
+expect("a confirmation stage gets no such line", a.does.every((d) => !d.startsWith("Nothing happens")), a);
+a = releaseAction(base, true);
+expect("a promotion with a step gets no such line", a.does.every((d) => !d.startsWith("Nothing happens")), a);
+
 if (problems.length) {
   for (const p of problems) console.error(`web::release_button_says_what_it_does — ${p}`);
   process.exit(1);

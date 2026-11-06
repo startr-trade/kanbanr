@@ -52,6 +52,11 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
     };
   }
   const does = plan.steps.filter((s) => !s.noop && !s.blocked).map((s) => s.does);
+  // A promotion that asks for nothing and does nothing only records the pass (FTR-020 R-5). The
+  // button stays: a `note` would replace it, and an older board still promotes through its stages.
+  if (!plan.cut && !plan.confirm && plan.steps.length === 0 && plan.conditions.length === 0) {
+    does.push(`Nothing happens when you promote to ${plan.to}: it only records that the release passed it.`);
+  }
   let missing: { text: string; fix: string }[] = [];
   if (!plan.repo && plan.steps.length + plan.conditions.length > 0) {
     // Everything that reads the repository would say the same thing: say it once, with the way out.
