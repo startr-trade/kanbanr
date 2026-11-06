@@ -8741,7 +8741,10 @@ fn config_cadence_has_ci_sets_the_flag() {
         serde_json::from_slice(&o.stdout).unwrap()
     };
     let before = json(&["--json", "release", "stages"]);
-    assert_eq!(before[2]["requires"], serde_json::json!(["main_at_release", "pushed"]));
+    assert_eq!(
+        before[2]["requires"],
+        serde_json::json!(["main_at_release", "pushed"])
+    );
     let c = json(&["--json", "config", "cadence", "--has-ci", "on"]);
     assert_eq!(c["cadence"]["has_ci"], true, "{c}");
     assert_eq!(c["cadence"]["commit_gates"], serde_json::json!(["ci"]));
@@ -8751,6 +8754,98 @@ fn config_cadence_has_ci_sets_the_flag() {
         serde_json::json!(["main_at_release", "pushed", "gate_passed"])
     );
     let c = json(&["--json", "config", "cadence", "--has-ci", "off"]);
-    assert!(c["cadence"]["has_ci"].is_null() || c["cadence"]["has_ci"] == false, "{c}");
+    assert!(
+        c["cadence"]["has_ci"].is_null() || c["cadence"]["has_ci"] == false,
+        "{c}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-020 R-1: turning releases on gives candidate, main and tag with their gates, and nothing
+/// to warn about; an older board that names the four stages is told which two do nothing.
+#[test]
+fn releases_on_gives_candidate_main_and_tag() {
+    let (base, work) = release_scratch_with("recommended", false);
+    let o = run_in(&base, &work, &["--json", "release", "stages"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let rows: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let names: Vec<_> = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["candidate", "main", "tag"]);
+    assert_eq!(
+        rows[0]["on_enter"],
+        serde_json::json!(["branch", "prepare"])
+    );
+    assert_eq!(rows[1]["on_enter"], serde_json::json!(["move_main"]));
+    assert_eq!(rows[2]["on_enter"], serde_json::json!(["tag"]));
+    assert!(rows.as_array().unwrap().iter().all(|r| r["inert"] == false));
+    let text = run_in(&base, &work, &["release", "stages"]);
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(!text.contains("does nothing"), "{text}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-020 R-5: configuring a stage that asks and does nothing is accepted and says so on stderr;
+/// `release stages` marks it.
+#[test]
+fn config_release_stage_warns_about_a_stage_that_does_nothing() {
+    let (base, work) = release_scratch("inert");
+    let o = run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "release-stage",
+            "test",
+            "--purpose",
+            "run the tests",
+        ],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("warning: release stage 'test' has no condition and no action"),
+        "{err}"
+    );
+    assert!(
+        err.contains("kanbanr config release-stage test --requires"),
+        "{err}"
+    );
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.contains("does nothing"), "{out}");
+    // Giving it an action clears the warning.
+    let o = run_in(
+        &base,
+        &work,
+        &["config", "release-stage", "test", "--requires", "pushed"],
+    );
+    assert!(o.status.success());
+    assert!(
+        !String::from_utf8_lossy(&o.stderr).contains("warning"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(
+        run_in(
+            &base,
+            &work,
+            &["config", "release-stage", "test", "--clear"]
+        )
+        .status
+        .success()
+    );
+    // And the cadence write that names stages with a stage doing nothing warns once.
+    let o = run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--release-stages", "candidate,qa,tag"],
+    );
+    assert!(o.status.success());
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(err.contains("release stage 'qa'"), "{err}");
     let _ = std::fs::remove_dir_all(&base);
 }

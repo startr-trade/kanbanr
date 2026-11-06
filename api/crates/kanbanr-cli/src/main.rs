@@ -7555,6 +7555,22 @@ fn print_write(cli: &Cli, resp: &str, human: String) {
     print_coverage_warnings(cli, resp);
 }
 
+/// The warnings a release-configuration write returned (FTR-020), one per line on stderr. Silent
+/// with `--json`, which carries them as `warnings`.
+fn print_release_warnings(cli: &Cli, warnings: &Value) {
+    if cli.json {
+        return;
+    }
+    for w in warnings
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        eprintln!("warning: {w}");
+    }
+}
+
 /// The coverage rules a write now fails (FEAT-197), on stderr: the first ten, then how many more
 /// and where to see them all. Silent with `--json`, which carries them as `coverage_warnings`.
 fn print_coverage_warnings(cli: &Cli, resp: &str) {
@@ -8357,6 +8373,19 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             };
             print_write(cli, &resp, said);
             if !cli.json {
+                // The route returns the stages; the one just set says whether it does nothing.
+                let rows: Vec<Value> = serde_json::from_str(&resp)?;
+                if let Some(row) = rows
+                    .iter()
+                    .find(|r| r["name"] == stage.as_str() && r["inert"] == true)
+                {
+                    eprintln!(
+                        "warning: {}",
+                        kanbanr_core::config::Cadence::inert_warning(
+                            row["name"].as_str().unwrap_or_default()
+                        )
+                    );
+                }
                 print_release_stages(cli, client, &p)?;
             }
             Ok(())
@@ -8496,6 +8525,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                     v["estimate_unit"].as_str().unwrap_or("days")
                 ),
             );
+            print_release_warnings(cli, &v["warnings"]);
             Ok(())
         }
         ConfigCmd::Show => {
@@ -9623,6 +9653,9 @@ fn print_release_stages(cli: &Cli, client: &Backend, p: &str) -> anyhow::Result<
         }
         if s["declared"] != true {
             note.push("default");
+        }
+        if s["inert"] == true {
+            note.push("does nothing");
         }
         let mut requires = names(&s["requires"]);
         if let Some(after) = s["after"].as_array().filter(|a| !a.is_empty()) {

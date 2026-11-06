@@ -11,9 +11,9 @@
 //! files, the dated changelog heading and its copies, a notes draft and where it is listed.
 
 use crate::config::{Cadence, RECOMMENDED_RELEASE_STAGES};
-use std::collections::BTreeMap;
 use crate::models::Extra;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// What entering a release stage does. The order of the variants is the order a promotion applies
 /// them in, whichever stages hold them.
@@ -318,14 +318,13 @@ impl Cadence {
     /// and tag, the cut, needs main at the release and pushed. With `has_ci` it also needs a
     /// passed `ci` result for that commit, and `ci` is the commit gate.
     pub fn recommended(has_ci: bool) -> (Vec<String>, BTreeMap<String, ReleaseGate>, Vec<String>) {
-        let gate = |purpose: &str, requires: &[ReleaseCheck], on_enter: &[ReleaseAction]| {
-            ReleaseGate {
+        let gate =
+            |purpose: &str, requires: &[ReleaseCheck], on_enter: &[ReleaseAction]| ReleaseGate {
                 purpose: purpose.to_string(),
                 requires: requires.to_vec(),
                 on_enter: on_enter.to_vec(),
                 ..ReleaseGate::default()
-            }
-        };
+            };
         let mut tag_requires = vec![ReleaseCheck::MainAtRelease, ReleaseCheck::Pushed];
         if has_ci {
             tag_requires.push(ReleaseCheck::GatePassed);
@@ -360,7 +359,11 @@ impl Cadence {
                 ),
             ),
         ]);
-        let commit_gates = if has_ci { vec!["ci".to_string()] } else { vec![] };
+        let commit_gates = if has_ci {
+            vec!["ci".to_string()]
+        } else {
+            vec![]
+        };
         (stages, gates, commit_gates)
     }
 
@@ -860,8 +863,10 @@ mod tests {
         };
         assert!(rec.inert_stages().is_empty());
         // A stage after the tag only confirms, so it is never inert.
-        let after = cadence("release_stages: [a, b, c, d]\nrelease_gates: { b: { on_enter: [move_main, tag] } }\n")
-            .unwrap();
+        let after = cadence(
+            "release_stages: [a, b, c, d]\nrelease_gates: { b: { on_enter: [move_main, tag] } }\n",
+        )
+        .unwrap();
         assert_eq!(after.inert_stages(), Vec::<String>::new());
         // A condition, an `after` or an action each make a stage act.
         let c = cadence(
@@ -871,7 +876,10 @@ mod tests {
         assert_eq!(c.inert_stages(), ["d"]);
         assert!(ReleaseGate::default().is_inert());
         let w = Cadence::inert_warning("test");
-        assert!(w.contains("'test'") && w.contains("kanbanr config release-stage test --requires"), "{w}");
+        assert!(
+            w.contains("'test'") && w.contains("kanbanr config release-stage test --requires"),
+            "{w}"
+        );
     }
 
     /// FTR-020 R-6: the stage view marks the inert stages.

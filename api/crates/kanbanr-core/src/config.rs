@@ -1805,7 +1805,11 @@ mod tests {
         assert_eq!(c.release_stages, ["candidate", "main", "tag"]);
         assert!(c.is_recommended() && c.commit_gates.is_empty());
         assert_eq!(c.release_gates["tag"].on_enter, [ReleaseAction::Tag]);
-        assert!(!c.release_gates["tag"].requires.contains(&ReleaseCheck::GatePassed));
+        assert!(
+            !c.release_gates["tag"]
+                .requires
+                .contains(&ReleaseCheck::GatePassed)
+        );
         // Saying it has CI in the same write that turns releases on asks for CI at the tag.
         let board = Board::new();
         let c = board
@@ -1927,7 +1931,9 @@ mod tests {
         let board = Board::new();
         board.change(|c| c.releases = true).unwrap();
         let c = board
-            .change(|c| c.release_stages = vec!["candidate".into(), "main".into(), "production".into()])
+            .change(|c| {
+                c.release_stages = vec!["candidate".into(), "main".into(), "production".into()]
+            })
             .unwrap();
         assert!(c.release_gates.is_empty());
         assert_eq!(c.release_stages, ["candidate", "main", "production"]);
@@ -1945,7 +1951,9 @@ mod tests {
             })
             .unwrap();
         let err = board
-            .change(|c| c.release_stages = vec!["candidate".into(), "main".into(), "production".into()])
+            .change(|c| {
+                c.release_stages = vec!["candidate".into(), "main".into(), "production".into()]
+            })
             .unwrap_err();
         assert!(err.contains("release-stage tag --clear"), "{err}");
     }

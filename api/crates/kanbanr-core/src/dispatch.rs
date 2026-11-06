@@ -1480,6 +1480,8 @@ fn dispatch_routes(
                 }
             };
             let current = store.load_meta(p)?.config.cadence;
+            let current_inert = current.inert_stages();
+            let current_cadence = current.clone();
             let cadence = crate::config::Cadence {
                 extra: current.extra.clone(),
                 // FEAT-212: the stages' gates and what `prepare` writes have routes of their own;
@@ -1522,7 +1524,23 @@ fn dispatch_routes(
                 // FEAT-189: branching follows the git model only when switched on.
                 git_model: bool_field(b, "git_model").unwrap_or(current.git_model),
             };
-            ser(&store.set_cadence(p, unit, cadence)?)
+            let config = store.set_cadence(p, unit, cadence)?;
+            // FTR-020: an inert stage that is newly there, and how to make the tag wait for CI.
+            let was = current_inert;
+            let mut warnings: Vec<String> = config
+                .cadence
+                .inert_stages()
+                .iter()
+                .filter(|s| !was.contains(s))
+                .map(|s| crate::config::Cadence::inert_warning(s))
+                .collect();
+            warnings.extend(config.cadence.has_ci_note(&current_cadence));
+            let mut body =
+                serde_json::to_value(&config).map_err(|e| CoreError::Unsupported(e.to_string()))?;
+            if !warnings.is_empty() {
+                body["warnings"] = serde_json::json!(warnings);
+            }
+            ser(&body)
         }
         // Workflow export (FEAT-039): the config rendered as a Mermaid state diagram.
         ("GET", ["projects", p, "workflow"]) => {
