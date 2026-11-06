@@ -197,6 +197,11 @@ flowchart TD
 - **Home tile**: project name + description, an **Open dashboard** link, a link per **status**
   (with counts), and a **Documentation** link.
 - **Board**: one column per state in `displayed_states`; click a card → that feature's page.
+  A card names the one stage the item reaches next, with the same count `kanbanr check` gives for
+  it, sign-offs included: "Migration needs 6, 1 yours" means six things stand between the item and
+  Migration and one of them is yours (a sign-off or approval); the rest are Claude's. "Waiting on
+  you: docs-folded" appears only when nothing but your part remains. The card says nothing about
+  stages the item could skip to.
 - **Status page**: features in one status, grouped by feature, each showing only its **open**
   todo-lists (those not fully completed), newest first, with their tasks.
 - **Feature page** (an *epic*): the **Specification** (rendered markdown) and a **tile per
