@@ -4538,6 +4538,101 @@ requirements:
         assert!(f.signoff_current("release").is_some());
     }
 
+    /// FTR-023 R-4, R-5, R-6, R-8, R-10: a design edited after its sign-off comes back to the
+    /// Review page with the change, and signing again settles it.
+    #[test]
+    fn the_review_queue_brings_back_a_changed_design() {
+        use serde_json::json;
+        let (store, _d, code) = skip_board(vec![crate::readiness::Condition::SpecSections {
+            spec_sections: vec!["Design".into()],
+        }]);
+        let spec = "## Why\nA cart.\n\n## Design\nUse a map.\n";
+        store
+            .edit_feature("demo", &code, None, Some(spec.into()), None, None)
+            .unwrap();
+        let queue = || -> Vec<serde_json::Value> {
+            serde_json::from_str(
+                &crate::dispatch::dispatch(&store, "GET", "/projects/demo/review", None).unwrap(),
+            )
+            .unwrap()
+        };
+        let entry = || queue().into_iter().find(|e| e["code"] == code.as_str());
+        let (_, rev) = crate::readiness::spec_pin(spec);
+
+        // Before the gate: a sign-off entry whose brief is the spec it will pin.
+        let e = entry().unwrap();
+        assert_eq!(e["approval"], "signoff");
+        assert_eq!(e["spec_rev"], rev.as_str());
+        assert_eq!(
+            e["spec"]["text"],
+            crate::readiness::spec_pin(spec).0.as_str()
+        );
+        assert_eq!(e["spec"]["diff"], json!([]));
+
+        let sign = |rev: &str| {
+            crate::dispatch::dispatch(
+                &store,
+                "POST",
+                &format!("/projects/demo/features/{code}/signoff/design-review"),
+                Some(&json!({"by": "Ada L", "spec_rev": rev})),
+            )
+        };
+        sign(&rev).unwrap();
+        store
+            .move_feature_approved("demo", &code, "Build", None)
+            .unwrap();
+        // The next stage's own sign-off comes first in the queue; settle it.
+        assert_eq!(entry().unwrap()["approval"], "signoff");
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        assert!(entry().is_none(), "{:?}", queue());
+
+        // A line outside ## Design changes: back on the page, with the one change.
+        let edited = spec.replace("A cart.", "A basket.");
+        store
+            .edit_feature("demo", &code, None, Some(edited.clone()), None, None)
+            .unwrap();
+        let e = entry().unwrap();
+        assert_eq!(e["approval"], "spec_changed");
+        assert_eq!(e["signoffs_needed"], json!(["design-review"]));
+        let new_rev = crate::readiness::spec_pin(&edited).1;
+        assert_eq!(e["spec_rev"], new_rev.as_str());
+        assert_eq!(e["spec"]["previous_kept"], true);
+        assert_eq!(e["spec"]["signed_by"], "Ada L");
+        let changed: Vec<_> = e["spec"]["diff"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|l| l["op"] != "same")
+            .map(|l| format!("{}{}", l["op"], l["text"]))
+            .collect();
+        assert_eq!(
+            changed,
+            vec!["\"removed\"\"A cart.\"", "\"added\"\"A basket.\""]
+        );
+
+        // The text kept at the last sign-off is gone: still listed, and says so.
+        let pin = store
+            .project_dir("demo")
+            .join("pins")
+            .join(&code)
+            .join(format!("{rev}.md"));
+        std::fs::rename(&pin, pin.with_extension("gone")).unwrap();
+        let e = entry().unwrap();
+        assert_eq!(e["approval"], "spec_changed");
+        assert_eq!(e["spec"]["previous_kept"], false);
+        assert_eq!(e["spec"]["diff"], json!([]));
+        assert_eq!(
+            e["spec"]["text"],
+            crate::readiness::spec_pin(&edited).0.as_str()
+        );
+
+        // Signing again on the changed text pins it and drops the item from the queue.
+        sign(&new_rev).unwrap();
+        assert!(entry().is_none(), "{:?}", queue());
+    }
+
     /// FEAT-114 R-3: a sign-off that cannot say who gave it is not evidence of anything.
     #[test]
     fn a_signoff_needs_an_identity() {
