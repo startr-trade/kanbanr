@@ -112,13 +112,15 @@ fn status(r: Result<ureq::Response, ureq::Error>) -> u16 {
     }
 }
 
-fn create_project(url: &str, headers: &[(&str, &str)]) -> Result<ureq::Response, ureq::Error> {
+fn create_project(url: &str, headers: &[(&str, &str)]) -> u16 {
     let mut req = ureq::post(&format!("{url}/api/write/projects"));
     for (k, v) in headers {
         req = req.set(k, v);
     }
-    req.set("content-type", "application/json")
-        .send_string(r#"{"name": "demo"}"#)
+    status(
+        req.set("content-type", "application/json")
+            .send_string(r#"{"name": "demo"}"#),
+    )
 }
 
 #[test]
@@ -139,7 +141,7 @@ fn a_request_for_another_host_is_refused() {
         &url,
         &[("Host", "attacker.example"), ("x-kanbanr-token", &token)],
     );
-    assert_eq!(status(r), 403);
+    assert_eq!(r, 403);
     assert_eq!(commits(&data), before, "nothing was written");
     // The names the monitor answers for still work, and the refusal names them.
     let port = url.rsplit(':').next().unwrap();
@@ -198,12 +200,9 @@ fn a_write_without_the_token_is_refused() {
     let data = board(&s);
     let url = serve(&s, &data);
     let before = commits(&data);
-    assert_eq!(status(create_project(&url, &[])), 403);
+    assert_eq!(create_project(&url, &[]), 403);
     assert_eq!(
-        status(create_project(
-            &url,
-            &[("x-kanbanr-token", "not-the-token")]
-        )),
+        create_project(&url, &[("x-kanbanr-token", "not-the-token")]),
         403
     );
     assert_eq!(commits(&data), before, "nothing was written");
@@ -224,11 +223,7 @@ fn a_write_from_another_origin_is_refused() {
             ("Origin", "http://attacker.example"),
         ],
     );
-    assert_eq!(
-        status(r),
-        403,
-        "even with the token, another origin is refused"
-    );
+    assert_eq!(r, 403, "even with the token, another origin is refused");
     assert_eq!(commits(&data), before, "nothing was written");
 }
 
@@ -241,7 +236,7 @@ fn the_monitors_own_page_writes_as_before() {
     let before: u32 = commits(&data).parse().unwrap();
     // A browser sends the token and its own origin.
     let r = create_project(&url, &[("x-kanbanr-token", &token), ("Origin", &url)]);
-    assert_eq!(status(r), 200);
+    assert_eq!(r, 200);
     assert_eq!(commits(&data).parse::<u32>().unwrap(), before + 1);
     assert!(data.join("projects/demo").exists());
 }
@@ -256,8 +251,5 @@ fn each_start_gets_a_new_token_in_the_page() {
     assert!(ta.chars().all(|c| c.is_ascii_hexdigit()));
     assert_ne!(ta, tb, "two starts, two tokens");
     // The token of one start does not write on the other.
-    assert_eq!(
-        status(create_project(&ub, &[("x-kanbanr-token", &ta)])),
-        403
-    );
+    assert_eq!(create_project(&ub, &[("x-kanbanr-token", &ta)]), 403);
 }
