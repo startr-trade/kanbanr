@@ -278,6 +278,17 @@ pub struct ReleaseStageView {
     pub after_cut: bool,
     /// The project declares this stage's gate; otherwise it is the default.
     pub declared: bool,
+    /// The stage asks nothing and does nothing: promoting to it only records that the release
+    /// passed it (FTR-020).
+    #[serde(default)]
+    pub inert: bool,
+}
+
+impl ReleaseGate {
+    /// Nothing is required before entering and nothing happens on entering (FTR-020).
+    pub fn is_inert(&self) -> bool {
+        self.requires.is_empty() && self.after.is_empty() && self.on_enter.is_empty()
+    }
 }
 
 impl Cadence {
@@ -290,6 +301,7 @@ impl Cadence {
             .enumerate()
             .map(|(i, (name, g))| ReleaseStageView {
                 declared: self.declares_release_gate(&name),
+                inert: i < cut && g.is_inert(),
                 name,
                 purpose: g.purpose,
                 requires: g.requires,
@@ -387,6 +399,28 @@ impl Cadence {
     pub fn is_recommended(&self) -> bool {
         let (stages, gates, _) = Cadence::recommended(self.has_ci);
         self.release_stages == stages && self.release_gates == gates
+    }
+
+    /// The stages before the cut that ask nothing and do nothing, in order. The cut always acts,
+    /// and a stage after it is a confirmation the user gives (FTR-026), so neither is listed.
+    pub fn inert_stages(&self) -> Vec<String> {
+        let cut = self.cut_index();
+        self.effective_release_gates()
+            .into_iter()
+            .take(cut)
+            .filter(|(_, g)| g.is_inert())
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    /// What to say of an inert stage, worded once for the CLI, the API and the monitor.
+    pub fn inert_warning(stage: &str) -> String {
+        format!(
+            "release stage '{stage}' has no condition and no action, so promoting to it only \
+             records that the release passed it. Give it one with kanbanr config release-stage \
+             {stage} --requires <check> --on-enter <action>, or leave it out of \
+             cadence.release_stages"
+        )
     }
 
     /// The index of the stage holding the `tag` action, the cut (FTR-026); the last stage when
@@ -812,6 +846,42 @@ mod tests {
             ]
         );
     }
+    /// FTR-020 R-5: a stage before the cut that requires nothing, follows nothing and does nothing
+    /// is inert; the default four have two of them, the cut and a confirmation after it never are.
+    #[test]
+    fn a_stage_asking_and_doing_nothing_is_inert() {
+        let old = Cadence::default();
+        assert_eq!(old.inert_stages(), ["test", "staging"]);
+        let (stages, gates, _) = Cadence::recommended(false);
+        let rec = Cadence {
+            release_stages: stages,
+            release_gates: gates,
+            ..Cadence::default()
+        };
+        assert!(rec.inert_stages().is_empty());
+        // A stage after the tag only confirms, so it is never inert.
+        let after = cadence("release_stages: [a, b, c, d]\nrelease_gates: { b: { on_enter: [move_main, tag] } }\n")
+            .unwrap();
+        assert_eq!(after.inert_stages(), Vec::<String>::new());
+        // A condition, an `after` or an action each make a stage act.
+        let c = cadence(
+            "release_stages: [a, b, c, d, e]\nrelease_gates: { b: { requires: [pushed] }, c: { after: [b] } }\n",
+        )
+        .unwrap();
+        assert_eq!(c.inert_stages(), ["d"]);
+        assert!(ReleaseGate::default().is_inert());
+        let w = Cadence::inert_warning("test");
+        assert!(w.contains("'test'") && w.contains("kanbanr config release-stage test --requires"), "{w}");
+    }
+
+    /// FTR-020 R-6: the stage view marks the inert stages.
+    #[test]
+    fn the_stage_view_marks_an_inert_stage() {
+        let views = Cadence::default().release_stage_views();
+        let inert: Vec<_> = views.iter().map(|v| v.inert).collect();
+        assert_eq!(inert, [false, true, true, false]);
+    }
+
     /// FTR-026 R-1: a stage after the tag can only confirm; `tag_passed` belongs only to such a
     /// stage and `tag_gate` must be a commit gate.
     #[test]

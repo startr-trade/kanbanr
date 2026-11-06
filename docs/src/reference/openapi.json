@@ -422,6 +422,10 @@
             "description": "Branching follows the derived git model (FEAT-189): where `start` branches, sprint\nbranches, and lines of integration taking merges only. Off by default, so no board changes.",
             "type": "boolean"
           },
+          "has_ci": {
+            "description": "The project has CI, so the recommended `tag` stage also requires a passed `ci` result for\nthe release tip (FTR-020). Off by default.",
+            "type": "boolean"
+          },
           "integration_branch": {
             "description": "The branch a release branch is made from. Unset: the code repository's default branch.",
             "type": "string"
