@@ -30,6 +30,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **The monitor answers only its own page and hosts (DEF-024).** The monitor serves and accepts
+  requests only for its own page and the hosts it is bound to, so nothing else running in your
+  browser can read the board through it or record a decision. A write needs the token its page was
+  given at this start. `SECURITY.md` now describes write mode and how it is limited.
+
 - **The book and the skill match this release (DOC-006).** The no-charter warning, the date set when
   main moves, `why` on an uncommitted line, `git doctor` with no integrate stage and lapsed approvals
   on finished items are all described as they now behave, and the skill tells Claude about them.

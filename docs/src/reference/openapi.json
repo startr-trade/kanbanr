@@ -1295,6 +1295,10 @@
             "description": "The release this item is planned into (FEAT-120), for projects that use releases.",
             "type": "string"
           },
+          "release_line": {
+            "description": "Which release shipped it, or will (FTR-001). Absent without releases.",
+            "type": "string"
+          },
           "source": {
             "$ref": "#/components/schemas/Source",
             "description": "Where this feature was imported from, if it was (FEAT-042)."
@@ -2885,6 +2889,13 @@
           },
           "version": {
             "type": "string"
+          },
+          "warnings": {
+            "description": "Things worth knowing that do not stop the promotion, e.g. a stale release date (DEF-001).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -3098,6 +3109,10 @@
           "definition": {
             "$ref": "#/components/schemas/FeatureDefinition"
           },
+          "finished": {
+            "description": "The item is finished work (DEF-013): listed only because its approval lapsed.",
+            "type": "boolean"
+          },
           "in_progress": {
             "description": "What the ordering keys on, and useful to a client besides.",
             "type": "boolean"
@@ -3139,7 +3154,8 @@
           "started_unapproved",
           "definition",
           "rev",
-          "in_progress"
+          "in_progress",
+          "finished"
         ],
         "type": "object"
       },
@@ -3672,7 +3688,7 @@
     }
   },
   "info": {
-    "description": "The read-only routes `kanbanr serve` answers for the monitor and for tools built on the board. Version 1 stays at `/api/...`; a breaking change would be published as v2 under `/api/v2/...`, with v1 kept for a deprecation period. Routes the daemon serves that are not listed here are internal and may change. Write routes (`serve --allow-writes`) are not part of this contract. Errors are `text/plain`. CORS is permissive; there is no authentication.",
+    "description": "The read-only routes `kanbanr serve` answers for the monitor and for tools built on the board. Version 1 stays at `/api/...`; a breaking change would be published as v2 under `/api/v2/...`, with v1 kept for a deprecation period. Routes the daemon serves that are not listed here are internal and may change. Write routes (`serve --allow-writes`) are not part of this contract. Errors are `text/plain`. The daemon answers only for its own host names and grants no cross-origin access; there is no authentication.",
     "license": {
       "identifier": "MIT OR Apache-2.0",
       "name": "MIT OR Apache-2.0"

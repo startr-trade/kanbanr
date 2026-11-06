@@ -6,8 +6,14 @@ kanbanr is deliberately small in attack surface:
 
 - **No accounts, passwords, tokens, or network auth.** There is nothing to log into.
 - **The CLI is the only writer.** It edits a local, git-backed `data/` folder on your own machine.
-- **`kanbanr serve` is read-only and binds `127.0.0.1`** by default. It never mutates data; it only
-  reads the folder and streams updates.
+- **`kanbanr serve` binds `127.0.0.1` and is read-only** by default: it reads the folder and streams
+  updates. Started with `--allow-writes` (or through `kanbanr review --ui`) the monitor can also take
+  decisions, and those writes are limited to the monitor's own page. At each start the monitor makes a
+  new random token and gives it only to the page it serves; a write is accepted only with that token
+  and, when the browser sends an `Origin`, only from the monitor's own origin. It sends no
+  cross-origin headers, and it answers a request only for the loopback names, the address it is bound
+  to and the hosts listed in `KANBANR_ALLOWED_HOSTS` (comma-separated `name[:port]`, for a reverse
+  proxy). Anything else gets a 403 and changes nothing.
 - **Exposing the monitor beyond localhost is the operator's responsibility.** If you put `serve`
   behind a network, front it with a reverse proxy that you control (TLS + authentication). kanbanr
   itself does no access control.
@@ -49,8 +55,8 @@ Please include: affected version/commit, steps to reproduce, impact, and any sug
 
 - The `kanbanr` CLI and `kanbanr-core` engine (e.g. path traversal in doc/asset handling, unsafe
   git operations, data-loss bugs on sync/commit).
-- The `kanbanr serve` read-only daemon (e.g. a read route exposing files outside the data folder, an
-  SSE/HTTP issue).
+- The `kanbanr serve` daemon (e.g. a read route exposing files outside the data folder, a write
+  accepted from outside the monitor's own page, an SSE/HTTP issue).
 
 ### Out of scope
 

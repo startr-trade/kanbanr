@@ -20,7 +20,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr config diagrams [--strict on\|off]` | whether a write whose Mermaid diagrams fail the lint is refused (strict) or written with the problems printed as warnings (the default); with no flag, shows the setting |
 | `kanbanr config codes [--set KIND=PREFIX,…] [--unset KIND,…] [--default PREFIX\|""] [--clear]` | which prefix a new item's code gets from its kind (`defect=DEF` codes a defect `DEF-001`, with a counter per prefix); with no flag, each kind's prefix, the default (`FEAT` unless set) and the next code per prefix. A prefix is 2–6 uppercase letters, not `MS`, `ADR`, `SC`, `SP`, `TL` or a milestone's; a bad one is refused, naming the entry. Existing codes are never renamed; unset, every item is `FEAT-` |
 | `kanbanr hooks install / status / uninstall` | the Claude Code hooks (session start, stop nudge, test capture, commit guard) |
-| `kanbanr serve [--ui-dir …]` | the read-only monitor over this board |
+| `kanbanr serve [--ui-dir …] [--allow-writes]` | the monitor over this board; read-only unless `--allow-writes`, and then it takes writes only from its own page. It answers for `localhost`, `127.0.0.1`, `[::1]`, its bound address and the hosts in `KANBANR_ALLOWED_HOSTS` (comma-separated `name[:port]`, for a reverse proxy); any other host gets a 403 |
 | `kanbanr open` | open the running monitor in a browser |
 | `kanbanr self-update [--check]` | replace this binary with the release's, checksum-verified (and the skill and editor extension already installed) |
 | `kanbanr skill install / status / uninstall` | the Claude Code skill this program carries, in `~/.claude/skills/kanbanr` |
