@@ -30,6 +30,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **An item is no longer shown as released before its release is cut (DEF-019).** On a project
+  that works in releases, an item planned into a release that has not been cut stays where it is
+  when its last task is done or its `release` sign-off is given, in every process; `task` and
+  `signoff` say which release it waits for, and the cut moves it to its end status. Moving it
+  yourself to an end status now needs a reason. The TOGAF preset no longer offers a direct move from
+  Implementation to Operations, so an item passes Migration; a board already running TOGAF keeps
+  its own copy until `kanbanr process update`.
+
 - **The book and the skill match this release (DOC-006).** The no-charter warning, the date set when
   main moves, `why` on an uncommitted line, `git doctor` with no integrate stage and lapsed approvals
   on finished items are all described as they now behave, and the skill tells Claude about them.

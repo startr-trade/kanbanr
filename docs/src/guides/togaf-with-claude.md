@@ -96,7 +96,7 @@ gate. When something's missing, Claude either drafts it or brings it to you.
 | **System Design** | Proposes how and where, and checks that against the requirements | **Approve** again, because the definition grew |
 | **Implementation** | Writes the design and its task list, and names a test for each requirement | **Approve** again, then **Sign off design-review** |
 | **Migration** | Builds on the item's branch, runs the tests and updates the docs | **Sign off docs-folded**, which appears once the docs are updated |
-| **Operations** | Nothing: your sign-off or the cut moves it here | **Sign off release** |
+| **Operations** | Nothing: the cut moves it here | **Sign off release** |
 
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
@@ -114,9 +114,9 @@ These record the same approval as the Review page. If you'd rather decide on the
 **A sign-off doesn't lapse when the design changes.** Changing the design in the item's spec leaves
 **design-review** standing, so ask Claude to bring you any corrections it makes during the build.
 
-**Operations doesn't mean shipped yet.** Once all an item's tasks are done, **Sign off release** moves
-it to Operations straight away, even though the phase says "Released and running". The **Releases**
-page tells you what has shipped.
+**Operations means shipped.** **Sign off release** records your sign-off and leaves the item where it
+is. The item moves to Operations when the release it is planned into is cut. The **Releases** page
+tells you what has shipped.
 
 **Just ask to move it on:**
 
@@ -208,7 +208,7 @@ because new items branch from the running sprint.
 | An item is back on the Review page | Its definition changed after you approved it | Read the change, then **Approve** again |
 | An item says it's waiting for a sign-off, but the Review page has nothing | A sign-off appears once the stage's other requirements are met | Ask Claude what's left. It's often the docs |
 | An item goes to the backlog when a sprint closes | It's merged but not done for that sprint | Ask Claude to plan it into the next sprint, or count Migration as done |
-| A promotion says an item would carry over | It can't reach Operations yet | Do what the page says, usually **Sign off release** |
+| A promotion says an item would carry over | It can't reach Operations yet | Do what the page says, usually **Sign off release**; the cut then moves it |
 | **Cut** stays greyed out after you pushed | The page hasn't read the push yet | **Check again** |
 | Your remote server rejects your first push, naming a permission | Your sign-in can't change some files yet, often your CI's own files | Ask Claude what the message means, then grant it and push again |
 | A defect in a shipped release | It needs its own fix | Ask Claude for a patch release, and see [Patch releases](../using/processes.md#patch-releases) |

@@ -975,6 +975,9 @@ Treat kanbanr updates as part of doing the work, not an afterthought:
   `green` once they actually pass, update the **specification** and any **documentation**
   affected, and **move** the feature's status as appropriate. When every task
   across all of a feature's todo-lists is Completed it auto-advances to "Completed".
+  On a project with releases, an item planned into a release that has not been cut stays where it
+  is, however its last task or sign-off arrives: the cut moves it to its end status. A move of your
+  own to an end status needs a `--override "<reason>"`.
 - **Before merging a sprint or cutting a release**, run `kanbanr doctor` and fix every coverage
   rule it lists, so the architecture views describe everything that ships.
 

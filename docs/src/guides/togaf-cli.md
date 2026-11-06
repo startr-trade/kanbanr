@@ -103,8 +103,8 @@ file must already be on the sprint's branch, or promoting to candidate is refuse
 
 ### Decide when an item is done for its sprint
 
-Under the TOGAF preset only **Operations** counts as done, and items reach Operations at the cut, or
-at their `release` sign-off once all their tasks are done.
+Under the TOGAF preset only **Operations** counts as done, and items reach Operations when their release is cut.
+A `release` sign-off or a last task leaves a planned item where it is.
 So if you close a sprint before its release is cut, an item that is merged and sitting in Migration
 is carried over, to the backlog by default:
 
@@ -160,7 +160,7 @@ Each move is refused until its gate is met, and the refusal says what's missing.
 | **System Design** | How, where, approval | `kanbanr feature define`, `kanbanr approve` |
 | **Implementation** | A test named for every requirement, approval, a `## Design` section in the spec, the `design-review` sign-off | `kanbanr feature edit`, `kanbanr signoff`, `kanbanr start` |
 | **Migration** | Requirements proven by green tests, docs updated, the `docs-folded` sign-off | `kanbanr test`, `kanbanr signoff`, `kanbanr move` |
-| **Operations** | Green tests, the `release` sign-off | `kanbanr signoff`, which makes the move once all the item's tasks are done; otherwise the cut does |
+| **Operations** | Green tests, the `release` sign-off | `kanbanr signoff` records the sign-off; the cut makes the move |
 
 **An edit lapses your approval.** When the definition changes, the next move says so, and you approve
 the larger definition:

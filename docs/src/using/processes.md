@@ -139,7 +139,9 @@ A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (sem
 - **Finishing the last task** moves the item to its end status only if that status's gate is
   met — and, on a workflow with no gates, only if every requirement has a green test. Otherwise
   it stays, and `kanbanr task state` says why. A batch is judged after its last operation, so one
-  that ticks the last task and then adds another never completes the item.
+  that ticks the last task and then adds another never completes the item. On a project with
+  releases, an item planned into a release that has not been cut stays where it is, however its last
+  task or sign-off arrives; the cut moves it to its end status. Moving it yourself needs an `--override` reason.
 
 ## Stage roles
 
