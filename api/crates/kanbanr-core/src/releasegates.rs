@@ -93,15 +93,21 @@ pub enum ReleaseCheck {
     Pushed,
     /// Every gate in `cadence.commit_gates` has a passed result recorded for the release tip.
     GatePassed,
+    /// Every item planned into the release is at the integrate stage or later.
+    ItemsMerged,
+    /// The release has been promoted into a stage a gate names in `after`. Only a plan names it
+    /// (a gate lists `after`, not this), so it is not in `ALL`.
+    StagePassed,
 }
 
 impl ReleaseCheck {
-    pub const ALL: [ReleaseCheck; 5] = [
+    pub const ALL: [ReleaseCheck; 6] = [
         ReleaseCheck::ItemsFinished,
         ReleaseCheck::Prepared,
         ReleaseCheck::MainAtRelease,
         ReleaseCheck::Pushed,
         ReleaseCheck::GatePassed,
+        ReleaseCheck::ItemsMerged,
     ];
 
     pub fn name(self) -> &'static str {
@@ -111,6 +117,8 @@ impl ReleaseCheck {
             ReleaseCheck::MainAtRelease => "main_at_release",
             ReleaseCheck::Pushed => "pushed",
             ReleaseCheck::GatePassed => "gate_passed",
+            ReleaseCheck::ItemsMerged => "items_merged",
+            ReleaseCheck::StagePassed => "stage_passed",
         }
     }
 
@@ -132,6 +140,10 @@ impl ReleaseCheck {
             ReleaseCheck::GatePassed => {
                 "every gate in commit_gates has a passed result for the release tip"
             }
+            ReleaseCheck::ItemsMerged => {
+                "every item planned into the release is at the integrate stage or later"
+            }
+            ReleaseCheck::StagePassed => "the release has been promoted into the stage",
         }
     }
 }
@@ -144,10 +156,16 @@ impl<'de> Deserialize<'de> for ReleaseCheck {
             .into_iter()
             .find(|c| c.name() == name.trim())
             .ok_or_else(|| {
-                serde::de::Error::custom(format!(
-                    "'{name}' is not a check a release stage can require — the checks are: {}",
-                    ReleaseCheck::ALL.map(ReleaseCheck::name).join(", ")
-                ))
+                serde::de::Error::custom(if name.trim() == "stage_passed" {
+                    "'stage_passed' is not a check a stage can require: use `after` to require an \
+                     earlier stage"
+                        .to_string()
+                } else {
+                    format!(
+                        "'{name}' is not a check a release stage can require — the checks are: {}",
+                        ReleaseCheck::ALL.map(ReleaseCheck::name).join(", ")
+                    )
+                })
             })
     }
 }
@@ -161,6 +179,9 @@ pub struct ReleaseGate {
     pub purpose: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<ReleaseCheck>,
+    /// Earlier stages the release must have been promoted into before it enters this one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub after: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub on_enter: Vec<ReleaseAction>,
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
@@ -239,6 +260,8 @@ pub struct ReleaseStageView {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub purpose: String,
     pub requires: Vec<ReleaseCheck>,
+    /// Earlier stages the release must have entered first.
+    pub after: Vec<String>,
     pub on_enter: Vec<ReleaseAction>,
     /// The last stage: entering it is the cut.
     pub cut: bool,
@@ -259,6 +282,7 @@ impl Cadence {
                 name,
                 purpose: g.purpose,
                 requires: g.requires,
+                after: g.after,
                 on_enter: g.on_enter,
                 cut: i == last,
             })
@@ -349,6 +373,24 @@ impl Cadence {
                 "release stage '{stage}' requires gate_passed but no commit gate is named: run \
                  `kanbanr config commit-gates ci` first"
             ));
+        }
+        for (i, (stage, gate)) in effective.iter().enumerate() {
+            for a in &gate.after {
+                let at = stages.iter().position(|s| s == a);
+                if at == Some(i) {
+                    return Err(format!(
+                        "release stage '{stage}' lists itself in after: it must name an earlier \
+                         stage"
+                    ));
+                }
+                if !at.is_some_and(|j| j < i) {
+                    return Err(format!(
+                        "release stage '{stage}' lists '{a}' in after, but {a} is not an earlier \
+                         stage of this project ({})",
+                        stages.join(", ")
+                    ));
+                }
+            }
         }
         for g in &self.commit_gates {
             crate::gates::check_name(g).map_err(|e| format!("commit gate: {e}"))?;
@@ -612,5 +654,76 @@ mod tests {
                 ("c".to_string(), vec!["move_main", "tag"]),
             ]
         );
+    }
+
+    /// FTR-021 R-4: `after` names an earlier stage of the project, and the check list names
+    /// `items_merged`.
+    #[test]
+    fn after_must_name_an_earlier_stage_of_the_project() {
+        let refused = |yaml: &str, says: &str| {
+            let err = cadence(yaml).unwrap().validate_release_gates().unwrap_err();
+            assert!(err.contains(says), "{yaml}\n→ {err}");
+        };
+        refused(
+            "release_stages: [candidate, main, production]\nrelease_gates: { production: { after: [ci] } }\n",
+            "release stage 'production' lists 'ci' in after, but ci is not an earlier stage of this \
+             project (candidate, main, production)",
+        );
+        refused(
+            "release_stages: [a, b, c]\nrelease_gates: { b: { after: [c] } }\n",
+            "'c' in after, but c is not an earlier stage",
+        );
+        refused(
+            "release_stages: [a, b, c]\nrelease_gates: { b: { after: [b] } }\n",
+            "lists itself in after",
+        );
+        cadence("release_stages: [a, b, c]\nrelease_gates: { c: { after: [a, b] } }\n")
+            .unwrap()
+            .validate_release_gates()
+            .unwrap();
+    }
+
+    /// FTR-021 R-4: a misspelt check is refused with a list that includes `items_merged`, and
+    /// `stage_passed` points to `after`.
+    #[test]
+    fn an_unknown_check_lists_items_merged() {
+        let err = cadence("release_stages: [a, b]\nrelease_gates: { a: { requires: [merged] } }\n")
+            .unwrap_err();
+        assert!(err.contains("items_merged"), "{err}");
+        let err =
+            cadence("release_stages: [a, b]\nrelease_gates: { b: { requires: [stage_passed] } }\n")
+                .unwrap_err();
+        assert!(err.contains("`after`"), "{err}");
+        let ok = cadence("release_stages: [a, b]\nrelease_gates: { a: { requires: [items_merged] } }\n")
+            .unwrap();
+        assert_eq!(ok.release_gates["a"].requires, [ReleaseCheck::ItemsMerged]);
+    }
+
+    /// FTR-021 R-6: `after` is read, written and shown, and an older binary keeps it as an unknown
+    /// key of the gate.
+    #[test]
+    fn after_survives_a_round_trip_through_an_older_gate() {
+        let c = cadence(
+            "release_stages: [a, b, c]\nrelease_gates: { c: { after: [b], on_enter: [tag] } }\n",
+        )
+        .unwrap();
+        assert_eq!(c.release_gates["c"].after, ["b"]);
+        assert_eq!(c.release_stage_views()[2].after, ["b"]);
+        let text = crate::yaml::to_string(&c).unwrap();
+        assert_eq!(cadence(&text).unwrap(), c, "{text}");
+        // An older gate (no `after` field) holds it in `extra` and writes it back.
+        #[derive(Debug, Default, Deserialize, Serialize)]
+        struct Older {
+            #[serde(default)]
+            on_enter: Vec<ReleaseAction>,
+            #[serde(flatten)]
+            extra: Extra,
+        }
+        let older: Older = crate::yaml::from_str("after: [b]\non_enter: [tag]\n").unwrap();
+        assert!(crate::yaml::to_string(&older).unwrap().contains("after"));
+        // Absent when empty.
+        let plain = cadence("release_stages: [a, b]\nrelease_gates: { a: { on_enter: [branch] } }\n")
+            .unwrap();
+        assert!(!crate::yaml::to_string(&plain).unwrap().contains("after"));
     }
 }
