@@ -3776,6 +3776,155 @@ requirements:
         );
     }
 
+    /// DEF-019: a board with releases on, one item in Scheduled with one open task, planned into
+    /// the uncut v0.1.0. Completed asks for a `release` sign-off.
+    fn planned_board() -> (Store, tempdir::TempDirLike, String, String) {
+        let (store, d, code) = gated_board(crate::config::Gate::default());
+        let mut gates = store.load("demo").unwrap().config.gates.clone();
+        gates.insert(
+            "Completed".to_string(),
+            crate::config::Gate {
+                signoffs: vec!["release".into()],
+                ..Default::default()
+            },
+        );
+        store.set_gates("demo", gates).unwrap();
+        let mut cadence = store.load("demo").unwrap().config.cadence;
+        cadence.releases = true;
+        store.set_cadence("demo", None, cadence).unwrap();
+        crate::releases::add(&store, "demo", "v0.1.0", "", "").unwrap();
+        store
+            .move_feature_approved("demo", &code, "Scheduled", None)
+            .unwrap();
+        store
+            .set_feature_release("demo", &code, Some("v0.1.0".into()))
+            .unwrap();
+        let tl = store.add_todo_list("demo", &code, "work", None).unwrap();
+        store
+            .add_task("demo", &code, &tl.code, "do it", None)
+            .unwrap();
+        (store, d, code, tl.code)
+    }
+
+    /// DEF-019 R-1: a release sign-off on an item whose tasks are done leaves it in place while
+    /// its release is not cut.
+    #[test]
+    fn signing_off_a_planned_item_waits_for_the_cut() {
+        let (store, _d, code, tl) = planned_board();
+        let (f, _) = store
+            .set_task_state_reported("demo", &code, &tl, "T1", TaskState::Completed)
+            .unwrap();
+        assert_eq!(f.status, "Scheduled");
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert_eq!(f.status, "Scheduled", "the sign-off does not finish it");
+        assert!(f.history.iter().all(|t| t.to != "Completed"));
+    }
+
+    /// DEF-019 R-2: finishing the last task leaves a planned item in place and says it waits for
+    /// the cut.
+    #[test]
+    fn finishing_the_last_task_of_a_planned_item_waits_for_the_cut() {
+        let (store, _d, code, tl) = planned_board();
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        let (f, held) = store
+            .set_task_state_reported("demo", &code, &tl, "T1", TaskState::Completed)
+            .unwrap();
+        assert_eq!(f.status, "Scheduled");
+        let held = held.expect("and says why");
+        assert!(held.contains("v0.1.0") && held.contains("Completed"), "{held}");
+        assert!(held.contains("has not been cut"), "{held}");
+    }
+
+    /// DEF-019 R-2: a batch that ticks the last task is judged the same way.
+    #[test]
+    fn a_batch_that_ticks_the_last_task_waits_for_the_cut() {
+        let (store, _d, code, tl) = planned_board();
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        let out = store
+            .apply_batch(
+                "demo",
+                ops(serde_json::json!([
+                    {"op":"task.state","feature":code,"todo":tl,"key":"T1","state":"Completed"}
+                ])),
+            )
+            .unwrap();
+        assert_eq!(out[0]["status"], "Scheduled", "{out:?}");
+        assert!(out[0]["held"].as_str().unwrap().contains("v0.1.0"), "{out:?}");
+    }
+
+    /// DEF-019 R-3: the cut moves an item that waited for it.
+    #[test]
+    fn the_cut_moves_an_item_that_waited_for_it() {
+        let (store, _d, code, tl) = planned_board();
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        store
+            .set_task_state_reported("demo", &code, &tl, "T1", TaskState::Completed)
+            .unwrap();
+        let cut = crate::releases::cut(&store, "demo", "v0.1.0").unwrap();
+        assert_eq!(cut.release.shipped, [code.clone()]);
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert_eq!(f.status, "Completed");
+        assert_eq!(f.history.last().unwrap().to, "Completed");
+    }
+
+    /// DEF-019 R-5: a person's own move of a planned item to its end needs a reason.
+    #[test]
+    fn a_planned_item_cannot_be_moved_to_its_end_without_a_reason() {
+        let (store, _d, code, _tl) = planned_board();
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        let err = store
+            .move_feature_approved("demo", &code, "Completed", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("v0.1.0") && err.contains("--reason"), "{err}");
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert_eq!(f.status, "Scheduled");
+    }
+
+    /// DEF-019 R-5: with a reason the move is made and the reason stays on the item.
+    #[test]
+    fn a_reason_lets_a_person_move_it_and_stays_on_the_item() {
+        let (store, _d, code, _tl) = planned_board();
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        let f = store
+            .move_feature_approved("demo", &code, "Completed", Some("hotfix shipped by hand"))
+            .unwrap();
+        assert_eq!(f.status, "Completed");
+        assert_eq!(
+            f.history.last().unwrap().override_reason.as_deref(),
+            Some("hotfix shipped by hand")
+        );
+    }
+
+    /// DEF-019 R-6: the cut moves a held item without asking for a reason.
+    #[test]
+    fn the_cut_moves_a_held_item_without_a_reason() {
+        let (store, _d, code, tl) = planned_board();
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        store
+            .set_task_state_reported("demo", &code, &tl, "T1", TaskState::Completed)
+            .unwrap();
+        crate::releases::cut(&store, "demo", "v0.1.0").unwrap();
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert_eq!(f.status, "Completed");
+        assert_eq!(f.history.last().unwrap().override_reason, None);
+    }
+
     /// DEF-019 R-4: an item waits for the cut only when the project works in releases and its
     /// release is not cut; no release, a cut release, or releases off leave it free to finish.
     #[test]

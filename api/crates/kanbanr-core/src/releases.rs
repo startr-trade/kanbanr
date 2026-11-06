@@ -464,7 +464,7 @@ fn cut_with(store: &Store, id: &str, version: &str, change: Option<StageChange>)
         match ship_to(&project, &charter, &ctx, f) {
             Ok(end) => {
                 let moved = match end {
-                    Some(end) => store.move_feature_approved(id, &f.code, &end, None)?,
+                    Some(end) => store.move_feature_for_cut(id, &f.code, &end)?,
                     None => f.clone(),
                 };
                 shipped.push(moved);

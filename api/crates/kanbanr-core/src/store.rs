@@ -1466,10 +1466,44 @@ impl Store {
         let mut pending = Pending::default();
         let charter = crate::charter::load(self, id)?;
         let ctx = crate::readiness::Context::load(self, id, &project.config);
-        let (f, warnings) =
-            Self::gated_move_on(&mut project, &mut pending, &charter, &ctx, code, to, reason)?;
+        let (f, warnings) = Self::gated_move_on(
+            &mut project,
+            &mut pending,
+            &charter,
+            &ctx,
+            code,
+            to,
+            reason,
+            false,
+        )?;
         self.flush(id, &project, &pending)?;
         Ok((f, warnings))
+    }
+
+    /// The move a cut makes: as [`Store::move_feature_gated`], through the same gate, but an item
+    /// planned into the release being cut is not held for it (DEF-019). Only the cut calls this.
+    pub(crate) fn move_feature_for_cut(
+        &self,
+        id: &str,
+        code: &str,
+        to: &str,
+    ) -> Result<FeatureItem> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let charter = crate::charter::load(self, id)?;
+        let ctx = crate::readiness::Context::load(self, id, &project.config);
+        let (f, _) = Self::gated_move_on(
+            &mut project,
+            &mut pending,
+            &charter,
+            &ctx,
+            code,
+            to,
+            None,
+            true,
+        )?;
+        self.flush(id, &project, &pending)?;
+        Ok(f)
     }
 
     /// What moving `code` to `to` would meet, without moving it (FEAT-190): the status, the edge
@@ -1509,8 +1543,25 @@ impl Store {
         code: &str,
         to: &str,
         reason: Option<&str>,
+        cut: bool,
     ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
         let reason = reason.map(str::trim).filter(|r| !r.is_empty());
+        // A person's own move to an end status of an item that waits for its release's cut needs
+        // a reason, as a gate override does (DEF-019). The cut itself is exempt.
+        if !cut
+            && reason.is_none()
+            && crate::graph::is_finished_work(&project.config, to)
+            && let Some(v) = crate::graph::waits_for_cut(
+                &project.config,
+                &ctx.unshipped_releases,
+                project.feature(code)?,
+            )
+        {
+            return Err(CoreError::Unsupported(format!(
+                "{code} is planned into {v}, which has not been cut: it reaches {to} when {v} \
+                 ships. To move it yourself, give a reason (--reason)"
+            )));
+        }
         let outcome = Self::check_gate(project, charter, ctx, code, to, reason)?;
         // A move made with a stated reason to override is a bypass, and stays one until someone
         // approves or ratifies what was built (FEAT-048, FEAT-080) — recorded whether or not a gate
@@ -1932,6 +1983,26 @@ impl Store {
                 .cloned()
         } else {
             None
+        };
+        // An item planned into a release that has not been cut ends only at the cut (DEF-019).
+        let target = match target {
+            Some(to) => {
+                match crate::graph::waits_for_cut(
+                    &config,
+                    &ctx.unshipped_releases,
+                    project.feature(feature)?,
+                ) {
+                    Some(v) => {
+                        held = Some(format!(
+                            "all tasks are done, but it stays in {from}: it is planned into {v}, \
+                             which has not been cut. Cutting {v} moves it to {to}"
+                        ));
+                        None
+                    }
+                    None => Some(to),
+                }
+            }
+            None => None,
         };
         // A finish that would merge the item's branch is a move made from the code repository,
         // never a side effect of a task write (FEAT-190, Q5).
@@ -2444,6 +2515,7 @@ impl Store {
                         &code,
                         &to,
                         unapproved.as_deref(),
+                        false,
                     )?;
                     if !warnings.is_empty() {
                         return Ok(serde_json::json!({
