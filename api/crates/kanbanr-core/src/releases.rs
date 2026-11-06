@@ -400,7 +400,7 @@ fn ship_to(
     let Some(end) = config
         .statuses
         .iter()
-        .find(|s| is_end(s) && config.transition_allowed(&f.status, s))
+        .find(|s| is_end(s) && config.transition_allowed_for(&f.status, s, f.kind.as_deref()))
     else {
         return Err(format!("not finished — it is at {}", f.status));
     };

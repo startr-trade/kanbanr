@@ -1295,6 +1295,10 @@
             "description": "The release this item is planned into (FEAT-120), for projects that use releases.",
             "type": "string"
           },
+          "release_line": {
+            "description": "Which release shipped it, or will (FTR-001). Absent without releases.",
+            "type": "string"
+          },
           "source": {
             "$ref": "#/components/schemas/Source",
             "description": "Where this feature was imported from, if it was (FEAT-042)."
@@ -1767,6 +1771,36 @@
         "required": [
           "at",
           "verdict"
+        ],
+        "type": "object"
+      },
+      "KindPath": {
+        "description": "The path an item of one kind takes through a process (FTR-019): the stages it passes, what its\nfirst move asks, and the method parts that do not apply to it. A subset of the workflow's own\nstages in its own order, so no stage is invented and the board's columns do not change.",
+        "properties": {
+          "method_off": {
+            "description": "Method parts not asked of this kind. Approvals and sign-offs the stage itself names stay.",
+            "items": {
+              "$ref": "#/components/schemas/Part"
+            },
+            "type": "array"
+          },
+          "requires": {
+            "description": "Asked, in addition to the entered stage's gate, of the first move off the starting stage:\nwhere an item of this kind records why it exists and how it is verified.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "stages": {
+            "description": "At least two statuses, no no-op status, none twice, in the workflow's order, the first the\ndefault state. Neighbours on the path may move to each other whatever `transitions` says.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "stages"
         ],
         "type": "object"
       },
@@ -2500,6 +2534,13 @@
             },
             "type": "array"
           },
+          "paths": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/KindPath"
+            },
+            "description": "A shorter path through the workflow for some work kinds (FTR-019), keyed by kind in lower\ncase. Absent: every kind walks every stage, and absent stays absent on disk.",
+            "type": "object"
+          },
           "process": {
             "$ref": "#/components/schemas/ProcessSource",
             "description": "The saved process this workflow was applied from, if it was (FEAT-169): what drift is\nmeasured against. An older kanbanr keeps it through `extra`, so it needs no schema bump."
@@ -2885,6 +2926,13 @@
           },
           "version": {
             "type": "string"
+          },
+          "warnings": {
+            "description": "Things worth knowing that do not stop the promotion, e.g. a stale release date (DEF-001).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -3098,6 +3146,10 @@
           "definition": {
             "$ref": "#/components/schemas/FeatureDefinition"
           },
+          "finished": {
+            "description": "The item is finished work (DEF-013): listed only because its approval lapsed.",
+            "type": "boolean"
+          },
           "in_progress": {
             "description": "What the ordering keys on, and useful to a client besides.",
             "type": "boolean"
@@ -3139,7 +3191,8 @@
           "started_unapproved",
           "definition",
           "rev",
-          "in_progress"
+          "in_progress",
+          "finished"
         ],
         "type": "object"
       },

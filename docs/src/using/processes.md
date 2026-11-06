@@ -23,11 +23,11 @@ kanbanr project init shop --workflow pdca      # choose at creation
 |---|---|---|
 | `default` | Planned → In Progress → Completed, plus Deferred and Ongoing | the built-in rule, plus the method |
 | `scheduled` | Planned → Scheduled → Completed | the built-in rule, plus the method |
-| `togaf` | Vision → Business Arch → System Design → Implementation → Migration → Operations | the definition grows phase by phase |
+| `togaf` | Vision → Business Arch → System Design → Implementation → Migration → Operations | the definition grows phase by phase; chores skip Business Arch and System Design |
 | `pdca` | Plan → Do → Check → Act | agreement to start, evidence to check, a review sign-off to act |
-| `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs before verification and before release |
-| `scrum` | Backlog → Ready → In Progress → Review → Testing → Done → Released | Definition of Ready and of Done; work starts in the sprint; sprints, releases and points on |
-| `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on |
+| `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs before verification and before release; chores skip Inputs, Review and Validation |
+| `scrum` | Backlog → Ready → In Progress → Review → Testing → Done → Released | Definition of Ready and of Done; work starts in the sprint; sprints, releases and points on; chores skip Review |
+| `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on; chores skip Design and Review |
 
 Every built-in process also carries [the method](#the-method-on-by-default): a design before
 build, and the docs it changes kept current.
@@ -140,6 +140,39 @@ A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (sem
   met — and, on a workflow with no gates, only if every requirement has a green test. Otherwise
   it stays, and `kanbanr task state` says why. A batch is judged after its last operation, so one
   that ticks the last task and then adds another never completes the item.
+
+## A lighter path for a kind
+
+A process can give a work kind its own path: the stages an item of that kind passes through, what
+its first move asks, and the parts of [the method](#the-method-on-by-default) that don't apply to
+it. The built-in `togaf`, `scrum`, `agile` and `design-control` processes give `chore` one, so a
+small maintenance item isn't forced through stages whose questions don't fit it. `default`,
+`scheduled` and `pdca` are short already and have none.
+
+```yaml
+paths:
+  chore:                                   # an item's kind, matched without regard to case
+    stages: [Vision, Implementation, Migration, Operations]
+    requires: [statement, goals, requirements, ears]
+    method_off: [design, design-review]    # parts of the method that don't apply to this kind
+```
+
+- **`stages`** are statuses of the workflow, in its own order, at least two, none a no-op status
+  or listed twice, the first the default state. An item of the kind moves to the next or previous
+  stage on its path, to a no-op disposition, or back to the start, and is refused any other stage.
+  The board's columns don't change.
+- **`requires`** are conditions asked, as well as the entered stage's gate, of the first move off
+  the starting stage. That is where a chore records why it exists and how it is verified.
+- **`method_off`** names method parts (`design`, `design-review`, `docs`, `docs-folded`, `links`)
+  not asked of this kind. A path can drop a method part, never an approval or sign-off that the
+  stage it enters asks for: those stay yours.
+
+A kind with no path walks every stage with every gate, as before. A workflow whose path names an
+unknown stage, a no-op stage, a stage twice, stages out of order or a first stage other than the
+default state is refused when it is saved or checked. `kanbanr process show` lists each kind's
+path, `kanbanr process diff` names a path that differs, and the monitor's Workflow page shows them
+with the skipped stages struck through. A process file with a `paths` key needs this version of
+kanbanr: an older one doesn't know the key, so check the file with `kanbanr process check` there.
 
 ## Stage roles
 

@@ -117,6 +117,12 @@ method` says which parts of the method your project has on ([The method, on by
 default](processes.md#the-method-on-by-default)). A part you turn off is no longer asked for, but
 it is still good practice, and Claude never turns one off or on for you.
 
+**For a kind with its own path.** A process can leave method parts off for a kind: the built-in
+processes give chores a lighter path with no `design` and no `design-review`, so a chore isn't asked
+for a Design section or a design review. It is still asked for every other part, for the approval,
+and for every sign-off the stage it enters requires ([A lighter path for a
+kind](processes.md#a-lighter-path-for-a-kind)).
+
 **At the design role.** The item's spec gets a `## Design` written at implementation level
 ([The design stage](processes.md#the-design-stage-a-build-ready-design-in-the-spec)), ending with
 an implementation task list that a cheaper model can build one task at a time. The Design ends with

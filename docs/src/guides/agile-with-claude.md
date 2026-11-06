@@ -88,6 +88,18 @@ reached Review, so there is no per-item sign-off at the release.
 If something is missing for a move, Claude tells you what and either fixes it or asks you. Nothing
 moves past a gate unless you say why, and that reason stays on the item.
 
+### Chores
+
+A chore doesn't walk every stage. It goes Plan → Develop → Test → Released, skipping Design and Review, because their
+questions don't fit small maintenance work. Tell Claude it's a chore when you ask for it.
+
+> Pin the CI image: it's a chore.
+
+Before its first move Claude asks once for what every item records: a one-sentence statement, the goal
+it serves, and a requirement in the EARS form that says how it's verified. You still approve it before work starts. A chore has no Design section and no **design-review**. If
+you change an item's kind to a chore while it's at a stage the chore path leaves out, it's off
+the path: it moves by the ordinary moves, or back to Plan.
+
 ## When an item is done for a sprint
 
 The agile process marks no stage as done other than **Released**. The sprint we followed was closed

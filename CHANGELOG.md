@@ -8,6 +8,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Chores take a lighter path through a process (FTR-019).** A process can give a work kind its own
+  `paths`: the stages an item of that kind passes through, the conditions its first move asks, and
+  the method parts that do not apply to it. The built-in TOGAF, Scrum, agile and design-control
+  processes give chores one, so a chore no longer goes through stages whose questions do not fit it,
+  while it still records why it exists and how it is verified, and still needs your approval and
+  sign-offs. Other kinds and boards without `paths` behave as before. A process file with `paths`
+  needs this version; an older kanbanr does not know the key.
+
 - **Guides for every built-in process (DOC-003).** The Process guides section now covers default,
   scheduled, PDCA, design control, Scrum and agile, each with Claude and from the command line, and
   Working with Claude links them from each process's row. Its table now lists what each process

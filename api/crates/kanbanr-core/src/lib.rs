@@ -7336,4 +7336,239 @@ requirements:
         );
         assert!(closed.get("coverage_warnings").is_none(), "{closed}");
     }
+
+    // ---- kind paths (FTR-019) --------------------------------------------------------------
+
+    /// A TOGAF board with an adopted charter, as the method has it (design and docs on).
+    fn togaf_board() -> (Store, tempdir::TempDirLike) {
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/workflow",
+            Some(&serde_json::json!({"preset": "togaf"})),
+        )
+        .unwrap();
+        adopt_charter(&store, "demo");
+        (store, d)
+    }
+
+    fn add_of_kind(store: &Store, title: &str, kind: Option<&str>) -> String {
+        store
+            .add_feature_of_kind("demo", title, "", "M", None, kind)
+            .unwrap()
+            .code
+    }
+
+    fn define_and_approve(store: &Store, code: &str) {
+        store
+            .set_feature_definition("demo", code, Some(full_definition("Keep carts 7 days")))
+            .unwrap();
+        store.approve_feature("demo", code, "Ada L").unwrap();
+    }
+
+    #[test]
+    fn a_chore_without_a_statement_or_requirement_is_refused_its_first_move() {
+        let (store, _d) = togaf_board();
+        let code = add_of_kind(&store, "Pin the CI image", Some("chore"));
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(crate::models::FeatureDefinition::default()),
+            )
+            .unwrap();
+        let err = store
+            .move_feature_gated("demo", &code, "Implementation", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot move"), "{err}");
+        for asked in ["statement", "goal", "requirement"] {
+            assert!(err.contains(asked), "{asked} not asked: {err}");
+        }
+        // Nothing moved.
+        let at = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .status
+            .clone();
+        assert_eq!(at, "Vision");
+    }
+
+    #[test]
+    fn a_chore_with_a_statement_goals_and_requirements_moves_on() {
+        let (store, _d) = togaf_board();
+        let code = add_of_kind(&store, "Pin the CI image", Some("chore"));
+        define_and_approve(&store, &code);
+        // The Design section and its review are the feature's, not the chore's.
+        store
+            .move_feature_gated("demo", &code, "Implementation", None)
+            .unwrap();
+        let mut def = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        def.requirements[0].tests[0].state = crate::models::TestState::Green;
+        def.requirements[0].tests[0].checked_rev = "abc1234".into();
+        store
+            .set_feature_definition("demo", &code, Some(def))
+            .unwrap();
+        // The docs part stays on for a chore: its sign-off is still asked at the integrate stage.
+        store
+            .signoff_feature("demo", &code, "docs-folded", "Ada L", "", "")
+            .unwrap();
+        store
+            .move_feature_gated("demo", &code, "Migration", None)
+            .unwrap();
+        let project = store.load("demo").unwrap();
+        let f = project.feature(&code).unwrap();
+        let walked: Vec<&str> = f
+            .history
+            .iter()
+            .flat_map(|t| [t.from.as_str(), t.to.as_str()])
+            .collect();
+        assert_eq!(
+            walked,
+            ["Vision", "Implementation", "Implementation", "Migration"]
+        );
+    }
+
+    #[test]
+    fn a_feature_still_walks_every_togaf_stage() {
+        let (store, _d) = togaf_board();
+        let code = add_of_kind(&store, "Carts", None);
+        define_and_approve(&store, &code);
+        // A feature cannot skip Business Arch and System Design.
+        let err = store
+            .move_feature("demo", &code, "Implementation")
+            .unwrap_err();
+        assert!(
+            matches!(err, CoreError::TransitionNotAllowed { .. }),
+            "{err}"
+        );
+        assert!(!err.to_string().contains("its path is"), "{err}");
+        // A chore cannot enter a stage off its path.
+        let chore = add_of_kind(&store, "Pin", Some("chore"));
+        let err = store
+            .move_feature("demo", &chore, "Business Arch")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("is a chore: its path is Vision \u{2192} Implementation"),
+            "{err}"
+        );
+        // The feature's way is unchanged: through Business Arch and System Design.
+        for stage in ["Business Arch", "System Design"] {
+            store
+                .move_feature_gated("demo", &code, stage, None)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn a_chore_path_drops_design_review_and_keeps_approval_and_docs() {
+        let (store, _d) = togaf_board();
+        let project = store.load("demo").unwrap();
+        let charter = crate::charter::load(&store, "demo").unwrap();
+        let ctx = crate::readiness::Context::load(&store, "demo", &project.config);
+        let feature_code = add_of_kind(&store, "Carts", None);
+        let chore_code = add_of_kind(&store, "Pin", Some("chore"));
+        for code in [&feature_code, &chore_code] {
+            store
+                .set_feature_definition("demo", code, Some(full_definition("Keep carts")))
+                .unwrap();
+        }
+        let project = store.load("demo").unwrap();
+        let gate = |code: &str| {
+            let f = project.feature(code).unwrap();
+            let all = crate::readiness::next_gates(&project, Some(&charter), f, &ctx);
+            all.into_iter()
+                .find(|g| g.status == "Implementation")
+                .map(|g| {
+                    (
+                        g.signoffs_needed,
+                        g.gaps
+                            .into_iter()
+                            .map(|x| x.message)
+                            .collect::<Vec<_>>()
+                            .join(" | "),
+                    )
+                })
+                .unwrap_or_default()
+        };
+        // The gate for the build stage: what the feature is asked, and the chore.
+        let (feature_signoffs, feature_gaps) = {
+            // A feature reaches Implementation from System Design; judge the gate directly.
+            let gates = project.config.effective_gates();
+            let g = &gates["Implementation"];
+            let f = project.feature(&feature_code).unwrap();
+            let gaps =
+                crate::readiness::evaluate_entering(f, None, &g.requires, &ctx, "Implementation");
+            (
+                g.signoffs.clone(),
+                gaps.into_iter()
+                    .map(|x| x.message)
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            )
+        };
+        assert!(feature_signoffs.iter().any(|s| s == "design-review"));
+        assert!(feature_gaps.contains("Design"), "{feature_gaps}");
+        let (chore_signoffs, chore_gaps) = gate(&chore_code);
+        assert!(
+            !chore_signoffs.iter().any(|s| s == "design-review"),
+            "{chore_signoffs:?}"
+        );
+        assert!(!chore_gaps.contains("Design"), "{chore_gaps}");
+        // Both are still asked for the approval.
+        assert!(chore_gaps.contains("approv"), "{chore_gaps}");
+        assert!(feature_gaps.contains("approv"), "{feature_gaps}");
+        // And the integrate stage keeps its docs check for the chore.
+        let migration = project.config.effective_gates()["Migration"].clone();
+        assert!(
+            migration
+                .requires
+                .contains(&crate::readiness::Condition::Check(
+                    crate::readiness::Check::DocsUpdated
+                ))
+        );
+    }
+
+    #[test]
+    fn a_chore_still_needs_the_users_approval_to_start_building() {
+        let (store, _d) = togaf_board();
+        let code = add_of_kind(&store, "Pin the CI image", Some("chore"));
+        store
+            .set_feature_definition("demo", &code, Some(full_definition("Pin the image")))
+            .unwrap();
+        let err = store
+            .move_feature_gated("demo", &code, "Implementation", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("approv"), "{err}");
+        // Approved, it builds; and the release sign-off is still listed for the end.
+        store.approve_feature("demo", &code, "Ada L").unwrap();
+        store
+            .move_feature_gated("demo", &code, "Implementation", None)
+            .unwrap();
+        let project = store.load("demo").unwrap();
+        let charter = crate::charter::load(&store, "demo").unwrap();
+        let ctx = crate::readiness::Context::load(&store, "demo", &project.config);
+        let gates = project.config.effective_gates();
+        assert_eq!(gates["Operations"].signoffs, ["release"]);
+        // The chore's path still ends at the stage that asks for the sign-off.
+        let path = project.config.path_for(Some("chore")).unwrap();
+        assert_eq!(path.stages.last().map(String::as_str), Some("Operations"));
+        // Recording one is a person's act; the gate lists it as needed until one is made.
+        let f = project.feature(&code).unwrap();
+        let next = crate::readiness::next_gates(&project, Some(&charter), f, &ctx);
+        assert!(next.iter().any(|g| g.status == "Migration"));
+    }
 }

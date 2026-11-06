@@ -184,15 +184,10 @@ pub fn add(wf: &mut WorkflowFile, parts: &[Part]) -> Vec<String> {
     notes
 }
 
-/// Take the parts' fragments out of the role-addressed gates — never out of a stage's own gate,
-/// which is the project's rule, not the method's. A gate left with nothing in it is dropped.
-pub fn remove(wf: &mut WorkflowFile, parts: &[Part]) {
+/// Take the parts' fragments out of one gate (FEAT-019): what `remove` does to a role-addressed
+/// gate, and what a kind's path does to the gate an item of that kind is judged against.
+pub fn strip_gate(gate: &mut Gate, parts: &[Part]) {
     for &part in parts {
-        let Some(role) = part.role() else { continue };
-        let key = role_gate_key(role);
-        let Some(gate) = wf.gates.get_mut(&key) else {
-            continue;
-        };
         match part {
             Part::Design => {
                 gate.requires.retain_mut(|c| match c {
@@ -211,6 +206,19 @@ pub fn remove(wf: &mut WorkflowFile, parts: &[Part]) {
             Part::DocsFolded => gate.signoffs.retain(|s| s != DOCS_FOLDED),
             Part::Links => {}
         }
+    }
+}
+
+/// Take the parts' fragments out of the role-addressed gates — never out of a stage's own gate,
+/// which is the project's rule, not the method's. A gate left with nothing in it is dropped.
+pub fn remove(wf: &mut WorkflowFile, parts: &[Part]) {
+    for &part in parts {
+        let Some(role) = part.role() else { continue };
+        let key = role_gate_key(role);
+        let Some(gate) = wf.gates.get_mut(&key) else {
+            continue;
+        };
+        strip_gate(gate, &[part]);
         if *gate == Gate::default() {
             wf.gates.remove(&key);
         }
@@ -312,6 +320,27 @@ mod tests {
             .into_config("p");
         // Every board is stamped 5 since canonical revisions (FEAT-187); 4 before.
         assert_eq!(default.required_schema_version(), 5);
+    }
+
+    #[test]
+    fn strip_gate_removes_design_parts_from_one_gate() {
+        let mut wf = crate::config::preset_bare("togaf").unwrap();
+        add(&mut wf, &Part::GATES);
+        let mut gate = wf.gates.get(&role_gate_key(Role::Build)).unwrap().clone();
+        assert!(asks_design(&gate.requires));
+        assert!(gate.signoffs.iter().any(|s| s == DESIGN_REVIEW));
+        let docs = wf
+            .gates
+            .get(&role_gate_key(Role::Integrate))
+            .unwrap()
+            .clone();
+        strip_gate(&mut gate, &[Part::Design, Part::DesignReview]);
+        assert!(!asks_design(&gate.requires));
+        assert!(gate.signoffs.iter().all(|s| s != DESIGN_REVIEW));
+        // Another gate is not touched, and a part left on stays.
+        let mut kept = docs.clone();
+        strip_gate(&mut kept, &[Part::Design, Part::DesignReview]);
+        assert_eq!(kept, docs);
     }
 
     #[test]

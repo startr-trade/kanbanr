@@ -555,6 +555,16 @@ pub fn diff(from: &WorkflowFile, to: &WorkflowFile) -> Vec<String> {
             }
         }
     }
+    // A kind's path (FTR-019).
+    let kinds: BTreeSet<&String> = from.paths.keys().chain(to.paths.keys()).collect();
+    for k in kinds {
+        match (from.paths.get(k), to.paths.get(k)) {
+            (None, Some(_)) => out.push(format!("+ path '{k}'")),
+            (Some(_), None) => out.push(format!("- path '{k}'")),
+            (Some(a), Some(b)) if a != b => out.push(format!("path '{k}' differs")),
+            _ => {}
+        }
+    }
     if from.cadence != to.cadence {
         out.push("sprints and releases differ".into());
     }
@@ -598,6 +608,27 @@ mod tests {
         let mut file = crate::config::preset("default").unwrap();
         file.statuses.push(about.to_string());
         file
+    }
+
+    #[test]
+    fn diff_names_a_changed_path() {
+        let plain = crate::config::preset("default").unwrap();
+        let mut with = plain.clone();
+        with.paths.insert(
+            "chore".into(),
+            crate::config::KindPath {
+                stages: vec!["Planned".into(), "Completed".into()],
+                ..Default::default()
+            },
+        );
+        assert!(diff(&plain, &plain).is_empty());
+        assert_eq!(diff(&plain, &with), ["+ path 'chore'"]);
+        assert_eq!(diff(&with, &plain), ["- path 'chore'"]);
+        let mut changed = with.clone();
+        changed.paths.get_mut("chore").unwrap().stages = vec!["Planned".into(), "Scheduled".into()];
+        assert_eq!(diff(&with, &changed), ["path 'chore' differs"]);
+        // A process with a path has its own rev; one without hashes as it did.
+        assert_ne!(plain.content_rev(), with.content_rev());
     }
 
     /// FEAT-176: lookup order is board, then personal, then built-in; nothing found names the

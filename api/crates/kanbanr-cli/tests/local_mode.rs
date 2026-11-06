@@ -8199,3 +8199,104 @@ fn why_json_on_an_uncommitted_line_names_the_branch_item() {
     assert_eq!(v["references"][0]["reference"], "FEAT-001", "{v}");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// FTR-019 R-1: under a process that gives chores a path, a chore goes from Vision straight to
+/// Implementation once it says why it exists and how it is verified, and is refused a stage off its
+/// path, with the path in the message.
+#[test]
+fn a_chore_moves_straight_from_vision_to_implementation() {
+    let (base, work) = togaf_scratch("chore-path");
+    togaf_board(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let process = base.join("paths.yaml");
+    std::fs::write(
+        &process,
+        r#"statuses: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+default_state: Vision
+displayed_states: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+terminal_states: [Operations]
+transitions:
+  Vision: [Business Arch]
+  Business Arch: [System Design, Vision]
+  System Design: [Implementation, Business Arch]
+  Implementation: [Migration, System Design]
+  Migration: [Operations, Implementation]
+  Operations: [Migration]
+gates:
+  Implementation:
+    requires: [approved]
+paths:
+  chore:
+    stages: [Vision, Implementation, Migration, Operations]
+    requires: [statement, goals, requirements]
+"#,
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "workflow",
+            "--from-file",
+            process.to_str().unwrap(),
+        ],
+    ));
+    for title in ["Pin the CI image", "Bump the lint"] {
+        ok(run_in(
+            &base,
+            &work,
+            &[
+                "feature",
+                "add",
+                "--title",
+                title,
+                "--milestone",
+                "MS-001",
+                "--kind",
+                "chore",
+            ],
+        ));
+    }
+    // Asked why it exists and how it is verified before its first move.
+    let bare = run_in(&base, &work, &["move", "FEAT-002", "Implementation"]);
+    assert!(!bare.status.success());
+    let why = String::from_utf8_lossy(&bare.stderr);
+    assert!(why.contains("definition"), "{why}");
+
+    let def = base.join("chore.yaml");
+    std::fs::write(
+        &def,
+        "statement: Pin the CI image\ngoals: [G-1]\nrequirements:\n  - kind: functional\n    \
+         text: \"THE SYSTEM SHALL pin the image.\"\n    tests:\n      - name: ci::pinned\n        \
+         state: planned\n",
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "define",
+            "FEAT-002",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    ok(run_in(&base, &work, &["approve", "FEAT-002"]));
+    ok(run_in(
+        &base,
+        &work,
+        &["move", "FEAT-002", "Implementation"],
+    ));
+
+    // The other chore may not enter a stage off its path.
+    let off = run_in(&base, &work, &["move", "FEAT-003", "Business Arch"]);
+    assert!(!off.status.success());
+    let why = String::from_utf8_lossy(&off.stderr);
+    assert!(why.contains("its path is Vision"), "{why}");
+    let _ = std::fs::remove_dir_all(&base);
+}

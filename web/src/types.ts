@@ -413,6 +413,8 @@ export interface ProjectConfig {
   gates?: Record<string, Gate>;
   /** Which prefix an item's code gets from its kind (FEAT-217). Absent: FEAT for every item. */
   codes?: CodesConfig;
+  /** A shorter path through the stages for some kinds, keyed by kind (FTR-019). Absent: none. */
+  paths?: Record<string, KindPath>;
   /** Days or story points (FEAT-121). */
   estimate_unit?: "days" | "points";
   /** Whether the project uses sprints and releases at all (FEAT-121). */
@@ -560,6 +562,13 @@ export interface ReleasePlan {
   empty: boolean;
   /** Worth knowing, not stopping: e.g. the notes carry an earlier date (DEF-001). */
   warnings?: string[];
+}
+
+/** The stages an item of one kind passes, what its first move asks, and the method parts left out. */
+export interface KindPath {
+  stages: string[];
+  requires?: Condition[];
+  method_off?: string[];
 }
 
 export interface Gate {

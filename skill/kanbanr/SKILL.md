@@ -352,6 +352,14 @@ organisation's own process file changes what you ask with nothing changed here:
 Warnings go into the plan with a choice: fix it, or go ahead with the warning on record. When more
 than one next stage is possible, ask which. Head the plan with the stage's own `purpose`.
 
+**A kind can have its own path.** An item of a kind with a path (`kanbanr process show` lists them
+under "Lighter paths"; the built-in processes give `chore` one) skips the stages the path leaves
+out. Do not walk a chore through stages its path omits, and do not pad answers to satisfy a stage it
+never meets: `kanbanr check` lists only the next stage on its path. Its first move asks the path's
+own conditions too (a statement, goals and requirements), so draft those once. Make one with
+`kanbanr feature add --kind chore`. The approval and the sign-offs the stage it enters asks for
+stay the user's, as ever.
+
 **Stages have roles** (`kanbanr process checks` lists them): design, build, integrate, release.
 Whatever a process calls its stages, the design is due before the build role's stage, and code is
 written there, on the item's branch. Say which stage holds which role when you plan work. What

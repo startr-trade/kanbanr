@@ -93,6 +93,18 @@ gate unless you say why, and that reason stays on the item.
 **Moving to Done is the merge.** kanbanr merges the item's branch into the sprint's branch. The item
 now counts as done for the sprint's burndown. It isn't released yet.
 
+### Chores
+
+A chore doesn't walk every stage. It goes Backlog → Ready → In Progress → Testing → Done → Released, skipping Review, because their
+questions don't fit small maintenance work. Tell Claude it's a chore when you ask for it.
+
+> Pin the CI image: it's a chore.
+
+Before its first move Claude asks once for what every item records: a one-sentence statement, the goal
+it serves, and a requirement in the EARS form that says how it's verified. It is still sized and planned into a sprint, you still approve it before work starts, and it is still tested before Done. A chore has no Design section and no **design-review**. If
+you change an item's kind to a chore while it's at a stage the chore path leaves out, it's off
+the path: it moves by the ordinary moves, or back to Backlog.
+
 ## Handing work to sub-agents
 
 > Have a sub-agent build these tasks.
