@@ -24,7 +24,7 @@ import { approveBlocker, checkBlocks, type DiagramProblem } from "../diagramChec
  */
 export default function ReviewPage() {
   const { project = "" } = useParams();
-  const tick = useLiveTick(api.projectEvents(project));
+  const tick = useLiveTick(api.projectEvents(project), 400);
   const [done, setDone] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const meta = useAsync(() => api.getMeta(), []);
