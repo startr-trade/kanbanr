@@ -714,7 +714,7 @@ pub fn next_gates(
 
 /// The gate of the stage an item reaches next in the workflow's own order (FEAT-182): of the
 /// stages it can move to in one step, the earliest. A workflow that lets an item skip ahead
-/// (Implementation → Operations) still has one next stage, and only its sign-offs are due.
+/// (a stage that skips ahead) still has one next stage, and only its sign-offs are due.
 pub fn immediate_next_gate(
     project: &crate::store::Project,
     charter: Option<&crate::Charter>,

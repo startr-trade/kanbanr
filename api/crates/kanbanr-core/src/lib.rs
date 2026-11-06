@@ -2896,7 +2896,7 @@ requirements:
                 .on_enter
                 .contains(&crate::config::Action::Branch)
         );
-        assert!(togaf.transitions["Implementation"].contains(&"Operations".to_string()));
+        assert!(!togaf.transitions["Implementation"].contains(&"Operations".to_string()));
         assert_eq!(togaf.gates["Operations"].signoffs, ["release"]);
     }
 

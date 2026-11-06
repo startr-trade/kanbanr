@@ -1863,6 +1863,16 @@ mod tests {
         }
     }
 
+    /// DEF-019 R-7: TOGAF has no move from Implementation straight to Operations, so an item
+    /// passes Migration, where its branch is merged and its docs sign-off is asked.
+    #[test]
+    fn togaf_has_no_edge_from_implementation_to_operations() {
+        let togaf = preset("togaf").unwrap();
+        let to = &togaf.transitions["Implementation"];
+        assert!(!to.iter().any(|s| s == "Operations"), "{to:?}");
+        assert!(to.iter().any(|s| s == "Migration"), "{to:?}");
+    }
+
     /// FEAT-188 R-2: every built-in process declares all four roles, the branch is made at build,
     /// release is an end status, and each preset still checks clean.
     #[test]
