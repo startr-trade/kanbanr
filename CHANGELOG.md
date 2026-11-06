@@ -8,6 +8,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **A release stage can require merged items, or an earlier stage (FTR-021).** A new release
+  check, `items_merged`, holds when every item planned into the release is at the integrate stage
+  or later, judged from the board with no repository, so **Promote to candidate** can wait for
+  merged work. A stage can also list `--after` stages (`kanbanr config release-stage tag --after ci`):
+  the release must have been promoted into each first, so a named promotion cannot jump over
+  them. Both appear in the promotion plan as conditions with what was found and what to do.
+  A board that uses neither sees no change.
+
 - **A release stage can require that the gate passed (FTR-002).** A new release check,
   `gate_passed`, needs a recorded passed result for the release tip from every gate named by
   `kanbanr config commit-gates`. You look at your CI and record its verdict with

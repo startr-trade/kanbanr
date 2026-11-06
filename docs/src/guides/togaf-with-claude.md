@@ -143,8 +143,8 @@ it finishes, Claude reviews the branch and brings you any decisions.
 
 ## Releasing
 
-Start once every item in the release has reached Migration. **Promote to candidate** is offered as
-soon as the release holds an item, even while work is still going on.
+Start once every item in the release has reached Migration. **Promote to candidate** is offered once
+every item in the release has reached Migration, and the Releases page lists any that has not.
 
 Follow this order and you won't have to go back:
 

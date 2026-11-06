@@ -410,6 +410,13 @@ cadence:
 | `main_at_release` | main is at the release tip | promote to the stage with `move_main` |
 | `pushed` | the release tip is on main's remote-tracking branch (`origin/main`) | push main (`git push origin main`), then wait for CI |
 | `gate_passed` | every gate named in `commit_gates` has a passed result recorded for the release tip | look at your CI, then record its verdict (see below) |
+| `items_merged` | every item planned into the release (other than one in a no-op status) is at the integrate stage or later; read from the board, so it needs no repository | move the item to the integrate stage, which merges its branch, or plan it into another release |
+
+A stage can also list earlier stages in `after` (`kanbanr config release-stage tag --after ci`). The
+release must have been promoted forward into each of them before it enters this one, so a named
+promotion cannot jump over them. The plan shows each as a `stage_passed` condition with the fix
+`promote <V> to <stage> first`. Moving back to a stage is not entering it, and a stage entered by the
+same promotion does not count. kanbanr records that the stage was entered, not that CI passed.
 
 A stage with no gate of its own keeps the default:
 
