@@ -132,25 +132,99 @@ pub fn setup_questions(tracked: bool, git_identity: bool) -> Vec<String> {
          has it), then the built-in ones, or designing their own."
             .into(),
     );
-    // FEAT-194 Q1: asked for every process, because the git model follows from it.
+    // FEAT-194 Q1: asked for every process, because the git model follows from it. FTR-022: one
+    // question, no details, and nothing is created: the first sprint or release is made when the
+    // user asks for it.
     ask.push(
         "Whether to work in sprints and releases — only after the process is chosen, because a \
          process may switch them on (scrum, agile): recommend its own setting. Then show the \
          resulting git model (`kanbanr git model --sprints on|off --releases on|off`): where \
          items branch from and merge into, what kanbanr merges, and that pushing is always the \
-         user's — before the plan applies it."
+         user's — before the plan applies it. Do not ask a sprint's length, start or capacity, \
+         or a release's version or rhythm, and do not create a sprint or a release: the defaults \
+         apply (14-day sprints, releases on demand) and the first one is made when the user asks \
+         for it."
             .into(),
     );
+    // FTR-022 R-5: the answer is `cadence.has_ci` (FTR-020); the question is moot without releases.
+    ask.push(
+        "Whether the project has CI — only when releases are on, never when they are off: Yes or \
+         No (default: No). Apply it with `kanbanr config cadence --has-ci on|off`. One question; \
+         do not ask which CI."
+            .into(),
+    );
+    // FTR-022 R-3: once, for the board and the repository both.
     if !git_identity {
         ask.push(
-            "This repository's git identity — only after the board's commit identity is \
-             given, in a later question: git has none here, so nobody can commit after setup. \
-             Offer that identity: Yes (this repository only, never --global), another \
-             name/email, or No (the first commit only)."
+            "The commit identity, once, for the board and this repository both: name and email, \
+             defaulted from the board's author. Git has none here, so nobody can commit after \
+             setup without it. Apply it to both (`git config user.name`/`user.email` in this \
+             repository only, never --global); the board's commit identity is the same answer. \
+             Do not ask for it twice."
                 .into(),
         );
     }
+    // FTR-022 R-4: one confirmation for the whole charter, not one question per field.
+    ask.push(
+        "The charter — asked after the process, because its goals vocabulary may matter: Claude \
+         drafts it from the README, manifests and docs, shows it marked as a draft with every \
+         blank left blank, and asks one question: confirm, or say what to change. One question \
+         for the whole charter, not one per field; nothing is adopted before the confirmation."
+            .into(),
+    );
     ask
+}
+
+/// A one-line description of the project at `dir`, read from what it already says (FTR-022): the
+/// first prose line of README.md, else `description` from Cargo.toml, package.json or
+/// pyproject.toml. At most 200 characters, cut at a sentence end. Read-only; `None` when nothing
+/// says one.
+pub fn suggested_description(dir: &Path) -> Option<String> {
+    let from_readme = std::fs::read_to_string(dir.join("README.md"))
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .map(str::trim)
+                .find(|l| {
+                    !l.is_empty()
+                        && !l.starts_with('#')
+                        && !l.starts_with('[')
+                        && !l.starts_with('!')
+                        && !l.starts_with('<')
+                        && !l.starts_with("```")
+                        && !l.starts_with('|')
+                })
+                .map(String::from)
+        });
+    let description = from_readme.or_else(|| {
+        let toml_like = |file: &str| {
+            std::fs::read_to_string(dir.join(file)).ok().and_then(|t| {
+                t.lines().find_map(|l| {
+                    let rest = l.trim().strip_prefix("description")?.trim_start();
+                    let value = rest.strip_prefix('=')?.trim();
+                    Some(value.trim_matches('"').trim_matches('\'').to_string())
+                })
+            })
+        };
+        toml_like("Cargo.toml")
+            .or_else(|| toml_like("pyproject.toml"))
+            .or_else(|| {
+                let text = std::fs::read_to_string(dir.join("package.json")).ok()?;
+                let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+                v.get("description")?.as_str().map(String::from)
+            })
+    })?;
+    let description = description.trim();
+    if description.is_empty() {
+        return None;
+    }
+    if description.chars().count() <= 200 {
+        return Some(description.to_string());
+    }
+    let cut: String = description.chars().take(200).collect();
+    // Cut at the last sentence end that fits, else at the limit.
+    let end = cut.rfind(". ").map(|i| i + 1).unwrap_or_else(|| cut.len());
+    Some(cut[..end].trim().to_string())
 }
 
 fn non_empty(s: Option<String>) -> Option<String> {
@@ -881,11 +955,11 @@ mod tests {
     #[test]
     fn setup_asks_what_only_the_user_can_answer() {
         assert!(setup_questions(true, false).is_empty());
-        assert_eq!(setup_questions(false, true).len(), 3);
+        assert_eq!(setup_questions(false, true).len(), 5);
         let all = setup_questions(false, false);
-        assert_eq!(all.len(), 4);
+        assert_eq!(all.len(), 6);
         assert!(all[2].contains("sprints and releases"));
-        assert!(all[3].contains("git identity"));
+        assert!(all[4].contains("commit identity"));
     }
     /// FEAT-129: Windows' CI run showed two path forms leaking out — a marker with backslashes,
     /// which no other platform can read, and canonicalize's `\\?\` verbatim prefix in messages.
