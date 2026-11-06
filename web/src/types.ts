@@ -483,6 +483,8 @@ export interface Release {
   stages?: { stage: string; by: string; at: string; reason?: string }[];
   /** The code branch, made on entering the first stage. */
   branch?: string;
+  /** The cut release this patches (FEAT-184); absent for an ordinary release. */
+  parent?: string;
 }
 
 /** A release's notes as they are on its branch `release/<V>` (FEAT-216). */
