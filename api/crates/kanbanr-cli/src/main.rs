@@ -1068,6 +1068,11 @@ enum ConfigCmd {
     CommitGates {
         names: Vec<String>,
     },
+    /// The commit gate whose result judges a release's tag (FTR-026): `kanbanr config tag-gate
+    /// ci`. It must be one of the commit gates; with none given, the first commit gate judges.
+    TagGate {
+        name: Option<String>,
+    },
     /// A release stage's gate (FEAT-212): what must hold before a release enters it, and what
     /// entering it does. Starts from the gate in force (`release stages`); `--clear` goes back to
     /// the default.
@@ -1236,6 +1241,19 @@ enum ReleaseCmd {
         /// starts at the first stage (FEAT-184). Run it from the project folder.
         #[arg(long)]
         patch_of: Option<String>,
+        /// With --patch-of: the parent's tag has a failed CI result recorded (FTR-026). A defect
+        /// is filed carrying the failed run's link and --notes, the defect and the parent's items
+        /// are planned into the patch, and the parent is marked superseded. Your own verdict:
+        /// Claude does not run it.
+        #[arg(long, requires = "patch_of")]
+        from_failed_tag: bool,
+        /// With --from-failed-tag: the failed run's link (default: the link on the recorded
+        /// result).
+        #[arg(long, requires = "from_failed_tag")]
+        link: Option<String>,
+        /// With --from-failed-tag: what you saw, kept in the defect.
+        #[arg(long, requires = "from_failed_tag")]
+        notes: Option<String>,
     },
     /// List the project's releases.
     List,
@@ -1253,6 +1271,10 @@ enum ReleaseCmd {
         /// Why the release moves back a stage (required for that, and recorded).
         #[arg(long)]
         reason: Option<String>,
+        /// What you checked, kept on the stage change when you confirm a stage after the tag
+        /// (FTR-026). The same field as --reason.
+        #[arg(long, conflicts_with = "reason")]
+        note: Option<String>,
         /// Who moved it (default: the board's commit identity).
         #[arg(long)]
         by: Option<String>,
@@ -8273,6 +8295,19 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             print_write(cli, &resp, said);
             Ok(())
         }
+        ConfigCmd::TagGate { name } => {
+            let resp = client.write(
+                Method::Put,
+                &format!("/projects/{p}/config/tag-gate"),
+                Some(json!({ "gate": name })),
+            )?;
+            let said = match name {
+                Some(n) => format!("tag gate: {n}"),
+                None => "tag gate cleared: the first commit gate judges".to_string(),
+            };
+            print_write(cli, &resp, said);
+            Ok(())
+        }
         ConfigCmd::ReleaseStage {
             stage,
             purpose,
@@ -8879,7 +8914,41 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             target,
             name,
+            patch_of: Some(parent),
+            from_failed_tag: true,
+            link,
+            notes,
+        } => {
+            let _ = (target, name);
+            let by = verdict_author(cli, None)?;
+            let resp = client.write_in(
+                Method::Post,
+                &format!(
+                    "/projects/{p}/releases/{}/patch-from-tag",
+                    urlencode_segment(parent)
+                ),
+                Some(obj(vec![
+                    ("version", Some(json!(version))),
+                    ("by", Some(json!(by))),
+                    ("link", link.clone().map(|l| json!(l))),
+                    ("notes", notes.clone().map(|n| json!(n))),
+                ])),
+                code_repo().as_deref(),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            let said = format!(
+                "added {version}, a patch of {parent}: defect {} filed, {} planned, {parent} superseded",
+                v["defect"].as_str().unwrap_or_default(),
+                v["planned"].as_array().map_or(0, Vec::len)
+            );
+            print_write(cli, &resp, said);
+        }
+        ReleaseCmd::Add {
+            version,
+            target,
+            name,
             patch_of,
+            ..
         } => {
             let by = match patch_of {
                 Some(_) => Some(verdict_author(cli, None)?),
@@ -8917,6 +8986,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             by,
             plan: true,
             fetch,
+            ..
         } => {
             let _ = by;
             print_release_plan(
@@ -8951,6 +9021,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             stage,
             reason,
+            note,
             by,
             plan: false,
             ..
@@ -8961,7 +9032,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 &p,
                 version,
                 stage.as_deref(),
-                reason.as_deref(),
+                reason.as_deref().or(note.as_deref()),
                 by.as_ref(),
             )?;
         }
@@ -9449,8 +9520,23 @@ fn print_release_plan(
             t["subject"].as_str().unwrap_or_default()
         );
     }
+    if let Some(t) = plan["tag"].as_object() {
+        let sha = t["commit"].as_str().unwrap_or_default();
+        let sha = &sha[..sha.len().min(7)];
+        let gate = t["gate"].as_str().unwrap_or_default();
+        match t["state"].as_str().unwrap_or_default() {
+            "none" => println!("  tag {sha}: no {gate} result recorded since the tag was made"),
+            state => println!(
+                "  tag {sha}: {gate} {state}{}",
+                t["result"]["by"]
+                    .as_str()
+                    .map(|b| format!(" (recorded by {b})"))
+                    .unwrap_or_default()
+            ),
+        }
+    }
     let preview = plan["preview"].as_array().cloned().unwrap_or_default();
-    if plan["cut"] == true {
+    if plan["ships"] == true {
         let ships: Vec<&str> = preview
             .iter()
             .filter(|c| c["ships"] == true)
@@ -9519,6 +9605,9 @@ fn print_release_stages(cli: &Cli, client: &Backend, p: &str) -> anyhow::Result<
         let mut note = Vec::new();
         if s["cut"] == true {
             note.push("the cut");
+        }
+        if s["after_cut"] == true {
+            note.push("confirmed by you");
         }
         if s["declared"] != true {
             note.push("default");

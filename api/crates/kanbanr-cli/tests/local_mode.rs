@@ -8303,6 +8303,154 @@ fn why_json_on_an_uncommitted_line_names_the_branch_item() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A release scratch whose `staging` stage tags and whose `production` stage, after it, confirms
+/// (FTR-026): the release is at `staging`, tagged and not shipped.
+fn tagged_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (base, work) = release_scratch(tag);
+    for args in [
+        &["config", "commit-gates", "ci"][..],
+        &["config", "release-stage", "staging", "--on-enter", "tag"],
+        &["release", "promote", "v1.0.0"],
+        &["release", "promote", "v1.0.0", "test"],
+        &["release", "promote", "v1.0.0", "staging"],
+    ] {
+        let o = run_in(&base, &work, args);
+        assert!(
+            o.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+    (base, work)
+}
+
+/// FTR-026 R-2: a confirmation after the tag keeps the user's note on the stage change, and the
+/// last one ships the release.
+#[test]
+fn release_promote_note_is_kept_on_the_stage_change() {
+    let (base, work) = tagged_scratch("ftr026-note");
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(r["state"], "planned", "{r}");
+    assert!(
+        !r["tagged_at"].as_str().unwrap_or_default().is_empty(),
+        "{r}"
+    );
+    // No result recorded for the tag yet: the confirmation is refused, naming what to do.
+    let refused = run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "--note", "looks fine"],
+    );
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("no result recorded for the tag"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    let plan = run_in(&base, &work, &["release", "plan", "v1.0.0"]);
+    let _ = plan;
+    let rec = run_in(
+        &base,
+        &work,
+        &["gate", "record", "ci", "--passed", "--commit", "v1.0.0"],
+    );
+    assert!(
+        rec.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rec.stderr)
+    );
+    let o = run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "promote",
+            "v1.0.0",
+            "--note",
+            "smoke test passed",
+        ],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let r = release_json(&base, &work, "v1.0.0");
+    assert_eq!(r["state"], "shipped", "{r}");
+    let last = r["stages"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["stage"], "production");
+    assert_eq!(last["reason"], "smoke test passed");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-026 R-6: from a failed tag result, a patch release is started carrying a defect.
+#[test]
+fn release_patch_from_a_failed_tag_result() {
+    let (base, work) = tagged_scratch("ftr026-patch");
+    let refused = run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "add",
+            "v1.0.1",
+            "--patch-of",
+            "v1.0.0",
+            "--from-failed-tag",
+        ],
+    );
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("no failed result"));
+    let rec = run_in(
+        &base,
+        &work,
+        &[
+            "gate", "record", "ci", "--failed", "--commit", "v1.0.0", "--note", "two red",
+        ],
+    );
+    assert!(
+        rec.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rec.stderr)
+    );
+    let made = run_in(
+        &base,
+        &work,
+        &[
+            "--json",
+            "release",
+            "add",
+            "v1.0.1",
+            "--patch-of",
+            "v1.0.0",
+            "--from-failed-tag",
+            "--link",
+            "https://ci.example/run/7",
+            "--notes",
+            "arm build broke",
+        ],
+    );
+    assert!(
+        made.status.success(),
+        "{}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&made.stdout).unwrap();
+    let defect = v["defect"].as_str().unwrap().to_string();
+    assert_eq!(
+        rev(&base, &work, "release/v1.0.1"),
+        rev(&base, &work, "v1.0.0^{commit}")
+    );
+    assert_eq!(
+        release_json(&base, &work, "v1.0.0")["superseded_by"],
+        "v1.0.1"
+    );
+    assert_eq!(release_json(&base, &work, "v1.0.1")["parent"], "v1.0.0");
+    let shown = run_in(&base, &work, &["feature", "show", &defect]);
+    let text = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        text.contains("https://ci.example/run/7") && text.contains("arm build broke"),
+        "{text}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FTR-002 R-1: a recorded gate result is a new file beside the earlier ones, and `gate list`
 /// shows them newest first.
 #[test]
