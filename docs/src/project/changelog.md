@@ -30,6 +30,13 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **Doctor warns only about the stage an item is at (DEF-021).** On a healthy TOGAF project it
+  showed 25 warnings, mostly the next stage's requirements on items still at Vision. It now warns
+  about what the item's current stage asks, which an edit may have undone, and counts what the stage
+  reached next still lacks, per stage, on a separate "Later stages will ask" line that is not a
+  warning and does not change the exit status. This changes the wording of FEAT-117 R-2, which had
+  doctor report the next stage's needs. The JSON report gains an optional `ahead` list.
+
 - **The monitor's next-stage counts match `kanbanr check` (DEF-020).** A board card left sign-offs
   out of "Migration needs 4" and listed every stage the item could skip to. It now names only the
   stage reached next, counts every gap `check` counts, and says how many are yours: "Migration needs
