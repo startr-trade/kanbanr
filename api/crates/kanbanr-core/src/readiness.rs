@@ -320,6 +320,9 @@ pub struct Context {
     /// What the coverage rules' source docs reference (FEAT-197), read only when the project has
     /// rules and some gate asks for `docs_cover`.
     pub coverage: Option<std::sync::Arc<crate::coverage::Snapshot>>,
+    /// The board's git history, shared by every doc judged in this evaluation (DEF-022): opened
+    /// and walked once, on the first doc. Make a new `Context` per evaluation; nothing outlives it.
+    pub history: std::sync::Arc<crate::git::DocHistory>,
 }
 
 impl Context {
@@ -336,6 +339,7 @@ impl Context {
             },
             docs_dir: Some(store.project_dir(id).join("docs")),
             coverage: Self::coverage(store, id, config),
+            history: Default::default(),
         }
     }
 
@@ -891,7 +895,7 @@ pub fn evaluate_in(
         && !exempt
         && let Some(docs) = ctx.docs_dir.as_deref()
     {
-        gaps.extend(docs_updated_gaps(feature, docs));
+        gaps.extend(docs_updated_gaps(feature, docs, &ctx.history));
     }
     if checks.contains(&Check::DiagramsValid) && !exempt {
         gaps.extend(diagram_gaps(feature, ctx.docs_dir.as_deref()));
@@ -1125,7 +1129,11 @@ pub fn affects_doc_key(path: &str) -> String {
 /// The docs an item declares that have not changed since it entered its stage (FEAT-180). An item
 /// that declares none passes — not every item touches an architecture doc; doctor says so when the
 /// next stage asks. A board with no history to judge by passes too: nothing can be shown either way.
-fn docs_updated_gaps(feature: &FeatureItem, docs: &std::path::Path) -> Vec<Gap> {
+fn docs_updated_gaps(
+    feature: &FeatureItem,
+    docs: &std::path::Path,
+    history: &crate::git::DocHistory,
+) -> Vec<Gap> {
     let declared = feature
         .definition
         .as_ref()
@@ -1136,7 +1144,7 @@ fn docs_updated_gaps(feature: &FeatureItem, docs: &std::path::Path) -> Vec<Gap> 
     for doc in declared {
         let key = affects_doc_key(doc);
         let path = docs.join(&key);
-        let changed = crate::git::doc_changed_since(&path, since);
+        let changed = history.changed_since(&path, since);
         if !path.is_file() && changed != Some(true) {
             gaps.push(Gap {
                 level: Level::Error,
@@ -1835,6 +1843,111 @@ mod tests {
         store.move_feature("demo", &code, "Planned").unwrap();
         assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "move"));
         assert_eq!(docs_gaps(&store, &code).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A board of `items` items, each declaring `docs` of the docs it holds, with a gate on
+    /// `Scheduled` that asks for `docs_updated` (DEF-022).
+    fn many_docs_board(
+        tag: &str,
+        items: usize,
+        docs: usize,
+        gate: crate::config::Gate,
+    ) -> (crate::Store, std::path::PathBuf) {
+        let (store, dir, _) = docs_board(tag);
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Scheduled".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        for d in 0..6 {
+            store
+                .write_doc("demo", &format!("architecture/d{d}.md"), "# D\n")
+                .unwrap();
+        }
+        for i in 0..items {
+            let item = store
+                .add_feature("demo", &format!("Item {i}"), "", "M", None)
+                .unwrap();
+            let affects_docs = (0..docs)
+                .map(|j| format!("architecture/d{}.md", (i + j) % 6))
+                .collect();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &item.code,
+                    Some(FeatureDefinition {
+                        statement: format!("Item {i}"),
+                        affects_docs,
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        }
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "items"));
+        (store, dir)
+    }
+
+    fn docs_gate() -> crate::config::Gate {
+        crate::config::Gate {
+            warns: vec![Condition::Check(Check::DocsUpdated)],
+            ..Default::default()
+        }
+    }
+
+    /// DEF-022 R-2: one evaluation over many items and docs opens the repository once and walks
+    /// its history once.
+    #[test]
+    fn next_gates_for_many_items_share_one_history() {
+        let (store, dir) = many_docs_board("share", 20, 3, docs_gate());
+        let project = store.load_for_gates("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        let mut judged = 0;
+        for f in project
+            .features
+            .iter()
+            .filter(|f| f.title.starts_with("Item"))
+        {
+            let next = next_gates(&project, None, f, &ctx);
+            judged += next.iter().filter(|n| n.status == "Scheduled").count();
+        }
+        assert_eq!(judged, 20);
+        assert_eq!(
+            ctx.history.stats(),
+            crate::git::HistoryStats { opens: 1, walks: 1 }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-022 R-3: nothing to judge, nothing read. A gate that does not ask for `docs_updated`,
+    /// or items that declare no docs, leave the history alone.
+    #[test]
+    fn no_declared_docs_reads_no_history() {
+        let none = crate::git::HistoryStats { opens: 0, walks: 0 };
+        // Items declare docs; the gate does not ask.
+        let gate = crate::config::Gate {
+            warns: vec![Condition::Check(Check::Definition)],
+            ..Default::default()
+        };
+        let (store, dir) = many_docs_board("lazy-gate", 5, 3, gate);
+        let project = store.load_for_gates("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        for f in &project.features {
+            next_gates(&project, None, f, &ctx);
+        }
+        assert_eq!(ctx.history.stats(), none);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // The gate asks; no item declares a doc.
+        let (store, dir) = many_docs_board("lazy-docs", 5, 0, docs_gate());
+        let project = store.load_for_gates("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        for f in project
+            .features
+            .iter()
+            .filter(|f| f.title.starts_with("Item"))
+        {
+            next_gates(&project, None, f, &ctx);
+        }
+        assert_eq!(ctx.history.stats(), none);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
