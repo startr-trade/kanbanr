@@ -2093,6 +2093,16 @@
             "description": "The stage ends the work (an end status that is not a no-op): \"ready to complete\".",
             "type": "boolean"
           },
+          "for_you": {
+            "description": "How many of `missing` the user settles: sign-offs and the `approved` check (DEF-020).",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "immediate": {
+            "description": "The stage the item reaches next in the workflow's order, the one the Review page asks\nsign-offs for (DEF-020). A card speaks only of this one.",
+            "type": "boolean"
+          },
           "missing": {
             "description": "Everything the stage still lacks, its sign-offs included (as before FEAT-205).",
             "format": "uint",
@@ -2120,7 +2130,9 @@
           "missing",
           "signoffs",
           "tasks_open",
-          "ends"
+          "ends",
+          "immediate",
+          "for_you"
         ],
         "type": "object"
       },
