@@ -7998,8 +7998,11 @@ impl JsonFixture {
             "--no-hooks",
         ]);
         // The board must be this test's own before anything else writes to it.
+        // Windows gives temp_dir() a short 8.3 name and kanbanr prints the long one, so check the
+        // fixture folder's own name, the same in both and unique to this test and process (DEF-030).
         let board = fx.run(&["where"]);
-        assert!(board.contains(&*base.to_string_lossy()), "{board}");
+        let own = base.file_name().unwrap().to_string_lossy();
+        assert!(board.contains(&*own), "{board}");
         fx.run(&["config", "method", "--off"]);
         fx.run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
         let charter = base.join("charter.yaml");
