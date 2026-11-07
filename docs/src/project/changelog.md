@@ -6,6 +6,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-06
+
 ### Added
 
 - **Guides for every built-in process (DOC-003).** The Process guides section now covers default,
@@ -30,6 +32,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **Dependencies with no open advisory (MNT-005).** libz-sys 1.1.32, tokio 1.54.1 and DOMPurify
+  3.4.17 replace versions with advisories published after 0.4.0. `astral-tokio-tar`, unmaintained and
+  reached only through a test-only dependency, is listed in `deny.toml` with its reason until 0.6.0
+  replaces it.
 - **The monitor answers only its own page and hosts (DEF-024).** The monitor serves and accepts
   requests only for its own page and the hosts it is bound to, so nothing else running in your
   browser can read the board through it or record a decision. A write needs the token its page was
@@ -1246,7 +1252,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/startr-trade/kanbanr/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/startr-trade/kanbanr/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/startr-trade/kanbanr/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/startr-trade/kanbanr/compare/v0.2.0...v0.2.1

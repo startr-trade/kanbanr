@@ -6,11 +6,13 @@ all-features = false
 
 [advisories]
 version = 2
-# Vulnerabilities, unsound and unmaintained crates all fail. A sanctioned exception would be a
-# finding with no fix anyone can reach, listed here with its reason and the item tracking it —
-# never silently. There is none: the last (RUSTSEC-2024-0449, unsafe-libyaml under serde_yaml) went
-# when FEAT-187 replaced the YAML library.
-ignore = []
+# Vulnerabilities, unsound and unmaintained crates all fail. A sanctioned exception is a finding
+# with no fix anyone can reach, listed here with its reason and the item tracking it — never
+# silently. (The last before this one, RUSTSEC-2024-0449, unsafe-libyaml under serde_yaml, went when
+# FEAT-187 replaced the YAML library.)
+ignore = [
+    { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar is unmaintained; it is reached only through testcontainers 0.28 (the newest), a dev-dependency of kanbanr-cli that is not in the shipped binary, and no maintained replacement is reachable. MNT-004 replaces or drops testcontainers and removes this line (MNT-005)." },
+]
 
 [licenses]
 version = 2
