@@ -190,6 +190,9 @@ project"** (or anything equivalent):
    and `kanbanr git doctor` (these two if the hooks were chosen) and `kanbanr doctor`, then show
    the board. On a new board, doctor's only expected
    warnings are the goals that no item links to yet. Anything else is a setup fault to fix now.
+   Doctor warns only about what an item's current stage asks; what later stages will ask appears
+   after the warnings as counts ("Later stages will ask"), which are not warnings and need no
+   clearing. `kanbanr check` lists them.
    Tell the user how to watch the board: `kanbanr serve` starts the monitor, which is built into
    the binary (it needs no `--ui-dir`, and never another checkout's build), and `kanbanr open`
    opens it. **Only then** go back to what the user originally asked for.
