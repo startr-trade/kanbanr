@@ -94,9 +94,10 @@ now and then; a client re-reads what it shows when an event arrives.
 
 ## CORS and access
 
-The daemon sends permissive CORS headers, so a monitor served from another origin, such as the
-standalone bundle each release attaches, can read the API and its SSE streams. CORS is not access
-control: anyone who can reach the daemon can read the board. See
+The daemon sends no cross-origin headers, so a page from another origin cannot read the API or its
+SSE streams. It answers only for the loopback names, its bound address and the hosts in
+`KANBANR_ALLOWED_HOSTS`, and a write needs the token its own page was given at this start. Anyone who
+can reach the daemon with an accepted host can read the board. See
 [Hosting the monitor elsewhere](../using/the-monitor.md#hosting-the-monitor-elsewhere).
 
 ## Internal routes

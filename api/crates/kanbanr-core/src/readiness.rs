@@ -320,6 +320,9 @@ pub struct Context {
     /// What the coverage rules' source docs reference (FEAT-197), read only when the project has
     /// rules and some gate asks for `docs_cover`.
     pub coverage: Option<std::sync::Arc<crate::coverage::Snapshot>>,
+    /// The board's git history, shared by every doc judged in this evaluation (DEF-022): opened
+    /// and walked once, on the first doc. Make a new `Context` per evaluation; nothing outlives it.
+    pub history: std::sync::Arc<crate::git::DocHistory>,
 }
 
 impl Context {
@@ -336,6 +339,7 @@ impl Context {
             },
             docs_dir: Some(store.project_dir(id).join("docs")),
             coverage: Self::coverage(store, id, config),
+            history: Default::default(),
         }
     }
 
@@ -561,6 +565,11 @@ pub struct NextStage {
     pub tasks_open: usize,
     /// The stage ends the work (an end status that is not a no-op): "ready to complete".
     pub ends: bool,
+    /// The stage the item reaches next in the workflow's order, the one the Review page asks
+    /// sign-offs for (DEF-020). A card speaks only of this one.
+    pub immediate: bool,
+    /// How many of `missing` the user settles: sign-offs and the `approved` check (DEF-020).
+    pub for_you: usize,
 }
 
 /// One card's readiness: its gaps, and its next stages.
@@ -591,20 +600,34 @@ impl ProjectReadiness {
                     let card = CardReadiness {
                         gaps: evaluate(f, None, CARD),
                         // The next stage, with how much it still lacks (FEAT-117).
-                        next: next_gates(&project, Some(&charter), f, &ctx)
-                            .into_iter()
-                            .map(|n| NextStage {
-                                ends: crate::graph::is_terminal_status(&project.config, &n.status)
-                                    && !project.config.is_no_op(&n.status),
-                                status: n.status,
-                                missing: n.gaps.len(),
-                                signoffs: n.signoffs_needed,
-                                tasks_open: f
-                                    .all_tasks()
-                                    .filter(|t| t.state != crate::models::TaskState::Completed)
-                                    .count(),
-                            })
-                            .collect(),
+                        next: {
+                            let gates = next_gates(&project, Some(&charter), f, &ctx);
+                            let first = immediate_status(&project, &gates).map(str::to_owned);
+                            gates
+                                .into_iter()
+                                .map(|n| NextStage {
+                                    ends: crate::graph::is_terminal_status(
+                                        &project.config,
+                                        &n.status,
+                                    ) && !project.config.is_no_op(&n.status),
+                                    immediate: first.as_deref() == Some(n.status.as_str()),
+                                    for_you: n
+                                        .gaps
+                                        .iter()
+                                        .filter(|g| {
+                                            matches!(g.check, Check::Signoff | Check::Approved)
+                                        })
+                                        .count(),
+                                    status: n.status,
+                                    missing: n.gaps.len(),
+                                    signoffs: n.signoffs_needed,
+                                    tasks_open: f
+                                        .all_tasks()
+                                        .filter(|t| t.state != crate::models::TaskState::Completed)
+                                        .count(),
+                                })
+                                .collect()
+                        },
                     };
                     (f.code.clone(), card)
                 })
@@ -706,10 +729,22 @@ pub fn immediate_next_gate(
     feature: &FeatureItem,
     ctx: &Context,
 ) -> Option<NextGate> {
+    let gates = next_gates(project, charter, feature, ctx);
+    let first = immediate_status(project, &gates)?.to_owned();
+    gates.into_iter().find(|g| g.status == first)
+}
+
+/// The status of the earliest gate in the workflow's order: the one stage an item reaches next.
+/// Review and the cards both ask this, so they cannot differ (DEF-020).
+pub fn immediate_status<'a>(
+    project: &crate::store::Project,
+    gates: &'a [NextGate],
+) -> Option<&'a str> {
     let position = |s: &str| project.config.statuses.iter().position(|x| x == s);
-    next_gates(project, charter, feature, ctx)
-        .into_iter()
+    gates
+        .iter()
         .min_by_key(|g| position(&g.status).unwrap_or(usize::MAX))
+        .map(|g| g.status.as_str())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -860,7 +895,7 @@ pub fn evaluate_in(
         && !exempt
         && let Some(docs) = ctx.docs_dir.as_deref()
     {
-        gaps.extend(docs_updated_gaps(feature, docs));
+        gaps.extend(docs_updated_gaps(feature, docs, &ctx.history));
     }
     if checks.contains(&Check::DiagramsValid) && !exempt {
         gaps.extend(diagram_gaps(feature, ctx.docs_dir.as_deref()));
@@ -1094,7 +1129,11 @@ pub fn affects_doc_key(path: &str) -> String {
 /// The docs an item declares that have not changed since it entered its stage (FEAT-180). An item
 /// that declares none passes — not every item touches an architecture doc; doctor says so when the
 /// next stage asks. A board with no history to judge by passes too: nothing can be shown either way.
-fn docs_updated_gaps(feature: &FeatureItem, docs: &std::path::Path) -> Vec<Gap> {
+fn docs_updated_gaps(
+    feature: &FeatureItem,
+    docs: &std::path::Path,
+    history: &crate::git::DocHistory,
+) -> Vec<Gap> {
     let declared = feature
         .definition
         .as_ref()
@@ -1105,7 +1144,7 @@ fn docs_updated_gaps(feature: &FeatureItem, docs: &std::path::Path) -> Vec<Gap> 
     for doc in declared {
         let key = affects_doc_key(doc);
         let path = docs.join(&key);
-        let changed = crate::git::doc_changed_since(&path, since);
+        let changed = history.changed_since(&path, since);
         if !path.is_file() && changed != Some(true) {
             gaps.push(Gap {
                 level: Level::Error,
@@ -1587,6 +1626,142 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A TOGAF board with one item at Implementation: a red test, a statement and goal, and a
+    /// Migration gate that asks for green tests, agreement and the `docs-folded` sign-off (DEF-020).
+    fn togaf_item_at_implementation(tag: &str) -> (crate::Store, std::path::PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-card-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = crate::Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/workflow",
+            Some(&serde_json::json!({"preset": "togaf"})),
+        )
+        .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let item = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &item.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "WHEN a cart is idle, THE SYSTEM SHALL keep it.".into(),
+                        tests: vec![TestRef {
+                            name: "t1".into(),
+                            state: crate::models::TestState::Red,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        // Walk to Implementation with no gates in the way, then set the gates under test.
+        store
+            .set_gates("demo", std::collections::BTreeMap::new())
+            .unwrap();
+        for to in ["Business Arch", "System Design", "Implementation"] {
+            store.move_feature("demo", &item.code, to).unwrap();
+        }
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Migration".to_string(),
+            crate::config::Gate {
+                requires: vec![
+                    Condition::Check(Check::TestsGreen),
+                    Condition::Check(Check::Approved),
+                ],
+                signoffs: vec!["docs-folded".into()],
+                ..Default::default()
+            },
+        );
+        gates.insert(
+            "Operations".to_string(),
+            crate::config::Gate {
+                requires: vec![Condition::Check(Check::TestsGreen)],
+                signoffs: vec!["release".into()],
+                ..Default::default()
+            },
+        );
+        store.set_gates("demo", gates).unwrap();
+        (store, dir, item.code)
+    }
+
+    fn card_of(store: &crate::Store, code: &str) -> CardReadiness {
+        ProjectReadiness::load(store, "demo")
+            .unwrap()
+            .0
+            .into_iter()
+            .find(|(c, _)| c == code)
+            .unwrap()
+            .1
+    }
+
+    /// DEF-020 R-1: a card counts every gap `kanbanr check` lists for the stage, sign-offs
+    /// included.
+    #[test]
+    fn card_next_stage_counts_match_check() {
+        let (store, dir, code) = togaf_item_at_implementation("counts");
+        let report = check_board(&store, "demo", Some(&code)).unwrap();
+        let checked = &report.items[0].next;
+        let card = card_of(&store, &code);
+        assert!(!card.next.is_empty());
+        for stage in &card.next {
+            let listed = checked
+                .iter()
+                .find(|n| n.status == stage.status)
+                .unwrap_or_else(|| panic!("check lists {}", stage.status));
+            assert_eq!(
+                stage.missing,
+                listed.gaps.len(),
+                "{}: the card and check count the same",
+                stage.status
+            );
+        }
+        let migration = card.next.iter().find(|n| n.status == "Migration").unwrap();
+        assert_eq!(migration.missing, 3, "green tests, agreement, one sign-off");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-020 R-2: of the stages an item can reach, the card marks the one reached next, the one
+    /// the Review page asks sign-offs for.
+    #[test]
+    fn card_marks_the_immediate_next_stage() {
+        let (store, dir, code) = togaf_item_at_implementation("immediate");
+        let card = card_of(&store, &code);
+        let flag = |s: &str| card.next.iter().find(|n| n.status == s).unwrap().immediate;
+        assert!(flag("Migration"));
+        assert!(!flag("Operations"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-020 R-3: `for_you` counts sign-offs and the `approved` check, nothing else.
+    #[test]
+    fn card_counts_what_is_the_users() {
+        let (store, dir, code) = togaf_item_at_implementation("foryou");
+        let card = card_of(&store, &code);
+        let migration = card.next.iter().find(|n| n.status == "Migration").unwrap();
+        assert_eq!(migration.missing, 3);
+        assert_eq!(
+            migration.for_you, 2,
+            "approval and the sign-off; not the red test"
+        );
+        let operations = card.next.iter().find(|n| n.status == "Operations").unwrap();
+        assert_eq!(operations.for_you, 1, "the release sign-off");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// FEAT-180 R-2: `affects_docs` is kept, does not reopen the agreement, and reads back the same
     /// through an older binary that keeps it as an unknown key.
     #[test]
@@ -1668,6 +1843,111 @@ mod tests {
         store.move_feature("demo", &code, "Planned").unwrap();
         assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "move"));
         assert_eq!(docs_gaps(&store, &code).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A board of `items` items, each declaring `docs` of the docs it holds, with a gate on
+    /// `Scheduled` that asks for `docs_updated` (DEF-022).
+    fn many_docs_board(
+        tag: &str,
+        items: usize,
+        docs: usize,
+        gate: crate::config::Gate,
+    ) -> (crate::Store, std::path::PathBuf) {
+        let (store, dir, _) = docs_board(tag);
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Scheduled".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        for d in 0..6 {
+            store
+                .write_doc("demo", &format!("architecture/d{d}.md"), "# D\n")
+                .unwrap();
+        }
+        for i in 0..items {
+            let item = store
+                .add_feature("demo", &format!("Item {i}"), "", "M", None)
+                .unwrap();
+            let affects_docs = (0..docs)
+                .map(|j| format!("architecture/d{}.md", (i + j) % 6))
+                .collect();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &item.code,
+                    Some(FeatureDefinition {
+                        statement: format!("Item {i}"),
+                        affects_docs,
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        }
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "items"));
+        (store, dir)
+    }
+
+    fn docs_gate() -> crate::config::Gate {
+        crate::config::Gate {
+            warns: vec![Condition::Check(Check::DocsUpdated)],
+            ..Default::default()
+        }
+    }
+
+    /// DEF-022 R-2: one evaluation over many items and docs opens the repository once and walks
+    /// its history once.
+    #[test]
+    fn next_gates_for_many_items_share_one_history() {
+        let (store, dir) = many_docs_board("share", 20, 3, docs_gate());
+        let project = store.load_for_gates("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        let mut judged = 0;
+        for f in project
+            .features
+            .iter()
+            .filter(|f| f.title.starts_with("Item"))
+        {
+            let next = next_gates(&project, None, f, &ctx);
+            judged += next.iter().filter(|n| n.status == "Scheduled").count();
+        }
+        assert_eq!(judged, 20);
+        assert_eq!(
+            ctx.history.stats(),
+            crate::git::HistoryStats { opens: 1, walks: 1 }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-022 R-3: nothing to judge, nothing read. A gate that does not ask for `docs_updated`,
+    /// or items that declare no docs, leave the history alone.
+    #[test]
+    fn no_declared_docs_reads_no_history() {
+        let none = crate::git::HistoryStats { opens: 0, walks: 0 };
+        // Items declare docs; the gate does not ask.
+        let gate = crate::config::Gate {
+            warns: vec![Condition::Check(Check::Definition)],
+            ..Default::default()
+        };
+        let (store, dir) = many_docs_board("lazy-gate", 5, 3, gate);
+        let project = store.load_for_gates("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        for f in &project.features {
+            next_gates(&project, None, f, &ctx);
+        }
+        assert_eq!(ctx.history.stats(), none);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // The gate asks; no item declares a doc.
+        let (store, dir) = many_docs_board("lazy-docs", 5, 0, docs_gate());
+        let project = store.load_for_gates("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        for f in project
+            .features
+            .iter()
+            .filter(|f| f.title.starts_with("Item"))
+        {
+            next_gates(&project, None, f, &ctx);
+        }
+        assert_eq!(ctx.history.stats(), none);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -6,6 +6,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-06
+
 ### Added
 
 - **Claude takes decisions one way, and keeps quiet while it works (FTR-024).** Claude sends every
@@ -39,6 +41,33 @@ All notable changes to kanbanr are documented here. The format follows
   and names agent scopes, release stages and kind codes as experimental in 1.0, stable from 1.1.
 
 ### Fixed
+
+- **Dependencies with no open advisory (MNT-005).** libz-sys 1.1.32, tokio 1.54.1 and DOMPurify
+  3.4.17 replace versions with advisories published after 0.4.0. `astral-tokio-tar`, unmaintained and
+  reached only through a test-only dependency, is listed in `deny.toml` with its reason until 0.6.0
+  replaces it.
+- **The monitor answers only its own page and hosts (DEF-024).** The monitor serves and accepts
+  requests only for its own page and the hosts it is bound to, so nothing else running in your
+  browser can read the board through it or record a decision. A write needs the token its page was
+  given at this start. `SECURITY.md` now describes write mode and how it is limited.
+- **Doctor warns only about the stage an item is at (DEF-021).** On a healthy TOGAF project it
+  showed 25 warnings, mostly the next stage's requirements on items still at Vision. It now warns
+  about what the item's current stage asks, which an edit may have undone, and counts what the stage
+  reached next still lacks, per stage, on a separate "Later stages will ask" line that is not a
+  warning and does not change the exit status. This changes the wording of FEAT-117 R-2, which had
+  doctor report the next stage's needs. The JSON report gains an optional `ahead` list.
+
+- **The monitor's next-stage counts match `kanbanr check` (DEF-020).** A board card left sign-offs
+  out of "Migration needs 4" and listed every stage the item could skip to. It now names only the
+  stage reached next, counts every gap `check` counts, and says how many are yours: "Migration needs
+  6, 1 yours", or "waiting on you: docs-folded" when only your part remains. The readiness answer
+  gains `immediate` and `for_you` on each next stage.
+- **The Review page no longer slows down as a board grows (DEF-022).** The `docs_updated` check
+  opened the board's repository and walked its history again for every doc an item declares. It now
+  opens it once and walks it once per request, and the Review page refetches once after a burst of
+  board changes settles. On a generated board of 2,500 commits and 70 items naming 490 docs, the
+  review queue went from 15.0 s to 0.05 s. `kanbanr check` and `doctor` share the check and gain
+  too; their answers are unchanged.
 
 - **The book and the skill match this release (DOC-006).** The no-charter warning, the date set when
   main moves, `why` on an uncommitted line, `git doctor` with no integrate stage and lapsed approvals
@@ -1251,7 +1280,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/startr-trade/kanbanr/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/startr-trade/kanbanr/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/startr-trade/kanbanr/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/startr-trade/kanbanr/compare/v0.2.0...v0.2.1

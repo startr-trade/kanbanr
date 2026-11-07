@@ -7998,8 +7998,11 @@ impl JsonFixture {
             "--no-hooks",
         ]);
         // The board must be this test's own before anything else writes to it.
+        // Windows gives temp_dir() a short 8.3 name and kanbanr prints the long one, so check the
+        // fixture folder's own name, the same in both and unique to this test and process (DEF-030).
         let board = fx.run(&["where"]);
-        assert!(board.contains(&*base.to_string_lossy()), "{board}");
+        let own = base.file_name().unwrap().to_string_lossy();
+        assert!(board.contains(&*own), "{board}");
         fx.run(&["config", "method", "--off"]);
         fx.run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
         let charter = base.join("charter.yaml");
@@ -8229,4 +8232,74 @@ fn the_git_guard_refuses_claude_recording_a_verdict() {
     assert!(out.contains("/p/shop/releases"), "{out}");
     assert_eq!(fx.guard(&fx.work, "kanbanr review --pending"), "");
     assert_eq!(fx.guard(&fx.work, "kanbanr release promote v1 --plan"), "");
+}
+
+/// DEF-021 R-6: `doctor` warns about the current stage only, and prints what later stages will ask
+/// as counts after the warnings, naming `kanbanr check`.
+#[test]
+fn doctor_prints_what_later_stages_ask_apart_from_warnings() {
+    let (base, work) = togaf_scratch("doctor-ahead");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "workflow", "--preset", "togaf"],
+    ));
+    let charter = base.join("charter.yaml");
+    std::fs::write(
+        &charter,
+        "purpose: p\ngoals:\n  - statement: g\n    measure: m\n",
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &["charter", "set", "--file", charter.to_str().unwrap()],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["feature", "add", "--title", "Cart", "--milestone", "MS-001"],
+    ));
+    let def = base.join("def.yaml");
+    std::fs::write(&def, "statement: Keep a cart\ngoals: [G-1]\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    let out = ok(run_in(&base, &work, &["doctor"]));
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(!said.contains("MISSING"), "{said}");
+    assert!(said.contains("Later stages will ask"), "{said}");
+    assert!(said.contains("Business Arch"), "{said}");
+    assert!(said.contains("kanbanr check"), "{said}");
+    let _ = std::fs::remove_dir_all(&base);
 }

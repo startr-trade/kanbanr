@@ -7463,6 +7463,20 @@ fn run_doctor(cli: &Cli, client: &Backend, all_projects: bool) -> anyhow::Result
             print_issue(i);
         }
     }
+    // What later stages will ask: counts, not warnings (DEF-021).
+    let ahead = report["ahead"].as_array().cloned().unwrap_or_default();
+    if !ahead.is_empty() {
+        println!("Later stages will ask (not warnings; kanbanr check lists them):");
+        for a in &ahead {
+            println!(
+                "  {} {}: {} item(s), {} thing(s)",
+                a["project"].as_str().unwrap_or(""),
+                a["stage"].as_str().unwrap_or(""),
+                a["items"],
+                a["things"]
+            );
+        }
+    }
     if issues.is_empty() {
         println!("clean: no integrity issues found");
     }

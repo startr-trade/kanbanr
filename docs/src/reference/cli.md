@@ -20,7 +20,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr config diagrams [--strict on\|off]` | whether a write whose Mermaid diagrams fail the lint is refused (strict) or written with the problems printed as warnings (the default); with no flag, shows the setting |
 | `kanbanr config codes [--set KIND=PREFIX,…] [--unset KIND,…] [--default PREFIX\|""] [--clear]` | which prefix a new item's code gets from its kind (`defect=DEF` codes a defect `DEF-001`, with a counter per prefix); with no flag, each kind's prefix, the default (`FEAT` unless set) and the next code per prefix. A prefix is 2–6 uppercase letters, not `MS`, `ADR`, `SC`, `SP`, `TL` or a milestone's; a bad one is refused, naming the entry. Existing codes are never renamed; unset, every item is `FEAT-` |
 | `kanbanr hooks install / status / uninstall` | the Claude Code hooks (session start, stop nudge, test capture, commit guard) |
-| `kanbanr serve [--ui-dir …]` | the read-only monitor over this board |
+| `kanbanr serve [--ui-dir …] [--allow-writes]` | the monitor over this board; read-only unless `--allow-writes`, and then it takes writes only from its own page. It answers for `localhost`, `127.0.0.1`, `[::1]`, its bound address and the hosts in `KANBANR_ALLOWED_HOSTS` (comma-separated `name[:port]`, for a reverse proxy); any other host gets a 403 |
 | `kanbanr open` | open the running monitor in a browser |
 | `kanbanr open --check [--json]` | report, opening nothing, whether the monitor is up and accepts writes, and its Review and Releases addresses |
 | `kanbanr self-update [--check]` | replace this binary with the release's, checksum-verified (and the skill and editor extension already installed) |
@@ -83,7 +83,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | Command | What it does |
 |---|---|
 | `kanbanr readme` | write or refresh the board's README: what it is, its projects, and how to install kanbanr and see it as a board; text outside its markers is kept |
-| `kanbanr doctor` | every broken reference and every gap, across the board — including links in specs and docs to items, requirements, ADRs, goals or docs the board does not have, diagram problems: each Mermaid block in a spec or doc the lint rejects, with its file, diagram number, line and rule, and each coverage rule a view still fails, with its first ten uncovered subjects |
+| `kanbanr doctor` | every broken reference and every gap, across the board — including links in specs and docs to items, requirements, ADRs, goals or docs the board does not have, diagram problems: each Mermaid block in a spec or doc the lint rejects, with its file, diagram number, line and rule, and each coverage rule a view still fails, with its first ten uncovered subjects. Warns only about what each item's current stage asks; what later stages will ask is printed after the warnings as counts |
 | `kanbanr check [CODE]` | what one item has not said, and what it cannot yet show |
 | `kanbanr review [CODE] [--pending] [--ui]` | the decision brief — one item, all of them, or in the browser |
 | `kanbanr approve <CODE> [--by …]` | records agreement, attributed to the board's commit identity |
