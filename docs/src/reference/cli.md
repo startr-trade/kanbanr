@@ -22,6 +22,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr hooks install / status / uninstall` | the Claude Code hooks (session start, stop nudge, test capture, commit guard) |
 | `kanbanr serve [--ui-dir …] [--allow-writes]` | the monitor over this board; read-only unless `--allow-writes`, and then it takes writes only from its own page. It answers for `localhost`, `127.0.0.1`, `[::1]`, its bound address and the hosts in `KANBANR_ALLOWED_HOSTS` (comma-separated `name[:port]`, for a reverse proxy); any other host gets a 403 |
 | `kanbanr open` | open the running monitor in a browser |
+| `kanbanr open --check [--json]` | report, opening nothing, whether the monitor is up and accepts writes, and its Review and Releases addresses |
 | `kanbanr self-update [--check]` | replace this binary with the release's, checksum-verified (and the skill and editor extension already installed) |
 | `kanbanr skill install / status / uninstall` | the Claude Code skill this program carries, in `~/.claude/skills/kanbanr` |
 | `kanbanr editor install [--editor codium] [--if-installed]` | this release's VS Code extension, checksum-verified, into the editors on PATH |

@@ -8203,6 +8203,37 @@ fn why_json_on_an_uncommitted_line_names_the_branch_item() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// FTR-024 R-3: `open --check` reports a monitor that is down, opens nothing, and exits 0.
+#[test]
+fn open_check_reports_a_monitor_that_is_down() {
+    let fx = ScopeFx::new("open-check");
+    let mut c = Command::new(cli());
+    c.args(["--json", "open", "--check"]).current_dir(&fx.work);
+    fx.env(&mut c);
+    c.env("KANBANR_SERVER_URL", "http://127.0.0.1:9");
+    let o = c.output().expect("run kanbanr CLI");
+    assert!(o.status.success(), "{o:?}");
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["up"], false, "{v}");
+    assert_eq!(v["writes"], false, "{v}");
+    assert_eq!(v["review"], "http://127.0.0.1:9/p/shop/review", "{v}");
+    assert_eq!(v["releases"], "http://127.0.0.1:9/p/shop/releases", "{v}");
+}
+
+/// FTR-024 R-4: the guard refuses Claude recording a verdict in a folder that keeps a board, and
+/// names the page where the person decides; a command that is not a verdict passes.
+#[test]
+fn the_git_guard_refuses_claude_recording_a_verdict() {
+    let fx = ScopeFx::new("verdict-guard");
+    let out = fx.guard(&fx.work, "kanbanr approve FEAT-001 --rev abc");
+    assert!(out.contains("\"deny\""), "{out}");
+    assert!(out.contains("/p/shop/review"), "{out}");
+    let out = fx.guard(&fx.work, "kanbanr release cut v1");
+    assert!(out.contains("/p/shop/releases"), "{out}");
+    assert_eq!(fx.guard(&fx.work, "kanbanr review --pending"), "");
+    assert_eq!(fx.guard(&fx.work, "kanbanr release promote v1 --plan"), "");
+}
+
 /// DEF-021 R-6: `doctor` warns about the current stage only, and prints what later stages will ask
 /// as counts after the warnings, naming `kanbanr check`.
 #[test]
