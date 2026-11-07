@@ -23,7 +23,7 @@
     "check:agent-scopes": "node scripts/check-agent-scopes.mjs"
   },
   "dependencies": {
-    "dompurify": "^3.4.16",
+    "dompurify": "^3.4.17",
     "marked": "^12.0.2",
     "pele": "1.7.0",
     "react": "^18.3.1",
