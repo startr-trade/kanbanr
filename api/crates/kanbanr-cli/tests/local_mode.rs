@@ -5413,6 +5413,111 @@ fn fixes_forward_merged() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A fix on its own branch in a promoted release's line, ready to move (DEF-031): the release v1
+/// holds FEAT-002, a bug, which has a commit on its fix branch. Returns the releases file.
+fn release_with_a_fix(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let (base, work) = togaf_scratch(tag);
+    git_model_board(&base, &work, false, true);
+    approved_item(&base, &work, "FEAT-002", "Cart loses items", Some("bug"));
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(&base, &work, &["release", "add", "v1"]));
+    ok(run_in(&base, &work, &["release", "plan", "v1", "FEAT-002"]));
+    ok(run_in(&base, &work, &["release", "promote", "v1"]));
+    ok(run_in(&base, &work, &["start", "FEAT-002"]));
+    commit_file_in(
+        &base,
+        &work,
+        "fix.txt",
+        "fixed\n",
+        "fix: cart\n\nRefs: kanbanr:FEAT-002",
+    );
+    let board = std::path::PathBuf::from(ok(run_in(&base, &work, &["where"])).trim());
+    let file = board.join("projects").join("shop").join("releases.yaml");
+    (base, work, file)
+}
+
+/// DEF-031 R-1: a fix merged into a release that has left its first stage sends it back, and the
+/// reply says so.
+#[test]
+fn moving_an_item_into_a_promoted_release_sends_it_back_to_candidate() {
+    let (base, work, file) = release_with_a_fix("def031-back");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // The release is at main (put there on the scratch board; promoting needs its items finished).
+    let at_candidate = std::fs::read_to_string(&file).unwrap();
+    assert!(at_candidate.contains("stage: candidate"), "{at_candidate}");
+    std::fs::write(&file, at_candidate.replacen("stage: candidate", "stage: main", 1)).unwrap();
+    let said = ok(run_in(
+        &base,
+        &work,
+        &[
+            "--json",
+            "move",
+            "FEAT-002",
+            "Completed",
+            "--override",
+            "fix integrated into the release under test",
+        ],
+    ));
+    let reply: serde_json::Value = serde_json::from_str(&said).unwrap();
+    let sent = &reply["release_sent_back"];
+    assert_eq!(
+        (&sent["version"], &sent["from"], &sent["to"], &sent["item"]),
+        (
+            &serde_json::json!("v1"),
+            &serde_json::json!("main"),
+            &serde_json::json!("candidate"),
+            &serde_json::json!("FEAT-002")
+        ),
+        "{said}"
+    );
+    let yaml = std::fs::read_to_string(&file).unwrap();
+    assert!(yaml.contains("stage: candidate"), "{yaml}");
+    assert!(yaml.contains("item: FEAT-002"), "{yaml}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-031 R-3: a release that is tagged and not shipped refuses the move before the merge, and
+/// nothing changes.
+#[test]
+fn moving_an_item_into_a_tagged_release_is_refused_before_merging() {
+    let (base, work, file) = release_with_a_fix("def031-tagged");
+    let release_tip = rev(&base, &work, "release/v1");
+    let mut yaml = std::fs::read_to_string(&file).unwrap();
+    yaml.push_str(&format!(
+        "  tagged_at: 2026-11-07T10:00:00Z\n  tag_commit: {release_tip}\n"
+    ));
+    std::fs::write(&file, &yaml).unwrap();
+    let o = run_in(
+        &base,
+        &work,
+        &[
+            "move",
+            "FEAT-002",
+            "Completed",
+            "--override",
+            "fix integrated into the release under test",
+        ],
+    );
+    assert!(!o.status.success(), "refused");
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("v1 is tagged at") && err.contains("release patch v1"),
+        "{err}"
+    );
+    assert_eq!(rev(&base, &work, "release/v1"), release_tip, "nothing merged");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), yaml, "board untouched");
+    let shown = String::from_utf8_lossy(&run_in(&base, &work, &["feature", "show", "FEAT-002"]).stdout)
+        .to_string();
+    assert!(!shown.contains("Status:** Completed"), "{shown}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-196 R-1: deleting a project leaves no folder for it, and nothing for the board to commit
 /// afterwards — the delete's own activity entry used to bring the folder back.
 #[test]

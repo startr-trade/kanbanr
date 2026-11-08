@@ -4314,6 +4314,10 @@ fn run_start(
     if let Some(reason) = unapproved {
         body["unapproved"] = json!(reason);
     }
+    // Who moved it, for a release this move sends back (DEF-031).
+    if let Ok(by) = verdict_author(cli, None) {
+        body["by"] = json!(by);
+    }
     let resp = client.write_in(
         Method::Post,
         &format!("/projects/{p}/features/{code}/move"),

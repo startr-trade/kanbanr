@@ -880,6 +880,7 @@ fn dispatch_routes(
                 &str_field(b, "to").unwrap_or_default(),
                 reason.as_deref(),
                 repo,
+                &str_field(b, "by").unwrap_or_else(|| "kanbanr".to_string()),
             )?;
             let mut out = serde_json::to_value(&moved.feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
@@ -897,6 +898,9 @@ fn dispatch_routes(
             }
             if let Some(v) = &moved.forward_needed {
                 out["forward_needed"] = json!(v);
+            }
+            if let Some(sent) = &moved.sent_back {
+                out["release_sent_back"] = json!(sent);
             }
             if let Some(note) = &moved.note {
                 out["note"] = json!(note);

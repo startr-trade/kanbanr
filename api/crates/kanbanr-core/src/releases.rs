@@ -5069,6 +5069,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    /// DEF-031 R-8: saving notes moves main with them and leaves the release's stage alone.
+    #[test]
+    fn saving_notes_does_not_send_the_release_back() {
+        let (store, dir, repo) = notes_fixture("notes-stays");
+        let tip = coderepo::rev_parse(&repo, "release/v0.2.0").unwrap();
+        coderepo::fast_forward(&repo, "main", &tip).unwrap();
+        let mut all = super::load(&store, "shop").unwrap();
+        let r = all.iter_mut().find(|r| r.version == "v0.2.0").unwrap();
+        let at = super::Cadence::default().stages()[1].clone();
+        r.stage = at.clone();
+        super::save(&store, "shop", &all).unwrap();
+        let before = super::load(&store, "shop").unwrap();
+        super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), "# v0.2.0\n\nMore.\n", "Ada")
+            .unwrap();
+        assert_eq!(super::load(&store, "shop").unwrap(), before);
+        let r = before.iter().find(|r| r.version == "v0.2.0").unwrap();
+        assert_eq!(r.stage, at);
+        assert!(r.stages.iter().all(|c| c.item.is_empty()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
     /// The notes and both changelogs of v0.2.0 dated `ymd`, committed onto its release branch, as
     /// a candidate prepared on an earlier day has them.
     fn date_candidate(repo: &Path, ymd: &str) -> String {
