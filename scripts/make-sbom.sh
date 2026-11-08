@@ -4,7 +4,7 @@
 #   <outdir>/kanbanr-<tag>.sbom.npm.cdx.json     the monitor's production npm dependencies,
 #                                                from web/package-lock.json
 # Usage: scripts/make-sbom.sh <tag> <outdir>
-# Needs cargo-cyclonedx (cargo install cargo-cyclonedx --locked) and npm 10+. Each file is
+# Needs cargo-cyclonedx (cargo install cargo-cyclonedx --version 0.5.10 --locked) and npm 10+. Each file is
 # written to a temporary name in <outdir> and renamed, so a failed run leaves no partial file.
 # Failure of any step stops it with the step named on stderr.
 set -eu

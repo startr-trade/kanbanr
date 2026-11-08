@@ -63,6 +63,15 @@ fn start() -> (Container, String) {
     let id = docker(&[
         "run",
         "-d",
+        // The image runs as uid 10001 with a root-owned /data and no home (FEAT-132): give it
+        // writable ones, as a mounted volume would be. `init` also writes beside its cwd, which
+        // is /app (root-owned), so run from the data dir.
+        "-w",
+        "/data",
+        "--tmpfs",
+        "/data:uid=10001,gid=10001",
+        "--tmpfs",
+        "/home/kanbanr:uid=10001,gid=10001",
         "-p",
         "127.0.0.1::8080",
         &image,
@@ -107,7 +116,10 @@ fn image_boots_and_serves_the_view() {
     let (_container, base) = start();
 
     // The view daemon is read-only and unauthenticated; the scaffolded project is visible.
+    // The monitor answers only hosts it names (DEF-024); inside the image that is the bound port,
+    // not the random one Docker published, so the requests name the bound one.
     let resp = ureq::get(&format!("{base}/api/projects"))
+        .set("Host", "127.0.0.1:8080")
         .call()
         .expect("read projects");
     assert_eq!(resp.status(), 200, "image serves the read API");
@@ -118,7 +130,10 @@ fn image_boots_and_serves_the_view() {
     );
 
     // The SPA is served at the root.
-    let root = ureq::get(&base).call().expect("read SPA");
+    let root = ureq::get(&base)
+        .set("Host", "127.0.0.1:8080")
+        .call()
+        .expect("read SPA");
     assert_eq!(root.status(), 200, "image serves the SPA");
 }
 

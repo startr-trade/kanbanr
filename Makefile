@@ -81,7 +81,7 @@ audit:
 	python3 scripts/check_supply_chain.py
 
 # The SBOMs a release attaches (MNT-004): Rust and monitor npm dependencies, CycloneDX, from the
-# lockfiles. Needs cargo-cyclonedx (cargo install cargo-cyclonedx --locked).
+# lockfiles. Needs cargo-cyclonedx (cargo install cargo-cyclonedx --version 0.5.10 --locked).
 TAG ?= dev
 sbom:
 	scripts/make-sbom.sh "$(TAG)" dist-sbom
