@@ -8900,6 +8900,17 @@ fn the_git_guard_refuses_claude_recording_a_verdict() {
     assert_eq!(fx.guard(&fx.work, "kanbanr release promote v1 --plan"), "");
 }
 
+/// FTR-002 R-8: recording a gate result is a verdict, so the guard refuses it from Claude and
+/// names the Releases page.
+#[test]
+fn the_guard_refuses_gate_record_from_claude() {
+    let fx = ScopeFx::new("gate-record-guard");
+    let out = fx.guard(&fx.work, "kanbanr gate record v1 smoke --result pass");
+    assert!(out.contains("\"deny\""), "{out}");
+    assert!(out.contains("/p/shop/releases"), "{out}");
+    assert_eq!(fx.guard(&fx.work, "kanbanr gate record --help"), "");
+}
+
 /// DEF-021 R-6: `doctor` warns about the current stage only, and prints what later stages will ask
 /// as counts after the warnings, naming `kanbanr check`.
 #[test]
