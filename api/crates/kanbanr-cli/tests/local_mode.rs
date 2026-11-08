@@ -3550,22 +3550,35 @@ fn where_names_the_questions_setup_must_ask() {
     };
     let (v, questions) = ask(&work);
     assert_eq!(v["git_identity"]["name"], serde_json::Value::Null);
-    assert_eq!(questions.len(), 4, "{questions:?}");
+    assert_eq!(questions.len(), 6, "{questions:?}");
     assert!(questions[0].starts_with("Where the board lives"));
     assert!(
         questions[1].starts_with("Which process")
             && questions[1].contains("saved processes first")
             && questions[1].contains("after the board is chosen")
-            && questions[3].contains("after the board's commit identity")
     );
-    assert!(questions[3].contains("git identity") && questions[3].contains("never --global"));
+    // FTR-022 R-3: the identity is one question for the board and the repository both.
+    let identity: Vec<&String> = questions
+        .iter()
+        .filter(|q| q.contains("identity"))
+        .collect();
+    assert_eq!(identity.len(), 1, "{questions:?}");
+    assert!(
+        identity[0].contains("board and this repository both")
+            && identity[0].contains("never --global"),
+        "{identity:?}"
+    );
 
     // With a repository identity, that question goes.
     ok(git_in(&base, &work, &["config", "user.name", "T"]));
     ok(git_in(&base, &work, &["config", "user.email", "t@x"]));
     let (v, questions) = ask(&work);
     assert_eq!(v["git_identity"]["name"], "T");
-    assert_eq!(questions.len(), 3, "{questions:?}");
+    assert_eq!(questions.len(), 5, "{questions:?}");
+    assert!(
+        !questions.iter().any(|q| q.contains("identity")),
+        "{questions:?}"
+    );
 
     // Set up: nothing left to ask.
     ok(run_in(
@@ -3613,7 +3626,7 @@ fn setup_asks_cadence_and_shows_git_model() {
 
     let asked = json(&["where", "--json"]);
     let questions = asked["ask_the_user"].as_array().unwrap();
-    assert_eq!(questions.len(), 4, "{questions:?}");
+    assert_eq!(questions.len(), 6, "{questions:?}");
     let cadence = questions[2].as_str().unwrap();
     assert!(
         cadence.contains("sprints and releases")
@@ -4627,6 +4640,213 @@ fn start_branches_from_integration_line() {
         merge_base.status.success(),
         "the item branch grows from integration"
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The questions `where --json` asks in a scratch repository with git's identity set.
+fn setup_questions_here(base: &std::path::Path, work: &std::path::Path) -> Vec<String> {
+    let out = run_in(base, work, &["where", "--json"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    v["ask_the_user"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|q| q.as_str().unwrap().to_string())
+        .collect()
+}
+
+/// FTR-022 R-1: sprints and releases are one question with no follow-up details, and it says to
+/// create neither.
+#[test]
+fn setup_cadence_question_asks_no_details() {
+    let (base, work) = togaf_scratch("ftr22-cadence");
+    let questions = setup_questions_here(&base, &work);
+    let cadence: Vec<&String> = questions
+        .iter()
+        .filter(|q| q.contains("sprints and releases"))
+        .collect();
+    assert_eq!(cadence.len(), 1, "{questions:?}");
+    let q = cadence[0];
+    assert!(q.contains("do not create a sprint or a release"), "{q}");
+    assert!(
+        q.contains("Do not ask a sprint's length, start or capacity"),
+        "{q}"
+    );
+    // Nothing asks for a first version, a rhythm, or a length as a question of its own.
+    assert!(
+        !questions.iter().any(|q| q.starts_with("The sprint length")
+            || q.starts_with("The first version")
+            || q.starts_with("The release rhythm")),
+        "{questions:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-022 R-2: the repository's README (or a manifest) gives the name and description to offer.
+#[test]
+fn where_json_offers_name_and_description_from_the_repository() {
+    let (base, work) = togaf_scratch("ftr22-describe");
+    let suggested = |work: &std::path::Path| -> serde_json::Value {
+        let out = run_in(&base, work, &["where", "--json"]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let v = suggested(&work);
+    assert_eq!(v["suggested_description"], serde_json::Value::Null);
+    assert_eq!(v["suggested_name"], "shop");
+    std::fs::write(
+        work.join("README.md"),
+        "# Shop\n\nA small shop for hand-made chairs. It has a cart.\n",
+    )
+    .unwrap();
+    let v = suggested(&work);
+    assert_eq!(
+        v["suggested_description"],
+        "A small shop for hand-made chairs. It has a cart."
+    );
+    // With no README prose, a manifest's description is offered.
+    std::fs::write(work.join("README.md"), "# Shop\n").unwrap();
+    std::fs::write(
+        work.join("package.json"),
+        r#"{"name":"shop","description":"Chairs, online"}"#,
+    )
+    .unwrap();
+    assert_eq!(suggested(&work)["suggested_description"], "Chairs, online");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-022 R-4: the charter is one question for the whole of it, asked once.
+#[test]
+fn setup_asks_the_charter_as_one_confirmation() {
+    let (base, work) = togaf_scratch("ftr22-charter");
+    let questions = setup_questions_here(&base, &work);
+    let charter: Vec<&String> = questions
+        .iter()
+        .filter(|q| q.starts_with("The charter"))
+        .collect();
+    assert_eq!(charter.len(), 1, "{questions:?}");
+    assert!(
+        charter[0].contains("one question") && charter[0].contains("nothing is adopted before"),
+        "{charter:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-022 R-5: whether the project has CI is asked once, when releases are on, and recorded as
+/// `cadence.has_ci`.
+#[test]
+fn setup_asks_once_whether_the_project_has_ci() {
+    let (base, work) = togaf_scratch("ftr22-ci");
+    let questions = setup_questions_here(&base, &work);
+    let ci: Vec<&String> = questions.iter().filter(|q| q.contains("has CI")).collect();
+    assert_eq!(ci.len(), 1, "{questions:?}");
+    assert!(
+        ci[0].contains("only when releases are on") && ci[0].contains("--has-ci on|off"),
+        "{ci:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-022 R-7: an unstarted sprint is reshaped in place, and a started one is refused.
+#[test]
+fn sprint_edit_changes_a_planned_sprint() {
+    let (base, work) = togaf_scratch("ftr22-sprint-edit");
+    git_model_board(&base, &work, true, false);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05", "--length", "5d"],
+    ));
+    let said = ok(run_in(
+        &base,
+        &work,
+        &[
+            "sprint",
+            "edit",
+            "SP-001",
+            "--start",
+            "2026-10-12",
+            "--goal",
+            "ship the cart",
+        ],
+    ));
+    assert!(
+        said.contains("edited SP-001 (2026-10-12 → 2026-10-16)"),
+        "{said}"
+    );
+    let said = ok(run_in(
+        &base,
+        &work,
+        &[
+            "sprint",
+            "edit",
+            "SP-001",
+            "--length",
+            "2w",
+            "--capacity",
+            "20",
+        ],
+    ));
+    assert!(said.contains("(2026-10-12 → 2026-10-25)"), "{said}");
+    let shown = ok(run_in(&base, &work, &["sprint", "list", "--json"]));
+    let v: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    assert_eq!(v[0]["goal"], "ship the cart");
+    assert_eq!(v[0]["capacity"], 20.0);
+    // Length and end conflict.
+    let both = run_in(
+        &base,
+        &work,
+        &[
+            "sprint",
+            "edit",
+            "SP-001",
+            "--length",
+            "5d",
+            "--end",
+            "2026-10-30",
+        ],
+    );
+    assert!(!both.status.success());
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    let late = run_in(&base, &work, &["sprint", "edit", "SP-001", "--name", "x"]);
+    assert!(!late.status.success());
+    assert!(String::from_utf8_lossy(&late.stderr).contains("has started"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-022 R-10: an empty planned release is removed; one holding an item is not.
+#[test]
+fn release_remove_deletes_an_empty_release() {
+    let (base, work) = togaf_scratch("ftr22-release-rm");
+    git_model_board(&base, &work, false, true);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(&base, &work, &["release", "add", "v0.1.0"]));
+    ok(run_in(&base, &work, &["release", "add", "v0.2.0"]));
+    let said = ok(run_in(&base, &work, &["release", "remove", "v0.1.0"]));
+    assert!(said.contains("removed v0.1.0"), "{said}");
+    let listed = ok(run_in(&base, &work, &["release", "list"]));
+    assert!(
+        !listed.contains("v0.1.0") && listed.contains("v0.2.0"),
+        "{listed}"
+    );
+    let gone = run_in(&base, &work, &["release", "remove", "v0.1.0"]);
+    assert!(!gone.status.success());
     let _ = std::fs::remove_dir_all(&base);
 }
 

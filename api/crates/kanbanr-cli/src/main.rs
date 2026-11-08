@@ -1277,6 +1277,9 @@ enum ReleaseCmd {
         #[arg(long, requires = "from_failed_tag")]
         notes: Option<String>,
     },
+    /// Remove a release that holds nothing: planned, with no stage, branch, notes, patch or item.
+    /// Anything else is refused, naming why.
+    Remove { version: String },
     /// List the project's releases.
     List,
     /// Move a release to its next stage, or to the one named (FEAT-183), doing what the stages
@@ -1382,9 +1385,33 @@ enum SprintCmd {
         #[arg(required = true)]
         items: Vec<String>,
     },
+    /// Change a sprint that has not started: name, goal, first day, length or last day, capacity.
+    /// A started sprint is a record and is refused.
+    Edit {
+        code: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        goal: Option<String>,
+        /// First day, YYYY-MM-DD; the sprint keeps its length unless one is given.
+        #[arg(long)]
+        start: Option<String>,
+        /// Length, e.g. `2w` or `10d`.
+        #[arg(long, conflicts_with = "end")]
+        length: Option<String>,
+        /// Last day, YYYY-MM-DD.
+        #[arg(long)]
+        end: Option<String>,
+        /// What it can take, in the project's estimate unit; 0 clears it.
+        #[arg(long)]
+        capacity: Option<f64>,
+    },
+    /// Remove a sprint that holds no item and has not started. A sprint with items is refused.
+    Remove { code: String },
     /// Make a sprint the active one.
     Start { code: String },
-    /// Close a sprint, carrying unfinished items to another sprint or back to the backlog.
+    /// Close a sprint, carrying unfinished items to another sprint or back to the backlog. An
+    /// empty sprint made by mistake is removed instead (`sprint remove`).
     Close {
         code: String,
         /// A sprint code, or `backlog` (the default).
@@ -5058,6 +5085,12 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
         "marker": resolved.marker.as_ref().map(|m| show(&m.path)),
         "project": project::resolve_project(cli.project.as_deref()),
         "project_root": show(&project::project_root(&cwd, home)),
+        // What the folder already says about the project: Claude asks only when these are null
+        // or unclear (FTR-022).
+        "suggested_name": project::project_root(&cwd, home)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string()),
+        "suggested_description": project::suggested_description(&project::project_root(&cwd, home)),
         "suggested_data_dir": suggested.as_deref().map(show),
         "suggested_inside_git_repo": suggested
             .as_deref()
@@ -9687,6 +9720,14 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 );
             }
         }
+        ReleaseCmd::Remove { version } => {
+            let resp = client.write(
+                Method::Delete,
+                &format!("/projects/{p}/releases/{}", urlencode_segment(version)),
+                None,
+            )?;
+            print_write(cli, &resp, format!("removed {version}"));
+        }
         ReleaseCmd::Plan { version, items } => {
             let resp = client.write(
                 Method::Post,
@@ -10294,6 +10335,50 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
                     v["end"].as_str().unwrap_or("")
                 ),
             );
+        }
+        SprintCmd::Edit {
+            code,
+            name,
+            goal,
+            start,
+            length,
+            end,
+            capacity,
+        } => {
+            let length = length.as_deref().map(parse_length).transpose()?;
+            let resp = client.write(
+                Method::Patch,
+                &format!("/projects/{p}/sprints/{code}"),
+                Some(obj(vec![
+                    ("name", name.clone().map(|n| json!(n))),
+                    ("goal", goal.clone().map(|g| json!(g))),
+                    ("start", start.clone().map(|s| json!(s))),
+                    ("length_days", length.map(|d| json!(d))),
+                    ("end", end.clone().map(|e| json!(e))),
+                    (
+                        "capacity",
+                        capacity.map(|c| if c == 0.0 { Value::Null } else { json!(c) }),
+                    ),
+                ])),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            print_write(
+                cli,
+                &resp,
+                format!(
+                    "edited {code} ({} → {})",
+                    v["start"].as_str().unwrap_or(""),
+                    v["end"].as_str().unwrap_or("")
+                ),
+            );
+        }
+        SprintCmd::Remove { code } => {
+            let resp = client.write(
+                Method::Delete,
+                &format!("/projects/{p}/sprints/{code}"),
+                None,
+            )?;
+            print_write(cli, &resp, format!("removed {code}"));
         }
         SprintCmd::List => {
             let resp = client.get(&format!("/projects/{p}/sprints"))?;

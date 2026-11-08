@@ -511,6 +511,8 @@ export interface Release {
   stages?: { stage: string; by: string; at: string; reason?: string }[];
   /** The code branch, made on entering the first stage. */
   branch?: string;
+  /** The cut release this patches (FEAT-184); absent for an ordinary release. */
+  parent?: string;
   /** When the stage that tags was entered (FTR-026); a tagged release still `planned` is waiting on its later stages. */
   tagged_at?: string;
   /** The commit the tag names. */

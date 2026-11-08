@@ -84,8 +84,9 @@ back to the backlog. If your sprints end before your releases do, say so:
 
 ## Planning a sprint
 
-Setup offers to create a first sprint and a first release. Use them rather than asking for new ones,
-because a sprint can be closed but not edited or deleted, so settle its dates and goal during setup.
+Setup does not create a sprint or a release. Ask for them when you are ready, and Claude asks the
+sprint's goal and dates, or the release's version and target, then. A planned sprint can be changed
+until it starts, and an empty sprint or release made by mistake can be removed.
 
 > Start the first sprint. We need saved carts: shoppers should be able to come back to their basket.
 > Put that in the sprint, for the first release.

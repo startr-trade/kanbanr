@@ -34,6 +34,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **Setup leaves no sprint or release you didn't need (FTR-022).** Setup now asks sprints and
+  releases as one question, with no length, dates, capacity or version, and creates neither; the
+  first is made when you ask for it. It reads the project's name and description from the README or
+  manifest, asks for the commit identity once for the board and the repository, asks for the
+  charter as one confirmation, and asks once whether the project has CI. A sprint that has not
+  started can be changed (`kanbanr sprint edit`), and an empty unstarted sprint or release can be
+  removed (`kanbanr sprint remove`, `kanbanr release remove`, and a Remove button on the Releases
+  page).
 - **Chores take a lighter path through a process (FTR-019).** A process can give a work kind its own
   `paths`: the stages an item of that kind passes through, the conditions its first move asks, and
   the method parts that do not apply to it. The built-in TOGAF, Scrum, agile and design-control
