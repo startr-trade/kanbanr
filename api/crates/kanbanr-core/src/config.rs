@@ -521,6 +521,7 @@ impl Cadence {
             commit_gates: Vec::new(),
             tag_gate: None,
             has_ci: false,
+            gate_docs: None,
             ..self.clone()
         }
     }
@@ -2317,6 +2318,7 @@ mod tests {
             commit_gates: vec!["ci".into()],
             tag_gate: Some("ci".into()),
             has_ci: true,
+            gate_docs: Some(vec!["docs/".into()]),
             extra: Default::default(),
         }
         .project_facts_cleared();
@@ -2326,6 +2328,7 @@ mod tests {
         assert!(c.release_stages.is_empty() && c.integration_branch.is_none());
         assert!(c.main_branch.is_none() && !c.git_model && c.release_gates.is_empty());
         assert!(c.commit_gates.is_empty() && c.tag_gate.is_none() && !c.has_ci);
+        assert!(c.gate_docs.is_none());
     }
 
     /// A path through `stages`, with the conditions a chore's first move asks.
