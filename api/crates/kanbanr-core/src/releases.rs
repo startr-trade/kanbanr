@@ -1271,7 +1271,8 @@ fn short(sha: &str) -> &str {
 fn gate_passed(
     store: &Store,
     id: &str,
-    commit_gates: &[String],
+    cadence: &Cadence,
+    repo: &Path,
     tip: Option<&str>,
     prepares: bool,
     version: &str,
@@ -1303,16 +1304,30 @@ fn gate_passed(
         );
     };
     let results = crate::gates::results(store, id, None).unwrap_or_default();
+    let docs = cadence.gate_docs_patterns();
+    let docs_ok = Cadence::validate_gate_docs(&docs).is_ok();
     let mut recorded = Vec::new();
-    for name in commit_gates {
+    for name in &cadence.commit_gates {
         match crate::gates::newest(&results, name, tip) {
-            None => {
-                return (
-                    false,
-                    format!("{name} has no recorded result for {}", short(tip)),
-                    fix_for(tip),
-                );
-            }
+            // A pass for an earlier commit stands when only documentation changed since (DEF-031).
+            None => match crate::gates::carried(&results, name, tip, repo, &docs)
+                .filter(|_| docs_ok)
+            {
+                Some((r, n)) => recorded.push(format!(
+                    "{name} passed on {} (recorded by {}, {}); only documentation changed since \
+                     ({n} file(s))",
+                    short(&r.commit),
+                    r.by,
+                    r.at.get(..10).unwrap_or(&r.at)
+                )),
+                None => {
+                    return (
+                        false,
+                        format!("{name} has no recorded result for {}", short(tip)),
+                        fix_for(tip),
+                    );
+                }
+            },
             Some(r) if !r.passed => {
                 let note = if r.note.is_empty() {
                     String::new()
@@ -2100,7 +2115,8 @@ fn work_out(
                     ReleaseCheck::GatePassed => gate_passed(
                         store,
                         id,
-                        &cadence.commit_gates,
+                        cadence,
+                        repo,
                         tip_before.as_deref(),
                         prepares,
                         version,

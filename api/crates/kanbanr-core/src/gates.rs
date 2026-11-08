@@ -9,7 +9,7 @@
 use crate::error::{CoreError, Result};
 use crate::store::Store;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The two places a result can come from.
 pub const SOURCES: [&str; 2] = ["person", "local"];
@@ -162,6 +162,44 @@ pub fn newest<'a>(results: &'a [GateResult], name: &str, commit: &str) -> Option
         .find(|r| r.name == name && r.commit == commit)
 }
 
+/// Whether `path` counts as documentation under `patterns` (DEF-031): a directory prefix ending in
+/// `/`, a suffix starting `*`, or an exact path.
+pub fn is_docs_path(patterns: &[String], path: &str) -> bool {
+    patterns.iter().any(|p| {
+        if p.ends_with('/') {
+            path.starts_with(p.as_str())
+        } else if let Some(suffix) = p.strip_prefix('*') {
+            path.ends_with(suffix)
+        } else {
+            path == p
+        }
+    })
+}
+
+/// The earlier result of `name` that stands for `tip` (DEF-031): the newest result of the gate for a
+/// commit `tip` descends from, when it passed and every path changed since touches only
+/// documentation. A failed result, a code change or a commit that cannot be compared gives `None`.
+/// Returns the result and how many files changed since.
+pub fn carried<'a>(
+    results: &'a [GateResult],
+    name: &str,
+    tip: &str,
+    repo: &Path,
+    patterns: &[String],
+) -> Option<(&'a GateResult, usize)> {
+    let earlier = results.iter().rev().find(|r| {
+        r.name == name && r.commit != tip && crate::coderepo::is_ancestor(repo, &r.commit, tip)
+    })?;
+    if !earlier.passed {
+        return None;
+    }
+    let changed = crate::coderepo::changed_paths(repo, &earlier.commit, tip).ok()?;
+    changed
+        .iter()
+        .all(|p| is_docs_path(patterns, p))
+        .then_some((earlier, changed.len()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,6 +229,77 @@ mod tests {
             source: "person".into(),
             ..GateResult::default()
         }
+    }
+
+    /// A repository with a pass recorded at its first commit, then `commits` made on top.
+    fn carry_fixture(name: &str, commits: &[(&str, &str)]) -> (PathBuf, String, String) {
+        use crate::coderepo::{git, tests::commit_file};
+        let repo = crate::coderepo::tests::scratch_repo(name);
+        let first = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        for (file, text) in commits {
+            std::fs::create_dir_all(repo.join(file).parent().unwrap()).unwrap();
+            commit_file(&repo, file, text, file);
+        }
+        let tip = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        (repo, first, tip)
+    }
+
+    fn docs() -> Vec<String> {
+        vec!["docs/".into(), "*.md".into()]
+    }
+
+    /// DEF-031 R-6: a pass stands across a change that touches only documentation.
+    #[test]
+    fn a_pass_carries_over_a_docs_only_change() {
+        let (repo, first, tip) = carry_fixture(
+            "carry-docs",
+            &[("docs/guide.txt", "g\n"), ("NOTES.md", "n\n")],
+        );
+        let rs = vec![result("ci", &first, true, "2026-11-04T10:00:00Z")];
+        let (r, n) = carried(&rs, "ci", &tip, &repo, &docs()).unwrap();
+        assert_eq!((r.commit.as_str(), n), (first.as_str(), 2));
+        // A pass for the tip itself is not a carried one.
+        assert!(carried(&rs, "ci", &first, &repo, &docs()).is_none());
+        // Another gate's pass says nothing.
+        assert!(carried(&rs, "local", &tip, &repo, &docs()).is_none());
+        assert!(is_docs_path(&docs(), "a/b/README.md") && !is_docs_path(&docs(), "src/a.rs"));
+        assert!(is_docs_path(&["LICENSE".into()], "LICENSE"));
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-031 R-6: a change to code, or to a path the project does not call documentation, does
+    /// not carry it.
+    #[test]
+    fn a_pass_does_not_carry_over_a_code_change() {
+        let (repo, first, tip) = carry_fixture(
+            "carry-code",
+            &[("docs/guide.txt", "g\n"), ("src/main.rs", "fn main(){}\n")],
+        );
+        let rs = vec![result("ci", &first, true, "2026-11-04T10:00:00Z")];
+        assert!(carried(&rs, "ci", &tip, &repo, &docs()).is_none());
+        // With nothing counting as documentation, not even a docs change carries.
+        let (repo2, first2, tip2) = carry_fixture("carry-none", &[("docs/guide.txt", "g\n")]);
+        let rs2 = vec![result("ci", &first2, true, "2026-11-04T10:00:00Z")];
+        assert!(carried(&rs2, "ci", &tip2, &repo2, &[]).is_none());
+        // A result for a commit the tip does not descend from says nothing.
+        let rs3 = vec![result("ci", A, true, "2026-11-04T10:00:00Z")];
+        assert!(carried(&rs3, "ci", &tip2, &repo2, &docs()).is_none());
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&repo2);
+    }
+
+    /// DEF-031 R-6: a failed result never carries, and a newer failure hides an older pass.
+    #[test]
+    fn a_failed_result_never_carries_over() {
+        let (repo, first, tip) = carry_fixture("carry-failed", &[("docs/guide.txt", "g\n")]);
+        let failed = vec![result("ci", &first, false, "2026-11-04T10:00:00Z")];
+        assert!(carried(&failed, "ci", &tip, &repo, &docs()).is_none());
+        let rs = vec![
+            result("ci", &first, true, "2026-11-04T10:00:00Z"),
+            result("ci", &first, false, "2026-11-04T11:00:00Z"),
+        ];
+        assert!(carried(&rs, "ci", &tip, &repo, &docs()).is_none());
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]

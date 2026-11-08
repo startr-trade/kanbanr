@@ -1233,6 +1233,25 @@ fn dispatch_routes(
             cadence.tag_gate = gate;
             ser(&store.set_cadence(p, None, cadence)?)
         }
+        // `{paths: [entry…]}`: the paths that count as documentation when a recorded gate pass is
+        // carried across a change (DEF-031). Empty goes back to the default; `{none: true}` says
+        // that no path counts as documentation.
+        ("PUT", ["projects", p, "config", "gate-docs"]) => {
+            let paths: Vec<String> = vec_field(b, "paths")
+                .unwrap_or_default()
+                .iter()
+                .map(|e| e.trim().to_string())
+                .collect();
+            let mut cadence = store.load_meta(p)?.config.cadence;
+            cadence.gate_docs = if bool_field(b, "none").unwrap_or(false) {
+                Some(Vec::new())
+            } else if paths.is_empty() {
+                None
+            } else {
+                Some(paths)
+            };
+            ser(&store.set_cadence(p, None, cadence)?)
+        }
         // The release stages with the gate in force on each (FEAT-212).
         ("GET", ["projects", p, "release-stages"]) => {
             ser(&store.load_meta(p)?.config.cadence.release_stage_views())
@@ -1510,6 +1529,7 @@ fn dispatch_routes(
                 // FTR-002: the gates a release stage requires have a route of their own.
                 commit_gates: current.commit_gates.clone(),
                 tag_gate: current.tag_gate.clone(),
+                gate_docs: current.gate_docs.clone(),
                 // FTR-020: whether the project has CI; kept when the body does not say.
                 has_ci: bool_field(b, "has_ci").unwrap_or(current.has_ci),
                 sprints: bool_field(b, "sprints").unwrap_or(current.sprints),
@@ -2064,6 +2084,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         }
         ["projects", _p, "config", "commit-gates"] => "set the commit gates".into(),
         ["projects", _p, "config", "tag-gate"] => "set the tag gate".into(),
+        ["projects", _p, "config", "gate-docs"] => "set the documentation paths".into(),
         ["projects", _p, "releases", v, "patch-from-tag"] => format!(
             "start a patch release from the failed tag of {}",
             percent_decode(v)

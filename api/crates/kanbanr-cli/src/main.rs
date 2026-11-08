@@ -1078,6 +1078,15 @@ enum ConfigCmd {
     CommitGates {
         names: Vec<String>,
     },
+    /// The paths that count as documentation when a recorded gate pass is carried across a change
+    /// (DEF-031): `kanbanr config gate-docs docs/ '*.md'`. A folder ends in `/`, a suffix starts
+    /// with `*`. With none given, goes back to the default (`docs/` and `*.md`); `--none` says no
+    /// path counts, so a pass carries across no change.
+    GateDocs {
+        entries: Vec<String>,
+        #[arg(long, conflicts_with = "entries")]
+        none: bool,
+    },
     /// The commit gate whose result judges a release's tag (FTR-026): `kanbanr config tag-gate
     /// ci`. It must be one of the commit gates; with none given, the first commit gate judges.
     TagGate {
@@ -8466,6 +8475,22 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 "commit gates cleared".to_string()
             } else {
                 format!("commit gates: {}", names.join(", "))
+            };
+            print_write(cli, &resp, said);
+            Ok(())
+        }
+        ConfigCmd::GateDocs { entries, none } => {
+            let resp = client.write(
+                Method::Put,
+                &format!("/projects/{p}/config/gate-docs"),
+                Some(json!({ "paths": entries, "none": none })),
+            )?;
+            let said = if *none {
+                "documentation paths: none, so a gate pass carries across no change".to_string()
+            } else if entries.is_empty() {
+                "documentation paths: the default (docs/, *.md)".to_string()
+            } else {
+                format!("documentation paths: {}", entries.join(", "))
             };
             print_write(cli, &resp, said);
             Ok(())

@@ -8723,6 +8723,84 @@ fn tagged_scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     (base, work)
 }
 
+/// DEF-031 R-6: a pass recorded for an earlier commit stands across a documentation-only change,
+/// the plan names the commit it carries from, and a code change ends it.
+#[test]
+fn gate_passed_names_the_earlier_commit_it_carries_from() {
+    let (base, work) = release_scratch("def031-carry");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(&base, &work, &["config", "commit-gates", "ci"]));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "release-stage",
+            "test",
+            "--requires",
+            "gate_passed",
+        ],
+    ));
+    ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    let first = rev(&base, &work, "release/v1.0.0");
+    ok(run_in(
+        &base,
+        &work,
+        &["gate", "record", "ci", "--passed", "--commit", &first],
+    ));
+    let on_release = |file: &str, content: &str| {
+        let dir = work.join(std::path::Path::new(file).parent().unwrap());
+        std::fs::create_dir_all(&dir).unwrap();
+        ok(git_in(&base, &work, &["checkout", "-q", "release/v1.0.0"]));
+        std::fs::write(work.join(file), content).unwrap();
+        ok(git_in(&base, &work, &["add", file]));
+        ok(git_in(
+            &base,
+            &work,
+            &["commit", "-q", "-m", "[no-ref] change"],
+        ));
+        ok(git_in(&base, &work, &["checkout", "-q", "main"]));
+    };
+    let gate = |base: &std::path::Path, work: &std::path::Path| -> serde_json::Value {
+        let plan: serde_json::Value = serde_json::from_str(&ok(run_in(
+            base,
+            work,
+            &["--json", "release", "promote", "v1.0.0", "test", "--plan"],
+        )))
+        .unwrap();
+        plan["conditions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["check"] == "gate_passed")
+            .cloned()
+            .unwrap_or_else(|| panic!("no gate_passed condition: {plan}"))
+    };
+    on_release("docs/guide.md", "more\n");
+    let held = gate(&base, &work);
+    assert_eq!(held["holds"], true, "{held}");
+    let detail = held["detail"].as_str().unwrap();
+    assert!(
+        detail.contains(&first[..7])
+            && detail.contains("only documentation changed since (1 file(s))"),
+        "{detail}"
+    );
+    on_release("src/code.rs", "fn main() {}\n");
+    let refused = gate(&base, &work);
+    assert_eq!(refused["holds"], false, "{refused}");
+    assert!(
+        refused["detail"]
+            .as_str()
+            .unwrap()
+            .contains("no recorded result"),
+        "{refused}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FTR-026 R-2: a confirmation after the tag keeps the user's note on the stage change, and the
 /// last one ships the release.
 #[test]
