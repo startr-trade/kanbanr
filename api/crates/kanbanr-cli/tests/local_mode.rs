@@ -7162,6 +7162,80 @@ fn main_session_unchanged_with_scopes_on_board() {
     );
 }
 
+/// DEF-015 R-1: an agent under a scope walks a process through on a temporary board: the guard
+/// lets the commands that name it through, they run in the claimed worktree, and the real board is
+/// left byte for byte as it was.
+#[test]
+fn an_agent_walks_a_process_through_on_a_temporary_board() {
+    let fx = ScopeFx::new("tempboard");
+    let wt = fx.claimed("agent-walk");
+    let before = snapshot(&fx.board);
+    let walk = std::env::temp_dir().join(format!("kanbanr-walk-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&walk);
+    let at = walk.to_string_lossy().into_owned();
+    for command in [
+        format!("kanbanr --data-dir {at} init walk --no-hooks"),
+        format!("kanbanr --data-dir {at} milestone add --name First"),
+        format!("kanbanr --data-dir {at} feature add --title Walked --milestone MS-001"),
+        format!("KANBANR_DATA_DIR={at} KANBANR_PROJECT=walk kanbanr board"),
+    ] {
+        let out = fx.guard(&wt, &command);
+        assert!(out.trim().is_empty(), "{command} was refused: {out}");
+    }
+    // A real board stays refused beside it.
+    let out = fx.guard(
+        &wt,
+        &format!("kanbanr --data-dir {} board", fx.board.display()),
+    );
+    assert!(out.contains("never another"), "{out}");
+    fx.ok(
+        &wt,
+        &[
+            "--data-dir",
+            &at,
+            "init",
+            "walk",
+            "--no-hooks",
+            "--author",
+            "T",
+            "--email",
+            "t@x",
+        ],
+    );
+    fx.ok(
+        &wt,
+        &[
+            "--data-dir",
+            &at,
+            "--project",
+            "walk",
+            "milestone",
+            "add",
+            "--name",
+            "First",
+        ],
+    );
+    fx.ok(
+        &wt,
+        &[
+            "--data-dir",
+            &at,
+            "--project",
+            "walk",
+            "feature",
+            "add",
+            "--title",
+            "Walked",
+            "--milestone",
+            "MS-001",
+        ],
+    );
+    let board = fx.ok(&wt, &["--data-dir", &at, "--project", "walk", "board"]);
+    assert!(board.contains("Walked"), "{board}");
+    assert!(snapshot(&fx.board) == before, "the real board is untouched");
+    let _ = std::fs::remove_dir_all(&walk);
+}
+
 /// FEAT-214 R-13: in an agent worktree, the commands that change kanbanr itself or write outside the
 /// board's write path are refused before they run, and the board is untouched.
 #[test]

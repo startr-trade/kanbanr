@@ -235,6 +235,21 @@ mod tests {
         }
     }
 
+    /// DEF-015 R-4: the skill tells the coordinator what a temporary board is and the form an agent
+    /// uses to name one.
+    #[test]
+    fn skill_names_the_temporary_board_form() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        for want in ["temporary board", "$TMPDIR", "--data-dir"] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+        assert!(!skill.contains("temporary boards only"));
+    }
+
     /// FEAT-200 R-18: the skill tells Claude how to write diagrams that draw — quote flowchart
     /// labels, plain words in sequence messages, never `end` as an id, `kanbanr doctor` after — and
     /// what a `diagrams_valid` gate asks of it.
