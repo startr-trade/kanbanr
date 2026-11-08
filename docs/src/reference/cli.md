@@ -120,7 +120,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr commit -m "…"` | commit with the board reference filled in from the branch |
 | `kanbanr claude sync` | write the project's charter and stages into `CLAUDE.md` |
 | `kanbanr git guard` / `kanbanr claude guard` / `kanbanr git check-msg` / `kanbanr git check-branch` / `kanbanr git check-push` | the checks the hooks run (you never call them); `check-push` is the pre-push hook, which refuses a push from an agent's worktree |
-| `kanbanr scope issue <design\|build> <CODE> [--for 8h] [--note …] [--worktree PATH] [--json]` | issue an agent scope: record what one sub-agent may do and print the brief to paste into its brief (FEAT-214) |
+| `kanbanr scope issue <design\|build> <CODE> [--for 8h] [--note …] [--worktree PATH] [--json]` | issue an agent scope: record what one sub-agent may do and print the brief to paste into its brief (FEAT-214). `--worktree PATH` binds the scope to that worktree now, so its brief has no claim step (DEF-023) |
 | `kanbanr scope claim <SC-id>` | the agent's first command, in its own worktree: bind the scope to it (a build agent switches to its item's branch) |
 | `kanbanr scope here` | which scope applies in this folder, and what it allows |
 | `kanbanr scope list [--all] [--item CODE] [--json]` / `scope show <SC-id>` / `scope brief <SC-id>` | the scopes in force (or every one), one scope, its brief |

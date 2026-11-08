@@ -630,6 +630,8 @@ and prints its brief:
 Then:
 - start the agent with `isolation: worktree`, design agents included: a scope binds to the agent's
   own worktree, never to your checkout;
+- with `--worktree <path>` the scope is bound at once and the brief has no claim step; without it
+  the agent's first command is the claim;
 - paste the printed brief **verbatim** at the top of the agent's brief. Its first line has the
   agent claim the scope (`kanbanr scope claim SC-…`); from then on kanbanr refuses, and names, every
   board write, commit and push that agent makes from that worktree that the scope does not allow;

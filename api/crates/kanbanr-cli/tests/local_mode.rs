@@ -6589,10 +6589,7 @@ fn scope_issued_with_a_worktree_prints_no_claim_step() {
         &fx.work,
         &["scope", "issue", "build", "FEAT-001", "--worktree", &wt_arg],
     );
-    for text in [
-        out.clone(),
-        fx.ok(&fx.work, &["scope", "brief", "SC-001"]),
-    ] {
+    for text in [out.clone(), fx.ok(&fx.work, &["scope", "brief", "SC-001"])] {
         assert!(
             !text.contains("First, in your worktree: `kanbanr scope claim"),
             "{text}"
