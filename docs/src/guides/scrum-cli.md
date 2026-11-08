@@ -298,6 +298,11 @@ agent on its next tool call and never restricts you.
 
 ## Releasing
 
+**Before your first release, design the pipeline.** A release workflow can only be tested by running
+it, a tag can't be moved once it's pushed, and shipped notes can't be edited, so a mistake in the
+pipeline costs a whole version number. Settle the checks, the release description and a run without a tag first:
+see [Designing CI and the release workflow](delivery-pipeline.md).
+
 `kanbanr release promote v1.0.0 --plan` shows what a promotion would do and changes nothing:
 
 ```text
