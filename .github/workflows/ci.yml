@@ -419,6 +419,10 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
+      # The guides cover designing a pipeline and describe a product by what a person does (DOC-007).
+      - name: The guides cover the pipeline and a product people use
+        run: python3 -m unittest -q scripts/tests/test_guides.py
+
       # Every check a gate can ask for has its behaviour described in the Working with Claude
       # chapter (FEAT-159): a new check cannot ship with nothing saying what Claude does about it.
       - name: Every gate check is described in Working with Claude
