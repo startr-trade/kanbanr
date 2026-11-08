@@ -3238,6 +3238,9 @@ pub struct ReleaseNotes {
     /// Why not, when not editable.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub why_not: String,
+    /// The items planned into the release whose code the notes do not mention (DEF-031).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unmentioned: Vec<String>,
 }
 
 /// The release, its branch and its notes path, or why its notes cannot be found.
@@ -3287,8 +3290,19 @@ fn branch_tip(repo: &Path, release: &Release) -> Result<String> {
 }
 
 /// The notes of `release` as read at `tip`.
-fn notes_at(release: &Release, path: &str, text: String, tip: &str) -> ReleaseNotes {
+fn notes_at(
+    project: &Project,
+    release: &Release,
+    path: &str,
+    text: String,
+    tip: &str,
+) -> ReleaseNotes {
     let shipped = release.state == ReleaseState::Shipped;
+    let unmentioned = if shipped {
+        Vec::new()
+    } else {
+        unmentioned(project, &release.version, &text)
+    };
     ReleaseNotes {
         version: release.version.clone(),
         branch: release.branch.clone(),
@@ -3304,7 +3318,33 @@ fn notes_at(release: &Release, path: &str, text: String, tip: &str) -> ReleaseNo
         } else {
             String::new()
         },
+        unmentioned,
     }
+}
+
+/// Whether `text` names `code` as a whole code: the character before is not a letter, digit or
+/// `-`, and the one after is not a letter or digit, so `DEF-03` is not found in `DEF-030` (DEF-031).
+fn mentions(text: &str, code: &str) -> bool {
+    text.match_indices(code).any(|(i, _)| {
+        let before = text[..i].chars().next_back();
+        let after = text[i + code.len()..].chars().next();
+        !before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-')
+            && !after.is_some_and(|c| c.is_ascii_alphanumeric())
+    })
+}
+
+/// The codes of the items planned into `version` (not in a no-op status) that `text` does not
+/// mention, sorted (DEF-031).
+fn unmentioned(project: &Project, version: &str, text: &str) -> Vec<String> {
+    let mut codes: Vec<String> = project
+        .features
+        .iter()
+        .filter(|f| f.release.as_deref() == Some(version) && !project.config.is_no_op(&f.status))
+        .filter(|f| !mentions(text, &f.code))
+        .map(|f| f.code.clone())
+        .collect();
+    codes.sort();
+    codes
 }
 
 /// A release's notes as they are at the tip of `release/<V>`, read without checking anything out
@@ -3316,7 +3356,7 @@ pub fn release_notes(
     version: &str,
     repo: Option<&Path>,
 ) -> Result<ReleaseNotes> {
-    let (_, release, _, path) = notes_target(store, id, version)?;
+    let (project, release, _, path) = notes_target(store, id, version)?;
     let repo = repo.ok_or_else(|| notes_need_repo(version))?;
     let tip = branch_tip(repo, &release)?;
     let (_, text) = coderepo::read_blob(repo, &tip, &path)?.ok_or_else(|| {
@@ -3326,7 +3366,7 @@ pub fn release_notes(
             short(&tip)
         ))
     })?;
-    Ok(notes_at(&release, &path, text, &tip))
+    Ok(notes_at(&project, &release, &path, text, &tip))
 }
 
 /// The dates before `today` on the lines of a release's notes and changelog that carry one, at
@@ -3537,7 +3577,7 @@ pub fn redate_release(
             .flatten()
             .map(|(_, t)| t)
             .unwrap_or_default();
-        notes_at(&release, &path, text, at)
+        notes_at(&project, &release, &path, text, at)
     };
     let files = redate_files(&project, &release, repo, &tip, &ymd)?;
     if files.is_empty() {
@@ -3649,7 +3689,7 @@ pub fn set_release_notes(
     if files.is_empty() {
         return Ok(NotesSaved {
             sha: tip.clone(),
-            notes: notes_at(&release, &path, text.to_string(), &tip),
+            notes: notes_at(&project, &release, &path, text.to_string(), &tip),
             main_moved: String::new(),
         });
     }
@@ -3667,7 +3707,7 @@ pub fn set_release_notes(
     )?;
     Ok(NotesSaved {
         sha: new.clone(),
-        notes: notes_at(&release, &path, text.to_string(), &new),
+        notes: notes_at(&project, &release, &path, text.to_string(), &new),
         main_moved,
     })
 }
@@ -5815,6 +5855,55 @@ mod tests {
         let plan = plan_to(&store, &repo, "tag");
         assert!(plan.ready, "{:#?}", plan.missing);
         clean(&dir, &repo);
+    }
+
+    /// DEF-031 R-5: the notes name the planned items they do not mention.
+    #[test]
+    fn notes_list_the_items_they_do_not_mention() {
+        let (store, dir, repo) = notes_fixture("def031-unmentioned");
+        let project = store.load("shop").unwrap();
+        let planned: Vec<String> = project
+            .features
+            .iter()
+            .filter(|f| f.release.as_deref() == Some("v0.2.0"))
+            .map(|f| f.code.clone())
+            .collect();
+        assert_eq!(planned.len(), 1, "{planned:?}");
+        let mention = format!("# v0.2.0\n\n- {}: it\n", planned[0]);
+        let saved = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            "# v0.2.0\n\nNothing.\n",
+            "Ada",
+        )
+        .unwrap();
+        assert_eq!(saved.notes.unmentioned, planned);
+        let saved =
+            super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), &mention, "Ada")
+                .unwrap();
+        assert!(saved.notes.unmentioned.is_empty());
+        let read = super::release_notes(&store, "shop", "v0.2.0", Some(&repo)).unwrap();
+        assert!(read.unmentioned.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-031 R-5: a code inside a longer code is not a mention.
+    #[test]
+    fn an_item_code_inside_a_longer_code_is_not_mentioned() {
+        assert!(!super::mentions("fixes DEF-030 and DEF-0301", "DEF-03"));
+        assert!(!super::mentions("see XDEF-030", "DEF-030"));
+        assert!(!super::mentions("see FTR-DEF-030", "DEF-030"));
+        assert!(!super::mentions("DEF-0301", "DEF-030"));
+        assert!(super::mentions("DEF-030: the fix", "DEF-030"));
+        assert!(super::mentions(
+            "[DEF-030](/p/kanbanr/feature/DEF-030)",
+            "DEF-030"
+        ));
+        assert!(super::mentions("DEF-0301 and DEF-030.", "DEF-030"));
+        assert!(!super::mentions("", "DEF-030"));
     }
 
     /// DEF-031 R-4: the steps follow the stages this project has.

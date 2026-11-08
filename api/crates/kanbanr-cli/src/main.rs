@@ -9407,6 +9407,15 @@ fn release_notes(
                 }
                 println!();
                 print!("{}", notes["text"].as_str().unwrap_or_default());
+                let missing: Vec<&str> = notes["unmentioned"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect();
+                if !missing.is_empty() {
+                    println!("\nNot mentioned yet: {}", missing.join(", "));
+                }
             }
             return Ok(());
         }
