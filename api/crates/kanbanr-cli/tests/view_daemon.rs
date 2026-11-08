@@ -1060,6 +1060,8 @@ fn releases_yaml(board: &std::path::Path) -> kanbanr_core::yaml::Value {
         if let Some(stages) = release.get_mut("stages").and_then(|s| s.as_array_mut()) {
             for change in stages {
                 change["at"] = kanbanr_core::yaml::Value::String(String::new());
+                // The monitor and the CLI name different origins (DEF-028); the rest is the same.
+                change["origin"] = kanbanr_core::yaml::Value::String(String::new());
             }
         }
     }
@@ -1741,7 +1743,6 @@ fn an_https_origin_that_was_not_named_is_refused() {
     assert_eq!(board_commits(&data), before);
     let _ = std::fs::remove_dir_all(base);
 }
-
 
 /// DEF-028 R-4: a verdict posted to the monitor is recorded as `monitor`, whatever origin the
 /// request claims, and the same verdict again records nothing.

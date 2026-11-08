@@ -9626,7 +9626,6 @@ paths:
     let _ = std::fs::remove_dir_all(&base);
 }
 
-
 /// DEF-028 R-4: the CLI names the origin of a verdict itself: `terminal` outside a Claude Code
 /// session, `conversation` inside one (`CLAUDECODE` set).
 #[test]
