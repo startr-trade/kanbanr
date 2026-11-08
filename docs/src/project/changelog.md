@@ -12,6 +12,9 @@ All notable changes to kanbanr are documented here. The format follows
   is bound at once, so the brief's claim step was refused when the agent ran it. A bound scope's
   brief now says which worktree it is bound to and the branch it is on, and that nothing needs
   claiming; an unbound scope's brief is unchanged.
+- **The monitor refuses to start with writes on at an address other machines can reach (DEF-026).**
+  Accept it with `--allow-remote-writes` or `KANBANR_ALLOW_REMOTE_WRITES`; `KANBANR_ALLOWED_ORIGINS`
+  lets a write come from an https origin through a proxy you name.
 - **A scope binds the agent it was issued to, not whoever stands in its folder (DEF-027).** The
   coordinator's shell was trapped once it entered an agent's worktree, and revoking the scope
   trapped it further. A process outside Claude Code is a person, a hook call without an `agent_id`
