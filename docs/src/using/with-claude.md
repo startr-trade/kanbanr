@@ -59,7 +59,7 @@ guides, and [Processes](processes.md) compares them and their gates.
 
 Ask for what you need, in your own words:
 
-> We need saved carts: shoppers should be able to come back to their basket.
+> A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there.
 
 Claude reads the charter and the code, then asks only what it can't work
 out, a few questions at a time:

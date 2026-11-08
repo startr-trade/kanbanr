@@ -52,7 +52,13 @@ are exempt.
 
 ## One item, stage by stage
 
-> We need saved carts: shoppers should be able to come back to their basket. Schedule it.
+> A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there. Schedule it.
+
+**Claude asks whether it has a user interface.** When you choose the technology (or, if you don't,
+when the first item is designed), Claude asks whether the product has screens a person uses, or is
+a service, library or command-line tool. If it has screens, they become items of their own,
+designed and approved like the rest. If it has none, that goes into the design, so a missing screen
+is a decision and not an oversight.
 
 | Stage | What Claude does | What you do on the Review page |
 |---|---|---|
@@ -70,14 +76,14 @@ returns to the Review page. Read what changed, then approve again.
 **Just ask to move it on.** If something is missing, Claude says what and either fixes it or asks
 you:
 
-> Schedule the cart restore.
+> Schedule the saved basket.
 
 Claude commits on the item's branch.
 
 **Moving to Completed is the merge.** kanbanr merges the item's branch into main, naming the item.
 Your checkout may stay on the item's branch. Nothing is pushed.
 
-> Mark the cart restore as complete.
+> Mark the saved basket as complete.
 
 **Ask for the tests first.** Under this process a requirement without a green test doesn't stop the
 move, so say "run the tests and record them before you complete it".

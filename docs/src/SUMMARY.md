@@ -41,6 +41,7 @@
 - [Scrum from the command line](guides/scrum-cli.md)
 - [Agile with Claude](guides/agile-with-claude.md)
 - [Agile from the command line](guides/agile-cli.md)
+- [Designing CI and the release workflow](guides/delivery-pipeline.md)
 
 # Reference
 

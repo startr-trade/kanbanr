@@ -84,6 +84,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
         },
         "workflows": {
             "The version being built has release notes": LOCAL,
+            "The guides cover the pipeline and a product people use": LOCAL,
             "Every gate check is described in Working with Claude": LOCAL,
             "Every third-party action is pinned to a commit": LOCAL,
             "Every scanner suppression has a reason and an expiry": LOCAL,
@@ -693,6 +694,8 @@ def main(argv: list[str] | None = None) -> int:
     say("make ci: verdicts and agents' scoped writes on the board are told apart from other changes", ok, out)
     ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_check_supply_chain.py"], ROOT)
     say("make ci: unlocked builds, npm install and an unattested release are caught (MNT-004)", ok, out)
+    ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_guides.py"], ROOT)
+    say("make ci: the guides cover the pipeline and a product people use (DOC-007)", ok, out)
     fresh_tree()
     lint_workflows()
     run_workflow_steps()

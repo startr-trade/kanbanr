@@ -56,7 +56,7 @@ Keep it open. Every decision below happens there.
 
 ## Planning a sprint
 
-> Start a two-week sprint for carts surviving a return. Put the cart restore in it, for release 1.0.
+> Start a two-week sprint for the saved basket. Put it in, for release 1.0.
 
 Setup doesn't create a sprint or a release, so Claude asks the sprint's goal and first day, and the
 release's version and target, when you first ask. Then it creates the sprint and its branch, adds the item and plans it into the sprint and the release.
@@ -65,7 +65,13 @@ from several sprints.
 
 ## One item, stage by stage
 
-> We need saved carts: shoppers should be able to come back to their basket. Take it to Design.
+> A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there. Take it to Design.
+
+**Claude asks whether it has a user interface.** When you choose the technology (or, if you don't,
+when the first item is designed), Claude asks whether the product has screens a person uses, or is
+a service, library or command-line tool. If it has screens, they become items of their own,
+designed and approved like the rest. If it has none, that goes into the design, so a missing screen
+is a decision and not an oversight.
 
 | Stage | What Claude does | What you do on the Review page |
 |---|---|---|
@@ -115,7 +121,7 @@ process.
 
 Feedback arrives as new items that name the version they were found in:
 
-> Customers found a problem in v1.0.0 with returning carts. Add it as an item found in v1.0.0.
+> Customers found a problem in v1.0.0 with the saved basket. Add it as an item found in v1.0.0.
 
 A defect in a shipped release needs its own fix. See
 [Patch releases](../using/processes.md#patch-releases).
@@ -133,6 +139,11 @@ without moving into it (`git -C`), so a scope never gets in your way or Claude's
 scope stops that agent on its next tool call and never restricts you.
 
 ## Releasing
+
+**Before your first release, design the pipeline.** A release workflow can only be tested by running
+it, a tag can't be moved once it's pushed, and shipped notes can't be edited, so a mistake in the
+pipeline costs a whole version number. Settle the checks, the release description and a run without a tag first:
+see [Designing CI and the release workflow](delivery-pipeline.md).
 
 | Step | Who | Do this |
 |---|---|---|
