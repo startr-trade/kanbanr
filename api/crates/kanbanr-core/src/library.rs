@@ -467,8 +467,8 @@ pub fn drift(
         WorkflowFile::from_config(&c).content_rev()
     };
     let own = config.cadence.without_recommended_defaults();
-    let mut same_as_source = mine_rev(own.clone()) == source.rev
-        || mine_rev(own.project_facts_cleared()) == source.rev;
+    let mut same_as_source =
+        mine_rev(own.clone()) == source.rev || mine_rev(own.project_facts_cleared()) == source.rev;
     if !same_as_source && current.as_ref().is_some_and(|c| c.cadence.is_off()) {
         same_as_source = mine_rev(Cadence::default()) == source.rev;
     }
