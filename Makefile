@@ -38,25 +38,25 @@ help:
 	@echo "  docker-down   Stop the docker container"
 
 build:
-	cd web && npm install && npm run build
-	cd api && cargo build --release
+	cd web && npm ci && npm run build
+	cd api && cargo build --locked --release
 
 test:
-	cd api && cargo test
+	cd api && cargo test --locked
 
 # Packaging smoke: spin up the real Docker image via testcontainers and confirm it boots and
 # serves the read-only view. Functional coverage is in `make test` (no Docker). The test is
 # #[ignore]d, so build the image first.
 itest: docker-build
 	docker build -f docker/Dockerfile -t kanbanr:itest .
-	cd api && cargo test -p kanbanr-cli -- --ignored
+	cd api && cargo test --locked -p kanbanr-cli -- --ignored
 
 # The CLI alone, without the monitor baked in (`make install-cli` builds the monitor first).
 cli:
-	cd api && KANBANR_ALLOW_BARE_BUILD=1 cargo build --release -p kanbanr-cli
+	cd api && KANBANR_ALLOW_BARE_BUILD=1 cargo build --locked --release -p kanbanr-cli
 
 web:
-	cd web && npm install && npm run build
+	cd web && npm ci && npm run build
 
 # The standalone monitor bundle a release attaches (FEAT-178): web/dist with the standalone
 # config.json, packed and then checked as release.yml checks it. Packs the dist already built
@@ -93,7 +93,7 @@ codeql:
 # copy of Pele is that build (FEAT-203). A diagram that fails renders as nothing, which reads as a
 # missing image rather than an error.
 check-docs:
-	cd web && npm install && npm run check:docs
+	cd web && npm ci && npm run check:docs
 	tools/docs/sync.sh
 	git diff --exit-code -- docs/src/project/changelog.md \
 		|| { echo "docs/src/project/changelog.md was stale: synced — commit it" >&2; exit 1; }
@@ -101,7 +101,7 @@ check-docs:
 # Depends on `web`, because the monitor is compiled INTO the binary (FEAT-084): without the built
 # SPA present, build.rs embeds nothing and `kanbanr serve` would quietly have no web view.
 install-cli: web
-	cd api && cargo install --path crates/kanbanr-cli
+	cd api && cargo install --locked --path crates/kanbanr-cli
 	@echo "Installed 'kanbanr'. Set your commit identity once:"
 	@echo "  kanbanr identity --name \"You\" --email you@example.com"
 

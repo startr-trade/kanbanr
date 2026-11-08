@@ -107,20 +107,20 @@ jobs:
 
       - name: Clippy (ubuntu only)
         if: runner.os == 'Linux'
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --locked --workspace -- -D warnings
 
       # The read API's description is generated from the response types and committed (FEAT-177):
       # a response type that changed without the document being regenerated fails here.
       - name: The published OpenAPI matches the code
         if: runner.os == 'Linux'
-        run: cargo run -p kanbanr-core --features schema --example openapi -- --check
+        run: cargo run --locked -p kanbanr-core --features schema --example openapi -- --check
 
       # --- Tests: run on every OS in the matrix. ---
 
       # --no-fail-fast: every test binary runs even after one fails, so a platform's failures all
       # show in one run. Without it Windows revealed its failures one test binary per push.
       - name: Test
-        run: cargo test --workspace --no-fail-fast
+        run: cargo test --locked --workspace --no-fail-fast
 
   # A contribution states why it exists and proves each requirement with a green test
   # (CONTRIBUTING.md). The definition travels in the PR body, because a contributor has no board
@@ -146,7 +146,7 @@ jobs:
         # Only `kanbanr check` is needed here, not the monitor (FEAT-202).
         env:
           KANBANR_ALLOW_BARE_BUILD: "1"
-        run: cd api && cargo build --release -p kanbanr-cli
+        run: cd api && cargo build --locked --release -p kanbanr-cli
       - name: Check it against the bar
         run: ./api/target/release/kanbanr check --file definition.yaml
 
@@ -171,7 +171,7 @@ jobs:
       # Prefer a clean, lockfile-respecting install; fall back to a plain
       # install if the lockfile is out of sync with package.json.
       - name: Install dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Build
         run: npm run build
@@ -288,7 +288,7 @@ jobs:
         working-directory: api
         run: |
           set -eu
-          cargo tree -p kanbanr-cli -e normal -i rustls \
+          cargo tree --locked -p kanbanr-cli -e normal -i rustls \
             || { echo "::error::kanbanr-cli has no TLS backend — self-update and https webhooks cannot work" >&2; exit 1; }
 
       # Installing and checking are separate steps so `make ci` can run the check exactly as

@@ -83,7 +83,7 @@ jobs:
           # Reading the crate's own Cargo.toml returns the literal "version.workspace = true",
           # which compares unequal to every tag — a guard that refuses every valid release is
           # worse than none, and only running it caught that.
-          crate="$(cargo metadata --no-deps --format-version 1 --manifest-path api/Cargo.toml \
+          crate="$(cargo metadata --locked --no-deps --format-version 1 --manifest-path api/Cargo.toml \
             | python3 -c "import json,sys; m=json.load(sys.stdin); print(next(p['version'] for p in m['packages'] if p['name']=='kanbanr-cli'))")"
           if [ "$crate" != "$version" ]; then
             echo "::error::tag ${tag} names version ${version}, but the workspace builds ${crate}." >&2
@@ -179,7 +179,7 @@ jobs:
       - name: Build CLI
         env:
           KANBANR_GIT_SHA: ${{ github.sha }}
-        run: cargo build --release -p kanbanr-cli --target ${{ matrix.target }}
+        run: cargo build --locked --release -p kanbanr-cli --target ${{ matrix.target }}
 
       # The binary must be able to say which build it is. A release whose binaries report "unknown"
       # cannot be matched against the release page, which is the whole point of stamping it.

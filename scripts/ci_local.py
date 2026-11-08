@@ -238,7 +238,7 @@ def fresh_tree() -> None:
 
 def workspace_version() -> str:
     meta = subprocess.check_output(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=TREE / "api", text=True
+        ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], cwd=TREE / "api", text=True
     )
     import json
 

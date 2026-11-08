@@ -65,8 +65,8 @@ It needs Docker (for actionlint and PowerShell), an authenticated `gh`, `shellch
 
 ```bash
 cd api && cargo fmt --all --check          # formatting
-cd api && cargo clippy --workspace -- -D warnings   # lints (warnings are errors)
-cd api && cargo test --workspace
+cd api && cargo clippy --locked --workspace -- -D warnings   # lints (warnings are errors)
+cd api && cargo test --locked --workspace
 cd web && npm ci && npm run build          # web type-check + build
 ```
 
@@ -86,7 +86,7 @@ switching theme needs no re-render. `npm run check:docs` draws every diagram in 
 README and the skill with that Pele and fails on one it cannot draw.
 
 Pele is pinned to an exact version in `web/package.json`. To update it, change the pin, run
-`npm install` in `web/`, then `tools/docs/pele.sh` to copy its build into the book, and check every
+`npm ci` in `web/`, then `tools/docs/pele.sh` to copy its build into the book, and check every
 diagram again (`npm run check:docs`, and a look at the book and the monitor in light and dark).
 `check:docs` fails while the book's copy differs from the pinned package.
 
