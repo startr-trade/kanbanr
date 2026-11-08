@@ -252,6 +252,22 @@ v1.0.0 cannot go to main yet — nothing was changed:
   - items_finished (main): FEAT-001 would carry over — FEAT-001 carries over: … no sign-off 'release' — `kanbanr signoff FEAT-001 release`.
 ```
 
+### Chores
+
+A process can give a kind its own path. The built-in `togaf` process gives `chore` the path
+Vision → Implementation → Migration → Operations, skipping Business Arch and System Design. `kanbanr process show togaf` lists each kind's path under
+"Lighter paths".
+
+```bash
+kanbanr feature add --title "Pin the CI image" --milestone MS-001 --kind chore
+```
+
+A chore's first move off Vision asks the path's own conditions (`statement`, `goals`,
+`requirements`, and `ears` where the path lists it) as well as the entered stage's gate, so it still
+records why it exists and how it is verified. A move to a phase off the path is refused, and the
+message names the path. `approved` and the `release` sign-off stay in force; the `design` and `design-review` parts do not apply. An item whose kind is changed to `chore` while it's at a
+phase off the path keeps the ordinary transitions, so it is never stranded.
+
 ## Handing work to sub-agents
 
 A scope limits what an agent working in its own worktree may do, and kanbanr enforces it. Issue one

@@ -425,6 +425,7 @@ fn build_project_config(store: &Store, name: &str, body: &Value) -> Result<Proje
                 diagrams: Default::default(),
                 codes: Default::default(),
                 coverage: Vec::new(),
+                paths: Default::default(),
             }
         }
         None => {
@@ -506,7 +507,16 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         ),
         None => base.as_ref().map(|x| x.gates.clone()),
     };
-    let config = store.set_workflow_with_gates(
+    // Kind paths (FTR-019): null or absent means none, except that an applied process brings its own.
+    let paths: Option<BTreeMap<String, crate::config::KindPath>> =
+        match body.get("paths").filter(|v| !v.is_null()) {
+            Some(v) => Some(
+                serde_json::from_value(v.clone())
+                    .map_err(|e| CoreError::Unsupported(format!("invalid paths: {e}")))?,
+            ),
+            None => base.as_ref().map(|x| x.paths.clone()),
+        };
+    let config = store.set_workflow_with_paths(
         p,
         statuses,
         transitions,
@@ -515,6 +525,7 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         no_ops,
         terminals,
         gates,
+        paths,
     )?;
     // A process that works in sprints, releases or points brings that with it (FEAT-122); one that
     // does not leaves the project's cadence as it was.

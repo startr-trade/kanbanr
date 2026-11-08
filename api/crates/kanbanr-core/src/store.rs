@@ -1585,9 +1585,16 @@ impl Store {
         if !project.config.has_status(to) {
             return Err(CoreError::UnknownStatus(to.to_string()));
         }
-        let from = project.feature(code)?.status.clone();
-        if !project.config.transition_allowed(&from, to) {
+        let (from, kind) = {
+            let f = project.feature(code)?;
+            (f.status.clone(), f.kind.clone())
+        };
+        if !project
+            .config
+            .transition_allowed_for(&from, to, kind.as_deref())
+        {
             return Err(CoreError::TransitionNotAllowed {
+                via: project.config.path_note(code, &from, kind.as_deref()),
                 from,
                 to: to.to_string(),
             });
@@ -1716,12 +1723,28 @@ impl Store {
             return Ok(pass);
         }
         let gates = project.config.effective_gates();
-        let Some(gate) = gates.get(to) else {
+        // A kind's path (FTR-019): the method parts it leaves out are not asked of it, and its
+        // first move off the starting stage asks the path's own conditions as well.
+        let path = project.config.path_for(feature.kind.as_deref());
+        let mut gate = gates
+            .get(to)
+            .filter(|g| g.applies_to(feature.kind.as_deref()))
+            .cloned();
+        if let (Some(path), Some(gate)) = (path, gate.as_mut()) {
+            crate::method::strip_gate(gate, &path.method_off);
+        }
+        let first_move = feature.status == project.config.default_state;
+        if let Some(path) = path.filter(|p| first_move && p.stages.iter().any(|s| s == to)) {
+            let gate = gate.get_or_insert_with(Default::default);
+            for c in &path.requires {
+                if !gate.requires.contains(c) {
+                    gate.requires.push(c.clone());
+                }
+            }
+        }
+        let Some(gate) = gate else {
             return Ok(pass);
         };
-        if !gate.applies_to(feature.kind.as_deref()) {
-            return Ok(pass);
-        }
         // There are no goals to judge against without a charter, so the goal checks are left out.
         let goal_ids = charter.goal_ids();
         let known = (!no_charter).then_some(&goal_ids);
@@ -1800,8 +1823,9 @@ impl Store {
         let config = project.config.clone();
         let feature = project.feature_mut(code)?;
         let from = feature.status.clone();
-        if !config.transition_allowed(&from, to) {
+        if !config.transition_allowed_for(&from, to, feature.kind.as_deref()) {
             return Err(CoreError::TransitionNotAllowed {
+                via: config.path_note(code, &from, feature.kind.as_deref()),
                 from,
                 to: to.to_string(),
             });
@@ -2036,6 +2060,7 @@ impl Store {
         let config = project.config.clone();
         let f = project.feature(feature)?;
         let from = f.status.clone();
+        let kind = f.kind.clone();
         let done = f.all_tasks_completed();
 
         // Auto-complete the feature when every task (across all lists) is done — but NOT when
@@ -2051,7 +2076,7 @@ impl Store {
                 .find(|s| {
                     crate::graph::is_terminal_status(&config, s)
                         && !config.is_no_op(s)
-                        && config.transition_allowed(&from, s)
+                        && config.transition_allowed_for(&from, s, kind.as_deref())
                 })
                 .cloned()
         } else {
@@ -3026,10 +3051,40 @@ impl Store {
         terminal_states: Option<Vec<String>>,
         gates: Option<std::collections::BTreeMap<String, crate::config::Gate>>,
     ) -> Result<ProjectConfig> {
+        self.set_workflow_with_paths(
+            id,
+            statuses,
+            transitions,
+            default_state,
+            displayed_states,
+            no_op_states,
+            terminal_states,
+            gates,
+            None,
+        )
+    }
+
+    /// As [`Store::set_workflow_with_gates`], replacing the kind paths in the same write when
+    /// `paths` is given (FTR-019): a path names stages, so it is checked against the statuses it
+    /// arrives with.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_workflow_with_paths(
+        &self,
+        id: &str,
+        statuses: Vec<String>,
+        transitions: std::collections::BTreeMap<String, Vec<String>>,
+        default_state: Option<String>,
+        displayed_states: Option<Vec<String>>,
+        no_op_states: Option<Vec<String>>,
+        terminal_states: Option<Vec<String>>,
+        gates: Option<std::collections::BTreeMap<String, crate::config::Gate>>,
+        paths: Option<std::collections::BTreeMap<String, crate::config::KindPath>>,
+    ) -> Result<ProjectConfig> {
         let mut project = self.load(id)?;
         // The gates this workflow will have must name its statuses: the new ones when given, or
         // the ones already declared, which a change of statuses must not orphan.
         let gates = gates.unwrap_or_else(|| project.config.gates.clone());
+        let paths = paths.unwrap_or_else(|| project.config.paths.clone());
         let (workflow, problems) = crate::config::check_workflow(
             statuses,
             transitions,
@@ -3038,6 +3093,7 @@ impl Store {
             no_op_states,
             terminal_states,
             gates,
+            paths,
         );
         if let Some(problem) = problems.into_iter().next() {
             return Err(problem);
@@ -3047,6 +3103,7 @@ impl Store {
             return Err(CoreError::StatusInUse(old.clone(), *refs));
         }
         project.config.gates = workflow.gates;
+        project.config.paths = workflow.paths;
         project.config.statuses = workflow.statuses;
         project.config.transitions = workflow.transitions;
         project.config.default_state = workflow.default_state;

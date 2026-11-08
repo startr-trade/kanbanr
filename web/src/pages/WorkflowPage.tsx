@@ -5,8 +5,8 @@ import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
 import { conditionText } from "../types";
 import type { Gate, GitModelView, ProcessStatus } from "../types";
-import { cadenceSection, doctorWarning, gitModelRows, guardRows } from "../workflowSections";
-import type { CadenceSection, GuardRow, Row, Tone } from "../workflowSections";
+import { cadenceSection, doctorWarning, gitModelRows, guardRows, pathSections } from "../workflowSections";
+import type { CadenceSection, GuardRow, PathSection, Row, Tone } from "../workflowSections";
 
 /**
  * Read-only Workflow view (FEAT-039, FEAT-117). The per-project config is the single source of
@@ -95,6 +95,8 @@ export default function WorkflowPage() {
         )}
       </section>
 
+      <PathsView paths={pathSections(config)} />
+
       <CadenceView cadence={cadenceSection(project, config, sprints.data ?? [], releases.data ?? [])} />
 
       <section className="section">
@@ -159,6 +161,48 @@ function Facts({ rows }: { rows: Row[] }) {
         </div>
       ))}
     </dl>
+  );
+}
+
+/** The shorter path a kind takes through the stages, when the process gives one (FTR-019). */
+function PathsView({ paths }: { paths: PathSection[] }) {
+  if (paths.length === 0) return null;
+  return (
+    <section className="section">
+      <h2>Lighter paths</h2>
+      <p className="muted small">
+        An item of one of these kinds passes only the stages not struck through. The board's columns do not
+        change.
+      </p>
+      <div className="tiles">
+        {paths.map((p) => (
+          <div className="tile" key={p.kind}>
+            <div className="tile-title">{p.kind}</div>
+            <div className="tile-states">
+              {p.stages.map((s) =>
+                s.skipped ? (
+                  <span className="chip" key={s.name} title="not on this path">
+                    <s>{s.name}</s>
+                  </span>
+                ) : (
+                  <span className="chip done" key={s.name}>
+                    {s.name}
+                  </span>
+                ),
+              )}
+            </div>
+            {p.asks.length > 0 ? (
+              <p className="small">
+                The first move also asks: {p.asks.map(conditionText).join(", ")}
+              </p>
+            ) : null}
+            {p.leavesOut.length > 0 ? (
+              <p className="muted small">Leaves out: {p.leavesOut.join(", ")}</p>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

@@ -265,6 +265,22 @@ The item now counts as done for the sprint. `kanbanr check FEAT-001` says it is 
 which only the cut does. Your checkout stays on the item's branch, so switch back when you want the
 line.
 
+### Chores
+
+A process can give a kind its own path. The built-in `scrum` process gives `chore` the path
+Backlog → Ready → In Progress → Testing → Done → Released, skipping Review. `kanbanr process show scrum` lists each kind's path under
+"Lighter paths".
+
+```bash
+kanbanr feature add --title "Pin the CI image" --milestone MS-001 --kind chore
+```
+
+A chore's first move off Backlog asks the path's own conditions (`statement`, `goals`,
+`requirements`, and `ears` where the path lists it) as well as the entered stage's gate, so it still
+records why it exists and how it is verified. A move to a stage off the path is refused, and the
+message names the path. Ready still asks for the statement, goals, requirements and a size, and In Progress still asks for `approved` and the current sprint; the `design` and `design-review` parts do not apply. An item whose kind is changed to `chore` while it's at a
+stage off the path keeps the ordinary transitions, so it is never stranded.
+
 ## Handing work to sub-agents
 
 A scope limits what an agent working in its own worktree may do, and kanbanr enforces it. The agent

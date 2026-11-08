@@ -204,6 +204,22 @@ Your checkout stays on the item's branch, so switch back when you want the sprin
 also go past its gate with `--override "<reason>"`, and the reason stays on the item. Save it for real
 exceptions.
 
+### Chores
+
+A process can give a kind its own path. The built-in `agile` process gives `chore` the path
+Plan → Develop → Test → Released, skipping Design and Review. `kanbanr process show agile` lists each kind's path under
+"Lighter paths".
+
+```bash
+kanbanr feature add --title "Pin the CI image" --milestone MS-001 --kind chore
+```
+
+A chore's first move off Plan asks the path's own conditions (`statement`, `goals`,
+`requirements`, and `ears` where the path lists it) as well as the entered stage's gate, so it still
+records why it exists and how it is verified. A move to a stage off the path is refused, and the
+message names the path. The entered stage's gate still applies, `approved` included; the `design` and `design-review` parts do not apply. An item whose kind is changed to `chore` while it's at a
+stage off the path keeps the ordinary transitions, so it is never stranded.
+
 ## Releasing
 
 `kanbanr release promote v1.0.0 --plan` shows what a promotion would do and changes nothing.
