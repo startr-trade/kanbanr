@@ -526,7 +526,7 @@ pub fn sprint_start(
 // ---- merges driven by the board (FEAT-190) ------------------------------------------------------
 
 /// The local branches that name `code`, through the project's pattern or its `fix/` twin.
-fn item_branches(config: &ProjectConfig, facts: &BranchFacts, code: &str) -> Vec<String> {
+pub(crate) fn item_branches(config: &ProjectConfig, facts: &BranchFacts, code: &str) -> Vec<String> {
     facts
         .branches
         .keys()

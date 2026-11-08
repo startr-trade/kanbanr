@@ -352,9 +352,35 @@ pub struct Context {
     /// The board's git history, shared by every doc judged in this evaluation (DEF-022): opened
     /// and walked once, on the first doc. Make a new `Context` per evaluation; nothing outlives it.
     pub history: std::sync::Arc<crate::git::DocHistory>,
+    /// The code repository, when this surface has one (DEF-033): the repository docs an item lists
+    /// are judged against it. `None` holds `docs-folded` for items that list any.
+    pub code_repo: Option<std::path::PathBuf>,
+    /// The sprints and releases the line an item merges into is derived from; loaded only with a
+    /// code repository on a project that automates its git model.
+    pub sprints: Vec<crate::sprints::Sprint>,
+    pub releases: Vec<crate::releases::Release>,
+    /// The repository's branches, read once per evaluation on first use.
+    pub(crate) branches: std::sync::OnceLock<Option<crate::gitmodel::BranchFacts>>,
+    /// `cadence.main_branch`, when set.
+    pub(crate) main_branch: Option<String>,
 }
 
 impl Context {
+    /// The code repository's branches, read once; `None` without a repository or when it cannot
+    /// be read.
+    pub fn branch_facts(&self) -> Option<&crate::gitmodel::BranchFacts> {
+        self.branches
+            .get_or_init(|| {
+                let root = self.code_repo.as_deref()?;
+                let main = self
+                    .main_branch
+                    .clone()
+                    .unwrap_or_else(|| crate::coderepo::default_branch(root));
+                crate::coderepo::branch_facts(root, &main).ok()
+            })
+            .as_ref()
+    }
+
     /// Is `status` the build stage or a later one? With no build role declared, every stage is.
     pub fn builds(&self, status: &str) -> bool {
         self.build_onward
@@ -364,7 +390,35 @@ impl Context {
 
     /// The context of a project, read from its config and side files.
     pub fn load(store: &crate::Store, id: &str, config: &crate::ProjectConfig) -> Context {
+        Self::load_in(store, id, config, None)
+    }
+
+    /// [`Context::load`] with the project's code repository, when the surface has one (DEF-033).
+    pub fn load_in(
+        store: &crate::Store,
+        id: &str,
+        config: &crate::ProjectConfig,
+        repo: Option<&std::path::Path>,
+    ) -> Context {
+        let line_inputs = repo.is_some() && config.cadence.git_model;
         Context {
+            code_repo: repo.map(std::path::Path::to_path_buf),
+            main_branch: config
+                .cadence
+                .main_branch
+                .clone()
+                .filter(|m| !m.trim().is_empty()),
+            sprints: if line_inputs {
+                crate::sprints::load(store, id).unwrap_or_default()
+            } else {
+                Vec::new()
+            },
+            releases: if line_inputs {
+                crate::releases::load(store, id).unwrap_or_default()
+            } else {
+                Vec::new()
+            },
+            branches: Default::default(),
             unit: config.estimate_unit,
             active_sprint: if config.cadence.sprints {
                 crate::sprints::load(store, id)
@@ -1249,7 +1303,7 @@ pub fn affects_doc_key(path: &str) -> String {
 /// The docs an item declares that have not changed since it entered its stage (FEAT-180). An item
 /// that declares none passes — not every item touches an architecture doc; doctor says so when the
 /// next stage asks. A board with no history to judge by passes too: nothing can be shown either way.
-fn docs_updated_gaps(
+pub(crate) fn docs_updated_gaps(
     feature: &FeatureItem,
     docs: &std::path::Path,
     history: &crate::git::DocHistory,

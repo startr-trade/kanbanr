@@ -26,6 +26,7 @@ pub mod daylog;
 pub mod diagrams;
 pub mod dispatch;
 pub mod docs;
+pub mod docsbuilt;
 pub mod doctor;
 /// EARS classification and the ISO 25010 vocabulary, re-exported from the standalone
 /// `ears-classifier` crate. It carries nothing of kanbanr in it and is published on its own; this

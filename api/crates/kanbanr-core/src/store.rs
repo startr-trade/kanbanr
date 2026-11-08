@@ -335,7 +335,15 @@ impl Store {
                 .as_ref()
                 .is_some_and(|d| d.signoffs.iter().any(|s| !s.spec_rev.is_empty()))
         });
+        // `docs-folded` is held until the repository docs the spec's Design lists are built
+        // (DEF-033), which reads the spec.
+        let docs_folded = project
+            .config
+            .effective_gates()
+            .values()
+            .any(|g| g.signoffs.iter().any(|s| s == crate::method::DOCS_FOLDED));
         if pinned
+            || docs_folded
             || project
                 .config
                 .effective_gates()

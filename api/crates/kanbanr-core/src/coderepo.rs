@@ -492,6 +492,21 @@ pub fn changed_paths(root: &Path, from: &str, to: &str) -> Result<Vec<String>> {
         .collect())
 }
 
+/// The files `branch` changed since it left `line`: `git diff --name-only line...branch`, three
+/// dots, from the merge base (DEF-033). A `line` or `branch` that does not exist is an error.
+pub fn changed_files(root: &Path, line: &str, branch: &str) -> Result<std::collections::BTreeSet<String>> {
+    let range = format!("{line}...{branch}");
+    let out = git(
+        root,
+        &["diff", "--name-only", "--no-renames", "-z", &range, "--"],
+    )?;
+    Ok(out
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 /// The worktree that has `branch` checked out, if any. A branch checked out somewhere must be
 /// moved there, by git's merge or reset, or that worktree's files no longer match its branch.
 fn checked_out_in(root: &Path, branch: &str) -> Option<PathBuf> {
@@ -813,6 +828,24 @@ pub(crate) mod tests {
         std::fs::write(repo.join(file), content).unwrap();
         git(repo, &["add", file]).unwrap();
         git(repo, &["commit", "-q", "-m", message]).unwrap();
+    }
+
+    /// DEF-033 R-2: the files a branch changed since the merge base, not what the line gained
+    /// after the fork.
+    #[test]
+    fn changed_files_lists_what_a_branch_changed_since_the_merge_base() {
+        let repo = scratch_repo("changed-files");
+        git(&repo, &["checkout", "-q", "-b", "feat/x"]).unwrap();
+        commit_file(&repo, "branch.md", "b\n", "branch");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        commit_file(&repo, "main.md", "m\n", "main");
+        let files = changed_files(&repo, "main", "feat/x").unwrap();
+        assert_eq!(
+            files.into_iter().collect::<Vec<_>>(),
+            vec!["branch.md".to_string()]
+        );
+        assert!(changed_files(&repo, "nope", "feat/x").is_err());
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     /// FEAT-190: merging into a branch that is not checked out makes the merge commit without
