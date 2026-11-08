@@ -14,6 +14,7 @@ pub mod activity;
 pub mod adr;
 pub mod agentscope;
 mod architecture;
+pub mod atomic;
 pub mod batch;
 pub mod boardreadme;
 pub mod charter;
