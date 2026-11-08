@@ -1,5 +1,5 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -139,7 +139,7 @@ export const api = {
       { items: [code] },
       "plan into a release",
       `kanbanr release plan ${version} ${code}`,
-    ),
+    ) as Promise<PlannedRelease>,
   /** What cutting `version` now would ship and carry over, nothing written (FEAT-185). */
   getCutPreview: (id: string, version: string) =>
     getJson<CutPreview[]>(

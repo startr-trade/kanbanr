@@ -7,7 +7,7 @@ import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
 import { zachmanColumns } from "../types";
-import type { Adr, PendingReview } from "../types";
+import type { Adr, PendingReview, PlannedRelease } from "../types";
 import { approveBlocker, checkBlocks, type DiagramProblem } from "../diagramCheck";
 
 /**
@@ -22,6 +22,14 @@ import { approveBlocker, checkBlocks, type DiagramProblem } from "../diagramChec
  * offers the button only when the daemon accepts writes, because a button that fails on click is
  * worse than no button.
  */
+/** "planned into v1", and, when a sprint runs that the item is not in, the command that plans it in (DEF-029). */
+function plannedText(version: string, code: string, planned: PlannedRelease): string {
+  const out = planned.not_in_sprint?.find((o) => o.code === code);
+  return out
+    ? `planned into ${version}. ${code} is in no sprint and ${out.sprint} is running: kanbanr sprint plan ${out.sprint} ${code}`
+    : `planned into ${version}`;
+}
+
 export default function ReviewPage() {
   const { project = "" } = useParams();
   const tick = useLiveTick(api.projectEvents(project), 400);
@@ -102,8 +110,8 @@ export default function ReviewPage() {
     const code = item.code;
     setBusy(code);
     try {
-      await api.planIntoRelease(project, version, code);
-      setDone((d) => ({ ...d, [code]: `planned into ${version}` }));
+      const planned = await api.planIntoRelease(project, version, code);
+      setDone((d) => ({ ...d, [code]: plannedText(version, code, planned) }));
     } catch (e) {
       setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
     } finally {
@@ -117,8 +125,8 @@ export default function ReviewPage() {
     setBusy(code);
     try {
       await api.addRelease(project, version, target);
-      await api.planIntoRelease(project, version, code);
-      setDone((d) => ({ ...d, [code]: `planned into ${version}` }));
+      const planned = await api.planIntoRelease(project, version, code);
+      setDone((d) => ({ ...d, [code]: plannedText(version, code, planned) }));
     } catch (e) {
       setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
     } finally {

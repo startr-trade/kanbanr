@@ -466,6 +466,9 @@ export interface SprintReport extends Sprint {
 }
 
 /** A release, planned up front and cut from finished work (FEAT-120). */
+/** What `release plan` answers: the release, and the planned items that are in no running sprint (DEF-029). */
+export type PlannedRelease = Release & { not_in_sprint?: { code: string; sprint: string }[] };
+
 export interface Release {
   version: string;
   name?: string;
@@ -539,7 +542,7 @@ export interface GateResult {
 
 /** One condition of a release stage a promotion enters, and whether it holds (FEAT-212). */
 export interface PlanCondition {
-  check: "items_finished" | "prepared" | "main_at_release" | "pushed" | "gate_passed" | "tag_passed" | "items_merged" | "stage_passed";
+  check: "items_finished" | "prepared" | "main_at_release" | "pushed" | "gate_passed" | "tag_passed" | "items_merged" | "stage_passed" | "merged_items_ship";
   stage: string;
   holds: boolean;
   detail: string;

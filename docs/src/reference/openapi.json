@@ -2872,6 +2872,11 @@
             "const": "stage_passed",
             "description": "The release has been promoted into a stage a gate names in `after`. Only a plan names it\n(a gate lists `after`, not this), so it is not in `ALL`.",
             "type": "string"
+          },
+          {
+            "const": "merged_items_ship",
+            "description": "Every item planned into the release whose code is merged can ship: the cut would not carry\nmerged work away (DEF-029). Only a plan names it, so it is not in `ALL`.",
+            "type": "string"
           }
         ]
       },
