@@ -1996,7 +1996,12 @@ mod tests {
     #[test]
     fn a_person_outside_a_session_is_never_scoped() {
         let env = |set: Option<&'static str>| {
-            move |k: &str| (k == "CLAUDECODE").then(|| set).flatten().map(String::from)
+            move |k: &str| {
+                (k == "CLAUDECODE")
+                    .then_some(set)
+                    .flatten()
+                    .map(String::from)
+            }
         };
         assert_eq!(Caller::of_process_in(env(None)), Caller::Person);
         assert_eq!(Caller::of_process_in(env(Some(""))), Caller::Person);
@@ -2081,7 +2086,7 @@ mod tests {
         }
         assert_eq!(
             resolve_with(
-                &[live.clone()],
+                std::slice::from_ref(&live),
                 Some(&here),
                 Some(&ptr),
                 NOW,

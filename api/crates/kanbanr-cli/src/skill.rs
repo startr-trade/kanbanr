@@ -206,6 +206,35 @@ mod tests {
         d
     }
 
+    /// DEF-027 R-9: the skill tells the coordinator to stay in the project folder and look inside an
+    /// agent's worktree with `git -C`.
+    #[test]
+    fn skill_keeps_the_coordinator_out_of_agent_worktrees() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        let section = skill
+            .split("**Issue a scope before each sub-agent.**")
+            .nth(1)
+            .expect("the skill has the sub-agent scope section")
+            .split("\n## ")
+            .next()
+            .unwrap();
+        for want in [
+            "git -C",
+            "never `cd` into an agent",
+            "project folder",
+            "never restricts you",
+        ] {
+            assert!(
+                section.contains(want),
+                "the sub-agent section says {want:?}"
+            );
+        }
+    }
+
     /// FEAT-200 R-18: the skill tells Claude how to write diagrams that draw — quote flowchart
     /// labels, plain words in sequence messages, never `end` as an id, `kanbanr doctor` after — and
     /// what a `diagrams_valid` gate asks of it.

@@ -1631,7 +1631,10 @@ fn main() -> ExitCode {
 
 fn real_main() -> ExitCode {
     quiet_on_a_closed_pipe();
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    if is_identifying_hook(&cli.command) {
+        apply_hook_board(&mut cli);
+    }
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -2889,10 +2892,7 @@ fn run_claude(cli: &Cli, client: &Backend, cmd: &ClaudeCmd) -> anyhow::Result<()
 /// and never weighs the charter's prose. A guard that has to interpret is a guard that misfires,
 /// and one that misfires gets turned off (ADR-0004).
 fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
-    use std::io::Read;
-    let mut raw = String::new();
-    std::io::stdin().read_to_string(&mut raw)?;
-    let payload: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+    let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
     let path = payload["tool_input"]["file_path"]
         .as_str()
         .unwrap_or_default();
@@ -3558,6 +3558,71 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
     }
 }
 
+/// The hooks that tell a sub-agent from the coordinator, and so read their payload before the
+/// board is opened (DEF-027).
+fn is_identifying_hook(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Capture | Command::Git(GitCmd::Guard) | Command::Claude(ClaudeCmd::Guard)
+    )
+}
+
+/// A hook's stdin, read once: the board lookup and the hook itself both need it.
+static HOOK_STDIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+fn hook_stdin() -> String {
+    HOOK_STDIN
+        .get_or_init(|| {
+            use std::io::Read;
+            let mut raw = String::new();
+            let _ = std::io::stdin().read_to_string(&mut raw);
+            raw
+        })
+        .clone()
+}
+
+/// A hook finds its board from the folder it is registered for, not from the shell's working
+/// folder (DEF-027): the shell may stand in a worktree outside the repository, or one whose copy
+/// of the `.kanbanr` marker points nowhere. `--data-dir`, `--project` and the `KANBANR_*`
+/// variables still win.
+fn apply_hook_board(cli: &mut Cli) {
+    let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
+    let (data_dir, project) = hook_board_in(
+        &payload,
+        std::env::var("CLAUDE_PROJECT_DIR").ok(),
+        std::env::var("KANBANR_DATA_DIR").ok().as_deref(),
+        std::env::var("KANBANR_PROJECT").ok().as_deref(),
+        project::home_dir().as_deref(),
+    );
+    if cli.data_dir.is_none() {
+        cli.data_dir = data_dir.map(|d| d.display().to_string());
+    }
+    if cli.project.is_none() {
+        cli.project = project;
+    }
+}
+
+/// The data folder and project a hook belongs to, from the folder it is registered for. The data
+/// folder is named only when that folder's `.kanbanr` marker names one; otherwise the process's
+/// own lookup stands.
+fn hook_board_in(
+    payload: &Value,
+    project_dir: Option<String>,
+    env_data: Option<&str>,
+    env_project: Option<&str>,
+    home: Option<&Path>,
+) -> (Option<PathBuf>, Option<String>) {
+    let dir = hook_dir_in(payload, project_dir);
+    let resolved = project::resolve_data_dir_in(None, env_data, &dir, home);
+    let data = (resolved.source == project::DataDirSource::Marker).then_some(resolved.path);
+    let project = if env_project.is_some_and(|p| !p.is_empty()) {
+        None
+    } else {
+        project::resolve_project_in(None, None, &dir, home)
+    };
+    (data, project)
+}
+
 /// What the Bash guard decides about who is calling (DEF-027).
 #[derive(Debug, PartialEq, Eq)]
 enum GuardDecision {
@@ -3567,10 +3632,6 @@ enum GuardDecision {
 
 /// The folder a hook belongs to: the project folder Claude Code started the session in
 /// (`CLAUDE_PROJECT_DIR`, when it exists), else the payload's `cwd`, else this process's folder.
-fn hook_dir(payload: &Value) -> PathBuf {
-    hook_dir_in(payload, std::env::var("CLAUDE_PROJECT_DIR").ok())
-}
-
 fn hook_dir_in(payload: &Value, project_dir: Option<String>) -> PathBuf {
     project_dir
         .filter(|d| !d.is_empty())
@@ -3705,10 +3766,7 @@ fn coordinator_refusal(command: &str, base: &Path) -> Option<String> {
 ///
 /// `client` is the board of the folder the session runs in, or `None` where there is none.
 fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
-    use std::io::Read;
-    let mut raw = String::new();
-    std::io::stdin().read_to_string(&mut raw)?;
-    let payload: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+    let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
     // A heredoc's body is data handed to another program, not shell the guard should read
     // (FEAT-108): a script that merely documents `git commit … -n` was refused as a commit.
     let command = &without_heredoc_bodies(payload["tool_input"]["command"].as_str().unwrap_or(""));
@@ -5240,12 +5298,42 @@ fn project_head_rev() -> Option<String> {
 /// than by "whatever item is in progress" is what makes this trustworthy: it records what ran,
 /// not what someone meant to run, and it is silent when nothing it knows about ran.
 fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
-    use std::io::Read;
-    let mut raw = String::new();
-    std::io::stdin().read_to_string(&mut raw)?;
-    let payload: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
-    // The tool output lives in different places depending on the tool; take the lot as text.
-    let text = [
+    let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
+    let caller = kanbanr_core::agentscope::Caller::of_hook(&payload);
+    let cwd = payload["cwd"]
+        .as_str()
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default();
+    let text = capture_text(&payload);
+    if kanbanr_core::evidence::parse_results(&text).is_empty() {
+        return Ok(()); // not a test run, or nothing recognizable: stay quiet
+    }
+
+    let p = require_project(cli)?;
+    let project = get_project(client, &p)?;
+    // The tests ran in the payload's folder, and an agent's worktree has its own HEAD.
+    let rev = project::project_revision(&cwd, project::home_dir().as_deref());
+    let scope = process_scope_as(client, &cwd, caller);
+    let ops = capture_plan(&payload, &project, &scope, caller, rev.as_deref());
+    let n = ops.len();
+    let Some(batch) = kanbanr_core::evidence::capture_batch(ops) else {
+        return Ok(());
+    };
+    let path = format!("/projects/{p}/batch");
+    // The coordinator's run is recorded unscoped, whatever folder its shell stood in.
+    if caller == kanbanr_core::agentscope::Caller::Coordinator {
+        client.as_unscoped(|| client.write(Method::Post, &path, Some(batch)))?;
+    } else {
+        client.write(Method::Post, &path, Some(batch))?;
+    }
+    eprintln!("kanbanr: recorded {n} test result(s) from this run");
+    Ok(())
+}
+
+/// The tool output lives in different places depending on the tool; take the lot as text.
+fn capture_text(payload: &Value) -> String {
+    [
         payload["tool_response"]["stdout"].as_str(),
         payload["tool_response"]["stderr"].as_str(),
         payload["tool_response"]["output"].as_str(),
@@ -5254,32 +5342,33 @@ fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     .into_iter()
     .flatten()
     .collect::<Vec<_>>()
-    .join("\n");
-    let results = kanbanr_core::evidence::parse_results(&text);
-    if results.is_empty() {
-        return Ok(()); // not a test run, or nothing recognizable: stay quiet
-    }
+    .join("\n")
+}
 
-    let p = require_project(cli)?;
-    let project = get_project(client, &p)?;
-    let rev = project_head_rev();
-    let ops = kanbanr_core::evidence::plan_capture(&project, &results, rev.as_deref());
-    // Under an agent scope only its own item's evidence is recorded; an agent worktree with no
-    // valid scope records nothing (FEAT-214, D5).
-    let ops = match std::env::current_dir().map(|cwd| process_scope(client, &cwd)) {
-        Ok(kanbanr_core::agentscope::ProcessScope::Scoped(s)) => {
-            kanbanr_core::agentscope::retain_permitted(&s, ops).0
-        }
-        Ok(kanbanr_core::agentscope::ProcessScope::Refused { .. }) => return Ok(()),
-        _ => ops,
-    };
-    let n = ops.len();
-    let Some(batch) = kanbanr_core::evidence::capture_batch(ops) else {
-        return Ok(());
-    };
-    client.write(Method::Post, &format!("/projects/{p}/batch"), Some(batch))?;
-    eprintln!("kanbanr: recorded {n} test result(s) from this run");
-    Ok(())
+/// The board operations a test run earns (DEF-027): for the coordinator, every tracked test the
+/// output shows, whatever folder it ran in; for an agent, only its scope's own item, and nothing
+/// when its scope is dead or it has none. Pure.
+fn capture_plan(
+    payload: &Value,
+    project: &kanbanr_core::Project,
+    scope: &kanbanr_core::agentscope::ProcessScope,
+    caller: kanbanr_core::agentscope::Caller,
+    rev: Option<&str>,
+) -> Vec<Value> {
+    use kanbanr_core::agentscope::{Caller, ProcessScope};
+    let results = kanbanr_core::evidence::parse_results(&capture_text(payload));
+    if results.is_empty() {
+        return Vec::new();
+    }
+    let ops = kanbanr_core::evidence::plan_capture(project, &results, rev);
+    if caller != Caller::Agent {
+        return ops;
+    }
+    match scope {
+        ProcessScope::Scoped(s) => kanbanr_core::agentscope::retain_permitted(s, ops).0,
+        ProcessScope::Refused { .. } => Vec::new(),
+        ProcessScope::Unscoped => ops,
+    }
 }
 
 /// Check a definition that is not on a board (FEAT-052).
@@ -10538,6 +10627,28 @@ Refs: kanbanr:FEAT-082/R-1""#;
         assert_eq!(inline_message("git commit"), None);
     }
 
+    fn scope_for(item: &str, revoked: bool) -> kanbanr_core::agentscope::Scope {
+        kanbanr_core::agentscope::Scope {
+            id: "SC-001".into(),
+            project: "shop".into(),
+            role: kanbanr_core::agentscope::Role::Build,
+            item: item.into(),
+            operations: kanbanr_core::agentscope::Role::Build.operations(),
+            branch: Some("agent-1".into()),
+            base: None,
+            issued_by: "V".into(),
+            issued_at: "2099-01-01T00:00:00Z".into(),
+            expires_at: "2099-01-02T00:00:00Z".into(),
+            note: String::new(),
+            worktree: Some(".claude/worktrees/agent-1".into()),
+            claimed_at: Some("2099-01-01T00:01:00Z".into()),
+            revoked_at: revoked.then(|| "2099-01-01T01:00:00Z".to_string()),
+            revoked_by: revoked.then(|| "V".to_string()),
+            revoked_reason: revoked.then(|| "done".to_string()),
+            extra: Default::default(),
+        }
+    }
+
     /// A project folder with an agent's worktree under `.claude/worktrees`, and a board beside it
     /// holding one build scope bound to that worktree (revoked when `revoked`). Returns the
     /// project folder, the worktree and the board.
@@ -10572,25 +10683,7 @@ Refs: kanbanr:FEAT-082/R-1""#;
         let shop = board.join("projects").join("shop");
         std::fs::create_dir_all(&shop).unwrap();
         std::fs::write(shop.join("config.yaml"), "name: shop\n").unwrap();
-        let scope = kanbanr_core::agentscope::Scope {
-            id: "SC-001".into(),
-            project: "shop".into(),
-            role: kanbanr_core::agentscope::Role::Build,
-            item: "FEAT-001".into(),
-            operations: Vec::new(),
-            branch: Some("agent-1".into()),
-            base: None,
-            issued_by: "V".into(),
-            issued_at: "2099-01-01T00:00:00Z".into(),
-            expires_at: "2099-01-02T00:00:00Z".into(),
-            note: String::new(),
-            worktree: Some(".claude/worktrees/agent-1".into()),
-            claimed_at: Some("2099-01-01T00:01:00Z".into()),
-            revoked_at: revoked.then(|| "2099-01-01T01:00:00Z".to_string()),
-            revoked_by: revoked.then(|| "V".to_string()),
-            revoked_reason: revoked.then(|| "done".to_string()),
-            extra: Default::default(),
-        };
+        let scope = scope_for("FEAT-001", revoked);
         std::fs::write(
             shop.join("scopes.yaml"),
             kanbanr_core::yaml::to_string(&[scope]).unwrap(),
@@ -10727,5 +10820,126 @@ Refs: kanbanr:FEAT-082/R-1""#;
             assert!(matches!(d, GuardDecision::Deny(_)), "{c}: {d:?}");
         }
         let _ = std::fs::remove_dir_all(work.parent().unwrap());
+    }
+
+    /// A project with two items, each tracking one test.
+    fn capture_project() -> Project {
+        let mut p = Project {
+            id: "shop".into(),
+            config: kanbanr_core::ProjectConfig::default_for("shop"),
+            milestones: vec![],
+            features: vec![],
+        };
+        for (code, test) in [("FEAT-001", "cart::keeps"), ("FEAT-002", "pay::charges")] {
+            let def: kanbanr_core::models::FeatureDefinition =
+                kanbanr_core::yaml::from_str(&format!(
+                    "requirements:\n  - id: R-1\n    text: x\n    tests:\n      - name: {test}\n"
+                ))
+                .unwrap();
+            let f: kanbanr_core::FeatureItem = kanbanr_core::yaml::from_str(&format!(
+                "code: {code}\ntitle: t\nstatus: In Progress\nmilestone: MS-001\n\
+                 created_at: '2026-01-01T00:00:00Z'\nupdated_at: '2026-01-01T00:00:00Z'\n"
+            ))
+            .unwrap();
+            p.features.push(kanbanr_core::FeatureItem {
+                definition: Some(def),
+                ..f
+            });
+        }
+        p
+    }
+
+    fn test_run() -> Value {
+        json!({"tool_response": {"stdout": "test cart::keeps ... ok\ntest pay::charges ... ok\n"}, "cwd": "/x"})
+    }
+
+    fn build_scope(item: &str) -> kanbanr_core::agentscope::Scope {
+        scope_for(item, false)
+    }
+
+    /// DEF-027 R-6: a hook finds its board and project from the folder it is registered for, not
+    /// from the folder the shell stands in.
+    #[test]
+    fn capture_finds_its_board_from_the_project_folder() {
+        let tmp = std::env::temp_dir().join(format!("kanbanr-hookdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let (project_dir, elsewhere) = (tmp.join("shop"), tmp.join("elsewhere").join("wt"));
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(
+            project_dir.join(".kanbanr"),
+            format!("project: shop\ndata_dir: {}\n", tmp.join("board").display()),
+        )
+        .unwrap();
+        let payload = json!({"cwd": elsewhere});
+        let found =
+            |project_dir: Option<String>, env_data: Option<&str>, env_project: Option<&str>| {
+                hook_board_in(&payload, project_dir, env_data, env_project, None)
+            };
+        let dir = Some(project_dir.display().to_string());
+        let (data, name) = found(dir.clone(), None, None);
+        assert_eq!(data.as_deref(), Some(tmp.join("board").as_path()));
+        assert_eq!(name.as_deref(), Some("shop"));
+        // Without the registered folder, the payload's folder is what is left: no marker there.
+        let (data, _) = found(None, None, None);
+        assert_eq!(data, None);
+        // The variables still win.
+        let (data, name) = found(dir.clone(), Some("/mine"), Some("mine"));
+        assert_eq!((data, name), (None, None));
+        assert_eq!(hook_dir_in(&payload, dir), project_dir);
+        assert_eq!(
+            hook_dir_in(&payload, Some("/no/such/folder".into())),
+            elsewhere
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// DEF-027 R-6: the coordinator's run is recorded for every tracked test, whatever folder it ran
+    /// in and whatever scope that folder holds.
+    #[test]
+    fn capture_records_a_coordinators_run_in_a_worktree() {
+        use kanbanr_core::agentscope::{Caller, ProcessScope};
+        let p = capture_project();
+        let ops = capture_plan(
+            &test_run(),
+            &p,
+            &ProcessScope::Unscoped,
+            Caller::of_hook(&test_run()),
+            Some("abc"),
+        );
+        assert_eq!(ops.len(), 2, "{ops:?}");
+        // Even if the folder's scope is dead or another item's, the coordinator's run stands.
+        let refused = ProcessScope::Refused {
+            why: "x".into(),
+            may_claim: false,
+        };
+        assert_eq!(
+            capture_plan(&test_run(), &p, &refused, Caller::Coordinator, Some("abc")).len(),
+            2
+        );
+        let theirs = ProcessScope::Scoped(build_scope("FEAT-001"));
+        assert_eq!(
+            capture_plan(&test_run(), &p, &theirs, Caller::Coordinator, Some("abc")).len(),
+            2
+        );
+    }
+
+    /// DEF-027 R-6: an agent records only its own item's tests, and nothing once its scope is dead.
+    #[test]
+    fn capture_records_only_the_agents_own_item() {
+        use kanbanr_core::agentscope::{Caller, ProcessScope};
+        let p = capture_project();
+        let mut run = test_run();
+        run["agent_id"] = json!("a1");
+        assert_eq!(Caller::of_hook(&run), Caller::Agent);
+        let scope = ProcessScope::Scoped(build_scope("FEAT-001"));
+        let ops = capture_plan(&run, &p, &scope, Caller::Agent, Some("abc"));
+        assert_eq!(ops.len(), 1, "{ops:?}");
+        assert_eq!(ops[0]["test"], "cart::keeps");
+        let dead = ProcessScope::Refused {
+            why: "revoked".into(),
+            may_claim: false,
+        };
+        assert!(capture_plan(&run, &p, &dead, Caller::Agent, Some("abc")).is_empty());
     }
 }
