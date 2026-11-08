@@ -5451,7 +5451,11 @@ fn moving_an_item_into_a_promoted_release_sends_it_back_to_candidate() {
     // The release is at main (put there on the scratch board; promoting needs its items finished).
     let at_candidate = std::fs::read_to_string(&file).unwrap();
     assert!(at_candidate.contains("stage: candidate"), "{at_candidate}");
-    std::fs::write(&file, at_candidate.replacen("stage: candidate", "stage: main", 1)).unwrap();
+    std::fs::write(
+        &file,
+        at_candidate.replacen("stage: candidate", "stage: main", 1),
+    )
+    .unwrap();
     let said = ok(run_in(
         &base,
         &work,
@@ -5510,10 +5514,19 @@ fn moving_an_item_into_a_tagged_release_is_refused_before_merging() {
         err.contains("v1 is tagged at") && err.contains("release patch v1"),
         "{err}"
     );
-    assert_eq!(rev(&base, &work, "release/v1"), release_tip, "nothing merged");
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), yaml, "board untouched");
-    let shown = String::from_utf8_lossy(&run_in(&base, &work, &["feature", "show", "FEAT-002"]).stdout)
-        .to_string();
+    assert_eq!(
+        rev(&base, &work, "release/v1"),
+        release_tip,
+        "nothing merged"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        yaml,
+        "board untouched"
+    );
+    let shown =
+        String::from_utf8_lossy(&run_in(&base, &work, &["feature", "show", "FEAT-002"]).stdout)
+            .to_string();
     assert!(!shown.contains("Status:** Completed"), "{shown}");
     let _ = std::fs::remove_dir_all(&base);
 }

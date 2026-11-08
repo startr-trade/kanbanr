@@ -714,6 +714,34 @@ pub fn returned_steps(cadence: &Cadence, version: &str) -> Vec<String> {
     steps
 }
 
+/// A release sent back by a merge that has not been cut yet, as the plan shows it (DEF-031).
+/// Derived, never stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Returned {
+    /// The item whose merge sent it back.
+    pub item: String,
+    pub by: String,
+    pub at: String,
+    /// The stage it was at before.
+    pub from: String,
+    /// What to do from the first stage, in order (`returned_steps`).
+    pub steps: Vec<String>,
+}
+
+/// The newest stage change made by a merge, unless a later change entered the cut stage or one
+/// after it (`cut` is that stage's index): the release was cut since, so it is no longer returned.
+fn open_return<'a>(release: &'a Release, stages: &[String], cut: usize) -> Option<&'a StageChange> {
+    let at = release.stages.iter().rposition(|c| !c.item.is_empty())?;
+    let cut_since = release.stages[at + 1..].iter().any(|c| {
+        stages
+            .iter()
+            .position(|s| *s == c.stage)
+            .is_some_and(|i| i >= cut)
+    });
+    (!cut_since).then(|| &release.stages[at])
+}
+
 /// Refuse a merge into the branch of a release that is tagged and has not shipped (DEF-031): its
 /// tag names one commit and stays in git, so a change to it needs a patch release. Reads only.
 pub fn open_for_merge(store: &Store, id: &str, branch: &str) -> Result<()> {
@@ -1071,6 +1099,9 @@ pub struct ReleasePlan {
     /// The recorded CI result for the tag, once the release is tagged and not shipped (FTR-026).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<TagResult>,
+    /// The merge that sent the release back and the steps from there, until it is cut (DEF-031).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returned: Option<Returned>,
     /// What the one button says: "Promote to main", "Cut v0.2.1", "Promote to main again".
     pub button: String,
     pub conditions: Vec<PlanCondition>,
@@ -1429,6 +1460,43 @@ fn work_out(
         for a in &gate.after {
             if !afters.iter().any(|(x, _)| x == a) {
                 afters.push((a.clone(), name.clone()));
+            }
+        }
+    }
+    // A release sent back by a merge is not cut for a commit that main and the gate have not
+    // reached, whatever its stages require (DEF-031). The stage's own `requires` stay as they are.
+    let returned = open_return(&release, &stages, cut_stage).map(|c| {
+        let prior = release
+            .stages
+            .iter()
+            .position(|x| std::ptr::eq(x, c))
+            .and_then(|i| i.checked_sub(1))
+            .map(|i| release.stages[i].stage.clone())
+            .unwrap_or_default();
+        Returned {
+            item: c.item.clone(),
+            by: c.by.clone(),
+            at: c.at.clone(),
+            from: prior,
+            steps: returned_steps(cadence, version),
+        }
+    });
+    if returned.is_some() && entered.contains(&cut_stage) {
+        let tag_stage = gates[cut_stage].0.clone();
+        let holds_main = gates
+            .iter()
+            .any(|(_, g)| g.on_enter.contains(&ReleaseAction::MoveMain));
+        let mut add = Vec::new();
+        if holds_main {
+            add.push(ReleaseCheck::MainAtRelease);
+            add.push(ReleaseCheck::Pushed);
+        }
+        if !cadence.commit_gates.is_empty() {
+            add.push(ReleaseCheck::GatePassed);
+        }
+        for c in add {
+            if !requires.iter().any(|(x, _)| *x == c) {
+                requires.push((c, tag_stage.clone()));
             }
         }
     }
@@ -2242,6 +2310,7 @@ fn work_out(
         confirm,
         ships,
         tag: tag_result(store, id, cadence, &release),
+        returned: returned.clone(),
         button,
         ready: missing.is_empty(),
         missing,
@@ -5081,8 +5150,15 @@ mod tests {
         r.stage = at.clone();
         super::save(&store, "shop", &all).unwrap();
         let before = super::load(&store, "shop").unwrap();
-        super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), "# v0.2.0\n\nMore.\n", "Ada")
-            .unwrap();
+        super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            "# v0.2.0\n\nMore.\n",
+            "Ada",
+        )
+        .unwrap();
         assert_eq!(super::load(&store, "shop").unwrap(), before);
         let r = before.iter().find(|r| r.version == "v0.2.0").unwrap();
         assert_eq!(r.stage, at);
@@ -5625,9 +5701,8 @@ mod tests {
     #[test]
     fn send_back_leaves_a_candidate_a_shipped_release_and_a_release_without_a_stage() {
         let (store, dir, repo) = staged("def031-noop", STAGED);
-        let bytes = |store: &Store| {
-            std::fs::read_to_string(super::path(store, "shop")).unwrap_or_default()
-        };
+        let bytes =
+            |store: &Store| std::fs::read_to_string(super::path(store, "shop")).unwrap_or_default();
         let none = bytes(&store);
         assert!(
             super::send_back(&store, "shop", "v1", "DEF-030", "Ada")
@@ -5676,6 +5751,69 @@ mod tests {
         );
         // Another branch is open.
         assert!(super::open_for_merge(&store, "shop", "main").is_ok());
+        clean(&dir, &repo);
+    }
+
+    /// DEF-031 R-4: the plan of a release sent back names the item and the steps, until it is cut.
+    #[test]
+    fn the_plan_of_a_returned_release_names_the_item_and_the_steps() {
+        let (store, dir, repo) = staged("def031-plan", STAGED);
+        with_remote(&repo);
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        assert!(
+            plan_to(&store, &repo, "tag").returned.is_none(),
+            "not sent back"
+        );
+        super::send_back(&store, "shop", "v1", "DEF-030", "Ada").unwrap();
+        let plan = plan_to(&store, &repo, "main");
+        let r = plan.returned.expect("sent back");
+        assert_eq!(
+            (r.item.as_str(), r.by.as_str(), r.from.as_str()),
+            ("DEF-030", "Ada", "main")
+        );
+        assert!(r.steps.iter().any(|s| s == "Cut v1") && !r.at.is_empty());
+        // Cut: the plan stops naming it.
+        let tip = coderepo::rev_parse(&repo, "release/v1").unwrap();
+        plain_git(&repo, &["push", "-q", "origin", "main"]);
+        now_result(&store, &tip, true);
+        go(&store, &repo, "tag");
+        assert!(plan_to(&store, &repo, "tag").returned.is_none(), "cut");
+        clean(&dir, &repo);
+    }
+
+    /// DEF-031 R-7: the cut of a returned release needs main at the tip, a push and the gate,
+    /// whatever its stages require.
+    #[test]
+    fn a_returned_release_needs_main_and_a_push_before_the_cut_whatever_its_stages_say() {
+        use crate::releasegates::ReleaseCheck as C;
+        let (store, dir, repo) = staged("def031-cut", STAGED);
+        with_remote(&repo);
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        // Not sent back: the tag stage requires nothing, so the cut is ready.
+        let held =
+            |p: &super::ReleasePlan, c: C| p.conditions.iter().find(|x| x.check == c).cloned();
+        let plain = plan_to(&store, &repo, "tag");
+        assert!(plain.ready, "{:#?}", plain.conditions);
+        assert!(held(&plain, C::Pushed).is_none() && held(&plain, C::GatePassed).is_none());
+        // The fix is merged into the release branch, after main held it.
+        on_release(&repo, "release/v1", "fix", "fixed\n");
+        super::send_back(&store, "shop", "v1", "DEF-030", "Ada").unwrap();
+        let plan = plan_to(&store, &repo, "tag");
+        assert!(!plan.ready, "{:#?}", plan.conditions);
+        assert!(held(&plan, C::MainAtRelease).is_some_and(|c| c.holds && c.stage == "tag"));
+        assert!(held(&plan, C::Pushed).is_some_and(|c| !c.holds));
+        assert!(held(&plan, C::GatePassed).is_some_and(|c| !c.holds));
+        assert!(super::promote(&store, "shop", "v1", Some("tag"), "Ada", "", Some(&repo)).is_err());
+        assert!(!coderepo::tag_exists(&repo, "v1"));
+        // Promoted to main again, pushed and green: ready.
+        go(&store, &repo, "main");
+        let tip = coderepo::rev_parse(&repo, "release/v1").unwrap();
+        plain_git(&repo, &["push", "-q", "origin", "main"]);
+        now_result(&store, &tip, true);
+        let plan = plan_to(&store, &repo, "tag");
+        assert!(plan.ready, "{:#?}", plan.missing);
         clean(&dir, &repo);
     }
 
