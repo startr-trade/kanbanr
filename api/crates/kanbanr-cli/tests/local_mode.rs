@@ -4058,6 +4058,152 @@ fn signoff_release_says_the_item_waits_for_the_cut() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A TOGAF board with the charter adopted, a release v1.0.0 with stages candidate and production,
+/// and one item per entry of `stages`, each planned into v1.0.0 and walked there with an override
+/// (a fixture: no gate is the subject). Returns the item codes.
+fn togaf_release_board(
+    base: &std::path::Path,
+    work: &std::path::Path,
+    stages: &[&str],
+) -> Vec<String> {
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    // The test's own board, never the repository's.
+    assert!(work.starts_with(std::env::temp_dir()));
+    ok(git_in(base, work, &["init", "-q", "-b", "main"]));
+    ok(git_in(base, work, &["config", "user.name", "T"]));
+    ok(git_in(base, work, &["config", "user.email", "t@x"]));
+    std::fs::write(work.join("app.txt"), "v0\n").unwrap();
+    ok(git_in(base, work, &["add", "app.txt"]));
+    ok(git_in(base, work, &["commit", "-q", "-m", "[no-ref] base"]));
+    let init = [
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ];
+    ok(run_in(base, work, &init));
+    ok(run_in(
+        base,
+        work,
+        &["config", "workflow", "--preset", "togaf"],
+    ));
+    let charter = base.join("charter.yaml");
+    std::fs::write(
+        &charter,
+        "purpose: p\ngoals:\n  - statement: g\n    measure: m\n",
+    )
+    .unwrap();
+    ok(run_in(
+        base,
+        work,
+        &["charter", "set", "--file", charter.to_str().unwrap()],
+    ));
+    ok(run_in(
+        base,
+        work,
+        &["config", "cadence", "--releases", "on"],
+    ));
+    ok(run_in(
+        base,
+        work,
+        &[
+            "config",
+            "cadence",
+            "--release-stages",
+            "candidate,production",
+        ],
+    ));
+    ok(run_in(base, work, &["release", "add", "v1.0.0"]));
+    ok(run_in(
+        base,
+        work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    let mut codes = Vec::new();
+    for (n, stage) in stages.iter().enumerate() {
+        let made = ok(run_in(
+            base,
+            work,
+            &[
+                "--json",
+                "feature",
+                "add",
+                "--title",
+                &format!("Item {n}"),
+                "--milestone",
+                "MS-001",
+            ],
+        ));
+        let made: serde_json::Value = serde_json::from_slice(&made.stdout).unwrap();
+        let code = made["code"].as_str().unwrap().to_string();
+        for phase in [
+            "Business Arch",
+            "System Design",
+            "Implementation",
+            "Migration",
+        ] {
+            ok(run_in(
+                base,
+                work,
+                &["move", &code, phase, "--override", "fixture"],
+            ));
+            if phase == *stage {
+                break;
+            }
+        }
+        ok(run_in(base, work, &["release", "plan", "v1.0.0", &code]));
+        codes.push(code);
+    }
+    codes
+}
+
+/// DEF-029 R-1: promoting into the stage that tags is refused while an item whose code is merged
+/// would be carried over; the refusal names it, the sign-off it lacks and the way out, and nothing
+/// moves. Unfinished work does not hold the promotion.
+#[test]
+fn release_promote_names_the_merged_item_and_what_it_lacks() {
+    let (base, work) = togaf_scratch("held-merged");
+    let codes = togaf_release_board(&base, &work, &["Migration", "Implementation"]);
+    let (merged, early) = (&codes[0], &codes[1]);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "candidate"],
+    ));
+    let held = run_in(
+        &base,
+        &work,
+        &["release", "promote", "v1.0.0", "production"],
+    );
+    assert!(!held.status.success(), "the promotion is held");
+    let said = String::from_utf8_lossy(&held.stderr).to_string();
+    assert!(said.contains(merged.as_str()), "{said}");
+    assert!(!said.contains(early.as_str()), "{said}");
+    assert!(said.contains("release"), "names the sign-off: {said}");
+    assert!(said.contains("Review page"), "{said}");
+    assert!(said.contains(&format!("kanbanr check {merged}")), "{said}");
+    let rel = release_json(&base, &work, "v1.0.0");
+    assert_eq!(rel["state"], "planned", "{rel}");
+    assert_eq!(rel["stage"], "candidate", "{rel}");
+    assert!(
+        !git_in(&base, &work, &["tag", "-l", "v1.0.0"])
+            .stdout
+            .iter()
+            .any(|_| true),
+        "no tag was made"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// The commit a name points at in the scratch repository, or "" when it names none.
 fn rev(base: &std::path::Path, work: &std::path::Path, name: &str) -> String {
     let o = git_in(base, work, &["rev-parse", "--verify", "--quiet", name]);
