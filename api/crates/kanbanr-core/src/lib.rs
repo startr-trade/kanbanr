@@ -2365,6 +2365,104 @@ requirements:
         sign().unwrap();
     }
 
+    /// FTR-013: a `docs-folded` board whose work is done, with a doc that names `--since` (listed
+    /// by its front matter), and a code repository where the item changed `--since` after the doc
+    /// was last written. Returns the board, its folder, the item's code and the code repository.
+    fn drift_board() -> (Store, tempdir::TempDirLike, String, std::path::PathBuf) {
+        use crate::docdrift::testkit::{code_commit, git_env, scratch};
+        let (store, d, code, list) = docs_folded_board();
+        crate::git::ensure_repo_as(&d.path, Some(("Ada", "ada@example.com")));
+        store
+            .write_doc(
+                "demo",
+                "design/data.md",
+                &format!("---\nitems: [{code}]\n---\n\n# Data\n\nRun with --since.\n"),
+            )
+            .unwrap();
+        assert!(crate::git::commit(
+            &d.path,
+            "Ada",
+            "ada@example.com",
+            "board"
+        ));
+        complete_first_task(&store, &code, &list);
+        let repo = scratch("lib-code");
+        git_env(&repo, &["init", "-q", "-b", "main"], None);
+        code_commit(
+            &repo,
+            "src/a.rs",
+            "let a = \"--since\";\n",
+            &format!("add\n\nRefs: kanbanr:{code}"),
+            "2099-01-01T00:00:00+00:00",
+        );
+        (store, d, code, repo)
+    }
+
+    fn sign_docs_folded(
+        store: &Store,
+        code: &str,
+        repo: &std::path::Path,
+        checked: serde_json::Value,
+    ) -> crate::Result<String> {
+        crate::dispatch::dispatch_in(
+            store,
+            "POST",
+            &format!("/projects/demo/features/{code}/signoff/docs-folded"),
+            Some(&serde_json::json!({"by": "Ada L", "checked": checked})),
+            Some(repo),
+        )
+    }
+
+    /// FTR-013 R-5: `docs-folded` is accepted only when the request records, for each flagged
+    /// text, that it was confirmed or a correction was filed.
+    #[test]
+    fn signing_off_docs_folded_needs_each_flagged_text_confirmed_or_corrected() {
+        use serde_json::json;
+        let (store, _d, code, repo) = drift_board();
+        let current = || {
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&code)
+                .unwrap()
+                .signoff_current("docs-folded")
+                .cloned()
+        };
+        let err = sign_docs_folded(&store, &code, &repo, json!([]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("doc:design/data.md"), "{err}");
+        assert!(current().is_none());
+
+        let err = sign_docs_folded(
+            &store,
+            &code,
+            &repo,
+            json!([{"target": "doc:design/data.md", "outcome": "corrected"}]),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("needs its code"), "{err}");
+
+        sign_docs_folded(
+            &store,
+            &code,
+            &repo,
+            json!([
+                {"target": "doc:design/data.md", "outcome": "corrected", "correction": "DEF-040"},
+                {"target": "doc:design/gone.md", "outcome": "confirmed"}
+            ]),
+        )
+        .unwrap();
+        let recorded = current().unwrap();
+        assert_eq!(
+            recorded.checked.len(),
+            1,
+            "a text no longer flagged is dropped"
+        );
+        assert_eq!(recorded.checked[0].correction, "DEF-040");
+    }
+
     /// DEF-033 R-6: a `docs-folded` sign-off given before the check existed stays recorded and
     /// counted, and reading the board does not rewrite it.
     #[test]

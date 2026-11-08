@@ -691,6 +691,18 @@ pub struct Target {
     pub path: String,
 }
 
+impl Target {
+    /// How a sign-off names this text: `doc:<path>`, `adr:<id>` or `item:<CODE>`.
+    pub fn key(&self) -> String {
+        let kind = match self.kind {
+            TargetKind::Doc => "doc",
+            TargetKind::Adr => "adr",
+            TargetKind::Item => "item",
+        };
+        format!("{kind}:{}", self.id)
+    }
+}
+
 /// A linked text and why it is linked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Linked {
@@ -972,10 +984,80 @@ pub fn flags_for_changes(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod testkit {
     use super::*;
     use std::path::PathBuf;
     use std::process::Command;
+
+    // ---- repository fixtures ----
+
+    pub(crate) fn scratch(tag: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "kanbanr-docdrift-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    pub(crate) fn git_env(dir: &Path, args: &[&str], date: Option<&str>) -> String {
+        let mut cmd = Command::new("git");
+        cmd.args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null");
+        if let Some(d) = date {
+            cmd.env("GIT_COMMITTER_DATE", d).env("GIT_AUTHOR_DATE", d);
+        }
+        let out = cmd.output().unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    pub(crate) fn code_commit(dir: &Path, file: &str, body: &str, msg: &str, date: &str) {
+        let path = dir.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, body).unwrap();
+        git_env(dir, &["add", "-A"], None);
+        git_env(dir, &["commit", "-q", "-m", msg], Some(date));
+    }
+
+    pub(crate) fn board(tag: &str) -> (Store, PathBuf) {
+        let dir = scratch(tag);
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        (store, dir)
+    }
+
+    pub(crate) fn commit_board(dir: &Path) {
+        assert!(crate::git::commit(dir, "Ada", "ada@example.com", "board"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testkit::*;
+    use super::*;
+    use std::path::PathBuf;
 
     fn name(kind: NameKind, text: &str) -> Name {
         Name::new(kind, text)
@@ -1246,52 +1328,6 @@ mod tests {
         assert_eq!(lines("drift"), vec![8]);
     }
 
-    // ---- repository fixtures ----
-
-    pub(super) fn scratch(tag: &str) -> PathBuf {
-        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "kanbanr-docdrift-{tag}-{}-{}",
-            std::process::id(),
-            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    pub(super) fn git_env(dir: &Path, args: &[&str], date: Option<&str>) -> String {
-        let mut cmd = Command::new("git");
-        cmd.args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
-            .args([
-                "-c",
-                "commit.gpgsign=false",
-                "-c",
-                "core.hooksPath=/dev/null",
-            ])
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null");
-        if let Some(d) = date {
-            cmd.env("GIT_COMMITTER_DATE", d).env("GIT_AUTHOR_DATE", d);
-        }
-        let out = cmd.output().unwrap();
-        assert!(
-            out.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    }
-
-    fn code_commit(dir: &Path, file: &str, body: &str, msg: &str, date: &str) {
-        let path = dir.join(file);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, body).unwrap();
-        git_env(dir, &["add", "-A"], None);
-        git_env(dir, &["commit", "-q", "-m", msg], Some(date));
-    }
-
     /// FTR-013 R-1: only the non-merge commits whose Refs trailer names the item.
     #[test]
     fn item_changes_come_from_commits_that_reference_the_item() {
@@ -1384,23 +1420,6 @@ mod tests {
         assert!(valid_since("2026-11-01"));
         assert!(!valid_since("--x"));
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    pub(super) fn board(tag: &str) -> (Store, PathBuf) {
-        let dir = scratch(tag);
-        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
-        let store = Store::new(dir.clone());
-        store
-            .init_project("demo", crate::ProjectConfig::default_for("demo"))
-            .unwrap();
-        store
-            .add_milestone("demo", "M", "", vec![], Some("M".into()))
-            .unwrap();
-        (store, dir)
-    }
-
-    pub(super) fn commit_board(dir: &Path) {
-        assert!(crate::git::commit(dir, "Ada", "ada@example.com", "board"));
     }
 
     /// FTR-013 R-2: the five sources, each target once with its reasons.
@@ -1594,7 +1613,7 @@ mod tests {
 
 #[cfg(test)]
 mod perf {
-    use super::tests::{board, commit_board, git_env, scratch};
+    use super::testkit::{board, commit_board, git_env, scratch};
     use super::*;
     use std::process::Command;
 

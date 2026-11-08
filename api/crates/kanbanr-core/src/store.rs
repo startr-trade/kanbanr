@@ -1473,6 +1473,23 @@ impl Store {
         doc: &str,
         origin: &str,
     ) -> Result<(FeatureItem, Option<String>)> {
+        self.signoff_feature_checked_as(id, code, signoff, by, note, doc, origin, &[])
+    }
+
+    /// As [`Store::signoff_feature_reported_as`], recording the flagged texts the person settled
+    /// (FTR-013).
+    #[allow(clippy::too_many_arguments)]
+    pub fn signoff_feature_checked_as(
+        &self,
+        id: &str,
+        code: &str,
+        signoff: &str,
+        by: &str,
+        note: &str,
+        doc: &str,
+        origin: &str,
+        checked: &[crate::models::Checked],
+    ) -> Result<(FeatureItem, Option<String>)> {
         let signoff = signoff.trim();
         if signoff.is_empty() {
             return Err(CoreError::Unsupported(
@@ -1519,6 +1536,7 @@ impl Store {
             doc: doc.trim().to_string(),
             status,
             origin: origin.to_string(),
+            checked: checked.to_vec(),
             ..Default::default()
         });
         feature.updated_at = at;
