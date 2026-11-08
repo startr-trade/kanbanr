@@ -625,6 +625,14 @@ pub struct NextGate {
     pub warnings: Vec<Gap>,
     /// The sign-offs this gate still needs, by name, so a surface can offer to record them.
     pub signoffs_needed: Vec<String>,
+    /// Sign-offs withheld because the work they confirm is not built (DEF-033): one gap per
+    /// unbuilt document. Only Claude can build them, so they are not "for you".
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub signoffs_held: Vec<Gap>,
+    /// What `docs-folded` was judged against, when it was asked (not serialized).
+    #[serde(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    pub docs_built: Option<crate::docsbuilt::DocsBuilt>,
 }
 
 /// What one item is missing, and what its next stage asks (FEAT-112, FEAT-117):
@@ -644,6 +652,16 @@ pub struct ReadinessView {
 
 impl ReadinessView {
     pub fn load(store: &crate::Store, p: &str, code: &str) -> crate::Result<Self> {
+        Self::load_in(store, p, code, None)
+    }
+
+    /// [`ReadinessView::load`] with the code repository, when the surface has one (DEF-033).
+    pub fn load_in(
+        store: &crate::Store,
+        p: &str,
+        code: &str,
+        repo: Option<&std::path::Path>,
+    ) -> crate::Result<Self> {
         let project = store.load_for_gates(p)?;
         let feature = project.feature(code)?;
         let charter = crate::charter::load(store, p)?;
@@ -656,7 +674,7 @@ impl ReadinessView {
                 &project,
                 Some(&charter),
                 feature,
-                &Context::load(store, p, &project.config),
+                &Context::load_in(store, p, &project.config, repo),
             ),
         })
     }
@@ -699,9 +717,18 @@ pub struct ProjectReadiness(pub Vec<(String, CardReadiness)>);
 
 impl ProjectReadiness {
     pub fn load(store: &crate::Store, p: &str) -> crate::Result<Self> {
+        Self::load_in(store, p, None)
+    }
+
+    /// [`ProjectReadiness::load`] with the code repository, when the surface has one (DEF-033).
+    pub fn load_in(
+        store: &crate::Store,
+        p: &str,
+        repo: Option<&std::path::Path>,
+    ) -> crate::Result<Self> {
         let project = store.load_for_gates(p)?;
         let charter = crate::charter::load(store, p)?;
-        let ctx = Context::load(store, p, &project.config);
+        let ctx = Context::load_in(store, p, &project.config, repo);
         Ok(Self(
             project
                 .features
@@ -842,14 +869,28 @@ pub fn next_gates(
                 to,
             ));
             let mut gaps = requires_gaps.clone();
-            let signoffs = signoff_gaps(feature, &gate.signoffs);
-            let signoffs_needed = gate
+            let mut signoffs = signoff_gaps(feature, &gate.signoffs);
+            let mut signoffs_needed: Vec<String> = gate
                 .signoffs
                 .iter()
                 .filter(|name| feature.signoff_current(name).is_none())
                 .cloned()
                 .collect();
+            // `docs-folded` is offered only once the documents it confirms are built (DEF-033).
+            let mut signoffs_held = Vec::new();
+            let mut docs_built = None;
+            if signoffs_needed.iter().any(|n| n == crate::method::DOCS_FOLDED) {
+                let built = crate::docsbuilt::evaluate(project, feature, ctx);
+                if !built.is_built() {
+                    signoffs_needed.retain(|n| n != crate::method::DOCS_FOLDED);
+                    let named = format!("'{}'", crate::method::DOCS_FOLDED);
+                    signoffs.retain(|g| !(g.check == Check::Signoff && g.label.contains(&named)));
+                    signoffs_held = built.gaps();
+                }
+                docs_built = Some(built);
+            }
             gaps.extend(signoffs);
+            gaps.extend(signoffs_held.iter().cloned());
             Some(NextGate {
                 status: to.clone(),
                 purpose: gate.purpose.clone(),
@@ -858,9 +899,39 @@ pub fn next_gates(
                 requires_gaps,
                 warnings: evaluate_entering(feature, goal_ids.as_ref(), &gate.warns, ctx, to),
                 signoffs_needed,
+                signoffs_held,
+                docs_built,
             })
         })
         .collect()
+}
+
+/// Why `name` is held back from the person, if it is (DEF-033): `Some(sentence)` naming the
+/// unbuilt documents when `name` is `docs-folded`, the item's immediate next gate asks for it and
+/// the item's documents are not built. Any other name, a gate that does not ask for it and an
+/// item not at such a stage are never refused.
+pub fn signoff_hold(
+    project: &crate::store::Project,
+    feature: &FeatureItem,
+    ctx: &Context,
+    name: &str,
+) -> Option<String> {
+    if name != crate::method::DOCS_FOLDED {
+        return None;
+    }
+    let next = immediate_next_gate(project, None, feature, ctx)?;
+    if next.signoffs_held.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{} cannot be signed off '{name}' yet: its documents are not built ({})",
+        feature.code,
+        next.signoffs_held
+            .iter()
+            .map(|g| g.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ")
+    ))
 }
 
 /// The gate of the stage an item reaches next in the workflow's own order (FEAT-182): of the
@@ -1804,6 +1875,53 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(1100));
     }
 
+    /// DEF-033 R-4: the next gate holds `docs-folded` while a listed document is unbuilt, names
+    /// it, counts nothing "for you", and leaves the other sign-offs alone.
+    #[test]
+    fn next_gate_holds_docs_folded_and_names_the_unbuilt_documents() {
+        let (store, dir, code) = docs_board("held");
+        next_second();
+        let gate = crate::config::Gate {
+            signoffs: vec!["design-review".into(), "docs-folded".into()],
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Scheduled".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        let next = |store: &crate::Store| {
+            let project = store.load_for_gates("demo").unwrap();
+            let ctx = Context::load(store, "demo", &project.config);
+            let f = project.feature(&code).unwrap();
+            (
+                next_gates(&project, None, f, &ctx),
+                signoff_hold(&project, f, &ctx, "docs-folded"),
+                signoff_hold(&project, f, &ctx, "design-review"),
+            )
+        };
+        let (gates, hold, other) = next(&store);
+        assert_eq!(gates[0].signoffs_needed, vec!["design-review".to_string()]);
+        assert_eq!(gates[0].signoffs_held.len(), 1, "{gates:?}");
+        assert!(gates[0].signoffs_held[0].message.contains("architecture/data.md"));
+        assert!(gates[0].gaps.iter().any(|g| g.label == "docs not built"));
+        assert!(hold.unwrap().contains("architecture/data.md"));
+        assert!(other.is_none());
+        let card = ProjectReadiness::load(&store, "demo").unwrap();
+        let n = &card.0.iter().find(|(c, _)| c == &code).unwrap().1.next[0];
+        assert_eq!(n.for_you, 1, "only design-review is for the person");
+
+        // Folded in: the sign-off is offered.
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv2\n")
+            .unwrap();
+        let (gates, hold, _) = next(&store);
+        assert_eq!(
+            gates[0].signoffs_needed,
+            vec!["design-review".to_string(), "docs-folded".to_string()]
+        );
+        assert!(gates[0].signoffs_held.is_empty() && hold.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// FEAT-205 R-1: a card's next stage names the sign-offs it still needs and the tasks still
     /// open, apart from its unmet conditions — so "ready" can only mean ready.
     #[test]
@@ -1842,6 +1960,11 @@ mod tests {
                 .unwrap()
                 .1
         };
+        // The doc it declares is folded in, so `docs-folded` is offered (DEF-033).
+        next_second();
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv2\n")
+            .unwrap();
         let next = &card(&store).next;
         assert_eq!(next.len(), 1, "{next:?}");
         assert_eq!(next[0].status, "Scheduled");
@@ -1931,6 +2054,20 @@ mod tests {
                     }],
                     ..Default::default()
                 }),
+            )
+            .unwrap();
+        // Finished work, so `docs-folded` is offered (DEF-033).
+        let list = store.add_todo_list("demo", &item.code, "work", None).unwrap();
+        let task = store
+            .add_task("demo", &item.code, &list.code, "build it", None)
+            .unwrap();
+        store
+            .set_task_state(
+                "demo",
+                &item.code,
+                &list.code,
+                &task.key,
+                crate::models::TaskState::Completed,
             )
             .unwrap();
         // Walk to Implementation with no gates in the way, then set the gates under test.
