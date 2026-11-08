@@ -79,6 +79,29 @@ pub fn refs_of(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The list under `key` in a document's front-matter: a YAML list or a one-line list
+/// (`items: [FTR-013, FTR-013/R-2]`). A single string counts as a list of one. Empty when the
+/// document has no front-matter or no such key.
+pub fn front_list(text: &str, key: &str) -> Vec<String> {
+    let Some(front) = split_front_matter(text).0 else {
+        return Vec::new();
+    };
+    let Ok(map) =
+        crate::yaml::parse::<std::collections::BTreeMap<String, crate::yaml::Value>>(front)
+    else {
+        return Vec::new();
+    };
+    let text_of = |v: &crate::yaml::Value| v.as_str().map(|s| s.trim().to_string());
+    match map.get(key) {
+        Some(crate::yaml::Value::Array(items)) => items.iter().filter_map(text_of).collect(),
+        Some(one) => text_of(one).into_iter().collect(),
+        None => Vec::new(),
+    }
+    .into_iter()
+    .filter(|s: &String| !s.is_empty())
+    .collect()
+}
+
 /// The content type a documentation file's raw bytes are served with, from its extension
 /// (FEAT-176: one copy, which the daemon's raw-doc route and its published description both mean).
 /// Images and PDFs as themselves; Markdown and text as plain text, so a browser shows the source

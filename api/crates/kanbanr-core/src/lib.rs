@@ -25,6 +25,7 @@ pub mod coverage;
 pub mod daylog;
 pub mod diagrams;
 pub mod dispatch;
+pub mod docdrift;
 pub mod docs;
 pub mod doctor;
 /// EARS classification and the ISO 25010 vocabulary, re-exported from the standalone
