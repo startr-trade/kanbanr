@@ -78,7 +78,8 @@ from several sprints.
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
 
-**Each approval covers the text you saw.** If the definition changes, your approval lapses and the item
+**Each approval covers the text you saw.** Adding to the definition keeps the approval, and what was
+added is reviewed at the next decision. Changing or removing approved text lapses it, and the item
 returns to the Review page.
 
 **Moving to Review is the merge.** kanbanr merges the item's branch into the sprint's branch. It isn't

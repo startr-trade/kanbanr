@@ -101,10 +101,10 @@ export const api = {
   approve: (id: string, code: string, by: string, rev = "") =>
     verdict(id, code, "approve", { by, rev }, "approve"),
   /** Record a named sign-off a stage asks for (FEAT-114). */
-  signoff: async (id: string, code: string, name: string, by: string, rev = "") => {
+  signoff: async (id: string, code: string, name: string, by: string, rev = "", specRev = "") => {
     const res = await postWrite(
       apiUrl(`/write/projects/${encodeURIComponent(id)}/features/${encodeURIComponent(code)}/signoff/${encodeURIComponent(name)}`),
-      { by, rev },
+      { by, rev, spec_rev: specRev },
       `kanbanr signoff ${code} ${name}`,
     );
     if (!res.ok) {

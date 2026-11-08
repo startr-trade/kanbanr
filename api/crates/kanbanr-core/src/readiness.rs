@@ -262,6 +262,19 @@ impl Condition {
     }
 }
 
+/// The spec as a sign-off pins it, and its hash (FTR-023). Line endings become LF, trailing
+/// whitespace is stripped from each line, and blank lines at the start and end are dropped, so a
+/// file rewritten without any change of words pins the same. An empty spec pins `""`.
+pub fn spec_pin(spec: &str) -> (String, String) {
+    let lines: Vec<&str> = spec.lines().map(str::trim_end).collect();
+    let text = lines.join("\n").trim_matches('\n').to_string();
+    if text.is_empty() {
+        return (String::new(), String::new());
+    }
+    let rev = crate::hash::stable_hash(&text);
+    (text, rev)
+}
+
 /// The sign-offs among `names` that are not recorded against the definition as it stands.
 pub fn signoff_gaps(feature: &FeatureItem, names: &[String]) -> Vec<Gap> {
     let def = feature.definition.as_ref();
@@ -269,9 +282,18 @@ pub fn signoff_gaps(feature: &FeatureItem, names: &[String]) -> Vec<Gap> {
         .iter()
         .filter_map(|name| {
             let latest = def.and_then(|d| d.signoff_latest(name));
-            let current = def.and_then(|d| d.signoff_current(name));
+            let current = feature.signoff_current(name);
             match (latest, current) {
                 (_, Some(_)) => None,
+                (Some(_), None) if feature.signoff_spec_changed(name).is_some() => Some(gap(
+                    Check::Signoff,
+                    None,
+                    &format!("sign-off '{name}': spec changed"),
+                    format!(
+                        "the spec changed after sign-off '{name}' was given, so it no longer \
+                         covers what will be built: the Review page shows what changed"
+                    ),
+                )),
                 // Taken back (FEAT-182): say so, with the reason, rather than "lapsed".
                 (Some(w), None) if !w.verdict.is_given() => Some(gap(
                     Check::Signoff,
@@ -320,6 +342,10 @@ pub struct Context {
     /// What the coverage rules' source docs reference (FEAT-197), read only when the project has
     /// rules and some gate asks for `docs_cover`.
     pub coverage: Option<std::sync::Arc<crate::coverage::Snapshot>>,
+    /// The stages at or after the one holding the `build` role, in workflow order (FTR-018): from
+    /// there on, text added to an approved definition must be decided at once. `None` when no
+    /// stage holds the role, which counts every stage as build onward.
+    pub build_onward: Option<std::collections::BTreeSet<String>>,
     /// The versions of the releases not yet cut, when the project works in releases (DEF-019).
     /// An item planned into one waits for the cut before it reaches its end status.
     pub unshipped_releases: std::collections::BTreeSet<String>,
@@ -329,6 +355,13 @@ pub struct Context {
 }
 
 impl Context {
+    /// Is `status` the build stage or a later one? With no build role declared, every stage is.
+    pub fn builds(&self, status: &str) -> bool {
+        self.build_onward
+            .as_ref()
+            .is_none_or(|stages| stages.contains(status))
+    }
+
     /// The context of a project, read from its config and side files.
     pub fn load(store: &crate::Store, id: &str, config: &crate::ProjectConfig) -> Context {
         Context {
@@ -342,6 +375,15 @@ impl Context {
             },
             docs_dir: Some(store.project_dir(id).join("docs")),
             coverage: Self::coverage(store, id, config),
+            build_onward: config.role_status(crate::config::Role::Build).map(|build| {
+                config
+                    .statuses
+                    .iter()
+                    .skip_while(|s| **s != build)
+                    .filter(|s| !config.is_no_op(s))
+                    .cloned()
+                    .collect()
+            }),
             unshipped_releases: if config.cadence.releases {
                 crate::releases::load(store, id)
                     .map(|rs| {
@@ -705,20 +747,21 @@ pub fn next_gates(
             if !gate.applies_to(feature.kind.as_deref()) {
                 return None;
             }
-            let requires_gaps =
+            let mut requires_gaps =
                 evaluate_entering(feature, goal_ids.as_ref(), &gate.requires, ctx, to);
+            requires_gaps.extend(additions_gap(
+                feature,
+                &gate.requires,
+                &gate.signoffs,
+                ctx,
+                to,
+            ));
             let mut gaps = requires_gaps.clone();
             let signoffs = signoff_gaps(feature, &gate.signoffs);
             let signoffs_needed = gate
                 .signoffs
                 .iter()
-                .filter(|name| {
-                    feature
-                        .definition
-                        .as_ref()
-                        .and_then(|d| d.signoff_current(name))
-                        .is_none()
-                })
+                .filter(|name| feature.signoff_current(name).is_none())
                 .cloned()
                 .collect();
             gaps.extend(signoffs);
@@ -1022,6 +1065,38 @@ pub fn evaluate_definition(
     gaps
 }
 
+/// An approval that has only grown passes `approved` before the build stage, because the next
+/// decision comes before anything is built. From the build stage on it passes only where the gate
+/// also asks for a sign-off, which is pinned to the current text; otherwise this is the gap
+/// (FTR-018). `at` is the stage being entered.
+pub fn additions_gap(
+    feature: &FeatureItem,
+    requires: &[Condition],
+    signoffs: &[String],
+    ctx: &Context,
+    at: &str,
+) -> Option<Gap> {
+    let def = feature.definition.as_ref()?;
+    if !requires.contains(&Condition::Check(Check::Approved))
+        || def.approval_state() != ApprovalState::Extended
+        || !ctx.builds(at)
+        || !signoffs.is_empty()
+    {
+        return None;
+    }
+    let added = def.part_changes().map(|c| c.added).unwrap_or_default();
+    Some(gap(
+        Check::Approved,
+        None,
+        "added since approval",
+        format!(
+            "text was added to the definition after it was approved ({}): approve it again (the \
+             Review page shows only the additions), or have this stage ask for a sign-off",
+            added.join(", ")
+        ),
+    ))
+}
+
 fn gap(check: Check, requirement: Option<&str>, label: &str, message: String) -> Gap {
     Gap {
         check,
@@ -1038,10 +1113,7 @@ fn item_level(
     goal_ids: Option<&std::collections::BTreeSet<String>>,
     gaps: &mut Vec<Gap>,
 ) {
-    let agreed = matches!(
-        def.approval_state(),
-        ApprovalState::Current | ApprovalState::Ratified
-    );
+    let agreed = def.approval_state().is_agreed();
     match check {
         Check::Definition => {}
         Check::Statement => {
@@ -1084,7 +1156,9 @@ fn item_level(
             }
         }
         Check::Approved => match def.approval_state() {
-            ApprovalState::Current | ApprovalState::Ratified => {}
+            // An extended approval passes here; whether the additions may wait is a question of the
+            // stage, answered by `additions_gap` (FTR-018).
+            ApprovalState::Current | ApprovalState::Ratified | ApprovalState::Extended => {}
             ApprovalState::Missing => {
                 gaps.push(gap(check, None, "not approved", "not approved".into()))
             }
@@ -1523,6 +1597,79 @@ mod check_tests {
 mod tests {
     use super::*;
     use crate::models::{Requirement, TestRef};
+
+    /// An item whose design-review pinned `spec`, then holding `now` as its spec (FTR-023).
+    fn pinned_item(spec: &str, now: &str) -> FeatureItem {
+        let mut def = crate::models::FeatureDefinition {
+            statement: "Keep a cart".into(),
+            ..Default::default()
+        };
+        def.signoffs.push(crate::models::Signoff {
+            id: "design-review".into(),
+            by: "Ada".into(),
+            rev: def.content_rev(),
+            spec_rev: spec_pin(spec).1,
+            ..Default::default()
+        });
+        let mut item: FeatureItem = crate::yaml::from_str(
+            "code: FTR-1\ntitle: T\nspecification: ''\nstatus: Build\nmilestone: ''\n\
+             created_at: '2026-11-06T00:00:00Z'\nupdated_at: '2026-11-06T00:00:00Z'\n",
+        )
+        .unwrap();
+        item.definition = Some(def);
+        item.specification = now.into();
+        item
+    }
+
+    /// FTR-023 R-3: whitespace at line ends, line endings and outer blank lines are not changes.
+    #[test]
+    fn spec_pin_ignores_trailing_whitespace() {
+        let base = "## Why\nA cart.\n\n## Design\nUse a map.";
+        let rev = spec_pin(base).1;
+        assert!(!rev.is_empty());
+        assert_eq!(
+            spec_pin("\n\n## Why  \r\nA cart.\t\r\n\r\n## Design\r\nUse a map.\r\n\n").1,
+            rev
+        );
+        assert_ne!(spec_pin("## Why\nA cart!\n\n## Design\nUse a map.").1, rev);
+        assert_ne!(spec_pin(&format!("{base}\nMore.")).1, rev);
+        assert_ne!(spec_pin(&format!("{base}\n\n## Notes\nx")).1, rev);
+        assert_eq!(spec_pin("  \n\n"), (String::new(), String::new()));
+    }
+
+    /// FTR-023 R-2: a change anywhere in the spec lapses a sign-off that pinned it.
+    #[test]
+    fn a_changed_spec_lapses_its_signoff() {
+        let names = vec!["design-review".to_string()];
+        let spec = "## Why\nA cart.\n\n## Design\nUse a map.";
+        assert!(signoff_gaps(&pinned_item(spec, spec), &names).is_empty());
+        for edited in [
+            "## Why\nA basket.\n\n## Design\nUse a map.",
+            "## Why\nA cart.\n\n## Design\nUse a vec.",
+            "## Why\nA cart.\n\n## Design\nUse a map.\n\n## Notes\nnew",
+        ] {
+            let gaps = signoff_gaps(&pinned_item(spec, edited), &names);
+            assert_eq!(gaps.len(), 1, "{edited}");
+            assert_eq!(gaps[0].label, "sign-off 'design-review': spec changed");
+            assert!(gaps[0].message.contains("the spec changed after sign-off"));
+        }
+    }
+
+    /// FTR-023 R-12: a sign-off with no spec pin is judged by the definition alone.
+    #[test]
+    fn a_signoff_without_a_spec_pin_is_judged_as_before() {
+        let names = vec!["design-review".to_string()];
+        let mut item = pinned_item("", "anything at all");
+        item.definition.as_mut().unwrap().signoffs[0].spec_rev = String::new();
+        assert!(signoff_gaps(&item, &names).is_empty());
+        item.specification = "something else".into();
+        assert!(signoff_gaps(&item, &names).is_empty());
+        item.definition.as_mut().unwrap().statement = "Keep a cart longer".into();
+        assert_eq!(
+            signoff_gaps(&item, &names)[0].label,
+            "sign-off 'design-review' lapsed"
+        );
+    }
 
     /// A board in a temp git repository with one item declaring `architecture/data.md` (FEAT-180).
     fn docs_board(tag: &str) -> (crate::Store, std::path::PathBuf, String) {
@@ -2147,6 +2294,7 @@ mod tests {
             by: "A".into(),
             at: "2026-09-29T00:00:00Z".into(),
             rev: def.content_rev(),
+            parts: Default::default(),
         });
         def.approvals.push(crate::models::ApprovalEvent {
             verdict: "ratified".into(),
@@ -2157,6 +2305,65 @@ mod tests {
         let f = item(Some(def));
         let approval = query_group("approval").unwrap();
         assert!(evaluate(&f, None, approval).is_empty());
+    }
+
+    /// An item whose approval has only grown since it was given (FTR-018).
+    fn grown_item() -> FeatureItem {
+        use crate::models::Approval;
+        let mut def = FeatureDefinition {
+            statement: "s".into(),
+            ..Default::default()
+        };
+        def.approval = Some(Approval {
+            by: "A".into(),
+            at: "2026-09-29T00:00:00Z".into(),
+            rev: def.content_rev(),
+            parts: def.part_revs(),
+            ..Default::default()
+        });
+        def.zachman.how = "by hashing".into();
+        assert_eq!(def.approval_state(), ApprovalState::Extended);
+        item(Some(def))
+    }
+
+    fn approved_only() -> Vec<Condition> {
+        vec![Condition::Check(Check::Approved)]
+    }
+
+    /// FTR-018 R-5: before the build stage the additions wait, so `approved` is met.
+    #[test]
+    fn an_extended_approval_passes_a_gate_before_build() {
+        let f = grown_item();
+        let ctx = Context {
+            build_onward: Some(["Build".to_string(), "Done".to_string()].into()),
+            ..Default::default()
+        };
+        assert!(additions_gap(&f, &approved_only(), &[], &ctx, "Design").is_none());
+        let gaps = evaluate_entering(&f, None, &approved_only(), &ctx, "Design");
+        assert!(gaps.is_empty(), "{gaps:?}");
+        // The item-level check does not report it either.
+        assert!(evaluate(&f, None, &[Check::Approved]).is_empty());
+    }
+
+    /// FTR-018 R-6: from the build stage on, a gate with no sign-off refuses the additions and
+    /// names them; one that asks for a sign-off leaves that to the sign-off.
+    #[test]
+    fn additions_need_a_decision_before_build() {
+        let f = grown_item();
+        let ctx = Context {
+            build_onward: Some(["Build".to_string(), "Done".to_string()].into()),
+            ..Default::default()
+        };
+        let gap = additions_gap(&f, &approved_only(), &[], &ctx, "Build").unwrap();
+        assert_eq!(gap.label, "added since approval");
+        assert!(gap.message.contains("zachman/how"), "{}", gap.message);
+        let with_signoff = ["design-review".to_string()];
+        assert!(additions_gap(&f, &approved_only(), &with_signoff, &ctx, "Build").is_none());
+        // A gate that does not ask for approval has nothing to refuse.
+        assert!(additions_gap(&f, &[], &[], &ctx, "Build").is_none());
+        // No build role declared: every stage counts, as before.
+        assert!(additions_gap(&f, &approved_only(), &[], &Context::default(), "Design").is_some());
+        assert!(Context::default().builds("x"));
     }
 
     #[test]

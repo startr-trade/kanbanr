@@ -2692,6 +2692,204 @@ requirements:
         assert_eq!(def(&store).approval_state(), ApprovalState::Current);
     }
 
+    /// FTR-018 R-1: approve, ratify and sign off each record a hash of every part they covered.
+    #[test]
+    fn a_verdict_records_the_parts_it_covered() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition("demo", &f.code, Some(full_definition("Keep carts 7 days")))
+            .unwrap();
+        let def = |store: &Store| {
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&f.code)
+                .unwrap()
+                .definition
+                .clone()
+                .unwrap()
+        };
+        store.approve_feature("demo", &f.code, "Venkat").unwrap();
+        let d = def(&store);
+        assert!(!d.part_revs().is_empty());
+        assert_eq!(d.approval.as_ref().unwrap().parts, d.part_revs());
+        store
+            .signoff_feature("demo", &f.code, "design-review", "Venkat", "", "")
+            .unwrap();
+        let d = def(&store);
+        assert_eq!(d.signoffs[0].parts, d.part_revs());
+        let mut bypassed = full_definition("Keep carts 7 days");
+        bypassed.started_unapproved = "urgent".into();
+        store
+            .set_feature_definition("demo", &f.code, Some(bypassed))
+            .unwrap();
+        store
+            .ratify_feature("demo", &f.code, "Venkat", "built first")
+            .unwrap();
+        let d = def(&store);
+        assert_eq!(d.approval.as_ref().unwrap().parts, d.part_revs());
+    }
+
+    /// FTR-018 R-2: through the store, an approval stands while the definition only grows, and a
+    /// sign-off on the grown text reads as the review of the additions.
+    #[test]
+    fn an_approval_stands_while_the_definition_only_grows() {
+        use crate::models::ApprovalState;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        let mut small = full_definition("Keep carts 7 days");
+        small.zachman.how.clear();
+        small.zachman.where_.clear();
+        store
+            .set_feature_definition("demo", &f.code, Some(small))
+            .unwrap();
+        let def = |store: &Store| {
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&f.code)
+                .unwrap()
+                .definition
+                .clone()
+                .unwrap()
+        };
+        store.approve_feature("demo", &f.code, "Venkat").unwrap();
+        store
+            .set_feature_definition("demo", &f.code, Some(full_definition("Keep carts 7 days")))
+            .unwrap();
+        assert_eq!(def(&store).approval_state(), ApprovalState::Extended);
+        assert_eq!(def(&store).approvals.len(), 1, "nothing was approved again");
+        store
+            .signoff_feature("demo", &f.code, "design-review", "Venkat", "", "")
+            .unwrap();
+        assert_eq!(def(&store).approval_state(), ApprovalState::Current);
+        // Changing approved text still lapses it.
+        store
+            .set_feature_definition("demo", &f.code, Some(full_definition("Keep carts 30 days")))
+            .unwrap();
+        assert_eq!(def(&store).approval_state(), ApprovalState::Lapsed);
+    }
+
+    /// FTR-018 R-9, R-10, R-11: additions are asked about once they need a decision, with the
+    /// parts added; a lapsed item names what was added, changed and removed.
+    #[test]
+    fn the_review_queue_lists_additions_once_they_need_a_decision() {
+        use serde_json::{Value, json};
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/workflow",
+            Some(&json!({"preset": "togaf"})),
+        )
+        .unwrap();
+        adopt_charter(&store, "demo");
+        // Implementation asks for a design review, as the walkthrough's process does.
+        let mut config = store.load("demo").unwrap().config;
+        config
+            .gates
+            .get_mut("Implementation")
+            .unwrap()
+            .signoffs
+            .push("design-review".into());
+        store.save_config("demo", &config).unwrap();
+        let queue = || -> Vec<Value> {
+            let out =
+                crate::dispatch::dispatch(&store, "GET", "/projects/demo/review", None).unwrap();
+            serde_json::from_str(&out).unwrap()
+        };
+        let entry = |code: &str| queue().into_iter().find(|v| v["code"] == code);
+        let add = |title: &str| {
+            let f = store
+                .add_feature("demo", title, "## Design\n\nHow.", "M", None)
+                .unwrap();
+            let mut small = full_definition("Keep carts 7 days");
+            small.zachman.how.clear();
+            small.zachman.where_.clear();
+            store
+                .set_feature_definition("demo", &f.code, Some(small))
+                .unwrap();
+            store.approve_feature("demo", &f.code, "Venkat").unwrap();
+            f.code
+        };
+        let grow = |code: &str| {
+            store
+                .set_feature_definition("demo", code, Some(full_definition("Keep carts 7 days")))
+                .unwrap();
+        };
+        let to = |code: &str, status: &str| {
+            store.move_feature("demo", code, status).unwrap();
+        };
+
+        // Before build, with no sign-off due: nothing to decide, so not listed.
+        let early = add("Early");
+        to(&early, "Business Arch");
+        grow(&early);
+        assert!(entry(&early).is_none(), "{:?}", queue());
+
+        // Next gate asks for design-review: listed as a sign-off, with the parts added.
+        let design = add("Design");
+        to(&design, "Business Arch");
+        to(&design, "System Design");
+        grow(&design);
+        let readiness = crate::dispatch::dispatch(
+            &store,
+            "GET",
+            &format!("/projects/demo/features/{design}/readiness"),
+            None,
+        )
+        .unwrap();
+        let e = entry(&design)
+            .unwrap_or_else(|| panic!("listed for its sign-off: {readiness} / {:?}", queue()));
+        assert_eq!(e["approval"], "signoff");
+        assert_eq!(
+            e["changes"]["added"],
+            json!(["zachman/how", "zachman/where"])
+        );
+
+        // At Implementation (the build stage): the additions need deciding at once.
+        let built = add("Built");
+        to(&built, "Business Arch");
+        to(&built, "System Design");
+        grow(&built);
+        store
+            .signoff_feature("demo", &built, "design-review", "Venkat", "", "")
+            .unwrap();
+        to(&built, "Implementation");
+        let mut more = full_definition("Keep carts 7 days");
+        more.goals.push("G-2".into());
+        store
+            .set_feature_definition("demo", &built, Some(more))
+            .unwrap();
+        let e = entry(&built).expect("listed once built");
+        assert_eq!(e["approval"], "added", "{e:?}");
+        assert_eq!(e["changes"]["added"], json!(["goals/G-2"]));
+
+        // Changed text lapses, and the entry names changed and removed parts.
+        let lapsed = add("Lapsed");
+        let mut changed = full_definition("Keep carts 30 days");
+        changed.goals.clear();
+        store
+            .set_feature_definition("demo", &lapsed, Some(changed))
+            .unwrap();
+        let e = entry(&lapsed).expect("lapsed is listed");
+        assert_eq!(e["approval"], "lapsed");
+        assert_eq!(e["changes"]["changed"], json!(["statement"]));
+        assert_eq!(e["changes"]["removed"], json!(["goals/G-1"]));
+        assert!(
+            e["changes"]["added"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("zachman/how"))
+        );
+    }
+
     #[test]
     fn the_start_gate_refuses_unapproved_work_but_never_blocks_closing_it() {
         let (store, _d) = temp_store();
@@ -4576,6 +4774,142 @@ requirements:
         store
             .move_feature_approved("demo", &code, "Scheduled", None)
             .unwrap();
+    }
+
+    /// FTR-023 R-1, R-2: a design sign-off pins the whole spec it was given on, and keeps its text.
+    #[test]
+    fn a_design_signoff_pins_the_design_it_was_given_on() {
+        let (store, _d, code) = skip_board(vec![crate::readiness::Condition::SpecSections {
+            spec_sections: vec!["Design".into()],
+        }]);
+        let spec = "## Why\nA cart.\n\n## Design\nUse a map.\n";
+        store
+            .edit_feature("demo", &code, None, Some(spec.into()), None, None)
+            .unwrap();
+        store
+            .signoff_feature("demo", &code, "design-review", "Ada L", "", "")
+            .unwrap();
+        let (text, rev) = crate::readiness::spec_pin(spec);
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        let given = f.signoff_current("design-review").unwrap();
+        assert_eq!(given.spec_rev, rev);
+        assert_eq!(store.spec_pin_text("demo", &code, &rev), Some(text));
+        // A sign-off no gate pins carries no pin.
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert!(f.signoff_current("release").unwrap().spec_rev.is_empty());
+        // One changed line outside ## Design, and it no longer stands.
+        store
+            .edit_feature(
+                "demo",
+                &code,
+                None,
+                Some(spec.replace("A cart.", "A basket.")),
+                None,
+                None,
+            )
+            .unwrap();
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert!(f.signoff_current("design-review").is_none());
+        assert!(f.signoff_spec_changed("design-review").is_some());
+        assert!(f.signoff_current("release").is_some());
+    }
+
+    /// FTR-023 R-4, R-5, R-6, R-8, R-10: a design edited after its sign-off comes back to the
+    /// Review page with the change, and signing again settles it.
+    #[test]
+    fn the_review_queue_brings_back_a_changed_design() {
+        use serde_json::json;
+        let (store, _d, code) = skip_board(vec![crate::readiness::Condition::SpecSections {
+            spec_sections: vec!["Design".into()],
+        }]);
+        let spec = "## Why\nA cart.\n\n## Design\nUse a map.\n";
+        store
+            .edit_feature("demo", &code, None, Some(spec.into()), None, None)
+            .unwrap();
+        let queue = || -> Vec<serde_json::Value> {
+            serde_json::from_str(
+                &crate::dispatch::dispatch(&store, "GET", "/projects/demo/review", None).unwrap(),
+            )
+            .unwrap()
+        };
+        let entry = || queue().into_iter().find(|e| e["code"] == code.as_str());
+        let (_, rev) = crate::readiness::spec_pin(spec);
+
+        // Before the gate: a sign-off entry whose brief is the spec it will pin.
+        let e = entry().unwrap();
+        assert_eq!(e["approval"], "signoff");
+        assert_eq!(e["spec_rev"], rev.as_str());
+        assert_eq!(
+            e["spec"]["text"],
+            crate::readiness::spec_pin(spec).0.as_str()
+        );
+        assert_eq!(e["spec"]["diff"], json!([]));
+
+        let sign = |rev: &str| {
+            crate::dispatch::dispatch(
+                &store,
+                "POST",
+                &format!("/projects/demo/features/{code}/signoff/design-review"),
+                Some(&json!({"by": "Ada L", "spec_rev": rev})),
+            )
+        };
+        sign(&rev).unwrap();
+        store
+            .move_feature_approved("demo", &code, "Build", None)
+            .unwrap();
+        // The next stage's own sign-off comes first in the queue; settle it.
+        assert_eq!(entry().unwrap()["approval"], "signoff");
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        assert!(entry().is_none(), "{:?}", queue());
+
+        // A line outside ## Design changes: back on the page, with the one change.
+        let edited = spec.replace("A cart.", "A basket.");
+        store
+            .edit_feature("demo", &code, None, Some(edited.clone()), None, None)
+            .unwrap();
+        let e = entry().unwrap();
+        assert_eq!(e["approval"], "spec_changed");
+        assert_eq!(e["signoffs_needed"], json!(["design-review"]));
+        let new_rev = crate::readiness::spec_pin(&edited).1;
+        assert_eq!(e["spec_rev"], new_rev.as_str());
+        assert_eq!(e["spec"]["previous_kept"], true);
+        assert_eq!(e["spec"]["signed_by"], "Ada L");
+        let changed: Vec<_> = e["spec"]["diff"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|l| l["op"] != "same")
+            .map(|l| format!("{}{}", l["op"], l["text"]))
+            .collect();
+        assert_eq!(
+            changed,
+            vec!["\"removed\"\"A cart.\"", "\"added\"\"A basket.\""]
+        );
+
+        // The text kept at the last sign-off is gone: still listed, and says so.
+        let pin = store
+            .project_dir("demo")
+            .join("pins")
+            .join(&code)
+            .join(format!("{rev}.md"));
+        std::fs::rename(&pin, pin.with_extension("gone")).unwrap();
+        let e = entry().unwrap();
+        assert_eq!(e["approval"], "spec_changed");
+        assert_eq!(e["spec"]["previous_kept"], false);
+        assert_eq!(e["spec"]["diff"], json!([]));
+        assert_eq!(
+            e["spec"]["text"],
+            crate::readiness::spec_pin(&edited).0.as_str()
+        );
+
+        // Signing again on the changed text pins it and drops the item from the queue.
+        sign(&new_rev).unwrap();
+        assert!(entry().is_none(), "{:?}", queue());
     }
 
     /// FEAT-114 R-3: a sign-off that cannot say who gave it is not evidence of anything.

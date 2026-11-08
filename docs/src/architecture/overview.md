@@ -161,7 +161,8 @@ drifted apart.
   approval to start, the readiness list to finish — so it behaves exactly as before, and is stamped
   schema 3 only once it declares any, so an older binary refuses it instead of ignoring its gates.
 - **Agreement is pinned to content.** An approval or a sign-off records the definition's revision;
-  editing the definition lapses it. A move made past a gate with `--override` records why, and
+  changing or removing approved text lapses it, and adding to the definition keeps it until the
+  next decision. A move made past a gate with `--override` records why, and
   `ratify` agrees to it afterwards.
 
 ```mermaid

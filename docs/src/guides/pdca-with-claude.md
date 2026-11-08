@@ -71,8 +71,9 @@ Ask for the work in your own words, and Claude asks only what it can't work out.
 spec and the `design-review` sign-off. If one is missing, Claude says which, and drafts it or brings
 it to you.
 
-**An edit lapses your approval.** Each approval covers exactly the text you saw. If the definition
-changes afterwards, the item returns to the Review page. Read what changed, then approve again.
+**Adding keeps your approval; changing lapses it.** Each approval covers the text you saw. Adding to
+the definition keeps it, and what was added is reviewed at the next decision. If approved text is
+changed or removed, the item returns to the Review page. Read what changed, then approve again.
 
 **Just ask to move it on:**
 

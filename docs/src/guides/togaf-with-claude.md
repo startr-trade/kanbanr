@@ -107,27 +107,28 @@ gate. When something's missing, Claude either drafts it or brings it to you.
 
 | Phase | What Claude does | What you do on the Review page |
 |---|---|---|
-| **Vision** | Writes what it is and why | Nothing yet. The page may offer **Approve**, but it isn't needed here and lapses when the definition grows |
+| **Vision** | Writes what it is and why | Nothing yet. The page may offer **Approve**, but it isn't needed here |
 | **Business Arch** | Drafts who, what, why and the requirements | **Approve** |
-| **System Design** | Proposes how and where, and checks that against the requirements | **Approve** again, because the definition grew |
-| **Implementation** | Writes the design and its task list, and names a test for each requirement | **Approve** again, then **Sign off design-review** |
+| **System Design** | Proposes how and where, and checks that against the requirements | Nothing: the approval stands while the definition grows |
+| **Implementation** | Writes the design and its task list, and names a test for each requirement | **Sign off design-review**, which also reviews what was added |
 | **Migration** | Builds on the item's branch, runs the tests and updates the docs | **Sign off docs-folded**, which appears once the docs are updated |
 | **Operations** | Nothing: the cut moves it here | **Sign off release** |
 
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
 
-**You'll approve more than once, and that's deliberate.** Each approval covers exactly the text you
-saw. If the definition changes, your approval lapses and the item returns to the Review page. Read
-what changed, then approve again.
+**You approve once, and review what's added.** Each approval covers the text you saw. Adding answers
+keeps it, and the Review page shows what was added when the next decision comes, usually the design
+review. Changing or removing what you approved lapses it, and the item returns to the Review page.
 
 **You decide on the Review page.** Claude tells you what's waiting there and links to it, and never records a decision for you. kanbanr refuses if it tries. If the monitor isn't running, Claude offers to start it.
 
 **A design can bring decisions with it.** Claude drafts each one as a decision record, and you use
 **Accept** or **Reject** on the Review page.
 
-**A sign-off doesn't lapse when the design changes.** Changing the design in the item's spec leaves
-**design-review** standing, so ask Claude to bring you any corrections it makes during the build.
+**A changed spec comes back to you.** Your **design-review** covers the item's spec as you saw it. If
+the spec changes afterwards, even outside the Design, the item returns to the Review page showing
+only what changed, and you sign again.
 
 **Operations means shipped.** **Sign off release** records your sign-off and leaves the item where it
 is. The item moves to Operations when the release it is planned into is cut. The **Releases** page

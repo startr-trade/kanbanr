@@ -222,13 +222,14 @@ kanbanr signoff FEAT-042 design-review --note "held 30 Sep" --doc reviews/checko
 
 - **What it records:** who gave it, when, in which status, and the definition it covered.
 - **When it lapses:** changing the definition lapses it, just as it lapses an approval. A review
-  of a different design is not a review of this one. Earlier sign-offs are kept.
+  of a different design is not a review of this one. Given on a definition that only grew since
+  its approval, it also counts as the review of what was added. Earlier sign-offs are kept.
 - **How it is asked for:** a gate asks for it by name (`signoffs: [design-review]`). The Review
   page offers a **Sign off** button for each one the next stage is waiting on.
 - **Where it can be given:** the review queue offers a sign-off only for the stage the item
   reaches next, and only once that stage's other requirements are met. A workflow that lets an
   item skip ahead doesn't get the later stage's sign-off offered early. A finished item is listed
-  only when its approval lapsed, and then only to approve again.
+  only when its approval lapsed or text was added since, and then only to approve again.
 - **Who gives it:** a sign-off is a person's agreement. Claude asks for it and never gives it.
 - **Taking it back:** a sign-off given in error is withdrawn with a reason:
 
@@ -256,9 +257,9 @@ what the next stage needs:
 ```
 
 `doctor` follows the same rule on a workflow with gates: it reports what the next stage asks, not
-what a later stage will. Each time the definition grows, its approval lapses and is given again.
-Each approval records the status it was given in, so the history reads "approved at Business
-Arch, again at System Design".
+what a later stage will. When the definition only grows, the approval stands: it is extended, and the additions are
+reviewed at the next decision the stage asks for, such as `design-review`. Changing or removing
+approved text lapses it and it is given again. Each approval records the status it was given in.
 
 ## The design stage: a build-ready design in the spec
 

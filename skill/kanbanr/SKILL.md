@@ -411,6 +411,12 @@ and say it is waiting for their approval on the Review page, with the link. Choi
 make go in the brief under **Choices I made**, so the approval is informed. Moving an item on is
 the same: grow the definition, then say what the next decision is and where it waits.
 
+Moving an item on to a stage that asks for more is the same loop: plan the growth, the user
+accepts, record the next decision the stage asks for. Adding to an approved definition keeps the
+approval; what you add is shown and reviewed at the next decision the stage asks for (usually
+design-review). Changing or removing approved text lapses it, and the item returns to the Review
+page.
+
 ### Waiting decisions: on the Review and Releases pages
 
 When items are waiting (`kanbanr review --pending --json`, `kanbanr adr list --json` for
@@ -496,8 +502,8 @@ view behind: add the links each one names before you move the item on.
   approver is refused, so never invent `--by`: if it fails, the board has no identity and the user
   sets one with `kanbanr identity`.
 - kanbanr enforces the gates: a move into a stage whose gate needs `approved` is refused unless the
-  definition's approval is current. Change the definition after approval and it **lapses** — scope
-  cannot drift silently past a yes.
+  definition's approval is current. Change or remove approved text and it **lapses**; added text is
+  reviewed at the next decision — scope cannot drift silently past a yes.
 - **Subagents inherit, never invent.** A coordinator passes the approved definition to each
   subagent as its brief. A subagent that finds work outside it returns a **proposed change to the
   definition**, not merged code.
@@ -537,6 +543,13 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
 Leaving the design role, the build stage's gate asks for `spec_sections: [Design]` and the
 `design-review` sign-off. Say **design-review** is waiting on the Review page once the section exists; the user gives
 it, never you.
+
+**A design-review covers the whole spec as it was when given.** Any edit to the spec afterwards (a
+correction, a note, a link) brings the sign-off back to the Review page, with only the change shown.
+Make spec edits after design-review together, not one by one. Then say the sign-off is waiting again
+on the Review page; don't ask the user to carry on in a question. A queue entry with
+`"approval": "spec_changed"` carries `spec_rev` and the diff; pass `--spec-rev <spec_rev>` with the
+sign-off so it is refused if the spec moved on after the user was shown it.
 
 ### The design stage: the spec carries the build-ready design
 
@@ -1192,14 +1205,16 @@ once items are in flight.
 Under a phased process, grow an item's definition stage by stage.
 - **A named manual test is an open check.** `kanbanr check` lists `manual test not run: R-n: <name>`
   without blocking. Tell the user, and don't call the item done until someone has run it.
-- **A finished item on the Review page** is there because its approval lapsed: ask the user to read
-  what changed and approve again, or say why the change doesn't need it.
+- **A finished item on the Review page** is there because its approval lapsed or text was added since: ask
+  the user to read what changed and approve again, or say why the change doesn't need it.
 - **Guides for each built-in process** are in the book, under Process guides. Point a user there
   when they ask how a whole project runs under their process.
 - **Before each move,** run `kanbanr check <CODE>`. It names what the next stage needs: fill in
   that, and not everything at once.
-- **Approval is renewed as the definition grows.** Each change lapses the approval, so ask the
-  user to approve again before the move.
+- **Growth keeps the approval; changes lapse it.** Adding to the definition leaves the approval
+  standing, to be reviewed at the next decision (before build) or at once (from build on, when the
+  Review page shows it as `added`). Changing or removing approved text lapses it, so ask the user
+  to approve again before the move.
 - **A sign-off (`kanbanr signoff`) is the user's**, like an approval: say it is waiting on the Review page; never record it
   yourself.
 - **Overrides:** `--override "<reason>"` gets past a gate on the record. Use it only when the

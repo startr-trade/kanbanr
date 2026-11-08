@@ -199,6 +199,13 @@
           "by": {
             "type": "string"
           },
+          "parts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "A hash of each part of the definition it covered (FTR-018), keyed as\n[`FeatureDefinition::part_revs`]. Empty on a record an older kanbanr wrote: such a record is\nno baseline, and any change to the definition lapses it.",
+            "type": "object"
+          },
           "rev": {
             "type": "string"
           }
@@ -270,6 +277,16 @@
           {
             "const": "lapsed",
             "description": "Approved, then the definition changed.",
+            "type": "string"
+          },
+          {
+            "const": "added",
+            "description": "Approved, then the definition gained parts that now need a decision (FTR-018): the item is\nat or past its build stage, or its next stage would refuse the additions.",
+            "type": "string"
+          },
+          {
+            "const": "spec_changed",
+            "description": "The spec a sign-off pinned changed after it was given, and the item has passed the gate\nthat asks for it (FTR-023).",
             "type": "string"
           }
         ]
@@ -986,6 +1003,31 @@
           "strict"
         ],
         "type": "object"
+      },
+      "DiffLine": {
+        "description": "One line of a [`line_diff`].",
+        "properties": {
+          "op": {
+            "$ref": "#/components/schemas/DiffOp"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "text"
+        ],
+        "type": "object"
+      },
+      "DiffOp": {
+        "description": "How a line stands in a [`line_diff`].",
+        "enum": [
+          "same",
+          "added",
+          "removed"
+        ],
+        "type": "string"
       },
       "Disposition": {
         "description": "A project-independent lane a feature falls into, since statuses are per-project (no shared\nvocabulary). Computed from the project config + the feature's task activity.",
@@ -2262,6 +2304,35 @@
           }
         ]
       },
+      "PartChanges": {
+        "description": "What differs between the parts a decision covered and the definition now (FTR-018). Keys are\nthose of [`FeatureDefinition::part_revs`], sorted.",
+        "properties": {
+          "added": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "changed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "removed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "added",
+          "changed",
+          "removed"
+        ],
+        "type": "object"
+      },
       "PlanCondition": {
         "description": "One condition of a stage entered or passed, and whether it holds (FEAT-212).",
         "properties": {
@@ -3224,6 +3295,10 @@
             "$ref": "#/components/schemas/ApprovalKind",
             "description": "What is being asked."
           },
+          "changes": {
+            "$ref": "#/components/schemas/PartChanges",
+            "description": "The parts added, changed and removed since the last decision (FTR-018); present on\n`lapsed`, `added` and `signoff` entries that have a baseline to compare with."
+          },
           "code": {
             "type": "string"
           },
@@ -3255,6 +3330,14 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/SpecBrief",
+            "description": "The spec the sign-off asked pins, with what changed since the last sign-off (FTR-023)."
+          },
+          "spec_rev": {
+            "description": "The hash of the spec's current text, when the sign-off asked pins the spec (FTR-023): what\nthe verdict is pinned to, sent back with it.",
+            "type": "string"
           },
           "started_unapproved": {
             "type": "string"
@@ -3324,12 +3407,23 @@
           "note": {
             "type": "string"
           },
+          "parts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "A hash of each part of the definition it covered (FTR-018), keyed as\n[`FeatureDefinition::part_revs`]. Empty on a record an older kanbanr wrote: such a record is\nno baseline, and any change to the definition lapses it.",
+            "type": "object"
+          },
           "reason": {
             "description": "Why it was withdrawn. Giving a sign-off needs no reason; taking one back does.",
             "type": "string"
           },
           "rev": {
             "description": "The definition content it covered.",
+            "type": "string"
+          },
+          "spec_rev": {
+            "description": "A hash of the whole normalised spec it covered (FTR-023), when a gate that lists this\nsign-off also asks for spec sections. Empty on a record an older kanbanr wrote, or one no\ngate pins: such a sign-off is judged by the definition alone.",
             "type": "string"
           },
           "status": {
@@ -3397,6 +3491,46 @@
           "ref",
           "imported_at",
           "key"
+        ],
+        "type": "object"
+      },
+      "SpecBrief": {
+        "description": "The spec a sign-off pins, as the person is shown it (FTR-023).",
+        "properties": {
+          "diff": {
+            "description": "The current text against the kept one; empty on a first sign-off, when the earlier text\nwas not kept, or when nothing differs.",
+            "items": {
+              "$ref": "#/components/schemas/DiffLine"
+            },
+            "type": "array"
+          },
+          "previous_kept": {
+            "description": "False when an earlier sign-off pinned the spec but its text is missing from the board.\nTrue otherwise, including a first sign-off with nothing earlier to keep.",
+            "type": "boolean"
+          },
+          "signed_at": {
+            "type": "string"
+          },
+          "signed_by": {
+            "description": "Who gave the earlier sign-off, and when; empty on a first sign-off.",
+            "type": "string"
+          },
+          "signoff": {
+            "description": "The sign-off that pins it.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The spec's current text, normalised as it is pinned.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signoff",
+          "text",
+          "previous_kept",
+          "signed_by",
+          "signed_at",
+          "diff"
         ],
         "type": "object"
       },

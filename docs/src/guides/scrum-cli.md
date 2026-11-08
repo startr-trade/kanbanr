@@ -211,8 +211,9 @@ created feat/FEAT-001-restore-the-cart from sprint/SP-001
 FEAT-001 -> In Progress
 ```
 
-**An edit lapses your approval.** When the definition changes, the next move says so, and you approve
-the larger definition.
+**Adding keeps your approval; changing lapses it.** Text added to the definition is reviewed at the
+next decision. When approved text is changed or removed, the next move says so, and you approve
+again.
 
 Commit with `kanbanr commit`, which adds `Refs: kanbanr:FEAT-001` to the commit:
 

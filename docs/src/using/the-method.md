@@ -47,8 +47,9 @@ kanbanr approve FEAT-001     # records agreement, pinned to the definition's con
 kanbanr start FEAT-001       # refuses without a current approval
 ```
 
-Approval is pinned to a hash of the definition, so editing the definition afterwards **lapses** the
-approval rather than silently keeping it. The escape is explicit and recorded:
+Approval is pinned to a hash of each part of the definition, so changing or removing approved text
+afterwards **lapses** the approval rather than silently keeping it. Adding to the definition keeps
+the approval, and the additions are reviewed at the next decision. The escape is explicit and recorded:
 `kanbanr start FEAT-001 --override "why you are going ahead anyway"` (`--unapproved` still works), which stays on the item and
 is reported by `doctor` until it is reviewed.
 
@@ -124,7 +125,9 @@ an implementation task list that a cheaper model can build one task at a time. T
 `affects_docs`. Every reference is a live link ([Tying code to the reason for
 it](traceability.md)). Decisions are drafted as proposed ADRs and put to you at once, and a question
 the design leaves open comes to you, never to a subagent. Leaving the role, the build stage asks for
-the Design and your **design-review** sign-off.
+the Design and your **design-review** sign-off. That sign-off covers the whole spec as it was when
+you gave it: if the spec changes afterwards, the item returns to the Review page showing only what
+changed.
 
 **At the build role.** `kanbanr start <CODE>` makes the item branch. With the git model on, it
 branches from the line of integration `kanbanr git model` names, not always from main. Commits go

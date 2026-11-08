@@ -379,6 +379,10 @@ enum Command {
         /// `rev`). Refused if the definition changed since — what Claude passes (FEAT-159).
         #[arg(long, conflicts_with = "withdraw")]
         rev: Option<String>,
+        /// The spec revision the user was shown (`kanbanr review --pending --json` gives it as
+        /// `spec_rev`). Refused if the spec changed since (FTR-023).
+        #[arg(long, conflicts_with = "withdraw")]
+        spec_rev: Option<String>,
         /// Take back a sign-off given in error (FEAT-182). The earlier one stays as history and
         /// stops counting. Needs --reason.
         #[arg(long, requires = "reason", conflicts_with_all = ["note", "doc"])]
@@ -6342,6 +6346,58 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             }
             for feature in &features {
                 print!("{}", kanbanr_core::export::definition_brief(feature));
+                // What was added since the last decision (FTR-018), from the queue's entry.
+                if let Some(entry) = queue.iter().find(|v| v["code"] == feature.code.as_str()) {
+                    let added: Vec<&str> = entry["changes"]["added"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|k| k.as_str())
+                        .collect();
+                    if !added.is_empty() {
+                        let also = if entry["approval"] == "signoff" {
+                            "also "
+                        } else {
+                            ""
+                        };
+                        println!("{also}added since approval: {}", added.join(", "));
+                    }
+                    // The spec a sign-off pinned changed since (FTR-023): what changed, at most 20 lines.
+                    if entry["approval"] == "spec_changed" {
+                        let spec = &entry["spec"];
+                        let date = spec["signed_at"].as_str().unwrap_or("");
+                        println!(
+                            "{} {}: spec changed since sign-off '{}' ({}, {})",
+                            feature.code,
+                            feature.title,
+                            spec["signoff"].as_str().unwrap_or(""),
+                            spec["signed_by"].as_str().unwrap_or(""),
+                            date.get(..10).unwrap_or(date)
+                        );
+                        if spec["previous_kept"] == false {
+                            println!("the earlier text was not kept, so there is no diff");
+                        }
+                        let changed: Vec<String> = spec["diff"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|l| {
+                                let text = l["text"].as_str().unwrap_or("");
+                                match l["op"].as_str() {
+                                    Some("added") => Some(format!("+{text}")),
+                                    Some("removed") => Some(format!("-{text}")),
+                                    _ => None,
+                                }
+                            })
+                            .collect();
+                        for line in changed.iter().take(20) {
+                            println!("{line}");
+                        }
+                        if changed.len() > 20 {
+                            println!("… {} more", changed.len() - 20);
+                        }
+                    }
+                }
                 println!();
             }
             // Agreed items whose one open question is which release they ship in (FEAT-185):
@@ -6458,6 +6514,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             doc,
             by,
             rev,
+            spec_rev,
             withdraw,
             reason,
         } => {
@@ -6485,7 +6542,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     "/projects/{p}/features/{code}/signoff/{}",
                     urlencode_segment(name)
                 ),
-                Some(json!({ "by": who, "note": note, "doc": doc, "rev": rev })),
+                Some(json!({
+                    "by": who, "note": note, "doc": doc, "rev": rev, "spec_rev": spec_rev
+                })),
             )?;
             print_write(
                 cli,

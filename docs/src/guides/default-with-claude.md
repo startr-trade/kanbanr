@@ -69,9 +69,10 @@ Claude asks only what it can't work out, then writes the item. It starts in Plan
 **An item counts as done when it reaches Completed and its branch is merged.** There's no sprint or
 release behind that.
 
-**Approve first, then sign off.** Each approval covers exactly the text you saw. If the definition
-changes afterwards, the approval lapses and the item returns to the Review page. Read what changed,
-then approve again.
+**Approve first, then sign off.** Each approval covers the text you saw. Adding to the definition
+keeps the approval, and what was added is reviewed at the next decision. Changing or removing
+approved text lapses it, and the item returns to the Review page. Read what changed, then approve
+again.
 
 **Just ask to move it on:**
 

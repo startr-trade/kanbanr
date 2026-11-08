@@ -201,12 +201,19 @@ Each move is refused until its gate is met, and the refusal says what's missing.
 | **Migration** | Requirements proven by green tests, docs updated, the `docs-folded` sign-off | `kanbanr test`, `kanbanr signoff`, `kanbanr move` |
 | **Operations** | Green tests, the `release` sign-off | `kanbanr signoff` records the sign-off; the cut makes the move |
 
-**An edit lapses your approval.** When the definition changes, the next move says so, and you approve
-the larger definition:
+**Adding keeps your approval; changing lapses it.** Text added to the definition is reviewed at the
+next decision, such as `kanbanr signoff FEAT-001 design-review`. When approved text is changed or
+removed, the next move says so, and you approve again:
 
 ```text
 cannot move FEAT-001 to 'System Design': approval lapsed — the definition changed after it was approved.
 ```
+
+**A changed spec comes back for sign-off.** A `design-review` sign-off covers the whole spec as it
+was when you gave it. If the spec changes afterwards, even outside `## Design`, the sign-off reads
+"changed since sign-off", and `kanbanr review --pending` lists the item as `spec_changed` with the
+changed lines. Sign again with `kanbanr signoff FEAT-001 design-review`. Pass `--spec-rev` with the
+`spec_rev` the queue gave to refuse the sign-off if the spec moved on since you read it.
 
 **Code starts at Implementation.** `kanbanr start` makes the item's branch from the sprint's branch,
 and moves the item if its gate is met:

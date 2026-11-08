@@ -63,8 +63,9 @@ are exempt.
 **You decide twice per item:** the design-review sign-off and the approval to start, and the
 docs-folded sign-off to finish. Claude asks for each and never gives it.
 
-**Each approval covers the text you saw.** If the definition changes, your approval lapses and the
-item returns to the Review page. Read what changed, then approve again.
+**Each approval covers the text you saw.** Adding to the definition keeps the approval, and what was
+added is reviewed at the next decision. Changing or removing approved text lapses it, and the item
+returns to the Review page. Read what changed, then approve again.
 
 **Just ask to move it on.** If something is missing, Claude says what and either fixes it or asks
 you:

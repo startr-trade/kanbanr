@@ -10,6 +10,27 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **An approval lapses only when the text you approved changes (FTR-018).** Adding to a definition
+  no longer lapses its approval: each approval, ratification and sign-off now records a hash per
+  part of the definition (`parts`), and an approval whose parts are all unchanged but which gained
+  new ones reads `extended`. Before the build stage the additions wait for the next decision, such
+  as `design-review`, which reviews them; from the build stage on a gate that asks for no sign-off
+  refuses the move and names the additions, and the Review page lists the item as `added`. Changing
+  or removing approved text still lapses it. The Review page shows the parts added or changed
+  first, with the approved text collapsed. Additive to the API: the `extended` approval state, the
+  `added` review entry, `changes` on review entries and `parts` on approvals and sign-offs.
+  Records from an older kanbanr have no parts and lapse on any change, as before.
+
+- **A changed design comes back for sign-off (FTR-023).** A sign-off whose gate asks for spec
+  sections, such as `design-review`, now records a hash of the whole spec it was given on (`spec_rev`)
+  and keeps the text under `pins/`. If the spec changes afterwards, even outside `## Design`, the
+  sign-off reads changed since sign-off, and the item returns to the Review page as `spec_changed`
+  with a line diff against the kept text; signing again pins the new text. Whitespace at line ends,
+  line endings and outer blank lines don't count as changes. `kanbanr signoff --spec-rev` and the
+  sign-off route refuse a sign-off given on a spec that moved on after it was shown. Additive to the
+  API: the `spec_changed` review entry, `spec_rev` and `spec` on review entries, and `spec_rev` on
+  sign-offs. The guide sentence that a sign-off doesn't lapse when the design changes is replaced.
+  An older kanbanr on the same board ignores `spec_rev` and reads such a sign-off as current.
 - **Turning releases on gives release stages that each do something (FTR-020).** A project that
   turns releases on, and names no stages and declares no stage gate, now gets `candidate` (branch
   and prepare), `main` (move main once the items are finished) and `tag` (the cut, needing main at
