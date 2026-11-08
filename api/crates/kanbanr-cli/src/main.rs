@@ -9265,6 +9265,19 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 &resp,
                 format!("planned {} into {version}", items.join(", ")),
             );
+            // The command's result, not a log (DEF-029): what the sprint is missing and how to add it.
+            if !cli.json {
+                let v: Value = serde_json::from_str(&resp)?;
+                for o in v["not_in_sprint"].as_array().into_iter().flatten() {
+                    let (code, sprint) = (
+                        o["code"].as_str().unwrap_or_default(),
+                        o["sprint"].as_str().unwrap_or_default(),
+                    );
+                    println!(
+                        "{code} is in no sprint and {sprint} is running: kanbanr sprint plan {sprint} {code}"
+                    );
+                }
+            }
         }
         // `cut --tag` is promotion to the last stage (FEAT-183): the tag comes with the main branch
         // fast-forwarded to the release, through the same preflight and rollback.

@@ -1059,12 +1059,27 @@ fn dispatch_routes(
         },
         ("POST", ["projects", p, "releases", version, "plan"]) => {
             let items = vec_field(b, "items").unwrap_or_default();
-            ser(&crate::releases::plan(
-                store,
-                p,
-                &percent_decode(version),
-                &items,
-            )?)
+            let release = crate::releases::plan(store, p, &percent_decode(version), &items)?;
+            // Items now in a release but in no running sprint are named, not planned in
+            // (DEF-029): the reply is the release as ever, with `not_in_sprint` when there are any.
+            let project = store.load(p)?;
+            let outside = crate::sprints::outside_running_sprint(
+                &project,
+                &crate::sprints::load(store, p)?,
+                &crate::releases::load(store, p)?,
+                Some(&items),
+            );
+            let mut body = serde_json::to_value(&release)
+                .map_err(|e| CoreError::Unsupported(format!("serialize: {e}")))?;
+            if !outside.is_empty() {
+                body["not_in_sprint"] = serde_json::Value::Array(
+                    outside
+                        .iter()
+                        .map(|o| serde_json::json!({"code": o.code, "sprint": o.sprint}))
+                        .collect(),
+                );
+            }
+            ser(&body)
         }
         ("POST", ["projects", p, "releases", version, "cut"]) => {
             ser(&crate::releases::cut(store, p, &percent_decode(version))?)

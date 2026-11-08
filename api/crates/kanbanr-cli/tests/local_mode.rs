@@ -4204,6 +4204,103 @@ fn release_promote_names_the_merged_item_and_what_it_lacks() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-029 R-5: `release plan` says, in the same reply, which of the items it planned are in no
+/// sprint while one runs, and the command that plans them in; it plans nothing into the sprint.
+#[test]
+fn release_plan_says_which_items_are_in_no_sprint() {
+    let (base, work) = togaf_scratch("plan-no-sprint");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    // The test's own board, never the repository's.
+    assert!(work.starts_with(std::env::temp_dir()));
+    let init = [
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ];
+    ok(run_in(&base, &work, &init));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--releases", "on"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--sprints", "on"],
+    ));
+    ok(run_in(&base, &work, &["release", "add", "v1.0.0"]));
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    let add = |title: &str| {
+        let made = ok(run_in(
+            &base,
+            &work,
+            &[
+                "--json",
+                "feature",
+                "add",
+                "--title",
+                title,
+                "--milestone",
+                "MS-001",
+            ],
+        ));
+        let made: serde_json::Value = serde_json::from_str(&made).unwrap();
+        made["code"].as_str().unwrap().to_string()
+    };
+    let (inside, outside) = (add("In the sprint"), add("Left out"));
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "plan", "SP-001", &inside]));
+    // No sprint runs: nothing to say.
+    let said = ok(run_in(
+        &base,
+        &work,
+        &["release", "plan", "v1.0.0", &inside],
+    ));
+    assert!(!said.contains("no sprint"), "{said}");
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    let said = ok(run_in(
+        &base,
+        &work,
+        &["release", "plan", "v1.0.0", &inside, &outside],
+    ));
+    assert!(
+        said.contains(&format!(
+            "{outside} is in no sprint and SP-001 is running: kanbanr sprint plan SP-001 {outside}"
+        )),
+        "{said}"
+    );
+    assert!(
+        !said.contains(&format!("{inside} is in no sprint")),
+        "{said}"
+    );
+    let shown = ok(run_in(
+        &base,
+        &work,
+        &["--json", "feature", "show", &outside],
+    ));
+    let shown: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    assert!(
+        shown["sprint"].is_null(),
+        "not planned into the sprint: {shown}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// The commit a name points at in the scratch repository, or "" when it names none.
 fn rev(base: &std::path::Path, work: &std::path::Path, name: &str) -> String {
     let o = git_in(base, work, &["rev-parse", "--verify", "--quiet", name]);
