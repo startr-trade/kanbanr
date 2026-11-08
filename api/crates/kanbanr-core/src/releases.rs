@@ -530,7 +530,7 @@ pub fn plan(store: &Store, id: &str, version: &str, items: &[String]) -> Result<
 /// Whether an item can ship, and to which end status — or why not. It ships if it is already
 /// finished, or if its work is done (every task complete) and the workflow allows it to an end
 /// status whose gate it meets. A workflow that declares no gates holds it to what `finish` asks.
-fn ship_to(
+pub(crate) fn ship_to(
     project: &Project,
     charter: &crate::Charter,
     ctx: &crate::readiness::Context,
@@ -612,6 +612,9 @@ pub fn tag_release(
 /// notes are written, `shipped_at` is recorded and what could not ship is carried. Records the
 /// stage change that made it when there is one (FEAT-183). Either way the release ends at the last
 /// stage: a shipped release is in production, whichever command shipped it.
+///
+/// It carries every item that cannot ship. A merged item is held earlier, by promotion
+/// (`merged_items_ship`); `cut` called directly has no plan to hold and keeps carrying.
 fn ship_release(
     store: &Store,
     id: &str,
@@ -1837,6 +1840,10 @@ fn work_out(
                     ReleaseCheck::StagePassed => {
                         (true, "judged through after".to_string(), String::new())
                     }
+                    // Only a plan names it; it is worked out after the checks.
+                    ReleaseCheck::MergedItemsShip => {
+                        (true, "judged by the plan".to_string(), String::new())
+                    }
                     ReleaseCheck::GatePassed => gate_passed(
                         store,
                         id,
@@ -1889,6 +1896,49 @@ fn work_out(
                 fix,
             });
         }
+    }
+
+    // A promotion that tags or ships never carries merged work away (DEF-029): the code is in the
+    // tag. `items_finished`, where a stage names it, already refuses every carry.
+    if direction == Direction::Forward
+        && (cut || ships)
+        && !requires
+            .iter()
+            .any(|(c, _)| *c == ReleaseCheck::ItemsFinished)
+    {
+        let held = merged_but_carried(&project, &preview);
+        let holder = stages[if cut { cut_stage } else { last }].clone();
+        let (holds, detail, fix) = if held.is_empty() {
+            let n = preview.len();
+            (
+                true,
+                format!("{n} planned item(s), no merged one would carry over"),
+                String::new(),
+            )
+        } else {
+            let detail = held
+                .iter()
+                .map(|(c, why)| format!("{c} is merged into {version} but would carry over: {why}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let fix = held
+                .iter()
+                .map(|(c, _)| {
+                    format!(
+                        "{c}: give what it lacks on the Review page (kanbanr check {c} lists it), or plan it into another release"
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            (false, detail, fix)
+        };
+        conditions.push(PlanCondition {
+            check: ReleaseCheck::MergedItemsShip,
+            stage: holder,
+            holds,
+            detail,
+            fix,
+        });
     }
 
     let reason = reason.trim();
@@ -2042,6 +2092,23 @@ fn work_out(
 /// Why a release with nothing planned into it cannot be promoted, and how to plan into it.
 pub fn empty_release(version: &str) -> String {
     format!("{version} has no items: plan some in with `kanbanr release plan {version} <CODE>…`")
+}
+
+/// Items planned into the release whose code is merged but which the cut would carry over, with
+/// what each lacks (DEF-029). Work not done or not merged is not listed: it is carried.
+fn merged_but_carried(project: &Project, preview: &[CutPreview]) -> Vec<(String, String)> {
+    preview
+        .iter()
+        .filter(|p| !p.ships)
+        .filter(|p| {
+            project.features.iter().any(|f| {
+                f.code == p.code
+                    && crate::gitmodel::is_integrated(&project.config, &f.status)
+                    && !project.config.is_no_op(&f.status)
+            })
+        })
+        .map(|p| (p.code.clone(), p.why.clone()))
+        .collect()
 }
 
 fn items_finished(preview: &[CutPreview]) -> (bool, String) {
@@ -5010,6 +5077,179 @@ mod tests {
     fn clean(dir: &Path, repo: &Path) {
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(repo);
+    }
+
+    // ---- DEF-029: merged work is never carried away ----
+
+    /// A TOGAF board with the staged release flow, v1 added and a charter adopted (so the gates
+    /// are enforced), beside a scratch repository. It holds no items.
+    fn togaf_staged(name: &str) -> (Store, PathBuf, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-def029-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        store
+            .init_project("shop", ProjectConfig::default_for("shop"))
+            .unwrap();
+        let put = |path: &str, body: serde_json::Value| {
+            crate::dispatch::dispatch(&store, "PUT", path, Some(&body)).unwrap();
+        };
+        put(
+            "/projects/shop/config/workflow",
+            serde_json::json!({"preset": "togaf"}),
+        );
+        put(
+            "/projects/shop/config/cadence",
+            serde_json::json!({"releases": true}),
+        );
+        configure(&store, STAGED);
+        let mut c = store.load_meta("shop").unwrap().config.cadence;
+        c.commit_gates = vec!["ci".into()];
+        store.set_cadence("shop", None, c).unwrap();
+        crate::charter::save(
+            &store,
+            "shop",
+            &crate::Charter {
+                purpose: "Ship what was agreed".into(),
+                adopted_at: "2000-01-01T00:00:00Z".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        store
+            .add_milestone("shop", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        super::add(&store, "shop", "v1", "", "").unwrap();
+        let repo = crate::coderepo::tests::scratch_repo(&format!("def029-{name}"));
+        (store, dir, repo)
+    }
+
+    /// An item planned into v1 and walked to `stage` (no gate is judged on the way).
+    fn togaf_item(store: &Store, title: &str, stage: &str) -> String {
+        let code = store
+            .add_feature("shop", title, "", "M", None)
+            .unwrap()
+            .code;
+        for s in [
+            "Business Arch",
+            "System Design",
+            "Implementation",
+            "Migration",
+        ] {
+            if stage == "Vision" {
+                break;
+            }
+            store.move_feature("shop", &code, s).unwrap();
+            if s == stage {
+                break;
+            }
+        }
+        super::plan(store, "shop", "v1", std::slice::from_ref(&code)).unwrap();
+        code
+    }
+
+    fn merged_ship(plan: &super::ReleasePlan) -> super::PlanCondition {
+        plan.conditions
+            .iter()
+            .find(|c| c.check == crate::releasegates::ReleaseCheck::MergedItemsShip)
+            .cloned()
+            .expect("the plan lists merged_items_ship")
+    }
+
+    /// DEF-029 R-1: the stage that tags holds an item whose code is merged and would be carried,
+    /// naming it and what it lacks; unfinished work is not held.
+    #[test]
+    fn the_stage_that_tags_holds_a_merged_item_that_would_carry() {
+        let (store, dir, repo) = togaf_staged("tag");
+        let merged = togaf_item(&store, "Merged", "Migration");
+        let early = togaf_item(&store, "Early", "Implementation");
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        let plan = plan_to(&store, &repo, "tag");
+        let c = merged_ship(&plan);
+        assert!(!c.holds && c.stage == "tag", "{c:?}");
+        assert!(
+            c.detail.contains(&merged) && !c.detail.contains(&early),
+            "{c:?}"
+        );
+        assert!(
+            c.detail.contains("release"),
+            "names the sign-off: {}",
+            c.detail
+        );
+        assert!(
+            c.fix.contains("Review page") && c.fix.contains(&format!("kanbanr check {merged}")),
+            "{}",
+            c.fix
+        );
+        assert!(!plan.ready);
+        let err = super::promote(&store, "shop", "v1", Some("tag"), "Ada", "", Some(&repo))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(&merged) && !err.contains(&early), "{err}");
+        assert_eq!(v1(&store).stage, "main", "nothing moved");
+        assert!(!coderepo::tag_exists(&repo, "v1"));
+        clean(&dir, &repo);
+    }
+
+    /// DEF-029 R-1: so does the stage that ships, when the item reached the merged stage after the
+    /// tag.
+    #[test]
+    fn the_stage_that_ships_holds_a_merged_item_that_would_carry() {
+        let (store, dir, repo) = togaf_staged("ship");
+        let item = togaf_item(&store, "Late", "Implementation");
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        go(&store, &repo, "tag");
+        let sha = v1(&store).tag_commit;
+        now_result(&store, &sha, true);
+        assert!(merged_ship(&plan_to(&store, &repo, "staging")).holds);
+        store.move_feature("shop", &item, "Migration").unwrap();
+        let plan = plan_to(&store, &repo, "staging");
+        let c = merged_ship(&plan);
+        assert!(!c.holds && c.stage == "staging", "{c:?}");
+        assert!(c.detail.contains(&item), "{c:?}");
+        assert!(!plan.ready);
+        let err = super::promote(
+            &store,
+            "shop",
+            "v1",
+            Some("staging"),
+            "Ada",
+            "",
+            Some(&repo),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains(&item), "{err}");
+        assert_eq!(v1(&store).state, super::ReleaseState::Planned);
+        assert_eq!(
+            store
+                .load("shop")
+                .unwrap()
+                .feature(&item)
+                .unwrap()
+                .release
+                .as_deref(),
+            Some("v1"),
+            "the item stays planned into the release"
+        );
+        clean(&dir, &repo);
+    }
+
+    /// DEF-029 R-2: work not done is still carried by the cut, and is not held.
+    #[test]
+    fn an_unfinished_item_is_still_carried_by_the_cut() {
+        let (store, dir, repo) = togaf_staged("carry");
+        let early = togaf_item(&store, "Early", "Implementation");
+        let project = store.load("shop").unwrap();
+        let preview = super::cut_preview(&store, "shop", "v1").unwrap();
+        assert!(!preview[0].ships);
+        assert!(super::merged_but_carried(&project, &preview).is_empty());
+        let cut = super::cut(&store, "shop", "v1").unwrap();
+        assert_eq!(cut.release.carried.len(), 1);
+        assert_eq!(cut.release.carried[0].code, early);
+        clean(&dir, &repo);
     }
 
     /// FTR-026 R-1: the stage that tags records `tagged_at` and the tag's commit, and ships nothing.
