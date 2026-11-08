@@ -570,6 +570,14 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
   A design subagent works under a design scope, in its own worktree: it reads, and writes nothing
   (see "Sub-agents: what each may do").
 
+- **Ask whether the product has a user interface** the first time the technology or stack is chosen
+  (for TOGAF, in the technology phase; elsewhere, when the first item is designed). Ask it as a
+  question with the options a screen a person uses, a service, library or command-line tool only,
+  and not decided yet; recommend nothing the user has not said. Record the answer in the design. When
+  there are screens, ask for them as items of their own; when there are none, write "no user
+  interface" in the design so that is a recorded decision. Write the first item as what a person
+  does ("a shopper opens their basket and finds it kept"), not as a capability.
+
 Leaving the design role, the build stage's gate asks for `spec_sections: [Design]` and the
 `design-review` sign-off. Say **design-review** is waiting on the Review page once the section exists; the user gives
 it, never you.
@@ -779,6 +787,14 @@ branches; fix it before going on.
   move says is needed; it is never done for you.
 - In the sprints-only model, `kanbanr sprint close <SP>` is the cut: main fast-forwards to
   `sprint/<SP>`, tagged with the sprint's code.
+- **Designing CI or a release workflow.** When the user asks for a pipeline, design it as
+  `docs/src/guides/delivery-pipeline.md` says, and as an item with its own definition: start with
+  one job on one platform, tests first; ask the user which checks their plan and settings allow
+  (you cannot see their account) and leave out any they cannot run; make the release description the
+  notes kanbanr drafted (`kanbanr release notes <V>`), never a list generated from commits; add a
+  manual trigger that runs everything up to publishing and publishes nothing, and ask the user to
+  run it before the cut; run each check once per commit; and test the built product the way a
+  person will use it. Name no remote server or CI product that the project has not already chosen.
 
 ### Carry-over
 
