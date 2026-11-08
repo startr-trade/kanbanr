@@ -1,6 +1,6 @@
 {
   "name": "kanbanr-web",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -20,10 +20,11 @@
     "check:api-types": "node scripts/check-api-types.mjs",
     "check:diagram-lint": "node scripts/check-diagram-lint.mjs",
     "check:diagram-review": "node scripts/check-diagram-review.mjs",
-    "check:agent-scopes": "node scripts/check-agent-scopes.mjs"
+    "check:agent-scopes": "node scripts/check-agent-scopes.mjs",
+    "check:live-settle": "node scripts/check-live-settle.mjs"
   },
   "dependencies": {
-    "dompurify": "^3.4.16",
+    "dompurify": "^3.4.17",
     "marked": "^12.0.2",
     "pele": "1.7.0",
     "react": "^18.3.1",

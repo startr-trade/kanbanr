@@ -2149,6 +2149,16 @@
             "description": "The stage ends the work (an end status that is not a no-op): \"ready to complete\".",
             "type": "boolean"
           },
+          "for_you": {
+            "description": "How many of `missing` the user settles: sign-offs and the `approved` check (DEF-020).",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "immediate": {
+            "description": "The stage the item reaches next in the workflow's order, the one the Review page asks\nsign-offs for (DEF-020). A card speaks only of this one.",
+            "type": "boolean"
+          },
           "missing": {
             "description": "Everything the stage still lacks, its sign-offs included (as before FEAT-205).",
             "format": "uint",
@@ -2176,7 +2186,9 @@
           "missing",
           "signoffs",
           "tasks_open",
-          "ends"
+          "ends",
+          "immediate",
+          "for_you"
         ],
         "type": "object"
       },
@@ -3823,7 +3835,7 @@
     }
   },
   "info": {
-    "description": "The read-only routes `kanbanr serve` answers for the monitor and for tools built on the board. Version 1 stays at `/api/...`; a breaking change would be published as v2 under `/api/v2/...`, with v1 kept for a deprecation period. Routes the daemon serves that are not listed here are internal and may change. Write routes (`serve --allow-writes`) are not part of this contract. Errors are `text/plain`. CORS is permissive; there is no authentication.",
+    "description": "The read-only routes `kanbanr serve` answers for the monitor and for tools built on the board. Version 1 stays at `/api/...`; a breaking change would be published as v2 under `/api/v2/...`, with v1 kept for a deprecation period. Routes the daemon serves that are not listed here are internal and may change. Write routes (`serve --allow-writes`) are not part of this contract. Errors are `text/plain`. The daemon answers only for its own host names and grants no cross-origin access; there is no authentication.",
     "license": {
       "identifier": "MIT OR Apache-2.0",
       "name": "MIT OR Apache-2.0"

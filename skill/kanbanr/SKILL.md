@@ -36,7 +36,7 @@ project"** (or anything equivalent):
 1. **Check whether it's already set up.** Run `kanbanr where --json`. If `source` is `marker` and
    `exists` is true, the project is already tracked: skip the interview, recover the board (see
    "Recover & resume") and carry on. Everything below is for a folder that is not yet tracked.
-2. **Enter plan mode before anything writes** (the `EnterPlanMode` tool). Setting up is the first
+2. **Enter plan mode before anything writes** (plan mode is for setup and for designing the process, only: never for a routine move or a new item, and **never while a sub-agent is running**, because entering it pauses the agent; if one is running, use a question, or wait until it reports) (the `EnterPlanMode` tool). Setting up is the first
    decision of the project, and the rule for every other decision applies to it too: nothing gets
    built before its reasoning is agreed. Set the user's original request aside until setup is
    done — it is picked up again at step 5.
@@ -190,6 +190,9 @@ project"** (or anything equivalent):
    and `kanbanr git doctor` (these two if the hooks were chosen) and `kanbanr doctor`, then show
    the board. On a new board, doctor's only expected
    warnings are the goals that no item links to yet. Anything else is a setup fault to fix now.
+   Doctor warns only about what an item's current stage asks; what later stages will ask appears
+   after the warnings as counts ("Later stages will ask"), which are not warnings and need no
+   clearing. `kanbanr check` lists them.
    Tell the user how to watch the board: `kanbanr serve` starts the monitor, which is built into
    the binary (it needs no `--ui-dir`, and never another checkout's build), and `kanbanr open`
    opens it. **Only then** go back to what the user originally asked for.
@@ -320,11 +323,15 @@ visible, a plausible guess is not. Never write `[MISSING: …]` into the data; t
 Write the definition with the batch path (`definition` on `feature.add`/`feature.edit`) or
 `kanbanr feature define <CODE> --file def.yaml`.
 
-## Agreement before work: decided in the conversation
+## Agreement before work: decided on the pages
 
-**Scope → define → show the brief → the user decides → only then write code.** The user decides in
-Claude Code itself: a plan they accept, or a question they answer. They should never need the
-browser or a terminal to agree to something (FEAT-159).
+**Scope → define → the user decides on the Review page → only then write code.** Every verdict is
+the user's and is taken on the monitor: approve, ratify, sign off, withdraw, accept or reject a
+decision (Review page), promote or cut a release and confirm each stage after the tag (Releases
+page). **You never record a verdict, and never ask for one in a plan or a question.** kanbanr's
+guard refuses the commands if you try. Your part is one message saying what is waiting and where:
+`kanbanr open --check` gives the addresses. If no monitor accepts writes, offer to start one with
+`kanbanr review --ui` (run it in the background) or tell the user the command to run.
 
 ### The workflow decides what you ask — never a preset name
 
@@ -339,13 +346,13 @@ organisation's own process file changes what you ask with nothing changed here:
 
 | Check | What you do |
 |---|---|
-| `definition`, `statement`, `goals`, `goals_known`, `zachman` (its named columns), `requirements`, `ears`, `quality`, `tests_named`, `small`, `spec_sections` (its named sections; `Design` is the build-ready design) | **draft it into the plan**; ask only what you cannot work out from the charter and the code |
-| `approved` | the user's **acceptance of the plan**; with nothing to draft, an **Approve** question |
-| `bypass` | a **Ratify** question |
-| `signoff` (a name in `signoffs_needed`, e.g. `design-review`, `docs-folded`) | a **"Sign off \<name\>"** question |
+| `definition`, `statement`, `goals`, `goals_known`, `zachman` (its named columns), `requirements`, `ears`, `quality`, `tests_named`, `small`, `spec_sections` (its named sections; `Design` is the build-ready design) | **draft it into the definition**; ask only what you cannot work out from the charter and the code |
+| `approved` | the user's approval **on the Review page**: say it is waiting, with the link |
+| `bypass` | a ratification **on the Review page**: say it is waiting |
+| `signoff` (a name in `signoffs_needed`, e.g. `design-review`, `docs-folded`) | a sign-off **on the Review page**: say it is waiting |
 | `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; the active sprint; planned releases) |
 | `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
-| `docs_updated` | **never a question** — fold the design into each doc in `affects_docs`, as built, and draft that fold-in into the plan, saying which docs change; if the item names none, ask whether it really changes no architecture doc |
+| `docs_updated` | **never a question** — fold the design into each doc in `affects_docs`, as built, and draft that fold-in into the definition, saying which docs change; if the item names none, ask whether it really changes no architecture doc |
 | `diagrams_valid` | **never a question** — fix each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then run `kanbanr doctor` to confirm none is left |
 | `docs_cover` | **never a question** — fix the coverage: add a link to the item in each view doc the rule names (`[zachman] FEAT-012 is not referenced from architecture/zachman.md`), then move |
 
@@ -381,71 +388,50 @@ after. Write them so they draw:
 A project can refuse broken diagrams outright (`kanbanr config diagrams --strict on`) or require
 `diagrams_valid` on a gate. Both are the user's choice; never switch them yourself.
 
-### A new item: scope it in plan mode
+### A new item: scope it in the conversation
 
-When the user asks for work, **enter plan mode** before writing anything. Read the charter and the
+When the user asks for work, do not enter plan mode. Read the charter and the
 code; ask only what you cannot find, a few questions at a time (AskUserQuestion, with your
-recommendation first). The plan is the brief: statement, goals, the six dimensions the stage asks
+recommendation first). The brief is the definition: statement, goals, the six dimensions the stage asks
 for, EARS requirements with named tests, and the stage it starts in — as far as the target stage's
 gate requires, and no further unless the user asks for the whole definition up front.
 
 **Ask the user's choices; don't make them.** Anything with a consequence the user would recognise —
 a business rule (how two baskets merge), a retention or expiry, a limit, who may see what, what is
-in or out of scope — is an AskUserQuestion *before* the plan, with your recommendation first.
-Choices you still had to make go in the plan under **"Choices I made — accepting agrees to them"**,
-so acceptance is informed. Never leave them as "for you to decide" after the approval is recorded.
+in or out of scope — is an AskUserQuestion *before* you write the definition, with your recommendation
+first.
+Choices you still had to make go in the brief under **Choices I made**, so the approval is
+informed. Never leave them as "for you to decide" after the approval is given.
 
 When one request spans several stages ("take it to business architecture, then design it"), say at
-the top of the plan which stages it covers; accepting it approves the definition at each.
+the top of the brief which stages it covers.
 
-**The user accepting the plan is their approval of exactly that text.** After they accept: create
-or define the item, then record the approval with the revision you showed —
-`kanbanr approve <CODE> --rev <rev>` (rev from `kanbanr check <CODE> --json`). If they send the plan
-back, revise it; nothing is recorded.
+Then write the definition to the board (`kanbanr feature define`), show its brief in a few lines,
+and say it is waiting for their approval on the Review page, with the link. Choices you had to
+make go in the brief under **Choices I made**, so the approval is informed. Moving an item on is
+the same: grow the definition, then say what the next decision is and where it waits.
 
-Moving an item on to a stage that asks for more is the same loop: plan the growth, the user
-accepts, record the approval again (the earlier one lapsed when the definition grew).
+### Waiting decisions: on the Review and Releases pages
 
-### Waiting decisions: work the queue as questions
-
-When items are waiting (`kanbanr review --pending --json` for definitions and sign-offs, and
-`kanbanr adr list --json` for decisions still `proposed`), or the user says "let's review", take
-them **one at a time**: show the brief in a sentence or three, then **one AskUserQuestion** whose options are the
-verdicts that item can take — from the table above — plus **"Change it"** and **"Skip"**:
-
-- **Approve / Ratify / Sign off \<name\>** → record it at once:
-  `kanbanr approve|ratify <CODE> --rev <rev>` · `kanbanr signoff <CODE> <name> --rev <rev>`.
-- **Accept / Reject** a proposed decision → `kanbanr adr accept|reject <ADR> [--reason "…"]`.
-- **Which release?** An entry with `"approval": "release"` (or any entry that has
-  `release_choices`) is an item ready for release and in none. Ask which planned release it
-  belongs to. The options are each version in `release_choices`, plus **New release…**, the same
-  choices the monitor's Review page offers. Then run `kanbanr release plan <VERSION> <CODE>`. For a
-  new release, ask its version and target date, then run
-  `kanbanr release add <VERSION> --target YYYY-MM-DD` before the plan.
-- **Change it** → ask what, revise the definition; it returns to the queue (its approval lapses).
-- **Skip** → leave it, and move to the next.
-
-**A verdict is recorded only from the user's explicit choice in that plan or question — never
-inferred from the conversation, never from "sounds good", never by you on your own.** Always pass
-`--rev`: if the definition changed after you showed it, the command refuses and records nothing;
-show the brief again and ask again. Recording a verdict nobody chose is the failure this exists to
-prevent — if it ever happens, say so and withdraw it (`kanbanr unapprove <CODE> --reason "…"`, or
-`kanbanr signoff <CODE> <name> --withdraw --reason "…"` for a sign-off). A withdrawal always needs
-the reason the user gives; never invent one.
+When items are waiting (`kanbanr review --pending --json`, `kanbanr adr list --json` for
+`proposed` decisions, and the Releases page for a release ready to move), say so in one message:
+how many, which, and the page's address. Never list them as questions. If the user asks you to
+explain one, explain it, then send them back to the page. If they want a change, make it; the item
+returns to the queue as its approval or sign-off requires. **If a verdict was ever recorded that
+the user did not give, say so at once**, and ask them to withdraw it on the item's page.
 
 The queue offers a sign-off only for the stage the item reaches **next**, and only once that
 stage's other requirements are met. A sign-off for a later stage, or for work not done yet, is not
 asked for, so don't ask for it either.
 
-**A decision you draft is asked about at once.** After `kanbanr adr new`, fill its sections, show it
-in a few lines, and ask Accept / Reject (with a reason) / Later — never end by telling the user to
-run `kanbanr adr accept`. "Later" leaves it proposed, and it comes back in the next review.
-
-The browser (`kanbanr review --ui`) and the plain commands stay available for users who prefer
-them; offer them, but do not require them. Never end a turn by handing the user a command to type
-for a decision you could have asked about.
+**A decision you draft is announced at once:** fill its sections, show it in a few lines, and say
+it waits on the Review page.
 
 ### Designing a process with the user
+
+Plan mode is for this, and for setup, only: never for a routine move or a new item, and **never
+while a sub-agent is running**, because entering it pauses the agent. If one is running, use a
+question, or wait until it reports.
 
 When the user wants a process of their own — at setup, or later ("let's change our process", "we
 need a design review before build") — design it **in plan mode**, from the board's vocabulary, so
@@ -549,7 +535,7 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
   (see "Sub-agents: what each may do").
 
 Leaving the design role, the build stage's gate asks for `spec_sections: [Design]` and the
-`design-review` sign-off. Ask **Sign off design-review** once the section exists; the user gives
+`design-review` sign-off. Say **design-review** is waiting on the Review page once the section exists; the user gives
 it, never you.
 
 ### The design stage: the spec carries the build-ready design
@@ -656,6 +642,13 @@ As the coordinator you:
 - take back every question and every piece of work outside the brief: the agent reports it, you
   decide or ask the user, it never decides a design question itself. A refusal an agent reports is
   the same: decide it or ask the user, never widen the scope to get past it;
+- **report changes, not events.** Reply to a status line, monitor event or agent message only when
+  it changes what the user knows: a task landed, a failure, a stall, a decision waiting, the work
+  done. Gather what arrives together into one message. Send nothing for a report that repeats one
+  already given. Never write 'already reported'.
+- **put rework on the board before it starts.** Add each piece as a task on the item's todo-list
+  first, so the item never reads as finished while someone works on it. A build scope is refused
+  for an item with no open task.
 - give no agent a verdict to record, a stage to move or anything to push; those stay yours and the
   user's. When a scoped agent finishes an item's last task, the item stays where it is: you move it.
 
@@ -667,7 +660,7 @@ the user, by the agent for its item (`Agent-Scope:` on the commit).
 
 Before the move:
 - fold the Design into each doc in `affects_docs`, describing it as built (`docs_updated`);
-- ask **Sign off docs-folded**.
+- say **docs-folded** is waiting for the user's sign-off on the Review page.
 
 With the git model on, entering the integrate role (`kanbanr move <CODE> <status>`) merges the item
 branch into its line, `--no-ff`, with `Refs: kanbanr:<CODE>`. If the merge would conflict, the move
@@ -711,8 +704,9 @@ branches; fix it before going on.
 - Plan items into a release before promoting it: a release with nothing planned is refused. So a
   release starts with `release add`, then `release plan <V> <CODE>…`, then promoting it to its
   first stage (candidate), which makes `release/<V>`; `release add` has no `--branch`.
-- Claude runs `kanbanr release promote <V>` (check first with `--plan`) and tells the user the
-  `next:` line it prints. **The user pushes main and the tag**, by hand; a cut that requires
+- Check with `kanbanr release promote <V> --plan` and tell the user what it still needs; the
+  promotion itself, the cut included, is theirs, on the Releases page. **The user pushes main and
+  the tag**, by hand; a cut that requires
   `pushed` waits until main is pushed (and CI has run on it).
 - **A CI result is the user's to record.** A stage that requires `gate_passed` needs a recorded
   passed result for the release tip. kanbanr never asks a server; the user looks at their CI and
@@ -830,9 +824,9 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
   Consequences and Compliance. Fill them in — `adr list` reports which are still unwritten, and
   doctor warns about a missing Decision or Consequences.
 - **A decision is the user's, never yours.** Draft it as `proposed` (the default — never pass
-  `--status accepted`), then ask. The user accepts or rejects it on the Review page or with
-  `kanbanr adr accept ADR-0007` / `adr reject ADR-0007 --reason "…"`, exactly as they approve a
-  definition. Accept is refused while a section is unanswered; the verdict, who gave it and when
+  `--status accepted`), then say it is waiting. The user accepts or rejects it on the Review page or with
+  `kanbanr adr accept ADR-0007` / `adr reject ADR-0007 --reason "…"` in their own terminal,
+  exactly as they approve a definition. Accept is refused while a section is unanswered; the verdict, who gave it and when
   are recorded on the decision and in the activity log.
 - The links live **on the decision** (`affects`, `driven_by`); the item's view is derived, so it
   can never disagree. `kanbanr adr supersede ADR-0007 --replaces ADR-0003` writes both sides and
@@ -1100,6 +1094,7 @@ resolution** in the data folder (kanbanr never auto-resolves).
 ```
 kanbanr serve                       # the monitor is built into the binary; nothing else to point at
 kanbanr open                        # open it in the browser
+kanbanr open --check [--json]       # is the monitor up, with writes; its Review and Releases addresses
 ```
 
 ## Command reference
@@ -1127,7 +1122,7 @@ kanbanr trace [G-2|FEAT-001|FEAT-001/R-2|doc.md] [--zachman]   # down the chain,
 kanbanr why src/cart.rs:42                      # up: annotation or trailer -> requirement -> goal
 kanbanr adr new "…" [--affects …] [--driven-by FEAT-001/R-2] [--quality Reliability] [--zachman How]
 kanbanr adr list [--for FEAT-001] | supersede ADR-0007 --replaces ADR-0003 | history ADR-0007
-kanbanr adr accept ADR-0007 | adr reject ADR-0007 --reason "…"   # the USER's verdict, not yours
+kanbanr adr accept ADR-0007 | adr reject ADR-0007 --reason "…"   # the user's, on the monitor; refused when Claude runs it
 kanbanr lessons [--for FEAT-001] [--all]        # read BEFORE starting work
 kanbanr lesson add "…" --kind pitfall --from FEAT-043 --evidence "…" [--tags a,b] [--goals G-1]
 kanbanr lesson affirm L-1 [--note "…"] | contradict L-1 [--note "…"]
@@ -1141,9 +1136,9 @@ kanbanr git model --sprints on|off --releases on|off   # preview a cadence's mod
 kanbanr git forward <VERSION>                    # merge a release's fixes forward into the line
 kanbanr git doctor [--json]                      # board vs branches; read-only, exits 1 on an error
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
-kanbanr approve FEAT-001 --rev <rev>   # only after the user chose Approve in a plan or question
-kanbanr signoff FEAT-001 design-review [--note …] [--doc path]   # a named sign-off a stage asks for — the user's, never Claude's
-kanbanr signoff FEAT-001 design-review --withdraw --reason "…"     # take one back; the earlier entry stays as history
+kanbanr approve FEAT-001 --rev <rev>   # the user's, on the monitor; refused when Claude runs it (so are ratify, unapprove)
+kanbanr signoff FEAT-001 design-review [--note …] [--doc path]   # a named sign-off a stage asks for — the user's, on the monitor; refused when Claude runs it
+kanbanr signoff FEAT-001 design-review --withdraw --reason "…"     # take one back (the user's too); the earlier entry stays as history
 kanbanr move FEAT-001 Scheduled [--override \"<reason>\"]     # gated; the override is recorded
 kanbanr batch --dry-run --file b.json   # preview a bundle (e.g. an import) without writing
 kanbanr sources [--write]         # imported items' sources; --write records ones that are gone
@@ -1166,8 +1161,8 @@ kanbanr sprint plan SP-001 FEAT-001 FEAT-002      # warns over capacity
 kanbanr sprint start SP-001 | show [SP-001] | list | close SP-001 --carry-to SP-002|backlog
 kanbanr retro --sprint SP-001                     # the sprint's items, what it carried, its burndown
 kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
-kanbanr release cut v0.1.0 [--tag]                # ship the finished items, write notes, carry the rest
-kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # next or named stage, doing what its gates say (default candidate → main → tag: the first makes release/<V>, main fast-forwards main, the stage holding `tag` is the cut and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
+kanbanr release cut v0.1.0 [--tag]                # the user's, on the monitor; refused when Claude runs it. Ship the finished items, write notes, carry the rest
+kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # the user's, on the monitor; refused when Claude runs it (so is each stage confirmed after the tag). Next or named stage, doing what its gates say (default candidate → main → tag: the first makes release/<V>, main fast-forwards main, the stage holding `tag` is the cut and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
 kanbanr release promote v0.1.0 [<stage>] --plan [--fetch]  # what it would do and still needs; changes nothing
 kanbanr gate list [--name ci] [--commit REV]   # recorded gate results, newest first (reading is yours; `gate record` is the user's)
 kanbanr release redate v0.1.0                     # date the notes and changelog today, before the cut
@@ -1205,7 +1200,7 @@ Under a phased process, grow an item's definition stage by stage.
   that, and not everything at once.
 - **Approval is renewed as the definition grows.** Each change lapses the approval, so ask the
   user to approve again before the move.
-- **A sign-off (`kanbanr signoff`) is the user's**, like an approval: ask for it, never record it
+- **A sign-off (`kanbanr signoff`) is the user's**, like an approval: say it is waiting on the Review page; never record it
   yourself.
 - **Overrides:** `--override "<reason>"` gets past a gate on the record. Use it only when the
   user says so.

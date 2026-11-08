@@ -306,13 +306,20 @@ async function verdict(
  * not offer the action then; this is the guarantee that the standalone bundle never calls a write
  * route even if one did.
  */
+/** The token the monitor gave its own page at this start (DEF-024); a write is refused without it.
+ * Outside a page (the web checks run this module under Node) there is none to send. */
+function token(): string {
+  if (typeof document === "undefined") return "";
+  return document.querySelector<HTMLMetaElement>('meta[name="kanbanr-token"]')?.content ?? "";
+}
+
 async function postWrite(url: string, body: unknown, command: string, method = "POST"): Promise<Response> {
   if (isReadOnly()) {
     throw new Error(`This monitor is read-only. Run \`${command}\` instead.`);
   }
   return fetch(url, {
     method,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-kanbanr-token": token() },
     body: JSON.stringify(body),
   });
 }

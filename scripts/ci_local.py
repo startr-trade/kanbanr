@@ -476,9 +476,14 @@ def uses_equivalents() -> None:
     # The plugin manifests (FEAT-139): nothing checked them, and a skills path Claude Code could not
     # resolve shipped. Validated wherever the claude command is installed; said so where it is not.
     if shutil.which("claude"):
+        # Fails when the validator fails; its warnings are advisory (it says they do not change the
+        # verdict), so they are printed with the result and never fail it (MNT-005).
         ok, out = sh(["claude", "plugin", "validate", "."], TREE)
-        say("plugin: claude plugin validate . (marketplace and plugin manifests)",
-            ok and "warning" not in out.lower(), out)
+        say("plugin: claude plugin validate . (marketplace and plugin manifests)", ok, out)
+        if ok:
+            for line in out.splitlines():
+                if line.strip().startswith("❯") or "warning" in line.lower():
+                    print("    " + line.strip(), flush=True)
     else:
         not_verified.append("plugin: claude plugin validate . (no claude command here)")
     not_verified.append("release.yml image: pushing to GHCR")

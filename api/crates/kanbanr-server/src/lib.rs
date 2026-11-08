@@ -13,6 +13,7 @@
 //! the CLI-writes-directly default is fully preserved.
 
 mod embedded;
+mod origin;
 mod routes;
 mod watcher;
 mod write;
@@ -30,7 +31,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::broadcast;
-use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
 #[derive(Clone)]
@@ -119,6 +119,17 @@ pub async fn run(
     // fell through to the SPA index.html — which broke the web Gantt page.)
     let api = api.fallback(routes::read_passthrough).with_state(state);
 
+    // Who this monitor answers, and the token its own page is given at this start (DEF-024).
+    // Read once, here (factor 3).
+    let allowed: Vec<String> = std::env::var("KANBANR_ALLOWED_HOSTS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty())
+        .collect();
+    let guard = Arc::new(origin::Guard::new(&bind, &allowed));
+    let token = guard.token().to_string();
+
     let meta_dir = data_dir.clone();
     let mut app = Router::new()
         .route("/healthz", get(healthz))
@@ -143,14 +154,14 @@ pub async fn run(
             }),
         )
         .nest("/api", api)
-        .layer(axum::middleware::from_fn(log_requests))
-        .layer(CorsLayer::permissive());
+        .layer(axum::middleware::from_fn(log_requests));
 
     if let Some(dir) = ui_dir {
         // Serve hashed assets and any other file the build put in the dir (favicon, config.json —
         // FEAT-178), and fall back to index.html for any other non-/api path so client-side routes
         // work on direct load / refresh.
         let base = PathBuf::from(&dir);
+        let token = token.clone();
         let files_root = base.clone();
         let index_path = base.join("index.html");
         // Read per request, not once at startup (FEAT-070). Vite writes hashed asset names on every
@@ -166,6 +177,7 @@ pub async fn run(
             .fallback(move |uri: axum::http::Uri| {
                 let path = index_path.clone();
                 let last_good = Arc::clone(&last_good);
+                let token = token.clone();
                 let file = ui_file(&files_root, uri.path());
                 async move {
                     if let Some((rel, body)) = file {
@@ -182,7 +194,7 @@ pub async fn run(
                         // Missing or half-written: serve what worked last rather than a blank page.
                         _ => last_good.lock().map(|c| c.clone()).unwrap_or_default(),
                     };
-                    axum::response::Html(with_root_base(&html)).into_response()
+                    axum::response::Html(with_root_base(&with_token(&html, &token))).into_response()
                 }
             });
         eprintln!("serving SPA from {dir}");
@@ -193,8 +205,16 @@ pub async fn run(
         let files = embedded::assets();
         let index = files
             .get("index.html")
-            .map(|html| with_root_base(&String::from_utf8_lossy(html)).into_bytes())
-            .unwrap_or_else(|| b"<!doctype html><title>kanbanr</title>".to_vec());
+            .map(|html| {
+                with_root_base(&with_token(&String::from_utf8_lossy(html), &token)).into_bytes()
+            })
+            .unwrap_or_else(|| {
+                with_token(
+                    "<!doctype html><html><head><title>kanbanr</title></head></html>",
+                    &token,
+                )
+                .into_bytes()
+            });
         app = app.fallback(move |uri: axum::http::Uri| {
             let index = index.clone();
             async move {
@@ -222,11 +242,19 @@ pub async fn run(
         );
     }
 
+    // The guard goes on last, so it covers the page and its files as well as the API: a layer only
+    // wraps the routes that exist when it is added (DEF-024).
+    let app = app.layer(axum::middleware::from_fn_with_state(
+        guard.clone(),
+        origin::check,
+    ));
+
     // Keep the watcher alive for the lifetime of the server.
     let _keep = _watcher;
     eprintln!(
-        "kanbanr view daemon on http://{bind}  (data: {})",
-        data_dir.display()
+        "kanbanr view daemon on http://{bind}  (data: {})\nanswering for: {}",
+        data_dir.display(),
+        guard.hosts().join(", ")
     );
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     axum::serve(listener, app).await?;
@@ -257,6 +285,28 @@ fn with_root_base(html: &str) -> String {
         return html.to_string();
     };
     format!("{}<base href=\"/\">{}", &html[..end], &html[end..])
+}
+
+/// The monitor's index with the token its own page sends with a write, as the first thing after
+/// `<head>` (DEF-024). An index with no head is left as it is.
+fn with_token(html: &str, token: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    let Some(start) = lower.find("<head").filter(|&i| {
+        matches!(
+            lower.as_bytes().get(i + 5),
+            Some(b'>' | b' ' | b'\t' | b'\n' | b'\r')
+        )
+    }) else {
+        return html.to_string();
+    };
+    let Some(end) = lower[start..].find('>').map(|i| start + i + 1) else {
+        return html.to_string();
+    };
+    format!(
+        "{}<meta name=\"kanbanr-token\" content=\"{token}\">{}",
+        &html[..end],
+        &html[end..]
+    )
 }
 
 /// A file under `--ui-dir` named by a request path, if one exists there: the favicon, the runtime

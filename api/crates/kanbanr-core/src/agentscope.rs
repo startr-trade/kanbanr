@@ -513,6 +513,24 @@ fn item_branch(
     Ok((name, true))
 }
 
+/// Why a build scope can't be issued for `item` (FTR-024 R-9): it has no task that is not
+/// completed, so the board would read it as finished while an agent works on it.
+fn open_task_refusal(item: &FeatureItem) -> Option<String> {
+    let open = item
+        .todo_lists
+        .iter()
+        .flat_map(|l| &l.tasks)
+        .any(|t| t.state != crate::models::TaskState::Completed);
+    (!open).then(|| {
+        format!(
+            "{code} has no open task, so the board would read it as finished while an agent works \
+             on it: add the work as tasks first (`kanbanr todo add {code} …`, `kanbanr task add \
+             …`), then issue the scope",
+            code = item.code
+        )
+    })
+}
+
 /// Issue a scope (R-1): record it with its issuer, item, operations, branch, issue time and
 /// expiry, and return the brief. A build scope's item must be at the build stage, and its branch
 /// is found or made, never checked out.
@@ -557,6 +575,9 @@ pub fn issue(
                         .into(),
                 ));
             }
+        }
+        if let Some(why) = open_task_refusal(&item) {
+            return Err(CoreError::Unsupported(why));
         }
     }
     let mut scopes = load(store, id)?;
@@ -1324,6 +1345,29 @@ pub fn drift_issues(store: &Store, id: &str, root: &Path, now: &str) -> Vec<crat
 
 #[cfg(test)]
 mod tests {
+    /// FTR-024 R-9: a build scope needs a task that is not completed; one with an open task, even
+    /// beside completed ones, is issued.
+    #[test]
+    fn a_build_scope_needs_an_open_task() {
+        let item = |states: &[&str]| -> FeatureItem {
+            let tasks: Vec<_> = states
+                .iter()
+                .enumerate()
+                .map(|(i, s)| serde_json::json!({"key": format!("T{i}"), "text": "t", "state": s}))
+                .collect();
+            serde_json::from_value(serde_json::json!({
+                "code": "FTR-9", "title": "x", "status": "In Progress", "milestone": "MS-1", "specification": "", "created_at": "2026-11-06T00:00:00Z", "updated_at": "2026-11-06T00:00:00Z",
+                "todo_lists": [{"code": "TL-001", "tasks": tasks, "created_at": "2026-11-06T00:00:00Z"}],
+            }))
+            .unwrap()
+        };
+        let why = open_task_refusal(&item(&["Completed", "Completed"])).expect("refused");
+        assert!(why.contains("add the work as tasks first"), "{why}");
+        assert!(open_task_refusal(&item(&[])).is_some());
+        assert!(open_task_refusal(&item(&["Completed", "InProgress"])).is_none());
+        assert!(open_task_refusal(&item(&["NotStarted"])).is_none());
+    }
+
     /// FEAT-214 R-4, the TMPDIR hole: a board that holds scopes is governed even when the
     /// temporary directory is made to cover it; one that holds none, inside it, is not (D7).
     #[test]

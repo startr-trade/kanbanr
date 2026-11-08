@@ -3713,14 +3713,12 @@ requirements:
         assert!(bad.is_err());
     }
 
-    /// FEAT-117 R-2: where the workflow declares its gates, doctor reports what the item's NEXT stage
-    /// needs — not everything a later stage will ask. A definition built stage by stage is not
-    /// incomplete for lacking what it is not yet expected to say.
-    #[test]
-    fn doctor_is_phase_aware() {
+    /// A TOGAF board with the charter adopted and one item at Vision, written up as far as Vision
+    /// asks (a statement and a goal).
+    fn togaf_vision_board(items: usize) -> (crate::Store, tempdir::TempDirLike, Vec<String>) {
         use crate::models::FeatureDefinition;
         use serde_json::json;
-        let (store, _d) = temp_store();
+        let (store, d) = temp_store();
         new_project(&store, "demo");
         crate::dispatch::dispatch(
             &store,
@@ -3730,44 +3728,60 @@ requirements:
         )
         .unwrap();
         adopt_charter(&store, "demo");
-        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
-        store
-            .set_feature_definition(
-                "demo",
-                &f.code,
-                Some(FeatureDefinition {
-                    statement: "Keep a cart for 7 days".into(),
-                    goals: vec!["G-1".into()],
-                    ..Default::default()
-                }),
-            )
-            .unwrap();
-        let report = crate::doctor::run_project(&store, "demo").unwrap();
-        let said: Vec<&str> = report
+        let mut codes = Vec::new();
+        for n in 0..items {
+            let f = store
+                .add_feature("demo", &format!("Cart {n}"), "", "M", None)
+                .unwrap();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &f.code,
+                    Some(FeatureDefinition {
+                        statement: "Keep a cart for 7 days".into(),
+                        goals: vec!["G-1".into()],
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+            codes.push(f.code);
+        }
+        (store, d, codes)
+    }
+
+    fn said_about(report: &crate::doctor::Report, code: &str) -> String {
+        report
             .issues
             .iter()
-            .filter(|i| i.code.as_deref() == Some(f.code.as_str()))
+            .filter(|i| i.code.as_deref() == Some(code))
             .map(|i| i.message.as_str())
-            .collect();
-        let all = said.join(" | ");
-        // Business Arch asks who, what and why, and requirements…
-        for asked in [
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    /// DEF-021 R-1, R-2 (replaces FEAT-117 R-2's `doctor_is_phase_aware`): where the workflow
+    /// declares its gates, doctor warns only about what the gate of the item's CURRENT stage asks.
+    /// What a later stage asks is not a warning, though the readiness endpoint still lists it.
+    #[test]
+    fn doctor_warns_only_about_the_current_stage() {
+        let (store, _d, codes) = togaf_vision_board(1);
+        let report = crate::doctor::run_project(&store, "demo").unwrap();
+        let all = said_about(&report, &codes[0]);
+        for later in [
             "[MISSING: Who]",
             "[MISSING: What]",
             "[MISSING: Why]",
             "no requirements",
+            "[MISSING: How]",
+            "[MISSING: Where]",
         ] {
-            assert!(all.contains(asked), "{asked} not reported: {all}");
-        }
-        // …and not how or where, which System Design asks later.
-        for later in ["[MISSING: How]", "[MISSING: Where]"] {
             assert!(!all.contains(later), "{later} reported too early: {all}");
         }
-        // The next-stage answer is on the readiness endpoint too, with what the stage is for.
+        // The next-stage answer is on the readiness endpoint, with what the stage is for.
         let out = crate::dispatch::dispatch(
             &store,
             "GET",
-            &format!("/projects/demo/features/{}/readiness", f.code),
+            &format!("/projects/demo/features/{}/readiness", codes[0]),
             None,
         )
         .unwrap();
@@ -3972,6 +3986,73 @@ requirements:
         );
         item.release = None;
         assert_eq!(wait(&project.config, &unshipped, &item), None, "no release");
+    }
+
+    /// DEF-021 R-4: an item that reached a stage and then stopped meeting its gate still warns.
+    #[test]
+    fn doctor_warns_when_the_current_stage_is_no_longer_met() {
+        let (store, _d, codes) = togaf_vision_board(1);
+        store
+            .move_feature("demo", &codes[0], "Business Arch")
+            .unwrap();
+        let report = crate::doctor::run_project(&store, "demo").unwrap();
+        let all = said_about(&report, &codes[0]);
+        assert!(all.contains("no requirements"), "not reported: {all}");
+    }
+
+    /// DEF-021 R-3: items waiting for what a later stage asks are counted per stage, with the same
+    /// number of things `check` lists for that stage.
+    #[test]
+    fn doctor_counts_what_the_next_stage_asks() {
+        let (store, _d, codes) = togaf_vision_board(2);
+        let report = crate::doctor::run_project(&store, "demo").unwrap();
+        let project = store.load("demo").unwrap();
+        let charter = crate::charter::load(&store, "demo").unwrap();
+        let ctx = crate::readiness::Context::load(&store, "demo", &project.config);
+        let next = crate::readiness::immediate_next_gate(
+            &project,
+            Some(&charter),
+            project
+                .features
+                .iter()
+                .find(|f| f.code == codes[0])
+                .unwrap(),
+            &ctx,
+        )
+        .unwrap();
+        let n = next
+            .gaps
+            .iter()
+            .chain(next.warnings.iter())
+            .filter(|g| crate::doctor::doctor_relevant(g))
+            .count();
+        assert!(n > 0);
+        assert_eq!(report.ahead.len(), 1, "{:?}", report.ahead);
+        let a = &report.ahead[0];
+        assert_eq!(
+            (a.project.as_str(), a.stage.as_str()),
+            ("demo", "Business Arch")
+        );
+        assert_eq!((a.items, a.things), (2, 2 * n));
+    }
+
+    /// DEF-021 R-3, R-5: the counts are not issues, change no exit status, and are left out of the
+    /// JSON when there are none.
+    #[test]
+    fn doctor_ahead_counts_are_not_issues() {
+        let (store, _d, codes) = togaf_vision_board(1);
+        let report = crate::doctor::run_project(&store, "demo").unwrap();
+        assert!(!report.ahead.is_empty());
+        assert!(!report.has_errors());
+        let all = said_about(&report, &codes[0]);
+        assert!(!all.contains("Business Arch"), "{all}");
+        let v = serde_json::to_value(&report).unwrap();
+        assert!(v["ahead"][0]["stage"] == "Business Arch");
+        assert!(v["issues"].is_array());
+        // A board with nothing waiting has no `ahead` key.
+        let (store, _d2, _) = togaf_vision_board(0);
+        let v = serde_json::to_value(crate::doctor::run_project(&store, "demo").unwrap()).unwrap();
+        assert!(v.get("ahead").is_none(), "{v}");
     }
 
     /// FEAT-115 R-3: finishing the last task does not carry an item past its end status's gate —

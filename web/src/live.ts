@@ -1,21 +1,50 @@
 import { useEffect, useState, useCallback } from "react";
 
 /**
+ * Run `fn` once, `ms` after the last `call()`: a burst of calls fires it once, when the burst has
+ * settled. `cancel()` drops a pending run. With `ms = 0` every call runs `fn` at once.
+ */
+export function settle(fn: () => void, ms: number): { call(): void; cancel(): void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cancel = () => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = undefined;
+  };
+  return {
+    call() {
+      if (ms <= 0) return fn();
+      cancel();
+      timer = setTimeout(() => {
+        timer = undefined;
+        fn();
+      }, ms);
+    },
+    cancel,
+  };
+}
+
+/**
  * Subscribe to an SSE endpoint and return a counter that increments on every "changed" event.
  * Components use it as a dependency to refetch data live as the CLI edits the data folder. No auth
  * (the view daemon is a localhost read-only view), so the native EventSource is enough.
+ *
+ * With `settleMs > 0` a burst of events bumps the counter once, `settleMs` after the last one, for
+ * a page whose refetch is costly (DEF-022).
  */
-export function useLiveTick(sseUrl: string): number {
+export function useLiveTick(sseUrl: string, settleMs = 0): number {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const es = new EventSource(sseUrl);
-    const bump = () => setTick((t) => t + 1);
-    es.addEventListener("changed", bump);
+    const bump = settle(() => setTick((t) => t + 1), settleMs);
+    es.addEventListener("changed", bump.call);
     es.onerror = () => {
       /* EventSource auto-reconnects; ignore transient errors */
     };
-    return () => es.close();
-  }, [sseUrl]);
+    return () => {
+      bump.cancel();
+      es.close();
+    };
+  }, [sseUrl, settleMs]);
   return tick;
 }
 

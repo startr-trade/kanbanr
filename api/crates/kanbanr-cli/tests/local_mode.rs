@@ -4539,6 +4539,23 @@ fn git_model_board(base: &std::path::Path, work: &std::path::Path, sprints: bool
         ],
     ));
     ok(run_in(base, work, &["git", "install-hooks"]));
+    // These tests plan items that are not merged into a release and promote it (FTR-021): the
+    // candidate stage keeps making the branch but does not wait for the items.
+    if releases {
+        ok(run_in(
+            base,
+            work,
+            &[
+                "config",
+                "release-stage",
+                "candidate",
+                "--requires",
+                "",
+                "--on-enter",
+                "branch,prepare",
+            ],
+        ));
+    }
     let charter = base.join("charter.yaml");
     std::fs::write(
         &charter,
@@ -8119,8 +8136,11 @@ impl JsonFixture {
             "--no-hooks",
         ]);
         // The board must be this test's own before anything else writes to it.
+        // Windows gives temp_dir() a short 8.3 name and kanbanr prints the long one, so check the
+        // fixture folder's own name, the same in both and unique to this test and process (DEF-030).
         let board = fx.run(&["where"]);
-        assert!(board.contains(&*base.to_string_lossy()), "{board}");
+        let own = base.file_name().unwrap().to_string_lossy();
+        assert!(board.contains(&*own), "{board}");
         fx.run(&["config", "method", "--off"]);
         fx.run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
         let charter = base.join("charter.yaml");
@@ -8847,5 +8867,105 @@ fn config_release_stage_warns_about_a_stage_that_does_nothing() {
     assert!(o.status.success());
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(err.contains("release stage 'qa'"), "{err}");
+}
+
+/// FTR-024 R-3: `open --check` reports a monitor that is down, opens nothing, and exits 0.
+#[test]
+fn open_check_reports_a_monitor_that_is_down() {
+    let fx = ScopeFx::new("open-check");
+    let mut c = Command::new(cli());
+    c.args(["--json", "open", "--check"]).current_dir(&fx.work);
+    fx.env(&mut c);
+    c.env("KANBANR_SERVER_URL", "http://127.0.0.1:9");
+    let o = c.output().expect("run kanbanr CLI");
+    assert!(o.status.success(), "{o:?}");
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["up"], false, "{v}");
+    assert_eq!(v["writes"], false, "{v}");
+    assert_eq!(v["review"], "http://127.0.0.1:9/p/shop/review", "{v}");
+    assert_eq!(v["releases"], "http://127.0.0.1:9/p/shop/releases", "{v}");
+}
+
+/// FTR-024 R-4: the guard refuses Claude recording a verdict in a folder that keeps a board, and
+/// names the page where the person decides; a command that is not a verdict passes.
+#[test]
+fn the_git_guard_refuses_claude_recording_a_verdict() {
+    let fx = ScopeFx::new("verdict-guard");
+    let out = fx.guard(&fx.work, "kanbanr approve FEAT-001 --rev abc");
+    assert!(out.contains("\"deny\""), "{out}");
+    assert!(out.contains("/p/shop/review"), "{out}");
+    let out = fx.guard(&fx.work, "kanbanr release cut v1");
+    assert!(out.contains("/p/shop/releases"), "{out}");
+    assert_eq!(fx.guard(&fx.work, "kanbanr review --pending"), "");
+    assert_eq!(fx.guard(&fx.work, "kanbanr release promote v1 --plan"), "");
+}
+
+/// DEF-021 R-6: `doctor` warns about the current stage only, and prints what later stages will ask
+/// as counts after the warnings, naming `kanbanr check`.
+#[test]
+fn doctor_prints_what_later_stages_ask_apart_from_warnings() {
+    let (base, work) = togaf_scratch("doctor-ahead");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "workflow", "--preset", "togaf"],
+    ));
+    let charter = base.join("charter.yaml");
+    std::fs::write(
+        &charter,
+        "purpose: p\ngoals:\n  - statement: g\n    measure: m\n",
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &["charter", "set", "--file", charter.to_str().unwrap()],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["feature", "add", "--title", "Cart", "--milestone", "MS-001"],
+    ));
+    let def = base.join("def.yaml");
+    std::fs::write(&def, "statement: Keep a cart\ngoals: [G-1]\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    let out = ok(run_in(&base, &work, &["doctor"]));
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(!said.contains("MISSING"), "{said}");
+    assert!(said.contains("Later stages will ask"), "{said}");
+    assert!(said.contains("Business Arch"), "{said}");
+    assert!(said.contains("kanbanr check"), "{said}");
     let _ = std::fs::remove_dir_all(&base);
 }

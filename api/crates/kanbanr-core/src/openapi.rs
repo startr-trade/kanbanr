@@ -656,7 +656,8 @@ pub fn document() -> Value {
                 be published as v2 under `/api/v2/...`, with v1 kept for a deprecation period. \
                 Routes the daemon serves that are not listed here are internal and may change. \
                 Write routes (`serve --allow-writes`) are not part of this contract. Errors are \
-                `text/plain`. CORS is permissive; there is no authentication.",
+                `text/plain`. The daemon answers only for its own host names and grants no \
+                cross-origin access; there is no authentication.",
             "license": { "name": "MIT OR Apache-2.0", "identifier": "MIT OR Apache-2.0" },
         },
         "paths": paths,

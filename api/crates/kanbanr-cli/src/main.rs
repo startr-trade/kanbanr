@@ -139,7 +139,12 @@ enum Command {
     /// push is debounced off the hot path by default; this flushes anything pending immediately.
     Sync,
     /// Open the live monitor in your browser (warns if it isn't running).
-    Open,
+    Open {
+        /// Report whether the monitor is up and accepts writes, and its Review and Releases
+        /// addresses; opens nothing.
+        #[arg(long)]
+        check: bool,
+    },
     /// Print the data folder (board) this directory uses. With --json, also where that came from,
     /// the recommended `<repo>.kanbanr` folder, and existing kanbanr folders next to the project.
     Where,
@@ -1783,7 +1788,7 @@ fn command_access(cmd: &Command) -> Access {
     use Access::*;
     match cmd {
         Command::Whoami
-        | Command::Open
+        | Command::Open { .. }
         | Command::Where
         | Command::Activity
         | Command::Trace { .. }
@@ -3678,6 +3683,19 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
             return Ok(());
         }
     }
+    // A verdict is the person's, taken on the monitor: Claude never records one (FTR-024).
+    if client.is_some() {
+        let project = project::resolve_project(cli.project.as_deref());
+        let review_url = format!(
+            "{}/p/{}/review",
+            monitor_url(),
+            urlencode_segment(project.as_deref().unwrap_or("<project>"))
+        );
+        if let Some(why) = verdict_refusal(command, &review_url) {
+            deny(why);
+            return Ok(());
+        }
+    }
     if !is_git_commit(command) {
         return Ok(());
     }
@@ -3726,6 +3744,61 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
         deny(why);
     }
     Ok(())
+}
+
+/// The verdict commands Claude may not run (FTR-024): approving, ratifying, signing off or
+/// withdrawing either, accepting or rejecting a decision, and promoting or cutting a release. A
+/// verdict is the person's own, recorded on the monitor. Returns the refusal, naming the page
+/// where the person decides (`review_url`, or its Releases sibling for a release).
+///
+/// Reads the tokens of each kanbanr invocation, not substrings of the line. `--help` is never
+/// refused, and anything it can't parse passes (ADR-0004).
+fn verdict_refusal(command: &str, review_url: &str) -> Option<String> {
+    for (_, words) in simple_commands(command) {
+        if !is_kanbanr(&words) || words.iter().any(|w| w == "--help" || w == "-h") {
+            continue;
+        }
+        let mut path: Vec<&str> = Vec::new();
+        let mut it = words[1..].iter().map(String::as_str);
+        while let Some(w) = it.next() {
+            match w {
+                "--data-dir" | "--project" => {
+                    it.next();
+                }
+                _ if w.starts_with('-') => {}
+                _ => {
+                    path.push(w);
+                    if path.len() == 2 || !matches!(w, "adr" | "release") {
+                        break;
+                    }
+                }
+            }
+        }
+        let rest = &words[1..];
+        let (verdict, releases) = match path.as_slice() {
+            ["approve" | "ratify" | "unapprove" | "signoff"] => (true, false),
+            ["adr", "accept" | "reject"] => (true, false),
+            ["release", "promote"] => (!rest.iter().any(|w| w == "--plan"), true),
+            ["release", "cut" | "confirm"] => (true, true),
+            _ => (false, false),
+        };
+        if verdict {
+            let page = if releases {
+                match review_url.strip_suffix("/review") {
+                    Some(base) => format!("{base}/releases"),
+                    None => review_url.to_string(),
+                }
+            } else {
+                review_url.to_string()
+            };
+            return Some(format!(
+                "refused: a verdict is the person's own, recorded on the monitor, never by Claude \
+                 (FTR-024). Tell them what is waiting: {page}. If no monitor accepts writes, offer \
+                 `kanbanr review --ui`."
+            ));
+        }
+    }
+    None
 }
 
 /// The command line with every heredoc body removed, keeping the lines that introduce them.
@@ -4802,8 +4875,67 @@ fn monitor_down_hint(url: &str) -> String {
     )
 }
 
+/// What `kanbanr open --check` reports about the monitor (FTR-024).
+#[derive(serde::Serialize)]
+struct MonitorStatus {
+    url: String,
+    up: bool,
+    writes: bool,
+    review: Option<String>,
+    releases: Option<String>,
+}
+
+/// The monitor's status from its `/api/meta` answer (`None`: nothing answered) and the project.
+fn monitor_status(url: &str, project: Option<&str>, meta: Option<&Value>) -> MonitorStatus {
+    let page = |name: &str| project.map(|p| format!("{url}/p/{}/{name}", urlencode_segment(p)));
+    MonitorStatus {
+        url: url.to_string(),
+        up: meta.is_some(),
+        writes: meta.is_some_and(|m| m["writes"] == true),
+        review: page("review"),
+        releases: page("releases"),
+    }
+}
+
+/// `kanbanr open --check`: ask the monitor, print its status, open nothing.
+fn run_open_check(cli: &Cli) -> anyhow::Result<()> {
+    let url = monitor_url();
+    // A transport error, a non-2xx answer or a body that isn't JSON all count as down.
+    let meta = ureq::get(&format!("{url}/api/meta"))
+        .timeout(std::time::Duration::from_millis(800))
+        .call()
+        .ok()
+        .and_then(|r| r.into_json::<Value>().ok());
+    let project = project::resolve_project(cli.project.as_deref());
+    let status = monitor_status(&url, project.as_deref(), meta.as_ref());
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&status)?);
+        return Ok(());
+    }
+    println!(
+        "{}",
+        match (status.up, status.writes) {
+            (true, true) => format!("monitor at {url}: up, writes on"),
+            (true, false) => format!(
+                "monitor at {url}: up, read-only (start one with writes: kanbanr review --ui)"
+            ),
+            (false, _) => format!("monitor at {url}: not running (start it: kanbanr review --ui)"),
+        }
+    );
+    if let Some(r) = &status.review {
+        println!("Review: {r}");
+    }
+    if let Some(r) = &status.releases {
+        println!("Releases: {r}");
+    }
+    Ok(())
+}
+
 /// Open the live monitor in the default browser (best-effort; warns if it isn't reachable).
-fn run_open(_cli: &Cli) -> anyhow::Result<()> {
+fn run_open(cli: &Cli, check: bool) -> anyhow::Result<()> {
+    if check {
+        return run_open_check(cli);
+    }
     let url = monitor_url();
     // Any HTTP status means the daemon is up; a transport error means it isn't.
     let up = !matches!(
@@ -5711,7 +5843,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             ui_dir,
             allow_writes,
         } => return run_serve(cli, bind.clone(), ui_dir.clone(), *allow_writes),
-        Command::Open => return run_open(cli),
+        Command::Open { check } => return run_open(cli, *check),
         Command::Where => return run_where(cli),
         // A preview of the git model needs no board (FEAT-194): setup shows it before `init`.
         Command::Git(GitCmd::Model { sprints, releases })
@@ -5765,7 +5897,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Identity { .. }
         | Command::Init { .. }
         | Command::Serve { .. }
-        | Command::Open
+        | Command::Open { .. }
         | Command::Where
         | Command::SelfUpdate { .. }
         | Command::Skill(_)
@@ -7419,6 +7551,20 @@ fn run_doctor(cli: &Cli, client: &Backend, all_projects: bool) -> anyhow::Result
         println!("Warnings ({}):", warnings.len());
         for i in &warnings {
             print_issue(i);
+        }
+    }
+    // What later stages will ask: counts, not warnings (DEF-021).
+    let ahead = report["ahead"].as_array().cloned().unwrap_or_default();
+    if !ahead.is_empty() {
+        println!("Later stages will ask (not warnings; kanbanr check lists them):");
+        for a in &ahead {
+            println!(
+                "  {} {}: {} item(s), {} thing(s)",
+                a["project"].as_str().unwrap_or(""),
+                a["stage"].as_str().unwrap_or(""),
+                a["items"],
+                a["things"]
+            );
         }
     }
     if issues.is_empty() {
@@ -10170,6 +10316,64 @@ mod tests {
             }
         }
         assert!(found.is_empty(), "{found:#?}");
+    }
+
+    /// FTR-024 R-4, R-5: the guard refuses the commands that record or withdraw a verdict, and
+    /// lets every other kanbanr command through.
+    #[test]
+    fn the_guard_refuses_a_verdict_claude_would_record() {
+        let url = "http://h:1/p/p/review";
+        for refused in [
+            "kanbanr approve FTR-1 --rev x",
+            "kanbanr --project p signoff FTR-1 design-review",
+            "cd x && kanbanr adr accept ADR-1",
+            "kanbanr adr reject ADR-1",
+            "kanbanr ratify FTR-1",
+            "kanbanr release promote v1",
+            "kanbanr release cut v1",
+            "kanbanr unapprove FTR-1 --reason r",
+            "kanbanr signoff FTR-1 design-review --withdraw --reason r",
+            "kanbanr release confirm v1 staging",
+        ] {
+            let why = verdict_refusal(refused, url).unwrap_or_else(|| panic!("passed: {refused}"));
+            assert!(why.contains("http://h:1/p/p/"), "{why}");
+        }
+        assert!(
+            verdict_refusal("kanbanr release cut v1", url)
+                .unwrap()
+                .contains("/p/p/releases")
+        );
+        for allowed in [
+            "kanbanr review --pending",
+            "kanbanr release promote v1 --plan",
+            "kanbanr sprint close SP-1",
+            "kanbanr release plan v1 FTR-1",
+            "kanbanr signoff --help",
+            "kanbanr adr list",
+            "echo \"kanbanr approve\"",
+            "git commit -m \"kanbanr approve\"",
+        ] {
+            assert!(
+                verdict_refusal(allowed, url).is_none(),
+                "refused: {allowed}"
+            );
+        }
+        let heredoc = without_heredoc_bodies("cat <<EOF\nkanbanr approve X\nEOF\n");
+        assert!(verdict_refusal(&heredoc, url).is_none());
+    }
+
+    /// FTR-024 R-3: the monitor's status reads `writes` from its meta, and names the pages only
+    /// when a project is known.
+    #[test]
+    fn monitor_status_reads_writes_from_meta() {
+        let down = monitor_status("http://h:1", None, None);
+        assert!(!down.up && !down.writes && down.review.is_none() && down.releases.is_none());
+        let ro = monitor_status("http://h:1", Some("p"), Some(&json!({"writes": false})));
+        assert!(ro.up && !ro.writes);
+        let rw = monitor_status("http://h:1", Some("my p"), Some(&json!({"writes": true})));
+        assert!(rw.up && rw.writes);
+        assert_eq!(rw.review.as_deref(), Some("http://h:1/p/my%20p/review"));
+        assert_eq!(rw.releases.as_deref(), Some("http://h:1/p/my%20p/releases"));
     }
 
     /// FEAT-212 R-8: `config release-prepare --version-file` keeps several entries for one path,
