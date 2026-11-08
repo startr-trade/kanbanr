@@ -1126,7 +1126,9 @@ response names the failing operation index. The whole bundle is **one git commit
 `source`, `original` and `issue` (for imports; see above), plus `definition`; `feature.edit`
 accepts `source`, `issue`, `defect`, `split_from` and `definition` (which replaces the block wholesale — it is authored
 whole, not merged). `kanbanr batch --dry-run` validates a bundle and reports what it would do without
-writing anything.
+writing anything. A field an operation does not accept is refused, naming the operation and the
+field, and nothing is written. Sprint membership is not a batch field: use `kanbanr sprint plan`
+and `kanbanr sprint unplan`.
 
 ---
 
@@ -1219,6 +1221,7 @@ kanbanr config coverage [--from-file rules.yaml | --clear]   # architecture cove
 kanbanr feature edit FEAT-001 --points 5          # a story-point estimate (--estimate is days)
 kanbanr sprint add --start 2026-10-05 --length 2w --goal "…" [--capacity 20]
 kanbanr sprint plan SP-001 FEAT-001 FEAT-002      # warns over capacity
+kanbanr sprint unplan FEAT-001                    # back to no sprint (not for a closed sprint)
 kanbanr sprint start SP-001 | show [SP-001] | list | close SP-001 --carry-to SP-002|backlog
 kanbanr sprint edit SP-001 [--name N] [--goal G] [--start D] [--length 2w | --end D] [--capacity N|0]   # only while planned
 kanbanr sprint remove SP-001                      # only an empty, unstarted sprint

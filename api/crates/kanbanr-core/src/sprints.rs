@@ -334,6 +334,62 @@ pub fn plan(store: &Store, id: &str, code: &str, items: &[String]) -> Result<Pla
     })
 }
 
+/// One item taken out of a sprint.
+#[derive(Debug, Clone, Serialize)]
+pub struct Left {
+    pub code: String,
+    pub from: String,
+}
+
+/// What taking items out of their sprints did.
+#[derive(Debug, Clone, Serialize)]
+pub struct Unplanned {
+    /// Items that were in a sprint and are now in none.
+    pub removed: Vec<Left>,
+    /// Items named that were in no sprint; nothing changed for them.
+    pub not_in_a_sprint: Vec<String>,
+}
+
+/// Take items out of their sprint (DEF-018). A closed sprint keeps its items as its record, and an
+/// unknown item is an error; both are refused before anything is written.
+pub fn unplan(store: &Store, id: &str, items: &[String]) -> Result<Unplanned> {
+    cadence_on(store, id)?;
+    let sprints = load(store, id)?;
+    let project = store.load(id)?;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut found: Vec<(String, Option<String>)> = Vec::new();
+    for code in items {
+        if !seen.insert(code.clone()) {
+            continue;
+        }
+        let sprint = project.feature(code)?.sprint.clone();
+        if let Some(s) = &sprint
+            && sprints
+                .iter()
+                .any(|x| &x.code == s && x.state == SprintState::Closed)
+        {
+            return Err(CoreError::Unsupported(format!(
+                "{code} is in {s}, which is closed; a closed sprint keeps its items as its record"
+            )));
+        }
+        found.push((code.clone(), sprint));
+    }
+    let mut out = Unplanned {
+        removed: Vec::new(),
+        not_in_a_sprint: Vec::new(),
+    };
+    for (code, sprint) in found {
+        match sprint {
+            Some(from) => {
+                store.set_feature_sprint(id, &code, None)?;
+                out.removed.push(Left { code, from });
+            }
+            None => out.not_in_a_sprint.push(code),
+        }
+    }
+    Ok(out)
+}
+
 /// Make a sprint the active one. Only one runs at a time.
 pub fn start(store: &Store, id: &str, code: &str) -> Result<Sprint> {
     cadence_on(store, id)?;
@@ -663,6 +719,80 @@ mod tests {
         let sp = super::add(&store, "shop", "2026-10-05", Some(5), "", None, "").unwrap();
         super::plan(&store, "shop", &sp.code, &codes).unwrap();
         (store, codes, dir)
+    }
+
+    /// DEF-018 R-1: one item leaves its sprint; the others and the sprint's record stay.
+    #[test]
+    fn unplan_takes_an_item_out_of_its_sprint_and_leaves_the_rest() {
+        let (store, codes, dir) = board("def018-r1", Default::default());
+        let before = std::fs::read(super::path(&store, "shop")).unwrap();
+        let out = super::unplan(&store, "shop", &codes[..1]).unwrap();
+        assert_eq!(out.removed.len(), 1);
+        assert_eq!(out.removed[0].code, codes[0]);
+        assert_eq!(out.removed[0].from, "SP-001");
+        assert!(out.not_in_a_sprint.is_empty());
+        let project = store.load("shop").unwrap();
+        assert_eq!(project.feature(&codes[0]).unwrap().sprint, None);
+        for c in &codes[1..] {
+            assert_eq!(
+                project.feature(c).unwrap().sprint.as_deref(),
+                Some("SP-001")
+            );
+        }
+        assert_eq!(before, std::fs::read(super::path(&store, "shop")).unwrap());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-018 R-2: an item in no sprint is named, not reported removed.
+    #[test]
+    fn unplan_names_an_item_that_was_in_no_sprint() {
+        let (store, codes, dir) = board("def018-r2", Default::default());
+        super::unplan(&store, "shop", &codes[..1]).unwrap();
+        let out = super::unplan(&store, "shop", &codes[..1]).unwrap();
+        assert!(out.removed.is_empty());
+        assert_eq!(out.not_in_a_sprint, vec![codes[0].clone()]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-018 R-3: a closed sprint and an unknown item refuse the whole command.
+    #[test]
+    fn unplan_refuses_a_closed_sprint_and_an_unknown_item_before_changing_anything() {
+        let gates = crate::config::preset("scrum").unwrap().gates;
+        let (store, codes, dir) = board("def018-r3", gates);
+        // Finish A so closing SP-001 leaves it in the closed sprint; B and C are carried to SP-002.
+        let sp2 = super::add(&store, "shop", "2026-10-12", Some(5), "", None, "").unwrap();
+        arrive(&store, &codes[0], "Done", "2026-10-06T10:00:00Z");
+        super::close(&store, "shop", "SP-001", Some(&sp2.code)).unwrap();
+        let err = super::unplan(&store, "shop", &codes[..1])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(&codes[0]) && err.contains("SP-001"), "{err}");
+        let both = vec![codes[1].clone(), "FEAT-999".to_string()];
+        let err = super::unplan(&store, "shop", &both)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("FEAT-999"), "{err}");
+        let project = store.load("shop").unwrap();
+        assert_eq!(
+            project.feature(&codes[1]).unwrap().sprint.as_deref(),
+            Some(sp2.code.as_str())
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-018 R-4: the command needs sprints switched on.
+    #[test]
+    fn unplan_needs_sprints_switched_on() {
+        let (store, codes, dir) = board("def018-r4", Default::default());
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/shop/config/cadence",
+            Some(&serde_json::json!({"sprints": false})),
+        )
+        .unwrap();
+        assert!(super::unplan(&store, "shop", &codes[..1]).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// DEF-029 R-5: items planned into a release while a sprint runs are named when they are in no

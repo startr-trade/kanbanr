@@ -352,6 +352,7 @@ and `agile` presets do this, and any other project can too:
 kanbanr config cadence --sprints on --releases on --unit points --sprint-length 14
 kanbanr sprint add --start 2026-10-05 --goal "Shoppers can pay" --capacity 20
 kanbanr sprint plan SP-001 FEAT-001 FEAT-002    # warns when it goes over capacity
+kanbanr sprint unplan FEAT-001                  # back to no sprint
 kanbanr sprint start SP-001
 kanbanr sprint list                             # every sprint and its state
 kanbanr sprint show                             # goal, days left, committed vs done, burndown

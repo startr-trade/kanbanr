@@ -192,7 +192,7 @@ You never need these, but here they are if you want to check what Claude did.
 |---|---|
 | Set up the process | `kanbanr config workflow --preset scrum` |
 | Branches and hooks | `kanbanr config cadence --git-model on`, `kanbanr git install-hooks` |
-| A sprint | `kanbanr sprint add`, `kanbanr sprint start`, `kanbanr sprint plan` |
+| A sprint | `kanbanr sprint add`, `kanbanr sprint start`, `kanbanr sprint plan`, `kanbanr sprint unplan` |
 | A release | `kanbanr release add`, `kanbanr release plan` |
 | Defining an item | `kanbanr feature define`, `kanbanr feature edit --points` |
 | Moving an item | `kanbanr move` |
@@ -201,3 +201,5 @@ You never need these, but here they are if you want to check what Claude did.
 | Release notes | `kanbanr release notes` |
 | Bringing a release forward | `kanbanr git forward` |
 | Closing a sprint | `kanbanr sprint close`, `kanbanr retro` |
+
+To take an item out of the sprint, ask Claude to take it out; it goes back to no sprint.

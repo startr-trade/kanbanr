@@ -1481,6 +1481,14 @@ fn dispatch_routes(
             let items = vec_field(b, "items").unwrap_or_default();
             ser(&crate::sprints::plan(store, p, code, &items)?)
         }
+        // Take items out of their sprint (DEF-018).
+        ("POST", ["projects", p, "sprints", "unplan"]) => {
+            let items = vec_field(b, "items").unwrap_or_default();
+            if items.is_empty() {
+                return Err(CoreError::Unsupported("name at least one item".into()));
+            }
+            ser(&crate::sprints::unplan(store, p, &items)?)
+        }
         // With the git model on, starting a sprint makes its branch (FEAT-189).
         ("POST", ["projects", p, "sprints", code, "start"]) => {
             ser(&crate::gitmodel::sprint_start(store, p, code, repo)?)

@@ -285,7 +285,7 @@ You never need these, but here they are if you're curious, or if you want to che
 | Set up the process | `kanbanr config workflow --preset togaf` |
 | Sprints, releases and branches | `kanbanr config cadence --sprints on --releases on --git-model on` |
 | Release stages | `kanbanr config cadence --release-stages`, `kanbanr config release-stage` |
-| A sprint | `kanbanr sprint add`, `kanbanr sprint start`, `kanbanr sprint plan` |
+| A sprint | `kanbanr sprint add`, `kanbanr sprint start`, `kanbanr sprint plan`, `kanbanr sprint unplan` |
 | A release | `kanbanr release add`, `kanbanr release plan` |
 | Moving an item | `kanbanr move` |
 | Starting the build | `kanbanr start` |
@@ -293,3 +293,5 @@ You never need these, but here they are if you're curious, or if you want to che
 | Release notes | `kanbanr release notes` |
 | Bringing a release forward | `kanbanr git forward` |
 | Closing a sprint | `kanbanr sprint close`, `kanbanr retro` |
+
+To take an item out of the sprint, ask Claude to take it out; it goes back to no sprint.
