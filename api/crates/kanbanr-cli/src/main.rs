@@ -6520,7 +6520,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 return check_definition_file(cli, file); // handled before the board opens
             }
             let p = require_project(cli)?;
-            let report = kanbanr_core::readiness::check_board(client.store(), &p, code.as_deref())?;
+            let report = kanbanr_core::readiness::check_board(
+                client.store(),
+                &p,
+                code.as_deref(),
+                scm::repo_root().as_deref(),
+            )?;
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
                 return Ok(());
@@ -6547,6 +6552,21 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     );
                     for gap in gaps {
                         println!("    {}", gap.as_str().unwrap_or(""));
+                    }
+                }
+                // The documents `docs-folded` waits on (DEF-033): information, not a refusal.
+                let unbuilt = r["docs_unbuilt"].as_array().cloned().unwrap_or_default();
+                if !unbuilt.is_empty() {
+                    println!("    Documents not built yet:");
+                    for u in &unbuilt {
+                        let kind = u["kind"].as_str().unwrap_or("");
+                        let path = u["path"].as_str().unwrap_or("");
+                        let at = if path.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" {path}")
+                        };
+                        println!("        {kind}{at}: {}", u["why"].as_str().unwrap_or(""));
                     }
                 }
                 // A manual test nobody ran: a note, not a gap (DEF-003).

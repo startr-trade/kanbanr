@@ -2209,6 +2209,13 @@
             },
             "type": "array"
           },
+          "signoffs_held": {
+            "description": "Sign-offs withheld because the work they confirm is not built (DEF-033): one gap per\nunbuilt document. Only Claude can build them, so they are not \"for you\".",
+            "items": {
+              "$ref": "#/components/schemas/Gap"
+            },
+            "type": "array"
+          },
           "signoffs_needed": {
             "description": "The sign-offs this gate still needs, by name, so a surface can offer to record them.",
             "items": {
@@ -3408,6 +3415,10 @@
           "changes": {
             "$ref": "#/components/schemas/PartChanges",
             "description": "The parts added, changed and removed since the last decision (FTR-018); present on\n`lapsed`, `added` and `signoff` entries that have a baseline to compare with."
+          },
+          "changes_no_documents": {
+            "description": "`docs-folded` is among them and the item lists no documents: the sign-off confirms that it\nchanges none (DEF-033).",
+            "type": "boolean"
           },
           "code": {
             "type": "string"

@@ -560,7 +560,10 @@ the gates, but it is still good practice: keep doing it, and never turn a part o
 
 The item's spec gains its build-ready `## Design` (the next subsection). Also:
 - **Affects docs**: the Design ends with links to the board docs the change touches, and the same
-  paths go into the definition's `affects_docs`, which the integrate role checks.
+  paths go into the definition's `affects_docs`, which the integrate role checks. Under the same
+  heading, write each repository doc the change touches (guides, reference pages, `SECURITY.md`,
+  `CHANGELOG.md`) as a path in backticks, one per bullet, and add a task for each document to
+  build, naming its path. `docs-folded` is offered to the user only once those are built.
 - **Every reference is a live link**: items, requirements, milestones, goals, ADRs and docs, in the
   forms under "Every change points back at the reason for it". `kanbanr doctor` reports a link that
   points at nothing.
@@ -721,7 +724,10 @@ the user, by the agent for its item (`Agent-Scope:` on the commit).
 
 Before the move:
 - fold the Design into each doc in `affects_docs`, describing it as built (`docs_updated`);
-- say **docs-folded** is waiting for the user's sign-off on the Review page.
+- build every document the item names: the board docs, the repository docs its Design lists under
+  `Affects docs` and each task that writes docs. Until then the Review page does not offer
+  **docs-folded** and `kanbanr check` names what is unbuilt;
+- say **docs-folded** is waiting for the user's sign-off on the Review page, once it is offered.
 
 With the git model on, entering the integrate role (`kanbanr move <CODE> <status>`) merges the item
 branch into its line, `--no-ff`, with `Refs: kanbanr:<CODE>`. If the merge would conflict, the move

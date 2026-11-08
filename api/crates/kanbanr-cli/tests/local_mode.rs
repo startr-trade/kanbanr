@@ -3019,6 +3019,99 @@ fn check_names_what_the_next_stage_needs() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-033 R-4: `check` names the documents `docs-folded` still waits on, and stops once the
+/// task that writes them is complete.
+#[test]
+fn check_names_the_documents_still_unbuilt() {
+    let (base, work) = togaf_scratch("check-unbuilt");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    let process = base.join("process.yaml");
+    std::fs::write(
+        &process,
+        "statuses: [Todo, Doing, Done]\ndefault_state: Todo\ndisplayed_states: [Todo, Doing, Done]\n\
+         terminal_states: [Done]\ntransitions:\n  Todo: [Doing]\n  Doing: [Done, Todo]\n  Done: [Doing]\n\
+         gates:\n  Done:\n    signoffs: [docs-folded]\n",
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "workflow",
+            "--from-file",
+            process.to_str().unwrap(),
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["milestone", "add", "--name", "M", "--code", "MS-001"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["feature", "add", "--title", "Cart", "--milestone", "MS-001"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["todo", "add", "FEAT-001", "--description", "work"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "task",
+            "add",
+            "FEAT-001",
+            "TL-001",
+            "--text",
+            "Write docs/src/cart.md",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["move", "FEAT-001", "Doing", "--unapproved", "test"],
+    ));
+    let said = |o: Output| String::from_utf8_lossy(&o.stdout).to_string();
+    let out = said(ok(run_in(&base, &work, &["check", "FEAT-001"])));
+    assert!(out.contains("Documents not built yet:"), "{out}");
+    assert!(
+        out.contains("task T1 writes docs and is not complete"),
+        "{out}"
+    );
+    let json = ok(run_in(&base, &work, &["check", "FEAT-001", "--json"]));
+    let v: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(v[0]["docs_unbuilt"][0]["kind"], "task");
+
+    ok(run_in(
+        &base,
+        &work,
+        &["task", "state", "FEAT-001", "TL-001", "T1", "Completed"],
+    ));
+    let out = said(ok(run_in(&base, &work, &["check", "FEAT-001"])));
+    assert!(!out.contains("Documents not built yet:"), "{out}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// DEF-003 R-1: check names a manual test with no result, beside the item, and still exits 0.
 #[test]
 fn check_names_an_open_manual_test() {

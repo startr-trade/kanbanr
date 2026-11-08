@@ -1040,6 +1040,17 @@ fn dispatch_routes(
             if let Some(earlier) = crate::origin::duplicate_signoff(&item, &name, &note, &doc) {
                 return ser_already_item(&item, &earlier);
             }
+            // `docs-folded` is refused until the item's documents are built (DEF-033): the same
+            // answer the Review page and `kanbanr check` give.
+            if name == crate::method::DOCS_FOLDED {
+                let project = store.load_for_gates(p)?;
+                let ctx = crate::readiness::Context::load_in(store, p, &project.config, repo);
+                if let Some(why) =
+                    crate::readiness::signoff_hold(&project, project.feature(code)?, &ctx, &name)
+                {
+                    return Err(CoreError::Unsupported(why));
+                }
+            }
             let (feature, held) = store.signoff_feature_reported_as(
                 p,
                 code,
@@ -1855,15 +1866,15 @@ fn dispatch_routes(
         ("GET", ["projects", p, "features", code, "diagrams"]) => {
             ser(&crate::diagrams::ItemDiagrams::load(store, p, code)?)
         }
-        ("GET", ["projects", p, "features", code, "readiness"]) => {
-            ser(&crate::readiness::ReadinessView::load(store, p, code)?)
-        }
+        ("GET", ["projects", p, "features", code, "readiness"]) => ser(
+            &crate::readiness::ReadinessView::load_in(store, p, code, repo)?,
+        ),
         // The board's cards, in one request: gaps per live item, keyed by code. Finished and
         // parked items are left out, as doctor leaves them out — they are history, not work.
-        ("GET", ["projects", p, "readiness"]) => {
-            ser(&crate::readiness::ProjectReadiness::load(store, p)?)
-        }
-        ("GET", ["projects", p, "review"]) => ser(&crate::review::pending(store, p)?),
+        ("GET", ["projects", p, "readiness"]) => ser(&crate::readiness::ProjectReadiness::load_in(
+            store, p, repo,
+        )?),
+        ("GET", ["projects", p, "review"]) => ser(&crate::review::pending(store, p, repo)?),
         ("GET", ["projects", p, "adrs"]) => ser(&crate::adr::list(store, p)?),
         ("GET", ["projects", p, "claude-block"]) => ser(&crate::claude::block(store, p)?),
         ("POST", ["projects", p, "adrs"]) => {

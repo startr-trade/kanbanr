@@ -116,7 +116,7 @@ is a decision and not an oversight.
 | **Business Arch** | Drafts who, what, why and the requirements | **Approve** |
 | **System Design** | Proposes how and where, and checks that against the requirements | Nothing: the approval stands while the definition grows |
 | **Implementation** | Writes the design and its task list, and names a test for each requirement | **Sign off design-review**, which also reviews what was added |
-| **Migration** | Builds on the item's branch, runs the tests and updates the docs | **Sign off docs-folded**, which appears once the docs are updated |
+| **Migration** | Builds on the item's branch, runs the tests and updates the docs | **Sign off docs-folded**, which appears once the docs are built; until then the Review page does not offer it |
 | **Operations** | Nothing: the cut moves it here | **Sign off release** |
 
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once

@@ -153,3 +153,24 @@ component has a doc that describes it as built, every doc's `items` and `adrs` a
 Zachman coverage has no column nothing answers (`kanbanr trace MS-… --zachman`). Run
 `kanbanr doctor` before merging a sprint or cutting a release: it lists every coverage rule a
 view still fails.
+
+### When docs-folded is offered
+
+The `docs-folded` sign-off says the documents are folded into the record, so it is offered only
+once there is something to confirm. An item's documents are built when all three hold:
+
+1. every board doc it names in `affects_docs` has changed since it entered its stage;
+2. every repository doc its Design lists under `Affects docs`, written as a path in backticks, has
+   changed on its branch against the line it merges into (guides, reference pages, `SECURITY.md`,
+   the changelog);
+3. every task that writes docs is complete. A task writes docs when its text names a listed
+   document, a path under `docs/`, or `CHANGELOG.md`, `SECURITY.md` or `README.md`.
+
+An item that names no documents at all is offered the sign-off once it has tasks and all are
+complete, and the Review page says the item changes no documents, so the sign-off confirms that.
+
+Until then the Review page does not list the sign-off, the sign-off request is refused naming what
+is unbuilt, and `kanbanr check` prints `Documents not built yet:` with each document and why. If
+the code repository cannot be read, because none is attached or the item has no branch in it, the
+sign-off is held and the reason is said. A sign-off given before this check existed stays recorded
+and counted.
