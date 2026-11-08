@@ -289,6 +289,11 @@ export interface PendingReview {
   signoffs_needed?: string[];
   /** The item lists no documents, so signing off docs-folded confirms that it changes none (DEF-033). */
   changes_no_documents?: boolean;
+  /** Texts that name something the item changed since they last changed, for the person to
+   * confirm or correct before docs-folded (FTR-013). Absent when the check was skipped. */
+  to_check?: DriftFlag[];
+  /** Why the drift check did not run; never to be read as "no drift" (FTR-013). */
+  drift_skipped?: string;
   /** Present when the item is ready for release and in none: the planned releases, in file order
    * (FEAT-185). Empty means there is none yet, and only a new release can be chosen. */
   release_choices?: string[];
@@ -889,4 +894,28 @@ export interface Guards {
     /** Null where it cannot be told: the daemon does not read the code repository's hooks. */
     push_hook_installed: boolean | null;
   };
+}
+
+/** A name a change put in the code, of a kind that decides how a text must hold it (FTR-013). */
+export interface DriftName {
+  kind: "flag" | "command" | "env" | "route" | "config_key" | "name" | "file";
+  text: string;
+}
+
+/** A linked text that names something an item changed after the text last changed (FTR-013).
+ * It says which text names what, never that the text is wrong. */
+export interface DriftFlag {
+  target: { kind: "doc" | "adr" | "item"; id: string; title: string; path?: string };
+  via: string[];
+  hits: { name: DriftName; lines: number[] }[];
+  commits: { sha: string; at: string; item: string; names: DriftName[] }[];
+  target_changed_at: string;
+}
+
+/** How a flagged text was settled at the sign-off (FTR-013). */
+export interface DriftChecked {
+  /** `doc:<path>`, `adr:<id>` or `item:<CODE>`. */
+  target: string;
+  outcome: "confirmed" | "corrected";
+  correction?: string;
 }

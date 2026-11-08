@@ -7,7 +7,7 @@ import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
 import { zachmanColumns } from "../types";
-import type { Adr, PendingReview, PlannedRelease, SpecBrief } from "../types";
+import type { Adr, DriftChecked, DriftFlag, PendingReview, PlannedRelease, SpecBrief } from "../types";
 import { approveBlocker, checkBlocks, type DiagramProblem } from "../diagramCheck";
 
 /**
@@ -100,12 +100,12 @@ export default function ReviewPage() {
   };
 
   // A named sign-off the item's next stage is waiting on (FEAT-117), recorded as the same identity.
-  const signoff = async (item: PendingReview, name: string) => {
+  const signoff = async (item: PendingReview, name: string, checked: DriftChecked[] = []) => {
     if (!who) return;
     const code = item.code;
     setBusy(code);
     try {
-      const answer = await api.signoff(project, code, name, who, item.rev ?? "", item.spec_rev ?? "");
+      const answer = await api.signoff(project, code, name, who, item.rev ?? "", item.spec_rev ?? "", checked);
       setDone((d) => ({ ...d, [code]: alreadyOr(answer, `signed off ${name}`) }));
     } catch (e) {
       setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
@@ -211,7 +211,7 @@ export default function ReviewPage() {
           // because a queue of twelve read as one unbroken column (FEAT-076).
           defaultOpen={i === 0}
           onApprove={() => agree(item)}
-          onSignoff={(name) => signoff(item, name)}
+          onSignoff={(name, checked) => signoff(item, name, checked)}
           onRelease={(version) => planRelease(item, version)}
           onNewRelease={(version, target) => newRelease(item, version, target)}
         />
@@ -472,7 +472,7 @@ function Brief({
   outcome?: string;
   defaultOpen: boolean;
   onApprove: () => void;
-  onSignoff: (name: string) => void;
+  onSignoff: (name: string, checked?: DriftChecked[]) => void;
   onRelease: (version: string) => void;
   onNewRelease: (version: string, target: string) => void;
 }) {
@@ -497,6 +497,22 @@ function Brief({
     (outcome ?? "").startsWith("signed off") ||
     (outcome ?? "").startsWith("planned into");
   const signoffs = item.signoffs_needed ?? [];
+  // The texts that name what this item changed (FTR-013): each is settled before docs-folded can
+  // be given, by "still right" or by the code of a correction Claude filed.
+  const flags: DriftFlag[] = signoffs.includes("docs-folded") ? (item.to_check ?? []) : [];
+  const [settled, setSettled] = useState<Record<string, { confirmed: boolean; correction: string }>>({});
+  const settledOf = (f: DriftFlag) => {
+    const s = settled[driftKey(f)];
+    return s?.confirmed ? "confirmed" : s?.correction.trim() ? "corrected" : null;
+  };
+  const unsettled = flags.some((f) => settledOf(f) === null);
+  const checkedFor = (): DriftChecked[] =>
+    flags.map((f) => {
+      const s = settled[driftKey(f)];
+      return s?.confirmed
+        ? { target: driftKey(f), outcome: "confirmed" }
+        : { target: driftKey(f), outcome: "corrected", correction: s?.correction.trim() ?? "" };
+    });
   const diagrams = useDiagramCheck(project, item.code, tick);
   const blocker = approveBlocker(diagrams);
 
@@ -656,6 +672,66 @@ function Brief({
       {item.changes_no_documents && signoffs.includes("docs-folded") ? (
         <p>This item changes no documents; signing off confirms that.</p>
       ) : null}
+      {flags.length && !writable ? (
+        <p>Give docs-folded on a monitor that takes decisions: it records what you checked beside each text.</p>
+      ) : null}
+      {signoffs.includes("docs-folded") && item.drift_skipped ? (
+        <p className="drift-skipped">Drift check skipped: {item.drift_skipped}.</p>
+      ) : null}
+      {flags.length ? (
+        <div className="drift-flags">
+          <h4>Texts that name what this item changed</h4>
+          <p>
+            Each of these names something {item.code} changed and has not changed since. Read it, then say it is
+            still right, or ask Claude to file a correction and enter its code.
+          </p>
+          <ul>
+            {flags.map((f) => {
+              const key = driftKey(f);
+              const s = settled[key] ?? { confirmed: false, correction: "" };
+              return (
+                <li key={key}>
+                  <Link to={driftHref(project, f)}>{f.target.title || f.target.id}</Link> names{" "}
+                  {f.hits.map((h, i) => (
+                    <span key={i}>
+                      {i ? "; " : ""}
+                      <code>{h.name.text}</code> (line {h.lines.join(", ")})
+                    </span>
+                  ))}
+                  {f.commits[0] ? (
+                    <span>
+                      {" "}
+                      — changed by {f.commits[0].item}, {f.commits[0].sha.slice(0, 7)}
+                    </span>
+                  ) : null}
+                  {writable ? (
+                    <div className="drift-choice">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={s.confirmed}
+                          onChange={(e) => setSettled({ ...settled, [key]: { ...s, confirmed: e.target.checked } })}
+                        />{" "}
+                        Still right
+                      </label>
+                      <label>
+                        File a correction: ask Claude to file one, then enter its code{" "}
+                        <input
+                          type="text"
+                          value={s.correction}
+                          placeholder="DEF-…"
+                          disabled={s.confirmed}
+                          onChange={(e) => setSettled({ ...settled, [key]: { ...s, correction: e.target.value } })}
+                        />
+                      </label>
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
       <div className="review-actions">
         {approved ? (
           <span className="chip done">{outcome} — it leaves this list on the next refresh</span>
@@ -675,8 +751,9 @@ function Brief({
               <button
                 key={name}
                 className={`btn ${waitingOnSignoff || specChanged ? "btn-primary" : ""}`}
-                onClick={() => onSignoff(name)}
-                disabled={busy}
+                onClick={() => onSignoff(name, name === "docs-folded" && flags.length ? checkedFor() : undefined)}
+                disabled={busy || (name === "docs-folded" && unsettled)}
+                title={name === "docs-folded" && unsettled ? "Settle each text above first" : undefined}
               >
                 {busy ? "recording…" : `Sign off ${name}`}
               </button>
@@ -731,7 +808,9 @@ function Brief({
           <code>
             {[
               ...(waitingOnSignoff
-                ? signoffs.map((n) => `kanbanr signoff ${item.code} ${n}`)
+                ? signoffs
+                    .filter((n) => !(n === "docs-folded" && flags.length > 0))
+                    .map((n) => `kanbanr signoff ${item.code} ${n}`)
                 : whichRelease
                   ? []
                   : [`kanbanr ${verb.toLowerCase()} ${item.code}`]),
@@ -809,4 +888,16 @@ function Changes({
       </ul>
     </div>
   );
+}
+
+/** How a flag is named in a sign-off: `doc:<path>`, `adr:<id>` or `item:<CODE>` (FTR-013). */
+function driftKey(f: DriftFlag): string {
+  return `${f.target.kind}:${f.target.id}`;
+}
+
+/** Where a flagged text is read: a board doc or an item. */
+function driftHref(project: string, f: DriftFlag): string {
+  return f.target.kind === "item"
+    ? `/p/${project}/feature/${f.target.id}`
+    : `/p/${project}/docs/file/${f.target.path ?? f.target.id}`;
 }

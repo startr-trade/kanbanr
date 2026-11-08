@@ -1,5 +1,5 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -101,10 +101,18 @@ export const api = {
   approve: (id: string, code: string, by: string, rev = "") =>
     verdict(id, code, "approve", { by, rev }, "approve"),
   /** Record a named sign-off a stage asks for (FEAT-114). */
-  signoff: async (id: string, code: string, name: string, by: string, rev = "", specRev = "") => {
+  signoff: async (
+    id: string,
+    code: string,
+    name: string,
+    by: string,
+    rev = "",
+    specRev = "",
+    checked: DriftChecked[] = [],
+  ) => {
     const res = await postWrite(
       apiUrl(`/write/projects/${encodeURIComponent(id)}/features/${encodeURIComponent(code)}/signoff/${encodeURIComponent(name)}`),
-      { by, rev, spec_rev: specRev },
+      checked.length ? { by, rev, spec_rev: specRev, checked } : { by, rev, spec_rev: specRev },
       `kanbanr signoff ${code} ${name}`,
     );
     if (!res.ok) {
