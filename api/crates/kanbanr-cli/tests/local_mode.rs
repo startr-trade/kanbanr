@@ -4949,6 +4949,43 @@ fn branches(base: &std::path::Path, work: &std::path::Path) -> String {
         .to_string()
 }
 
+/// FTR-013 R-7: a merge lists, on stderr, the docs that name what the item changed and have not
+/// changed since, and a merge of an item that touched no such name says nothing.
+#[test]
+fn a_merge_reports_the_texts_that_name_what_it_changed() {
+    let (base, work) = togaf_scratch("gm-drift-merge");
+    git_model_board(&base, &work, false, false);
+    let run = |args: &[&str]| run_in(&base, &work, args);
+    let good = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    good(run(&[
+        "doc",
+        "add",
+        "design/cart.md",
+        "--content",
+        "# Cart\n\nHow FEAT-001 keeps a cart; pass --expires to set the time.\n",
+    ]));
+    good(run(&["start", "FEAT-001"]));
+    // The doc was written a moment ago: commits are timed to the second.
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    commit_file_in(
+        &base,
+        &work,
+        "cart.txt",
+        "flag: --expires\n",
+        "feat: cart\n\nRefs: kanbanr:FEAT-001",
+    );
+    let moved = good(run(&["move", "FEAT-001", "Completed"]));
+    let said = String::from_utf8_lossy(&moved.stderr).to_string();
+    assert!(said.contains("design/cart.md"), "{said}");
+    assert!(said.contains("names --expires"), "{said}");
+    assert!(said.contains("changed by FEAT-001"), "{said}");
+    assert!(said.contains("`kanbanr drift`"), "{said}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-189 R-2: with releases on, `start` branches from the integration line, making it from
 /// main the first time.
 #[test]

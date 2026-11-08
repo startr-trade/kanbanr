@@ -17,7 +17,7 @@
 use crate::error::{CoreError, Result};
 use crate::refs::{self, BoardIndex, Ref};
 use crate::{Store, coderepo};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use time::OffsetDateTime;
@@ -26,7 +26,7 @@ use time::format_description::well_known::Rfc3339;
 // ---- names ----------------------------------------------------------------------------------
 
 /// What kind of thing a [`Name`] is; it decides how a text must hold it to match (see [`scan`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum NameKind {
@@ -40,7 +40,7 @@ pub enum NameKind {
 }
 
 /// Something a change put in the code that a text may describe.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Name {
     pub kind: NameKind,
@@ -519,7 +519,7 @@ pub fn item_changes(repo: &Path, code: &str, since: Option<&str>) -> Result<Vec<
 // ---- scanning a text ------------------------------------------------------------------------
 
 /// A name a text holds, with the lines it is on (1-based).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Hit {
     pub name: Name,
@@ -669,7 +669,7 @@ fn normalize_route_line(line: &str) -> String {
 // ---- what is linked -------------------------------------------------------------------------
 
 /// What kind of text a flag points at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {
@@ -679,7 +679,7 @@ pub enum TargetKind {
 }
 
 /// A text linked to an item.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Target {
     pub kind: TargetKind,
@@ -687,7 +687,7 @@ pub struct Target {
     pub id: String,
     pub title: String,
     /// The doc path under the board's `docs/`, for a doc or an ADR; empty for an item.
-    #[serde(skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub path: String,
 }
 
@@ -842,17 +842,19 @@ pub fn linked(store: &Store, project: &str, code: &str) -> Result<Vec<Linked>> {
 // ---- flags ----------------------------------------------------------------------------------
 
 /// A commit that changed a flagged name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct CommitRef {
     pub sha: String,
     pub at: String,
     pub item: String,
+    /// The names this commit changed that the text holds.
+    pub names: Vec<Name>,
 }
 
 /// A linked text that names something changed after it last changed. A flag says which text names
 /// which changed name, never that the text is wrong.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Flag {
     pub target: Target,
@@ -891,6 +893,11 @@ pub fn flag_for(linked: &Linked, text: &str, changed_at: &str, changes: &[Change
             sha: c.sha.clone(),
             at: c.at.clone(),
             item: c.item.clone(),
+            names: hits
+                .iter()
+                .filter(|h| c.names.contains(&h.name))
+                .map(|h| h.name.clone())
+                .collect(),
         })
         .collect();
     commits.sort_by(|a, b| (&a.at, &a.sha).cmp(&(&b.at, &b.sha)));
@@ -902,6 +909,53 @@ pub fn flag_for(linked: &Linked, text: &str, changed_at: &str, changes: &[Change
         commits,
         target_changed_at: changed_at.to_string(),
     })
+}
+
+impl Flag {
+    /// What to call the flagged text on a terminal.
+    pub fn heading(&self) -> String {
+        match self.target.kind {
+            TargetKind::Doc => self.target.path.clone(),
+            TargetKind::Adr => format!("{} ({})", self.target.id, self.target.path),
+            TargetKind::Item => format!("{}: {}", self.target.id, self.target.title),
+        }
+    }
+
+    /// One line per name the text holds, for a terminal: the name, the commit that changed it and
+    /// when the text last changed. It says what to read, never that the text is wrong.
+    pub fn lines(&self) -> Vec<String> {
+        let day = |t: &str| t.get(..10).unwrap_or(t).to_string();
+        let what = match self.target.kind {
+            TargetKind::Doc | TargetKind::Adr => "doc",
+            TargetKind::Item => "item",
+        };
+        self.hits
+            .iter()
+            .map(|h| {
+                let name = match h.name.kind {
+                    NameKind::ConfigKey | NameKind::Name => format!("`{}`", h.name.text),
+                    _ => h.name.text.clone(),
+                };
+                let by = self
+                    .commits
+                    .iter()
+                    .find(|c| c.names.contains(&h.name))
+                    .map(|c| {
+                        format!(
+                            "changed by {} ({}, {})",
+                            c.item,
+                            c.sha.get(..7).unwrap_or(&c.sha),
+                            day(&c.at)
+                        )
+                    })
+                    .unwrap_or_default();
+                format!(
+                    "names {name}  {by}; this {what} last changed {}",
+                    day(&self.target_changed_at)
+                )
+            })
+            .collect()
+    }
 }
 
 /// When the files last changed in the board's repository: the committer time of the last commit

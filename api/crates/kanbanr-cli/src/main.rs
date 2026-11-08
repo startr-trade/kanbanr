@@ -4632,6 +4632,25 @@ fn print_merge(cli: &Cli, resp: &str) {
     if let Some(version) = v["forward_needed"].as_str() {
         println!("release/{version} has a fix the line lacks: kanbanr git forward {version}");
     }
+    print_drift(&v["drift"]);
+}
+
+/// The docs and items that name what a merged item changed (FTR-013), on stderr: they are to be
+/// read, not acted on.
+fn print_drift(flags: &Value) {
+    let flags: Vec<kanbanr_core::docdrift::Flag> =
+        serde_json::from_value(flags.clone()).unwrap_or_default();
+    if flags.is_empty() {
+        return;
+    }
+    eprintln!("These name something this change touched and have not changed since:");
+    for flag in &flags {
+        eprintln!("  {}", flag.heading());
+        for line in flag.lines() {
+            eprintln!("    {line}");
+        }
+    }
+    eprintln!("Read these; `kanbanr drift` lists them again.");
 }
 
 /// Carried items brought up to date with a sprint's branch (FEAT-190).

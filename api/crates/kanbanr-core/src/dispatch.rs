@@ -1019,6 +1019,9 @@ fn dispatch_routes(
             if let Some(note) = &moved.note {
                 out["note"] = json!(note);
             }
+            if !moved.drift.is_empty() {
+                out["drift"] = json!(moved.drift);
+            }
             ser(&out)
         }
         ("PUT", ["projects", p, "features", code, "tests", requirement, test]) => {

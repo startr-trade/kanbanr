@@ -569,6 +569,10 @@ pub struct Moved {
     /// Something to know, e.g. that the item has no branch, so nothing was merged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// The docs and items that name something the merged item changed and have not changed since
+    /// (FTR-013): for the person to read, not a verdict. Nothing is written for them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drift: Vec<crate::docdrift::Flag>,
 }
 
 /// Move an item. With the git model on, a move that integrates it — into the integrate stage, or
@@ -600,6 +604,7 @@ pub fn move_item(
             forward_needed: None,
             sent_back: None,
             note,
+            drift: Vec::new(),
         })
     };
     if !integrates {
@@ -721,9 +726,13 @@ pub fn move_item(
             }
         }
     }
+    // What the merge brought in may be named by docs and items that did not change with it. A
+    // failure to read the history is no reason to fail a move that is already done.
+    let drift = crate::docdrift::flags_for_item(store, id, code, repo).unwrap_or_default();
     Ok(Moved {
         feature: moved,
         warnings,
+        drift,
         merged: Some(Merged {
             branch,
             into: line,
