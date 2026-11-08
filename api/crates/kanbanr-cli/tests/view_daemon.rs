@@ -1514,3 +1514,223 @@ fn writes_from_the_page_record_a_signoff() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A board with one project `demo` over a scratch folder, for the tests of the bind and origin
+/// rules (DEF-026). Returns the folder, its home and its data.
+fn bind_board(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let base = scratch(name);
+    let (home, data) = (base.join("home"), base.join("data"));
+    let run = |args: &[&str]| {
+        let o = Command::new(cli())
+            .args(args)
+            .env("HOME", &home)
+            .env("KANBANR_DATA_DIR", &data)
+            .env_remove("KANBANR_SERVER_URL")
+            .output()
+            .expect("run cli");
+        assert!(
+            o.status.success(),
+            "cmd {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
+    run(&["identity", "--name", "Tester", "--email", "t@example.com"]);
+    run(&["--project", "demo", "project", "init", "demo"]);
+    (base, home, data)
+}
+
+/// A page with a head, so the monitor can put its token in it.
+fn page_dir(base: &std::path::Path) -> String {
+    let ui = base.join("dist");
+    std::fs::create_dir_all(ui.join("assets")).unwrap();
+    std::fs::write(
+        ui.join("index.html"),
+        "<!doctype html><html><head><title>t</title></head><body></body></html>",
+    )
+    .unwrap();
+    ui.to_str().unwrap().to_string()
+}
+
+/// `kanbanr serve --allow-writes` over a bind board with `extra` args and variables, stderr piped.
+fn serve_writes(
+    home: &std::path::Path,
+    data: &std::path::Path,
+    bind: &str,
+    extra: &[&str],
+    vars: &[(&str, &str)],
+) -> Child {
+    let mut cmd = Command::new(cli());
+    cmd.args(["serve", "--allow-writes", "--bind", bind])
+        .args(extra)
+        .env("HOME", home)
+        .env("KANBANR_DATA_DIR", data)
+        .env_remove("KANBANR_ALLOW_REMOTE_WRITES")
+        .env_remove("KANBANR_ALLOWED_ORIGINS")
+        .env_remove("KANBANR_ALLOWED_HOSTS")
+        .stderr(std::process::Stdio::piped());
+    for (k, v) in vars {
+        cmd.env(k, v);
+    }
+    cmd.spawn().expect("spawn kanbanr serve")
+}
+
+fn wait_up(url: &str, child: &mut Child) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        assert!(Instant::now() < deadline, "daemon did not become ready");
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!("the daemon exited ({status})");
+        }
+        if ureq::get(&format!("{url}/healthz")).call().is_ok() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn board_commits(data: &std::path::Path) -> String {
+    let out = Command::new("git")
+        .args(["rev-list", "--count", "HEAD"])
+        .current_dir(data)
+        .output()
+        .expect("run git");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// DEF-026 R-2: with the acceptance, a monitor on a reachable bind starts, and says so.
+#[test]
+fn an_accepted_non_local_bind_starts_and_says_so() {
+    use std::io::Read;
+    let (base, home, data) = bind_board("remote-accepted");
+    let port = free_port();
+    let bind = format!("0.0.0.0:{port}");
+    let mut child = serve_writes(&home, &data, &bind, &["--allow-remote-writes"], &[]);
+    let url = format!("http://127.0.0.1:{port}");
+    wait_up(&url, &mut child);
+    let mut stderr = child.stderr.take().unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+    let mut text = String::new();
+    stderr.read_to_string(&mut text).unwrap();
+    assert!(
+        text.contains(&format!("WARNING writes are ON at {bind}")),
+        "{text}"
+    );
+    assert!(text.contains("--allow-remote-writes"), "{text}");
+    let _ = std::fs::remove_dir_all(base);
+}
+
+/// DEF-026 R-5: `review --ui` has no flag, so a reachable KANBANR_BIND is refused.
+#[test]
+fn review_ui_on_a_non_local_bind_is_refused() {
+    let (base, home, data) = bind_board("review-remote");
+    let port = free_port();
+    let child = Command::new(cli())
+        .args(["--project", "demo", "review", "--ui"])
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &data)
+        .env("KANBANR_BIND", format!("0.0.0.0:{port}"))
+        .env_remove("KANBANR_ALLOW_REMOTE_WRITES")
+        .env("BROWSER", "true")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn review --ui");
+    let start = Instant::now();
+    let out = child.wait_with_output().unwrap();
+    assert!(start.elapsed() < Duration::from_secs(5), "it did not exit");
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("KANBANR_ALLOW_REMOTE_WRITES"), "{err}");
+    assert!(
+        TcpListener::bind(("0.0.0.0", port)).is_ok(),
+        "nothing listens on the port"
+    );
+    let _ = std::fs::remove_dir_all(base);
+}
+
+fn create_project_with(url: &str, headers: &[(&str, &str)]) -> u16 {
+    let mut req = ureq::post(&format!("{url}/api/write/projects"));
+    for (k, v) in headers {
+        req = req.set(k, v);
+    }
+    match req
+        .set("content-type", "application/json")
+        .send_string(r#"{"name": "other"}"#)
+    {
+        Ok(r) => r.status(),
+        Err(ureq::Error::Status(code, _)) => code,
+        Err(e) => panic!("request failed: {e}"),
+    }
+}
+
+/// DEF-026 R-7: an https origin the person named is accepted with the token.
+#[test]
+fn a_named_https_origin_is_accepted() {
+    let (base, home, data) = bind_board("origin-named");
+    let port = free_port();
+    let mut child = serve_writes(
+        &home,
+        &data,
+        &format!("127.0.0.1:{port}"),
+        &["--ui-dir", &page_dir(&base)],
+        &[("KANBANR_ALLOWED_ORIGINS", "https://board.example.com")],
+    );
+    let url = format!("http://127.0.0.1:{port}");
+    wait_up(&url, &mut child);
+    let _daemon = Daemon(child);
+    let token = page_token(&url);
+    let before: u32 = board_commits(&data).parse().unwrap();
+    let status = create_project_with(
+        &url,
+        &[
+            ("Origin", "https://board.example.com"),
+            ("x-kanbanr-token", &token),
+        ],
+    );
+    assert!((200..300).contains(&status), "status {status}");
+    let after: u32 = board_commits(&data).parse().unwrap();
+    assert!(after > before, "the write was committed");
+    let _ = std::fs::remove_dir_all(base);
+}
+
+/// DEF-026 R-8: an origin that was not named is refused, and naming a host does not name one.
+#[test]
+fn an_https_origin_that_was_not_named_is_refused() {
+    let (base, home, data) = bind_board("origin-unnamed");
+    let port = free_port();
+    let mut child = serve_writes(
+        &home,
+        &data,
+        &format!("127.0.0.1:{port}"),
+        &["--ui-dir", &page_dir(&base)],
+        &[
+            ("KANBANR_ALLOWED_ORIGINS", "https://board.example.com"),
+            ("KANBANR_ALLOWED_HOSTS", "other.example.com"),
+        ],
+    );
+    let url = format!("http://127.0.0.1:{port}");
+    wait_up(&url, &mut child);
+    let _daemon = Daemon(child);
+    let token = page_token(&url);
+    let before = board_commits(&data);
+    let a = create_project_with(
+        &url,
+        &[
+            ("Origin", "https://other.example.com"),
+            ("x-kanbanr-token", &token),
+        ],
+    );
+    assert_eq!(a, 403);
+    let b = create_project_with(
+        &url,
+        &[
+            ("Host", "other.example.com"),
+            ("Origin", "https://other.example.com"),
+            ("x-kanbanr-token", &token),
+        ],
+    );
+    assert_eq!(b, 403, "naming a host does not name an origin");
+    assert_eq!(board_commits(&data), before);
+    let _ = std::fs::remove_dir_all(base);
+}

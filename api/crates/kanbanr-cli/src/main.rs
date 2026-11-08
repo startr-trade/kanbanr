@@ -134,6 +134,10 @@ enum Command {
         /// (single-writer daemon). OFF by default — the default daemon only reads. (FEAT-034)
         #[arg(long)]
         allow_writes: bool,
+        /// Accept writes on an address other machines can reach (default: refused). Also
+        /// $KANBANR_ALLOW_REMOTE_WRITES. (DEF-026)
+        #[arg(long)]
+        allow_remote_writes: bool,
     },
     /// Push local commits to the configured git remotes now (FEAT-034). Writes commit locally and
     /// push is debounced off the hot path by default; this flushes anything pending immediately.
@@ -1913,6 +1917,7 @@ fn run_serve(
     bind: Option<String>,
     ui_dir: Option<String>,
     allow_writes: bool,
+    allow_remote_writes: bool,
 ) -> anyhow::Result<()> {
     let dir = project::resolve_data_dir(cli.data_dir.as_deref());
     if allow_writes {
@@ -1947,12 +1952,13 @@ fn run_serve(
         );
     }
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(kanbanr_server::run(
+    rt.block_on(kanbanr_server::run_with(
         dir,
         bind,
         ui_dir,
         allow_writes,
         code_repo,
+        allow_remote_writes,
     ))
 }
 
@@ -5760,7 +5766,16 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             bind,
             ui_dir,
             allow_writes,
-        } => return run_serve(cli, bind.clone(), ui_dir.clone(), *allow_writes),
+            allow_remote_writes,
+        } => {
+            return run_serve(
+                cli,
+                bind.clone(),
+                ui_dir.clone(),
+                *allow_writes,
+                *allow_remote_writes,
+            );
+        }
         Command::Open { check } => return run_open(cli, *check),
         Command::Where => return run_where(cli),
         // A preview of the git model needs no board (FEAT-194): setup shows it before `init`.
@@ -6196,7 +6211,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     std::thread::sleep(std::time::Duration::from_millis(600));
                     open_in_browser(&opened);
                 });
-                return run_serve(cli, Some(bind), ui_dir_for_review(), true);
+                return run_serve(cli, Some(bind), ui_dir_for_review(), true, false);
             }
             // What is waiting is the daemon's answer, the one the Review page shows (FEAT-159):
             // never approved, lapsed, unratified, or waiting on a sign-off — and not live work
