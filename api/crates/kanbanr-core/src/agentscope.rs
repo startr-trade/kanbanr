@@ -956,14 +956,30 @@ pub fn resolve_with(
 /// Is this board one scopes govern? A board that holds scopes always is, wherever it lives: the
 /// temporary directory comes from `TMPDIR`, which an agent can set, so its location alone must never
 /// lift a scope. A board inside the temporary directory that holds none is not (D7): test boards
-/// live there, and build agents run the tests in their worktrees.
+/// live there, and build agents run the tests in their worktrees. The opposite of
+/// [`is_temporary_board`], which is the one rule for both.
 pub fn is_governed_board(data_dir: &Path) -> bool {
-    if holds_scopes(data_dir) {
-        return true;
-    }
+    !is_temporary_board(data_dir)
+}
+
+/// The system temporary directory as scopes read it: `std::env::temp_dir()`, normalised.
+pub fn temp_root() -> PathBuf {
+    crate::project::normalize(&std::env::temp_dir())
+}
+
+/// Is `data_dir` a temporary board: inside the system temporary directory and holding no agent
+/// scope record? One rule for the guard, the brief and [`is_governed_board`] (DEF-015). The path is
+/// normalised first (symlinks resolved as far as they exist), so a link inside the temporary
+/// directory to a real board is that board. A folder that does not exist yet counts if its nearest
+/// existing parent is inside the temporary directory. A folder that exists but cannot be read is
+/// not a temporary board: it fails closed.
+pub fn is_temporary_board(data_dir: &Path) -> bool {
     let board = crate::project::normalize(data_dir);
-    let temp = crate::project::normalize(&std::env::temp_dir());
-    !board.starts_with(&temp)
+    if !board.starts_with(temp_root()) || holds_scopes(&board) {
+        return false;
+    }
+    let projects = board.join("projects");
+    !projects.exists() || std::fs::read_dir(&projects).is_ok()
 }
 
 /// Whether any project on the board at `data_dir` has a scope record.
@@ -1281,7 +1297,13 @@ pub fn with_trailer(message: &str, scope: &Scope) -> String {
 
 /// The boundary table for the agent's brief (R-1), with the claim command.
 pub fn brief(scope: &Scope, project: &Project) -> String {
+    brief_in(scope, project, &temp_root())
+}
+
+/// The brief with the temporary directory named in its Tests row (a parameter, for tests).
+pub fn brief_in(scope: &Scope, project: &Project, temp: &Path) -> String {
     let _ = project;
+    let temp = temp.display();
     let item = &scope.item;
     let mut out = format!(
         "## Your boundaries — kanbanr agent scope {} ({}, {item}), enforced by kanbanr\n\n",
@@ -1319,7 +1341,11 @@ pub fn brief(scope: &Scope, project: &Project) -> String {
         }
     }
     out.push_str("| Remote | nothing | `git push`, `kanbanr sync` |\n");
-    out.push_str("| Tests | temporary boards only | a real board |\n\n");
+    out.push_str(&format!(
+        "| Tests | on a temporary board: a folder under `{temp}` that holds no agent scope, named by \
+         a literal path or `$TMPDIR/…` (`kanbanr --data-dir {temp}/walk init …`, `cd {temp}/walk`) \
+         | a real board; any data dir outside `{temp}` |\n\n"
+    ));
     if !scope.note.is_empty() {
         out.push_str(&format!("Note: {}\n\n", scope.note));
     }
@@ -1491,6 +1517,66 @@ mod tests {
             "holding scopes, it is governed although it is in temp"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-015 R-5: one rule says what a temporary board is; the board-governing check is its
+    /// opposite on every kind of folder.
+    #[test]
+    fn a_temporary_board_is_one_rule() {
+        let temp = temp_root();
+        let dir = temp.join(format!("kanbanr-temp-rule-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("projects").join("shop")).unwrap();
+        let missing = dir.join("not-yet");
+        let holds = dir.join("holds");
+        std::fs::create_dir_all(holds.join("projects").join("shop")).unwrap();
+        std::fs::write(
+            holds.join("projects").join("shop").join(SCOPES_FILE),
+            "- id: SC-001\n",
+        )
+        .unwrap();
+        let outside = std::env::current_dir().unwrap();
+        for (what, path, temporary) in [
+            ("a board inside", dir.clone(), true),
+            ("the temporary directory itself", temp.clone(), true),
+            ("a folder that does not exist yet", missing, true),
+            ("a board that holds scopes", holds, false),
+            ("a folder outside", outside, false),
+            ("the filesystem root", PathBuf::from("/"), false),
+        ] {
+            assert_eq!(is_temporary_board(&path), temporary, "{what}: {path:?}");
+            assert_eq!(is_governed_board(&path), !temporary, "{what}: {path:?}");
+        }
+        // A link inside the temporary directory to a folder outside it is that folder.
+        #[cfg(unix)]
+        {
+            let link = dir.join("link");
+            std::os::unix::fs::symlink(std::env::current_dir().unwrap(), &link).unwrap();
+            assert!(
+                !is_temporary_board(&link),
+                "a link out of the temporary directory"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-015 R-4: the Tests row says what a temporary board is and the form to name one, with the
+    /// temporary directory the guard reads.
+    #[test]
+    fn the_brief_says_what_a_temporary_board_is() {
+        let project = Project {
+            id: "kanbanr".into(),
+            config: crate::ProjectConfig::for_new_project("kanbanr"),
+            features: Vec::new(),
+            milestones: Vec::new(),
+        };
+        let b = brief_in(&scope(Role::Build), &project, Path::new("/scratch/tmp"));
+        let row = "| Tests | on a temporary board: a folder under `/scratch/tmp` that holds no agent \
+                   scope, named by a literal path or `$TMPDIR/…` (`kanbanr --data-dir \
+                   /scratch/tmp/walk init …`, `cd /scratch/tmp/walk`) | a real board; any data dir \
+                   outside `/scratch/tmp` |";
+        assert!(b.contains(row), "the Tests row:\n{b}");
+        assert!(!b.contains("temporary boards only"), "{b}");
     }
 
     use super::*;
@@ -1769,7 +1855,9 @@ mod tests {
             "moves, approvals, sign-offs, definitions, specs, docs, config, other items",
             "| Code | commits on feat/FEAT-214-agent-scopes, each naming FEAT-214 (`kanbanr commit`)",
             "| Remote | nothing | `git push`, `kanbanr sync` |",
-            "| Tests | temporary boards only | a real board |",
+            "| Tests | on a temporary board: a folder under `",
+            "` that holds no agent scope, named by a literal path or `$TMPDIR/…`",
+            "| a real board; any data dir outside `",
             "Expires 2026-10-21 17:00 UTC.",
             "never work around it.",
         ] {
