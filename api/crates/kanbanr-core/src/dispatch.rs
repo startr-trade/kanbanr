@@ -6,7 +6,6 @@
 //! It deliberately does NOT cover auth/users/remotes — those are server/identity concerns handled
 //! by their respective layers.
 
-use crate::batch::BatchOp;
 use crate::config::ProjectConfig;
 use crate::error::{CoreError, Result};
 use crate::graph::DependencyView;
@@ -1482,6 +1481,14 @@ fn dispatch_routes(
             let items = vec_field(b, "items").unwrap_or_default();
             ser(&crate::sprints::plan(store, p, code, &items)?)
         }
+        // Take items out of their sprint (DEF-018).
+        ("POST", ["projects", p, "sprints", "unplan"]) => {
+            let items = vec_field(b, "items").unwrap_or_default();
+            if items.is_empty() {
+                return Err(CoreError::Unsupported("name at least one item".into()));
+            }
+            ser(&crate::sprints::unplan(store, p, &items)?)
+        }
         // With the git model on, starting a sprint makes its branch (FEAT-189).
         ("POST", ["projects", p, "sprints", code, "start"]) => {
             ser(&crate::gitmodel::sprint_start(store, p, code, repo)?)
@@ -2038,13 +2045,8 @@ fn dispatch_routes(
 
         // ---- batch ----
         ("POST", ["projects", p, "batch"]) => {
-            let ops: Vec<BatchOp> = b
-                .get("operations")
-                .cloned()
-                .map(serde_json::from_value)
-                .transpose()
-                .map_err(|e| CoreError::Unsupported(format!("invalid batch: {e}")))?
-                .unwrap_or_default();
+            let ops = crate::batch::parse(b.get("operations"))
+                .map_err(|e| CoreError::Unsupported(format!("invalid batch: {e}")))?;
             let dry_run = b.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
             // Under an agent scope the write path holds every item where it is (FEAT-214).
             let hold = str_field(b, "hold_advance");
@@ -2949,6 +2951,44 @@ mod tests {
         );
         let off = call("GET", "/projects/demo/guards", Value::Null);
         assert_eq!(off["commits"]["protected"], json!(["main"]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-018 R-5: a batch with a field an operation does not take is refused whole, in a dry run
+    /// as in a real one, and the operation before it is not written.
+    #[test]
+    fn a_batch_with_an_unknown_field_writes_nothing() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-dispatch-bf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(
+            std::fs::canonicalize(&dir)
+                .unwrap()
+                .starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap())
+        );
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let before = store.load("demo").unwrap().features.len();
+        for dry_run in [true, false] {
+            let body = json!({
+                "dry_run": dry_run,
+                "operations": [
+                    { "op": "feature.add", "title": "T", "milestone": "M" },
+                    { "op": "feature.edit", "code": "FEAT-001", "sprint": "" },
+                ],
+            });
+            let err = dispatch(&store, "POST", "/projects/demo/batch", Some(&body))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("operation 1 (feature.edit)"), "{err}");
+            assert!(err.contains("unknown field `sprint`"), "{err}");
+            assert_eq!(store.load("demo").unwrap().features.len(), before);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -186,10 +186,12 @@ You never need these. [Agile from the command line](agile-cli.md) covers them st
 | You asked for | Claude runs |
 |---|---|
 | Set up the process | `kanbanr config workflow --preset agile`, `kanbanr config cadence` |
-| A sprint | `kanbanr sprint add`, `kanbanr sprint start`, `kanbanr sprint plan` |
+| A sprint | `kanbanr sprint add`, `kanbanr sprint start`, `kanbanr sprint plan`, `kanbanr sprint unplan` |
 | A release | `kanbanr release add`, `kanbanr release plan` |
 | Moving an item | `kanbanr move` |
 | Starting the build | `kanbanr start` |
 | Release notes | `kanbanr release notes` |
 | Bringing a release forward | `kanbanr git forward` |
 | Closing a sprint | `kanbanr sprint close`, `kanbanr retro` |
+
+To take an item out of the sprint, ask Claude to take it out; it goes back to no sprint.

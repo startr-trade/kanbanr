@@ -1394,6 +1394,11 @@ enum SprintCmd {
         #[arg(required = true)]
         items: Vec<String>,
     },
+    /// Take items out of their sprint; each goes back to no sprint.
+    Unplan {
+        #[arg(required = true)]
+        items: Vec<String>,
+    },
     /// Change a sprint that has not started: name, goal, first day, length or last day, capacity.
     /// A started sprint is a record and is refused.
     Edit {
@@ -10580,6 +10585,40 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
             {
                 eprintln!("  warning: {over}");
             }
+        }
+        SprintCmd::Unplan { items } => {
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/sprints/unplan"),
+                Some(json!({ "items": items })),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            // One clause per sprint the items left, then the items that were in none.
+            let mut by_sprint: Vec<(String, Vec<String>)> = Vec::new();
+            for left in v["removed"].as_array().into_iter().flatten() {
+                let (code, from) = (
+                    left["code"].as_str().unwrap_or_default().to_string(),
+                    left["from"].as_str().unwrap_or_default().to_string(),
+                );
+                match by_sprint.iter_mut().find(|(s, _)| *s == from) {
+                    Some((_, codes)) => codes.push(code),
+                    None => by_sprint.push((from, vec![code])),
+                }
+            }
+            let mut said: Vec<String> = by_sprint
+                .iter()
+                .map(|(from, codes)| format!("removed {} from {from}", codes.join(", ")))
+                .collect();
+            let none: Vec<&str> = v["not_in_a_sprint"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            if !none.is_empty() {
+                said.push(format!("{} was in no sprint", none.join(", ")));
+            }
+            print_write(cli, &resp, said.join("; "));
         }
         SprintCmd::Start { code } => {
             // With the git model on, the sprint's branch is made in this repository (FEAT-189).

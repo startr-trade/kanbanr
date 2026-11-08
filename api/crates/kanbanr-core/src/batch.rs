@@ -7,7 +7,7 @@ use crate::models::{FeatureDefinition, IssueLink, Source};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "op")]
+#[serde(tag = "op", deny_unknown_fields)]
 pub enum BatchOp {
     /// Create a feature item. `ref` aliases the new FEAT code for later ops.
     #[serde(rename = "feature.add")]
@@ -197,6 +197,37 @@ pub enum BatchOp {
     DocWrite { path: String, content: String },
 }
 
+/// Where a sprint is changed, appended to the refusal of a `sprint` field in a batch (DEF-018).
+const SPRINT_HINT: &str =
+    " — a sprint is changed with `kanbanr sprint plan` and `kanbanr sprint unplan`, not in a batch";
+
+/// The operations of a bundle's `operations` array, each judged on its own so a refusal can name
+/// which one. `None` (no `operations` key) is an empty bundle, as before. An operation carrying a
+/// field it does not accept is refused rather than ignored (DEF-018).
+pub fn parse(operations: Option<&serde_json::Value>) -> Result<Vec<BatchOp>, String> {
+    let Some(operations) = operations else {
+        return Ok(Vec::new());
+    };
+    let Some(list) = operations.as_array() else {
+        return Err("operations must be a list".to_string());
+    };
+    list.iter()
+        .enumerate()
+        .map(|(i, op)| {
+            serde_json::from_value::<BatchOp>(op.clone()).map_err(|e| {
+                let kind = op["op"].as_str().unwrap_or("?");
+                let error = e.to_string();
+                let hint = if error.contains("unknown field `sprint`") {
+                    SPRINT_HINT
+                } else {
+                    ""
+                };
+                format!("operation {i} ({kind}): {error}{hint}")
+            })
+        })
+        .collect()
+}
+
 /// A bundle as `POST /projects/{p}/batch` takes it (FEAT-176): a bare array of operations is
 /// wrapped as `{ "operations": [...] }`, `message` (when given) is set on it, and each file-sourced
 /// `feature.add` that does not say which revision of the file it came from is stamped with
@@ -262,5 +293,70 @@ mod tests {
         });
         assert_eq!(body, plain);
         assert!(!asked.get());
+    }
+
+    #[test]
+    fn an_unknown_field_refuses_the_batch_and_names_it() {
+        let ops = json!([
+            { "op": "task.add", "feature": "X", "todo": "TL-1", "text": "a" },
+            { "op": "task.add", "feature": "X", "todo": "TL-1", "txt": "a" },
+        ]);
+        let err = parse(Some(&ops)).unwrap_err();
+        assert!(err.contains("operation 1 (task.add)"), "{err}");
+        assert!(err.contains("unknown field `txt`"), "{err}");
+        assert!(
+            parse(Some(&json!({})))
+                .unwrap_err()
+                .contains("must be a list")
+        );
+        assert!(parse(None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_refusal_for_sprint_points_to_sprint_plan_and_unplan() {
+        let ops = json!([{ "op": "feature.edit", "code": "X", "sprint": "" }]);
+        let err = parse(Some(&ops)).unwrap_err();
+        assert!(err.contains("operation 0 (feature.edit)"), "{err}");
+        assert!(err.contains("unknown field `sprint`"), "{err}");
+        assert!(err.contains("kanbanr sprint plan"), "{err}");
+        assert!(err.contains("kanbanr sprint unplan"), "{err}");
+        // Another unknown field gets no sprint hint.
+        let other = json!([{ "op": "feature.edit", "code": "X", "ref": "a" }]);
+        assert!(!parse(Some(&other)).unwrap_err().contains("sprint"));
+    }
+
+    /// The shapes the skill's "Prefer bulk" example, the evidence capture and the mirror send,
+    /// plus one op per variant using every field its struct declares.
+    #[test]
+    fn every_field_in_the_books_batch_examples_is_still_accepted() {
+        let src = json!({ "system": "file", "key": "a.md", "revision": "r" });
+        let ops = json!([
+            { "op": "milestone.add", "ref": "m", "name": "M", "code": "MS-009",
+              "description": "d", "depends_on": ["MS-001"] },
+            { "op": "feature.add", "ref": "f", "title": "T", "milestone": "m", "spec": "s",
+              "code": "FEAT-900", "kind": "feature", "priority": "high", "due": "2026-12-01",
+              "assignee": "a", "team": "t", "labels": ["x"], "depends_on": ["FEAT-1"],
+              "source": src, "original": "o",
+              "issue": { "system": "github", "repo": "o/r", "number": 1 },
+              "definition": {}, "defect": {}, "split_from": "FEAT-2" },
+            { "op": "feature.edit", "code": "f", "title": "T", "spec": "s", "milestone": "m",
+              "new_code": "FEAT-901", "kind": "feature", "priority": "low", "due": "2026-12-02",
+              "assignee": "a", "team": "t", "labels": [], "depends_on": [],
+              "source": src, "issue": { "system": "github", "repo": "o/r", "number": 1 },
+              "definition": {}, "defect": {}, "split_from": "FEAT-2" },
+            { "op": "feature.move", "code": "f", "to": "Done", "unapproved": "why" },
+            { "op": "feature.approve", "code": "f", "by": "me" },
+            { "op": "test.state", "feature": "f", "requirement": "R-1", "test": "t",
+              "state": "green", "checked_rev": "abc" },
+            { "op": "lesson.add", "lesson": "l", "kind": "k", "from_item": "f",
+              "from_retro": "MS-001", "evidence": "e", "tags": [], "goals": [] },
+            { "op": "todo.add", "ref": "t", "feature": "f", "description": "d", "code": "TL-1" },
+            { "op": "task.add", "feature": "f", "todo": "t", "text": "x", "key": "T1" },
+            { "op": "task.state", "feature": "f", "todo": "t", "key": "T1", "state": "Completed" },
+            { "op": "doc.folder", "path": "a", "name": "A", "description": "d" },
+            { "op": "doc.write", "path": "a/b.md", "content": "c" },
+        ]);
+        let parsed = parse(Some(&ops));
+        assert_eq!(parsed.map(|v| v.len()), Ok(12));
     }
 }

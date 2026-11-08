@@ -10199,3 +10199,70 @@ fn a_monitor_click_then_a_command_records_one_approval() {
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0]["origin"], "monitor");
 }
+
+/// DEF-018 R-1: `sprint unplan` takes one item out of its sprint and says so.
+#[test]
+fn sprint_unplan_removes_one_item_and_says_so() {
+    let (base, work) = togaf_scratch("def018-unplan");
+    git_model_board(&base, &work, true, false);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "plan", "SP-001", "FEAT-001"],
+    ));
+    let out = ok(run_in(&base, &work, &["sprint", "unplan", "FEAT-001"]));
+    assert!(out.contains("removed FEAT-001 from SP-001"), "{out}");
+    let shown = ok(run_in(&base, &work, &["sprint", "show", "SP-001"]));
+    assert!(!shown.contains("FEAT-001"), "{shown}");
+}
+
+/// DEF-018 R-5: a batch that sets `sprint` is refused, not reported applied; `sprint unplan` is
+/// the way out.
+#[test]
+fn batch_feature_edit_with_a_sprint_is_refused_not_applied() {
+    let (base, work) = togaf_scratch("def018-batch");
+    git_model_board(&base, &work, true, false);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05"],
+    ));
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "plan", "SP-001", "FEAT-001"],
+    ));
+    let file = base.join("bundle.json");
+    std::fs::write(
+        &file,
+        r#"{"operations":[{"op":"feature.edit","code":"FEAT-001","sprint":""}]}"#,
+    )
+    .unwrap();
+    let refused = run_in(&base, &work, &["batch", "--file", file.to_str().unwrap()]);
+    assert!(!refused.status.success());
+    let err = String::from_utf8_lossy(&refused.stderr).to_string();
+    assert!(
+        err.contains("unknown field") && err.contains("sprint"),
+        "{err}"
+    );
+    let shown = ok(run_in(&base, &work, &["sprint", "show", "SP-001"]));
+    assert!(shown.contains("FEAT-001"), "{shown}");
+    ok(run_in(&base, &work, &["sprint", "unplan", "FEAT-001"]));
+    let shown = ok(run_in(&base, &work, &["sprint", "show", "SP-001"]));
+    assert!(!shown.contains("FEAT-001"), "{shown}");
+}

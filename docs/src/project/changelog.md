@@ -8,6 +8,14 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **A batch refuses a field its operation does not take, instead of ignoring it and reporting
+  success (DEF-018).** `{"op":"feature.edit","code":"FEAT-001","sprint":""}` used to print
+  `applied 1 operation(s)` and change nothing. Every operation now refuses an unknown field, naming
+  the operation by position and kind and the field, in a dry run as in a real one, and writes
+  nothing. A refusal for `sprint` points to `kanbanr sprint plan` and `kanbanr sprint unplan`. This
+  includes `ref` on `feature.edit` and any other field never accepted: it is now a refusal where it
+  was a silent ignore; removing the field restores the old result.
+
 - **A promotion no longer carries merged work out of its release, and doctor names what a release
   left behind (DEF-029).** Promoting into the stage that tags, or the last stage, is now held while
   an item planned into the release has its code merged but would be carried over because its end
@@ -54,6 +62,14 @@ All notable changes to kanbanr are documented here. The format follows
   guard keeps the coordinator out of agents' worktrees and names the way out (`git -C <path>`),
   test capture finds its board from the project folder and records the coordinator's runs, and
   `kanbanr scope issue` needs the Claude Code hooks that tell the two apart (`kanbanr hooks install`).
+- **A batch refuses a field its operation does not take, instead of ignoring it and reporting
+  success (DEF-018).** `{"op":"feature.edit","code":"FEAT-001","sprint":""}` used to print
+  `applied 1 operation(s)` and change nothing. Every operation now refuses a field it does not
+  accept, in a dry run as in a real one, naming the operation by position and kind and the field
+  (`operation 1 (feature.edit): unknown field ...`), and writes nothing. For `sprint` the refusal
+  says sprint membership is changed with `kanbanr sprint plan` and `kanbanr sprint unplan`. A bundle
+  that sent a field no operation ever took, such as `ref` on `feature.edit`, now fails where it was
+  silently ignored; remove the field to get the old result.
 - **A scope's brief allows temporary boards, and the guard now lets an agent use one (DEF-015).**
   Every brief said "Tests: temporary boards only", but the Bash guard refused `--data-dir`,
   `KANBANR_DATA_DIR`, `KANBANR_PROJECT` and `cd $TMPDIR/…` for any board, so agents could not walk a
@@ -64,6 +80,13 @@ All notable changes to kanbanr are documented here. The format follows
   `$TMPDIR` cannot be reassigned in a command.
 
 ### Added
+
+- **`kanbanr sprint unplan ITEM...` takes items out of their sprint (DEF-018).** Each goes back to
+  no sprint, and the command says which items left which sprint and which were in none. An item in
+  a closed sprint, or an unknown item, refuses the whole command and changes nothing. It needs
+  sprints switched on, as `sprint plan` does. The new write route
+  `POST /projects/{p}/sprints/unplan` is not in `openapi.json`, which lists read routes only, as
+  `plan`, `start` and `close` are not.
 
 - **TOGAF fits sprints and releases without changing it (FTR-025).** Migration counts as done for a
   sprint, so closing a sprint carries over only unmerged work. A project's sprints, releases, release

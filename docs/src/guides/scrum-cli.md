@@ -140,6 +140,7 @@ kanbanr sprint add --start 2026-11-03 --length 2w --goal "Carts survive a return
 kanbanr sprint start SP-001
 kanbanr feature add --title "Restore the cart" --milestone MS-001 --spec "# Restore the cart"
 kanbanr sprint plan SP-001 FEAT-001
+kanbanr sprint unplan FEAT-001                 # take it back out
 kanbanr release add v1.0.0
 kanbanr release plan v1.0.0 FEAT-001
 ```
