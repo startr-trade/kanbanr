@@ -168,6 +168,27 @@ fn a_request_for_another_host_is_refused() {
 }
 
 #[test]
+fn a_published_port_serves_the_page() {
+    // A container binds one port and publishes another: the browser names the published one.
+    let s = Scratch::new("published");
+    let data = board(&s);
+    let url = serve(&s, &data);
+    let bound: u16 = url.rsplit(':').next().unwrap().parse().unwrap();
+    let other = if bound == 18080 { 18081 } else { 18080 };
+    for host in [
+        format!("localhost:{other}"),
+        format!("127.0.0.1:{other}"),
+        format!("[::1]:{other}"),
+        "localhost".to_string(),
+    ] {
+        for path in ["/", "/api/projects"] {
+            let r = ureq::get(&format!("{url}{path}")).set("Host", &host).call();
+            assert_eq!(status(r), 200, "{path} for {host}");
+        }
+    }
+}
+
+#[test]
 fn another_origin_gets_no_cross_origin_headers() {
     let s = Scratch::new("cors");
     let data = board(&s);

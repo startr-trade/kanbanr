@@ -43,6 +43,14 @@ All notable changes to kanbanr are documented here. The format follows
   `ATTEST_RELEASE=false` skips the attestations and says so in the release notes. The Docker smoke
   test drives the `docker` CLI directly, so `testcontainers` and its advisory exception
   (RUSTSEC-2026-0440) are gone.
+## [0.5.1] - 2026-11-08
+
+### Fixed
+
+- **The monitor answers its own page on a published port (DEF-032).** v0.5.0 counted `localhost`,
+  `127.0.0.1` and `[::1]` only on the port the monitor is bound to, so the documented Docker setup,
+  which publishes 8080 as 18080, got a 403 on every page. Those three names are now answered on any
+  port; every other host is checked exactly as before.
 
 ## [0.5.0] - 2026-11-06
 
@@ -1382,7 +1390,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/startr-trade/kanbanr/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/startr-trade/kanbanr/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/startr-trade/kanbanr/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/startr-trade/kanbanr/compare/v0.2.1...v0.3.0

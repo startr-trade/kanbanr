@@ -97,7 +97,7 @@ server {
 ```
 
 The proxy enforces who gets in and encrypts the connection. The monitor answers only for the
-loopback names (`localhost`, `127.0.0.1`, `[::1]`), the address it is bound to and the hosts named in
+loopback names (`localhost`, `127.0.0.1`, `[::1]`, on any port, so a port published by Docker works), the address it is bound to and the hosts named in
 the `KANBANR_ALLOWED_HOSTS` variable, so name the proxy's host there, as a comma-separated list of
 `name[:port]` (for example `KANBANR_ALLOWED_HOSTS=board.example.com kanbanr serve`). A request for any
 other host gets a 403 that says so. A monitor started without `--allow-writes` stays read-only, so an
