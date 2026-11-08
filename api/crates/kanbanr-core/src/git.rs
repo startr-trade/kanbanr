@@ -183,13 +183,15 @@ fn agent_refusal(dir: &Path, what: &str) -> Option<String> {
         return None;
     }
     let cwd = std::env::current_dir().ok()?;
-    crate::agentscope::outside_core_refusal(&cwd, what)
+    crate::agentscope::outside_core_refusal(&cwd, what, crate::agentscope::Caller::of_process())
 }
 
 /// The scope id (or `none`) of an agent context this process runs in, when it would push a governed
 /// board (FEAT-214 R-6).
 fn agent_pusher(dir: &Path) -> Option<String> {
-    if !crate::agentscope::is_governed_board(dir) {
+    if !crate::agentscope::Caller::of_process().is_governed()
+        || !crate::agentscope::is_governed_board(dir)
+    {
         return None;
     }
     let wt = crate::agentscope::agent_context(&std::env::current_dir().ok()?)?;
@@ -707,7 +709,169 @@ pub fn remove_remote(dir: &Path, name: &str) -> Result<(), String> {
 /// the working tree, so a doc written in the same batch as a move still counts — with its blob in
 /// the newest commit at or before `t`. Absent then and present now counts as changed; present then
 /// and absent now does too. `None` when the board is not a git repository or `t` is not a time.
+/// Judging several docs? Share one [`DocHistory`] instead: this opens and walks for each call.
 pub fn doc_changed_since(path: &Path, t: &str) -> Option<bool> {
+    DocHistory::default().changed_since(path, t)
+}
+
+/// What a [`DocHistory`] has done, for tests and measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HistoryStats {
+    /// Times the repository was opened.
+    pub opens: usize,
+    /// Times the history was walked.
+    pub walks: usize,
+}
+
+/// One view of a board's git history for judging many docs (DEF-022). The repository is opened and
+/// its history walked once, on the first doc judged; each baseline commit, each doc's blob at it
+/// and each doc's blob now are found once. Make one per evaluation and drop it with the evaluation:
+/// nothing is kept across requests, so a doc written a moment ago is seen.
+#[derive(Default)]
+pub struct DocHistory {
+    state: std::sync::Mutex<HistoryState>,
+}
+
+#[derive(Default)]
+struct HistoryState {
+    /// `None` until the first doc is judged.
+    repo: Option<Opened>,
+    stats: HistoryStats,
+    /// Each baseline, by the time asked for: the tree of the first commit at or before it.
+    baselines: std::collections::HashMap<i64, Option<git2::Oid>>,
+    /// A doc's blob in a baseline tree.
+    then: std::collections::HashMap<(git2::Oid, std::path::PathBuf), Option<git2::Oid>>,
+    /// A doc's blob in the working tree.
+    now: std::collections::HashMap<std::path::PathBuf, Option<git2::Oid>>,
+}
+
+enum Opened {
+    /// The repository could not be opened: there is no history to judge by.
+    Failed,
+    Repo {
+        repo: Repository,
+        workdir: std::path::PathBuf,
+        /// `(commit time, tree)` in the order a `Sort::TIME` walk from HEAD visits; empty when the
+        /// repository has no commits.
+        commits: Vec<(i64, git2::Oid)>,
+    },
+}
+
+impl std::fmt::Debug for DocHistory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DocHistory")
+            .field("stats", &self.stats())
+            .finish_non_exhaustive()
+    }
+}
+
+impl DocHistory {
+    /// What this history has opened and walked so far.
+    pub fn stats(&self) -> HistoryStats {
+        self.state.lock().map(|s| s.stats).unwrap_or_default()
+    }
+
+    /// The contract of [`doc_changed_since`], answered from the shared history.
+    pub fn changed_since(&self, path: &Path, t: &str) -> Option<bool> {
+        self.judge(path, t, true)
+    }
+
+    fn judge(&self, path: &Path, t: &str, may_fall_back: bool) -> Option<bool> {
+        use time::OffsetDateTime;
+        use time::format_description::well_known::Rfc3339;
+        let since = OffsetDateTime::parse(t.trim(), &Rfc3339)
+            .ok()?
+            .unix_timestamp();
+        // A poisoned lock means a reader panicked mid-read: judge this doc on a fresh history.
+        let Ok(mut guard) = self.state.lock() else {
+            return DocHistory::default().judge(path, t, false);
+        };
+        let state = &mut *guard;
+        if state.repo.is_none() {
+            state.stats.opens += 1;
+            state.repo = Some(match Repository::discover(path.parent()?) {
+                Ok(repo) => match repo.workdir().and_then(|w| w.canonicalize().ok()) {
+                    Some(workdir) => {
+                        state.stats.walks += 1;
+                        let commits = walk_commits(&repo);
+                        Opened::Repo {
+                            repo,
+                            workdir,
+                            commits,
+                        }
+                    }
+                    None => Opened::Failed,
+                },
+                Err(_) => Opened::Failed,
+            });
+        }
+        let Some(Opened::Repo {
+            repo,
+            workdir,
+            commits,
+        }) = &state.repo
+        else {
+            return None;
+        };
+        let full = path.parent()?.canonicalize().ok()?.join(path.file_name()?);
+        let Ok(rel) = full.strip_prefix(workdir) else {
+            // Outside the repository this history opened: not a board doc, judge it alone.
+            drop(guard);
+            return may_fall_back
+                .then(|| DocHistory::default().judge(path, t, false))
+                .flatten();
+        };
+        if commits.is_empty() {
+            // No commits at all: anything on disk is new.
+            return Some(full.exists());
+        }
+        // The baseline: the newest commit at or before `t`. None before the first commit.
+        let tree = *state.baselines.entry(since).or_insert_with(|| {
+            commits
+                .iter()
+                .find(|(time, _)| *time <= since)
+                .map(|(_, tree)| *tree)
+        });
+        let then = match tree {
+            Some(tree) => *state
+                .then
+                .entry((tree, rel.to_path_buf()))
+                .or_insert_with(|| {
+                    repo.find_tree(tree)
+                        .ok()?
+                        .get_path(rel)
+                        .ok()
+                        .map(|entry| entry.id())
+                }),
+            None => None,
+        };
+        let now = *state.now.entry(full.clone()).or_insert_with(|| {
+            full.is_file()
+                .then(|| git2::Oid::hash_file(git2::ObjectType::Blob, &full).ok())
+                .flatten()
+        });
+        Some(then != now)
+    }
+}
+
+/// The history from HEAD as `(commit time, tree)`, newest first by commit time.
+fn walk_commits(repo: &Repository) -> Vec<(i64, git2::Oid)> {
+    let Ok(mut walk) = repo.revwalk() else {
+        return Vec::new();
+    };
+    if walk.push_head().is_err() || walk.set_sorting(git2::Sort::TIME).is_err() {
+        return Vec::new();
+    }
+    walk.flatten()
+        .filter_map(|oid| repo.find_commit(oid).ok())
+        .map(|c| (c.time().seconds(), c.tree_id()))
+        .collect()
+}
+
+/// The one-doc walk `DocHistory` replaced, kept as the reference its answers are checked against
+/// (DEF-022).
+#[cfg(test)]
+pub(crate) fn doc_changed_since_single_walk(path: &Path, t: &str) -> Option<bool> {
     use time::OffsetDateTime;
     use time::format_description::well_known::Rfc3339;
     let since = OffsetDateTime::parse(t.trim(), &Rfc3339)
@@ -768,6 +932,125 @@ mod tests {
         assert_eq!(doc_changed_since(&doc, future), Some(true));
         // Before any commit held it, the doc was absent: it changed.
         assert_eq!(doc_changed_since(&doc, past), Some(true));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const T0: i64 = 1_700_000_000;
+
+    /// Stage `paths` (relative to the repository) and commit them as of `secs`.
+    fn commit_at(repo: &Repository, paths: &[&str], gone: &[&str], secs: i64) {
+        let mut index = repo.index().unwrap();
+        for p in paths {
+            index.add_path(Path::new(p)).unwrap();
+        }
+        for p in gone {
+            index.remove_path(Path::new(p)).unwrap();
+        }
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = Signature::new("Ada", "ada@example.com", &git2::Time::new(secs, 0)).unwrap();
+        let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        let parents: Vec<&git2::Commit> = parent.iter().collect();
+        repo.commit(Some("HEAD"), &sig, &sig, "c", &tree, &parents)
+            .unwrap();
+    }
+
+    /// A repository of 60 commits, two of them dated before their parents, and the docs it holds.
+    fn history_board(name: &str) -> (PathBuf, Vec<PathBuf>) {
+        let dir = temp(name);
+        ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let repo = Repository::open(&dir).unwrap();
+        let docs = dir.join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        for i in 0..60i64 {
+            let mut paths = vec![format!("docs/d{}.md", i % 5)];
+            let mut gone = Vec::new();
+            std::fs::write(docs.join(format!("d{}.md", i % 5)), format!("v{i}")).unwrap();
+            if i == 5 {
+                std::fs::write(docs.join("deleted.md"), "x").unwrap();
+                paths.push("docs/deleted.md".into());
+            }
+            if i == 30 {
+                std::fs::write(docs.join("added.md"), "x").unwrap();
+                paths.push("docs/added.md".into());
+            }
+            if i == 45 {
+                std::fs::remove_file(docs.join("deleted.md")).unwrap();
+                gone.push("docs/deleted.md".to_string());
+            }
+            // Two commits dated before their parents: the walk's order is not the commit order.
+            let at = if i == 20 || i == 40 { i - 30 } else { i };
+            let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+            let gone: Vec<&str> = gone.iter().map(String::as_str).collect();
+            commit_at(&repo, &paths, &gone, T0 + at * 100);
+        }
+        // Edited in the working tree, left untracked, never there.
+        std::fs::write(docs.join("d1.md"), "edited").unwrap();
+        std::fs::write(docs.join("untracked.md"), "new").unwrap();
+        let mut all: Vec<PathBuf> = [
+            "d0",
+            "d1",
+            "d2",
+            "d3",
+            "d4",
+            "added",
+            "deleted",
+            "untracked",
+            "never",
+        ]
+        .iter()
+        .map(|n| docs.join(format!("{n}.md")))
+        .collect();
+        all.push(dir.join("outside.md"));
+        (dir, all)
+    }
+
+    /// DEF-022 R-1: judging many docs against one shared history gives, for each, the answer of
+    /// judging it alone with its own walk.
+    #[test]
+    fn shared_history_gives_the_answers_of_the_single_doc_walk() {
+        let (dir, docs) = history_board("shared-answers");
+        let history = DocHistory::default();
+        // Before the first commit, at commits, between them, and after the last.
+        let times = [
+            -500, 0, 50, 100, 1_000, 2_050, 2_450, 3_000, 4_100, 5_000, 5_900, 9_999,
+        ];
+        let mut answers = Vec::new();
+        for offset in times {
+            let at = time::OffsetDateTime::from_unix_timestamp(T0 + offset)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            for doc in &docs {
+                let want = doc_changed_since_single_walk(doc, &at);
+                assert_eq!(history.changed_since(doc, &at), want, "{doc:?} at {at}");
+                answers.push(want);
+            }
+        }
+        // Not vacuous: both answers occur.
+        assert!(answers.contains(&Some(true)) && answers.contains(&Some(false)));
+        assert_eq!(history.changed_since(&docs[0], "not a time"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-022 R-2: any number of docs and entry times open the repository once and walk it once.
+    #[test]
+    fn shared_history_opens_the_repository_and_walks_once() {
+        let (dir, docs) = history_board("shared-once");
+        let history = DocHistory::default();
+        assert_eq!(history.stats(), HistoryStats { opens: 0, walks: 0 });
+        let mut calls = 0;
+        for offset in [0, 1_000, 2_000, 3_000, 4_000] {
+            let at = time::OffsetDateTime::from_unix_timestamp(T0 + offset)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap();
+            for doc in docs.iter().take(6) {
+                history.changed_since(doc, &at);
+                calls += 1;
+            }
+        }
+        assert_eq!(calls, 30);
+        assert_eq!(history.stats(), HistoryStats { opens: 1, walks: 1 });
         let _ = std::fs::remove_dir_all(&dir);
     }
 

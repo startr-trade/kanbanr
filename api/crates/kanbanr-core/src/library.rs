@@ -450,7 +450,10 @@ pub fn drift(
     current: Option<&WorkflowFile>,
 ) -> Option<Drift> {
     let source = config.process.clone()?;
-    let mine = WorkflowFile::from_config(config).content_rev();
+    // The stages kanbanr wrote when releases were turned on are not an edit of the process (FTR-020).
+    let mut compared = config.clone();
+    compared.cadence = compared.cadence.without_recommended_defaults();
+    let mine = WorkflowFile::from_config(&compared).content_rev();
     // The process as this project takes it: a part of the method it turned off is a choice, not
     // an edit, and not news (FEAT-193).
     let current = current.map(|c| crate::method::shaped(c.clone(), &config.method));

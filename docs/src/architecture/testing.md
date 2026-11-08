@@ -14,6 +14,6 @@ Testing is **two-layered**:
   `view_daemon.rs` then runs **`kanbanr serve`** over that folder and asserts the read API + the
   activity endpoint serve it **with no auth**.
 - **Layer 2 — packaging smoke** (`api/crates/kanbanr-cli/tests/integration.rs`): uses
-  **testcontainers** to confirm the real Docker **image** boots, scaffolds a project, and serves
+  the `docker` CLI (driven directly, no test-container crate) to confirm the real Docker **image** boots, scaffolds a project, and serves
   the read-only view (no auth). It does not re-test business logic (that's layer 1). `#[ignore]`d
   (needs Docker + image); run with `make itest`.

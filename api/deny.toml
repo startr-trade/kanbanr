@@ -6,10 +6,11 @@ all-features = false
 
 [advisories]
 version = 2
-# Vulnerabilities, unsound and unmaintained crates all fail. A sanctioned exception would be a
-# finding with no fix anyone can reach, listed here with its reason and the item tracking it —
-# never silently. There is none: the last (RUSTSEC-2024-0449, unsafe-libyaml under serde_yaml) went
-# when FEAT-187 replaced the YAML library.
+# Vulnerabilities, unsound and unmaintained crates all fail. A sanctioned exception is a finding
+# with no fix anyone can reach, listed here with its reason and the item tracking it — never
+# silently. (The last before this one, RUSTSEC-2024-0449, unsafe-libyaml under serde_yaml, went when
+# FEAT-187 replaced the YAML library. The last, RUSTSEC-2026-0440, astral-tokio-tar under
+# testcontainers, went when MNT-004 dropped testcontainers.)
 ignore = []
 
 [licenses]

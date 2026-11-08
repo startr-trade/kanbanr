@@ -9,7 +9,7 @@ transitions:
   Vision: [Business Arch, No Action, Not Applicable, Out-of-Scope]
   Business Arch: [System Design, Vision, No Action, Not Applicable, Out-of-Scope]
   System Design: [Implementation, Business Arch, No Action, Not Applicable, Out-of-Scope]
-  Implementation: [Migration, Operations, System Design, No Action, Not Applicable, Out-of-Scope]
+  Implementation: [Migration, System Design, No Action, Not Applicable, Out-of-Scope]
   Migration: [Operations, Implementation, No Action, Not Applicable, Out-of-Scope]
   Operations: [Migration, No Action, Not Applicable, Out-of-Scope]
   No Action: [Vision]

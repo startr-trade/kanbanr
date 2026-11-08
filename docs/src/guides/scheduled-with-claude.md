@@ -6,6 +6,8 @@ Scheduled, Completed. It has no sprints and no releases. You don't need to learn
 - **You talk to Claude** for everything except decisions and pushes. Use your own words. The ones
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page.
+  Claude tells you what is waiting there and links to it. It never records a decision, and it
+  doesn't ask for one in a plan or a question.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [Scheduled from the command line](scheduled-cli.md). To
@@ -61,8 +63,9 @@ are exempt.
 **You decide twice per item:** the design-review sign-off and the approval to start, and the
 docs-folded sign-off to finish. Claude asks for each and never gives it.
 
-**Each approval covers the text you saw.** If the definition changes, your approval lapses and the
-item returns to the Review page. Read what changed, then approve again.
+**Each approval covers the text you saw.** Adding to the definition keeps the approval, and what was
+added is reviewed at the next decision. Changing or removing approved text lapses it, and the item
+returns to the Review page. Read what changed, then approve again.
 
 **Just ask to move it on.** If something is missing, Claude says what and either fixes it or asks
 you:
@@ -86,6 +89,10 @@ move, so say "run the tests and record them before you complete it".
 Claude gives each agent a scope, which kanbanr enforces. An agent can record its own tasks and test
 results and commit on its branch. It can't move items, approve anything or push. See
 [Sub-agents and agent scopes](../using/with-claude.md#sub-agents-and-agent-scopes).
+
+Claude stays in the project folder while an agent works, and looks inside the agent's worktree
+without moving into it (`git -C`), so a scope never gets in your way or Claude's. Revoking an agent's
+scope stops that agent on its next tool call and never restricts you.
 
 ## Pushing
 

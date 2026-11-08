@@ -291,6 +291,11 @@ can record its own tasks and tests and commit on its item's branch. It can't mov
 give sign-offs or push. See
 [Sub-agents and agent scopes](../using/with-claude.md#sub-agents-and-agent-scopes).
 
+Stay in the project folder. Never `cd` into an agent's worktree: look inside with `git -C <path>`,
+`make -C <path>`, `npm --prefix <path>` or a subshell `(cd <path> && …)`. If your shell is already
+there, `cd` back to the project folder. Revoking a scope (`kanbanr scope revoke SC-…`) stops the
+agent on its next tool call and never restricts you.
+
 ## When things go wrong
 
 | You see | It means | Do this |

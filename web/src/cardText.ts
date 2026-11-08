@@ -16,6 +16,10 @@ export interface NextStage {
   tasks_open?: number;
   /** The stage ends the work. */
   ends?: boolean;
+  /** The stage the item reaches next. Absent counts as true, for an older daemon (DEF-020). */
+  immediate?: boolean;
+  /** How many of `missing` the user settles: sign-offs and approval. Absent counts as 0. */
+  for_you?: number;
 }
 
 export interface CardHint {
@@ -27,23 +31,31 @@ export interface CardHint {
 
 /** The hint for one next stage, or null when the card should say nothing about it. */
 export function nextStageHint(n: NextStage): CardHint | null {
+  if (n.immediate === false) return null;
   const signoffs = n.signoffs ?? [];
-  const conditions = Math.max(0, n.missing - signoffs.length);
-  if (conditions > 0) {
+  const yours = n.for_you ?? 0;
+  if (n.missing > 0) {
+    if (yours === 0 || n.missing > yours) {
+      const mine = yours > 0 ? `, ${yours} yours` : "";
+      return {
+        text: `${n.status} needs ${n.missing}${mine}`,
+        title:
+          yours > 0
+            ? `${n.status} needs ${n.missing} things: ${n.missing - yours} for Claude to do, and ${yours} for you (a sign-off or approval)`
+            : `${n.status} needs ${n.missing} thing(s) done by Claude`,
+        kind: "needs",
+      };
+    }
+    // Only the user's part remains.
+    if ((n.tasks_open ?? 0) > 0) return null;
+    const names = [...signoffs, ...(yours > signoffs.length ? ["approval"] : [])];
     return {
-      text: `${n.status} needs ${conditions}`,
-      title: `${conditions} thing(s) to settle before ${n.status}${signoffs.length ? `, and sign-off ${signoffs.join(", ")}` : ""}`,
-      kind: "needs",
-    };
-  }
-  if ((n.tasks_open ?? 0) > 0) return null;
-  if (signoffs.length > 0) {
-    return {
-      text: `waiting for sign-off ${signoffs.join(", ")}`,
-      title: `${n.status} needs the sign-off ${signoffs.join(", ")}`,
+      text: `waiting on you: ${names.join(", ")}`,
+      title: `${n.status} waits on you: ${names.join(", ")}`,
       kind: "waiting",
     };
   }
+  if ((n.tasks_open ?? 0) > 0) return null;
   return {
     text: n.ends ? "ready to complete" : `ready for ${n.status}`,
     title: `nothing stands between this item and ${n.status}`,

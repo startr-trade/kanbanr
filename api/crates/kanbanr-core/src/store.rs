@@ -53,6 +53,9 @@ struct Pending {
     remove_features: std::collections::BTreeSet<(String, String)>,
     /// Milestone codes to (re)write.
     persist_milestones: std::collections::BTreeSet<String>,
+    /// Spec pins to keep (FTR-023), by path: the normalised text a sign-off covered. Written
+    /// before the feature files so a sign-off never points at text that wasn't kept.
+    pins: std::collections::BTreeMap<PathBuf, String>,
 }
 
 pub struct Store {
@@ -325,15 +328,36 @@ impl Store {
     /// (`spec_sections`, FEAT-179), which a metadata-only load leaves empty.
     pub fn load_for_gates(&self, id: &str) -> Result<Project> {
         let project = self.load_meta(id)?;
-        if project
-            .config
-            .effective_gates()
-            .values()
-            .any(|g| g.reads_spec())
+        // A pinned sign-off needs the spec whatever the gates ask now: with the Design part turned
+        // off, the empty spec would read every pinned sign-off as changed (FTR-023).
+        let pinned = project.features.iter().any(|f| {
+            f.definition
+                .as_ref()
+                .is_some_and(|d| d.signoffs.iter().any(|s| !s.spec_rev.is_empty()))
+        });
+        if pinned
+            || project
+                .config
+                .effective_gates()
+                .values()
+                .any(|g| g.reads_spec())
         {
             return self.load(id);
         }
         Ok(project)
+    }
+
+    /// Where the spec a sign-off covered is kept (FTR-023): content-addressed, keyed by code.
+    fn pin_path(&self, id: &str, code: &str, spec_rev: &str) -> PathBuf {
+        self.project_dir(id)
+            .join("pins")
+            .join(code)
+            .join(format!("{spec_rev}.md"))
+    }
+
+    /// The spec text kept for a sign-off, or `None` when it is missing (FTR-023).
+    pub fn spec_pin_text(&self, id: &str, code: &str, spec_rev: &str) -> Option<String> {
+        std::fs::read_to_string(self.pin_path(id, code, spec_rev)).ok()
     }
 
     /// Load a single feature's specification body on demand. Scans the configured status folders
@@ -598,6 +622,16 @@ impl Store {
         // Bring an older board's layout up to date before writing into it (FEAT-071), so the two
         // shapes never have to coexist in a single write.
         self.migrate_layout(id, &project.config.statuses);
+        // Pins are content-addressed: written once, never changed (FTR-023).
+        for (path, text) in &pending.pins {
+            if path.exists() {
+                continue;
+            }
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            std::fs::write(path, text)?;
+        }
         for code in &pending.persist_features {
             if let Some(f) = project.features.iter().find(|f| &f.code == code) {
                 self.persist_feature(id, f)?;
@@ -1196,6 +1230,7 @@ impl Store {
             by: by.to_string(),
             at: at.clone(),
             rev: rev.clone(),
+            parts: definition.part_revs(),
         });
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
@@ -1252,6 +1287,7 @@ impl Store {
             by: by.to_string(),
             at: at.clone(),
             rev: rev.clone(),
+            parts: definition.part_revs(),
         });
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
@@ -1329,6 +1365,21 @@ impl Store {
         note: &str,
         doc: &str,
     ) -> Result<FeatureItem> {
+        self.signoff_feature_reported(id, code, signoff, by, note, doc)
+            .map(|(f, _)| f)
+    }
+
+    /// As [`Store::signoff_feature`], also returning why the sign-off did not finish an item whose
+    /// tasks are all done, when it did not (DEF-019): the same words `task` shows.
+    pub fn signoff_feature_reported(
+        &self,
+        id: &str,
+        code: &str,
+        signoff: &str,
+        by: &str,
+        note: &str,
+        doc: &str,
+    ) -> Result<(FeatureItem, Option<String>)> {
         let signoff = signoff.trim();
         if signoff.is_empty() {
             return Err(CoreError::Unsupported(
@@ -1343,8 +1394,18 @@ impl Store {
         }
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
+        let pins_spec = project.config.signoff_pins_spec(signoff);
         let feature = project.feature_mut(code)?;
         let status = feature.status.clone();
+        // A sign-off whose gate asks for spec sections pins the whole spec and keeps its text.
+        let mut spec_rev = String::new();
+        if pins_spec {
+            let (text, rev) = crate::readiness::spec_pin(&feature.specification);
+            if !rev.is_empty() {
+                pending.pins.insert(self.pin_path(id, code, &rev), text);
+                spec_rev = rev;
+            }
+        }
         let definition = feature.definition.as_mut().ok_or_else(|| {
             CoreError::Unsupported(format!(
                 "{code} has no definition to sign off — a sign-off covers a definition, so write one \
@@ -1359,6 +1420,8 @@ impl Store {
             by: by.trim().to_string(),
             at: at.clone(),
             rev,
+            parts: definition.part_revs(),
+            spec_rev,
             note: note.trim().to_string(),
             doc: doc.trim().to_string(),
             status,
@@ -1369,13 +1432,15 @@ impl Store {
         pending.persist_features.insert(updated.code.clone());
         // The sign-off may have been the last thing holding finished work (FEAT-204): finish it as
         // the last task would have, through the same gates and holds.
+        let mut held = None;
         if updated.all_tasks_completed() {
             let charter = crate::charter::load(self, id)?;
             let ctx = crate::readiness::Context::load(self, id, &project.config);
-            updated = Self::auto_advance_on(&mut project, &mut pending, &charter, &ctx, code)?.0;
+            (updated, held) =
+                Self::auto_advance_on(&mut project, &mut pending, &charter, &ctx, code)?;
         }
         self.flush(id, &project, &pending)?;
-        Ok(updated)
+        Ok((updated, held))
     }
 
     /// Withdraw sign-off `signoff` on an item (FEAT-182): appends a withdrawal, keeping the earlier
@@ -1466,10 +1531,44 @@ impl Store {
         let mut pending = Pending::default();
         let charter = crate::charter::load(self, id)?;
         let ctx = crate::readiness::Context::load(self, id, &project.config);
-        let (f, warnings) =
-            Self::gated_move_on(&mut project, &mut pending, &charter, &ctx, code, to, reason)?;
+        let (f, warnings) = Self::gated_move_on(
+            &mut project,
+            &mut pending,
+            &charter,
+            &ctx,
+            code,
+            to,
+            reason,
+            false,
+        )?;
         self.flush(id, &project, &pending)?;
         Ok((f, warnings))
+    }
+
+    /// The move a cut makes: as [`Store::move_feature_gated`], through the same gate, but an item
+    /// planned into the release being cut is not held for it (DEF-019). Only the cut calls this.
+    pub(crate) fn move_feature_for_cut(
+        &self,
+        id: &str,
+        code: &str,
+        to: &str,
+    ) -> Result<FeatureItem> {
+        let mut project = self.load(id)?;
+        let mut pending = Pending::default();
+        let charter = crate::charter::load(self, id)?;
+        let ctx = crate::readiness::Context::load(self, id, &project.config);
+        let (f, _) = Self::gated_move_on(
+            &mut project,
+            &mut pending,
+            &charter,
+            &ctx,
+            code,
+            to,
+            None,
+            true,
+        )?;
+        self.flush(id, &project, &pending)?;
+        Ok(f)
     }
 
     /// What moving `code` to `to` would meet, without moving it (FEAT-190): the status, the edge
@@ -1508,6 +1607,7 @@ impl Store {
 
     /// The one gated move, shared by the route and the batch path — the batch is the primary way
     /// work is started, so exempting it would make every gate decorative.
+    #[allow(clippy::too_many_arguments)]
     fn gated_move_on(
         project: &mut Project,
         pending: &mut Pending,
@@ -1516,8 +1616,25 @@ impl Store {
         code: &str,
         to: &str,
         reason: Option<&str>,
+        cut: bool,
     ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
         let reason = reason.map(str::trim).filter(|r| !r.is_empty());
+        // A person's own move to an end status of an item that waits for its release's cut needs
+        // a reason, as a gate override does (DEF-019). The cut itself is exempt.
+        if !cut
+            && reason.is_none()
+            && crate::graph::is_finished_work(&project.config, to)
+            && let Some(v) = crate::graph::waits_for_cut(
+                &project.config,
+                &ctx.unshipped_releases,
+                project.feature(code)?,
+            )
+        {
+            return Err(CoreError::Unsupported(format!(
+                "{code} is planned into {v}, which has not been cut: it reaches {to} when {v} \
+                 ships. To move it yourself, give a reason (--override <reason>)"
+            )));
+        }
         let outcome = Self::check_gate(project, charter, ctx, code, to, reason)?;
         // A move made with a stated reason to override is a bypass, and stays one until someone
         // approves or ratifies what was built (FEAT-048, FEAT-080) — recorded whether or not a gate
@@ -1635,6 +1752,13 @@ impl Store {
         // applies to the item entering it.
         let mut failing =
             crate::readiness::evaluate_entering(feature, known, &gate.requires, ctx, to);
+        failing.extend(crate::readiness::additions_gap(
+            feature,
+            &gate.requires,
+            &gate.signoffs,
+            ctx,
+            to,
+        ));
         failing.extend(crate::readiness::signoff_gaps(feature, &gate.signoffs));
         if no_charter {
             failing.retain(|g| {
@@ -1957,6 +2081,26 @@ impl Store {
                 .cloned()
         } else {
             None
+        };
+        // An item planned into a release that has not been cut ends only at the cut (DEF-019).
+        let target = match target {
+            Some(to) => {
+                match crate::graph::waits_for_cut(
+                    &config,
+                    &ctx.unshipped_releases,
+                    project.feature(feature)?,
+                ) {
+                    Some(v) => {
+                        held = Some(format!(
+                            "all tasks are done, but it stays in {from}: it is planned into {v}, \
+                             which has not been cut. Cutting {v} moves it to {to}"
+                        ));
+                        None
+                    }
+                    None => Some(to),
+                }
+            }
+            None => None,
         };
         // A finish that would merge the item's branch is a move made from the code repository,
         // never a side effect of a task write (FEAT-190, Q5).
@@ -2469,6 +2613,7 @@ impl Store {
                         &code,
                         &to,
                         unapproved.as_deref(),
+                        false,
                     )?;
                     if !warnings.is_empty() {
                         return Ok(serde_json::json!({
@@ -2549,6 +2694,7 @@ impl Store {
                         by: by.unwrap_or_else(|| "unknown".to_string()),
                         at: now_rfc3339(),
                         rev: definition.content_rev(),
+                        parts: definition.part_revs(),
                     });
                     feature.updated_at = now_rfc3339();
                     pending.persist_features.insert(resolved.clone());
@@ -3163,6 +3309,41 @@ impl Store {
         cadence: crate::config::Cadence,
     ) -> Result<ProjectConfig> {
         let mut project = self.load(id)?;
+        let mut cadence = cadence;
+        // FTR-020: the recommended stages and gates are written when the choice is made, never on
+        // a read, and only over what the project did not choose itself.
+        let previous = project.config.cadence.clone();
+        if cadence.has_ci
+            && !previous.has_ci
+            && previous.is_recommended()
+            && previous.commit_gates.is_empty()
+            && cadence.release_stages == previous.release_stages
+            && cadence.release_gates == previous.release_gates
+            && cadence.commit_gates.is_empty()
+        {
+            // Still exactly the recommended stages: the tag now waits for CI.
+            let (_, gates, commit_gates) = crate::config::Cadence::recommended(true);
+            cadence.release_gates = gates;
+            cadence.commit_gates = commit_gates;
+        } else if cadence.releases
+            && !previous.releases
+            && cadence.release_stages.is_empty()
+            && cadence.release_gates.is_empty()
+        {
+            let (stages, gates, commit_gates) = crate::config::Cadence::recommended(cadence.has_ci);
+            cadence.release_stages = stages;
+            cadence.release_gates = gates;
+            if cadence.commit_gates.is_empty() {
+                cadence.commit_gates = commit_gates;
+            }
+        } else if previous.is_recommended()
+            && cadence.release_gates == previous.release_gates
+            && cadence.release_stages != previous.release_stages
+            && !cadence.release_stages.is_empty()
+        {
+            // The gates were never the project's choice: the new stages take the defaults.
+            cadence.release_gates.clear();
+        }
         if let Some(release) = cadence.release.as_deref()
             && !["per_sprint", "every_n", "on_demand"].contains(&release)
         {

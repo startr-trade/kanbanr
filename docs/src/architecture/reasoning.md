@@ -50,8 +50,11 @@ Three rules keep it from rotting:
 
 **Approval is pinned to content, not to time.** `definition.approval.rev` is a stable hash of the
 definition with the approval itself *and the test states* excluded — recording evidence must not
-lapse an approval, but changing scope must. Editing the definition after a yes therefore reports
-"approval lapsed", which is a different thing from "never approved".
+lapse an approval, but changing scope must. Changing or removing approved text after a yes therefore
+reports "approval lapsed", which is a different thing from "never approved". Adding to the
+definition does not lapse it: the approval also records a hash per part, and when every approved
+part is unchanged and only new ones were added, the approval is *extended* and the additions are
+reviewed at the next decision (FTR-018).
 
 **The gates refuse two things and warn about everything else.** A reference that names something
 the board does not have, and a commit that names nothing, are refused — both fixable in the message

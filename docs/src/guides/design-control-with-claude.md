@@ -9,6 +9,8 @@ You don't need to learn any commands:
 - **You talk to Claude** for everything except decisions and pushes. Use your own words. The ones
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page.
+  Claude tells you what is waiting there and links to it. It never records a decision, and it
+  doesn't ask for one in a plan or a question.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [Design control from the command line](design-control-cli.md).
@@ -117,6 +119,10 @@ Claude gives each agent a scope, which kanbanr enforces. An agent can record its
 results and commit on its own branch. It can't move items, approve anything, give a sign-off or push.
 Its progress shows on the item's page, and its scope on the **Workflow** page. When it finishes,
 Claude reviews the branch and brings you any decisions.
+
+Claude stays in the project folder while an agent works, and looks inside the agent's worktree
+without moving into it (`git -C`), so a scope never gets in your way or Claude's. Revoking an agent's
+scope stops that agent on its next tool call and never restricts you.
 
 ## Pushing
 
