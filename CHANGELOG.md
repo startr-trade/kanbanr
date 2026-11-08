@@ -16,6 +16,15 @@ All notable changes to kanbanr are documented here. The format follows
   guard keeps the coordinator out of agents' worktrees and names the way out (`git -C <path>`),
   test capture finds its board from the project folder and records the coordinator's runs, and
   `kanbanr scope issue` needs the Claude Code hooks that tell the two apart (`kanbanr hooks install`).
+- **A scope's brief allows temporary boards, and the guard now lets an agent use one (DEF-015).**
+  Every brief said "Tests: temporary boards only", but the Bash guard refused `--data-dir`,
+  `KANBANR_DATA_DIR`, `KANBANR_PROJECT` and `cd $TMPDIR/…` for any board, so agents could not walk a
+  process through on a throwaway one. One rule in core now decides what a temporary board is (a
+  folder under the temporary directory that holds no agent scope); the guard, the brief and the
+  board-governing check all use it. A real board, a copy of it (it holds scopes), a link to it and a
+  path the guard cannot resolve stay refused, and the refusal and the brief name the form to use.
+  `$TMPDIR` cannot be reassigned in a command.
+
 ### Added
 
 - **Release and install builds are locked, and releases carry SBOMs and attestations (MNT-004).**

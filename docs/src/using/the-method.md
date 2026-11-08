@@ -145,7 +145,9 @@ boundaries, kanbanr enforces them, and Claude puts them in the agent's brief wor
 | Everything else on the board | refused: moves, approvals, sign-offs, definitions, specs, docs, other items, config; a `batch` only of these ops | refused |
 | Code | commits only on its item's branch, each naming the item | no edits, no commits |
 | Remote | never: no `git push`, no `kanbanr sync` | never |
-| Tests | on temporary boards only, never a real board | — |
+| Tests | on a temporary board: a folder under the system temporary directory that holds no scope, named by a literal path or `$TMPDIR/…`; never a real board | — |
+
+To walk a process through, an agent runs `kanbanr --data-dir $TMPDIR/walk init …` and then the same `--data-dir` (or `KANBANR_DATA_DIR`) on each command.
 
 Before starting each sub-agent, Claude issues it a scope with one command,
 `kanbanr scope issue <design|build> <CODE>`, starts the agent in its own worktree (design agents
