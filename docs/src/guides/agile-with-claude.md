@@ -7,6 +7,8 @@ releases. You don't need to learn any commands:
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page, promotions and the
   cut on the **Releases** page.
+  Claude tells you what is waiting there and links to it. It never records a decision, and it
+  doesn't ask for one in a plan or a question.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [Agile from the command line](agile-cli.md). For the other
@@ -77,7 +79,8 @@ from several sprints.
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
 
-**Each approval covers the text you saw.** If the definition changes, your approval lapses and the item
+**Each approval covers the text you saw.** Adding to the definition keeps the approval, and what was
+added is reviewed at the next decision. Changing or removing approved text lapses it, and the item
 returns to the Review page.
 
 **Moving to Review is the merge.** kanbanr merges the item's branch into the sprint's branch. It isn't
@@ -88,6 +91,18 @@ reached Review, so there is no per-item sign-off at the release.
 
 If something is missing for a move, Claude tells you what and either fixes it or asks you. Nothing
 moves past a gate unless you say why, and that reason stays on the item.
+
+### Chores
+
+A chore doesn't walk every stage. It goes Plan → Develop → Test → Released, skipping Design and Review, because their
+questions don't fit small maintenance work. Tell Claude it's a chore when you ask for it.
+
+> Pin the CI image: it's a chore.
+
+Before its first move Claude asks once for what every item records: a one-sentence statement, the goal
+it serves, and a requirement in the EARS form that says how it's verified. You still approve it before work starts. A chore has no Design section and no **design-review**. If
+you change an item's kind to a chore while it's at a stage the chore path leaves out, it's off
+the path: it moves by the ordinary moves, or back to Plan.
 
 ## When an item is done for a sprint
 
@@ -113,6 +128,10 @@ Claude gives each agent a scope, which kanbanr enforces. An agent can record its
 and commit on its own branch. It can't move items, approve anything or push. You'll see its progress on
 the item's page, and its scope on the **Workflow** page.
 
+Claude stays in the project folder while an agent works, and looks inside the agent's worktree
+without moving into it (`git -C`), so a scope never gets in your way or Claude's. Revoking an agent's
+scope stops that agent on its next tool call and never restricts you.
+
 ## Releasing
 
 | Step | Who | Do this |
@@ -123,7 +142,7 @@ the item's page, and its scope on the **Workflow** page.
 | 4 | Claude | Say "Run the full checks over the release" |
 | 5 | You | **Releases** page: **Promote to main**. This moves main to the release, without tagging |
 | 6 | You | Terminal: `git push origin main`, then wait for CI to go green |
-| 7 | You | **Releases** page: **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Released |
+| 7 | You | **Releases** page: **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Released, unless your stages continue after the tag: then **Confirm** each later stage, and the last one moves the items |
 | 8 | You | Terminal: `git push origin v1.0.0` |
 | 9 | Claude | Say "The release is out. Bring it forward into the sprint" |
 

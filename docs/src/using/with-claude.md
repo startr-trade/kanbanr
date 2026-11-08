@@ -1,7 +1,7 @@
 # Working with Claude
 
-You can run kanbanr entirely from Claude Code. You don't need a browser or a terminal. You ask for
-work, accept plans, and answer questions, and Claude records everything on the board. This chapter
+You can run kanbanr from Claude Code. You ask for work and answer questions, Claude records the
+work on the board, and you take every decision on the monitor's pages. This chapter
 shows what that conversation looks like and why it asks what it asks.
 
 Three things are worth knowing up front:
@@ -9,13 +9,16 @@ Three things are worth knowing up front:
 - **Your workflow decides the questions.** Claude doesn't follow a script for TOGAF or Scrum. At
   each step it asks the board what the next stage still needs and turns each gap into a question
   or a draft. Change your workflow and the conversation changes with it.
-- **Only your explicit choice counts.** An approval, ratification or sign-off is recorded only when
-  you accept a plan or pick that answer in a question. Claude never infers it from the
-  conversation.
-- **A verdict covers what you were shown.** Claude records your choice pinned to the definition you
-  saw (`--rev`). If the definition changed in between, the command refuses and Claude asks again.
+- **Decisions are taken on the pages.** An approval, ratification, sign-off or its withdrawal, and
+  accepting or rejecting a decision, are taken on the **Review** page. Promoting or cutting a
+  release is taken on the **Releases** page. Claude tells you what is waiting there, with the
+  page's address, and never records one for you: kanbanr refuses if it tries, and never asks for
+  one in a plan or a question. If no monitor accepts writes, Claude offers to start one with
+  `kanbanr review --ui`.
+- **A verdict covers what you were shown.** The page pins your choice to the definition you saw
+  (`--rev`). If the definition changed in between, it refuses and you read the change first.
 
-The [Review page](the-monitor.md) and the plain commands still work, for anyone who prefers them.
+See [the monitor](the-monitor.md) for the pages.
 
 This chapter explains how the conversation works under any process. To follow one project from setup
 to a shipped release, see the [Process guides](../guides/index.md).
@@ -49,13 +52,13 @@ applies it. What each role then asks for is in [The method by stage role](the-me
 Not sure which process to pick? [Choosing a guide](../guides/index.md) lists every process and its
 guides, and [Processes](processes.md) compares them and their gates.
 
-## Starting work: a plan you accept
+## Starting work: a definition you approve
 
 Ask for what you need, in your own words:
 
 > We need saved carts: shoppers should be able to come back to their basket.
 
-Claude enters **plan mode**. It reads the charter and the code, then asks only what it can't work
+Claude reads the charter and the code, then asks only what it can't work
 out, a few questions at a time:
 
 ```
@@ -63,50 +66,47 @@ Which goal does this serve?   ● G-1 A customer can pay for a basket on their o
 Who is it for?                ● returning shoppers   ○ guests too   ○ other…
 ```
 
-The plan it writes is the item's brief: a one-line statement, the goals it serves, the
+The definition it writes is the item's brief: a one-line statement, the goals it serves, the
 [six dimensions](the-method.md), EARS requirements each naming its test, and the stage it starts
 in. It goes only as far as the first stage asks, unless you ask for the whole definition up front.
 
 **Choices are yours.** Anything you'd recognise as a decision (a business rule, a retention period,
-a limit, what's in or out of scope) is asked before the plan, with Claude's recommendation first.
-Anything Claude still had to choose is listed in the plan under "Choices I made", so accepting is
-informed. If one request spans several stages, the plan says which ones it covers.
+a limit, what's in or out of scope) is asked before the definition is written, with Claude's recommendation first.
+Anything Claude still had to choose is listed in the brief under "Choices I made", so your
+approval is informed. If one request spans several stages, the brief says which ones it covers.
 
-**Accepting the plan creates the item and records your approval of exactly that text.** Sending it
-back with changes revises the plan, and nothing is recorded until you accept.
+Claude writes the definition to the board, shows you its brief in a few lines, and says it is
+waiting for your approval on the Review page, with the link. Nothing is recorded as approved until
+you approve it there.
 
-## Deciding: one question per item
+## Deciding: on the Review and Releases pages
 
-When decisions are waiting, the session start mentions them. Say "let's review" and Claude takes
-them one at a time. It shows each brief in a few lines and asks one question whose answers are the
-verdicts that item can take:
+When decisions are waiting, the session start mentions them. Claude says in one message how many
+there are, which, and the address of the page where they wait. It doesn't list them as questions.
+If you ask it to explain one, it does, and sends you back to the page.
 
-```
-FEAT-012 Saved carts: 2 requirements, both with named tests; approval lapsed when R-2 was added.
-   ● Approve   ○ Change it   ○ Skip
-```
-
-| You choose | What is recorded |
+| You decide | Where |
 |---|---|
-| Approve | `kanbanr approve FEAT-012 --rev <rev>`, in your name |
-| Ratify (work done under a recorded override) | `kanbanr ratify FEAT-012 --rev <rev>` |
-| Sign off *release* (a stage asks for it) | `kanbanr signoff FEAT-012 release --rev <rev>` |
-| Accept / Reject (a proposed design decision; asked as soon as Claude drafts one, or later in a review) | `kanbanr adr accept ADR-0007` / `adr reject … --reason "…"` |
-| Change it | nothing yet: Claude asks what to change, revises the definition, and the item comes back to the queue |
-| Skip | nothing: it stays waiting |
+| Approve a definition, or ratify work done under a recorded override | **Review** page |
+| Sign off a stage (for example *release*) | **Review** page |
+| Accept or reject a proposed design decision | **Review** page |
+| Withdraw an approval or a sign-off | the item's page |
+| Promote or cut a release, and confirm each stage after the tag | **Releases** page |
+| Change it | tell Claude what to change: it revises the definition, and the item comes back to the queue |
 
-## Plan or question?
+Claude may run `kanbanr release promote <V> --plan`, `kanbanr sprint close` and
+`kanbanr release plan`, which record no verdict. If a verdict was ever recorded that you did not
+give, Claude says so at once and asks you to withdraw it on the item's page.
 
-Claude uses each one for a single job:
+## Plan mode
 
-- **Plan mode** is for *writing* a definition: a new item, or growing one for its next stage.
-  There's a brief to draft, and you read the whole text before you accept it.
-- **A question** is for *deciding* on a definition that already exists. There's nothing to write,
-  so each item gets a few lines and one question. A ten-item review is ten clicks, not ten plans.
+Claude uses plan mode for the setup interview and for designing or changing your process. It never
+uses it for a routine move or a new item, and never while a sub-agent is running, because entering
+it pauses the agent.
 
-"Change it" in a review is usually a small edit, so it's shown and asked again rather than planned.
-A change that amounts to a new stage's worth of definition ("take FEAT-002 to System Design") goes
-through plan mode.
+While agents build, Claude tells you only what changed: a task landed, a failure, a stall, a
+decision waiting. It sends nothing for a report that repeats one it gave. Rework goes on the item's
+todo-list before anyone starts it, and kanbanr refuses a build scope for an item with no open task.
 
 ## Moving work: just ask
 
@@ -172,6 +172,15 @@ that are newer than its item's last task change, and so do the Stop hook, sessio
 (`kanbanr scope revoke SC-007 --reason done`); `kanbanr scope list` shows the ones in force, and
 `kanbanr scope renew SC-007 --for 4h` extends one. Your own checkout is never scoped.
 
+A scope binds the agent it was issued to, never whoever stands in its folder. The three hooks
+(the Bash guard, the Write guard and test capture) tell a sub-agent's calls, which carry an
+`agent_id`, from Claude's own, and a command run in your own terminal is not an agent's at all. So a
+scope never governs you or Claude's session, and a revoke stops the agent on its next tool call and
+frees every other shell at once. Issuing a scope therefore needs those hooks: `kanbanr hooks
+install`. Claude stays in the project folder and looks inside an agent's worktree with `git -C
+<path>`, `make -C <path>` or `npm --prefix <path>`; a `cd` into one is refused, with the way out
+named.
+
 Scopes guard against mistakes and casual crossings, not a hostile process: the agent runs as you,
 with your file permissions. A script that leaves the worktree, a commit with its hooks switched off
 inside a script, or a hand edit to the board's `scopes.yaml` is not stopped, though every scoped
@@ -197,13 +206,13 @@ same in every workflow:
 | `ears` | rewrites a requirement into EARS form |
 | `quality` | drafts the quality scenario, and asks for the target (for example "300 ms at p95") |
 | `tests_named` | names a test for each requirement |
-| `spec_sections` | drafts each named section of the spec into the plan; for `Design`, the build-ready design and its implementation task list |
+| `spec_sections` | drafts each named section of the spec into the definition; for `Design`, the build-ready design and its implementation task list |
 | `docs_updated` | folds the item's design into each doc in `affects_docs` before the move, and says which docs it changed |
 | `diagrams_valid` | fixes each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then runs `kanbanr doctor` to confirm none is left |
 | `docs_cover` | adds a link to the item in each view doc a coverage rule names (the Zachman matrix, the catalog), then moves; it never asks you |
 | `small` | proposes splitting the item |
-| `approved` | your acceptance of the plan, or an Approve question when nothing needs drafting |
-| `bypass` | a Ratify question |
+| `approved` | your approval on the Review page; Claude says it is waiting and links to it |
+| `bypass` | your ratification on the Review page |
 | `signoff` | a "Sign off *name*" question |
 | `estimated` | a question: how big, in your project's unit (points or days) |
 | `in_sprint` | a question: plan it into the active sprint? |
@@ -235,13 +244,13 @@ approval yet.
 
 Claude drafts who, what and why and the requirement ("WHEN a shopper returns within 7 days, THE
 SYSTEM SHALL restore their cart."), asks what only you can decide ("any device, or only the same
-browser?"), and you accept the plan. That's approval 1.
+browser?"), and you approve the definition on the Review page. That's approval 1.
 
 **System Design.** Now only `[MISSING: How] [MISSING: Where]`. Claude proposes the design and checks
 it against the requirement you agreed: "server-side storage keyed by account satisfies R-1 across
 devices; browser storage would not". It asks for a quality target. The definition grew, so the
-earlier approval lapsed (`Approval lapsed — the definition changed after it was approved`), and
-accepting this plan approves the larger definition. That's approval 2. The gate's warning (`R-2 is
+earlier approval stands, since text was only added, and the additions are reviewed at the next
+decision, the design review. Nothing to approve here. The gate's warning (`R-2 is
 a quality requirement with no scenario`) is in the plan for you to fix or accept. The architecture
 decision is drafted as *proposed* for you to accept.
 

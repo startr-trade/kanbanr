@@ -20,6 +20,15 @@ If you have a remote configured, an occasional `kanbanr sync` keeps the board pu
 where --json` tells you which folder is in use and why.
 
 
+## What doctor warns about, and what it counts
+
+For a project that declares its gates, `kanbanr doctor` warns about what the gate of each item's
+current stage asks, which an edit may have undone since the item got there. What the stage an item
+reaches next still lacks is not a warning: doctor prints it after the warnings as
+`Later stages will ask`, one line per stage with the items and things, and `kanbanr check` lists
+them. These counts never change doctor's exit status. In the JSON report they are the optional
+`ahead` list, left out when empty.
+
 ## Keeping the architecture views whole
 
 `kanbanr doctor` lists each coverage rule a view still fails — `coverage rule 'zachman' (every

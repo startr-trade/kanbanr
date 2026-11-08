@@ -23,11 +23,11 @@ kanbanr project init shop --workflow pdca      # choose at creation
 |---|---|---|
 | `default` | Planned → In Progress → Completed, plus Deferred and Ongoing | the built-in rule, plus the method |
 | `scheduled` | Planned → Scheduled → Completed | the built-in rule, plus the method |
-| `togaf` | Vision → Business Arch → System Design → Implementation → Migration → Operations | the definition grows phase by phase |
+| `togaf` | Vision → Business Arch → System Design → Implementation → Migration → Operations | the definition grows phase by phase; chores skip Business Arch and System Design |
 | `pdca` | Plan → Do → Check → Act | agreement to start, evidence to check, a review sign-off to act |
-| `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs before verification and before release |
-| `scrum` | Backlog → Ready → In Progress → Review → Testing → Done → Released | Definition of Ready and of Done; work starts in the sprint; sprints, releases and points on |
-| `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on |
+| `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs before verification and before release; chores skip Inputs, Review and Validation |
+| `scrum` | Backlog → Ready → In Progress → Review → Testing → Done → Released | Definition of Ready and of Done; work starts in the sprint; sprints, releases and points on; chores skip Review |
+| `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on; chores skip Design and Review |
 
 Every built-in process also carries [the method](#the-method-on-by-default): a design before
 build, and the docs it changes kept current.
@@ -139,7 +139,42 @@ A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (sem
 - **Finishing the last task** moves the item to its end status only if that status's gate is
   met — and, on a workflow with no gates, only if every requirement has a green test. Otherwise
   it stays, and `kanbanr task state` says why. A batch is judged after its last operation, so one
-  that ticks the last task and then adds another never completes the item.
+  that ticks the last task and then adds another never completes the item. On a project with
+  releases, an item planned into a release that has not been cut stays where it is, however its last
+  task or sign-off arrives; the cut moves it to its end status. Moving it yourself needs an `--override` reason.
+
+## A lighter path for a kind
+
+A process can give a work kind its own path: the stages an item of that kind passes through, what
+its first move asks, and the parts of [the method](#the-method-on-by-default) that don't apply to
+it. The built-in `togaf`, `scrum`, `agile` and `design-control` processes give `chore` one, so a
+small maintenance item isn't forced through stages whose questions don't fit it. `default`,
+`scheduled` and `pdca` are short already and have none.
+
+```yaml
+paths:
+  chore:                                   # an item's kind, matched without regard to case
+    stages: [Vision, Implementation, Migration, Operations]
+    requires: [statement, goals, requirements, ears]
+    method_off: [design, design-review]    # parts of the method that don't apply to this kind
+```
+
+- **`stages`** are statuses of the workflow, in its own order, at least two, none a no-op status
+  or listed twice, the first the default state. An item of the kind moves to the next or previous
+  stage on its path, to a no-op disposition, or back to the start, and is refused any other stage.
+  The board's columns don't change.
+- **`requires`** are conditions asked, as well as the entered stage's gate, of the first move off
+  the starting stage. That is where a chore records why it exists and how it is verified.
+- **`method_off`** names method parts (`design`, `design-review`, `docs`, `docs-folded`, `links`)
+  not asked of this kind. A path can drop a method part, never an approval or sign-off that the
+  stage it enters asks for: those stay yours.
+
+A kind with no path walks every stage with every gate, as before. A workflow whose path names an
+unknown stage, a no-op stage, a stage twice, stages out of order or a first stage other than the
+default state is refused when it is saved or checked. `kanbanr process show` lists each kind's
+path, `kanbanr process diff` names a path that differs, and the monitor's Workflow page shows them
+with the skipped stages struck through. A process file with a `paths` key needs this version of
+kanbanr: an older one doesn't know the key, so check the file with `kanbanr process check` there.
 
 ## Stage roles
 
@@ -220,13 +255,14 @@ kanbanr signoff FEAT-042 design-review --note "held 30 Sep" --doc reviews/checko
 
 - **What it records:** who gave it, when, in which status, and the definition it covered.
 - **When it lapses:** changing the definition lapses it, just as it lapses an approval. A review
-  of a different design is not a review of this one. Earlier sign-offs are kept.
+  of a different design is not a review of this one. Given on a definition that only grew since
+  its approval, it also counts as the review of what was added. Earlier sign-offs are kept.
 - **How it is asked for:** a gate asks for it by name (`signoffs: [design-review]`). The Review
   page offers a **Sign off** button for each one the next stage is waiting on.
 - **Where it can be given:** the review queue offers a sign-off only for the stage the item
   reaches next, and only once that stage's other requirements are met. A workflow that lets an
   item skip ahead doesn't get the later stage's sign-off offered early. A finished item is listed
-  only when its approval lapsed, and then only to approve again.
+  only when its approval lapsed or text was added since, and then only to approve again.
 - **Who gives it:** a sign-off is a person's agreement. Claude asks for it and never gives it.
 - **Taking it back:** a sign-off given in error is withdrawn with a reason:
 
@@ -254,9 +290,9 @@ what the next stage needs:
 ```
 
 `doctor` follows the same rule on a workflow with gates: it reports what the next stage asks, not
-what a later stage will. Each time the definition grows, its approval lapses and is given again.
-Each approval records the status it was given in, so the history reads "approved at Business
-Arch, again at System Design".
+what a later stage will. When the definition only grows, the approval stands: it is extended, and the additions are
+reviewed at the next decision the stage asks for, such as `design-review`. Changing or removing
+approved text lapses it and it is given again. Each approval records the status it was given in.
 
 ## The design stage: a build-ready design in the spec
 
@@ -352,17 +388,26 @@ once cut; the Gantt adds the sprints as a lane and the releases as milestones:
 
 ### Release stages
 
-A release moves through the environments it is deployed to before production. By default they are
-`candidate → test → staging → production`; a project names its own with
-`kanbanr config cadence --release-stages candidate,qa,uat,live`. Each stage must appear once, and
-the **last one is always the cut**. Every move is recorded on the release with who made it and when.
+A release moves through the environments it is deployed to before production. A project that turns
+releases on gets `candidate → main → tag`, with the gates described under [Stages that act](#stages-that-act)
+written into its config, where `candidate` waits for `items_merged`; a project that has said it has CI (`kanbanr config cadence --has-ci on`)
+also needs a passed `ci` result at `tag`. A board with releases on from before 0.6 that names no
+stages keeps `candidate → test → staging → production`, where `test` and `staging` do nothing. A
+project names its own with `kanbanr config cadence --release-stages candidate,qa,uat,live`. Each
+stage must appear once, and the **stage that tags is the cut**, by default the last.
+
+A stage that has no condition, no earlier-stage requirement and no action, and comes before the cut,
+only records that the release passed it. kanbanr says so in the same response when you configure
+one, and marks it `does nothing` in `kanbanr release stages` and on the Releases page. The change
+is still accepted. Changing the stages of a project whose gates are still the three recommended ones
+drops those gates and takes the defaults for the new stages. Every move is recorded on the release with who made it and when.
 
 - **The first stage** makes the branch `release/<VERSION>` from the integration branch, without
   checking it out.
 - **A middle stage** is a board change only.
 - **Back a stage** — staging to test after a failed check — needs `--reason`, which is recorded.
   Nothing moves back from production.
-- **The last stage** is the cut. It ships the finished items, writes the notes (the notes file at the tagged commit when one is
+- **The cut** is the stage holding the `tag` action, the last stage by default. It ships the finished items, writes the notes (the notes file at the tagged commit when one is
   configured, otherwise a generated list), tags the code repository with the version and **fast-forwards the main branch** to the release, so main's tip
   is exactly the tagged commit. Before anything changes it checks that the working tree has no
   uncommitted changes, that the release branch exists, that the tag does not, and that main has no
@@ -370,6 +415,9 @@ the **last one is always the cut**. Every move is recorded on the release with w
   has moved on, merge main into the release branch and promote again. If the board step fails after
   the tag and the fast-forward, both are undone. `kanbanr release cut <VERSION> --tag` is the same
   as promoting to the last stage; a plain `release cut` changes only the board.
+
+  With stages after the cut (see [Stages after the tag](#stages-after-the-tag)), the cut tags and
+  ships nothing, and the last stage ships.
 
 A release that has no branch yet gets `release/<VERSION>` made first whichever stage it is promoted
 to, so a process with a single stage (both first and the cut) works, and so does a promotion that
@@ -382,18 +430,18 @@ so it is promoted with nothing of its own planned.
 
 #### Stages that act
 
-That is the default. A stage can instead say what must hold before a release enters it
+That is what a stage does when it has no gate. A stage can instead say what must hold before a release enters it
 (`requires`) and what entering it does (`on_enter`), as an item's status has a gate. The rules sit
 beside the stage names, under `cadence.release_gates`, keyed by stage name:
 
 ```yaml
 cadence:
-  release_stages: [candidate, main, production]   # names only; the last is the cut
+  release_stages: [candidate, main, tag]   # names only; the stage holding `tag` is the cut
   release_gates:
-    candidate:  { on_enter: [branch, prepare] }
-    main:       { purpose: "main holds the release; push it and let CI run",
-                  requires: [items_finished], on_enter: [move_main] }
-    production: { requires: [main_at_release, pushed], on_enter: [tag] }
+    candidate: { on_enter: [branch, prepare] }
+    main:      { purpose: "main holds the release; push it and let CI run",
+                 requires: [items_finished], on_enter: [move_main] }
+    tag:       { requires: [main_at_release, pushed], on_enter: [tag] }
 ```
 
 | action | does |
@@ -401,7 +449,7 @@ cadence:
 | `branch` | makes `release/<V>` from the line of integration, nothing checked out |
 | `prepare` | one commit on `release/<V>`: the version files, the dated changelog heading and its copies, the notes draft and its listings (see below) |
 | `move_main` | fast-forwards main to the release tip; refused if main has commits the release lacks (a patch of an older release leaves main where it is) |
-| `tag` | tags the release tip `<V>` ("Release <V>"); the last stage only |
+| `tag` | tags the release tip `<V>` ("Release <V>"); the stage holding it is the cut, and any stage after it only confirms |
 
 | condition | holds when | fix shown |
 |---|---|---|
@@ -409,6 +457,15 @@ cadence:
 | `prepared` | the release tip carries the version, the changelog heading and the notes | promote to the stage that prepares |
 | `main_at_release` | main is at the release tip | promote to the stage with `move_main` |
 | `pushed` | the release tip is on main's remote-tracking branch (`origin/main`) | push main (`git push origin main`), then wait for CI |
+| `gate_passed` | every gate named in `commit_gates` has a passed result recorded for the release tip | look at your CI, then record its verdict (see below) |
+| `tag_passed` | the newest result of the tag gate for the tag commit, recorded since the tag was made, is passed; only a stage after the tag can require it | run your CI on the tag and record its verdict, or start a patch release if it failed |
+| `items_merged` | every item planned into the release (other than one in a no-op status) is at the integrate stage or later; read from the board, so it needs no repository | move the item to the integrate stage, which merges its branch, or plan it into another release |
+
+A stage can also list earlier stages in `after` (`kanbanr config release-stage tag --after ci`). The
+release must have been promoted forward into each of them before it enters this one, so a named
+promotion cannot jump over them. The plan shows each as a `stage_passed` condition with the fix
+`promote <V> to <stage> first`. Moving back to a stage is not entering it, and a stage entered by the
+same promotion does not count. kanbanr records that the stage was entered, not that CI passed.
 
 A stage with no gate of its own keeps the default:
 
@@ -416,7 +473,8 @@ A stage with no gate of its own keeps the default:
 |---|---|
 | the first | `branch` (unless another stage holds it) |
 | a middle one | nothing |
-| the last | `move_main, tag` (without `move_main` if another stage holds it) |
+| the last | `move_main, tag` (without `move_main` if another stage holds it, and without `tag` if another stage holds that) |
+| the first after the tag | nothing, and `tag_passed` required when `commit_gates` names a gate |
 | the only one | `branch, move_main, tag` |
 
 A promotion takes the actions of every stage it passes or enters, in the order `branch`, `prepare`,
@@ -431,6 +489,65 @@ it may already be pushed.
 
 `pushed` reads the remote-tracking branch. A promotion fetches main first; offline, it judges from
 the last fetch and says so. kanbanr never pushes: pushing main and the tag is yours.
+
+### Stages after the tag
+
+A tag says which commit the release is. Whether that commit works, and where it has been run, is
+for you to say. Put stages after the one holding `tag` and each is a confirmation: the release
+stays unshipped, its items stay where they are, and the stage runs no action.
+
+```yaml
+cadence:
+  release_stages: [candidate, main, tag, staging, production]
+  release_gates:
+    candidate: { on_enter: [branch, prepare] }
+    main:      { requires: [items_finished], on_enter: [move_main] }
+    tag:       { requires: [main_at_release, pushed], on_enter: [tag] }
+  commit_gates: [ci]
+```
+
+- Promoting into `tag` tags the commit and records `tagged_at` and the commit on the release.
+- The Releases page shows the newest result of the tag gate (`tag_gate`, else the first commit
+  gate) for that commit, recorded after the tag, with its link and note. With none, it offers
+  **Record result**.
+- The first stage after the tag requires a passed result. On a failed one the page offers **Check
+  again** (re-reads the board after you rerun your CI and record the new result) and **Start a
+  patch release**.
+- Each confirmation is `kanbanr release promote <V> --note "what you checked"` or the page's
+  **Confirm** button. It records who, when and the note on the release, and nothing else.
+- Confirming the last stage ships the release: finished items move to their last status, the notes
+  are written and `shipped_at` is recorded. A project with no stage after the tag ships at the tag.
+- **Start a patch release** (`kanbanr release add <V2> --patch-of <V> --from-failed-tag [--link …]
+  [--notes …]`) files a defect carrying the failed run's link and your notes, plans it and the
+  release's items into a new patch branched from the tag, and marks the release superseded by it.
+  The tag stays in git. `kanbanr config tag-gate <name>` picks the gate that judges the tag.
+
+kanbanr never contacts a CI server or the remote: you run your CI, and you record what it said.
+
+### Gate results
+
+kanbanr runs no CI and asks no server what it said. You look at your CI, then record its verdict
+for a commit; a stage that requires `gate_passed` reads what was recorded. Name the gates a project
+requires once, then record each verdict as it comes in:
+
+```bash
+kanbanr config commit-gates ci                       # the gates gate_passed requires (none clears them)
+kanbanr config release-stage production --requires main_at_release,gate_passed --on-enter tag
+kanbanr gate record ci --passed --url <link to the run> [--commit <REV>] [--note …]
+kanbanr gate list [--name ci] [--commit <REV>]       # newest first
+```
+
+A result is a file of its own under the project's `gates/<name>/`, and none is rewritten: the newest
+result of a gate for the commit decides, and a result for another commit says nothing. `--commit`
+defaults to HEAD; a pass with no commit named is refused while the working tree has uncommitted
+changes, because it would not be about HEAD. The Releases page offers the same as a **Record result**
+form where a promotion lacks a result, and shows the command on a read-only monitor.
+
+A promotion that would itself add a commit to the release branch (`prepare`) cannot be covered: no
+result can exist for a commit that is not made yet, so promote to the stage that prepares first and
+record the result once it is on the branch. `make ci` records its own run as the gate `local`, a
+failure always and a pass only on a clean working tree; add `local` to `commit_gates` to require it.
+Claude never records a result for you.
 
 ```bash
 kanbanr config release-stage candidate --on-enter branch,prepare

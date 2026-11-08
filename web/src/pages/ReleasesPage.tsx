@@ -7,7 +7,7 @@ import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import { releaseAction } from "../releaseAction";
 import { notesSection } from "../releaseNotes";
 import Markdown from "../components/Markdown";
-import type { Release } from "../types";
+import type { Release, TagResult } from "../types";
 
 /** The stages a release moves through when the project names none (FEAT-183). */
 const DEFAULT_STAGES = ["candidate", "test", "staging", "production"];
@@ -54,23 +54,24 @@ export default function ReleasesPage() {
   const writable = !isReadOnly() && meta.data?.writes === true && who != null;
   // The stage after the one it is at; the first, before it has one. None once it is at the last.
   const nextStage = (r: Release) => {
-    if (r.state === "shipped") return null;
+    // A superseded release never ships: its tag stays, and the patch carries on (FTR-026).
+    if (r.state === "shipped" || r.superseded_by) return null;
     const at = r.stage ? stages.indexOf(r.stage) : -1;
     return at + 1 < stages.length ? stages[at + 1] : null;
   };
   // The same core promotion as the CLI, through the daemon's promote route (FEAT-183), carrying
   // the release tip the plan showed (FEAT-212).
-  const promote = async (r: Release, to: string, expect: string) => {
+  const promote = async (r: Release, to: string, expect: string, note = "") => {
     if (!who) return;
     setBusy(r.version);
     try {
-      const done = (await api.promoteRelease(project, r.version, who, to, expect)) as { next?: string };
+      const done = (await api.promoteRelease(project, r.version, who, to, expect, note)) as { next?: string };
       setOutcome((o) => ({ ...o, [r.version]: `promoted to ${to}${done?.next ? ` — ${done.next}` : ""}` }));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setOutcome((o) => ({
         ...o,
-        [r.version]: `${message} — from the project folder: kanbanr release promote ${r.version} ${to}`,
+        [r.version]: `${message} — from the project folder: kanbanr release promote ${r.version} ${to}${note ? ` --note "${note}"` : ""}`,
       }));
     } finally {
       setBusy(null);
@@ -139,6 +140,12 @@ export default function ReleasesPage() {
                 </div>
                 <div className="tile-states">
                   {r.target ? <span className="chip">target {r.target}</span> : null}
+                  {r.tagged_at && r.state !== "shipped" && !r.superseded_by ? (
+                    <span className="chip warn">tagged, not released yet</span>
+                  ) : null}
+                  {r.superseded_by ? (
+                    <span className="chip warn">Superseded by {r.superseded_by}</span>
+                  ) : null}
                   {r.shipped_at ? <span className="chip">shipped {r.shipped_at.slice(0, 10)}</span> : null}
                   <span className="chip tasks">
                     {finished}/{planned.length} finished ({pct}%)
@@ -171,6 +178,8 @@ export default function ReleasesPage() {
                     release={r}
                     tick={tick}
                     writable={writable}
+                    gates={config.cadence?.commit_gates ?? []}
+                    who={who}
                     busy={busy}
                     onPromote={promote}
                     outcome={outcome[r.version]}
@@ -214,15 +223,22 @@ function ReleaseButton({
   busy,
   onPromote,
   outcome,
+  gates,
+  who,
 }: {
   project: string;
   release: Release;
   tick: number;
   writable: boolean;
+  gates: string[];
+  who: string | null;
   busy: string | null;
-  onPromote: (r: Release, to: string, expect: string) => void;
+  onPromote: (r: Release, to: string, expect: string, note?: string) => void;
   outcome?: string;
 }) {
+  // A confirmation after the tag asks what the user checked before it goes (FTR-026).
+  const [asking, setAsking] = useState(false);
+  const [note, setNote] = useState("");
   // "Check again" re-reads the plan: a `git push` updates the remote-tracking ref locally, so no
   // fetch is needed (the monitor never fetches).
   const [again, setAgain] = useState(0);
@@ -241,8 +257,24 @@ function ReleaseButton({
       </p>
     );
   }
+  const recheck = () => {
+    setHideOutcome(true);
+    setAgain((n) => n + 1);
+  };
   return (
     <div className="release-action">
+      {plan.data.tag ? (
+        <TagPanel
+          project={project}
+          release={release}
+          tag={plan.data.tag}
+          gates={gates}
+          writable={writable}
+          who={who}
+          secondary={action.secondary}
+          onChanged={recheck}
+        />
+      ) : null}
       {plan.data.warnings?.length ? (
         <ul className="dep-list small">
           {plan.data.warnings.map((w) => (
@@ -256,7 +288,9 @@ function ReleaseButton({
         {action.button ? (
           <button
             className="btn btn-primary"
-            onClick={() => onPromote(release, plan.data!.to, plan.data!.release_tip)}
+            onClick={() =>
+              action.confirm ? setAsking(true) : onPromote(release, plan.data!.to, plan.data!.release_tip)
+            }
             disabled={!action.enabled || busy != null}
             title={action.enabled ? action.does.join("; ") : "not ready: see what is missing"}
           >
@@ -271,6 +305,37 @@ function ReleaseButton({
           </span>
         ) : null}
       </div>
+      {asking && action.confirm ? (
+        <div className="small">
+          <p>
+            <label>
+              What you checked (optional){" "}
+              <input
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="e.g. smoke test passed on staging"
+                aria-label="What you checked"
+              />
+            </label>
+          </p>
+          <p className="review-actions">
+            <button
+              className="btn btn-primary"
+              disabled={busy != null}
+              onClick={() => {
+                setAsking(false);
+                onPromote(release, plan.data!.to, plan.data!.release_tip, note.trim());
+                setNote("");
+              }}
+            >
+              {action.label}
+            </button>
+            <button className="btn" onClick={() => setAsking(false)}>
+              Cancel
+            </button>
+          </p>
+        </div>
+      ) : null}
       {action.does.length ? (
         <ul className="dep-list small">
           {action.does.map((d) => (
@@ -299,6 +364,20 @@ function ReleaseButton({
               </li>
             ))}
           </ul>
+          {action.gate ? (
+            <RecordResult
+              project={project}
+              commit={action.gate.commit}
+              gates={gates}
+              writable={writable}
+              who={who}
+              command={action.gate.record}
+              onRecorded={() => {
+                setHideOutcome(true);
+                setAgain((n) => n + 1);
+              }}
+            />
+          ) : null}
           <button
             className="btn"
             onClick={() => {
@@ -311,6 +390,238 @@ function ReleaseButton({
           </button>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * A tagged release waiting on its later stages (FTR-026): the commit the tag names and the result
+ * recorded for it. With none, Record result; when it failed, check again after a rerun or start a
+ * patch release. kanbanr asks no server: the user's CI ran, and the user says what it showed.
+ */
+function TagPanel({
+  project,
+  release,
+  tag,
+  gates,
+  writable,
+  who,
+  secondary,
+  onChanged,
+}: {
+  project: string;
+  release: Release;
+  tag: TagResult;
+  gates: string[];
+  writable: boolean;
+  who: string | null;
+  secondary: ("runAgain" | "startPatch")[];
+  onChanged: () => void;
+}) {
+  const sha = tag.commit.slice(0, 7);
+  const r = tag.result;
+  const [patching, setPatching] = useState(false);
+  const [version, setVersion] = useState("");
+  const [link, setLink] = useState(r?.url ?? "");
+  const [notes, setNotes] = useState("");
+  const [said, setSaid] = useState<{ ok: boolean; text: string; defect?: string } | null>(null);
+  const start = async () => {
+    if (!who) return;
+    try {
+      const made = await api.patchFromFailedTag(project, release.version, version.trim(), who, link.trim(), notes.trim());
+      setSaid({ ok: true, text: `${made.release.version} started, with ${made.defect} for the failed run`, defect: made.defect });
+      setPatching(false);
+      onChanged();
+    } catch (e) {
+      setSaid({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    }
+  };
+  const base = `/p/${encodeURIComponent(project)}`;
+  return (
+    <div className="small">
+      <p>
+        Tagged <code>{release.version}</code> at <code>{sha}</code>
+        {tag.state === "none" ? (
+          <>
+            . No result recorded since the tag.
+          </>
+        ) : r ? (
+          <>
+            . {tag.gate} <strong>{tag.state}</strong>, recorded by {r.by} on {r.at.slice(0, 10)}
+            {r.url ? (
+              <>
+                {" "}
+                (<a href={r.url} target="_blank" rel="noreferrer">run</a>)
+              </>
+            ) : null}
+            {r.note ? <> — {r.note}</> : null}
+          </>
+        ) : null}
+      </p>
+      {tag.state !== "passed" && tag.gate ? (
+        <>
+          {tag.state === "failed" ? (
+            <p>
+              Run your CI again on <code>{sha}</code>, record the new result, then check again.
+            </p>
+          ) : null}
+          <RecordResult
+            project={project}
+            commit={tag.commit}
+            gates={gates}
+            writable={writable}
+            who={who}
+            command={`kanbanr gate record ${tag.gate} --passed --commit ${tag.commit}`}
+            onRecorded={onChanged}
+          />
+        </>
+      ) : null}
+      {secondary.length ? (
+        <p className="review-actions">
+          {secondary.includes("runAgain") ? (
+            <button className="btn" onClick={onChanged}>
+              Check again
+            </button>
+          ) : null}
+          {secondary.includes("startPatch") ? (
+            writable && who ? (
+              <button className="btn" onClick={() => setPatching((p) => !p)}>
+                Start a patch release
+              </button>
+            ) : (
+              <code>kanbanr release add &lt;version&gt; --patch-of {release.version} --from-failed-tag</code>
+            )
+          ) : null}
+        </p>
+      ) : null}
+      {patching ? (
+        <div>
+          <p>
+            <input
+              value={version}
+              onChange={(e) => setVersion(e.target.value)}
+              placeholder="new version, e.g. v1.0.1"
+              aria-label="New version"
+            />{" "}
+            <input
+              type="url"
+              value={link}
+              onChange={(e) => setLink(e.target.value)}
+              placeholder="link to the failed run"
+              aria-label="Link to the failed run"
+            />
+          </p>
+          <p>
+            <input
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="what you saw"
+              aria-label="Notes"
+            />
+          </p>
+          <p className="review-actions">
+            <button className="btn btn-primary" onClick={start} disabled={!version.trim()}>
+              Start {version.trim() || "the patch release"}
+            </button>
+            <button className="btn" onClick={() => setPatching(false)}>
+              Cancel
+            </button>
+          </p>
+        </div>
+      ) : null}
+      {said ? (
+        <p>
+          <span className={`chip ${said.ok ? "done" : "warn"}`}>{said.text}</span>
+          {said.defect ? (
+            <>
+              {" "}
+              <Link to={`${base}/feature/${encodeURIComponent(said.defect)}`}>{said.defect}</Link>
+            </>
+          ) : null}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Record what your CI said about the commit a promotion needs (FTR-002): which gate, passed or
+ * failed, a link to the run and a note. kanbanr asks no server; a person records the verdict. On a
+ * read-only monitor it shows the command instead.
+ */
+function RecordResult({
+  project,
+  commit,
+  gates,
+  writable,
+  who,
+  command,
+  onRecorded,
+}: {
+  project: string;
+  commit: string;
+  gates: string[];
+  writable: boolean;
+  who: string | null;
+  command: string;
+  onRecorded: () => void;
+}) {
+  const [gate, setGate] = useState(gates[0] ?? "ci");
+  const [url, setUrl] = useState("");
+  const [note, setNote] = useState("");
+  const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
+  if (!writable || !who) {
+    return (
+      <p className="small">
+        Record your CI's verdict from the project folder: <code>{command}</code>
+      </p>
+    );
+  }
+  const record = async (passed: boolean) => {
+    try {
+      await api.recordGate(project, gate, commit, passed, who, url.trim(), note.trim());
+      setSaid({ ok: true, text: `${gate} ${passed ? "passed" : "failed"} on ${commit.slice(0, 7)}` });
+      setUrl("");
+      setNote("");
+      onRecorded();
+    } catch (e) {
+      setSaid({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    }
+  };
+  return (
+    <div className="small">
+      <p>
+        <strong>Record result</strong> for <code>{commit.slice(0, 7)}</code>, as your CI showed it:
+      </p>
+      <p>
+        <select value={gate} onChange={(e) => setGate(e.target.value)} aria-label="Gate">
+          {(gates.length ? gates : ["ci"]).map((g) => (
+            <option key={g}>{g}</option>
+          ))}
+        </select>{" "}
+        <input
+          type="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="link to the run (optional)"
+          aria-label="Link to the run"
+        />{" "}
+        <input
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="note (optional)"
+          aria-label="Note"
+        />
+      </p>
+      <p className="review-actions">
+        <button className="btn btn-primary" onClick={() => record(true)}>
+          Passed
+        </button>
+        <button className="btn" onClick={() => record(false)}>
+          Failed
+        </button>
+        {said ? <span className={`chip ${said.ok ? "done" : "warn"}`}>{said.text}</span> : null}
+      </p>
     </div>
   );
 }

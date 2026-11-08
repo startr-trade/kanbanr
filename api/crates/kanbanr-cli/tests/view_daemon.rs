@@ -32,6 +32,19 @@ fn free_port() -> u16 {
     }
 }
 
+/// The token the monitor gave its own page at this start (DEF-024). A write carries it, as the
+/// page does; a monitor without writes has one too, and answers a write route it lacks with a 404.
+fn page_token(url: &str) -> String {
+    let html = ureq::get(&format!("{url}/"))
+        .call()
+        .expect("the monitor serves its page")
+        .into_string()
+        .unwrap();
+    let marker = "<meta name=\"kanbanr-token\" content=\"";
+    let start = html.find(marker).expect("the page carries a token") + marker.len();
+    html[start..start + html[start..].find('"').unwrap()].to_string()
+}
+
 struct Daemon(Child);
 impl Drop for Daemon {
     fn drop(&mut self) {
@@ -261,6 +274,7 @@ fn review_and_approve_through_the_daemon() {
             "{url}/api/write/projects/demo/features/FEAT-001/approve"
         ))
         .set("content-type", "application/json")
+        .set("x-kanbanr-token", &page_token(&url))
         .send_string(r#"{"by": "someone"}"#);
         match refused {
             Err(ureq::Error::Status(404 | 405, _)) => {}
@@ -280,6 +294,7 @@ fn review_and_approve_through_the_daemon() {
         "{url}/api/write/projects/demo/features/FEAT-001/approve"
     ))
     .set("content-type", "application/json")
+    .set("x-kanbanr-token", &page_token(&url))
     .send_string(r#"{"by": "reviewed in the monitor"}"#)
     .expect("approve through the daemon");
 
@@ -304,6 +319,7 @@ fn review_and_approve_through_the_daemon() {
         "{url}/api/write/projects/demo/features/FEAT-001/move"
     ))
     .set("content-type", "application/json")
+    .set("x-kanbanr-token", &page_token(&url))
     .send_string(r#"{"to": "In Progress"}"#)
     .expect("move through the daemon");
     assert_eq!(
@@ -336,12 +352,14 @@ fn review_and_approve_through_the_daemon() {
         "{url}/api/write/projects/demo/features/FEAT-001/signoff/design-review"
     ))
     .set("content-type", "application/json")
+    .set("x-kanbanr-token", &page_token(&url))
     .send_string(r#"{"by": "reviewed in the monitor"}"#)
     .expect("sign off through the daemon");
     let withdraw =
         format!("{url}/api/write/projects/demo/features/FEAT-001/signoff/design-review/withdraw");
     match ureq::post(&withdraw)
         .set("content-type", "application/json")
+        .set("x-kanbanr-token", &page_token(&url))
         .send_string(r#"{"by": "reviewed in the monitor", "reason": " "}"#)
     {
         Err(ureq::Error::Status(400, _)) => {}
@@ -349,6 +367,7 @@ fn review_and_approve_through_the_daemon() {
     }
     ureq::post(&withdraw)
         .set("content-type", "application/json")
+        .set("x-kanbanr-token", &page_token(&url))
         .send_string(r#"{"by": "reviewed in the monitor", "reason": "signed before the review"}"#)
         .expect("withdraw through the daemon");
     let feature = get(&format!("{url}/api/projects/demo"));
@@ -897,6 +916,7 @@ fn promote_through_the_daemon_uses_the_repository_it_was_started_in() {
             "{url}/api/write/projects/shop/releases/{version}/promote"
         ))
         .set("content-type", "application/json")
+        .set("x-kanbanr-token", &page_token(url))
         .send_string(r#"{"stage": "candidate", "by": "A"}"#)
         {
             Ok(r) => (r.status(), r.into_string().unwrap()),
@@ -987,6 +1007,13 @@ fn release_scratch(base: &std::path::Path) -> (PathBuf, PathBuf, PathBuf) {
         board.display()
     );
     run(&["config", "cadence", "--releases", "on"]);
+    // The four stages the expectations assume, not the recommended ones (FTR-020).
+    run(&[
+        "config",
+        "cadence",
+        "--release-stages",
+        "candidate,test,staging,production",
+    ]);
     run(&["release", "add", "v1.0.0"]);
     // A release with nothing planned into it is never promoted (FEAT-212 R-17): one finished item.
     run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
@@ -1079,6 +1106,7 @@ fn monitor_promote_matches_cli() {
         "{url}/api/write/projects/shop/releases/v1.0.0/promote"
     ))
     .set("content-type", "application/json")
+    .set("x-kanbanr-token", &page_token(&url))
     .send_string(r#"{"stage": "candidate", "by": "A"}"#)
     {
         Ok(r) => r.into_string().unwrap(),
@@ -1250,6 +1278,7 @@ fn release_plan_route_matches_promote() {
             "{url}/api/write/projects/shop/releases/v1.0.0/promote"
         ))
         .set("content-type", "application/json")
+        .set("x-kanbanr-token", &page_token(&url))
         .send_string(&body.to_string())
         {
             Ok(r) => serde_json::from_str(&r.into_string().unwrap()).unwrap(),
@@ -1355,6 +1384,7 @@ fn release_notes_route_reads_and_saves_with_the_daemons_repository() {
         "{url}/api/write/projects/shop/releases/v1.0.0/notes"
     ))
     .set("content-type", "application/json")
+    .set("x-kanbanr-token", &page_token(&url))
     .send_string(&body.to_string())
     {
         Ok(r) => serde_json::from_str(&r.into_string().unwrap()).unwrap(),
@@ -1373,4 +1403,341 @@ fn release_notes_route_reads_and_saves_with_the_daemons_repository() {
         "nothing checked out"
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// DEF-024: the monitor's own page writes with the token it was given and its own origin, and a
+/// sign-off it sends that way is recorded as the CLI would record it. The same request without the
+/// token is refused and records nothing.
+#[test]
+fn writes_from_the_page_record_a_signoff() {
+    let base = std::env::temp_dir().join(format!("kanbanr-page-write-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let data = base.join("data");
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    let run = |args: &[&str]| {
+        let o = Command::new(cli())
+            .args(args)
+            .env("HOME", &home)
+            .env("KANBANR_DATA_DIR", &data)
+            .env_remove("KANBANR_SERVER_URL")
+            .output()
+            .expect("run cli");
+        assert!(
+            o.status.success(),
+            "cmd {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
+    let p = ["--project", "demo"];
+    run(&["identity", "--name", "Tester", "--email", "t@example.com"]);
+    run(&[&p[..], &["project", "init", "demo"][..]].concat());
+    run(&[&p[..], &["config", "method", "--off"][..]].concat());
+    run(&[
+        &p[..],
+        &["milestone", "add", "--name", "M", "--code", "MS-1"][..],
+    ]
+    .concat());
+    run(&[
+        &p[..],
+        &["feature", "add", "--title", "Cart", "--milestone", "MS-1"][..],
+    ]
+    .concat());
+
+    let def = base.join("def.yaml");
+    std::fs::write(
+        &def,
+        "statement: Keep a cart for 7 days\n\
+         requirements:\n  - kind: functional\n    text: \"THE SYSTEM SHALL retain the cart.\"\n\
+         \x20   tests:\n      - name: cart::retains\n        kind: unit\n        state: planned\n",
+    )
+    .unwrap();
+    run(&[
+        &p[..],
+        &[
+            "feature",
+            "define",
+            "FEAT-001",
+            "--file",
+            def.to_str().unwrap(),
+        ][..],
+    ]
+    .concat());
+
+    let port = free_port();
+    let child = Command::new(cli())
+        .args([
+            "serve",
+            "--bind",
+            &format!("127.0.0.1:{port}"),
+            "--allow-writes",
+        ])
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &data)
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let _daemon = Daemon(child);
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        assert!(Instant::now() < deadline, "daemon did not become ready");
+        match ureq::get(&format!("{url}/api/projects")).call() {
+            Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    let signoff = format!("{url}/api/write/projects/demo/features/FEAT-001/signoff/design-review");
+    let data_git = |args: &[&str]| -> String {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&data)
+            .output()
+            .expect("run git");
+        String::from_utf8_lossy(&out.stdout).to_string()
+    };
+
+    // Without the token the page was given, nothing is recorded.
+    match ureq::post(&signoff)
+        .set("content-type", "application/json")
+        .set("origin", &url)
+        .send_string(r#"{"by": "reviewed in the monitor"}"#)
+    {
+        Err(ureq::Error::Status(403, _)) => {}
+        other => panic!("a write without the token must be refused: {other:?}"),
+    }
+    let log = data_git(&["log", "--format=%s"]);
+    assert!(!log.contains("sign off design-review"), "{log}");
+
+    // As the page sends it, the sign-off is recorded.
+    ureq::post(&signoff)
+        .set("content-type", "application/json")
+        .set("x-kanbanr-token", &page_token(&url))
+        .set("origin", &url)
+        .send_string(r#"{"by": "reviewed in the monitor"}"#)
+        .expect("sign off as the page does");
+    let log = data_git(&["log", "--format=%s"]);
+    assert!(log.contains("sign off design-review"), "{log}");
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A board with one project `demo` over a scratch folder, for the tests of the bind and origin
+/// rules (DEF-026). Returns the folder, its home and its data.
+fn bind_board(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let base = scratch(name);
+    let (home, data) = (base.join("home"), base.join("data"));
+    let run = |args: &[&str]| {
+        let o = Command::new(cli())
+            .args(args)
+            .env("HOME", &home)
+            .env("KANBANR_DATA_DIR", &data)
+            .env_remove("KANBANR_SERVER_URL")
+            .output()
+            .expect("run cli");
+        assert!(
+            o.status.success(),
+            "cmd {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
+    run(&["identity", "--name", "Tester", "--email", "t@example.com"]);
+    run(&["--project", "demo", "project", "init", "demo"]);
+    (base, home, data)
+}
+
+/// A page with a head, so the monitor can put its token in it.
+fn page_dir(base: &std::path::Path) -> String {
+    let ui = base.join("dist");
+    std::fs::create_dir_all(ui.join("assets")).unwrap();
+    std::fs::write(
+        ui.join("index.html"),
+        "<!doctype html><html><head><title>t</title></head><body></body></html>",
+    )
+    .unwrap();
+    ui.to_str().unwrap().to_string()
+}
+
+/// `kanbanr serve --allow-writes` over a bind board with `extra` args and variables, stderr piped.
+fn serve_writes(
+    home: &std::path::Path,
+    data: &std::path::Path,
+    bind: &str,
+    extra: &[&str],
+    vars: &[(&str, &str)],
+) -> Child {
+    let mut cmd = Command::new(cli());
+    cmd.args(["serve", "--allow-writes", "--bind", bind])
+        .args(extra)
+        .env("HOME", home)
+        .env("KANBANR_DATA_DIR", data)
+        .env_remove("KANBANR_ALLOW_REMOTE_WRITES")
+        .env_remove("KANBANR_ALLOWED_ORIGINS")
+        .env_remove("KANBANR_ALLOWED_HOSTS")
+        .stderr(std::process::Stdio::piped());
+    for (k, v) in vars {
+        cmd.env(k, v);
+    }
+    cmd.spawn().expect("spawn kanbanr serve")
+}
+
+fn wait_up(url: &str, child: &mut Child) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        assert!(Instant::now() < deadline, "daemon did not become ready");
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!("the daemon exited ({status})");
+        }
+        if ureq::get(&format!("{url}/healthz")).call().is_ok() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn board_commits(data: &std::path::Path) -> String {
+    let out = Command::new("git")
+        .args(["rev-list", "--count", "HEAD"])
+        .current_dir(data)
+        .output()
+        .expect("run git");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// DEF-026 R-2: with the acceptance, a monitor on a reachable bind starts, and says so.
+#[test]
+fn an_accepted_non_local_bind_starts_and_says_so() {
+    use std::io::Read;
+    let (base, home, data) = bind_board("remote-accepted");
+    let port = free_port();
+    let bind = format!("0.0.0.0:{port}");
+    let mut child = serve_writes(&home, &data, &bind, &["--allow-remote-writes"], &[]);
+    let url = format!("http://127.0.0.1:{port}");
+    wait_up(&url, &mut child);
+    let mut stderr = child.stderr.take().unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+    let mut text = String::new();
+    stderr.read_to_string(&mut text).unwrap();
+    assert!(
+        text.contains(&format!("WARNING writes are ON at {bind}")),
+        "{text}"
+    );
+    assert!(text.contains("--allow-remote-writes"), "{text}");
+    let _ = std::fs::remove_dir_all(base);
+}
+
+/// DEF-026 R-5: `review --ui` has no flag, so a reachable KANBANR_BIND is refused.
+#[test]
+fn review_ui_on_a_non_local_bind_is_refused() {
+    let (base, home, data) = bind_board("review-remote");
+    let port = free_port();
+    let child = Command::new(cli())
+        .args(["--project", "demo", "review", "--ui"])
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &data)
+        .env("KANBANR_BIND", format!("0.0.0.0:{port}"))
+        .env_remove("KANBANR_ALLOW_REMOTE_WRITES")
+        .env("BROWSER", "true")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn review --ui");
+    let start = Instant::now();
+    let out = child.wait_with_output().unwrap();
+    assert!(start.elapsed() < Duration::from_secs(5), "it did not exit");
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("KANBANR_ALLOW_REMOTE_WRITES"), "{err}");
+    assert!(
+        TcpListener::bind(("0.0.0.0", port)).is_ok(),
+        "nothing listens on the port"
+    );
+    let _ = std::fs::remove_dir_all(base);
+}
+
+fn create_project_with(url: &str, headers: &[(&str, &str)]) -> u16 {
+    let mut req = ureq::post(&format!("{url}/api/write/projects"));
+    for (k, v) in headers {
+        req = req.set(k, v);
+    }
+    match req
+        .set("content-type", "application/json")
+        .send_string(r#"{"name": "other"}"#)
+    {
+        Ok(r) => r.status(),
+        Err(ureq::Error::Status(code, _)) => code,
+        Err(e) => panic!("request failed: {e}"),
+    }
+}
+
+/// DEF-026 R-7: an https origin the person named is accepted with the token.
+#[test]
+fn a_named_https_origin_is_accepted() {
+    let (base, home, data) = bind_board("origin-named");
+    let port = free_port();
+    let mut child = serve_writes(
+        &home,
+        &data,
+        &format!("127.0.0.1:{port}"),
+        &["--ui-dir", &page_dir(&base)],
+        &[("KANBANR_ALLOWED_ORIGINS", "https://board.example.com")],
+    );
+    let url = format!("http://127.0.0.1:{port}");
+    wait_up(&url, &mut child);
+    let _daemon = Daemon(child);
+    let token = page_token(&url);
+    let before: u32 = board_commits(&data).parse().unwrap();
+    let status = create_project_with(
+        &url,
+        &[
+            ("Origin", "https://board.example.com"),
+            ("x-kanbanr-token", &token),
+        ],
+    );
+    assert!((200..300).contains(&status), "status {status}");
+    let after: u32 = board_commits(&data).parse().unwrap();
+    assert!(after > before, "the write was committed");
+    let _ = std::fs::remove_dir_all(base);
+}
+
+/// DEF-026 R-8: an origin that was not named is refused, and naming a host does not name one.
+#[test]
+fn an_https_origin_that_was_not_named_is_refused() {
+    let (base, home, data) = bind_board("origin-unnamed");
+    let port = free_port();
+    let mut child = serve_writes(
+        &home,
+        &data,
+        &format!("127.0.0.1:{port}"),
+        &["--ui-dir", &page_dir(&base)],
+        &[
+            ("KANBANR_ALLOWED_ORIGINS", "https://board.example.com"),
+            ("KANBANR_ALLOWED_HOSTS", "other.example.com"),
+        ],
+    );
+    let url = format!("http://127.0.0.1:{port}");
+    wait_up(&url, &mut child);
+    let _daemon = Daemon(child);
+    let token = page_token(&url);
+    let before = board_commits(&data);
+    let a = create_project_with(
+        &url,
+        &[
+            ("Origin", "https://other.example.com"),
+            ("x-kanbanr-token", &token),
+        ],
+    );
+    assert_eq!(a, 403);
+    let b = create_project_with(
+        &url,
+        &[
+            ("Host", "other.example.com"),
+            ("Origin", "https://other.example.com"),
+            ("x-kanbanr-token", &token),
+        ],
+    );
+    assert_eq!(b, 403, "naming a host does not name an origin");
+    assert_eq!(board_commits(&data), before);
+    let _ = std::fs::remove_dir_all(base);
 }

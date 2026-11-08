@@ -134,12 +134,21 @@ enum Command {
         /// (single-writer daemon). OFF by default — the default daemon only reads. (FEAT-034)
         #[arg(long)]
         allow_writes: bool,
+        /// Accept writes on an address other machines can reach (default: refused). Also
+        /// $KANBANR_ALLOW_REMOTE_WRITES. (DEF-026)
+        #[arg(long)]
+        allow_remote_writes: bool,
     },
     /// Push local commits to the configured git remotes now (FEAT-034). Writes commit locally and
     /// push is debounced off the hot path by default; this flushes anything pending immediately.
     Sync,
     /// Open the live monitor in your browser (warns if it isn't running).
-    Open,
+    Open {
+        /// Report whether the monitor is up and accepts writes, and its Review and Releases
+        /// addresses; opens nothing.
+        #[arg(long)]
+        check: bool,
+    },
     /// Print the data folder (board) this directory uses. With --json, also where that came from,
     /// the recommended `<repo>.kanbanr` folder, and existing kanbanr folders next to the project.
     Where,
@@ -243,6 +252,11 @@ enum Command {
     /// them on: `kanbanr config cadence --releases on`.
     #[command(subcommand)]
     Release(ReleaseCmd),
+    /// Gate results (FTR-002): the verdict of your CI, or of `make ci`, recorded against one
+    /// commit. kanbanr runs no gate and asks no server; a release stage that requires
+    /// `gate_passed` reads what was recorded here.
+    #[command(subcommand)]
+    Gate(GateCmd),
     /// Record that an item was sliced out of another, so a wave's growth can be accounted for.
     SplitFrom {
         code: String,
@@ -369,6 +383,10 @@ enum Command {
         /// `rev`). Refused if the definition changed since — what Claude passes (FEAT-159).
         #[arg(long, conflicts_with = "withdraw")]
         rev: Option<String>,
+        /// The spec revision the user was shown (`kanbanr review --pending --json` gives it as
+        /// `spec_rev`). Refused if the spec changed since (FTR-023).
+        #[arg(long, conflicts_with = "withdraw")]
+        spec_rev: Option<String>,
         /// Take back a sign-off given in error (FEAT-182). The earlier one stays as history and
         /// stops counting. Needs --reason.
         #[arg(long, requires = "reason", conflicts_with_all = ["note", "doc"])]
@@ -1041,7 +1059,8 @@ enum ConfigCmd {
         /// How often a release is cut: per_sprint | every_n | on_demand.
         #[arg(long)]
         release: Option<String>,
-        /// The stages a release moves through, in order; the last is the cut (FEAT-183). Default:
+        /// The stages a release moves through, in order; the stage holding `tag` is the cut
+        /// (FEAT-183). Turning releases on gives candidate,main,tag; a board from before 0.6 keeps
         /// candidate,test,staging,production.
         #[arg(long, value_delimiter = ',')]
         release_stages: Option<Vec<String>>,
@@ -1057,6 +1076,20 @@ enum ConfigCmd {
         /// branches, lines taking merges only. on | off; off by default.
         #[arg(long, value_parser = ["on", "off"])]
         git_model: Option<String>,
+        /// The project has CI (FTR-020): the recommended `tag` stage then also waits for a passed
+        /// `ci` result for the release tip. on | off; off by default.
+        #[arg(long, value_parser = ["on", "off"])]
+        has_ci: Option<String>,
+    },
+    /// The gates a release stage needing `gate_passed` requires a passed result of for the release
+    /// tip (FTR-002): `kanbanr config commit-gates ci`. With none given, clears them.
+    CommitGates {
+        names: Vec<String>,
+    },
+    /// The commit gate whose result judges a release's tag (FTR-026): `kanbanr config tag-gate
+    /// ci`. It must be one of the commit gates; with none given, the first commit gate judges.
+    TagGate {
+        name: Option<String>,
     },
     /// A release stage's gate (FEAT-212): what must hold before a release enters it, and what
     /// entering it does. Starts from the gate in force (`release stages`); `--clear` goes back to
@@ -1066,15 +1099,19 @@ enum ConfigCmd {
         /// What the stage is for, in a sentence.
         #[arg(long)]
         purpose: Option<String>,
-        /// Conditions: items_finished, prepared, main_at_release, pushed ("" for none).
+        /// Conditions: items_finished, prepared, main_at_release, pushed, gate_passed,
+        /// items_merged ("" for none).
         #[arg(long, value_delimiter = ',')]
         requires: Option<Vec<String>>,
+        /// Earlier stages the release must have been promoted into first ("" for none).
+        #[arg(long, value_delimiter = ',')]
+        after: Option<Vec<String>>,
         /// Actions, applied in this order whatever the order given: branch, prepare, move_main,
         /// tag ("" for none).
         #[arg(long, value_delimiter = ',')]
         on_enter: Option<Vec<String>>,
         /// Remove the stage's own gate: it acts as the default again.
-        #[arg(long, conflicts_with_all = ["purpose", "requires", "on_enter"])]
+        #[arg(long, conflicts_with_all = ["purpose", "requires", "after", "on_enter"])]
         clear: bool,
     },
     /// What a release's `prepare` action commits onto `release/<V>` (FEAT-212). With no flag,
@@ -1173,6 +1210,46 @@ enum ConfigCmd {
 }
 
 #[derive(Subcommand)]
+enum GateCmd {
+    /// Record a gate's verdict for a commit, as a new result beside the earlier ones. Look at
+    /// your CI first, then record what it said.
+    Record {
+        /// The gate: `ci`, `local`, `security`... (lowercase letters, digits, - and _).
+        name: String,
+        /// The run passed.
+        #[arg(long, conflicts_with = "failed", required_unless_present = "failed")]
+        passed: bool,
+        /// The run failed.
+        #[arg(long)]
+        failed: bool,
+        /// The commit the verdict is about (default: HEAD of this repository).
+        #[arg(long, value_name = "REV")]
+        commit: Option<String>,
+        /// A link to the run, http or https.
+        #[arg(long)]
+        url: Option<String>,
+        /// A note, such as what failed.
+        #[arg(long)]
+        note: Option<String>,
+        /// Who gave the verdict (default: the board's commit identity).
+        #[arg(long)]
+        by: Option<String>,
+        /// `local` for the project's own `make ci` run (default: person).
+        #[arg(long, hide = true, value_parser = ["person", "local"])]
+        source: Option<String>,
+    },
+    /// The recorded results, newest first.
+    List {
+        /// Only this gate.
+        #[arg(long)]
+        name: Option<String>,
+        /// Only results for this commit.
+        #[arg(long, value_name = "REV")]
+        commit: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum ReleaseCmd {
     /// Add a planned release.
     Add {
@@ -1186,6 +1263,19 @@ enum ReleaseCmd {
         /// starts at the first stage (FEAT-184). Run it from the project folder.
         #[arg(long)]
         patch_of: Option<String>,
+        /// With --patch-of: the parent's tag has a failed CI result recorded (FTR-026). A defect
+        /// is filed carrying the failed run's link and --notes, the defect and the parent's items
+        /// are planned into the patch, and the parent is marked superseded. Your own verdict:
+        /// Claude does not run it.
+        #[arg(long, requires = "patch_of")]
+        from_failed_tag: bool,
+        /// With --from-failed-tag: the failed run's link (default: the link on the recorded
+        /// result).
+        #[arg(long, requires = "from_failed_tag")]
+        link: Option<String>,
+        /// With --from-failed-tag: what you saw, kept in the defect.
+        #[arg(long, requires = "from_failed_tag")]
+        notes: Option<String>,
     },
     /// Remove a release that holds nothing: planned, with no stage, branch, notes, patch or item.
     /// Anything else is refused, naming why.
@@ -1206,6 +1296,10 @@ enum ReleaseCmd {
         /// Why the release moves back a stage (required for that, and recorded).
         #[arg(long)]
         reason: Option<String>,
+        /// What you checked, kept on the stage change when you confirm a stage after the tag
+        /// (FTR-026). The same field as --reason.
+        #[arg(long, conflicts_with = "reason")]
+        note: Option<String>,
         /// Who moved it (default: the board's commit identity).
         #[arg(long)]
         by: Option<String>,
@@ -1653,7 +1747,10 @@ fn main() -> ExitCode {
 
 fn real_main() -> ExitCode {
     quiet_on_a_closed_pipe();
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    if is_identifying_hook(&cli.command) {
+        apply_hook_board(&mut cli);
+    }
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -1729,7 +1826,7 @@ fn command_access(cmd: &Command) -> Access {
     use Access::*;
     match cmd {
         Command::Whoami
-        | Command::Open
+        | Command::Open { .. }
         | Command::Where
         | Command::Activity
         | Command::Trace { .. }
@@ -1824,6 +1921,7 @@ fn command_access(cmd: &Command) -> Access {
         | Command::Lesson(_)
         | Command::Sprint(_)
         | Command::Release(_)
+        | Command::Gate(_)
         | Command::Commit { .. }
         | Command::Tests { .. }
         | Command::Sources { .. }
@@ -1908,7 +2006,11 @@ fn scope_gate(cli: &Cli) -> anyhow::Result<()> {
     {
         return Ok(());
     }
-    match kanbanr_core::agentscope::outside_core_refusal(&cwd, what) {
+    match kanbanr_core::agentscope::outside_core_refusal(
+        &cwd,
+        what,
+        kanbanr_core::agentscope::Caller::of_process(),
+    ) {
         Some(refusal) => anyhow::bail!("{refusal}"),
         None => Ok(()),
     }
@@ -1935,6 +2037,7 @@ fn run_serve(
     bind: Option<String>,
     ui_dir: Option<String>,
     allow_writes: bool,
+    allow_remote_writes: bool,
 ) -> anyhow::Result<()> {
     let dir = project::resolve_data_dir(cli.data_dir.as_deref());
     if allow_writes {
@@ -1969,12 +2072,13 @@ fn run_serve(
         );
     }
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(kanbanr_server::run(
+    rt.block_on(kanbanr_server::run_with(
         dir,
         bind,
         ui_dir,
         allow_writes,
         code_repo,
+        allow_remote_writes,
     ))
 }
 
@@ -2907,10 +3011,7 @@ fn run_claude(cli: &Cli, client: &Backend, cmd: &ClaudeCmd) -> anyhow::Result<()
 /// and never weighs the charter's prose. A guard that has to interpret is a guard that misfires,
 /// and one that misfires gets turned off (ADR-0004).
 fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
-    use std::io::Read;
-    let mut raw = String::new();
-    std::io::stdin().read_to_string(&mut raw)?;
-    let payload: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+    let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
     let path = payload["tool_input"]["file_path"]
         .as_str()
         .unwrap_or_default();
@@ -2924,7 +3025,11 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
-    if let Some(wt) = kanbanr_core::agentscope::agent_context(&here) {
+    // A scope governs the agent it was issued to, never the coordinator (DEF-027).
+    let caller = kanbanr_core::agentscope::Caller::of_hook(&payload);
+    if caller == kanbanr_core::agentscope::Caller::Agent
+        && let Some(wt) = kanbanr_core::agentscope::agent_context(&here)
+    {
         let target = project::normalize(&here.join(path));
         let temp = project::normalize(&std::env::temp_dir());
         let board = project::normalize(client.store().data_dir());
@@ -2932,7 +3037,7 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
             .map(|p| p.scope)
             .unwrap_or_else(|| "none".to_string());
         let design = matches!(
-            process_scope(client, &here),
+            process_scope_as(client, &here, caller),
             kanbanr_core::agentscope::ProcessScope::Scoped(s)
                 if s.role == kanbanr_core::agentscope::Role::Design
         );
@@ -3572,6 +3677,205 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
     }
 }
 
+/// The hooks that tell a sub-agent from the coordinator, and so read their payload before the
+/// board is opened (DEF-027).
+fn is_identifying_hook(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Capture | Command::Git(GitCmd::Guard) | Command::Claude(ClaudeCmd::Guard)
+    )
+}
+
+/// A hook's stdin, read once: the board lookup and the hook itself both need it.
+static HOOK_STDIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+fn hook_stdin() -> String {
+    HOOK_STDIN
+        .get_or_init(|| {
+            use std::io::Read;
+            let mut raw = String::new();
+            let _ = std::io::stdin().read_to_string(&mut raw);
+            raw
+        })
+        .clone()
+}
+
+/// A hook finds its board from the folder it is registered for, not from the shell's working
+/// folder (DEF-027): the shell may stand in a worktree outside the repository, or one whose copy
+/// of the `.kanbanr` marker points nowhere. `--data-dir`, `--project` and the `KANBANR_*`
+/// variables still win.
+fn apply_hook_board(cli: &mut Cli) {
+    let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
+    let (data_dir, project) = hook_board_in(
+        &payload,
+        std::env::var("CLAUDE_PROJECT_DIR").ok(),
+        std::env::var("KANBANR_DATA_DIR").ok().as_deref(),
+        std::env::var("KANBANR_PROJECT").ok().as_deref(),
+        project::home_dir().as_deref(),
+    );
+    if cli.data_dir.is_none() {
+        cli.data_dir = data_dir.map(|d| d.display().to_string());
+    }
+    if cli.project.is_none() {
+        cli.project = project;
+    }
+}
+
+/// The data folder and project a hook belongs to, from the folder it is registered for. The data
+/// folder is named only when that folder's `.kanbanr` marker names one; otherwise the process's
+/// own lookup stands.
+fn hook_board_in(
+    payload: &Value,
+    project_dir: Option<String>,
+    env_data: Option<&str>,
+    env_project: Option<&str>,
+    home: Option<&Path>,
+) -> (Option<PathBuf>, Option<String>) {
+    let dir = hook_dir_in(payload, project_dir);
+    let resolved = project::resolve_data_dir_in(None, env_data, &dir, home);
+    let data = (resolved.source == project::DataDirSource::Marker).then_some(resolved.path);
+    let project = if env_project.is_some_and(|p| !p.is_empty()) {
+        None
+    } else {
+        project::resolve_project_in(None, None, &dir, home)
+    };
+    (data, project)
+}
+
+/// What the Bash guard decides about who is calling (DEF-027).
+#[derive(Debug, PartialEq, Eq)]
+enum GuardDecision {
+    Allow,
+    Deny(String),
+}
+
+/// The folder a hook belongs to: the project folder Claude Code started the session in
+/// (`CLAUDE_PROJECT_DIR`, when it exists), else the payload's `cwd`, else this process's folder.
+fn hook_dir_in(payload: &Value, project_dir: Option<String>) -> PathBuf {
+    project_dir
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .filter(|d| d.is_dir())
+        .or_else(|| payload["cwd"].as_str().map(PathBuf::from))
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default()
+}
+
+/// Who is calling decides which rules apply to a Bash command (DEF-027). A sub-agent is held to
+/// its scope's boundaries, and stopped outright once the scope is revoked or expired. The
+/// coordinator is not governed by a scope, but is kept out of agent worktrees, with the way out
+/// named. A hook call without a board (`board` is `None`) cannot read a scope: an agent's commit
+/// is refused then, as before. Pure apart from reading the board and the folders it names.
+fn bash_guard_decision(payload: &Value, board: Option<&Path>) -> GuardDecision {
+    use kanbanr_core::agentscope::{self, Caller};
+    let command = &without_heredoc_bodies(payload["tool_input"]["command"].as_str().unwrap_or(""));
+    let base = payload["cwd"]
+        .as_str()
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default();
+    match Caller::of_hook(payload) {
+        Caller::Agent => {
+            let Some(wt) = agentscope::agent_context(&base) else {
+                return GuardDecision::Allow;
+            };
+            if let Some(board) = board
+                && let Some(why) =
+                    agentscope::dead_scope(&kanbanr_core::store::Store::new(board), &base)
+            {
+                return GuardDecision::Deny(why);
+            }
+            if let Some(why) = scoped_command_refusal(command, &base, &wt, board) {
+                return GuardDecision::Deny(why);
+            }
+            if is_git_commit(command)
+                && board.is_none()
+                && let Some(pointer) = agentscope::read_pointer(&wt.git_dir)
+            {
+                return GuardDecision::Deny(format!(
+                    "refused: the scope file here names {}, but its board cannot be read, so \
+                     nothing is committed under it until it can.",
+                    pointer.scope
+                ));
+            }
+            GuardDecision::Allow
+        }
+        Caller::Coordinator => coordinator_refusal(command, &base)
+            .map(GuardDecision::Deny)
+            .unwrap_or(GuardDecision::Allow),
+        // A hook call is never a person's or an unidentified session's.
+        Caller::Person | Caller::Session => GuardDecision::Allow,
+    }
+}
+
+/// Keep the coordinator's shell out of an agent's worktree (DEF-027 R-4, R-5): refuse a kanbanr or
+/// git command that would run in one, and a top-level `cd` or `pushd` into one. A command that
+/// leaves first, or only leaves, passes, so the way out is never blocked; a subshell passes.
+fn coordinator_refusal(command: &str, base: &Path) -> Option<String> {
+    use kanbanr_core::agentscope;
+    let main_root = coderepo::worktree_facts(base)
+        .map(|w| w.main_root)
+        .or_else(|| {
+            std::env::var("CLAUDE_PROJECT_DIR")
+                .ok()
+                .filter(|d| !d.is_empty())
+                .map(PathBuf::from)
+        })?;
+    let home = project::home_dir();
+    let resolve = |from: &Path, to: &str| -> Option<PathBuf> {
+        if to.contains('$') || to.contains('`') || to == "-" {
+            return None;
+        }
+        if to == "~" {
+            return home.clone();
+        }
+        if let Some(rest) = to.strip_prefix("~/") {
+            return home.as_ref().map(|h| h.join(rest));
+        }
+        Some(from.join(to))
+    };
+    let in_agent = |p: &Path| {
+        agentscope::agent_context(p).is_some() || agentscope::is_agent_worktree_path(p, &main_root)
+    };
+    let mut dir = Some(base.to_path_buf());
+    for (_, words) in simple_commands(command) {
+        let Some(first) = words.first() else {
+            continue;
+        };
+        if first == "cd" || first == "pushd" {
+            let target = words.get(1).and_then(|to| resolve(dir.as_deref()?, to));
+            if let Some(t) = &target
+                && agentscope::is_agent_worktree_path(t, &main_root)
+            {
+                return Some(format!(
+                    "do not make an agent's worktree your shell's folder ({}): use `git -C <path>`, \
+                     `make -C <path>`, `npm --prefix <path>`, `cargo --manifest-path \
+                     <path>/Cargo.toml`, or a subshell `(cd <path> && ...)`.",
+                    t.display()
+                ));
+            }
+            dir = target;
+            continue;
+        }
+        let Some(here) = dir.as_deref() else {
+            continue;
+        };
+        // `git -C <path>` runs in <path>, not here: it is how to look inside a worktree.
+        let runs_here = match git_call(&words) {
+            Some(call) => call.dirs.is_empty(),
+            None => is_kanbanr(&words),
+        };
+        if runs_here && in_agent(here) {
+            return Some(format!(
+                "your shell is standing in the agent worktree {}. Run `cd <project folder>` first \
+                 (that command is allowed) and look inside with `git -C <path> ...`.",
+                here.display()
+            ));
+        }
+    }
+    None
+}
+
 /// The Claude Code side of the commit guardrail (FEAT-056): the same rules as the git hooks, but
 /// answered *before* the command runs, with the reference to use. Feedback that arrives as a
 /// failed command teaches avoidance; feedback that arrives with the fix teaches the rule.
@@ -3581,10 +3885,7 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
 ///
 /// `client` is the board of the folder the session runs in, or `None` where there is none.
 fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
-    use std::io::Read;
-    let mut raw = String::new();
-    std::io::stdin().read_to_string(&mut raw)?;
-    let payload: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
+    let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
     // A heredoc's body is data handed to another program, not shell the guard should read
     // (FEAT-108): a script that merely documents `git commit … -n` was refused as a commit.
     let command = &without_heredoc_bodies(payload["tool_input"]["command"].as_str().unwrap_or(""));
@@ -3605,21 +3906,22 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
-    if let Some(wt) = kanbanr_core::agentscope::agent_context(&base) {
-        let board = client.map(|c| c.store().data_dir().to_path_buf());
-        if let Some(why) = scoped_command_refusal(command, &base, &wt, board.as_deref()) {
+    let caller = kanbanr_core::agentscope::Caller::of_hook(&payload);
+    let board = client.map(|c| c.store().data_dir().to_path_buf());
+    if let GuardDecision::Deny(why) = bash_guard_decision(&payload, board.as_deref()) {
+        deny(why);
+        return Ok(());
+    }
+    // A verdict is the person's, taken on the monitor: Claude never records one (FTR-024).
+    if client.is_some() {
+        let project = project::resolve_project(cli.project.as_deref());
+        let review_url = format!(
+            "{}/p/{}/review",
+            monitor_url(),
+            urlencode_segment(project.as_deref().unwrap_or("<project>"))
+        );
+        if let Some(why) = verdict_refusal(command, &review_url) {
             deny(why);
-            return Ok(());
-        }
-        if is_git_commit(command)
-            && client.is_none()
-            && let Some(pointer) = kanbanr_core::agentscope::read_pointer(&wt.git_dir)
-        {
-            deny(format!(
-                "refused: the scope file here names {}, but its board cannot be read, so nothing \
-                 is committed under it until it can.",
-                pointer.scope
-            ));
             return Ok(());
         }
     }
@@ -3659,7 +3961,7 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     // The scope this commit is made under comes first (FEAT-214 R-5).
     if project::normalize(&target) == project::normalize(&base)
         && let Some(client) = client
-        && let Some(why) = scoped_commit_refusal(client, &target, inline_message(command))
+        && let Some(why) = scoped_commit_refusal(client, &target, inline_message(command), caller)
     {
         deny(why);
         return Ok(());
@@ -3671,6 +3973,66 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
         deny(why);
     }
     Ok(())
+}
+
+/// The verdict commands Claude may not run (FTR-024): approving, ratifying, signing off or
+/// withdrawing either, accepting or rejecting a decision, and promoting or cutting a release. A
+/// verdict is the person's own, recorded on the monitor. Returns the refusal, naming the page
+/// where the person decides (`review_url`, or its Releases sibling for a release).
+///
+/// Reads the tokens of each kanbanr invocation, not substrings of the line. `--help` is never
+/// refused, and anything it can't parse passes (ADR-0004).
+fn verdict_refusal(command: &str, review_url: &str) -> Option<String> {
+    for (_, words) in simple_commands(command) {
+        if !is_kanbanr(&words) || words.iter().any(|w| w == "--help" || w == "-h") {
+            continue;
+        }
+        let mut path: Vec<&str> = Vec::new();
+        let mut it = words[1..].iter().map(String::as_str);
+        while let Some(w) = it.next() {
+            match w {
+                "--data-dir" | "--project" => {
+                    it.next();
+                }
+                _ if w.starts_with('-') => {}
+                _ => {
+                    path.push(w);
+                    if path.len() == 2 || !matches!(w, "adr" | "release" | "gate") {
+                        break;
+                    }
+                }
+            }
+        }
+        let rest = &words[1..];
+        let (verdict, releases) = match path.as_slice() {
+            ["approve" | "ratify" | "unapprove" | "signoff"] => (true, false),
+            ["adr", "accept" | "reject"] => (true, false),
+            ["release", "promote"] => (!rest.iter().any(|w| w == "--plan"), true),
+            ["release", "cut"] => (true, true),
+            // Starting a patch from a red tag is the person's decision (FTR-026). `promote` to a
+            // stage after the tag is covered above; `config tag-gate` is configuration, not a verdict.
+            ["release", "add"] => (rest.iter().any(|w| w == "--from-failed-tag"), true),
+            // A gate result recorded by hand is a verdict on the release (FTR-002).
+            ["gate", "record"] => (true, true),
+            _ => (false, false),
+        };
+        if verdict {
+            let page = if releases {
+                match review_url.strip_suffix("/review") {
+                    Some(base) => format!("{base}/releases"),
+                    None => review_url.to_string(),
+                }
+            } else {
+                review_url.to_string()
+            };
+            return Some(format!(
+                "refused: a verdict is the person's own, recorded on the monitor, never by Claude \
+                 (FTR-024). Tell them what is waiting: {page}. If no monitor accepts writes, offer \
+                 `kanbanr review --ui`."
+            ));
+        }
+    }
+    None
 }
 
 /// The command line with every heredoc body removed, keeping the lines that introduce them.
@@ -4030,7 +4392,9 @@ fn run_check_msg(cli: &Cli, client: &Backend, file: &Path) -> anyhow::Result<()>
     // The scope this commit is made under comes first (FEAT-214 R-5), and its commits carry its
     // trailer (R-7).
     if let Ok(cwd) = std::env::current_dir() {
-        if let Some(why) = scoped_commit_refusal(client, &cwd, Some(message.clone())) {
+        if let Some(why) =
+            scoped_commit_refusal(client, &cwd, Some(message.clone()), process_caller())
+        {
             anyhow::bail!("{why}");
         }
         if let kanbanr_core::agentscope::ProcessScope::Scoped(s) = process_scope(client, &cwd) {
@@ -4096,7 +4460,7 @@ fn require_project_quiet() -> Option<String> {
 fn run_check_branch(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     // The scope this commit is made under comes first (FEAT-214 R-5).
     if let Ok(cwd) = std::env::current_dir()
-        && let Some(why) = scoped_commit_refusal(client, &cwd, None)
+        && let Some(why) = scoped_commit_refusal(client, &cwd, None, process_caller())
     {
         anyhow::bail!("{why}");
     }
@@ -4753,8 +5117,67 @@ fn monitor_down_hint(url: &str) -> String {
     )
 }
 
+/// What `kanbanr open --check` reports about the monitor (FTR-024).
+#[derive(serde::Serialize)]
+struct MonitorStatus {
+    url: String,
+    up: bool,
+    writes: bool,
+    review: Option<String>,
+    releases: Option<String>,
+}
+
+/// The monitor's status from its `/api/meta` answer (`None`: nothing answered) and the project.
+fn monitor_status(url: &str, project: Option<&str>, meta: Option<&Value>) -> MonitorStatus {
+    let page = |name: &str| project.map(|p| format!("{url}/p/{}/{name}", urlencode_segment(p)));
+    MonitorStatus {
+        url: url.to_string(),
+        up: meta.is_some(),
+        writes: meta.is_some_and(|m| m["writes"] == true),
+        review: page("review"),
+        releases: page("releases"),
+    }
+}
+
+/// `kanbanr open --check`: ask the monitor, print its status, open nothing.
+fn run_open_check(cli: &Cli) -> anyhow::Result<()> {
+    let url = monitor_url();
+    // A transport error, a non-2xx answer or a body that isn't JSON all count as down.
+    let meta = ureq::get(&format!("{url}/api/meta"))
+        .timeout(std::time::Duration::from_millis(800))
+        .call()
+        .ok()
+        .and_then(|r| r.into_json::<Value>().ok());
+    let project = project::resolve_project(cli.project.as_deref());
+    let status = monitor_status(&url, project.as_deref(), meta.as_ref());
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&status)?);
+        return Ok(());
+    }
+    println!(
+        "{}",
+        match (status.up, status.writes) {
+            (true, true) => format!("monitor at {url}: up, writes on"),
+            (true, false) => format!(
+                "monitor at {url}: up, read-only (start one with writes: kanbanr review --ui)"
+            ),
+            (false, _) => format!("monitor at {url}: not running (start it: kanbanr review --ui)"),
+        }
+    );
+    if let Some(r) = &status.review {
+        println!("Review: {r}");
+    }
+    if let Some(r) = &status.releases {
+        println!("Releases: {r}");
+    }
+    Ok(())
+}
+
 /// Open the live monitor in the default browser (best-effort; warns if it isn't reachable).
-fn run_open(_cli: &Cli) -> anyhow::Result<()> {
+fn run_open(cli: &Cli, check: bool) -> anyhow::Result<()> {
+    if check {
+        return run_open_check(cli);
+    }
     let url = monitor_url();
     // Any HTTP status means the daemon is up; a transport error means it isn't.
     let up = !matches!(
@@ -5005,12 +5428,42 @@ fn project_head_rev() -> Option<String> {
 /// than by "whatever item is in progress" is what makes this trustworthy: it records what ran,
 /// not what someone meant to run, and it is silent when nothing it knows about ran.
 fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
-    use std::io::Read;
-    let mut raw = String::new();
-    std::io::stdin().read_to_string(&mut raw)?;
-    let payload: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
-    // The tool output lives in different places depending on the tool; take the lot as text.
-    let text = [
+    let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
+    let caller = kanbanr_core::agentscope::Caller::of_hook(&payload);
+    let cwd = payload["cwd"]
+        .as_str()
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default();
+    let text = capture_text(&payload);
+    if kanbanr_core::evidence::parse_results(&text).is_empty() {
+        return Ok(()); // not a test run, or nothing recognizable: stay quiet
+    }
+
+    let p = require_project(cli)?;
+    let project = get_project(client, &p)?;
+    // The tests ran in the payload's folder, and an agent's worktree has its own HEAD.
+    let rev = project::project_revision(&cwd, project::home_dir().as_deref());
+    let scope = process_scope_as(client, &cwd, caller);
+    let ops = capture_plan(&payload, &project, &scope, caller, rev.as_deref());
+    let n = ops.len();
+    let Some(batch) = kanbanr_core::evidence::capture_batch(ops) else {
+        return Ok(());
+    };
+    let path = format!("/projects/{p}/batch");
+    // The coordinator's run is recorded unscoped, whatever folder its shell stood in.
+    if caller == kanbanr_core::agentscope::Caller::Coordinator {
+        client.as_unscoped(|| client.write(Method::Post, &path, Some(batch)))?;
+    } else {
+        client.write(Method::Post, &path, Some(batch))?;
+    }
+    eprintln!("kanbanr: recorded {n} test result(s) from this run");
+    Ok(())
+}
+
+/// The tool output lives in different places depending on the tool; take the lot as text.
+fn capture_text(payload: &Value) -> String {
+    [
         payload["tool_response"]["stdout"].as_str(),
         payload["tool_response"]["stderr"].as_str(),
         payload["tool_response"]["output"].as_str(),
@@ -5019,32 +5472,33 @@ fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     .into_iter()
     .flatten()
     .collect::<Vec<_>>()
-    .join("\n");
-    let results = kanbanr_core::evidence::parse_results(&text);
-    if results.is_empty() {
-        return Ok(()); // not a test run, or nothing recognizable: stay quiet
-    }
+    .join("\n")
+}
 
-    let p = require_project(cli)?;
-    let project = get_project(client, &p)?;
-    let rev = project_head_rev();
-    let ops = kanbanr_core::evidence::plan_capture(&project, &results, rev.as_deref());
-    // Under an agent scope only its own item's evidence is recorded; an agent worktree with no
-    // valid scope records nothing (FEAT-214, D5).
-    let ops = match std::env::current_dir().map(|cwd| process_scope(client, &cwd)) {
-        Ok(kanbanr_core::agentscope::ProcessScope::Scoped(s)) => {
-            kanbanr_core::agentscope::retain_permitted(&s, ops).0
-        }
-        Ok(kanbanr_core::agentscope::ProcessScope::Refused { .. }) => return Ok(()),
-        _ => ops,
-    };
-    let n = ops.len();
-    let Some(batch) = kanbanr_core::evidence::capture_batch(ops) else {
-        return Ok(());
-    };
-    client.write(Method::Post, &format!("/projects/{p}/batch"), Some(batch))?;
-    eprintln!("kanbanr: recorded {n} test result(s) from this run");
-    Ok(())
+/// The board operations a test run earns (DEF-027): for the coordinator, every tracked test the
+/// output shows, whatever folder it ran in; for an agent, only its scope's own item, and nothing
+/// when its scope is dead or it has none. Pure.
+fn capture_plan(
+    payload: &Value,
+    project: &kanbanr_core::Project,
+    scope: &kanbanr_core::agentscope::ProcessScope,
+    caller: kanbanr_core::agentscope::Caller,
+    rev: Option<&str>,
+) -> Vec<Value> {
+    use kanbanr_core::agentscope::{Caller, ProcessScope};
+    let results = kanbanr_core::evidence::parse_results(&capture_text(payload));
+    if results.is_empty() {
+        return Vec::new();
+    }
+    let ops = kanbanr_core::evidence::plan_capture(project, &results, rev);
+    if caller != Caller::Agent {
+        return ops;
+    }
+    match scope {
+        ProcessScope::Scoped(s) => kanbanr_core::agentscope::retain_permitted(s, ops).0,
+        ProcessScope::Refused { .. } => Vec::new(),
+        ProcessScope::Unscoped => ops,
+    }
 }
 
 /// Check a definition that is not on a board (FEAT-052).
@@ -5661,8 +6115,17 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             bind,
             ui_dir,
             allow_writes,
-        } => return run_serve(cli, bind.clone(), ui_dir.clone(), *allow_writes),
-        Command::Open => return run_open(cli),
+            allow_remote_writes,
+        } => {
+            return run_serve(
+                cli,
+                bind.clone(),
+                ui_dir.clone(),
+                *allow_writes,
+                *allow_remote_writes,
+            );
+        }
+        Command::Open { check } => return run_open(cli, *check),
         Command::Where => return run_where(cli),
         // A preview of the git model needs no board (FEAT-194): setup shows it before `init`.
         Command::Git(GitCmd::Model { sprints, releases })
@@ -5716,7 +6179,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Identity { .. }
         | Command::Init { .. }
         | Command::Serve { .. }
-        | Command::Open
+        | Command::Open { .. }
         | Command::Where
         | Command::SelfUpdate { .. }
         | Command::Skill(_)
@@ -6097,7 +6560,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     std::thread::sleep(std::time::Duration::from_millis(600));
                     open_in_browser(&opened);
                 });
-                return run_serve(cli, Some(bind), ui_dir_for_review(), true);
+                return run_serve(cli, Some(bind), ui_dir_for_review(), true, false);
             }
             // What is waiting is the daemon's answer, the one the Review page shows (FEAT-159):
             // never approved, lapsed, unratified, or waiting on a sign-off — and not live work
@@ -6156,6 +6619,58 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             }
             for feature in &features {
                 print!("{}", kanbanr_core::export::definition_brief(feature));
+                // What was added since the last decision (FTR-018), from the queue's entry.
+                if let Some(entry) = queue.iter().find(|v| v["code"] == feature.code.as_str()) {
+                    let added: Vec<&str> = entry["changes"]["added"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|k| k.as_str())
+                        .collect();
+                    if !added.is_empty() {
+                        let also = if entry["approval"] == "signoff" {
+                            "also "
+                        } else {
+                            ""
+                        };
+                        println!("{also}added since approval: {}", added.join(", "));
+                    }
+                    // The spec a sign-off pinned changed since (FTR-023): what changed, at most 20 lines.
+                    if entry["approval"] == "spec_changed" {
+                        let spec = &entry["spec"];
+                        let date = spec["signed_at"].as_str().unwrap_or("");
+                        println!(
+                            "{} {}: spec changed since sign-off '{}' ({}, {})",
+                            feature.code,
+                            feature.title,
+                            spec["signoff"].as_str().unwrap_or(""),
+                            spec["signed_by"].as_str().unwrap_or(""),
+                            date.get(..10).unwrap_or(date)
+                        );
+                        if spec["previous_kept"] == false {
+                            println!("the earlier text was not kept, so there is no diff");
+                        }
+                        let changed: Vec<String> = spec["diff"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|l| {
+                                let text = l["text"].as_str().unwrap_or("");
+                                match l["op"].as_str() {
+                                    Some("added") => Some(format!("+{text}")),
+                                    Some("removed") => Some(format!("-{text}")),
+                                    _ => None,
+                                }
+                            })
+                            .collect();
+                        for line in changed.iter().take(20) {
+                            println!("{line}");
+                        }
+                        if changed.len() > 20 {
+                            println!("… {} more", changed.len() - 20);
+                        }
+                    }
+                }
                 println!();
             }
             // Agreed items whose one open question is which release they ship in (FEAT-185):
@@ -6272,6 +6787,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             doc,
             by,
             rev,
+            spec_rev,
             withdraw,
             reason,
         } => {
@@ -6299,17 +6815,27 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     "/projects/{p}/features/{code}/signoff/{}",
                     urlencode_segment(name)
                 ),
-                Some(json!({ "by": who, "note": note, "doc": doc, "rev": rev })),
+                Some(json!({
+                    "by": who, "note": note, "doc": doc, "rev": rev, "spec_rev": spec_rev
+                })),
             )?;
             print_write(
                 cli,
                 &resp,
                 format!("{code}: sign-off '{name}' recorded by {who}"),
             );
+            if !cli.json
+                && let Some(held) = serde_json::from_str::<Value>(&resp)
+                    .ok()
+                    .and_then(|v| v["auto_advance_held"].as_str().map(str::to_string))
+            {
+                eprintln!("  {held}");
+            }
             Ok(())
         }
         Command::Sprint(cmd) => run_sprint(cli, &client, cmd),
         Command::Release(cmd) => run_release(cli, &client, cmd),
+        Command::Gate(cmd) => run_gate(cli, &client, cmd),
         Command::Todo(cmd) => run_todo(cli, &client, cmd),
         Command::Task(cmd) => run_task(cli, &client, cmd),
         Command::Milestone(cmd) => run_milestone(cli, &client, cmd),
@@ -6522,14 +7048,32 @@ fn parse_hours(s: &str) -> anyhow::Result<u32> {
     }
 }
 
-/// The scope a process in `dir` works under, against the board of `client`.
+fn process_caller() -> kanbanr_core::agentscope::Caller {
+    kanbanr_core::agentscope::Caller::of_process()
+}
+
+/// The scope this process in `dir` works under, against the board of `client`.
 fn process_scope(client: &Backend, dir: &Path) -> kanbanr_core::agentscope::ProcessScope {
-    kanbanr_core::agentscope::resolve(client.store(), dir)
+    process_scope_as(client, dir, kanbanr_core::agentscope::Caller::of_process())
+}
+
+/// The scope `caller` works under in `dir`: a hook call names its caller from its payload.
+fn process_scope_as(
+    client: &Backend,
+    dir: &Path,
+    caller: kanbanr_core::agentscope::Caller,
+) -> kanbanr_core::agentscope::ProcessScope {
+    kanbanr_core::agentscope::resolve(client.store(), dir, caller)
 }
 
 /// Why a commit from `dir` is refused by the scope it works under, if it is (FEAT-214 R-5).
-fn scoped_commit_refusal(client: &Backend, dir: &Path, message: Option<String>) -> Option<String> {
-    let scope = process_scope(client, dir);
+fn scoped_commit_refusal(
+    client: &Backend,
+    dir: &Path,
+    message: Option<String>,
+    caller: kanbanr_core::agentscope::Caller,
+) -> Option<String> {
+    let scope = process_scope_as(client, dir, caller);
     if scope == kanbanr_core::agentscope::ProcessScope::Unscoped {
         return None;
     }
@@ -6541,6 +7085,9 @@ fn scoped_commit_refusal(client: &Backend, dir: &Path, message: Option<String>) 
 /// An agent's worktree whose board cannot be read: its scope cannot be checked, so a commit or a
 /// push from it is refused (fail closed).
 fn unreadable_scope() -> Option<String> {
+    if !process_caller().is_governed() {
+        return None;
+    }
     let cwd = std::env::current_dir().ok()?;
     let wt = kanbanr_core::agentscope::agent_context(&cwd)?;
     let pointer = kanbanr_core::agentscope::read_pointer(&wt.git_dir)?;
@@ -6553,6 +7100,9 @@ fn unreadable_scope() -> Option<String> {
 
 /// The pre-push hook (FEAT-214 R-6): nothing is pushed from an agent's worktree.
 fn run_check_push(client: Option<&Backend>) -> anyhow::Result<()> {
+    if !process_caller().is_governed() {
+        return Ok(());
+    }
     let Ok(cwd) = std::env::current_dir() else {
         return Ok(());
     };
@@ -6669,6 +7219,84 @@ fn is_kanbanr(words: &[String]) -> bool {
         .is_some_and(|w| w == "kanbanr" || w.ends_with("/kanbanr"))
 }
 
+/// A path word the guard can resolve: a leading `$TMPDIR` or `${TMPDIR}` is the temporary
+/// directory, `~` and `~/x` the home, anything else relative to `from`. `None` for any other `$`,
+/// a backtick, an empty word or `-`: the guard cannot know where it points, so it fails closed.
+fn expand_path_word(from: &Path, word: &str, temp: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    if word.is_empty() || word == "-" || word.contains('`') {
+        return None;
+    }
+    let tmp_rest = word
+        .strip_prefix("${TMPDIR}")
+        .or_else(|| word.strip_prefix("$TMPDIR"));
+    if let Some(rest) = tmp_rest {
+        if rest.contains('$') || !(rest.is_empty() || rest.starts_with('/')) {
+            return None;
+        }
+        return Some(temp.join(rest.trim_start_matches('/')));
+    }
+    if word.contains('$') {
+        return None;
+    }
+    if word == "~" {
+        return home.map(Path::to_path_buf);
+    }
+    if let Some(rest) = word.strip_prefix("~/") {
+        return home.map(|h| h.join(rest));
+    }
+    Some(from.join(word))
+}
+
+/// The assignments one simple command carries that name `var`: a prefix assignment of a kanbanr
+/// command or of nothing (`VAR=x` alone), and an `export` of it. Values unexpanded.
+fn named_values(env: &[String], words: &[String], var: &str) -> Vec<String> {
+    let prefix = format!("{var}=");
+    let carries =
+        words.is_empty() || is_kanbanr(words) || words.first().is_some_and(|w| w == "export");
+    let mut out: Vec<String> = Vec::new();
+    if carries {
+        out.extend(
+            env.iter()
+                .filter_map(|e| e.strip_prefix(&prefix))
+                .map(String::from),
+        );
+    }
+    if words.first().is_some_and(|w| w == "export") {
+        out.extend(
+            words
+                .iter()
+                .filter_map(|w| w.strip_prefix(&prefix))
+                .map(String::from),
+        );
+    }
+    out
+}
+
+/// The data dirs one simple command names, unexpanded: `--data-dir X` / `--data-dir=X` on a
+/// kanbanr command, `KANBANR_DATA_DIR=X` as a prefix assignment of a kanbanr command, and the same
+/// assignment after `export`. A `--data-dir` with no value is named as an empty word.
+fn named_data_dirs(env: &[String], words: &[String]) -> Vec<String> {
+    let mut out = named_values(env, words, "KANBANR_DATA_DIR");
+    if is_kanbanr(words) {
+        let mut it = words.iter().skip(1);
+        while let Some(w) = it.next() {
+            if w == "--data-dir" {
+                out.push(it.next().cloned().unwrap_or_default());
+            } else if let Some(v) = w.strip_prefix("--data-dir=") {
+                out.push(v.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Does the command name `KANBANR_PROJECT` (prefix assignment of a kanbanr command, or `export`)?
+fn names_project(env: &[String], words: &[String]) -> bool {
+    !named_values(env, words, "KANBANR_PROJECT").is_empty()
+        || (words.first().is_some_and(|w| w == "export")
+            && words.iter().any(|w| w == "KANBANR_PROJECT"))
+}
+
 /// What a Bash command in an agent's worktree may not do (FEAT-214): push, sync, point kanbanr at
 /// another board or project, leave the worktree to run git or kanbanr, touch the scope file,
 /// remove or move a worktree, redirect or skip the hooks, or write the board's files directly.
@@ -6692,55 +7320,73 @@ fn scoped_command_refusal(
     if command.contains("kanbanr-scope") {
         return refuse("the scope file is kanbanr's, never an agent's to read around or change");
     }
-    let temp = project::normalize(&std::env::temp_dir());
+    let temp = kanbanr_core::agentscope::temp_root();
     let inside = |p: &Path| {
         let p = project::normalize(p);
         p.starts_with(&wt.root) || p.starts_with(&temp)
     };
     let home = project::home_dir();
     let resolve = |from: &Path, to: &str| -> Option<PathBuf> {
-        if to.contains('$') || to.contains('`') || to == "-" {
-            return None;
-        }
-        if to == "~" {
-            return home.clone();
-        }
-        if let Some(rest) = to.strip_prefix("~/") {
-            return home.as_ref().map(|h| h.join(rest));
-        }
-        Some(from.join(to))
+        expand_path_word(from, to, &temp, home.as_deref())
     };
+    let temp_shown = temp.display();
+    let folder_refusal = format!(
+        "git and kanbanr run in this worktree or under {temp_shown}, never from another folder"
+    );
+    let board_refusal = format!(
+        "kanbanr runs on the board and project this worktree names, or on a temporary board (a \
+         folder under {temp_shown} that holds no agent scope, written as a literal path or \
+         `$TMPDIR/…`, for example `kanbanr --data-dir {temp_shown}/walk init …`), never another"
+    );
     let commands = simple_commands(command);
+    // The caller is told apart by CLAUDECODE and the hook payload: an agent never sets, clears or
+    // exports either, nor the coordinator's stamp (DEF-027).
+    let names_caller = |w: &String| w.contains("CLAUDECODE") || w.contains("KANBANR_CALLER");
+    if commands.iter().any(|(env, words)| {
+        env.iter().any(names_caller)
+            || (words.first().is_some_and(|f| {
+                ["export", "unset", "declare", "typeset", "readonly", "-u"].contains(&f.as_str())
+            }) && words.iter().any(names_caller))
+            || words
+                .windows(2)
+                .any(|w| w[0] == "-u" && names_caller(&w[1]))
+    }) {
+        return refuse("who is calling is Claude Code's to say, never set or cleared by an agent");
+    }
+    // `$TMPDIR` is where this guard reads the temporary directory from: an agent that reassigns it
+    // would make the guard and the shell disagree about where `$TMPDIR/…` points (DEF-015).
+    let names_tmpdir = |w: &String| w == "TMPDIR" || w.starts_with("TMPDIR=");
+    if commands.iter().any(|(env, words)| {
+        env.iter().any(names_tmpdir)
+            || (words.first().is_some_and(|f| {
+                ["export", "unset", "declare", "typeset", "readonly"].contains(&f.as_str())
+            }) && words.iter().any(names_tmpdir))
+    }) {
+        return refuse(
+            "$TMPDIR is what this guard reads the temporary directory from; do not change it",
+        );
+    }
     let runs_tool = commands
         .iter()
         .any(|(_, w)| is_kanbanr(w) || git_call(w).is_some());
     let mut dir = base.to_path_buf();
+    let (mut temp_board, mut names_a_project) = (false, false);
     for (env, words) in &commands {
         if is_kanbanr(words) {
             let sub = words[1..].iter().find(|w| !w.starts_with('-'));
             if sub.is_some_and(|s| s == "sync") {
                 return Some(kanbanr_core::agentscope::push_refusal(&id));
             }
-            if words
-                .iter()
-                .any(|w| w == "--data-dir" || w.starts_with("--data-dir="))
-                || env.iter().any(|e| {
-                    e.starts_with("KANBANR_DATA_DIR=") || e.starts_with("KANBANR_PROJECT=")
-                })
-            {
-                return refuse(
-                    "kanbanr runs on the board and project this worktree names, never another",
-                );
+        }
+        for d in named_data_dirs(env, words) {
+            if resolve(&dir, &d).is_some_and(|p| kanbanr_core::agentscope::is_temporary_board(&p)) {
+                temp_board = true;
+            } else {
+                return refuse(&board_refusal);
             }
         }
-        if words.first().is_some_and(|w| w == "export")
-            && words
-                .iter()
-                .any(|w| w.starts_with("KANBANR_DATA_DIR") || w.starts_with("KANBANR_PROJECT"))
-        {
-            return refuse(
-                "kanbanr runs on the board and project this worktree names, never another",
-            );
+        if names_project(env, words) {
+            names_a_project = true;
         }
         if let Some(call) = git_call(words) {
             if call.sub == Some("push") {
@@ -6769,9 +7415,10 @@ fn scoped_command_refusal(
             }
             for d in &call.dirs {
                 if !resolve(&dir, d).is_some_and(|p| inside(&p)) {
-                    return refuse(
-                        "git runs in this worktree, never in another repository or checkout",
-                    );
+                    return refuse(&format!(
+                        "git runs in this worktree or under {temp_shown}, never in another \
+                         repository or checkout"
+                    ));
                 }
             }
         }
@@ -6782,17 +7429,9 @@ fn scoped_command_refusal(
             match words.get(1) {
                 Some(to) => match resolve(&dir, to) {
                     Some(next) if inside(&next) => dir = next,
-                    _ => {
-                        return refuse(
-                            "git and kanbanr run in this worktree, never from another folder",
-                        );
-                    }
+                    _ => return refuse(&folder_refusal),
                 },
-                None => {
-                    return refuse(
-                        "git and kanbanr run in this worktree, never from another folder",
-                    );
-                }
+                None => return refuse(&folder_refusal),
             }
         }
         if let Some(board) = board {
@@ -6828,6 +7467,12 @@ fn scoped_command_refusal(
             }
         }
     }
+    if names_a_project && !temp_board {
+        return refuse(&format!(
+            "{board_refusal}. `KANBANR_PROJECT` is for a temporary board: give `--data-dir \
+             {temp_shown}/…` in the same command"
+        ));
+    }
     None
 }
 
@@ -6856,7 +7501,15 @@ fn run_scope(cli: &Cli, client: &Backend, cmd: &ScopeCmd) -> anyhow::Result<()> 
             let hooks_ready = root
                 .as_deref()
                 .is_some_and(|r| scm::hooks_installed(r) && scm::push_hook_installed(r));
-            let mut body = json!({ "role": role, "item": code, "hooks_ready": hooks_ready });
+            let claude_hooks_ready = root
+                .as_deref()
+                .is_some_and(hooks::identifying_hooks_registered);
+            let mut body = json!({
+                "role": role,
+                "item": code,
+                "hooks_ready": hooks_ready,
+                "claude_hooks_ready": claude_hooks_ready,
+            });
             if let Some(d) = duration {
                 body["hours"] = json!(parse_hours(d)?);
             }
@@ -7047,7 +7700,9 @@ fn run_scope(cli: &Cli, client: &Backend, cmd: &ScopeCmd) -> anyhow::Result<()> 
             )?;
             print_scope(
                 &resp,
-                format!("revoked {id}: nothing more is recorded under it"),
+                format!(
+                    "revoked {id}: nothing more is recorded under it\nthe agent's next tool call is refused"
+                ),
             )
         }
         ScopeCmd::Renew { id, duration } => {
@@ -7364,6 +8019,20 @@ fn run_doctor(cli: &Cli, client: &Backend, all_projects: bool) -> anyhow::Result
             print_issue(i);
         }
     }
+    // What later stages will ask: counts, not warnings (DEF-021).
+    let ahead = report["ahead"].as_array().cloned().unwrap_or_default();
+    if !ahead.is_empty() {
+        println!("Later stages will ask (not warnings; kanbanr check lists them):");
+        for a in &ahead {
+            println!(
+                "  {} {}: {} item(s), {} thing(s)",
+                a["project"].as_str().unwrap_or(""),
+                a["stage"].as_str().unwrap_or(""),
+                a["items"],
+                a["things"]
+            );
+        }
+    }
     if issues.is_empty() {
         println!("clean: no integrity issues found");
     }
@@ -7497,6 +8166,22 @@ fn print_write(cli: &Cli, resp: &str, human: String) {
         println!("{human}");
     }
     print_coverage_warnings(cli, resp);
+}
+
+/// The warnings a release-configuration write returned (FTR-020), one per line on stderr. Silent
+/// with `--json`, which carries them as `warnings`.
+fn print_release_warnings(cli: &Cli, warnings: &Value) {
+    if cli.json {
+        return;
+    }
+    for w in warnings
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        eprintln!("warning: {w}");
+    }
 }
 
 /// The coverage rules a write now fails (FEAT-197), on stderr: the first ten, then how many more
@@ -8233,10 +8918,38 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             }
             Ok(())
         }
+        ConfigCmd::CommitGates { names } => {
+            let resp = client.write(
+                Method::Put,
+                &format!("/projects/{p}/config/commit-gates"),
+                Some(json!({ "gates": names })),
+            )?;
+            let said = if names.is_empty() {
+                "commit gates cleared".to_string()
+            } else {
+                format!("commit gates: {}", names.join(", "))
+            };
+            print_write(cli, &resp, said);
+            Ok(())
+        }
+        ConfigCmd::TagGate { name } => {
+            let resp = client.write(
+                Method::Put,
+                &format!("/projects/{p}/config/tag-gate"),
+                Some(json!({ "gate": name })),
+            )?;
+            let said = match name {
+                Some(n) => format!("tag gate: {n}"),
+                None => "tag gate cleared: the first commit gate judges".to_string(),
+            };
+            print_write(cli, &resp, said);
+            Ok(())
+        }
         ConfigCmd::ReleaseStage {
             stage,
             purpose,
             requires,
+            after,
             on_enter,
             clear,
         } => {
@@ -8261,6 +8974,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 Some(obj(vec![
                     ("purpose", purpose.clone().map(|x| json!(x))),
                     ("requires", list(requires)),
+                    ("after", list(after)),
                     ("on_enter", list(on_enter)),
                     ("clear", clear.then(|| json!(true))),
                 ])),
@@ -8272,6 +8986,19 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             };
             print_write(cli, &resp, said);
             if !cli.json {
+                // The route returns the stages; the one just set says whether it does nothing.
+                let rows: Vec<Value> = serde_json::from_str(&resp)?;
+                if let Some(row) = rows
+                    .iter()
+                    .find(|r| r["name"] == stage.as_str() && r["inert"] == true)
+                {
+                    eprintln!(
+                        "warning: {}",
+                        kanbanr_core::config::Cadence::inert_warning(
+                            row["name"].as_str().unwrap_or_default()
+                        )
+                    );
+                }
                 print_release_stages(cli, client, &p)?;
             }
             Ok(())
@@ -8358,8 +9085,10 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             integration_branch,
             main_branch,
             git_model,
+            has_ci,
         } => {
             let body = obj(vec![
+                ("has_ci", has_ci.as_deref().map(|v| json!(v == "on"))),
                 ("git_model", git_model.as_deref().map(|v| json!(v == "on"))),
                 ("sprints", sprints.as_deref().map(|v| json!(v == "on"))),
                 ("releases", releases.as_deref().map(|v| json!(v == "on"))),
@@ -8409,6 +9138,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                     v["estimate_unit"].as_str().unwrap_or("days")
                 ),
             );
+            print_release_warnings(cli, &v["warnings"]);
             Ok(())
         }
         ConfigCmd::Show => {
@@ -8713,6 +9443,125 @@ fn merge_version_files(current: &Value, flags: &[String], clear: bool) -> Vec<Va
     files
 }
 
+fn run_gate(cli: &Cli, client: &Backend, cmd: &GateCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    match cmd {
+        GateCmd::Record {
+            name,
+            passed,
+            failed: _,
+            commit,
+            url,
+            note,
+            by,
+            source,
+        } => {
+            let repo = code_repo();
+            let root = repo.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "this is not inside a code repository, so there is no commit to record"
+                )
+            })?;
+            // A pass with no commit named is about HEAD, which a dirty tree makes untrue.
+            if *passed && commit.is_none() && !coderepo::is_clean(root) {
+                anyhow::bail!(
+                    "the working tree has uncommitted changes, so a pass would not be about HEAD: \
+                     commit them, or name the commit with --commit"
+                );
+            }
+            let rev = commit.as_deref().unwrap_or("HEAD");
+            let sha = coderepo::rev_parse(root, rev)
+                .map_err(|e| anyhow::anyhow!("'{rev}' is not a commit here: {e}"))?;
+            let by = verdict_author(cli, by.as_ref())?;
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/gate-results"),
+                Some(obj(vec![
+                    ("name", Some(json!(name))),
+                    ("commit", Some(json!(sha))),
+                    ("passed", Some(json!(*passed))),
+                    ("by", Some(json!(by))),
+                    ("url", url.clone().map(|u| json!(u))),
+                    ("note", note.clone().map(|n| json!(n))),
+                    ("source", source.clone().map(|s| json!(s))),
+                ])),
+            )?;
+            print_write(
+                cli,
+                &resp,
+                format!(
+                    "gate {name} {} on {}, recorded by {by}",
+                    if *passed { "passed" } else { "failed" },
+                    &sha[..7]
+                ),
+            );
+            Ok(())
+        }
+        GateCmd::List { name, commit } => {
+            let sha = match commit {
+                Some(rev) => {
+                    let root = code_repo().ok_or_else(|| {
+                        anyhow::anyhow!("--commit needs a code repository to resolve '{rev}' in")
+                    })?;
+                    Some(
+                        coderepo::rev_parse(&root, rev)
+                            .map_err(|e| anyhow::anyhow!("'{rev}' is not a commit here: {e}"))?,
+                    )
+                }
+                None => None,
+            };
+            let mut q: Vec<String> = Vec::new();
+            if let Some(n) = name {
+                q.push(format!("name={}", urlencode_segment(n)));
+            }
+            if let Some(c) = &sha {
+                q.push(format!("commit={c}"));
+            }
+            let path = if q.is_empty() {
+                format!("/projects/{p}/gate-results")
+            } else {
+                format!("/projects/{p}/gate-results?{}", q.join("&"))
+            };
+            let resp = client.get(&path)?;
+            let mut rows: Vec<Value> = serde_json::from_str(&resp)?;
+            rows.reverse();
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else if rows.is_empty() {
+                println!("(no gate results recorded)");
+            } else {
+                for r in &rows {
+                    let g = |k: &str| r[k].as_str().unwrap_or("").to_string();
+                    let commit = g("commit");
+                    let mut line = format!(
+                        "{:<10} {:<6} {}  {}  {}",
+                        g("name"),
+                        if r["passed"].as_bool().unwrap_or(false) {
+                            "passed"
+                        } else {
+                            "FAILED"
+                        },
+                        &commit[..commit.len().min(7)],
+                        g("at"),
+                        g("by"),
+                    );
+                    if g("source") == "local" {
+                        line.push_str("  (local)");
+                    }
+                    if !g("url").is_empty() {
+                        line.push_str(&format!("  {}", g("url")));
+                    }
+                    if !g("note").is_empty() {
+                        line.push_str(&format!("  - {}", g("note")));
+                    }
+                    println!("{line}");
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     match cmd {
@@ -8720,7 +9569,41 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             target,
             name,
+            patch_of: Some(parent),
+            from_failed_tag: true,
+            link,
+            notes,
+        } => {
+            let _ = (target, name);
+            let by = verdict_author(cli, None)?;
+            let resp = client.write_in(
+                Method::Post,
+                &format!(
+                    "/projects/{p}/releases/{}/patch-from-tag",
+                    urlencode_segment(parent)
+                ),
+                Some(obj(vec![
+                    ("version", Some(json!(version))),
+                    ("by", Some(json!(by))),
+                    ("link", link.clone().map(|l| json!(l))),
+                    ("notes", notes.clone().map(|n| json!(n))),
+                ])),
+                code_repo().as_deref(),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            let said = format!(
+                "added {version}, a patch of {parent}: defect {} filed, {} planned, {parent} superseded",
+                v["defect"].as_str().unwrap_or_default(),
+                v["planned"].as_array().map_or(0, Vec::len)
+            );
+            print_write(cli, &resp, said);
+        }
+        ReleaseCmd::Add {
+            version,
+            target,
+            name,
             patch_of,
+            ..
         } => {
             let by = match patch_of {
                 Some(_) => Some(verdict_author(cli, None)?),
@@ -8758,6 +9641,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             by,
             plan: true,
             fetch,
+            ..
         } => {
             let _ = by;
             print_release_plan(
@@ -8792,6 +9676,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             stage,
             reason,
+            note,
             by,
             plan: false,
             ..
@@ -8802,7 +9687,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 &p,
                 version,
                 stage.as_deref(),
-                reason.as_deref(),
+                reason.as_deref().or(note.as_deref()),
                 by.as_ref(),
             )?;
         }
@@ -9298,8 +10183,23 @@ fn print_release_plan(
             t["subject"].as_str().unwrap_or_default()
         );
     }
+    if let Some(t) = plan["tag"].as_object() {
+        let sha = t["commit"].as_str().unwrap_or_default();
+        let sha = &sha[..sha.len().min(7)];
+        let gate = t["gate"].as_str().unwrap_or_default();
+        match t["state"].as_str().unwrap_or_default() {
+            "none" => println!("  tag {sha}: no {gate} result recorded since the tag was made"),
+            state => println!(
+                "  tag {sha}: {gate} {state}{}",
+                t["result"]["by"]
+                    .as_str()
+                    .map(|b| format!(" (recorded by {b})"))
+                    .unwrap_or_default()
+            ),
+        }
+    }
     let preview = plan["preview"].as_array().cloned().unwrap_or_default();
-    if plan["cut"] == true {
+    if plan["ships"] == true {
         let ships: Vec<&str> = preview
             .iter()
             .filter(|c| c["ships"] == true)
@@ -9369,13 +10269,29 @@ fn print_release_stages(cli: &Cli, client: &Backend, p: &str) -> anyhow::Result<
         if s["cut"] == true {
             note.push("the cut");
         }
+        if s["after_cut"] == true {
+            note.push("confirmed by you");
+        }
         if s["declared"] != true {
             note.push("default");
+        }
+        if s["inert"] == true {
+            note.push("does nothing");
+        }
+        let mut requires = names(&s["requires"]);
+        if let Some(after) = s["after"].as_array().filter(|a| !a.is_empty()) {
+            let after: Vec<&str> = after.iter().filter_map(Value::as_str).collect();
+            let text = format!("after {}", after.join(", "));
+            requires = if requires == "—" {
+                text
+            } else {
+                format!("{requires}, {text}")
+            };
         }
         println!(
             "{:<14} {:<34} {:<30} {}",
             s["name"].as_str().unwrap_or_default(),
-            names(&s["requires"]),
+            requires,
             names(&s["on_enter"]),
             note.join(", ")
         );
@@ -9845,6 +10761,147 @@ fn print_board(project: &Project) {
 mod tests {
     use super::*;
 
+    /// The text between `from` and `to` in `source` (to the end when `to` is None).
+    fn between<'a>(source: &'a str, from: &str, to: Option<&str>) -> &'a str {
+        let start = source.find(from).unwrap_or_else(|| panic!("no '{from}'"));
+        let rest = &source[start..];
+        match to {
+            Some(to) => {
+                &rest[..rest[from.len()..]
+                    .find(to)
+                    .map_or(rest.len(), |i| i + from.len())]
+            }
+            None => rest,
+        }
+    }
+
+    /// FTR-002 R-9: the gate commands, messages, page and guide text say CI, the run or the
+    /// remote, and name no CI product, git host or workflow file.
+    #[test]
+    fn gate_text_names_no_ci_product() {
+        let core = include_str!("../../kanbanr-core/src/gates.rs");
+        let releases = include_str!("../../kanbanr-core/src/releases.rs");
+        let gates_rs = between(core, "//! Gate results", Some("#[cfg(test)]"));
+        let gate_arm = between(releases, "fn gate_passed(", Some("fn today_ymd"));
+        let this = include_str!("main.rs");
+        let help = between(this, "enum GateCmd {", Some("enum ReleaseCmd"));
+        let run = between(this, "fn run_gate(", Some("fn run_release("));
+        let page = include_str!("../../../../web/src/pages/ReleasesPage.tsx");
+        let form = between(
+            page,
+            "function RecordResult(",
+            Some("function ReleaseNotesSection"),
+        );
+        let guide = include_str!("../../../../docs/src/using/processes.md");
+        let guide = between(guide, "### Gate results", Some("\n## "));
+        let cli_ref = include_str!("../../../../docs/src/reference/cli.md");
+        let named = [
+            "github",
+            "gitlab",
+            "bitbucket",
+            "jenkins",
+            "circleci",
+            "travis",
+            "buildkite",
+            "teamcity",
+            "azure",
+            ".github",
+            "workflow file",
+            "workflows/",
+        ];
+        let mut found = Vec::new();
+        for (where_, text) in [
+            ("gates.rs", gates_rs),
+            ("the gate_passed judgement", gate_arm),
+            ("GateCmd help", help),
+            ("gate command messages", run),
+            ("the Record result form", form),
+            ("the gate guide section", guide),
+        ] {
+            let lower = text.to_lowercase();
+            for n in named {
+                if lower.contains(n) {
+                    found.push(format!("{where_} names '{n}'"));
+                }
+            }
+        }
+        for line in cli_ref.lines().filter(|l| l.contains("kanbanr gate ")) {
+            let lower = line.to_lowercase();
+            for n in named {
+                if lower.contains(n) {
+                    found.push(format!("the cli reference names '{n}': {line}"));
+                }
+            }
+        }
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    /// FTR-024 R-4, R-5: the guard refuses the commands that record or withdraw a verdict, and
+    /// lets every other kanbanr command through.
+    #[test]
+    fn the_guard_refuses_a_verdict_claude_would_record() {
+        let url = "http://h:1/p/p/review";
+        for refused in [
+            "kanbanr approve FTR-1 --rev x",
+            "kanbanr --project p signoff FTR-1 design-review",
+            "cd x && kanbanr adr accept ADR-1",
+            "kanbanr adr reject ADR-1",
+            "kanbanr ratify FTR-1",
+            "kanbanr release promote v1",
+            "kanbanr release cut v1",
+            "kanbanr unapprove FTR-1 --reason r",
+            "kanbanr signoff FTR-1 design-review --withdraw --reason r",
+            "kanbanr release add v1.0.1 --patch-of v1.0.0 --from-failed-tag",
+            "kanbanr gate record v1 smoke --result pass",
+        ] {
+            let why = verdict_refusal(refused, url).unwrap_or_else(|| panic!("passed: {refused}"));
+            assert!(why.contains("http://h:1/p/p/"), "{why}");
+        }
+        assert!(
+            verdict_refusal("kanbanr release cut v1", url)
+                .unwrap()
+                .contains("/p/p/releases")
+        );
+        assert!(
+            verdict_refusal("kanbanr gate record v1 smoke", url)
+                .unwrap()
+                .contains("/p/p/releases")
+        );
+        for allowed in [
+            "kanbanr review --pending",
+            "kanbanr release promote v1 --plan",
+            "kanbanr release add v1.0.1 --patch-of v1.0.0",
+            "kanbanr config tag-gate ci",
+            "kanbanr sprint close SP-1",
+            "kanbanr release plan v1 FTR-1",
+            "kanbanr signoff --help",
+            "kanbanr adr list",
+            "echo \"kanbanr approve\"",
+            "git commit -m \"kanbanr approve\"",
+        ] {
+            assert!(
+                verdict_refusal(allowed, url).is_none(),
+                "refused: {allowed}"
+            );
+        }
+        let heredoc = without_heredoc_bodies("cat <<EOF\nkanbanr approve X\nEOF\n");
+        assert!(verdict_refusal(&heredoc, url).is_none());
+    }
+
+    /// FTR-024 R-3: the monitor's status reads `writes` from its meta, and names the pages only
+    /// when a project is known.
+    #[test]
+    fn monitor_status_reads_writes_from_meta() {
+        let down = monitor_status("http://h:1", None, None);
+        assert!(!down.up && !down.writes && down.review.is_none() && down.releases.is_none());
+        let ro = monitor_status("http://h:1", Some("p"), Some(&json!({"writes": false})));
+        assert!(ro.up && !ro.writes);
+        let rw = monitor_status("http://h:1", Some("my p"), Some(&json!({"writes": true})));
+        assert!(rw.up && rw.writes);
+        assert_eq!(rw.review.as_deref(), Some("http://h:1/p/my%20p/review"));
+        assert_eq!(rw.releases.as_deref(), Some("http://h:1/p/my%20p/releases"));
+    }
+
     /// FEAT-212 R-8: `config release-prepare --version-file` keeps several entries for one path,
     /// each with its own match, in order, through the config and back; an exact duplicate is kept
     /// once, and `--clear-version-files` clears them all.
@@ -10233,5 +11290,480 @@ Refs: kanbanr:FEAT-082/R-1""#;
         );
         // An editor commit has no inline message; the commit-msg hook covers that one.
         assert_eq!(inline_message("git commit"), None);
+    }
+
+    fn scope_for(item: &str, revoked: bool) -> kanbanr_core::agentscope::Scope {
+        kanbanr_core::agentscope::Scope {
+            id: "SC-001".into(),
+            project: "shop".into(),
+            role: kanbanr_core::agentscope::Role::Build,
+            item: item.into(),
+            operations: kanbanr_core::agentscope::Role::Build.operations(),
+            branch: Some("agent-1".into()),
+            base: None,
+            issued_by: "V".into(),
+            issued_at: "2099-01-01T00:00:00Z".into(),
+            expires_at: "2099-01-02T00:00:00Z".into(),
+            note: String::new(),
+            worktree: Some(".claude/worktrees/agent-1".into()),
+            claimed_at: Some("2099-01-01T00:01:00Z".into()),
+            revoked_at: revoked.then(|| "2099-01-01T01:00:00Z".to_string()),
+            revoked_by: revoked.then(|| "V".to_string()),
+            revoked_reason: revoked.then(|| "done".to_string()),
+            extra: Default::default(),
+        }
+    }
+
+    /// A project folder with an agent's worktree under `.claude/worktrees`, and a board beside it
+    /// holding one build scope bound to that worktree (revoked when `revoked`). Returns the
+    /// project folder, the worktree and the board.
+    fn guard_fixture(tag: &str, revoked: bool) -> (PathBuf, PathBuf, PathBuf) {
+        let tmp = std::env::temp_dir().join(format!("kanbanr-guard-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let (work, board) = (tmp.join("work"), tmp.join("board"));
+        std::fs::create_dir_all(&work).unwrap();
+        let git = |args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&work)
+                .env("GIT_AUTHOR_NAME", "T")
+                .env("GIT_AUTHOR_EMAIL", "t@x")
+                .env("GIT_COMMITTER_NAME", "T")
+                .env("GIT_COMMITTER_EMAIL", "t@x")
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+        git(&[
+            "worktree",
+            "add",
+            "-q",
+            ".claude/worktrees/agent-1",
+            "-b",
+            "agent-1",
+        ]);
+        let wt = work.join(".claude/worktrees/agent-1");
+        let shop = board.join("projects").join("shop");
+        std::fs::create_dir_all(&shop).unwrap();
+        std::fs::write(shop.join("config.yaml"), "name: shop\n").unwrap();
+        let scope = scope_for("FEAT-001", revoked);
+        std::fs::write(
+            shop.join("scopes.yaml"),
+            kanbanr_core::yaml::to_string(&[scope]).unwrap(),
+        )
+        .unwrap();
+        let wt_info = kanbanr_core::coderepo::worktree_facts(&wt).unwrap();
+        kanbanr_core::agentscope::write_pointer(
+            &wt_info.git_dir,
+            &kanbanr_core::agentscope::PointerFile {
+                scope: "SC-001".into(),
+                project: "shop".into(),
+            },
+        )
+        .unwrap();
+        (work, wt, board)
+    }
+
+    fn bash(cwd: &Path, command: &str, agent: bool) -> Value {
+        let mut v = json!({"tool_input": {"command": command}, "cwd": cwd});
+        if agent {
+            v["agent_id"] = json!("a1b2c3");
+        }
+        v
+    }
+
+    /// DEF-027 R-2: the coordinator's calls are never judged by an agent's scope, wherever the
+    /// shell stands; the way out of the worktree stays open.
+    #[test]
+    fn the_guard_lets_the_coordinator_run_in_an_agent_worktree() {
+        let (work, wt, board) = guard_fixture("coord", false);
+        let allow = |cwd: &Path, c: &str| bash_guard_decision(&bash(cwd, c, false), Some(&board));
+        assert_eq!(
+            allow(&work, "kanbanr task state X TL-001 T1 Completed"),
+            GuardDecision::Allow
+        );
+        assert_eq!(allow(&wt, "ls -la"), GuardDecision::Allow);
+        // The agent is still held to its scope for what the coordinator may do from the project.
+        let sync = bash_guard_decision(&bash(&wt, "kanbanr sync", true), Some(&board));
+        assert!(matches!(sync, GuardDecision::Deny(_)), "{sync:?}");
+        let _ = std::fs::remove_dir_all(work.parent().unwrap());
+    }
+
+    /// DEF-027 R-3: once the scope is revoked every Bash call of its agent is refused, and none of
+    /// the coordinator's.
+    #[test]
+    fn the_guard_denies_an_agent_whose_scope_is_revoked() {
+        let (work, wt, board) = guard_fixture("revoked", true);
+        for c in ["ls", "cargo test", "kanbanr scope here"] {
+            let d = bash_guard_decision(&bash(&wt, c, true), Some(&board));
+            assert!(
+                matches!(&d, GuardDecision::Deny(w) if w.contains("was revoked by V")),
+                "{c}: {d:?}"
+            );
+        }
+        assert_eq!(
+            bash_guard_decision(&bash(&wt, "ls", false), Some(&board)),
+            GuardDecision::Allow
+        );
+        let _ = std::fs::remove_dir_all(work.parent().unwrap());
+    }
+
+    /// DEF-027 R-4: the refusal says the shell is in that worktree and names the way out.
+    #[test]
+    fn the_guard_names_the_way_out_of_an_agent_worktree() {
+        let (work, wt, board) = guard_fixture("wayout", false);
+        let d = bash_guard_decision(&bash(&wt, "git status", false), Some(&board));
+        let GuardDecision::Deny(why) = d else {
+            panic!("{d:?}")
+        };
+        assert!(why.contains("standing in the agent worktree"), "{why}");
+        assert!(
+            why.contains("agent-1") && why.contains("cd <project folder>"),
+            "{why}"
+        );
+        assert!(why.contains("git -C <path>"), "{why}");
+        // Leaving first, or only leaving, is allowed; so is looking inside with -C.
+        for c in [
+            format!("cd {} && git status", work.display()),
+            format!("cd {}", work.display()),
+            format!("git -C {} status", wt.display()),
+        ] {
+            assert_eq!(
+                bash_guard_decision(&bash(&wt, &c, false), Some(&board)),
+                GuardDecision::Allow,
+                "{c}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(work.parent().unwrap());
+    }
+
+    /// DEF-027 R-5: a top-level cd or pushd into an agent worktree is refused; a subshell, `-C` and
+    /// the tools' own directory flags pass.
+    #[test]
+    fn the_guard_keeps_the_coordinator_out_of_agent_worktrees() {
+        let (work, wt, board) = guard_fixture("goingin", false);
+        let w = wt.display();
+        for c in [
+            format!("cd {w}"),
+            format!("pushd {w}"),
+            format!("cd {w} && make"),
+            "cd .claude/worktrees/agent-1 && make".to_string(),
+        ] {
+            let d = bash_guard_decision(&bash(&work, &c, false), Some(&board));
+            let GuardDecision::Deny(why) = d else {
+                panic!("{c}: {d:?}")
+            };
+            assert!(
+                why.contains("git -C <path>") && why.contains("subshell"),
+                "{why}"
+            );
+        }
+        for c in [
+            format!("(cd {w} && make)"),
+            format!("git -C {w} log"),
+            format!("make -C {w}"),
+            format!("npm --prefix {w} test"),
+            "cd api && cargo test".to_string(),
+        ] {
+            assert_eq!(
+                bash_guard_decision(&bash(&work, &c, false), Some(&board)),
+                GuardDecision::Allow,
+                "{c}"
+            );
+        }
+        // An agent may not dress as someone else.
+        for c in [
+            "unset CLAUDECODE",
+            "export CLAUDECODE=",
+            "CLAUDECODE= kanbanr scope here",
+            "env -u CLAUDECODE ls",
+            "KANBANR_CALLER=coordinator ls",
+        ] {
+            let d = bash_guard_decision(&bash(&wt, c, true), Some(&board));
+            assert!(matches!(d, GuardDecision::Deny(_)), "{c}: {d:?}");
+        }
+        let _ = std::fs::remove_dir_all(work.parent().unwrap());
+    }
+
+    /// A project with two items, each tracking one test.
+    fn capture_project() -> Project {
+        let mut p = Project {
+            id: "shop".into(),
+            config: kanbanr_core::ProjectConfig::default_for("shop"),
+            milestones: vec![],
+            features: vec![],
+        };
+        for (code, test) in [("FEAT-001", "cart::keeps"), ("FEAT-002", "pay::charges")] {
+            let def: kanbanr_core::models::FeatureDefinition =
+                kanbanr_core::yaml::from_str(&format!(
+                    "requirements:\n  - id: R-1\n    text: x\n    tests:\n      - name: {test}\n"
+                ))
+                .unwrap();
+            let f: kanbanr_core::FeatureItem = kanbanr_core::yaml::from_str(&format!(
+                "code: {code}\ntitle: t\nstatus: In Progress\nmilestone: MS-001\n\
+                 created_at: '2026-01-01T00:00:00Z'\nupdated_at: '2026-01-01T00:00:00Z'\n"
+            ))
+            .unwrap();
+            p.features.push(kanbanr_core::FeatureItem {
+                definition: Some(def),
+                ..f
+            });
+        }
+        p
+    }
+
+    fn test_run() -> Value {
+        json!({"tool_response": {"stdout": "test cart::keeps ... ok\ntest pay::charges ... ok\n"}, "cwd": "/x"})
+    }
+
+    fn build_scope(item: &str) -> kanbanr_core::agentscope::Scope {
+        scope_for(item, false)
+    }
+
+    /// DEF-027 R-6: a hook finds its board and project from the folder it is registered for, not
+    /// from the folder the shell stands in.
+    #[test]
+    fn capture_finds_its_board_from_the_project_folder() {
+        let tmp = std::env::temp_dir().join(format!("kanbanr-hookdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let (project_dir, elsewhere) = (tmp.join("shop"), tmp.join("elsewhere").join("wt"));
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(
+            project_dir.join(".kanbanr"),
+            format!("project: shop\ndata_dir: {}\n", tmp.join("board").display()),
+        )
+        .unwrap();
+        let payload = json!({"cwd": elsewhere});
+        let found =
+            |project_dir: Option<String>, env_data: Option<&str>, env_project: Option<&str>| {
+                hook_board_in(&payload, project_dir, env_data, env_project, None)
+            };
+        let dir = Some(project_dir.display().to_string());
+        let (data, name) = found(dir.clone(), None, None);
+        assert_eq!(data.as_deref(), Some(tmp.join("board").as_path()));
+        assert_eq!(name.as_deref(), Some("shop"));
+        // Without the registered folder, the payload's folder is what is left: no marker there.
+        let (data, _) = found(None, None, None);
+        assert_eq!(data, None);
+        // The variables still win.
+        let (data, name) = found(dir.clone(), Some("/mine"), Some("mine"));
+        assert_eq!((data, name), (None, None));
+        assert_eq!(hook_dir_in(&payload, dir), project_dir);
+        assert_eq!(
+            hook_dir_in(&payload, Some("/no/such/folder".into())),
+            elsewhere
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// DEF-027 R-6: the coordinator's run is recorded for every tracked test, whatever folder it ran
+    /// in and whatever scope that folder holds.
+    #[test]
+    fn capture_records_a_coordinators_run_in_a_worktree() {
+        use kanbanr_core::agentscope::{Caller, ProcessScope};
+        let p = capture_project();
+        let ops = capture_plan(
+            &test_run(),
+            &p,
+            &ProcessScope::Unscoped,
+            Caller::of_hook(&test_run()),
+            Some("abc"),
+        );
+        assert_eq!(ops.len(), 2, "{ops:?}");
+        // Even if the folder's scope is dead or another item's, the coordinator's run stands.
+        let refused = ProcessScope::Refused {
+            why: "x".into(),
+            may_claim: false,
+        };
+        assert_eq!(
+            capture_plan(&test_run(), &p, &refused, Caller::Coordinator, Some("abc")).len(),
+            2
+        );
+        let theirs = ProcessScope::Scoped(build_scope("FEAT-001"));
+        assert_eq!(
+            capture_plan(&test_run(), &p, &theirs, Caller::Coordinator, Some("abc")).len(),
+            2
+        );
+    }
+
+    /// DEF-027 R-6: an agent records only its own item's tests, and nothing once its scope is dead.
+    #[test]
+    fn capture_records_only_the_agents_own_item() {
+        use kanbanr_core::agentscope::{Caller, ProcessScope};
+        let p = capture_project();
+        let mut run = test_run();
+        run["agent_id"] = json!("a1");
+        assert_eq!(Caller::of_hook(&run), Caller::Agent);
+        let scope = ProcessScope::Scoped(build_scope("FEAT-001"));
+        let ops = capture_plan(&run, &p, &scope, Caller::Agent, Some("abc"));
+        assert_eq!(ops.len(), 1, "{ops:?}");
+        assert_eq!(ops[0]["test"], "cart::keeps");
+        let dead = ProcessScope::Refused {
+            why: "revoked".into(),
+            may_claim: false,
+        };
+        assert!(capture_plan(&run, &p, &dead, Caller::Agent, Some("abc")).is_empty());
+    }
+
+    /// A scratch worktree's facts: enough for the guard's command rules, which read no folder.
+    fn scratch_wt(root: &Path) -> kanbanr_core::agentscope::WorktreeFacts {
+        kanbanr_core::agentscope::WorktreeFacts {
+            root: root.to_path_buf(),
+            git_dir: root.join(".git"),
+            main_root: root.to_path_buf(),
+            linked: true,
+            branch: Some("feat/DEF-015-x".into()),
+        }
+    }
+
+    /// A folder of its own under the temporary directory, removed when the test ends.
+    struct TempBoard(PathBuf);
+    impl TempBoard {
+        fn new(name: &str) -> Self {
+            let dir = kanbanr_core::agentscope::temp_root()
+                .join(format!("kanbanr-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("projects/shop")).unwrap();
+            TempBoard(dir)
+        }
+    }
+    impl Drop for TempBoard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// DEF-015 R-1: a temporary board, written as a literal path or under `$TMPDIR`, is allowed by
+    /// `--data-dir` and `KANBANR_DATA_DIR`, and `KANBANR_PROJECT` may name a project on it.
+    #[test]
+    fn the_guard_lets_an_agent_use_a_temporary_board() {
+        let b = TempBoard::new("guard-allows");
+        let wt = scratch_wt(Path::new("/work/tree"));
+        let name = b.0.file_name().unwrap().to_string_lossy().into_owned();
+        let at = b.0.display();
+        for command in [
+            format!("kanbanr --data-dir {at} board"),
+            format!("kanbanr --data-dir={at} board"),
+            format!("kanbanr --data-dir {at}/new init walk --no-hooks"),
+            format!("kanbanr --data-dir $TMPDIR/{name} board"),
+            format!("KANBANR_DATA_DIR={at} kanbanr board"),
+            format!("KANBANR_DATA_DIR={at} KANBANR_PROJECT=shop kanbanr board"),
+            format!("KANBANR_PROJECT=shop kanbanr --data-dir {at} board"),
+            format!("export KANBANR_DATA_DIR={at} && kanbanr board"),
+        ] {
+            let got = scoped_command_refusal(&command, Path::new("/work/tree"), &wt, None);
+            assert_eq!(got, None, "{command}");
+        }
+    }
+
+    /// DEF-015 R-2: a real board, any folder outside the temporary directory, a link into the
+    /// temporary directory from outside it, a path the guard cannot resolve, and a project with no
+    /// temporary board are all refused, with the form to use.
+    #[test]
+    fn the_guard_still_refuses_a_real_board_for_an_agent() {
+        let b = TempBoard::new("guard-refuses");
+        let outside = std::env::current_dir().unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, b.0.join("link")).unwrap();
+        let wt = scratch_wt(Path::new("/work/tree"));
+        let at = b.0.display();
+        let real = outside.display();
+        for command in [
+            format!("kanbanr --data-dir {real} board"),
+            "kanbanr --data-dir /elsewhere board".to_string(),
+            format!("kanbanr --data-dir {at}/link board"),
+            "kanbanr --data-dir $(mktemp -d) board".to_string(),
+            "kanbanr --data-dir $HOME/board board".to_string(),
+            "kanbanr --data-dir board".to_string(),
+            "kanbanr --data-dir".to_string(),
+            "KANBANR_DATA_DIR=/elsewhere kanbanr board".to_string(),
+            "export KANBANR_DATA_DIR=/elsewhere".to_string(),
+            "KANBANR_PROJECT=other kanbanr board".to_string(),
+            "export KANBANR_PROJECT=other".to_string(),
+        ] {
+            let why = scoped_command_refusal(&command, Path::new("/work/tree"), &wt, None)
+                .unwrap_or_else(|| panic!("{command} was allowed"));
+            assert!(why.contains("never another"), "{command}: {why}");
+            assert!(why.contains("temporary board"), "{command}: {why}");
+        }
+        let alone = scoped_command_refusal(
+            "KANBANR_PROJECT=other kanbanr board",
+            Path::new("/work/tree"),
+            &wt,
+            None,
+        )
+        .unwrap();
+        assert!(alone.contains("KANBANR_PROJECT"), "{alone}");
+        let tmpdir =
+            scoped_command_refusal("TMPDIR=/ kanbanr board", Path::new("/work/tree"), &wt, None)
+                .expect("refused");
+        assert!(tmpdir.contains("$TMPDIR"), "{tmpdir}");
+        assert!(
+            scoped_command_refusal("export TMPDIR=/", Path::new("/work/tree"), &wt, None).is_some()
+        );
+    }
+
+    /// DEF-015 R-2: a copy of a real board put in the temporary directory holds scopes, so it
+    /// stays governed and the guard refuses it.
+    #[test]
+    fn a_copy_of_the_board_that_holds_scopes_is_not_temporary() {
+        let b = TempBoard::new("guard-copy");
+        std::fs::write(
+            b.0.join("projects/shop")
+                .join(kanbanr_core::agentscope::SCOPES_FILE),
+            "- id: SC-001\n",
+        )
+        .unwrap();
+        let wt = scratch_wt(Path::new("/work/tree"));
+        let command = format!("kanbanr --data-dir {} board", b.0.display());
+        let why = scoped_command_refusal(&command, Path::new("/work/tree"), &wt, None)
+            .expect("a copy that holds scopes is refused");
+        assert!(why.contains("never another"), "{why}");
+    }
+
+    /// DEF-015 R-3: `$TMPDIR` (bare or braced) resolves for `cd` and `git -C`, and any other folder
+    /// is refused with the worktree and the temporary directory named.
+    #[test]
+    fn the_guard_resolves_tmpdir_and_names_where_an_agent_may_work() {
+        let wt = scratch_wt(Path::new("/work/tree"));
+        let base = Path::new("/work/tree");
+        for command in [
+            "cd $TMPDIR/b && kanbanr board",
+            "cd ${TMPDIR}/b && git status",
+            "cd \"$TMPDIR/b\" && git status",
+            "git -C $TMPDIR/b status",
+            "cd $TMPDIR && kanbanr board",
+            "cd /work/tree/sub && git status",
+        ] {
+            assert_eq!(
+                scoped_command_refusal(command, base, &wt, None),
+                None,
+                "{command}"
+            );
+        }
+        let temp = kanbanr_core::agentscope::temp_root();
+        for command in [
+            "cd /usr && git status",
+            "cd $(mktemp -d) && kanbanr board",
+            "cd $TMPDIR/$X && git status",
+            "cd $HOME && git status",
+        ] {
+            let why = scoped_command_refusal(command, base, &wt, None)
+                .unwrap_or_else(|| panic!("{command} was allowed"));
+            assert!(
+                why.contains("never from another folder"),
+                "{command}: {why}"
+            );
+            assert!(why.contains("this worktree"), "{command}: {why}");
+            assert!(
+                why.contains(&temp.display().to_string()),
+                "{command}: {why}"
+            );
+        }
+        let why = scoped_command_refusal("git -C /usr status", base, &wt, None).expect("refused");
+        assert!(why.contains(&temp.display().to_string()), "{why}");
     }
 }

@@ -4,6 +4,12 @@ use crate::models::{FeatureItem, Milestone, TaskState};
 use crate::store::Project;
 use serde::Serialize;
 
+/// "N part(s) added since: keys" for an approval that has only grown (FTR-018).
+fn added_since(def: &crate::models::FeatureDefinition) -> String {
+    let added = def.part_changes().map(|c| c.added).unwrap_or_default();
+    format!("{} part(s) added since: {}", added.len(), added.join(", "))
+}
+
 /// Render an ENTIRE project as one portable markdown bundle: a board summary, the milestones, then
 /// every feature item in full. Good for a snapshot/report or handing the whole plan to Claude.
 pub fn project_to_markdown(project: &Project) -> String {
@@ -232,6 +238,15 @@ pub fn definition_brief(feature: &FeatureItem) -> String {
                 )
             })
             .unwrap_or_default(),
+        crate::models::ApprovalState::Extended => {
+            let approver = def.approval.as_ref();
+            format!(
+                "approved by {} on {}, with {}",
+                approver.map_or("", |a| a.by.as_str()),
+                approver.map_or("", |a| a.at.get(..10).unwrap_or(&a.at)),
+                added_since(def)
+            )
+        }
         crate::models::ApprovalState::Lapsed => {
             "**approval lapsed** — the definition changed after it was approved".to_string()
         }
@@ -250,7 +265,7 @@ pub fn definition_brief(feature: &FeatureItem) -> String {
 /// The definition as markdown: why the item exists, the six dimensions with their gaps named, and
 /// each requirement with its evidence. This is what `kanbanr feature show` prints, which is the
 /// whole of what Claude sees about an item — a field rendered nowhere may as well not exist.
-fn definition_sections(def: &crate::models::FeatureDefinition) -> String {
+fn definition_sections(feature: &FeatureItem, def: &crate::models::FeatureDefinition) -> String {
     let mut out = String::from("## Definition\n\n");
     if def.statement.trim().is_empty() {
         out.push_str("_[MISSING: statement]_\n");
@@ -294,6 +309,16 @@ fn definition_sections(def: &crate::models::FeatureDefinition) -> String {
                 ));
             }
         }
+        crate::models::ApprovalState::Extended => {
+            if let Some(a) = &def.approval {
+                out.push_str(&format!(
+                    "- **Approved** by {} on {}, with {}\n",
+                    a.by,
+                    a.at.get(..10).unwrap_or(&a.at),
+                    added_since(def)
+                ));
+            }
+        }
         crate::models::ApprovalState::Lapsed => {
             out.push_str("- **Approval lapsed** — the definition changed after it was approved\n")
         }
@@ -330,6 +355,8 @@ fn definition_sections(def: &crate::models::FeatureDefinition) -> String {
             continue;
         }
         let current = def.signoff_current(&s.id).is_some();
+        // The definition still matches but the spec the sign-off pinned has moved (FTR-023).
+        let spec_moved = feature.signoff_spec_changed(&s.id).is_some();
         out.push_str(&format!(
             "- **Signed off `{}`** by {} on {}{}{}{}\n",
             s.id,
@@ -345,7 +372,9 @@ fn definition_sections(def: &crate::models::FeatureDefinition) -> String {
             } else {
                 format!(" — {}", s.note)
             },
-            if current {
+            if spec_moved {
+                " — **changed since sign-off**: the spec changed"
+            } else if current {
                 ""
             } else {
                 " — **lapsed**: the definition changed since"
@@ -454,7 +483,7 @@ pub fn to_markdown(
     // The definition, when there is one. Rendered only if present, so every item written before
     // the method keeps producing byte-identical markdown.
     if let Some(def) = feature.definition.as_ref() {
-        out.push_str(&definition_sections(def));
+        out.push_str(&definition_sections(feature, def));
     }
 
     out.push_str("## Specification\n\n");
@@ -607,6 +636,34 @@ mod tests {
     }
 
     /// FTR-001 R-2: a project without releases shows no release line.
+    #[test]
+    fn feature_show_marks_a_design_changed_since_signoff() {
+        let mut f = item("FTR-001", None);
+        f.specification = "## Design\nUse a map.".into();
+        let mut def = crate::models::FeatureDefinition {
+            statement: "Keep a cart".into(),
+            ..Default::default()
+        };
+        def.signoffs.push(crate::models::Signoff {
+            id: "design-review".into(),
+            by: "Ada".into(),
+            at: "2026-11-06T10:00:00Z".into(),
+            rev: def.content_rev(),
+            spec_rev: crate::readiness::spec_pin(&f.specification).1,
+            ..Default::default()
+        });
+        f.definition = Some(def);
+        let md = super::to_markdown(&f, None, None);
+        assert!(md.contains("Signed off `design-review`"), "{md}");
+        assert!(!md.contains("changed since sign-off"), "{md}");
+        f.specification = "## Design\nUse a vec.".into();
+        let md = super::to_markdown(&f, None, None);
+        assert!(
+            md.contains("**changed since sign-off**: the spec changed"),
+            "{md}"
+        );
+    }
+
     #[test]
     fn no_release_line_without_releases() {
         let p = project(false);
