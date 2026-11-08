@@ -100,6 +100,10 @@ Claude gives each agent a scope, which kanbanr enforces. An agent can record its
 results and commit on its branch. It can't move items, approve anything or push. When it finishes,
 Claude reviews the branch and brings you any decisions.
 
+Claude stays in the project folder while an agent works, and looks inside the agent's worktree
+without moving into it (`git -C`), so a scope never gets in your way or Claude's. Revoking an agent's
+scope stops that agent on its next tool call and never restricts you.
+
 ## Who does what
 
 | | You | Claude |

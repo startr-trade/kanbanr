@@ -632,18 +632,24 @@ Then:
   own worktree, never to your checkout;
 - paste the printed brief **verbatim** at the top of the agent's brief. Its first line has the
   agent claim the scope (`kanbanr scope claim SC-…`); from then on kanbanr refuses, and names, every
-  board write, commit and push from that worktree that the scope does not allow;
+  board write, commit and push that agent makes from that worktree that the scope does not allow;
+- **stay in the project folder.** A scope binds the agent it was issued to, never you, but your own
+  shell is kept out of an agent's worktree: never `cd` into an agent's worktree. Look inside with
+  `git -C <path>`, `make -C <path>`, `npm --prefix <path>`, `cargo --manifest-path <path>/Cargo.toml`
+  or a subshell `(cd <path> && …)`. If your shell is already there, `cd` back to the project folder;
+  the Bash guard says so too;
 - add the item, its todo-list and the tasks the agent takes, and nothing that contradicts the
   table;
 - when the agent's work has been reviewed, revoke the scope: `kanbanr scope revoke SC-… --reason
   done`. `kanbanr scope list` shows what is in force; `kanbanr scope renew SC-… --for 4h` extends
-  one;
+  one. Revoking a scope stops the agent on its next tool call and never restricts you;
 - never issue scopes from inside an agent: an agent's worktree refuses it;
 - put your own worktree, for a merge or a finished item, under `.claude/worktrees/` too, with a
   name that does not start `agent-`: only `agent-*` worktrees are refused without a scope.
 
 A build scope needs its item at the build stage and kanbanr's hooks installed
-(`kanbanr git install-hooks`, which adds the pre-push hook). It finds or makes the item branch;
+(`kanbanr git install-hooks`, which adds the pre-push hook, and `kanbanr hooks install`, whose
+Claude Code hooks tell an agent from you). It finds or makes the item branch;
 the claim switches the agent's worktree to it.
 
 As the coordinator you:

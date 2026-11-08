@@ -273,6 +273,11 @@ refused by agent scope SC-001: agents never push. The coordinator reviews the br
 When the agent finishes its tasks, the item stays where it is until you review the branch and move
 it. See [Sub-agents and agent scopes](../using/with-claude.md#sub-agents-and-agent-scopes).
 
+Stay in the project folder. Never `cd` into an agent's worktree: look inside with `git -C <path>`,
+`make -C <path>`, `npm --prefix <path>` or a subshell `(cd <path> && …)`. If your shell is already
+there, `cd` back to the project folder. Revoking a scope (`kanbanr scope revoke SC-…`) stops the
+agent on its next tool call and never restricts you.
+
 ## Releasing
 
 Release in this order, and you won't have to go back. `kanbanr release promote v1.1.0 --plan` shows

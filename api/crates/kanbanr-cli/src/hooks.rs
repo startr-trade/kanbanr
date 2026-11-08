@@ -127,6 +127,38 @@ pub fn plugin_enabled(settings: &Value) -> bool {
         })
 }
 
+/// Are the hooks that tell a sub-agent from the coordinator registered for this project or the
+/// user: the Bash guard, the Write and Edit guard and the capture hook (DEF-027)? Each may sit in
+/// the project's `settings.json` or `settings.local.json` or the user's `settings.json`, or the
+/// kanbanr plugin, which brings them, is enabled. A scope is told apart from its agent by them.
+pub fn identifying_hooks_registered(project_root: &Path) -> bool {
+    let mut files = vec![
+        settings_path(&project_config_dir(project_root)),
+        project_config_dir(project_root).join("settings.local.json"),
+    ];
+    files.extend(claude_dir().map(|d| settings_path(&d)));
+    let all: Vec<Value> = files
+        .iter()
+        .filter_map(|f| std::fs::read_to_string(f).ok())
+        .filter_map(|raw| serde_json::from_str(&raw).ok())
+        .collect();
+    if all.iter().any(plugin_enabled) {
+        return true;
+    }
+    CLI_HOOKS.iter().all(|(event, matcher, command)| {
+        all.iter().any(|settings| {
+            settings["hooks"][event]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|g| g["matcher"].as_str().unwrap_or("") == *matcher)
+                .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
+                .filter_map(|h| h["command"].as_str())
+                .any(|c| c.trim() == *command)
+        })
+    })
+}
+
 /// The script hooks not registered, as `(event, script)`: one event can carry two of them, so the
 /// event alone cannot say which is missing. A registration whose script is gone counts as missing.
 fn missing_scripts(settings: &Value) -> Vec<(&'static str, &'static str)> {

@@ -6,6 +6,17 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A scope binds the agent it was issued to, not whoever stands in its folder (DEF-027).** The
+  coordinator's shell was trapped once it entered an agent's worktree, and revoking the scope
+  trapped it further. A process outside Claude Code is a person, a hook call without an `agent_id`
+  is the coordinator's, and one with an `agent_id` is that agent's; scopes govern agents only. A
+  revoked or expired scope stops its agent's next tool call and frees every other shell. The Bash
+  guard keeps the coordinator out of agents' worktrees and names the way out (`git -C <path>`),
+  test capture finds its board from the project folder and records the coordinator's runs, and
+  `kanbanr scope issue` needs the Claude Code hooks that tell the two apart (`kanbanr hooks install`).
+
 ## [0.5.0] - 2026-11-06
 
 ### Added
