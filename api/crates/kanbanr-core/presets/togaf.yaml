@@ -43,3 +43,10 @@ gates:
     purpose: Released and running.
     requires: [tests_green]
     signoffs: [release]
+# A chore skips the phases whose questions do not fit it; its first move asks why it exists and how
+# it is verified, and the approval and the release sign-off still stand (FTR-019).
+paths:
+  chore:
+    stages: [Vision, Implementation, Migration, Operations]
+    requires: [statement, goals, requirements, ears]
+    method_off: [design, design-review]

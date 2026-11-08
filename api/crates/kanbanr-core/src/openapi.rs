@@ -276,6 +276,29 @@ pub fn public_routes() -> Vec<RouteDoc> {
             response: Response::Json(schema_of::<Vec<crate::releases::CutPreview>>),
         },
         RouteDoc {
+            path: "/api/projects/{project}/gate-results",
+            summary: "The gate results recorded for the project, oldest first: which gate, which \
+                      commit, passed or failed, who and when",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "name",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only this gate's results.",
+                },
+                Param {
+                    name: "commit",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only results for the commit with this hash (or prefix).",
+                },
+            ],
+            response: Response::Json(schema_of::<Vec<crate::gates::GateResult>>),
+        },
+        RouteDoc {
             path: "/api/projects/{project}/releases/{version}/plan",
             summary: "What promoting a release would do, with nothing changed: the button, each \
                       step and condition, what is missing and, for the cut, what ships. The \
@@ -633,7 +656,8 @@ pub fn document() -> Value {
                 be published as v2 under `/api/v2/...`, with v1 kept for a deprecation period. \
                 Routes the daemon serves that are not listed here are internal and may change. \
                 Write routes (`serve --allow-writes`) are not part of this contract. Errors are \
-                `text/plain`. CORS is permissive; there is no authentication.",
+                `text/plain`. The daemon answers only for its own host names and grants no \
+                cross-origin access; there is no authentication.",
             "license": { "name": "MIT OR Apache-2.0", "identifier": "MIT OR Apache-2.0" },
         },
         "paths": paths,

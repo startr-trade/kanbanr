@@ -206,6 +206,50 @@ mod tests {
         d
     }
 
+    /// DEF-027 R-9: the skill tells the coordinator to stay in the project folder and look inside an
+    /// agent's worktree with `git -C`.
+    #[test]
+    fn skill_keeps_the_coordinator_out_of_agent_worktrees() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        let section = skill
+            .split("**Issue a scope before each sub-agent.**")
+            .nth(1)
+            .expect("the skill has the sub-agent scope section")
+            .split("\n## ")
+            .next()
+            .unwrap();
+        for want in [
+            "git -C",
+            "never `cd` into an agent",
+            "project folder",
+            "never restricts you",
+        ] {
+            assert!(
+                section.contains(want),
+                "the sub-agent section says {want:?}"
+            );
+        }
+    }
+
+    /// DEF-015 R-4: the skill tells the coordinator what a temporary board is and the form an agent
+    /// uses to name one.
+    #[test]
+    fn skill_names_the_temporary_board_form() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        for want in ["temporary board", "$TMPDIR", "--data-dir"] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+        assert!(!skill.contains("temporary boards only"));
+    }
+
     /// FEAT-200 R-18: the skill tells Claude how to write diagrams that draw — quote flowchart
     /// labels, plain words in sequence messages, never `end` as an id, `kanbanr doctor` after — and
     /// what a `diagrams_valid` gate asks of it.
@@ -238,6 +282,34 @@ mod tests {
         assert!(skill.contains("`diagrams_valid` gate"));
     }
 
+    /// FTR-023: the skill says a design-review covers the whole spec as it was when given.
+    #[test]
+    fn skill_says_design_review_covers_the_whole_spec() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        assert!(
+            skill.contains("**A design-review covers the whole spec as it was when given.**"),
+            "the skill says a design-review covers the whole spec"
+        );
+    }
+
+    /// DEF-023: the skill says a `--worktree` scope is bound at once and its brief has no claim step.
+    #[test]
+    fn skill_says_a_worktree_flag_binds_the_scope() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        assert!(
+            skill.contains("--worktree") && skill.contains("no claim step"),
+            "the skill says --worktree binds the scope and the brief has no claim step"
+        );
+    }
+
     /// FEAT-197 R-16 (its automatable half): the skill says when to list the view docs, index a
     /// new ADR, fix coverage warnings before a move and run doctor before a sprint merge or a cut,
     /// what a `docs_cover` gate asks, and names `config coverage`. Whether the guidance matches the
@@ -259,6 +331,59 @@ mod tests {
         ] {
             assert!(skill.contains(want), "the skill says {want:?}");
         }
+    }
+
+    /// The skill's text.
+    fn skill_md() -> String {
+        SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap()
+    }
+
+    /// FTR-024 R-1, R-2: every verdict goes to the Review or Releases page, with what is waiting
+    /// said in one message; with no monitor on writes Claude offers to start one, never records.
+    #[test]
+    fn skill_sends_decisions_to_the_monitor() {
+        let skill = skill_md();
+        for want in [
+            "## Agreement before work: decided on the pages",
+            "You never record a verdict, and never ask for one in a plan or a question",
+            "kanbanr open --check",
+            "kanbanr review --ui",
+        ] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+        for gone in [
+            "work the queue as questions",
+            "The user accepting the plan is their approval",
+        ] {
+            assert!(!skill.contains(gone), "the skill no longer says {gone:?}");
+        }
+    }
+
+    /// FTR-024 R-6: plan mode is for setup and the process, and never while a sub-agent runs.
+    #[test]
+    fn skill_keeps_plan_mode_for_setup_and_process() {
+        let skill = skill_md();
+        assert!(skill.contains("never while a sub-agent is running"));
+        assert!(skill.contains("### A new item: scope it in the conversation"));
+        assert!(!skill.contains("scope it in plan mode"));
+    }
+
+    /// FTR-024 R-7: progress is reported as changes, not events.
+    #[test]
+    fn skill_reports_changes_not_events() {
+        let skill = skill_md();
+        assert!(skill.contains("**report changes, not events.**"));
+        assert!(skill.contains("Never write 'already reported'"));
+    }
+
+    /// FTR-024 R-8: rework goes on the item's todo-list before anyone starts it.
+    #[test]
+    fn skill_adds_rework_before_starting_it() {
+        assert!(skill_md().contains("**put rework on the board before it starts.**"));
     }
 
     /// FEAT-215 R-1: the skill states each sub-agent role's boundaries, and the coordinator's

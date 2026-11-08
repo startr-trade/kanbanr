@@ -262,6 +262,19 @@ impl Condition {
     }
 }
 
+/// The spec as a sign-off pins it, and its hash (FTR-023). Line endings become LF, trailing
+/// whitespace is stripped from each line, and blank lines at the start and end are dropped, so a
+/// file rewritten without any change of words pins the same. An empty spec pins `""`.
+pub fn spec_pin(spec: &str) -> (String, String) {
+    let lines: Vec<&str> = spec.lines().map(str::trim_end).collect();
+    let text = lines.join("\n").trim_matches('\n').to_string();
+    if text.is_empty() {
+        return (String::new(), String::new());
+    }
+    let rev = crate::hash::stable_hash(&text);
+    (text, rev)
+}
+
 /// The sign-offs among `names` that are not recorded against the definition as it stands.
 pub fn signoff_gaps(feature: &FeatureItem, names: &[String]) -> Vec<Gap> {
     let def = feature.definition.as_ref();
@@ -269,9 +282,18 @@ pub fn signoff_gaps(feature: &FeatureItem, names: &[String]) -> Vec<Gap> {
         .iter()
         .filter_map(|name| {
             let latest = def.and_then(|d| d.signoff_latest(name));
-            let current = def.and_then(|d| d.signoff_current(name));
+            let current = feature.signoff_current(name);
             match (latest, current) {
                 (_, Some(_)) => None,
+                (Some(_), None) if feature.signoff_spec_changed(name).is_some() => Some(gap(
+                    Check::Signoff,
+                    None,
+                    &format!("sign-off '{name}': spec changed"),
+                    format!(
+                        "the spec changed after sign-off '{name}' was given, so it no longer \
+                         covers what will be built: the Review page shows what changed"
+                    ),
+                )),
                 // Taken back (FEAT-182): say so, with the reason, rather than "lapsed".
                 (Some(w), None) if !w.verdict.is_given() => Some(gap(
                     Check::Signoff,
@@ -320,12 +342,26 @@ pub struct Context {
     /// What the coverage rules' source docs reference (FEAT-197), read only when the project has
     /// rules and some gate asks for `docs_cover`.
     pub coverage: Option<std::sync::Arc<crate::coverage::Snapshot>>,
+    /// The stages at or after the one holding the `build` role, in workflow order (FTR-018): from
+    /// there on, text added to an approved definition must be decided at once. `None` when no
+    /// stage holds the role, which counts every stage as build onward.
+    pub build_onward: Option<std::collections::BTreeSet<String>>,
     /// The versions of the releases not yet cut, when the project works in releases (DEF-019).
     /// An item planned into one waits for the cut before it reaches its end status.
     pub unshipped_releases: std::collections::BTreeSet<String>,
+    /// The board's git history, shared by every doc judged in this evaluation (DEF-022): opened
+    /// and walked once, on the first doc. Make a new `Context` per evaluation; nothing outlives it.
+    pub history: std::sync::Arc<crate::git::DocHistory>,
 }
 
 impl Context {
+    /// Is `status` the build stage or a later one? With no build role declared, every stage is.
+    pub fn builds(&self, status: &str) -> bool {
+        self.build_onward
+            .as_ref()
+            .is_none_or(|stages| stages.contains(status))
+    }
+
     /// The context of a project, read from its config and side files.
     pub fn load(store: &crate::Store, id: &str, config: &crate::ProjectConfig) -> Context {
         Context {
@@ -339,6 +375,15 @@ impl Context {
             },
             docs_dir: Some(store.project_dir(id).join("docs")),
             coverage: Self::coverage(store, id, config),
+            build_onward: config.role_status(crate::config::Role::Build).map(|build| {
+                config
+                    .statuses
+                    .iter()
+                    .skip_while(|s| **s != build)
+                    .filter(|s| !config.is_no_op(s))
+                    .cloned()
+                    .collect()
+            }),
             unshipped_releases: if config.cadence.releases {
                 crate::releases::load(store, id)
                     .map(|rs| {
@@ -351,6 +396,7 @@ impl Context {
             } else {
                 Default::default()
             },
+            history: Default::default(),
         }
     }
 
@@ -576,6 +622,11 @@ pub struct NextStage {
     pub tasks_open: usize,
     /// The stage ends the work (an end status that is not a no-op): "ready to complete".
     pub ends: bool,
+    /// The stage the item reaches next in the workflow's order, the one the Review page asks
+    /// sign-offs for (DEF-020). A card speaks only of this one.
+    pub immediate: bool,
+    /// How many of `missing` the user settles: sign-offs and the `approved` check (DEF-020).
+    pub for_you: usize,
 }
 
 /// One card's readiness: its gaps, and its next stages.
@@ -606,20 +657,34 @@ impl ProjectReadiness {
                     let card = CardReadiness {
                         gaps: evaluate(f, None, CARD),
                         // The next stage, with how much it still lacks (FEAT-117).
-                        next: next_gates(&project, Some(&charter), f, &ctx)
-                            .into_iter()
-                            .map(|n| NextStage {
-                                ends: crate::graph::is_terminal_status(&project.config, &n.status)
-                                    && !project.config.is_no_op(&n.status),
-                                status: n.status,
-                                missing: n.gaps.len(),
-                                signoffs: n.signoffs_needed,
-                                tasks_open: f
-                                    .all_tasks()
-                                    .filter(|t| t.state != crate::models::TaskState::Completed)
-                                    .count(),
-                            })
-                            .collect(),
+                        next: {
+                            let gates = next_gates(&project, Some(&charter), f, &ctx);
+                            let first = immediate_status(&project, &gates).map(str::to_owned);
+                            gates
+                                .into_iter()
+                                .map(|n| NextStage {
+                                    ends: crate::graph::is_terminal_status(
+                                        &project.config,
+                                        &n.status,
+                                    ) && !project.config.is_no_op(&n.status),
+                                    immediate: first.as_deref() == Some(n.status.as_str()),
+                                    for_you: n
+                                        .gaps
+                                        .iter()
+                                        .filter(|g| {
+                                            matches!(g.check, Check::Signoff | Check::Approved)
+                                        })
+                                        .count(),
+                                    status: n.status,
+                                    missing: n.gaps.len(),
+                                    signoffs: n.signoffs_needed,
+                                    tasks_open: f
+                                        .all_tasks()
+                                        .filter(|t| t.state != crate::models::TaskState::Completed)
+                                        .count(),
+                                })
+                                .collect()
+                        },
                     };
                     (f.code.clone(), card)
                 })
@@ -667,35 +732,67 @@ pub fn next_gates(
     let position = |s: &str| config.statuses.iter().position(|x| x == s);
     let here = position(&feature.status);
     let goal_ids = charter.map(|c| c.goal_ids());
-    config
-        .transitions
-        .get(&feature.status)
+    let kind = feature.kind.as_deref();
+    // An item on a kind's path (FTR-019) meets the next stage on it, not the stages it skips.
+    let path = config.path_for(kind);
+    let reachable: Vec<&String> = match path {
+        Some(_) => config
+            .statuses
+            .iter()
+            .filter(|to| config.transition_allowed_for(&feature.status, to, kind))
+            .collect(),
+        None => config
+            .transitions
+            .get(&feature.status)
+            .into_iter()
+            .flatten()
+            .collect(),
+    };
+    let first_move = feature.status == config.default_state;
+    reachable
         .into_iter()
-        .flatten()
         .filter(|to| !config.is_no_op(to))
         .filter(|to| match (here, position(to)) {
             (Some(h), Some(t)) => t > h,
             _ => false,
         })
         .filter_map(|to| {
-            let gate = gates.get(to)?;
-            if !gate.applies_to(feature.kind.as_deref()) {
+            let mut gate = gates
+                .get(to)
+                .filter(|g| g.applies_to(kind))
+                .cloned()
+                .unwrap_or_default();
+            if let Some(path) = path {
+                crate::method::strip_gate(&mut gate, &path.method_off);
+                if first_move {
+                    for c in &path.requires {
+                        if !gate.requires.contains(c) {
+                            gate.requires.push(c.clone());
+                        }
+                    }
+                }
+            }
+            // A stage with nothing to say about this kind is not listed, as before.
+            if gates.get(to).filter(|g| g.applies_to(kind)).is_none()
+                && !(first_move && path.is_some_and(|p| !p.requires.is_empty()))
+            {
                 return None;
             }
-            let requires_gaps =
+            let mut requires_gaps =
                 evaluate_entering(feature, goal_ids.as_ref(), &gate.requires, ctx, to);
+            requires_gaps.extend(additions_gap(
+                feature,
+                &gate.requires,
+                &gate.signoffs,
+                ctx,
+                to,
+            ));
             let mut gaps = requires_gaps.clone();
             let signoffs = signoff_gaps(feature, &gate.signoffs);
             let signoffs_needed = gate
                 .signoffs
                 .iter()
-                .filter(|name| {
-                    feature
-                        .definition
-                        .as_ref()
-                        .and_then(|d| d.signoff_current(name))
-                        .is_none()
-                })
+                .filter(|name| feature.signoff_current(name).is_none())
                 .cloned()
                 .collect();
             gaps.extend(signoffs);
@@ -721,10 +818,22 @@ pub fn immediate_next_gate(
     feature: &FeatureItem,
     ctx: &Context,
 ) -> Option<NextGate> {
+    let gates = next_gates(project, charter, feature, ctx);
+    let first = immediate_status(project, &gates)?.to_owned();
+    gates.into_iter().find(|g| g.status == first)
+}
+
+/// The status of the earliest gate in the workflow's order: the one stage an item reaches next.
+/// Review and the cards both ask this, so they cannot differ (DEF-020).
+pub fn immediate_status<'a>(
+    project: &crate::store::Project,
+    gates: &'a [NextGate],
+) -> Option<&'a str> {
     let position = |s: &str| project.config.statuses.iter().position(|x| x == s);
-    next_gates(project, charter, feature, ctx)
-        .into_iter()
+    gates
+        .iter()
         .min_by_key(|g| position(&g.status).unwrap_or(usize::MAX))
+        .map(|g| g.status.as_str())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -875,7 +984,7 @@ pub fn evaluate_in(
         && !exempt
         && let Some(docs) = ctx.docs_dir.as_deref()
     {
-        gaps.extend(docs_updated_gaps(feature, docs));
+        gaps.extend(docs_updated_gaps(feature, docs, &ctx.history));
     }
     if checks.contains(&Check::DiagramsValid) && !exempt {
         gaps.extend(diagram_gaps(feature, ctx.docs_dir.as_deref()));
@@ -987,6 +1096,38 @@ pub fn evaluate_definition(
     gaps
 }
 
+/// An approval that has only grown passes `approved` before the build stage, because the next
+/// decision comes before anything is built. From the build stage on it passes only where the gate
+/// also asks for a sign-off, which is pinned to the current text; otherwise this is the gap
+/// (FTR-018). `at` is the stage being entered.
+pub fn additions_gap(
+    feature: &FeatureItem,
+    requires: &[Condition],
+    signoffs: &[String],
+    ctx: &Context,
+    at: &str,
+) -> Option<Gap> {
+    let def = feature.definition.as_ref()?;
+    if !requires.contains(&Condition::Check(Check::Approved))
+        || def.approval_state() != ApprovalState::Extended
+        || !ctx.builds(at)
+        || !signoffs.is_empty()
+    {
+        return None;
+    }
+    let added = def.part_changes().map(|c| c.added).unwrap_or_default();
+    Some(gap(
+        Check::Approved,
+        None,
+        "added since approval",
+        format!(
+            "text was added to the definition after it was approved ({}): approve it again (the \
+             Review page shows only the additions), or have this stage ask for a sign-off",
+            added.join(", ")
+        ),
+    ))
+}
+
 fn gap(check: Check, requirement: Option<&str>, label: &str, message: String) -> Gap {
     Gap {
         check,
@@ -1003,10 +1144,7 @@ fn item_level(
     goal_ids: Option<&std::collections::BTreeSet<String>>,
     gaps: &mut Vec<Gap>,
 ) {
-    let agreed = matches!(
-        def.approval_state(),
-        ApprovalState::Current | ApprovalState::Ratified
-    );
+    let agreed = def.approval_state().is_agreed();
     match check {
         Check::Definition => {}
         Check::Statement => {
@@ -1049,7 +1187,9 @@ fn item_level(
             }
         }
         Check::Approved => match def.approval_state() {
-            ApprovalState::Current | ApprovalState::Ratified => {}
+            // An extended approval passes here; whether the additions may wait is a question of the
+            // stage, answered by `additions_gap` (FTR-018).
+            ApprovalState::Current | ApprovalState::Ratified | ApprovalState::Extended => {}
             ApprovalState::Missing => {
                 gaps.push(gap(check, None, "not approved", "not approved".into()))
             }
@@ -1109,7 +1249,11 @@ pub fn affects_doc_key(path: &str) -> String {
 /// The docs an item declares that have not changed since it entered its stage (FEAT-180). An item
 /// that declares none passes — not every item touches an architecture doc; doctor says so when the
 /// next stage asks. A board with no history to judge by passes too: nothing can be shown either way.
-fn docs_updated_gaps(feature: &FeatureItem, docs: &std::path::Path) -> Vec<Gap> {
+fn docs_updated_gaps(
+    feature: &FeatureItem,
+    docs: &std::path::Path,
+    history: &crate::git::DocHistory,
+) -> Vec<Gap> {
     let declared = feature
         .definition
         .as_ref()
@@ -1120,7 +1264,7 @@ fn docs_updated_gaps(feature: &FeatureItem, docs: &std::path::Path) -> Vec<Gap> 
     for doc in declared {
         let key = affects_doc_key(doc);
         let path = docs.join(&key);
-        let changed = crate::git::doc_changed_since(&path, since);
+        let changed = history.changed_since(&path, since);
         if !path.is_file() && changed != Some(true) {
             gaps.push(Gap {
                 level: Level::Error,
@@ -1485,6 +1629,79 @@ mod tests {
     use super::*;
     use crate::models::{Requirement, TestRef};
 
+    /// An item whose design-review pinned `spec`, then holding `now` as its spec (FTR-023).
+    fn pinned_item(spec: &str, now: &str) -> FeatureItem {
+        let mut def = crate::models::FeatureDefinition {
+            statement: "Keep a cart".into(),
+            ..Default::default()
+        };
+        def.signoffs.push(crate::models::Signoff {
+            id: "design-review".into(),
+            by: "Ada".into(),
+            rev: def.content_rev(),
+            spec_rev: spec_pin(spec).1,
+            ..Default::default()
+        });
+        let mut item: FeatureItem = crate::yaml::from_str(
+            "code: FTR-1\ntitle: T\nspecification: ''\nstatus: Build\nmilestone: ''\n\
+             created_at: '2026-11-06T00:00:00Z'\nupdated_at: '2026-11-06T00:00:00Z'\n",
+        )
+        .unwrap();
+        item.definition = Some(def);
+        item.specification = now.into();
+        item
+    }
+
+    /// FTR-023 R-3: whitespace at line ends, line endings and outer blank lines are not changes.
+    #[test]
+    fn spec_pin_ignores_trailing_whitespace() {
+        let base = "## Why\nA cart.\n\n## Design\nUse a map.";
+        let rev = spec_pin(base).1;
+        assert!(!rev.is_empty());
+        assert_eq!(
+            spec_pin("\n\n## Why  \r\nA cart.\t\r\n\r\n## Design\r\nUse a map.\r\n\n").1,
+            rev
+        );
+        assert_ne!(spec_pin("## Why\nA cart!\n\n## Design\nUse a map.").1, rev);
+        assert_ne!(spec_pin(&format!("{base}\nMore.")).1, rev);
+        assert_ne!(spec_pin(&format!("{base}\n\n## Notes\nx")).1, rev);
+        assert_eq!(spec_pin("  \n\n"), (String::new(), String::new()));
+    }
+
+    /// FTR-023 R-2: a change anywhere in the spec lapses a sign-off that pinned it.
+    #[test]
+    fn a_changed_spec_lapses_its_signoff() {
+        let names = vec!["design-review".to_string()];
+        let spec = "## Why\nA cart.\n\n## Design\nUse a map.";
+        assert!(signoff_gaps(&pinned_item(spec, spec), &names).is_empty());
+        for edited in [
+            "## Why\nA basket.\n\n## Design\nUse a map.",
+            "## Why\nA cart.\n\n## Design\nUse a vec.",
+            "## Why\nA cart.\n\n## Design\nUse a map.\n\n## Notes\nnew",
+        ] {
+            let gaps = signoff_gaps(&pinned_item(spec, edited), &names);
+            assert_eq!(gaps.len(), 1, "{edited}");
+            assert_eq!(gaps[0].label, "sign-off 'design-review': spec changed");
+            assert!(gaps[0].message.contains("the spec changed after sign-off"));
+        }
+    }
+
+    /// FTR-023 R-12: a sign-off with no spec pin is judged by the definition alone.
+    #[test]
+    fn a_signoff_without_a_spec_pin_is_judged_as_before() {
+        let names = vec!["design-review".to_string()];
+        let mut item = pinned_item("", "anything at all");
+        item.definition.as_mut().unwrap().signoffs[0].spec_rev = String::new();
+        assert!(signoff_gaps(&item, &names).is_empty());
+        item.specification = "something else".into();
+        assert!(signoff_gaps(&item, &names).is_empty());
+        item.definition.as_mut().unwrap().statement = "Keep a cart longer".into();
+        assert_eq!(
+            signoff_gaps(&item, &names)[0].label,
+            "sign-off 'design-review' lapsed"
+        );
+    }
+
     /// A board in a temp git repository with one item declaring `architecture/data.md` (FEAT-180).
     fn docs_board(tag: &str) -> (crate::Store, std::path::PathBuf, String) {
         let dir = std::env::temp_dir().join(format!("kanbanr-docs-{tag}-{}", std::process::id()));
@@ -1602,6 +1819,161 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A TOGAF board with one item at Implementation: a red test, a statement and goal, and a
+    /// Migration gate that asks for green tests, agreement and the `docs-folded` sign-off (DEF-020).
+    fn togaf_item_at_implementation(tag: &str) -> (crate::Store, std::path::PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-card-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = crate::Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/workflow",
+            Some(&serde_json::json!({"preset": "togaf"})),
+        )
+        .unwrap();
+        // The preset has no move from Implementation to Operations (DEF-019); these cards are
+        // about a workflow that lets an item skip ahead, so add that move back.
+        let cfg = store.load("demo").unwrap().config;
+        let mut transitions = cfg.transitions.clone();
+        transitions
+            .get_mut("Implementation")
+            .unwrap()
+            .push("Operations".into());
+        store
+            .set_workflow(
+                "demo",
+                cfg.statuses.clone(),
+                transitions,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let item = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &item.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "WHEN a cart is idle, THE SYSTEM SHALL keep it.".into(),
+                        tests: vec![TestRef {
+                            name: "t1".into(),
+                            state: crate::models::TestState::Red,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        // Walk to Implementation with no gates in the way, then set the gates under test.
+        store
+            .set_gates("demo", std::collections::BTreeMap::new())
+            .unwrap();
+        for to in ["Business Arch", "System Design", "Implementation"] {
+            store.move_feature("demo", &item.code, to).unwrap();
+        }
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Migration".to_string(),
+            crate::config::Gate {
+                requires: vec![
+                    Condition::Check(Check::TestsGreen),
+                    Condition::Check(Check::Approved),
+                ],
+                signoffs: vec!["docs-folded".into()],
+                ..Default::default()
+            },
+        );
+        gates.insert(
+            "Operations".to_string(),
+            crate::config::Gate {
+                requires: vec![Condition::Check(Check::TestsGreen)],
+                signoffs: vec!["release".into()],
+                ..Default::default()
+            },
+        );
+        store.set_gates("demo", gates).unwrap();
+        (store, dir, item.code)
+    }
+
+    fn card_of(store: &crate::Store, code: &str) -> CardReadiness {
+        ProjectReadiness::load(store, "demo")
+            .unwrap()
+            .0
+            .into_iter()
+            .find(|(c, _)| c == code)
+            .unwrap()
+            .1
+    }
+
+    /// DEF-020 R-1: a card counts every gap `kanbanr check` lists for the stage, sign-offs
+    /// included.
+    #[test]
+    fn card_next_stage_counts_match_check() {
+        let (store, dir, code) = togaf_item_at_implementation("counts");
+        let report = check_board(&store, "demo", Some(&code)).unwrap();
+        let checked = &report.items[0].next;
+        let card = card_of(&store, &code);
+        assert!(!card.next.is_empty());
+        for stage in &card.next {
+            let listed = checked
+                .iter()
+                .find(|n| n.status == stage.status)
+                .unwrap_or_else(|| panic!("check lists {}", stage.status));
+            assert_eq!(
+                stage.missing,
+                listed.gaps.len(),
+                "{}: the card and check count the same",
+                stage.status
+            );
+        }
+        let migration = card.next.iter().find(|n| n.status == "Migration").unwrap();
+        assert_eq!(migration.missing, 3, "green tests, agreement, one sign-off");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-020 R-2: of the stages an item can reach, the card marks the one reached next, the one
+    /// the Review page asks sign-offs for.
+    #[test]
+    fn card_marks_the_immediate_next_stage() {
+        let (store, dir, code) = togaf_item_at_implementation("immediate");
+        let card = card_of(&store, &code);
+        let flag = |s: &str| card.next.iter().find(|n| n.status == s).unwrap().immediate;
+        assert!(flag("Migration"));
+        assert!(!flag("Operations"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-020 R-3: `for_you` counts sign-offs and the `approved` check, nothing else.
+    #[test]
+    fn card_counts_what_is_the_users() {
+        let (store, dir, code) = togaf_item_at_implementation("foryou");
+        let card = card_of(&store, &code);
+        let migration = card.next.iter().find(|n| n.status == "Migration").unwrap();
+        assert_eq!(migration.missing, 3);
+        assert_eq!(
+            migration.for_you, 2,
+            "approval and the sign-off; not the red test"
+        );
+        let operations = card.next.iter().find(|n| n.status == "Operations").unwrap();
+        assert_eq!(operations.for_you, 1, "the release sign-off");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// FEAT-180 R-2: `affects_docs` is kept, does not reopen the agreement, and reads back the same
     /// through an older binary that keeps it as an unknown key.
     #[test]
@@ -1683,6 +2055,111 @@ mod tests {
         store.move_feature("demo", &code, "Planned").unwrap();
         assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "move"));
         assert_eq!(docs_gaps(&store, &code).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A board of `items` items, each declaring `docs` of the docs it holds, with a gate on
+    /// `Scheduled` that asks for `docs_updated` (DEF-022).
+    fn many_docs_board(
+        tag: &str,
+        items: usize,
+        docs: usize,
+        gate: crate::config::Gate,
+    ) -> (crate::Store, std::path::PathBuf) {
+        let (store, dir, _) = docs_board(tag);
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Scheduled".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        for d in 0..6 {
+            store
+                .write_doc("demo", &format!("architecture/d{d}.md"), "# D\n")
+                .unwrap();
+        }
+        for i in 0..items {
+            let item = store
+                .add_feature("demo", &format!("Item {i}"), "", "M", None)
+                .unwrap();
+            let affects_docs = (0..docs)
+                .map(|j| format!("architecture/d{}.md", (i + j) % 6))
+                .collect();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &item.code,
+                    Some(FeatureDefinition {
+                        statement: format!("Item {i}"),
+                        affects_docs,
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        }
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "items"));
+        (store, dir)
+    }
+
+    fn docs_gate() -> crate::config::Gate {
+        crate::config::Gate {
+            warns: vec![Condition::Check(Check::DocsUpdated)],
+            ..Default::default()
+        }
+    }
+
+    /// DEF-022 R-2: one evaluation over many items and docs opens the repository once and walks
+    /// its history once.
+    #[test]
+    fn next_gates_for_many_items_share_one_history() {
+        let (store, dir) = many_docs_board("share", 20, 3, docs_gate());
+        let project = store.load_for_gates("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        let mut judged = 0;
+        for f in project
+            .features
+            .iter()
+            .filter(|f| f.title.starts_with("Item"))
+        {
+            let next = next_gates(&project, None, f, &ctx);
+            judged += next.iter().filter(|n| n.status == "Scheduled").count();
+        }
+        assert_eq!(judged, 20);
+        assert_eq!(
+            ctx.history.stats(),
+            crate::git::HistoryStats { opens: 1, walks: 1 }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-022 R-3: nothing to judge, nothing read. A gate that does not ask for `docs_updated`,
+    /// or items that declare no docs, leave the history alone.
+    #[test]
+    fn no_declared_docs_reads_no_history() {
+        let none = crate::git::HistoryStats { opens: 0, walks: 0 };
+        // Items declare docs; the gate does not ask.
+        let gate = crate::config::Gate {
+            warns: vec![Condition::Check(Check::Definition)],
+            ..Default::default()
+        };
+        let (store, dir) = many_docs_board("lazy-gate", 5, 3, gate);
+        let project = store.load_for_gates("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        for f in &project.features {
+            next_gates(&project, None, f, &ctx);
+        }
+        assert_eq!(ctx.history.stats(), none);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // The gate asks; no item declares a doc.
+        let (store, dir) = many_docs_board("lazy-docs", 5, 0, docs_gate());
+        let project = store.load_for_gates("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        for f in project
+            .features
+            .iter()
+            .filter(|f| f.title.starts_with("Item"))
+        {
+            next_gates(&project, None, f, &ctx);
+        }
+        assert_eq!(ctx.history.stats(), none);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1848,6 +2325,7 @@ mod tests {
             by: "A".into(),
             at: "2026-09-29T00:00:00Z".into(),
             rev: def.content_rev(),
+            parts: Default::default(),
         });
         def.approvals.push(crate::models::ApprovalEvent {
             verdict: "ratified".into(),
@@ -1858,6 +2336,65 @@ mod tests {
         let f = item(Some(def));
         let approval = query_group("approval").unwrap();
         assert!(evaluate(&f, None, approval).is_empty());
+    }
+
+    /// An item whose approval has only grown since it was given (FTR-018).
+    fn grown_item() -> FeatureItem {
+        use crate::models::Approval;
+        let mut def = FeatureDefinition {
+            statement: "s".into(),
+            ..Default::default()
+        };
+        def.approval = Some(Approval {
+            by: "A".into(),
+            at: "2026-09-29T00:00:00Z".into(),
+            rev: def.content_rev(),
+            parts: def.part_revs(),
+            ..Default::default()
+        });
+        def.zachman.how = "by hashing".into();
+        assert_eq!(def.approval_state(), ApprovalState::Extended);
+        item(Some(def))
+    }
+
+    fn approved_only() -> Vec<Condition> {
+        vec![Condition::Check(Check::Approved)]
+    }
+
+    /// FTR-018 R-5: before the build stage the additions wait, so `approved` is met.
+    #[test]
+    fn an_extended_approval_passes_a_gate_before_build() {
+        let f = grown_item();
+        let ctx = Context {
+            build_onward: Some(["Build".to_string(), "Done".to_string()].into()),
+            ..Default::default()
+        };
+        assert!(additions_gap(&f, &approved_only(), &[], &ctx, "Design").is_none());
+        let gaps = evaluate_entering(&f, None, &approved_only(), &ctx, "Design");
+        assert!(gaps.is_empty(), "{gaps:?}");
+        // The item-level check does not report it either.
+        assert!(evaluate(&f, None, &[Check::Approved]).is_empty());
+    }
+
+    /// FTR-018 R-6: from the build stage on, a gate with no sign-off refuses the additions and
+    /// names them; one that asks for a sign-off leaves that to the sign-off.
+    #[test]
+    fn additions_need_a_decision_before_build() {
+        let f = grown_item();
+        let ctx = Context {
+            build_onward: Some(["Build".to_string(), "Done".to_string()].into()),
+            ..Default::default()
+        };
+        let gap = additions_gap(&f, &approved_only(), &[], &ctx, "Build").unwrap();
+        assert_eq!(gap.label, "added since approval");
+        assert!(gap.message.contains("zachman/how"), "{}", gap.message);
+        let with_signoff = ["design-review".to_string()];
+        assert!(additions_gap(&f, &approved_only(), &with_signoff, &ctx, "Build").is_none());
+        // A gate that does not ask for approval has nothing to refuse.
+        assert!(additions_gap(&f, &[], &[], &ctx, "Build").is_none());
+        // No build role declared: every stage counts, as before.
+        assert!(additions_gap(&f, &approved_only(), &[], &Context::default(), "Design").is_some());
+        assert!(Context::default().builds("x"));
     }
 
     #[test]
@@ -2331,5 +2868,57 @@ mod tests {
         // No definition is not a coverage gap of its own.
         let f = item(None);
         assert!(evaluate(&f, None, &[Check::DocsCover]).is_empty());
+    }
+
+    /// FTR-019 R-5: a chore at Vision is told about Implementation and what its first move asks, not
+    /// the stages its path skips; a feature still meets Business Arch.
+    #[test]
+    fn next_gates_for_a_chore_follow_its_path() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-chore-next-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = crate::Store::new(dir.clone());
+        let config = crate::config::preset("togaf").unwrap().into_config("demo");
+        store.init_project("demo", config).unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let chore = store
+            .add_feature_of_kind("demo", "Pin", "", "M", None, Some("chore"))
+            .unwrap();
+        let feature = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        for code in [&chore.code, &feature.code] {
+            store
+                .set_feature_definition("demo", code, Some(FeatureDefinition::default()))
+                .unwrap();
+        }
+        let project = store.load("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        let next = |code: &str| next_gates(&project, None, project.feature(code).unwrap(), &ctx);
+
+        let chore_next = next(&chore.code);
+        let stages: Vec<&str> = chore_next.iter().map(|g| g.status.as_str()).collect();
+        assert_eq!(stages, ["Implementation"]);
+        let gaps: Vec<&str> = chore_next[0]
+            .gaps
+            .iter()
+            .map(|g| g.message.as_str())
+            .collect();
+        let said = gaps.join(" | ");
+        // The path's own questions, and the entered stage's.
+        assert!(said.contains("statement"), "{said}");
+        assert!(said.contains("requirement"), "{said}");
+        assert!(said.contains("approv"), "{said}");
+        // No Design section or design review for a chore.
+        assert!(!said.contains("Design"), "{said}");
+        assert!(
+            chore_next[0].signoffs_needed.is_empty(),
+            "{:?}",
+            chore_next[0]
+        );
+
+        let stages: Vec<String> = next(&feature.code).into_iter().map(|g| g.status).collect();
+        assert_eq!(stages, ["Business Arch"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

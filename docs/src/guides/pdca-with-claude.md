@@ -5,6 +5,8 @@ This guide takes one item through Plan, Do, Check and Act. You don't need to lea
 - **You talk to Claude** for everything except decisions and pushes. Use your own words. The ones
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page.
+  Claude tells you what is waiting there and links to it. It never records a decision, and it
+  doesn't ask for one in a plan or a question.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [PDCA from the command line](pdca-cli.md). For the other
@@ -69,8 +71,9 @@ Ask for the work in your own words, and Claude asks only what it can't work out.
 spec and the `design-review` sign-off. If one is missing, Claude says which, and drafts it or brings
 it to you.
 
-**An edit lapses your approval.** Each approval covers exactly the text you saw. If the definition
-changes afterwards, the item returns to the Review page. Read what changed, then approve again.
+**Adding keeps your approval; changing lapses it.** Each approval covers the text you saw. Adding to
+the definition keeps it, and what was added is reviewed at the next decision. If approved text is
+changed or removed, the item returns to the Review page. Read what changed, then approve again.
 
 **Just ask to move it on:**
 
@@ -96,6 +99,10 @@ server hasn't until you push.
 Claude gives each agent a scope, which kanbanr enforces. An agent can record its own tasks and test
 results and commit on its branch. It can't move items, approve anything or push. When it finishes,
 Claude reviews the branch and brings you any decisions.
+
+Claude stays in the project folder while an agent works, and looks inside the agent's worktree
+without moving into it (`git -C`), so a scope never gets in your way or Claude's. Revoking an agent's
+scope stops that agent on its next tool call and never restricts you.
 
 ## Who does what
 

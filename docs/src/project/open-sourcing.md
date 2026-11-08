@@ -217,7 +217,7 @@ content** and your **publish credentials**:
 - [x] **Cross-platform matrix** (ubuntu/macos/windows) for `cargo test` — already in `ci.yml`.
 - [x] **Image build + GHCR push on tags** — handled by [`release.yml`](https://github.com/startr-trade/kanbanr/blob/main/.github/workflows/release.yml)
       (see §5), so a separate `docker.yml` isn't needed.
-- [ ] (Optional) Add the `#[ignore]`d testcontainers smoke (`make itest`) to CI.
+- [ ] (Optional) Add the `#[ignore]`d Docker smoke test (`make itest`) to CI.
 
 ## 5. Versioning & releases
 

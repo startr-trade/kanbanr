@@ -455,6 +455,9 @@ pub struct IssueRequest {
     /// The CLI's word that the commit hooks and the pre-push hook are installed in the repository:
     /// the hooks are its to write and read.
     pub hooks_ready: bool,
+    /// The CLI's word that the Claude Code hooks that tell an agent from the coordinator (the Bash
+    /// and Write guards, the capture hook) are registered for the project or the user (DEF-027).
+    pub claude_hooks_ready: bool,
 }
 
 /// What issuing made: the scope, the brief for the agent, and whether the branch was created.
@@ -513,6 +516,24 @@ fn item_branch(
     Ok((name, true))
 }
 
+/// Why a build scope can't be issued for `item` (FTR-024 R-9): it has no task that is not
+/// completed, so the board would read it as finished while an agent works on it.
+fn open_task_refusal(item: &FeatureItem) -> Option<String> {
+    let open = item
+        .todo_lists
+        .iter()
+        .flat_map(|l| &l.tasks)
+        .any(|t| t.state != crate::models::TaskState::Completed);
+    (!open).then(|| {
+        format!(
+            "{code} has no open task, so the board would read it as finished while an agent works \
+             on it: add the work as tasks first (`kanbanr todo add {code} …`, `kanbanr task add \
+             …`), then issue the scope",
+            code = item.code
+        )
+    })
+}
+
 /// Issue a scope (R-1): record it with its issuer, item, operations, branch, issue time and
 /// expiry, and return the brief. A build scope's item must be at the build stage, and its branch
 /// is found or made, never checked out.
@@ -541,6 +562,13 @@ pub fn issue(
                 .into(),
         ));
     }
+    if !req.claude_hooks_ready {
+        return Err(CoreError::Unsupported(
+            "an agent scope is told apart from you by Claude Code's hooks, and they are not \
+             registered here: run `kanbanr hooks install`"
+                .into(),
+        ));
+    }
     if req.role == Role::Build {
         match project.config.role_status(crate::config::Role::Build) {
             Some(build) if build == item.status => {}
@@ -557,6 +585,9 @@ pub fn issue(
                         .into(),
                 ));
             }
+        }
+        if let Some(why) = open_task_refusal(&item) {
+            return Err(CoreError::Unsupported(why));
         }
     }
     let mut scopes = load(store, id)?;
@@ -758,10 +789,14 @@ pub fn write_pointer(git_dir: &Path, p: &PointerFile) -> std::io::Result<()> {
     std::fs::write(git_dir.join(POINTER_FILE), yaml)
 }
 
+/// The closing sentence of a refusal, for a reader who is not the agent it was meant for (DEF-027).
+const NOT_THE_AGENT: &str = "If you are the coordinator, your shell is standing in an agent's \
+     worktree: `cd` to the project folder and use `git -C <path>` to look inside it.";
+
 fn expired_message(s: &Scope) -> String {
     format!(
         "refused: agent scope {} expired at {}. The coordinator renews it (`kanbanr scope renew {} \
-         --for 4h`) or issues a new one.",
+         --for 4h`) or issues a new one. {NOT_THE_AGENT}",
         s.id,
         readable(&s.expires_at),
         s.id
@@ -770,7 +805,8 @@ fn expired_message(s: &Scope) -> String {
 
 fn revoked_message(s: &Scope) -> String {
     format!(
-        "refused: agent scope {} was revoked by {} at {} ({}). Nothing more is recorded under it.",
+        "refused: agent scope {} was revoked by {} at {} ({}). Nothing more is recorded under it. \
+         {NOT_THE_AGENT}",
         s.id,
         s.revoked_by.as_deref().unwrap_or("the coordinator"),
         readable(s.revoked_at.as_deref().unwrap_or_default()),
@@ -782,13 +818,58 @@ fn unbound_message(wt: &WorktreeFacts) -> String {
     format!(
         "refused: this is an agent worktree ({}) and no agent scope is bound to it. If you are the \
          agent, run the claim command from your brief (`kanbanr scope claim SC-…`); otherwise ask \
-         the coordinator to issue one (`kanbanr scope issue <design|build> <CODE>`).",
+         the coordinator to issue one (`kanbanr scope issue <design|build> <CODE>`). \
+         {NOT_THE_AGENT}",
         wt.root.display()
     )
 }
 
+/// Who is calling, as far as kanbanr can tell (DEF-027). A scope governs an agent, never the
+/// person at a terminal or the coordinator, wherever their shell stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Caller {
+    /// A process outside a Claude Code session.
+    Person,
+    /// A hook call from the main session: the payload has no `agent_id`.
+    Coordinator,
+    /// A hook call from a sub-agent: the payload has an `agent_id`.
+    Agent,
+    /// A process inside a Claude Code session that is not a hook call: it cannot tell which.
+    Session,
+}
+
+impl Caller {
+    /// A process: `Person` when the environment has no non-empty `CLAUDECODE`, else `Session`.
+    pub fn of_process() -> Caller {
+        Caller::of_process_in(|k| std::env::var(k).ok())
+    }
+
+    /// As `of_process`, with the environment passed in (no environment mutation in tests).
+    pub fn of_process_in(env: impl Fn(&str) -> Option<String>) -> Caller {
+        match env("CLAUDECODE") {
+            Some(v) if !v.is_empty() => Caller::Session,
+            _ => Caller::Person,
+        }
+    }
+
+    /// A hook call, from its stdin payload: a non-empty string `agent_id` is `Agent`, else
+    /// `Coordinator`.
+    pub fn of_hook(payload: &Value) -> Caller {
+        match payload.get("agent_id").and_then(Value::as_str) {
+            Some(id) if !id.is_empty() => Caller::Agent,
+            _ => Caller::Coordinator,
+        }
+    }
+
+    /// Do scopes govern this caller? `Agent` and `Session` only.
+    pub fn is_governed(self) -> bool {
+        matches!(self, Caller::Agent | Caller::Session)
+    }
+}
+
 /// The scope a process works under, from the board's scopes, the worktree it runs in and the
-/// pointer there. Pure. Rules, in order: no scopes on the board, or no work tree, is unscoped; a
+/// pointer there. Pure. Rules, in order: a caller scopes do not govern, no scopes on the board, or
+/// no work tree, is unscoped; a
 /// pointer naming a scope here must match it and it must be in force; an agent worktree with no
 /// valid pointer is refused; anything else is unscoped.
 pub fn resolve_with(
@@ -796,8 +877,9 @@ pub fn resolve_with(
     wt: Option<&WorktreeFacts>,
     pointer: Option<&PointerFile>,
     now: &str,
+    caller: Caller,
 ) -> ProcessScope {
-    if scopes.is_empty() {
+    if !caller.is_governed() || scopes.is_empty() {
         return ProcessScope::Unscoped;
     }
     let Some(wt) = wt else {
@@ -838,7 +920,11 @@ pub fn resolve_with(
             }
             Some(_) => {}
         }
+        // A dead scope stops its agent (whose hook calls say so); it frees every other shell.
         return match s.state(now) {
+            ScopeState::Revoked | ScopeState::Expired if caller != Caller::Agent => {
+                ProcessScope::Unscoped
+            }
             ScopeState::Revoked => ProcessScope::Refused {
                 why: revoked_message(s),
                 may_claim: false,
@@ -870,14 +956,30 @@ pub fn resolve_with(
 /// Is this board one scopes govern? A board that holds scopes always is, wherever it lives: the
 /// temporary directory comes from `TMPDIR`, which an agent can set, so its location alone must never
 /// lift a scope. A board inside the temporary directory that holds none is not (D7): test boards
-/// live there, and build agents run the tests in their worktrees.
+/// live there, and build agents run the tests in their worktrees. The opposite of
+/// [`is_temporary_board`], which is the one rule for both.
 pub fn is_governed_board(data_dir: &Path) -> bool {
-    if holds_scopes(data_dir) {
-        return true;
-    }
+    !is_temporary_board(data_dir)
+}
+
+/// The system temporary directory as scopes read it: `std::env::temp_dir()`, normalised.
+pub fn temp_root() -> PathBuf {
+    crate::project::normalize(&std::env::temp_dir())
+}
+
+/// Is `data_dir` a temporary board: inside the system temporary directory and holding no agent
+/// scope record? One rule for the guard, the brief and [`is_governed_board`] (DEF-015). The path is
+/// normalised first (symlinks resolved as far as they exist), so a link inside the temporary
+/// directory to a real board is that board. A folder that does not exist yet counts if its nearest
+/// existing parent is inside the temporary directory. A folder that exists but cannot be read is
+/// not a temporary board: it fails closed.
+pub fn is_temporary_board(data_dir: &Path) -> bool {
     let board = crate::project::normalize(data_dir);
-    let temp = crate::project::normalize(&std::env::temp_dir());
-    !board.starts_with(&temp)
+    if !board.starts_with(temp_root()) || holds_scopes(&board) {
+        return false;
+    }
+    let projects = board.join("projects");
+    !projects.exists() || std::fs::read_dir(&projects).is_ok()
 }
 
 /// Whether any project on the board at `data_dir` has a scope record.
@@ -894,8 +996,8 @@ fn holds_scopes(data_dir: &Path) -> bool {
 }
 
 /// The scope a process in `cwd` writes `store` under.
-pub fn resolve(store: &Store, cwd: &Path) -> ProcessScope {
-    if !is_governed_board(store.data_dir()) {
+pub fn resolve(store: &Store, cwd: &Path, caller: Caller) -> ProcessScope {
+    if !caller.is_governed() || !is_governed_board(store.data_dir()) {
         return ProcessScope::Unscoped;
     }
     let scopes = load_all(store).unwrap_or_default();
@@ -906,7 +1008,40 @@ pub fn resolve(store: &Store, cwd: &Path) -> ProcessScope {
         wt.as_ref(),
         pointer.as_ref(),
         &crate::now_rfc3339(),
+        caller,
     )
+}
+
+/// Why the agent in `cwd` must stop: its worktree's pointer names a scope that is revoked or
+/// expired. `None` for a live scope, for no scope and for a board that holds none. A hook asks it
+/// for every call of an agent, so a revoke takes effect at once (DEF-027).
+pub fn dead_scope(store: &Store, cwd: &Path) -> Option<String> {
+    match resolve(store, cwd, Caller::Agent) {
+        ProcessScope::Refused { why, .. } if why.contains("was revoked by") => Some(why),
+        ProcessScope::Refused { why, .. } if why.contains(" expired at ") => Some(why),
+        _ => None,
+    }
+}
+
+/// Is `path` inside an agent's worktree of the project at `main_root`: under
+/// `main_root/.claude/worktrees/` with a first component starting `agent-`, or a worktree whose
+/// pointer names a scope. Pure on strings when the folder does not exist.
+pub fn is_agent_worktree_path(path: &Path, main_root: &Path) -> bool {
+    let path = crate::project::normalize(path);
+    let root = crate::project::normalize(main_root);
+    let base = root.join(".claude").join("worktrees");
+    if let Ok(rest) = path.strip_prefix(&base)
+        && let Some(first) = rest.components().next()
+    {
+        if first.as_os_str().to_string_lossy().starts_with("agent-") {
+            return true;
+        }
+        if path.exists() {
+            return agent_context(&path).is_some_and(|w| w.git_dir.join(POINTER_FILE).is_file());
+        }
+        return false;
+    }
+    path.exists() && agent_context(&path).is_some_and(|w| w.git_dir.join(POINTER_FILE).is_file())
 }
 
 /// The worktree `cwd` is in, when it is an agent's: it has a pointer, or Claude Code made it under
@@ -918,7 +1053,10 @@ pub fn agent_context(cwd: &Path) -> Option<WorktreeFacts> {
 
 /// M11 when `cwd` is an agent context: `what` is the command and what it does, e.g.
 /// "`kanbanr identity` changes kanbanr itself".
-pub fn outside_core_refusal(cwd: &Path, what: &str) -> Option<String> {
+pub fn outside_core_refusal(cwd: &Path, what: &str, caller: Caller) -> Option<String> {
+    if !caller.is_governed() {
+        return None;
+    }
     let wt = agent_context(cwd)?;
     let id = read_pointer(&wt.git_dir)
         .map(|p| p.scope)
@@ -1157,21 +1295,37 @@ pub fn with_trailer(message: &str, scope: &Scope) -> String {
     format!("{body}{sep}{}\n", trailer(scope))
 }
 
-/// The boundary table for the agent's brief (R-1), with the claim command.
+/// The boundary table for the agent's brief (R-1), with the claim command for an unbound scope.
 pub fn brief(scope: &Scope, project: &Project) -> String {
+    brief_in(scope, project, &temp_root())
+}
+
+/// The brief with the temporary directory named in its Tests row (a parameter, for tests).
+pub fn brief_in(scope: &Scope, project: &Project, temp: &Path) -> String {
     let _ = project;
+    let temp = temp.display();
     let item = &scope.item;
     let mut out = format!(
         "## Your boundaries — kanbanr agent scope {} ({}, {item}), enforced by kanbanr\n\n",
         scope.id,
         scope.role.name()
     );
-    match (&scope.branch, scope.role) {
-        (Some(branch), Role::Build) => out.push_str(&format!(
+    // The brief tells an agent only what it still has to do: a bound scope has nothing to claim,
+    // and a claim from its agent is refused.
+    match (&scope.worktree, &scope.branch, scope.role) {
+        (Some(rel), Some(branch), Role::Build) => out.push_str(&format!(
+            "Your worktree ({rel}) is already bound to this scope and is on {branch}. Do not run \
+             `kanbanr scope claim`: nothing needs claiming, and a bound scope refuses it.\n\n"
+        )),
+        (Some(rel), _, _) => out.push_str(&format!(
+            "Your worktree ({rel}) is already bound to this scope. Do not run `kanbanr scope \
+             claim`: nothing needs claiming, and a bound scope refuses it.\n\n"
+        )),
+        (None, Some(branch), Role::Build) => out.push_str(&format!(
             "First, in your worktree: `kanbanr scope claim {}` (switches you to {branch})\n\n",
             scope.id
         )),
-        _ => out.push_str(&format!(
+        (None, _, _) => out.push_str(&format!(
             "First, in your worktree: `kanbanr scope claim {}`\n\n",
             scope.id
         )),
@@ -1197,7 +1351,11 @@ pub fn brief(scope: &Scope, project: &Project) -> String {
         }
     }
     out.push_str("| Remote | nothing | `git push`, `kanbanr sync` |\n");
-    out.push_str("| Tests | temporary boards only | a real board |\n\n");
+    out.push_str(&format!(
+        "| Tests | on a temporary board: a folder under `{temp}` that holds no agent scope, named by \
+         a literal path or `$TMPDIR/…` (`kanbanr --data-dir {temp}/walk init …`, `cd {temp}/walk`) \
+         | a real board; any data dir outside `{temp}` |\n\n"
+    ));
     if !scope.note.is_empty() {
         out.push_str(&format!("Note: {}\n\n", scope.note));
     }
@@ -1324,6 +1482,29 @@ pub fn drift_issues(store: &Store, id: &str, root: &Path, now: &str) -> Vec<crat
 
 #[cfg(test)]
 mod tests {
+    /// FTR-024 R-9: a build scope needs a task that is not completed; one with an open task, even
+    /// beside completed ones, is issued.
+    #[test]
+    fn a_build_scope_needs_an_open_task() {
+        let item = |states: &[&str]| -> FeatureItem {
+            let tasks: Vec<_> = states
+                .iter()
+                .enumerate()
+                .map(|(i, s)| serde_json::json!({"key": format!("T{i}"), "text": "t", "state": s}))
+                .collect();
+            serde_json::from_value(serde_json::json!({
+                "code": "FTR-9", "title": "x", "status": "In Progress", "milestone": "MS-1", "specification": "", "created_at": "2026-11-06T00:00:00Z", "updated_at": "2026-11-06T00:00:00Z",
+                "todo_lists": [{"code": "TL-001", "tasks": tasks, "created_at": "2026-11-06T00:00:00Z"}],
+            }))
+            .unwrap()
+        };
+        let why = open_task_refusal(&item(&["Completed", "Completed"])).expect("refused");
+        assert!(why.contains("add the work as tasks first"), "{why}");
+        assert!(open_task_refusal(&item(&[])).is_some());
+        assert!(open_task_refusal(&item(&["Completed", "InProgress"])).is_none());
+        assert!(open_task_refusal(&item(&["NotStarted"])).is_none());
+    }
+
     /// FEAT-214 R-4, the TMPDIR hole: a board that holds scopes is governed even when the
     /// temporary directory is made to cover it; one that holds none, inside it, is not (D7).
     #[test]
@@ -1346,6 +1527,66 @@ mod tests {
             "holding scopes, it is governed although it is in temp"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-015 R-5: one rule says what a temporary board is; the board-governing check is its
+    /// opposite on every kind of folder.
+    #[test]
+    fn a_temporary_board_is_one_rule() {
+        let temp = temp_root();
+        let dir = temp.join(format!("kanbanr-temp-rule-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("projects").join("shop")).unwrap();
+        let missing = dir.join("not-yet");
+        let holds = dir.join("holds");
+        std::fs::create_dir_all(holds.join("projects").join("shop")).unwrap();
+        std::fs::write(
+            holds.join("projects").join("shop").join(SCOPES_FILE),
+            "- id: SC-001\n",
+        )
+        .unwrap();
+        let outside = std::env::current_dir().unwrap();
+        for (what, path, temporary) in [
+            ("a board inside", dir.clone(), true),
+            ("the temporary directory itself", temp.clone(), true),
+            ("a folder that does not exist yet", missing, true),
+            ("a board that holds scopes", holds, false),
+            ("a folder outside", outside, false),
+            ("the filesystem root", PathBuf::from("/"), false),
+        ] {
+            assert_eq!(is_temporary_board(&path), temporary, "{what}: {path:?}");
+            assert_eq!(is_governed_board(&path), !temporary, "{what}: {path:?}");
+        }
+        // A link inside the temporary directory to a folder outside it is that folder.
+        #[cfg(unix)]
+        {
+            let link = dir.join("link");
+            std::os::unix::fs::symlink(std::env::current_dir().unwrap(), &link).unwrap();
+            assert!(
+                !is_temporary_board(&link),
+                "a link out of the temporary directory"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-015 R-4: the Tests row says what a temporary board is and the form to name one, with the
+    /// temporary directory the guard reads.
+    #[test]
+    fn the_brief_says_what_a_temporary_board_is() {
+        let project = Project {
+            id: "kanbanr".into(),
+            config: crate::ProjectConfig::for_new_project("kanbanr"),
+            features: Vec::new(),
+            milestones: Vec::new(),
+        };
+        let b = brief_in(&scope(Role::Build), &project, Path::new("/scratch/tmp"));
+        let row = "| Tests | on a temporary board: a folder under `/scratch/tmp` that holds no agent \
+                   scope, named by a literal path or `$TMPDIR/…` (`kanbanr --data-dir \
+                   /scratch/tmp/walk init …`, `cd /scratch/tmp/walk`) | a real board; any data dir \
+                   outside `/scratch/tmp` |";
+        assert!(b.contains(row), "the Tests row:\n{b}");
+        assert!(!b.contains("temporary boards only"), "{b}");
     }
 
     use super::*;
@@ -1615,7 +1856,12 @@ mod tests {
             features: Vec::new(),
             milestones: Vec::new(),
         };
-        let b = brief(&scope(Role::Build), &project);
+        let unbound = |role| Scope {
+            worktree: None,
+            claimed_at: None,
+            ..scope(role)
+        };
+        let b = brief(&unbound(Role::Build), &project);
         for want in [
             "## Your boundaries — kanbanr agent scope SC-007 (build, FEAT-214), enforced by kanbanr",
             "`kanbanr scope claim SC-007` (switches you to feat/FEAT-214-agent-scopes)",
@@ -1624,13 +1870,15 @@ mod tests {
             "moves, approvals, sign-offs, definitions, specs, docs, config, other items",
             "| Code | commits on feat/FEAT-214-agent-scopes, each naming FEAT-214 (`kanbanr commit`)",
             "| Remote | nothing | `git push`, `kanbanr sync` |",
-            "| Tests | temporary boards only | a real board |",
+            "| Tests | on a temporary board: a folder under `",
+            "` that holds no agent scope, named by a literal path or `$TMPDIR/…`",
+            "| a real board; any data dir outside `",
             "Expires 2026-10-21 17:00 UTC.",
             "never work around it.",
         ] {
             assert!(b.contains(want), "the brief says {want:?}:\n{b}");
         }
-        let d = brief(&scope(Role::Design), &project);
+        let d = brief(&unbound(Role::Design), &project);
         assert!(d.contains("(design, FEAT-214)"), "{d}");
         assert!(
             d.contains("| FEAT-214's record | nothing | every write |"),
@@ -1641,6 +1889,38 @@ mod tests {
             "{d}"
         );
         assert!(!d.contains("switches you"), "{d}");
+    }
+
+    /// DEF-023 R-1, R-3: a bound scope's brief has no claim step; it names the worktree and branch.
+    #[test]
+    fn a_bound_scopes_brief_has_no_claim_step() {
+        let project = Project {
+            id: "kanbanr".into(),
+            config: crate::ProjectConfig::for_new_project("kanbanr"),
+            features: Vec::new(),
+            milestones: Vec::new(),
+        };
+        let b = brief(&scope(Role::Build), &project);
+        assert!(!b.contains("scope claim SC-007"), "{b}");
+        assert!(!b.contains("First, in your worktree"), "{b}");
+        assert!(
+            b.contains("Your worktree (.claude/worktrees/agent-x) is already bound to this scope and is on feat/FEAT-214-agent-scopes."),
+            "{b}"
+        );
+        assert!(b.contains("nothing needs claiming"), "{b}");
+        assert!(b.contains("| Remote | nothing |"), "{b}");
+        let d = brief(&scope(Role::Design), &project);
+        assert!(!d.contains("scope claim SC-007"), "{d}");
+        assert!(
+            d.contains("Your worktree (.claude/worktrees/agent-x) is already bound to this scope. Do not run"),
+            "{d}"
+        );
+        let unbound = Scope {
+            worktree: None,
+            claimed_at: None,
+            ..scope(Role::Build)
+        };
+        assert!(brief(&unbound, &project).contains("`kanbanr scope claim SC-007`"));
     }
 
     /// FEAT-214 R-4: every `resolve_with` rule, and that it fails closed — a missing, foreign,
@@ -1657,22 +1937,40 @@ mod tests {
 
         // 1. No scopes on the board: unscoped, even in an agent worktree with a pointer.
         assert_eq!(
-            resolve_with(&[], Some(&here), Some(&pointer("SC-007")), NOW),
+            resolve_with(
+                &[],
+                Some(&here),
+                Some(&pointer("SC-007")),
+                NOW,
+                Caller::Session
+            ),
             ProcessScope::Unscoped
         );
         // 2. No work tree.
         assert_eq!(
-            resolve_with(&scopes, None, None, NOW),
+            resolve_with(&scopes, None, None, NOW, Caller::Session),
             ProcessScope::Unscoped
         );
         // 3. A pointer naming this worktree's scope, in force.
         assert_eq!(
-            resolve_with(&scopes, Some(&here), Some(&pointer("SC-007")), NOW),
+            resolve_with(
+                &scopes,
+                Some(&here),
+                Some(&pointer("SC-007")),
+                NOW,
+                Caller::Session
+            ),
             ProcessScope::Scoped(s.clone())
         );
         // 3. A pointer naming a scope bound elsewhere (an altered pointer).
         let elsewhere = wt(".claude/worktrees/agent-y", None);
-        let r = resolve_with(&scopes, Some(&elsewhere), Some(&pointer("SC-007")), NOW);
+        let r = resolve_with(
+            &scopes,
+            Some(&elsewhere),
+            Some(&pointer("SC-007")),
+            NOW,
+            Caller::Session,
+        );
         assert!(refused(&r), "{r:?}");
         if let ProcessScope::Refused { why, may_claim } = &r {
             assert!(why.contains("bound to .claude/worktrees/agent-x"), "{why}");
@@ -1687,12 +1985,19 @@ mod tests {
             &scopes,
             Some(&here),
             Some(&foreign),
-            NOW
+            NOW,
+            Caller::Session
         )));
         // 3. Not yet claimed: refused, and it may claim.
         let mut unclaimed = s.clone();
         unclaimed.worktree = None;
-        let r = resolve_with(&[unclaimed], Some(&here), Some(&pointer("SC-007")), NOW);
+        let r = resolve_with(
+            &[unclaimed],
+            Some(&here),
+            Some(&pointer("SC-007")),
+            NOW,
+            Caller::Session,
+        );
         assert!(
             matches!(
                 r,
@@ -1704,7 +2009,13 @@ mod tests {
             "{r:?}"
         );
         // 3. Expired and revoked.
-        let r = resolve_with(&scopes, Some(&here), Some(&pointer("SC-007")), LATER);
+        let r = resolve_with(
+            &scopes,
+            Some(&here),
+            Some(&pointer("SC-007")),
+            LATER,
+            Caller::Agent,
+        );
         assert!(
             matches!(&r, ProcessScope::Refused { why, .. } if why.contains("expired at 2026-10-21 17:00 UTC")),
             "{r:?}"
@@ -1713,13 +2024,19 @@ mod tests {
         revoked.revoked_at = Some(NOW.into());
         revoked.revoked_by = Some("V".into());
         revoked.revoked_reason = Some("done".into());
-        let r = resolve_with(&[revoked], Some(&here), Some(&pointer("SC-007")), NOW);
+        let r = resolve_with(
+            &[revoked],
+            Some(&here),
+            Some(&pointer("SC-007")),
+            NOW,
+            Caller::Agent,
+        );
         assert!(
             matches!(&r, ProcessScope::Refused { why, .. } if why.contains("was revoked by V") && why.contains("(done)")),
             "{r:?}"
         );
         // 4. A deleted pointer: the worktree is recorded, so refused (M3), and it may re-claim.
-        let r = resolve_with(&scopes, Some(&here), None, NOW);
+        let r = resolve_with(&scopes, Some(&here), None, NOW, Caller::Session);
         assert!(
             matches!(&r, ProcessScope::Refused { why, may_claim: true } if why.contains("no agent scope is bound to it")),
             "{r:?}"
@@ -1730,26 +2047,45 @@ mod tests {
             &scopes,
             Some(&fresh),
             Some(&pointer("SC-999")),
-            NOW
+            NOW,
+            Caller::Session
         )));
-        assert!(refused(&resolve_with(&scopes, Some(&fresh), None, NOW)));
+        assert!(refused(&resolve_with(
+            &scopes,
+            Some(&fresh),
+            None,
+            NOW,
+            Caller::Session
+        )));
         // 4. A linked worktree elsewhere on the scope's branch.
         let other = WorktreeFacts {
             root: PathBuf::from("/elsewhere/wt"),
             ..wt("x", Some("feat/FEAT-214-agent-scopes"))
         };
-        assert!(refused(&resolve_with(&scopes, Some(&other), None, NOW)));
+        assert!(refused(&resolve_with(
+            &scopes,
+            Some(&other),
+            None,
+            NOW,
+            Caller::Session
+        )));
         // 5. The person's own linked worktree elsewhere, and the main checkout: unscoped.
         let mine = WorktreeFacts {
             root: PathBuf::from("/elsewhere/wt"),
             ..wt("x", Some("feat/FEAT-1-other"))
         };
         assert_eq!(
-            resolve_with(&scopes, Some(&mine), None, NOW),
+            resolve_with(&scopes, Some(&mine), None, NOW, Caller::Session),
             ProcessScope::Unscoped
         );
         assert_eq!(
-            resolve_with(&scopes, Some(&wt("", Some("main"))), None, NOW),
+            resolve_with(
+                &scopes,
+                Some(&wt("", Some("main"))),
+                None,
+                NOW,
+                Caller::Session
+            ),
             ProcessScope::Unscoped
         );
     }
@@ -1765,17 +2101,186 @@ mod tests {
         let coord = wt(".claude/worktrees/coordinator", Some("main"));
         assert!(!coord.under_agent_worktrees());
         // Bound, the pointer gone: still refused.
-        assert!(refused(&resolve_with(&scopes, Some(&coord), None, NOW)));
+        assert!(refused(&resolve_with(
+            &scopes,
+            Some(&coord),
+            None,
+            NOW,
+            Caller::Session
+        )));
         // Unbound and not named agent-*: the ordinary hooks.
         let free = wt(".claude/worktrees/merge-v05", Some("main"));
         assert_eq!(
-            resolve_with(&scopes, Some(&free), None, NOW),
+            resolve_with(&scopes, Some(&free), None, NOW, Caller::Session),
             ProcessScope::Unscoped
         );
         // Named agent-*, unbound: refused.
         let agent = wt(".claude/worktrees/agent-q", Some("main"));
         assert!(agent.under_agent_worktrees());
-        assert!(refused(&resolve_with(&scopes, Some(&agent), None, NOW)));
+        assert!(refused(&resolve_with(
+            &scopes,
+            Some(&agent),
+            None,
+            NOW,
+            Caller::Session
+        )));
+    }
+
+    /// DEF-027 R-1: a process outside a Claude Code session is a person, and no scope governs a
+    /// person wherever their shell stands.
+    #[test]
+    fn a_person_outside_a_session_is_never_scoped() {
+        let env = |set: Option<&'static str>| {
+            move |k: &str| {
+                (k == "CLAUDECODE")
+                    .then_some(set)
+                    .flatten()
+                    .map(String::from)
+            }
+        };
+        assert_eq!(Caller::of_process_in(env(None)), Caller::Person);
+        assert_eq!(Caller::of_process_in(env(Some(""))), Caller::Person);
+        assert_eq!(Caller::of_process_in(env(Some("1"))), Caller::Session);
+        let s = scope(Role::Build);
+        let here = wt(
+            ".claude/worktrees/agent-x",
+            Some("feat/FEAT-214-agent-scopes"),
+        );
+        let mut revoked = s.clone();
+        revoked.revoked_at = Some(NOW.into());
+        let unbound = wt(".claude/worktrees/agent-new", None);
+        for (scopes, w, ptr) in [
+            (vec![s.clone()], &here, Some(pointer("SC-007"))),
+            (vec![revoked], &here, Some(pointer("SC-007"))),
+            (vec![s], &unbound, None),
+        ] {
+            assert_eq!(
+                resolve_with(&scopes, Some(w), ptr.as_ref(), NOW, Caller::Person),
+                ProcessScope::Unscoped
+            );
+        }
+        assert_eq!(
+            outside_core_refusal(Path::new("/nowhere"), "x", Caller::Person),
+            None
+        );
+    }
+
+    /// DEF-027 R-2: a hook call without a (non-empty, string) agent_id is the coordinator's.
+    #[test]
+    fn a_hook_call_without_agent_id_is_the_coordinator() {
+        assert_eq!(Caller::of_hook(&json!({"cwd": "/x"})), Caller::Coordinator);
+        assert_eq!(
+            Caller::of_hook(&json!({"agent_id": ""})),
+            Caller::Coordinator
+        );
+        assert_eq!(
+            Caller::of_hook(&json!({"agent_id": 7})),
+            Caller::Coordinator
+        );
+        assert_eq!(Caller::of_hook(&Value::Null), Caller::Coordinator);
+        assert_eq!(Caller::of_hook(&json!({"agent_id": "a1b2"})), Caller::Agent);
+        assert!(Caller::Agent.is_governed() && Caller::Session.is_governed());
+        assert!(!Caller::Coordinator.is_governed() && !Caller::Person.is_governed());
+        let here = wt(
+            ".claude/worktrees/agent-x",
+            Some("feat/FEAT-214-agent-scopes"),
+        );
+        let scopes = vec![scope(Role::Build)];
+        assert_eq!(
+            resolve_with(&scopes, Some(&here), None, NOW, Caller::Coordinator),
+            ProcessScope::Unscoped
+        );
+    }
+
+    /// DEF-027 R-3: a dead scope stops its agent and frees every other shell; a live one still
+    /// governs a session.
+    #[test]
+    fn a_dead_scope_stops_its_agent_and_frees_every_other_shell() {
+        let here = wt(
+            ".claude/worktrees/agent-x",
+            Some("feat/FEAT-214-agent-scopes"),
+        );
+        let ptr = pointer("SC-007");
+        let live = scope(Role::Build);
+        let mut revoked = live.clone();
+        revoked.revoked_at = Some(NOW.into());
+        revoked.revoked_by = Some("V".into());
+        for (dead, at) in [(revoked, NOW), (live.clone(), LATER)] {
+            let scopes = vec![dead];
+            assert!(matches!(
+                resolve_with(&scopes, Some(&here), Some(&ptr), at, Caller::Agent),
+                ProcessScope::Refused { .. }
+            ));
+            for c in [Caller::Session, Caller::Coordinator, Caller::Person] {
+                assert_eq!(
+                    resolve_with(&scopes, Some(&here), Some(&ptr), at, c),
+                    ProcessScope::Unscoped,
+                    "{c:?}"
+                );
+            }
+        }
+        assert_eq!(
+            resolve_with(
+                std::slice::from_ref(&live),
+                Some(&here),
+                Some(&ptr),
+                NOW,
+                Caller::Session
+            ),
+            ProcessScope::Scoped(live)
+        );
+    }
+
+    /// DEF-027 R-7: a refusal tells someone who is not the agent how to get out of it.
+    #[test]
+    fn refusals_name_the_way_out_for_someone_who_is_not_the_agent() {
+        let mut s = scope(Role::Build);
+        s.revoked_at = Some(NOW.into());
+        let here = wt(".claude/worktrees/agent-x", None);
+        let unbound = resolve_with(&[scope(Role::Build)], Some(&here), None, NOW, Caller::Agent);
+        let expired = resolve_with(
+            &[scope(Role::Build)],
+            Some(&here),
+            Some(&pointer("SC-007")),
+            LATER,
+            Caller::Agent,
+        );
+        let revoked = resolve_with(
+            &[s],
+            Some(&here),
+            Some(&pointer("SC-007")),
+            NOW,
+            Caller::Agent,
+        );
+        for r in [unbound, expired, revoked] {
+            let ProcessScope::Refused { why, .. } = r else {
+                panic!("{r:?}")
+            };
+            assert!(why.contains("If you are the coordinator"), "{why}");
+            assert!(
+                why.contains("git -C <path>") && why.contains("project folder"),
+                "{why}"
+            );
+        }
+    }
+
+    /// DEF-027: which paths are an agent's worktree, without touching the disk.
+    #[test]
+    fn agent_worktree_paths_are_told_by_name() {
+        let root = Path::new("/repo");
+        assert!(is_agent_worktree_path(
+            Path::new("/repo/.claude/worktrees/agent-1/api"),
+            root
+        ));
+        assert!(!is_agent_worktree_path(
+            Path::new("/repo/.claude/worktrees/def-1"),
+            root
+        ));
+        assert!(!is_agent_worktree_path(Path::new("/repo/api"), root));
+        assert!(!is_agent_worktree_path(
+            Path::new("/other/.claude/worktrees/agent-1"),
+            root
+        ));
     }
 
     /// FEAT-214 R-5: a commit under a build scope lands only on its branch, names its item, and

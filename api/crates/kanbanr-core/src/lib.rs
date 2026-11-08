@@ -36,6 +36,7 @@ pub mod evidence;
 pub mod export;
 pub mod flow;
 pub mod gantt;
+pub mod gates;
 pub mod git;
 pub mod gitdrift;
 pub mod gitmodel;
@@ -2691,6 +2692,204 @@ requirements:
         assert_eq!(def(&store).approval_state(), ApprovalState::Current);
     }
 
+    /// FTR-018 R-1: approve, ratify and sign off each record a hash of every part they covered.
+    #[test]
+    fn a_verdict_records_the_parts_it_covered() {
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        store
+            .set_feature_definition("demo", &f.code, Some(full_definition("Keep carts 7 days")))
+            .unwrap();
+        let def = |store: &Store| {
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&f.code)
+                .unwrap()
+                .definition
+                .clone()
+                .unwrap()
+        };
+        store.approve_feature("demo", &f.code, "Venkat").unwrap();
+        let d = def(&store);
+        assert!(!d.part_revs().is_empty());
+        assert_eq!(d.approval.as_ref().unwrap().parts, d.part_revs());
+        store
+            .signoff_feature("demo", &f.code, "design-review", "Venkat", "", "")
+            .unwrap();
+        let d = def(&store);
+        assert_eq!(d.signoffs[0].parts, d.part_revs());
+        let mut bypassed = full_definition("Keep carts 7 days");
+        bypassed.started_unapproved = "urgent".into();
+        store
+            .set_feature_definition("demo", &f.code, Some(bypassed))
+            .unwrap();
+        store
+            .ratify_feature("demo", &f.code, "Venkat", "built first")
+            .unwrap();
+        let d = def(&store);
+        assert_eq!(d.approval.as_ref().unwrap().parts, d.part_revs());
+    }
+
+    /// FTR-018 R-2: through the store, an approval stands while the definition only grows, and a
+    /// sign-off on the grown text reads as the review of the additions.
+    #[test]
+    fn an_approval_stands_while_the_definition_only_grows() {
+        use crate::models::ApprovalState;
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        adopt_charter(&store, "demo");
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        let mut small = full_definition("Keep carts 7 days");
+        small.zachman.how.clear();
+        small.zachman.where_.clear();
+        store
+            .set_feature_definition("demo", &f.code, Some(small))
+            .unwrap();
+        let def = |store: &Store| {
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&f.code)
+                .unwrap()
+                .definition
+                .clone()
+                .unwrap()
+        };
+        store.approve_feature("demo", &f.code, "Venkat").unwrap();
+        store
+            .set_feature_definition("demo", &f.code, Some(full_definition("Keep carts 7 days")))
+            .unwrap();
+        assert_eq!(def(&store).approval_state(), ApprovalState::Extended);
+        assert_eq!(def(&store).approvals.len(), 1, "nothing was approved again");
+        store
+            .signoff_feature("demo", &f.code, "design-review", "Venkat", "", "")
+            .unwrap();
+        assert_eq!(def(&store).approval_state(), ApprovalState::Current);
+        // Changing approved text still lapses it.
+        store
+            .set_feature_definition("demo", &f.code, Some(full_definition("Keep carts 30 days")))
+            .unwrap();
+        assert_eq!(def(&store).approval_state(), ApprovalState::Lapsed);
+    }
+
+    /// FTR-018 R-9, R-10, R-11: additions are asked about once they need a decision, with the
+    /// parts added; a lapsed item names what was added, changed and removed.
+    #[test]
+    fn the_review_queue_lists_additions_once_they_need_a_decision() {
+        use serde_json::{Value, json};
+        let (store, _d) = temp_store();
+        new_project(&store, "demo");
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/workflow",
+            Some(&json!({"preset": "togaf"})),
+        )
+        .unwrap();
+        adopt_charter(&store, "demo");
+        // Implementation asks for a design review, as the walkthrough's process does.
+        let mut config = store.load("demo").unwrap().config;
+        config
+            .gates
+            .get_mut("Implementation")
+            .unwrap()
+            .signoffs
+            .push("design-review".into());
+        store.save_config("demo", &config).unwrap();
+        let queue = || -> Vec<Value> {
+            let out =
+                crate::dispatch::dispatch(&store, "GET", "/projects/demo/review", None).unwrap();
+            serde_json::from_str(&out).unwrap()
+        };
+        let entry = |code: &str| queue().into_iter().find(|v| v["code"] == code);
+        let add = |title: &str| {
+            let f = store
+                .add_feature("demo", title, "## Design\n\nHow.", "M", None)
+                .unwrap();
+            let mut small = full_definition("Keep carts 7 days");
+            small.zachman.how.clear();
+            small.zachman.where_.clear();
+            store
+                .set_feature_definition("demo", &f.code, Some(small))
+                .unwrap();
+            store.approve_feature("demo", &f.code, "Venkat").unwrap();
+            f.code
+        };
+        let grow = |code: &str| {
+            store
+                .set_feature_definition("demo", code, Some(full_definition("Keep carts 7 days")))
+                .unwrap();
+        };
+        let to = |code: &str, status: &str| {
+            store.move_feature("demo", code, status).unwrap();
+        };
+
+        // Before build, with no sign-off due: nothing to decide, so not listed.
+        let early = add("Early");
+        to(&early, "Business Arch");
+        grow(&early);
+        assert!(entry(&early).is_none(), "{:?}", queue());
+
+        // Next gate asks for design-review: listed as a sign-off, with the parts added.
+        let design = add("Design");
+        to(&design, "Business Arch");
+        to(&design, "System Design");
+        grow(&design);
+        let readiness = crate::dispatch::dispatch(
+            &store,
+            "GET",
+            &format!("/projects/demo/features/{design}/readiness"),
+            None,
+        )
+        .unwrap();
+        let e = entry(&design)
+            .unwrap_or_else(|| panic!("listed for its sign-off: {readiness} / {:?}", queue()));
+        assert_eq!(e["approval"], "signoff");
+        assert_eq!(
+            e["changes"]["added"],
+            json!(["zachman/how", "zachman/where"])
+        );
+
+        // At Implementation (the build stage): the additions need deciding at once.
+        let built = add("Built");
+        to(&built, "Business Arch");
+        to(&built, "System Design");
+        grow(&built);
+        store
+            .signoff_feature("demo", &built, "design-review", "Venkat", "", "")
+            .unwrap();
+        to(&built, "Implementation");
+        let mut more = full_definition("Keep carts 7 days");
+        more.goals.push("G-2".into());
+        store
+            .set_feature_definition("demo", &built, Some(more))
+            .unwrap();
+        let e = entry(&built).expect("listed once built");
+        assert_eq!(e["approval"], "added", "{e:?}");
+        assert_eq!(e["changes"]["added"], json!(["goals/G-2"]));
+
+        // Changed text lapses, and the entry names changed and removed parts.
+        let lapsed = add("Lapsed");
+        let mut changed = full_definition("Keep carts 30 days");
+        changed.goals.clear();
+        store
+            .set_feature_definition("demo", &lapsed, Some(changed))
+            .unwrap();
+        let e = entry(&lapsed).expect("lapsed is listed");
+        assert_eq!(e["approval"], "lapsed");
+        assert_eq!(e["changes"]["changed"], json!(["statement"]));
+        assert_eq!(e["changes"]["removed"], json!(["goals/G-1"]));
+        assert!(
+            e["changes"]["added"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("zachman/how"))
+        );
+    }
+
     #[test]
     fn the_start_gate_refuses_unapproved_work_but_never_blocks_closing_it() {
         let (store, _d) = temp_store();
@@ -3158,7 +3357,11 @@ requirements:
             &store,
             "PUT",
             "/projects/demo/config/cadence",
-            Some(&json!({"releases": true})),
+            // The four stages an older board has; turning releases on now gives other ones.
+            Some(&json!({
+                "releases": true,
+                "release_stages": ["candidate", "test", "staging", "production"],
+            })),
         )
         .unwrap();
         crate::releases::add(&store, "demo", "v0.1.0", "2026-10-31", "First cut").unwrap();
@@ -3708,14 +3911,12 @@ requirements:
         assert!(bad.is_err());
     }
 
-    /// FEAT-117 R-2: where the workflow declares its gates, doctor reports what the item's NEXT stage
-    /// needs — not everything a later stage will ask. A definition built stage by stage is not
-    /// incomplete for lacking what it is not yet expected to say.
-    #[test]
-    fn doctor_is_phase_aware() {
+    /// A TOGAF board with the charter adopted and one item at Vision, written up as far as Vision
+    /// asks (a statement and a goal).
+    fn togaf_vision_board(items: usize) -> (crate::Store, tempdir::TempDirLike, Vec<String>) {
         use crate::models::FeatureDefinition;
         use serde_json::json;
-        let (store, _d) = temp_store();
+        let (store, d) = temp_store();
         new_project(&store, "demo");
         crate::dispatch::dispatch(
             &store,
@@ -3725,44 +3926,60 @@ requirements:
         )
         .unwrap();
         adopt_charter(&store, "demo");
-        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
-        store
-            .set_feature_definition(
-                "demo",
-                &f.code,
-                Some(FeatureDefinition {
-                    statement: "Keep a cart for 7 days".into(),
-                    goals: vec!["G-1".into()],
-                    ..Default::default()
-                }),
-            )
-            .unwrap();
-        let report = crate::doctor::run_project(&store, "demo").unwrap();
-        let said: Vec<&str> = report
+        let mut codes = Vec::new();
+        for n in 0..items {
+            let f = store
+                .add_feature("demo", &format!("Cart {n}"), "", "M", None)
+                .unwrap();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &f.code,
+                    Some(FeatureDefinition {
+                        statement: "Keep a cart for 7 days".into(),
+                        goals: vec!["G-1".into()],
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+            codes.push(f.code);
+        }
+        (store, d, codes)
+    }
+
+    fn said_about(report: &crate::doctor::Report, code: &str) -> String {
+        report
             .issues
             .iter()
-            .filter(|i| i.code.as_deref() == Some(f.code.as_str()))
+            .filter(|i| i.code.as_deref() == Some(code))
             .map(|i| i.message.as_str())
-            .collect();
-        let all = said.join(" | ");
-        // Business Arch asks who, what and why, and requirements…
-        for asked in [
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    /// DEF-021 R-1, R-2 (replaces FEAT-117 R-2's `doctor_is_phase_aware`): where the workflow
+    /// declares its gates, doctor warns only about what the gate of the item's CURRENT stage asks.
+    /// What a later stage asks is not a warning, though the readiness endpoint still lists it.
+    #[test]
+    fn doctor_warns_only_about_the_current_stage() {
+        let (store, _d, codes) = togaf_vision_board(1);
+        let report = crate::doctor::run_project(&store, "demo").unwrap();
+        let all = said_about(&report, &codes[0]);
+        for later in [
             "[MISSING: Who]",
             "[MISSING: What]",
             "[MISSING: Why]",
             "no requirements",
+            "[MISSING: How]",
+            "[MISSING: Where]",
         ] {
-            assert!(all.contains(asked), "{asked} not reported: {all}");
-        }
-        // …and not how or where, which System Design asks later.
-        for later in ["[MISSING: How]", "[MISSING: Where]"] {
             assert!(!all.contains(later), "{later} reported too early: {all}");
         }
-        // The next-stage answer is on the readiness endpoint too, with what the stage is for.
+        // The next-stage answer is on the readiness endpoint, with what the stage is for.
         let out = crate::dispatch::dispatch(
             &store,
             "GET",
-            &format!("/projects/demo/features/{}/readiness", f.code),
+            &format!("/projects/demo/features/{}/readiness", codes[0]),
             None,
         )
         .unwrap();
@@ -3967,6 +4184,73 @@ requirements:
         );
         item.release = None;
         assert_eq!(wait(&project.config, &unshipped, &item), None, "no release");
+    }
+
+    /// DEF-021 R-4: an item that reached a stage and then stopped meeting its gate still warns.
+    #[test]
+    fn doctor_warns_when_the_current_stage_is_no_longer_met() {
+        let (store, _d, codes) = togaf_vision_board(1);
+        store
+            .move_feature("demo", &codes[0], "Business Arch")
+            .unwrap();
+        let report = crate::doctor::run_project(&store, "demo").unwrap();
+        let all = said_about(&report, &codes[0]);
+        assert!(all.contains("no requirements"), "not reported: {all}");
+    }
+
+    /// DEF-021 R-3: items waiting for what a later stage asks are counted per stage, with the same
+    /// number of things `check` lists for that stage.
+    #[test]
+    fn doctor_counts_what_the_next_stage_asks() {
+        let (store, _d, codes) = togaf_vision_board(2);
+        let report = crate::doctor::run_project(&store, "demo").unwrap();
+        let project = store.load("demo").unwrap();
+        let charter = crate::charter::load(&store, "demo").unwrap();
+        let ctx = crate::readiness::Context::load(&store, "demo", &project.config);
+        let next = crate::readiness::immediate_next_gate(
+            &project,
+            Some(&charter),
+            project
+                .features
+                .iter()
+                .find(|f| f.code == codes[0])
+                .unwrap(),
+            &ctx,
+        )
+        .unwrap();
+        let n = next
+            .gaps
+            .iter()
+            .chain(next.warnings.iter())
+            .filter(|g| crate::doctor::doctor_relevant(g))
+            .count();
+        assert!(n > 0);
+        assert_eq!(report.ahead.len(), 1, "{:?}", report.ahead);
+        let a = &report.ahead[0];
+        assert_eq!(
+            (a.project.as_str(), a.stage.as_str()),
+            ("demo", "Business Arch")
+        );
+        assert_eq!((a.items, a.things), (2, 2 * n));
+    }
+
+    /// DEF-021 R-3, R-5: the counts are not issues, change no exit status, and are left out of the
+    /// JSON when there are none.
+    #[test]
+    fn doctor_ahead_counts_are_not_issues() {
+        let (store, _d, codes) = togaf_vision_board(1);
+        let report = crate::doctor::run_project(&store, "demo").unwrap();
+        assert!(!report.ahead.is_empty());
+        assert!(!report.has_errors());
+        let all = said_about(&report, &codes[0]);
+        assert!(!all.contains("Business Arch"), "{all}");
+        let v = serde_json::to_value(&report).unwrap();
+        assert!(v["ahead"][0]["stage"] == "Business Arch");
+        assert!(v["issues"].is_array());
+        // A board with nothing waiting has no `ahead` key.
+        let (store, _d2, _) = togaf_vision_board(0);
+        let v = serde_json::to_value(crate::doctor::run_project(&store, "demo").unwrap()).unwrap();
+        assert!(v.get("ahead").is_none(), "{v}");
     }
 
     /// FEAT-115 R-3: finishing the last task does not carry an item past its end status's gate —
@@ -4490,6 +4774,142 @@ requirements:
         store
             .move_feature_approved("demo", &code, "Scheduled", None)
             .unwrap();
+    }
+
+    /// FTR-023 R-1, R-2: a design sign-off pins the whole spec it was given on, and keeps its text.
+    #[test]
+    fn a_design_signoff_pins_the_design_it_was_given_on() {
+        let (store, _d, code) = skip_board(vec![crate::readiness::Condition::SpecSections {
+            spec_sections: vec!["Design".into()],
+        }]);
+        let spec = "## Why\nA cart.\n\n## Design\nUse a map.\n";
+        store
+            .edit_feature("demo", &code, None, Some(spec.into()), None, None)
+            .unwrap();
+        store
+            .signoff_feature("demo", &code, "design-review", "Ada L", "", "")
+            .unwrap();
+        let (text, rev) = crate::readiness::spec_pin(spec);
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        let given = f.signoff_current("design-review").unwrap();
+        assert_eq!(given.spec_rev, rev);
+        assert_eq!(store.spec_pin_text("demo", &code, &rev), Some(text));
+        // A sign-off no gate pins carries no pin.
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert!(f.signoff_current("release").unwrap().spec_rev.is_empty());
+        // One changed line outside ## Design, and it no longer stands.
+        store
+            .edit_feature(
+                "demo",
+                &code,
+                None,
+                Some(spec.replace("A cart.", "A basket.")),
+                None,
+                None,
+            )
+            .unwrap();
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert!(f.signoff_current("design-review").is_none());
+        assert!(f.signoff_spec_changed("design-review").is_some());
+        assert!(f.signoff_current("release").is_some());
+    }
+
+    /// FTR-023 R-4, R-5, R-6, R-8, R-10: a design edited after its sign-off comes back to the
+    /// Review page with the change, and signing again settles it.
+    #[test]
+    fn the_review_queue_brings_back_a_changed_design() {
+        use serde_json::json;
+        let (store, _d, code) = skip_board(vec![crate::readiness::Condition::SpecSections {
+            spec_sections: vec!["Design".into()],
+        }]);
+        let spec = "## Why\nA cart.\n\n## Design\nUse a map.\n";
+        store
+            .edit_feature("demo", &code, None, Some(spec.into()), None, None)
+            .unwrap();
+        let queue = || -> Vec<serde_json::Value> {
+            serde_json::from_str(
+                &crate::dispatch::dispatch(&store, "GET", "/projects/demo/review", None).unwrap(),
+            )
+            .unwrap()
+        };
+        let entry = || queue().into_iter().find(|e| e["code"] == code.as_str());
+        let (_, rev) = crate::readiness::spec_pin(spec);
+
+        // Before the gate: a sign-off entry whose brief is the spec it will pin.
+        let e = entry().unwrap();
+        assert_eq!(e["approval"], "signoff");
+        assert_eq!(e["spec_rev"], rev.as_str());
+        assert_eq!(
+            e["spec"]["text"],
+            crate::readiness::spec_pin(spec).0.as_str()
+        );
+        assert_eq!(e["spec"]["diff"], json!([]));
+
+        let sign = |rev: &str| {
+            crate::dispatch::dispatch(
+                &store,
+                "POST",
+                &format!("/projects/demo/features/{code}/signoff/design-review"),
+                Some(&json!({"by": "Ada L", "spec_rev": rev})),
+            )
+        };
+        sign(&rev).unwrap();
+        store
+            .move_feature_approved("demo", &code, "Build", None)
+            .unwrap();
+        // The next stage's own sign-off comes first in the queue; settle it.
+        assert_eq!(entry().unwrap()["approval"], "signoff");
+        store
+            .signoff_feature("demo", &code, "release", "Ada L", "", "")
+            .unwrap();
+        assert!(entry().is_none(), "{:?}", queue());
+
+        // A line outside ## Design changes: back on the page, with the one change.
+        let edited = spec.replace("A cart.", "A basket.");
+        store
+            .edit_feature("demo", &code, None, Some(edited.clone()), None, None)
+            .unwrap();
+        let e = entry().unwrap();
+        assert_eq!(e["approval"], "spec_changed");
+        assert_eq!(e["signoffs_needed"], json!(["design-review"]));
+        let new_rev = crate::readiness::spec_pin(&edited).1;
+        assert_eq!(e["spec_rev"], new_rev.as_str());
+        assert_eq!(e["spec"]["previous_kept"], true);
+        assert_eq!(e["spec"]["signed_by"], "Ada L");
+        let changed: Vec<_> = e["spec"]["diff"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|l| l["op"] != "same")
+            .map(|l| format!("{}{}", l["op"], l["text"]))
+            .collect();
+        assert_eq!(
+            changed,
+            vec!["\"removed\"\"A cart.\"", "\"added\"\"A basket.\""]
+        );
+
+        // The text kept at the last sign-off is gone: still listed, and says so.
+        let pin = store
+            .project_dir("demo")
+            .join("pins")
+            .join(&code)
+            .join(format!("{rev}.md"));
+        std::fs::rename(&pin, pin.with_extension("gone")).unwrap();
+        let e = entry().unwrap();
+        assert_eq!(e["approval"], "spec_changed");
+        assert_eq!(e["spec"]["previous_kept"], false);
+        assert_eq!(e["spec"]["diff"], json!([]));
+        assert_eq!(
+            e["spec"]["text"],
+            crate::readiness::spec_pin(&edited).0.as_str()
+        );
+
+        // Signing again on the changed text pins it and drops the item from the queue.
+        sign(&new_rev).unwrap();
+        assert!(entry().is_none(), "{:?}", queue());
     }
 
     /// FEAT-114 R-3: a sign-off that cannot say who gave it is not evidence of anything.
@@ -7528,5 +7948,240 @@ requirements:
             json!({ "carry_to": "backlog" }),
         );
         assert!(closed.get("coverage_warnings").is_none(), "{closed}");
+    }
+
+    // ---- kind paths (FTR-019) --------------------------------------------------------------
+
+    /// A TOGAF board with an adopted charter, as the method has it (design and docs on).
+    fn togaf_board() -> (Store, tempdir::TempDirLike) {
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/workflow",
+            Some(&serde_json::json!({"preset": "togaf"})),
+        )
+        .unwrap();
+        adopt_charter(&store, "demo");
+        (store, d)
+    }
+
+    fn add_of_kind(store: &Store, title: &str, kind: Option<&str>) -> String {
+        store
+            .add_feature_of_kind("demo", title, "", "M", None, kind)
+            .unwrap()
+            .code
+    }
+
+    fn define_and_approve(store: &Store, code: &str) {
+        store
+            .set_feature_definition("demo", code, Some(full_definition("Keep carts 7 days")))
+            .unwrap();
+        store.approve_feature("demo", code, "Ada L").unwrap();
+    }
+
+    #[test]
+    fn a_chore_without_a_statement_or_requirement_is_refused_its_first_move() {
+        let (store, _d) = togaf_board();
+        let code = add_of_kind(&store, "Pin the CI image", Some("chore"));
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(crate::models::FeatureDefinition::default()),
+            )
+            .unwrap();
+        let err = store
+            .move_feature_gated("demo", &code, "Implementation", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("cannot move"), "{err}");
+        for asked in ["statement", "goal", "requirement"] {
+            assert!(err.contains(asked), "{asked} not asked: {err}");
+        }
+        // Nothing moved.
+        let at = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .status
+            .clone();
+        assert_eq!(at, "Vision");
+    }
+
+    #[test]
+    fn a_chore_with_a_statement_goals_and_requirements_moves_on() {
+        let (store, _d) = togaf_board();
+        let code = add_of_kind(&store, "Pin the CI image", Some("chore"));
+        define_and_approve(&store, &code);
+        // The Design section and its review are the feature's, not the chore's.
+        store
+            .move_feature_gated("demo", &code, "Implementation", None)
+            .unwrap();
+        let mut def = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        def.requirements[0].tests[0].state = crate::models::TestState::Green;
+        def.requirements[0].tests[0].checked_rev = "abc1234".into();
+        store
+            .set_feature_definition("demo", &code, Some(def))
+            .unwrap();
+        // The docs part stays on for a chore: its sign-off is still asked at the integrate stage.
+        store
+            .signoff_feature("demo", &code, "docs-folded", "Ada L", "", "")
+            .unwrap();
+        store
+            .move_feature_gated("demo", &code, "Migration", None)
+            .unwrap();
+        let project = store.load("demo").unwrap();
+        let f = project.feature(&code).unwrap();
+        let walked: Vec<&str> = f
+            .history
+            .iter()
+            .flat_map(|t| [t.from.as_str(), t.to.as_str()])
+            .collect();
+        assert_eq!(
+            walked,
+            ["Vision", "Implementation", "Implementation", "Migration"]
+        );
+    }
+
+    #[test]
+    fn a_feature_still_walks_every_togaf_stage() {
+        let (store, _d) = togaf_board();
+        let code = add_of_kind(&store, "Carts", None);
+        define_and_approve(&store, &code);
+        // A feature cannot skip Business Arch and System Design.
+        let err = store
+            .move_feature("demo", &code, "Implementation")
+            .unwrap_err();
+        assert!(
+            matches!(err, CoreError::TransitionNotAllowed { .. }),
+            "{err}"
+        );
+        assert!(!err.to_string().contains("its path is"), "{err}");
+        // A chore cannot enter a stage off its path.
+        let chore = add_of_kind(&store, "Pin", Some("chore"));
+        let err = store
+            .move_feature("demo", &chore, "Business Arch")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("is a chore: its path is Vision \u{2192} Implementation"),
+            "{err}"
+        );
+        // The feature's way is unchanged: through Business Arch and System Design.
+        for stage in ["Business Arch", "System Design"] {
+            store
+                .move_feature_gated("demo", &code, stage, None)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn a_chore_path_drops_design_review_and_keeps_approval_and_docs() {
+        let (store, _d) = togaf_board();
+        let project = store.load("demo").unwrap();
+        let charter = crate::charter::load(&store, "demo").unwrap();
+        let ctx = crate::readiness::Context::load(&store, "demo", &project.config);
+        let feature_code = add_of_kind(&store, "Carts", None);
+        let chore_code = add_of_kind(&store, "Pin", Some("chore"));
+        for code in [&feature_code, &chore_code] {
+            store
+                .set_feature_definition("demo", code, Some(full_definition("Keep carts")))
+                .unwrap();
+        }
+        let project = store.load("demo").unwrap();
+        let gate = |code: &str| {
+            let f = project.feature(code).unwrap();
+            let all = crate::readiness::next_gates(&project, Some(&charter), f, &ctx);
+            all.into_iter()
+                .find(|g| g.status == "Implementation")
+                .map(|g| {
+                    (
+                        g.signoffs_needed,
+                        g.gaps
+                            .into_iter()
+                            .map(|x| x.message)
+                            .collect::<Vec<_>>()
+                            .join(" | "),
+                    )
+                })
+                .unwrap_or_default()
+        };
+        // The gate for the build stage: what the feature is asked, and the chore.
+        let (feature_signoffs, feature_gaps) = {
+            // A feature reaches Implementation from System Design; judge the gate directly.
+            let gates = project.config.effective_gates();
+            let g = &gates["Implementation"];
+            let f = project.feature(&feature_code).unwrap();
+            let gaps =
+                crate::readiness::evaluate_entering(f, None, &g.requires, &ctx, "Implementation");
+            (
+                g.signoffs.clone(),
+                gaps.into_iter()
+                    .map(|x| x.message)
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            )
+        };
+        assert!(feature_signoffs.iter().any(|s| s == "design-review"));
+        assert!(feature_gaps.contains("Design"), "{feature_gaps}");
+        let (chore_signoffs, chore_gaps) = gate(&chore_code);
+        assert!(
+            !chore_signoffs.iter().any(|s| s == "design-review"),
+            "{chore_signoffs:?}"
+        );
+        assert!(!chore_gaps.contains("Design"), "{chore_gaps}");
+        // Both are still asked for the approval.
+        assert!(chore_gaps.contains("approv"), "{chore_gaps}");
+        assert!(feature_gaps.contains("approv"), "{feature_gaps}");
+        // And the integrate stage keeps its docs check for the chore.
+        let migration = project.config.effective_gates()["Migration"].clone();
+        assert!(
+            migration
+                .requires
+                .contains(&crate::readiness::Condition::Check(
+                    crate::readiness::Check::DocsUpdated
+                ))
+        );
+    }
+
+    #[test]
+    fn a_chore_still_needs_the_users_approval_to_start_building() {
+        let (store, _d) = togaf_board();
+        let code = add_of_kind(&store, "Pin the CI image", Some("chore"));
+        store
+            .set_feature_definition("demo", &code, Some(full_definition("Pin the image")))
+            .unwrap();
+        let err = store
+            .move_feature_gated("demo", &code, "Implementation", None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("approv"), "{err}");
+        // Approved, it builds; and the release sign-off is still listed for the end.
+        store.approve_feature("demo", &code, "Ada L").unwrap();
+        store
+            .move_feature_gated("demo", &code, "Implementation", None)
+            .unwrap();
+        let project = store.load("demo").unwrap();
+        let charter = crate::charter::load(&store, "demo").unwrap();
+        let ctx = crate::readiness::Context::load(&store, "demo", &project.config);
+        let gates = project.config.effective_gates();
+        assert_eq!(gates["Operations"].signoffs, ["release"]);
+        // The chore's path still ends at the stage that asks for the sign-off.
+        let path = project.config.path_for(Some("chore")).unwrap();
+        assert_eq!(path.stages.last().map(String::as_str), Some("Operations"));
+        // Recording one is a person's act; the gate lists it as needed until one is made.
+        let f = project.feature(&code).unwrap();
+        let next = crate::readiness::next_gates(&project, Some(&charter), f, &ctx);
+        assert!(next.iter().any(|g| g.status == "Migration"));
     }
 }

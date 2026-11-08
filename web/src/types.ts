@@ -192,6 +192,10 @@ export interface Signoff {
   at: string;
   /** The definition content it covered; empty on a withdrawal. */
   rev: string;
+  /** A hash per part of the definition it covered (FTR-018). */
+  parts?: Record<string, string>;
+  /** A hash of the whole spec it covered, when its gate asks for spec sections (FTR-023). */
+  spec_rev?: string;
   note?: string;
   doc?: string;
   status?: string;
@@ -214,6 +218,8 @@ export interface Approval {
   by: string;
   at: string;
   rev: string;
+  /** A hash per part of the definition the approval covered (FTR-018). */
+  parts?: Record<string, string>;
 }
 
 export interface Requirement {
@@ -266,7 +272,11 @@ export interface PendingReview {
   status: string;
   /** `unratified`: finished under a recorded bypass and never agreed to (FEAT-109). */
   /** `release`: agreed, and its next stage is the end — which planned release is it in (FEAT-185)? */
-  approval: "missing" | "lapsed" | "unratified" | "signoff" | "release";
+  /** `added`: approved, then text was added that now needs a decision (FTR-018). */
+  /** `spec_changed`: the spec a sign-off pinned changed after it was given (FTR-023). */
+  approval: "missing" | "lapsed" | "unratified" | "signoff" | "release" | "added" | "spec_changed";
+  /** Parts added, changed and removed since the last decision (FTR-018), by part key. */
+  changes?: { added: string[]; changed: string[]; removed: string[] };
   /** Finished work listed only because its approval lapsed (DEF-013). */
   finished?: boolean;
   /** Sign-offs the item's next stage is waiting on (FEAT-117). */
@@ -278,6 +288,20 @@ export interface PendingReview {
   rev?: string;
   started_unapproved?: string;
   definition: FeatureDefinition;
+  /** The hash of the spec's current text, when the sign-off asked pins the spec (FTR-023). */
+  spec_rev?: string;
+  /** The spec that sign-off pins, with what changed since the last one (FTR-023). */
+  spec?: SpecBrief;
+}
+
+export interface SpecBrief {
+  signoff: string;
+  text: string;
+  /** False when the earlier sign-off's text is missing from the board. */
+  previous_kept: boolean;
+  signed_by: string;
+  signed_at: string;
+  diff: { op: "same" | "added" | "removed"; text: string }[];
 }
 
 /** One thing an item is missing, as the daemon's readiness engine reports it (FEAT-112). The rules
@@ -333,7 +357,7 @@ export interface ItemDiagrams {
 /** Per live item, keyed by code: what its card counts, and the next stage with how much it lacks. */
 export type Readiness = Record<
   string,
-  { gaps: Gap[]; next: { status: string; missing: number; signoffs: string[]; tasks_open: number; ends: boolean }[] }
+  { gaps: Gap[]; next: { status: string; missing: number; signoffs: string[]; tasks_open: number; ends: boolean; immediate?: boolean; for_you?: number }[] }
 >;
 
 /** A mirrored external issue (e.g. a GitHub issue kept in step with this feature). */
@@ -413,6 +437,8 @@ export interface ProjectConfig {
   gates?: Record<string, Gate>;
   /** Which prefix an item's code gets from its kind (FEAT-217). Absent: FEAT for every item. */
   codes?: CodesConfig;
+  /** A shorter path through the stages for some kinds, keyed by kind (FTR-019). Absent: none. */
+  paths?: Record<string, KindPath>;
   /** Days or story points (FEAT-121). */
   estimate_unit?: "days" | "points";
   /** Whether the project uses sprints and releases at all (FEAT-121). */
@@ -423,12 +449,14 @@ export interface ProjectConfig {
     release?: string;
     /** The stages a release moves through; the last is the cut (FEAT-183). */
     release_stages?: string[];
+    /** The gates a stage needing `gate_passed` requires a passed result of (FTR-002). */
+    commit_gates?: string[];
     integration_branch?: string;
     main_branch?: string;
     /** Branching follows the git model the cadence implies (FEAT-189). */
     git_model?: boolean;
     /** Each release stage's conditions and entry actions, keyed by stage name (FEAT-212). */
-    release_gates?: Record<string, { purpose?: string; requires?: string[]; on_enter?: string[] }>;
+    release_gates?: Record<string, { purpose?: string; requires?: string[]; after?: string[]; on_enter?: string[] }>;
     /** What a release's `prepare` action commits onto `release/<V>` (FEAT-212). */
     release_prepare?: {
       version_files?: { path: string; match?: string }[];
@@ -483,6 +511,14 @@ export interface Release {
   stages?: { stage: string; by: string; at: string; reason?: string }[];
   /** The code branch, made on entering the first stage. */
   branch?: string;
+  /** The cut release this patches (FEAT-184); absent for an ordinary release. */
+  parent?: string;
+  /** When the stage that tags was entered (FTR-026); a tagged release still `planned` is waiting on its later stages. */
+  tagged_at?: string;
+  /** The commit the tag names. */
+  tag_commit?: string;
+  /** The patch release that replaced it after its tag's CI run failed; its tag stays in git. */
+  superseded_by?: string;
 }
 
 /** A release's notes as they are on its branch `release/<V>` (FEAT-216). */
@@ -517,9 +553,21 @@ export interface CutPreview {
   why?: string;
 }
 
+/** A gate's verdict recorded for one commit (FTR-002). */
+export interface GateResult {
+  name: string;
+  commit: string;
+  passed: boolean;
+  by: string;
+  at: string;
+  source: "person" | "local";
+  url?: string;
+  note?: string;
+}
+
 /** One condition of a release stage a promotion enters, and whether it holds (FEAT-212). */
 export interface PlanCondition {
-  check: "items_finished" | "prepared" | "main_at_release" | "pushed";
+  check: "items_finished" | "prepared" | "main_at_release" | "pushed" | "gate_passed" | "tag_passed" | "items_merged" | "stage_passed";
   stage: string;
   holds: boolean;
   detail: string;
@@ -535,13 +583,28 @@ export interface PlanStep {
   blocked?: string;
 }
 
+/** The newest result recorded for a release's tag (FTR-026). */
+export interface TagResult {
+  commit: string;
+  gate: string;
+  state: "passed" | "failed" | "none";
+  result?: GateResult;
+}
+
 /** What promoting a release would do, with nothing changed (FEAT-212). */
 export interface ReleasePlan {
   version: string;
   from: string;
   to: string;
   direction: string;
+  /** This promotion enters the stage that tags. */
   cut: boolean;
+  /** This promotion enters a stage after the cut: a confirmation by the user (FTR-026). */
+  confirm: boolean;
+  /** This promotion enters the last stage and ships the release (FTR-026). */
+  ships: boolean;
+  /** The tag's recorded CI result, while the release is tagged and not shipped (FTR-026). */
+  tag?: TagResult;
   /** What the one button says: "Promote to main", "Cut v0.2.1". */
   button: string;
   conditions: PlanCondition[];
@@ -560,6 +623,13 @@ export interface ReleasePlan {
   empty: boolean;
   /** Worth knowing, not stopping: e.g. the notes carry an earlier date (DEF-001). */
   warnings?: string[];
+}
+
+/** The stages an item of one kind passes, what its first move asks, and the method parts left out. */
+export interface KindPath {
+  stages: string[];
+  requires?: Condition[];
+  method_off?: string[];
 }
 
 export interface Gate {

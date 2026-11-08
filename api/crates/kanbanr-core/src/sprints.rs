@@ -150,6 +150,151 @@ pub fn add(
     Ok(sprint)
 }
 
+/// What to change on a planned sprint. Fields left `None` are not touched.
+#[derive(Debug, Clone, Default)]
+pub struct SprintEdit {
+    pub name: Option<String>,
+    pub goal: Option<String>,
+    pub start: Option<String>,
+    pub length_days: Option<u32>,
+    pub end: Option<String>,
+    /// `Some(None)` clears the capacity.
+    pub capacity: Option<Option<f64>>,
+}
+
+/// Change a sprint that has not started: its plan is the planner's to reshape. Once started its
+/// dates and goal are the record of what happened (burndown and retro read them), so it is refused.
+/// Nothing is written until every field checks.
+pub fn edit(store: &Store, id: &str, code: &str, edit: &SprintEdit) -> Result<Sprint> {
+    cadence_on(store, id)?;
+    let mut sprints = load(store, id)?;
+    let sprint = find(&mut sprints, code)?;
+    match sprint.state {
+        SprintState::Planned => {}
+        SprintState::Active => {
+            return Err(CoreError::Unsupported(format!(
+                "{code} has started — its dates and goal are the record of what happened; add a sprint instead"
+            )));
+        }
+        SprintState::Closed => {
+            return Err(CoreError::Unsupported(format!(
+                "{code} is closed — its dates and goal are the record of what happened; add a sprint instead"
+            )));
+        }
+    }
+    let date = |x: &str| {
+        crate::gantt::parse_ymd(x)
+            .ok_or_else(|| CoreError::Unsupported(format!("'{x}' is not a date (YYYY-MM-DD)")))
+    };
+    if edit.length_days.is_some() && edit.end.is_some() {
+        return Err(CoreError::Unsupported(
+            "give a length or an end, not both".into(),
+        ));
+    }
+    let old_start = date(&sprint.start)?;
+    let old_end = date(&sprint.end)?;
+    let new_start = match &edit.start {
+        Some(x) => date(x)?,
+        None => old_start,
+    };
+    let new_end = if let Some(x) = &edit.end {
+        date(x)?
+    } else if let Some(length) = edit.length_days {
+        new_start
+            .checked_add(time::Duration::days(i64::from(length.max(1)) - 1))
+            .unwrap_or(new_start)
+    } else {
+        // Only the start moved (or nothing did): keep the length.
+        new_start
+            .checked_add(old_end - old_start)
+            .unwrap_or(new_start)
+    };
+    if new_end < new_start {
+        return Err(CoreError::Unsupported(format!(
+            "{code} would end ({}) before it starts ({})",
+            crate::gantt::fmt_date(new_end),
+            crate::gantt::fmt_date(new_start)
+        )));
+    }
+    let name = match &edit.name {
+        Some(n) if n.trim().is_empty() => {
+            return Err(CoreError::Unsupported(
+                "a sprint's name cannot be empty".into(),
+            ));
+        }
+        Some(n) => Some(n.trim().to_string()),
+        None => None,
+    };
+    if let Some(Some(c)) = edit.capacity
+        && c <= 0.0
+    {
+        return Err(CoreError::Unsupported(
+            "capacity must be more than zero (to clear it, give none)".into(),
+        ));
+    }
+    if let Some(n) = name {
+        sprint.name = n;
+    }
+    if let Some(g) = &edit.goal {
+        sprint.goal = g.trim().to_string();
+    }
+    sprint.start = crate::gantt::fmt_date(new_start);
+    sprint.end = crate::gantt::fmt_date(new_end);
+    if let Some(c) = edit.capacity {
+        sprint.capacity = c;
+    }
+    let edited = sprint.clone();
+    save(store, id, &sprints)?;
+    Ok(edited)
+}
+
+/// Remove a sprint that holds nothing: planned, with no item in it. Anything else would lose a
+/// reference (an item's sprint, a burndown, a retro's carried list), so it is refused with why.
+pub fn remove(store: &Store, id: &str, code: &str) -> Result<Sprint> {
+    cadence_on(store, id)?;
+    let mut sprints = load(store, id)?;
+    let at = sprints
+        .iter()
+        .position(|s| s.code == code)
+        .ok_or_else(|| CoreError::Unsupported(format!("no sprint {code}")))?;
+    match sprints[at].state {
+        SprintState::Planned => {}
+        SprintState::Active => {
+            return Err(CoreError::Unsupported(format!(
+                "{code} has started — close it (`kanbanr sprint close {code}`) rather than remove it"
+            )));
+        }
+        SprintState::Closed => {
+            return Err(CoreError::Unsupported(format!(
+                "{code} is closed — it is the record of a sprint that ran, so it stays"
+            )));
+        }
+    }
+    let project = store.load_meta(id)?;
+    let held: Vec<&str> = project
+        .features
+        .iter()
+        .filter(|f| f.sprint.as_deref() == Some(code))
+        .map(|f| f.code.as_str())
+        .collect();
+    if !held.is_empty() {
+        let shown: Vec<&str> = held.iter().copied().take(10).collect();
+        let more = held.len().saturating_sub(shown.len());
+        return Err(CoreError::Unsupported(format!(
+            "{code} holds {}{} — only an empty sprint is removed; plan the items into another sprint first",
+            shown.join(", "),
+            if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            }
+        )));
+    }
+    let removed = sprints.remove(at);
+    save(store, id, &sprints)?;
+    Ok(removed)
+}
+
 /// What planning some items into a sprint produced: the sprint, and a warning when the committed
 /// estimate goes over its capacity.
 #[derive(Debug, Clone, Serialize)]
@@ -591,6 +736,150 @@ mod tests {
         let closed = super::close(&store, "shop", "SP-001", Some("backlog")).unwrap();
         let carried: Vec<&str> = closed.carried.iter().map(|c| c.code.as_str()).collect();
         assert_eq!(carried, [early.code.as_str()]);
+    }
+
+    fn sprint_bytes(store: &Store) -> Vec<u8> {
+        std::fs::read(store.project_dir("shop").join("sprints.yaml")).unwrap()
+    }
+
+    /// FTR-022 R-7: a planned sprint's fields change, and only the ones given.
+    #[test]
+    fn a_planned_sprint_can_be_edited() {
+        let (store, _codes, dir) = board("edit", Default::default());
+        let sp = super::add(&store, "shop", "2026-10-05", Some(5), "old", Some(10.0), "").unwrap();
+        let e = super::SprintEdit {
+            name: Some(" Alpha ".into()),
+            goal: Some("ship it".into()),
+            start: Some("2026-10-12".into()),
+            ..Default::default()
+        };
+        let got = super::edit(&store, "shop", &sp.code, &e).unwrap();
+        assert_eq!(got.name, "Alpha");
+        assert_eq!(got.goal, "ship it");
+        assert_eq!(
+            (got.start.as_str(), got.end.as_str()),
+            ("2026-10-12", "2026-10-16")
+        );
+        assert_eq!(got.capacity, Some(10.0));
+        let e = super::SprintEdit {
+            length_days: Some(14),
+            ..Default::default()
+        };
+        let got = super::edit(&store, "shop", &sp.code, &e).unwrap();
+        assert_eq!(
+            (got.start.as_str(), got.end.as_str()),
+            ("2026-10-12", "2026-10-25")
+        );
+        let e = super::SprintEdit {
+            end: Some("2026-10-30".into()),
+            capacity: Some(None),
+            ..Default::default()
+        };
+        let got = super::edit(&store, "shop", &sp.code, &e).unwrap();
+        assert_eq!(got.end, "2026-10-30");
+        assert_eq!(got.capacity, None);
+        assert_eq!((got.name.as_str(), got.goal.as_str()), ("Alpha", "ship it"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-022 R-8: a started or closed sprint is a record, so an edit is refused and nothing moves.
+    #[test]
+    fn a_started_sprint_refuses_edits() {
+        let (store, _codes, dir) = board("started", Default::default());
+        let e = super::SprintEdit {
+            name: Some("x".into()),
+            ..Default::default()
+        };
+        super::start(&store, "shop", "SP-001").unwrap();
+        let before = sprint_bytes(&store);
+        let err = super::edit(&store, "shop", "SP-001", &e)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("has started"), "{err}");
+        super::close(&store, "shop", "SP-001", None).unwrap();
+        let before_closed = sprint_bytes(&store);
+        let err = super::edit(&store, "shop", "SP-001", &e)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("is closed"), "{err}");
+        assert_eq!(sprint_bytes(&store), before_closed);
+        assert_ne!(before, before_closed);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-022 R-8: a bad date, or an end before the start, refuses the whole edit.
+    #[test]
+    fn an_edit_with_bad_dates_changes_nothing() {
+        let (store, _codes, dir) = board("baddates", Default::default());
+        super::add(&store, "shop", "2026-10-12", Some(5), "", None, "").unwrap();
+        let before = sprint_bytes(&store);
+        for e in [
+            super::SprintEdit {
+                name: Some("renamed".into()),
+                start: Some("10/05".into()),
+                ..Default::default()
+            },
+            super::SprintEdit {
+                name: Some("renamed".into()),
+                end: Some("2026-10-01".into()),
+                ..Default::default()
+            },
+        ] {
+            assert!(super::edit(&store, "shop", "SP-002", &e).is_err());
+            assert_eq!(sprint_bytes(&store), before);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-022 R-12: editing one sprint leaves the others as they were.
+    #[test]
+    fn an_edit_keeps_unknown_fields_and_other_sprints() {
+        let (store, _codes, dir) = board("keeps", Default::default());
+        super::add(&store, "shop", "2026-10-12", Some(5), "g", Some(4.0), "").unwrap();
+        let before = super::load(&store, "shop").unwrap();
+        let e = super::SprintEdit {
+            goal: Some("new".into()),
+            ..Default::default()
+        };
+        super::edit(&store, "shop", "SP-002", &e).unwrap();
+        let after = super::load(&store, "shop").unwrap();
+        assert_eq!(after[0], before[0]);
+        assert_eq!(after.len(), 2);
+        assert_eq!(after[1].goal, "new");
+        assert_eq!(after[1].capacity, before[1].capacity);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-022 R-9: an empty planned sprint can go.
+    #[test]
+    fn an_empty_planned_sprint_can_be_removed() {
+        let (store, _codes, dir) = board("rm", Default::default());
+        super::add(&store, "shop", "2026-10-12", Some(5), "", None, "").unwrap();
+        let removed = super::remove(&store, "shop", "SP-002").unwrap();
+        assert_eq!(removed.code, "SP-002");
+        let left = super::load(&store, "shop").unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].code, "SP-001");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-022 R-9: a sprint that holds an item, or has started, stays, and the refusal says why.
+    #[test]
+    fn a_sprint_with_items_or_a_start_is_not_removed() {
+        let (store, codes, dir) = board("rmno", Default::default());
+        let err = super::remove(&store, "shop", "SP-001")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(&codes[0]), "{err}");
+        for c in &codes {
+            store.set_feature_sprint("shop", c, None).unwrap();
+        }
+        super::start(&store, "shop", "SP-001").unwrap();
+        let err = super::remove(&store, "shop", "SP-001")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("has started"), "{err}");
+        assert_eq!(super::load(&store, "shop").unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -15,6 +15,8 @@ const base = {
   to: "main",
   direction: "forward",
   cut: false,
+  confirm: false,
+  ships: false,
   button: "Promote to main",
   conditions: [{ check: "items_finished", stage: "main", holds: true, detail: "2 planned item(s), all finished" }],
   steps: [{ action: "move_main", stage: "main", does: "fast-forwards main to release/v0.3.0 (abc1234)", noop: false }],
@@ -31,6 +33,7 @@ const cut = {
   from: "main",
   to: "production",
   cut: true,
+  ships: true,
   button: "Cut v0.3.0",
   conditions: [
     { check: "main_at_release", stage: "production", holds: true, detail: "main is at release/v0.3.0" },
@@ -113,6 +116,74 @@ expect("no repo: says the monitor was not started in the project folder", a.miss
 a = releaseAction(empty, true);
 expect("empty release: no button", !a.button && !a.enabled && a.label === "", a);
 expect("empty release: only the sentence", a.note === empty.missing[0] && a.command === "kanbanr release plan v0.3.0 <CODE>…", a);
+
+// FTR-002: an unmet gate_passed offers recording a result for the release tip, never reading one.
+const ungated = {
+  ...cut,
+  ready: false,
+  conditions: [
+    cut.conditions[0],
+    {
+      check: "gate_passed",
+      stage: "production",
+      holds: false,
+      detail: "ci has no recorded result for abc1234",
+      fix: "look at your CI for abc1234, then record its verdict: kanbanr gate record <gate> --passed --commit <sha>",
+    },
+  ],
+  missing: ["look at your CI for abc1234, then record its verdict"],
+};
+a = releaseAction(ungated, true);
+expect("gate missing: disabled, names the result", !a.enabled && a.missing.some((m) => m.text.startsWith("gate_passed: ci has no recorded result")), a);
+expect("gate missing: the form is for the release tip", a.gate?.commit === "abc1234def" && a.gate.record.includes("kanbanr gate record <gate> --passed --commit abc1234def"), a);
+a = releaseAction({ ...ungated, repo: false }, true);
+expect("gate missing, no repo: still shown with the tip", a.missing.some((m) => m.text.startsWith("gate_passed:")), a);
+a = releaseAction({ ...ungated, release_tip: "" }, true);
+expect("gate missing, no tip: no form", a.gate === undefined, a);
+a = releaseAction(cut, true);
+expect("no gate condition: no form", a.gate === undefined, a);
+
+// FTR-026: a stage after the tag is a confirmation, offered only after a passed result for the tag.
+const confirm = {
+  ...base,
+  from: "tag",
+  to: "staging",
+  confirm: true,
+  ships: true,
+  button: "Confirm staging: ship v0.3.0",
+  conditions: [{ check: "tag_passed", stage: "staging", holds: true, detail: "ci passed on abc1234 (recorded by Ada L)" }],
+  steps: [],
+  preview: [{ code: "FEAT-1", ships: true }],
+  tag: { commit: "abc1234def5678", gate: "ci", state: "passed", result: { passed: true, by: "Ada L" } },
+};
+a = releaseAction(confirm, true);
+expect("confirm after a pass: the button confirms and is enabled", a.confirm && a.enabled && a.label === "Confirm staging: ship v0.3.0" && a.secondary.length === 0, a);
+const red = {
+  ...confirm,
+  ready: false,
+  conditions: [{ check: "tag_passed", stage: "staging", holds: false, detail: "ci failed on abc1234", fix: "start a patch release" }],
+  missing: ["start a patch release"],
+  tag: { commit: "abc1234def5678", gate: "ci", state: "failed", result: { passed: false, by: "Ada L", note: "two red" } },
+};
+a = releaseAction(red, true);
+expect("confirm after a failure: not enabled, run again or patch", !a.enabled && a.secondary.join() === "runAgain,startPatch" && a.missing.some((m) => m.text.startsWith("tag_passed")), a);
+const none = { ...red, ready: true, conditions: [], missing: [], tag: { commit: "abc1234def5678", gate: "ci", state: "none" } };
+a = releaseAction(none, true);
+expect("confirm with no result: not enabled even if the plan has no condition", !a.enabled && a.missing.length === 1 && a.secondary.length === 0, a);
+a = releaseAction({ ...none, tag: { commit: "abc1234def5678", gate: "", state: "none" } }, true);
+expect("confirm with no gate to judge by: enabled", a.enabled, a);
+
+const inert = { ...base, to: "test", button: "Promote to test", conditions: [], steps: [] };
+a = releaseAction(inert, true);
+expect(
+  "a promotion to an inert stage says nothing happens",
+  a.button && a.enabled && a.note === undefined && a.does.includes("Nothing happens when you promote to test: it only records that the release passed it."),
+  a,
+);
+a = releaseAction({ ...none, conditions: [], steps: [] }, true);
+expect("a confirmation stage gets no such line", a.does.every((d) => !d.startsWith("Nothing happens")), a);
+a = releaseAction(base, true);
+expect("a promotion with a step gets no such line", a.does.every((d) => !d.startsWith("Nothing happens")), a);
 
 if (problems.length) {
   for (const p of problems) console.error(`web::release_button_says_what_it_does — ${p}`);

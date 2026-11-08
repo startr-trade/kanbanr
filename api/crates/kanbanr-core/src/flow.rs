@@ -45,7 +45,13 @@ pub fn plan_start(
                 )
             })?,
     };
-    require_reachable(config, code, &feature.status, &status)?;
+    require_reachable(
+        config,
+        code,
+        &feature.status,
+        &status,
+        feature.kind.as_deref(),
+    )?;
     let branch = match repo {
         None => None,
         // An item branch is made from the default branch, and a repository with no commits has
@@ -120,8 +126,9 @@ pub fn plan_finish(
         }
     };
     let feature = project.feature(&code)?;
-    let terminal = config.finish_target(&feature.status);
-    require_reachable(config, &code, &feature.status, &terminal)?;
+    let kind = feature.kind.as_deref();
+    let terminal = config.finish_target_for(&feature.status, kind);
+    require_reachable(config, &code, &feature.status, &terminal, kind)?;
 
     let mut lines: Vec<String> = if config.declares_gates() {
         Vec::new()
@@ -149,18 +156,41 @@ pub fn plan_finish(
 
 /// Refuse a jump the workflow does not allow, naming the stages in between — each has its own
 /// gate, so they are walked, not skipped (FEAT-115).
-pub fn require_reachable(config: &ProjectConfig, code: &str, from: &str, to: &str) -> Result<()> {
-    if from == to || config.transition_allowed(from, to) {
+pub fn require_reachable(
+    config: &ProjectConfig,
+    code: &str,
+    from: &str,
+    to: &str,
+    kind: Option<&str>,
+) -> Result<()> {
+    if from == to || config.transition_allowed_for(from, to, kind) {
         return Ok(());
     }
-    Err(CoreError::Refused(match config.path_between(from, to) {
-        Some(path) if path.len() > 2 => format!(
-            "{code} is at {from}, and {to} is reached through {}. Move it through those first — \
+    // An item on a kind's path is told the path, since that, not the plain transitions, refused it.
+    if let Some(path) = config
+        .path_for(kind)
+        .filter(|p| p.stages.iter().any(|s| s == from))
+    {
+        let kind = kind
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+            .unwrap_or("feature");
+        return Err(CoreError::Refused(format!(
+            "{code} is a {kind}: its path is {}. It is at {from}, and {to} is not next on it — \
+             move it with `kanbanr move {code} <STATUS>` one stage at a time.",
+            path.stages.join(" → ")
+        )));
+    }
+    Err(CoreError::Refused(
+        match config.path_between_for(from, to, kind) {
+            Some(path) if path.len() > 2 => format!(
+                "{code} is at {from}, and {to} is reached through {}. Move it through those first — \
              each stage has its own gate — with `kanbanr move {code} <STATUS>`.",
-            path[1..path.len() - 1].join(" → ")
-        ),
-        _ => format!("the workflow has no way from {from} to {to}"),
-    }))
+                path[1..path.len() - 1].join(" → ")
+            ),
+            _ => format!("the workflow has no way from {from} to {to}"),
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -217,7 +247,8 @@ mod tests {
                 &config,
                 "FEAT-001",
                 "Completed",
-                "Nowhere"
+                "Nowhere",
+                None
             )),
             "the workflow has no way from Completed to Nowhere"
         );
@@ -229,11 +260,12 @@ mod tests {
                 &config,
                 "FEAT-001",
                 "Planned",
-                "Completed"
+                "Completed",
+                None
             ))
             .contains("reached through Scheduled")
         );
-        assert!(require_reachable(&config, "FEAT-001", "Planned", "Scheduled").is_ok());
+        assert!(require_reachable(&config, "FEAT-001", "Planned", "Scheduled", None).is_ok());
     }
 
     /// FEAT-217 R-8: a defect coded by its kind starts on its `fix/` branch, named by that code.

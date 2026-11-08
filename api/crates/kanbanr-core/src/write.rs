@@ -90,7 +90,7 @@ pub fn apply(
     sender: &dyn eventing::WebhookSender,
 ) -> Result<Applied, WriteError> {
     let scope = match std::env::current_dir() {
-        Ok(cwd) => agentscope::resolve(store, &cwd),
+        Ok(cwd) => agentscope::resolve(store, &cwd, agentscope::Caller::of_process()),
         Err(_) => ProcessScope::Unscoped,
     };
     apply_as(

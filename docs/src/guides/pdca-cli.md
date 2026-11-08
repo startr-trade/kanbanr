@@ -140,7 +140,8 @@ created feat/FEAT-001-restore-the-cart from main
 FEAT-001 -> Do
 ```
 
-**An edit lapses your approval.** If the definition changes after you approve, approve it again.
+**Adding keeps your approval; changing lapses it.** Text added to the definition is reviewed at the
+next decision. If you change or remove approved text, approve it again.
 
 Do the work, then commit with `kanbanr commit`, which adds `Refs: kanbanr:FEAT-001` to the commit:
 

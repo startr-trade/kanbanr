@@ -7,6 +7,8 @@ You don't need to learn any commands:
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page, promotions and the
   cut on the **Releases** page.
+  Claude tells you what is waiting there and links to it. It never records a decision, and it
+  doesn't ask for one in a plan or a question.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [TOGAF from the command line](togaf-cli.md).
@@ -43,16 +45,30 @@ the process, the branches it will use and where each one merges. **Accepting the
 Ask for the things that make the rest of this guide work:
 
 > Agree a charter with me first, then set up release stages so that main has to be pushed before
-> anything is tagged. Use only candidate, main and production.
+> anything is tagged.
 
 **Do the charter first.** Gates aren't enforced until a project has one, and items created before it
 are exempt. Without one, a move that a gate would have refused still goes through, with a warning
 saying what was missing. Claude asks for the project's purpose and goals. Every item then links to a goal.
 
-**CI is yours to check.** kanbanr can see that main was pushed, but it can't see whether CI passed, so
-you look at CI yourself before the cut.
+**Releases can have stages after the tag.** The tag only says which commit the release is. Stages
+after it, such as staging or production, are for you to confirm once you have seen the release
+work there. The release ships, and its items reach their last status, when you confirm the last
+one. If CI fails on the tag, record the failed result and choose **Start a patch release**: Claude
+files the defect with the run's link and your notes, and the failed release is marked superseded.
+Claude tells you where the release is and never confirms a stage for you.
 
-**Name the stages you want.** Otherwise you get the defaults, which include `test` and `staging`.
+**You record CI's verdict.** kanbanr can see that main was pushed, but it never asks a server whether
+CI passed. You look at CI yourself, then record what it said on the **Releases** page (**Record
+result**, with a link to the run if you like). A release stage can require that result before the
+cut. Claude tells you when it is missing and never records it for you.
+
+**The stages are candidate, main and tag.** A project that turns releases on gets these three, each
+doing something: candidate prepares the release, main moves main once the items are finished, and tag
+cuts the release once main is pushed. If you have CI, say so and the tag waits for your recorded
+result. Ask for other stages only if you have a pipeline behind them. Releases on a board made before
+this keep the four they had, `test` and `staging` among them. Those two do nothing, and Claude says so
+when you configure them.
 Those two record that a release passed a point and do nothing else: nothing builds or deploys when
 you promote to them. Add them when you have a pipeline and environments behind them.
 
@@ -66,8 +82,9 @@ merged.
 
 ## Planning a sprint
 
-Setup offers to create a first sprint and a first release. Use them rather than asking for new ones,
-because a sprint can be closed but not edited or deleted, so settle its dates and goal during setup.
+Setup does not create a sprint or a release. Ask for them when you are ready, and Claude asks the
+sprint's goal and dates, or the release's version and target, then. A planned sprint can be changed
+until it starts, and an empty sprint or release made by mistake can be removed.
 
 > Start the first sprint. We need saved carts: shoppers should be able to come back to their basket.
 > Put that in the sprint, for the first release.
@@ -89,28 +106,28 @@ gate. When something's missing, Claude either drafts it or brings it to you.
 
 | Phase | What Claude does | What you do on the Review page |
 |---|---|---|
-| **Vision** | Writes what it is and why | Nothing yet. The page may offer **Approve**, but it isn't needed here and lapses when the definition grows |
+| **Vision** | Writes what it is and why | Nothing yet. The page may offer **Approve**, but it isn't needed here |
 | **Business Arch** | Drafts who, what, why and the requirements | **Approve** |
-| **System Design** | Proposes how and where, and checks that against the requirements | **Approve** again, because the definition grew |
-| **Implementation** | Writes the design and its task list, and names a test for each requirement | **Approve** again, then **Sign off design-review** |
+| **System Design** | Proposes how and where, and checks that against the requirements | Nothing: the approval stands while the definition grows |
+| **Implementation** | Writes the design and its task list, and names a test for each requirement | **Sign off design-review**, which also reviews what was added |
 | **Migration** | Builds on the item's branch, runs the tests and updates the docs | **Sign off docs-folded**, which appears once the docs are updated |
 | **Operations** | Nothing: the cut moves it here | **Sign off release** |
 
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
 
-**You'll approve more than once, and that's deliberate.** Each approval covers exactly the text you
-saw. If the definition changes, your approval lapses and the item returns to the Review page. Read
-what changed, then approve again.
+**You approve once, and review what's added.** Each approval covers the text you saw. Adding answers
+keeps it, and the Review page shows what was added when the next decision comes, usually the design
+review. Changing or removing what you approved lapses it, and the item returns to the Review page.
 
-**Claude may ask you in a question instead.** It can also say that accepting a plan is your approval.
-These record the same approval as the Review page. If you'd rather decide on the page, tell Claude.
+**You decide on the Review page.** Claude tells you what's waiting there and links to it, and never records a decision for you. kanbanr refuses if it tries. If the monitor isn't running, Claude offers to start it.
 
 **A design can bring decisions with it.** Claude drafts each one as a decision record, and you use
 **Accept** or **Reject** on the Review page.
 
-**A sign-off doesn't lapse when the design changes.** Changing the design in the item's spec leaves
-**design-review** standing, so ask Claude to bring you any corrections it makes during the build.
+**A changed spec comes back to you.** Your **design-review** covers the item's spec as you saw it. If
+the spec changes afterwards, even outside the Design, the item returns to the Review page showing
+only what changed, and you sign again.
 
 **Operations means shipped.** **Sign off release** records your sign-off and leaves the item where it
 is. The item moves to Operations when the release it is planned into is cut. The **Releases** page
@@ -126,6 +143,18 @@ gate unless you say why, and that reason stays on the item.
 **Moving to Migration is the merge.** kanbanr merges the item's branch into the sprint's branch. It
 isn't released yet.
 
+### Chores
+
+A chore doesn't walk every phase. It goes Vision → Implementation → Migration → Operations, skipping Business Arch and System Design, because their
+questions don't fit small maintenance work. Tell Claude it's a chore when you ask for it.
+
+> Pin the CI image: it's a chore.
+
+Before its first move Claude asks once for what every item records: a one-sentence statement, the goal
+it serves, and a requirement in the EARS form that says how it's verified. You still approve it before the build starts, and you still give the **release** sign-off at the end. A chore has no Design section and no **design-review**, because there is no design to review. If
+you change an item's kind to a chore while it's at a phase the chore path leaves out, it's off
+the path: it moves by the ordinary moves, or back to Vision.
+
 ## Handing work to sub-agents
 
 > Have a sub-agent build these tasks.
@@ -137,10 +166,14 @@ move items, approve anything or push.
 You'll see its progress on the item's page as it works, and its scope on the **Workflow** page. When
 it finishes, Claude reviews the branch and brings you any decisions.
 
+Claude stays in the project folder while an agent works, and looks inside the agent's worktree
+without moving into it (`git -C`), so a scope never gets in your way or Claude's. Revoking an agent's
+scope stops that agent on its next tool call and never restricts you.
+
 ## Releasing
 
-Start once every item in the release has reached Migration. **Promote to candidate** is offered as
-soon as the release holds an item, even while work is still going on.
+Start once every item in the release has reached Migration. **Promote to candidate** is offered once
+every item in the release has reached Migration, and the Releases page lists any that has not.
 
 Follow this order and you won't have to go back:
 
@@ -153,7 +186,7 @@ Follow this order and you won't have to go back:
 | 5 | You | **Review** page: **Sign off release** on each item, if you haven't already |
 | 6 | You | **Releases** page: **Promote to main**. This moves main to the release, without tagging |
 | 7 | You | Terminal: `git push origin main`, then wait for CI to go green |
-| 8 | You | **Releases** page: **Check again**, then, with CI green, **Cut v0.1.0**. This tags main and moves any item not already there to Operations |
+| 8 | You | **Releases** page: **Check again**, then, with CI green, **Cut v0.1.0**. This tags main. If your stages continue after the tag, the page shows the result you recorded for it; when it is green, **Confirm** each later stage with a note of what you checked. Confirming the last one moves any item not already there to Operations |
 | 9 | You | Terminal: `git push origin v0.1.0`, then wait for the release workflow |
 | 10 | Claude | Say "The release is out. Bring it forward into the sprint" |
 

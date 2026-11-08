@@ -47,8 +47,9 @@ kanbanr approve FEAT-001     # records agreement, pinned to the definition's con
 kanbanr start FEAT-001       # refuses without a current approval
 ```
 
-Approval is pinned to a hash of the definition, so editing the definition afterwards **lapses** the
-approval rather than silently keeping it. The escape is explicit and recorded:
+Approval is pinned to a hash of each part of the definition, so changing or removing approved text
+afterwards **lapses** the approval rather than silently keeping it. Adding to the definition keeps
+the approval, and the additions are reviewed at the next decision. The escape is explicit and recorded:
 `kanbanr start FEAT-001 --override "why you are going ahead anyway"` (`--unapproved` still works), which stays on the item and
 is reported by `doctor` until it is reviewed.
 
@@ -117,6 +118,12 @@ method` says which parts of the method your project has on ([The method, on by
 default](processes.md#the-method-on-by-default)). A part you turn off is no longer asked for, but
 it is still good practice, and Claude never turns one off or on for you.
 
+**For a kind with its own path.** A process can leave method parts off for a kind: the built-in
+processes give chores a lighter path with no `design` and no `design-review`, so a chore isn't asked
+for a Design section or a design review. It is still asked for every other part, for the approval,
+and for every sign-off the stage it enters requires ([A lighter path for a
+kind](processes.md#a-lighter-path-for-a-kind)).
+
 **At the design role.** The item's spec gets a `## Design` written at implementation level
 ([The design stage](processes.md#the-design-stage-a-build-ready-design-in-the-spec)), ending with
 an implementation task list that a cheaper model can build one task at a time. The Design ends with
@@ -124,7 +131,9 @@ an implementation task list that a cheaper model can build one task at a time. T
 `affects_docs`. Every reference is a live link ([Tying code to the reason for
 it](traceability.md)). Decisions are drafted as proposed ADRs and put to you at once, and a question
 the design leaves open comes to you, never to a subagent. Leaving the role, the build stage asks for
-the Design and your **design-review** sign-off.
+the Design and your **design-review** sign-off. That sign-off covers the whole spec as it was when
+you gave it: if the spec changes afterwards, the item returns to the Review page showing only what
+changed.
 
 **At the build role.** `kanbanr start <CODE>` makes the item branch. With the git model on, it
 branches from the line of integration `kanbanr git model` names, not always from main. Commits go
@@ -142,7 +151,9 @@ boundaries, kanbanr enforces them, and Claude puts them in the agent's brief wor
 | Everything else on the board | refused: moves, approvals, sign-offs, definitions, specs, docs, other items, config; a `batch` only of these ops | refused |
 | Code | commits only on its item's branch, each naming the item | no edits, no commits |
 | Remote | never: no `git push`, no `kanbanr sync` | never |
-| Tests | on temporary boards only, never a real board | — |
+| Tests | on a temporary board: a folder under the system temporary directory that holds no scope, named by a literal path or `$TMPDIR/…`; never a real board | — |
+
+To walk a process through, an agent runs `kanbanr --data-dir $TMPDIR/walk init …` and then the same `--data-dir` (or `KANBANR_DATA_DIR`) on each command.
 
 Before starting each sub-agent, Claude issues it a scope with one command,
 `kanbanr scope issue <design|build> <CODE>`, starts the agent in its own worktree (design agents

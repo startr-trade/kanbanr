@@ -199,6 +199,13 @@
           "by": {
             "type": "string"
           },
+          "parts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "A hash of each part of the definition it covered (FTR-018), keyed as\n[`FeatureDefinition::part_revs`]. Empty on a record an older kanbanr wrote: such a record is\nno baseline, and any change to the definition lapses it.",
+            "type": "object"
+          },
           "rev": {
             "type": "string"
           }
@@ -270,6 +277,16 @@
           {
             "const": "lapsed",
             "description": "Approved, then the definition changed.",
+            "type": "string"
+          },
+          {
+            "const": "added",
+            "description": "Approved, then the definition gained parts that now need a decision (FTR-018): the item is\nat or past its build stage, or its next stage would refuse the additions.",
+            "type": "string"
+          },
+          {
+            "const": "spec_changed",
+            "description": "The spec a sign-off pinned changed after it was given, and the item has passed the gate\nthat asks for it (FTR-023).",
             "type": "string"
           }
         ]
@@ -411,8 +428,19 @@
         "additionalProperties": true,
         "description": "A project's rhythm (FEAT-121): whether it has sprints and releases, and their defaults.",
         "properties": {
+          "commit_gates": {
+            "description": "The gates (`ci`, `local`, ...) a release stage needing `gate_passed` requires a passed\nresult of for the release tip (FTR-002). Empty by default.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "git_model": {
             "description": "Branching follows the derived git model (FEAT-189): where `start` branches, sprint\nbranches, and lines of integration taking merges only. Off by default, so no board changes.",
+            "type": "boolean"
+          },
+          "has_ci": {
+            "description": "The project has CI, so the recommended `tag` stage also requires a passed `ci` result for\nthe release tip (FTR-020). Off by default.",
             "type": "boolean"
           },
           "integration_branch": {
@@ -458,6 +486,10 @@
           "sprints": {
             "default": false,
             "type": "boolean"
+          },
+          "tag_gate": {
+            "description": "The commit gate whose result judges a release's tag (FTR-026). Unset: the first of\n`commit_gates`. A result counts only when recorded after the tag was made.",
+            "type": "string"
           }
         },
         "required": [
@@ -972,6 +1004,31 @@
         ],
         "type": "object"
       },
+      "DiffLine": {
+        "description": "One line of a [`line_diff`].",
+        "properties": {
+          "op": {
+            "$ref": "#/components/schemas/DiffOp"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "text"
+        ],
+        "type": "object"
+      },
+      "DiffOp": {
+        "description": "How a line stands in a [`line_diff`].",
+        "enum": [
+          "same",
+          "added",
+          "removed"
+        ],
+        "type": "string"
+      },
       "Disposition": {
         "description": "A project-independent lane a feature falls into, since statuses are per-project (no shared\nvocabulary). Computed from the project config + the feature's task activity.",
         "oneOf": [
@@ -1293,6 +1350,10 @@
           },
           "release": {
             "description": "The release this item is planned into (FEAT-120), for projects that use releases.",
+            "type": "string"
+          },
+          "release_line": {
+            "description": "Which release shipped it, or will (FTR-001). Absent without releases.",
             "type": "string"
           },
           "source": {
@@ -1633,6 +1694,47 @@
         },
         "type": "object"
       },
+      "GateResult": {
+        "properties": {
+          "at": {
+            "description": "RFC 3339, UTC.",
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "commit": {
+            "description": "The full commit the result is about.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "source": {
+            "description": "`person` or `local`.",
+            "type": "string"
+          },
+          "url": {
+            "description": "A link to the run, `http(s)` only.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "commit",
+          "passed",
+          "by",
+          "at",
+          "source"
+        ],
+        "type": "object"
+      },
       "Goal": {
         "additionalProperties": true,
         "description": "An outcome the project commits to, not an output it produces.",
@@ -1767,6 +1869,36 @@
         "required": [
           "at",
           "verdict"
+        ],
+        "type": "object"
+      },
+      "KindPath": {
+        "description": "The path an item of one kind takes through a process (FTR-019): the stages it passes, what its\nfirst move asks, and the method parts that do not apply to it. A subset of the workflow's own\nstages in its own order, so no stage is invented and the board's columns do not change.",
+        "properties": {
+          "method_off": {
+            "description": "Method parts not asked of this kind. Approvals and sign-offs the stage itself names stay.",
+            "items": {
+              "$ref": "#/components/schemas/Part"
+            },
+            "type": "array"
+          },
+          "requires": {
+            "description": "Asked, in addition to the entered stage's gate, of the first move off the starting stage:\nwhere an item of this kind records why it exists and how it is verified.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "stages": {
+            "description": "At least two statuses, no no-op status, none twice, in the workflow's order, the first the\ndefault state. Neighbours on the path may move to each other whatever `transitions` says.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "stages"
         ],
         "type": "object"
       },
@@ -2089,6 +2221,16 @@
             "description": "The stage ends the work (an end status that is not a no-op): \"ready to complete\".",
             "type": "boolean"
           },
+          "for_you": {
+            "description": "How many of `missing` the user settles: sign-offs and the `approved` check (DEF-020).",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "immediate": {
+            "description": "The stage the item reaches next in the workflow's order, the one the Review page asks\nsign-offs for (DEF-020). A card speaks only of this one.",
+            "type": "boolean"
+          },
           "missing": {
             "description": "Everything the stage still lacks, its sign-offs included (as before FEAT-205).",
             "format": "uint",
@@ -2116,7 +2258,9 @@
           "missing",
           "signoffs",
           "tasks_open",
-          "ends"
+          "ends",
+          "immediate",
+          "for_you"
         ],
         "type": "object"
       },
@@ -2189,6 +2333,35 @@
             "type": "string"
           }
         ]
+      },
+      "PartChanges": {
+        "description": "What differs between the parts a decision covered and the definition now (FTR-018). Keys are\nthose of [`FeatureDefinition::part_revs`], sorted.",
+        "properties": {
+          "added": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "changed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "removed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "added",
+          "changed",
+          "removed"
+        ],
+        "type": "object"
       },
       "PlanCondition": {
         "description": "One condition of a stage entered or passed, and whether it holds (FEAT-212).",
@@ -2500,6 +2673,13 @@
             },
             "type": "array"
           },
+          "paths": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/KindPath"
+            },
+            "description": "A shorter path through the workflow for some work kinds (FTR-019), keyed by kind in lower\ncase. Absent: every kind walks every stage, and absent stays absent on disk.",
+            "type": "object"
+          },
           "process": {
             "$ref": "#/components/schemas/ProcessSource",
             "description": "The saved process this workflow was applied from, if it was (FEAT-169): what drift is\nmeasured against. An older kanbanr keeps it through `extra`, so it needs no schema bump."
@@ -2780,6 +2960,26 @@
             "const": "pushed",
             "description": "The release tip is on main's remote-tracking branch.",
             "type": "string"
+          },
+          {
+            "const": "gate_passed",
+            "description": "Every gate in `cadence.commit_gates` has a passed result recorded for the release tip.",
+            "type": "string"
+          },
+          {
+            "const": "tag_passed",
+            "description": "The newest result of the tag gate for the tag commit, recorded since the tag, is passed\n(FTR-026). Only a stage after the tag can require it.",
+            "type": "string"
+          },
+          {
+            "const": "items_merged",
+            "description": "Every item planned into the release is at the integrate stage or later.",
+            "type": "string"
+          },
+          {
+            "const": "stage_passed",
+            "description": "The release has been promoted into a stage a gate names in `after`. Only a plan names it\n(a gate lists `after`, not this), so it is not in `ALL`.",
+            "type": "string"
           }
         ]
       },
@@ -2787,6 +2987,13 @@
         "additionalProperties": true,
         "description": "One release stage's rules: what it is for, what must hold to enter it, and what entering it\ndoes.",
         "properties": {
+          "after": {
+            "description": "Earlier stages the release must have been promoted into before it enters this one.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "on_enter": {
             "items": {
               "$ref": "#/components/schemas/ReleaseAction"
@@ -2822,8 +3029,12 @@
             },
             "type": "array"
           },
+          "confirm": {
+            "description": "This promotion enters a stage after the cut: a confirmation by the user (FTR-026).",
+            "type": "boolean"
+          },
           "cut": {
-            "description": "This promotion is the cut.",
+            "description": "This promotion enters the stage that tags: the cut.",
             "type": "boolean"
           },
           "direction": {
@@ -2870,11 +3081,19 @@
             "description": "Whether the code repository was there to read.",
             "type": "boolean"
           },
+          "ships": {
+            "description": "This promotion enters the last stage: it ships the release (FTR-026).",
+            "type": "boolean"
+          },
           "steps": {
             "items": {
               "$ref": "#/components/schemas/PlanStep"
             },
             "type": "array"
+          },
+          "tag": {
+            "$ref": "#/components/schemas/TagResult",
+            "description": "The recorded CI result for the tag, once the release is tagged and not shipped (FTR-026)."
           },
           "tag_commit": {
             "$ref": "#/components/schemas/CommitLine",
@@ -2885,6 +3104,13 @@
           },
           "version": {
             "type": "string"
+          },
+          "warnings": {
+            "description": "Things worth knowing that do not stop the promotion, e.g. a stale release date (DEF-001).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -2893,6 +3119,8 @@
           "to",
           "direction",
           "cut",
+          "confirm",
+          "ships",
           "button",
           "conditions",
           "steps",
@@ -3007,6 +3235,18 @@
             "$ref": "#/components/schemas/ReleaseState",
             "default": "planned"
           },
+          "superseded_by": {
+            "description": "The patch release that replaced this one after its tag's CI run failed (FTR-026). The tag\nstays in git; the release never ships.",
+            "type": "string"
+          },
+          "tag_commit": {
+            "description": "The full sha the tag names (FTR-026).",
+            "type": "string"
+          },
+          "tagged_at": {
+            "description": "When the stage holding the tag action was entered (FTR-026), RFC 3339. A release that is\ntagged and still `Planned` is waiting for the stages after the tag.",
+            "type": "string"
+          },
           "target": {
             "description": "Target date, `YYYY-MM-DD`.",
             "type": "string"
@@ -3092,11 +3332,19 @@
             "$ref": "#/components/schemas/ApprovalKind",
             "description": "What is being asked."
           },
+          "changes": {
+            "$ref": "#/components/schemas/PartChanges",
+            "description": "The parts added, changed and removed since the last decision (FTR-018); present on\n`lapsed`, `added` and `signoff` entries that have a baseline to compare with."
+          },
           "code": {
             "type": "string"
           },
           "definition": {
             "$ref": "#/components/schemas/FeatureDefinition"
+          },
+          "finished": {
+            "description": "The item is finished work (DEF-013): listed only because its approval lapsed.",
+            "type": "boolean"
           },
           "in_progress": {
             "description": "What the ordering keys on, and useful to a client besides.",
@@ -3120,6 +3368,14 @@
             },
             "type": "array"
           },
+          "spec": {
+            "$ref": "#/components/schemas/SpecBrief",
+            "description": "The spec the sign-off asked pins, with what changed since the last sign-off (FTR-023)."
+          },
+          "spec_rev": {
+            "description": "The hash of the spec's current text, when the sign-off asked pins the spec (FTR-023): what\nthe verdict is pinned to, sent back with it.",
+            "type": "string"
+          },
           "started_unapproved": {
             "type": "string"
           },
@@ -3139,7 +3395,8 @@
           "started_unapproved",
           "definition",
           "rev",
-          "in_progress"
+          "in_progress",
+          "finished"
         ],
         "type": "object"
       },
@@ -3187,12 +3444,23 @@
           "note": {
             "type": "string"
           },
+          "parts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "A hash of each part of the definition it covered (FTR-018), keyed as\n[`FeatureDefinition::part_revs`]. Empty on a record an older kanbanr wrote: such a record is\nno baseline, and any change to the definition lapses it.",
+            "type": "object"
+          },
           "reason": {
             "description": "Why it was withdrawn. Giving a sign-off needs no reason; taking one back does.",
             "type": "string"
           },
           "rev": {
             "description": "The definition content it covered.",
+            "type": "string"
+          },
+          "spec_rev": {
+            "description": "A hash of the whole normalised spec it covered (FTR-023), when a gate that lists this\nsign-off also asks for spec sections. Empty on a record an older kanbanr wrote, or one no\ngate pins: such a sign-off is judged by the definition alone.",
             "type": "string"
           },
           "status": {
@@ -3260,6 +3528,46 @@
           "ref",
           "imported_at",
           "key"
+        ],
+        "type": "object"
+      },
+      "SpecBrief": {
+        "description": "The spec a sign-off pins, as the person is shown it (FTR-023).",
+        "properties": {
+          "diff": {
+            "description": "The current text against the kept one; empty on a first sign-off, when the earlier text\nwas not kept, or when nothing differs.",
+            "items": {
+              "$ref": "#/components/schemas/DiffLine"
+            },
+            "type": "array"
+          },
+          "previous_kept": {
+            "description": "False when an earlier sign-off pinned the spec but its text is missing from the board.\nTrue otherwise, including a first sign-off with nothing earlier to keep.",
+            "type": "boolean"
+          },
+          "signed_at": {
+            "type": "string"
+          },
+          "signed_by": {
+            "description": "Who gave the earlier sign-off, and when; empty on a first sign-off.",
+            "type": "string"
+          },
+          "signoff": {
+            "description": "The sign-off that pins it.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The spec's current text, normalised as it is pinned.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signoff",
+          "text",
+          "previous_kept",
+          "signed_by",
+          "signed_at",
+          "diff"
         ],
         "type": "object"
       },
@@ -3470,6 +3778,32 @@
         ],
         "type": "object"
       },
+      "TagResult": {
+        "description": "The newest result recorded for a release's tag (FTR-026), read from the board only.",
+        "properties": {
+          "commit": {
+            "description": "The commit the tag names.",
+            "type": "string"
+          },
+          "gate": {
+            "description": "The gate that judges it (`cadence.tag_gate`, else the first commit gate).",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/GateResult"
+          },
+          "state": {
+            "description": "`passed`, `failed` or `none`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit",
+          "gate",
+          "state"
+        ],
+        "type": "object"
+      },
       "Task": {
         "additionalProperties": true,
         "description": "A todo item belonging to a todo-list. `key` is short and unique within its todo-list.",
@@ -3672,7 +4006,7 @@
     }
   },
   "info": {
-    "description": "The read-only routes `kanbanr serve` answers for the monitor and for tools built on the board. Version 1 stays at `/api/...`; a breaking change would be published as v2 under `/api/v2/...`, with v1 kept for a deprecation period. Routes the daemon serves that are not listed here are internal and may change. Write routes (`serve --allow-writes`) are not part of this contract. Errors are `text/plain`. CORS is permissive; there is no authentication.",
+    "description": "The read-only routes `kanbanr serve` answers for the monitor and for tools built on the board. Version 1 stays at `/api/...`; a breaking change would be published as v2 under `/api/v2/...`, with v1 kept for a deprecation period. Routes the daemon serves that are not listed here are internal and may change. Write routes (`serve --allow-writes`) are not part of this contract. Errors are `text/plain`. The daemon answers only for its own host names and grants no cross-origin access; there is no authentication.",
     "license": {
       "identifier": "MIT OR Apache-2.0",
       "name": "MIT OR Apache-2.0"
@@ -4438,6 +4772,68 @@
           }
         },
         "summary": "The schedule as a Mermaid gantt diagram, by milestone"
+      }
+    },
+    "/api/projects/{project}/gate-results": {
+      "get": {
+        "operationId": "getProjectsGateResults",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only this gate's results.",
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only results for the commit with this hash (or prefix).",
+            "in": "query",
+            "name": "commit",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GateResult"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The gate results recorded for the project, oldest first: which gate, which commit, passed or failed, who and when"
       }
     },
     "/api/projects/{project}/gates": {

@@ -34,11 +34,64 @@ pub struct Issue {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Report {
     pub issues: Vec<Issue>,
+    /// What later stages will ask, counted per project and stage (DEF-021). Not warnings: they
+    /// never change `has_errors` and are left out of the JSON when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ahead: Vec<Ahead>,
+    /// Items already counted in `ahead`, so an item is one item per stage however many scans add to it.
+    #[serde(skip)]
+    ahead_seen: BTreeSet<(String, String, String)>,
+}
+
+/// How many items still lack something at the stage they reach next, and how many things in all.
+#[derive(Debug, Clone, Serialize)]
+pub struct Ahead {
+    pub project: String,
+    pub stage: String,
+    pub items: usize,
+    pub things: usize,
 }
 
 impl Report {
     pub fn has_errors(&self) -> bool {
         self.issues.iter().any(|i| i.severity == Severity::Error)
+    }
+
+    /// Count `things` an item lacks at `stage`, which it reaches next. The entries stay grouped by
+    /// project and in the workflow's order of stages.
+    fn count_ahead(&mut self, project: &Project, code: &str, stage: &str, things: usize) {
+        if things == 0 {
+            return;
+        }
+        let new_item =
+            self.ahead_seen
+                .insert((project.id.clone(), stage.to_owned(), code.to_owned()));
+        if let Some(a) = self
+            .ahead
+            .iter_mut()
+            .find(|a| a.project == project.id && a.stage == stage)
+        {
+            a.items += usize::from(new_item);
+            a.things += things;
+            return;
+        }
+        let position = |s: &str| project.config.statuses.iter().position(|x| x == s);
+        let at = self
+            .ahead
+            .iter()
+            .rposition(|a| a.project == project.id && position(&a.stage) <= position(stage))
+            .map(|i| i + 1)
+            .or_else(|| self.ahead.iter().position(|a| a.project == project.id))
+            .unwrap_or(self.ahead.len());
+        self.ahead.insert(
+            at,
+            Ahead {
+                project: project.id.clone(),
+                stage: stage.to_owned(),
+                items: 1,
+                things,
+            },
+        );
     }
 }
 
@@ -236,9 +289,10 @@ fn scan_definitions(
         }
 
         // The same rules every surface uses (FEAT-112). Where the workflow declares its gates,
-        // doctor asks only what the item's NEXT stage needs, plus that stage's warnings — a
-        // definition built stage by stage is not incomplete for lacking what a later stage asks
-        // (FEAT-117). Agreement and sign-offs are the review queue's questions, not doctor's.
+        // doctor warns only about what the gate of the item's CURRENT stage asks, plus its warnings
+        // — a definition built stage by stage is not incomplete for lacking what a later stage
+        // asks (FEAT-117, DEF-021). What the stage reached next still lacks is counted, not
+        // warned. Agreement and sign-offs are the review queue's questions, not doctor's.
         let gaps = if !project.config.declares_gates() {
             crate::readiness::evaluate(feature, Some(&goal_ids), crate::readiness::DOCTOR)
         } else {
@@ -248,16 +302,13 @@ fn scan_definitions(
                 Some(&goal_ids),
                 &[Check::Definition, Check::GoalsKnown, Check::Bypass],
             );
-            for next in crate::readiness::next_gates(project, Some(charter), feature, ctx) {
-                for gap in next.gaps.into_iter().chain(next.warnings) {
-                    if !matches!(
-                        gap.check,
-                        Check::Approved | Check::Signoff | Check::Definition
-                    ) && !gaps.contains(&gap)
-                    {
-                        gaps.push(gap);
-                    }
+            for gap in current_stage_gaps(project, charter, feature, ctx) {
+                if !gaps.contains(&gap) {
+                    gaps.push(gap);
                 }
+            }
+            if let Some((stage, ahead)) = next_stage_gaps(project, charter, feature, ctx) {
+                report.count_ahead(project, &feature.code, &stage, ahead.len());
             }
             gaps
         };
@@ -305,6 +356,61 @@ fn scan_definitions(
             });
         }
     }
+}
+
+/// Whether doctor says a gap at all: agreement and sign-offs are the Review queue's questions, and
+/// the definition's own presence is checked on every item regardless of stage.
+pub(crate) fn doctor_relevant(gap: &crate::readiness::Gap) -> bool {
+    use crate::readiness::Check;
+    !matches!(
+        gap.check,
+        Check::Approved | Check::Signoff | Check::Definition
+    )
+}
+
+/// What the gate of the item's current status asks and the item no longer meets: its `requires`
+/// then its `warns`. The item met this gate to be here, so a gap is drift (DEF-021).
+fn current_stage_gaps(
+    project: &Project,
+    charter: &crate::Charter,
+    feature: &crate::FeatureItem,
+    ctx: &crate::readiness::Context,
+) -> Vec<crate::readiness::Gap> {
+    let gates = project.config.effective_gates();
+    let Some(gate) = gates
+        .get(&feature.status)
+        .filter(|g| g.applies_to(feature.kind.as_deref()))
+    else {
+        return Vec::new();
+    };
+    let goal_ids = charter.goal_ids();
+    let status = &feature.status;
+    let mut gaps =
+        crate::readiness::evaluate_entering(feature, Some(&goal_ids), &gate.requires, ctx, status);
+    gaps.extend(crate::readiness::evaluate_entering(
+        feature,
+        Some(&goal_ids),
+        &gate.warns,
+        ctx,
+        status,
+    ));
+    gaps.retain(doctor_relevant);
+    gaps
+}
+
+/// The stage the item reaches next and what it still lacks there, by the same rules as
+/// `current_stage_gaps`; counted, never warned (DEF-021). `None` when there is no next stage.
+fn next_stage_gaps(
+    project: &Project,
+    charter: &crate::Charter,
+    feature: &crate::FeatureItem,
+    ctx: &crate::readiness::Context,
+) -> Option<(String, Vec<crate::readiness::Gap>)> {
+    let next = crate::readiness::immediate_next_gate(project, Some(charter), feature, ctx)?;
+    let mut gaps = next.gaps;
+    gaps.extend(next.warnings);
+    gaps.retain(doctor_relevant);
+    Some((next.status, gaps))
 }
 
 /// Architecture decisions in the graph (FEAT-057).
@@ -401,8 +507,7 @@ fn push(
 /// approval is not an answer: the definition changed, so the agreement no longer covers what was
 /// built, and the question is open again.
 pub(crate) fn unreconciled_bypass(def: &crate::models::FeatureDefinition) -> bool {
-    use crate::models::ApprovalState::{Current, Ratified};
-    !def.started_unapproved.trim().is_empty() && !matches!(def.approval_state(), Current | Ratified)
+    !def.started_unapproved.trim().is_empty() && !def.approval_state().is_agreed()
 }
 
 /// Live work under the method: not finished, on the board, and created since adoption. The first two
@@ -556,8 +661,9 @@ fn scan_references(store: &Store, project: &Project, report: &mut Report) {
     }
 }
 
-/// An item whose next stage asks for `docs_updated` but that names no docs (FEAT-180, Q2). The gate
-/// passes it — not every item touches an architecture doc — so this is where it is said.
+/// An item whose current stage asks for `docs_updated` but that names no docs (FEAT-180, Q2). The
+/// gate passes it — not every item touches an architecture doc — so this is where it is said; when
+/// only the next stage asks, it is counted (DEF-021).
 fn scan_declared_docs(
     project: &Project,
     charter: &crate::Charter,
@@ -576,12 +682,13 @@ fn scan_declared_docs(
         let Some(def) = f.definition.as_ref() else {
             continue;
         };
-        if !def.affects_docs.is_empty() || !def.exempt.trim().is_empty() {
+        if !crate::graph::is_live_work(&project.config, &f.status)
+            || !def.affects_docs.is_empty()
+            || !def.exempt.trim().is_empty()
+        {
             continue;
         }
-        if let Some(next) = crate::readiness::immediate_next_gate(project, Some(charter), f, ctx)
-            && asks(&next.status)
-        {
+        if asks(&f.status) {
             report.issues.push(Issue {
                 severity: Severity::Warning,
                 project: project.id.clone(),
@@ -589,9 +696,15 @@ fn scan_declared_docs(
                 message: format!(
                     "{} declares no docs it affects, and {} asks for docs_updated — name them in \
                      affects_docs, or confirm it changes none",
-                    f.code, next.status
+                    f.code, f.status
                 ),
             });
+        } else if let Some(next) =
+            crate::readiness::immediate_next_gate(project, Some(charter), f, ctx)
+            && asks(&next.status)
+        {
+            // Only the stage reached next asks: said as a count (DEF-021).
+            report.count_ahead(project, &f.code, &next.status, 1);
         }
     }
 }
@@ -815,7 +928,14 @@ fn describe(r: &crate::refs::Ref) -> String {
 
 fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
     let known: BTreeSet<&str> = project.config.statuses.iter().map(String::as_str).collect();
-    const EXPECTED: [&str; 5] = ["features", "milestones", "docs", "activity", "events"];
+    const EXPECTED: [&str; 6] = [
+        "features",
+        "milestones",
+        "docs",
+        "activity",
+        "events",
+        "pins",
+    ];
     let Ok(entries) = std::fs::read_dir(store.project_dir(&project.id)) else {
         return;
     };
@@ -1215,8 +1335,8 @@ mod tests {
     }
 
     /// FEAT-180 R-4 (doctor): a declared doc the board does not have is an error; an item whose
-    /// next stage asks for docs_updated but names no docs is warned about, and one that names its
-    /// docs is not.
+    /// current stage asks for docs_updated but names no docs is warned about, and one that names
+    /// its docs is not. While only the next stage asks (DEF-021), it is counted, not warned.
     #[test]
     fn affects_docs_unknown_and_undeclared_reported() {
         let (store, _dir) = fixture();
@@ -1275,9 +1395,31 @@ mod tests {
             )]
         );
         assert_eq!(about(&named.code, "declares no docs"), vec![]);
-        let warned = about(&silent.code, "declares no docs");
+        // Scheduled is only the next stage so far: a count, not a warning.
+        assert_eq!(about(&silent.code, "declares no docs"), vec![]);
+        let report = run_project(&store, "demo").unwrap();
+        assert!(
+            report
+                .ahead
+                .iter()
+                .any(|a| a.stage == "Scheduled" && a.items >= 1),
+            "{:?}",
+            report.ahead
+        );
+        // Once the item is at Scheduled, the stage asks now.
+        store
+            .move_feature("demo", &silent.code, "Scheduled")
+            .unwrap();
+        let issues = run_project(&store, "demo").unwrap().issues;
+        let warned: Vec<_> = issues
+            .iter()
+            .filter(|i| {
+                i.code.as_deref() == Some(silent.code.as_str())
+                    && i.message.contains("declares no docs")
+            })
+            .collect();
         assert_eq!(warned.len(), 1, "{issues:?}");
-        assert_eq!(warned[0].0, Severity::Warning);
+        assert_eq!(warned[0].severity, Severity::Warning);
     }
 
     /// FEAT-193 Q3: a project from before the method is asked once to choose, and choosing either

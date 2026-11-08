@@ -70,36 +70,75 @@ kanbanr charter set --file charter.yaml
 
 ### Release stages
 
-By default a release has four stages, and the cut does everything at once:
+A project that turns releases on gets three stages, `candidate`, `main` and `tag`, with the gates
+below written into the board's config, so you can see and edit them. Main has to be pushed
+before anything is tagged. Candidate waits for `items_merged`, so the release branch is made only once the items are
+merged; the commands below set the same thing. kanbanr can't see whether CI passed. Look at it yourself, then record what it said:
+`kanbanr gate record ci --passed --url <link to the run>`. Say the project has CI with
+`kanbanr config cadence --has-ci on` and the `tag` stage requires that result
+(`gate_passed`, with `ci` as the commit gate); without the flag it requires only `main_at_release`
+and `pushed`.
+
+A board made before 0.6 that has releases on and names no stages keeps the four it had, `candidate`,
+`test`, `staging` and `production`. `test` and `staging` do nothing, and kanbanr says so when you
+configure them and in `kanbanr release stages`. To move such a board to the three, run
+`kanbanr config cadence --release-stages candidate,main,tag`, then the `release-stage` lines below.
+Stages you add after `tag` follow the cut and are confirmed by you.
 
 ```text
-STAGE          REQUIRES                           ON ENTER
-candidate      —                                  branch                         default
-test           —                                  —                              default
-staging        —                                  —                              default
-production     —                                  move_main, tag                 the cut, default
-```
-
-We recommend three stages instead, so that main has to be pushed before anything is tagged.
-kanbanr can't see whether CI passed, so check that yourself before the cut:
-
-```text
-kanbanr config cadence --release-stages candidate,main,production
-kanbanr config release-stage candidate --on-enter branch,prepare
+kanbanr config cadence --release-stages candidate,main,tag
+kanbanr config release-stage candidate --requires items_merged --on-enter branch,prepare
 kanbanr config release-stage main --requires items_finished --on-enter move_main
-kanbanr config release-stage production --requires main_at_release,pushed --on-enter tag
+kanbanr config release-stage tag --requires main_at_release,pushed --on-enter tag
 kanbanr config release-prepare --version-file Cargo.toml --changelog CHANGELOG.md --notes "docs/releases/{version}.md"
 ```
 
 ```text
 STAGE          REQUIRES                           ON ENTER
-candidate      —                                  branch, prepare
+candidate      items_merged                       branch, prepare
 main           items_finished                     move_main
-production     main_at_release, pushed            tag                            the cut
+tag            main_at_release, pushed            tag                            the cut
 ```
+
+To stop a release being promoted while work is still going on, have the candidate stage require
+`items_merged`: every item planned into the release must be at the integrate stage or later (for
+TOGAF, Migration), and the plan names each item that is not, with the status it is at. And to stop a
+named promotion jumping over a stage, list it in `--after`: kanbanr then refuses to enter the stage
+until the release has been promoted into the one named. For example, with a `ci` stage you record
+yourself:
+
+```text
+kanbanr config cadence --release-stages candidate,main,ci,tag
+kanbanr config release-stage tag --after ci
+```
+
+kanbanr records that the stage was entered, not that CI passed. To require a recorded CI result as
+well, use `gate_passed`.
 
 The `release-prepare` line names your own files. The notes file is created for you, but the version
 file must already be on the sprint's branch, or promoting to candidate is refused and nothing changes.
+
+
+#### Stages after the tag
+
+The stage that tags is the cut, but it does not have to be the last. Add stages after it, for the
+places you run the release before it counts as out, and each becomes a confirmation you give:
+
+```text
+kanbanr config cadence --release-stages candidate,main,tag,staging,production
+kanbanr config release-stage tag --on-enter tag
+kanbanr config commit-gates ci
+```
+
+Promoting to `tag` tags the commit and ships nothing. The Releases page then shows the result you
+recorded for the tag and asks for the next stage only after a passed one. Each stage after the
+tag, `staging` and `production` here, is confirmed with
+`kanbanr release promote <VERSION> --note "what you checked"`. Confirming the last stage ships the
+release: the items reach their last status and the notes are written. If your CI fails on the tag,
+record the failed result and run `kanbanr release add <NEW VERSION> --patch-of <VERSION>
+--from-failed-tag --link <run> --notes "what you saw"`: it files a defect with the link and your
+notes, plans it and the release's items into a patch branched from the tag, and marks the failed
+release as superseded. The tag stays in git.
 
 ### Closing a sprint before its release
 
@@ -112,6 +151,10 @@ closed SP-001; carried FEAT-001 → backlog
 ```
 
 ## Planning a sprint
+
+Setup creates no sprint or release; make them when you are ready. A sprint can be changed until it
+starts (`kanbanr sprint edit SP-001 --goal "…" --start 2026-11-10`), and an empty sprint or release
+made by mistake is removed with `kanbanr sprint remove SP-001` or `kanbanr release remove v1.0.0`.
 
 ```text
 kanbanr sprint add --start 2026-11-03 --length 2w --goal "Carts survive a return"
@@ -141,12 +184,19 @@ Each move is refused until its gate is met, and the refusal says what's missing.
 | **Migration** | Requirements proven by green tests, docs updated, the `docs-folded` sign-off | `kanbanr test`, `kanbanr signoff`, `kanbanr move` |
 | **Operations** | Green tests, the `release` sign-off | `kanbanr signoff` records the sign-off; the cut makes the move |
 
-**An edit lapses your approval.** When the definition changes, the next move says so, and you approve
-the larger definition:
+**Adding keeps your approval; changing lapses it.** Text added to the definition is reviewed at the
+next decision, such as `kanbanr signoff FEAT-001 design-review`. When approved text is changed or
+removed, the next move says so, and you approve again:
 
 ```text
 cannot move FEAT-001 to 'System Design': approval lapsed — the definition changed after it was approved.
 ```
+
+**A changed spec comes back for sign-off.** A `design-review` sign-off covers the whole spec as it
+was when you gave it. If the spec changes afterwards, even outside `## Design`, the sign-off reads
+"changed since sign-off", and `kanbanr review --pending` lists the item as `spec_changed` with the
+changed lines. Sign again with `kanbanr signoff FEAT-001 design-review`. Pass `--spec-rev` with the
+`spec_rev` the queue gave to refuse the sign-off if the spec moved on since you read it.
 
 **Code starts at Implementation.** `kanbanr start` makes the item's branch from the sprint's branch,
 and moves the item if its gate is met:
@@ -185,6 +235,22 @@ v1.0.0 cannot go to main yet — nothing was changed:
   - items_finished (main): FEAT-001 would carry over — FEAT-001 carries over: … no sign-off 'release' — `kanbanr signoff FEAT-001 release`.
 ```
 
+### Chores
+
+A process can give a kind its own path. The built-in `togaf` process gives `chore` the path
+Vision → Implementation → Migration → Operations, skipping Business Arch and System Design. `kanbanr process show togaf` lists each kind's path under
+"Lighter paths".
+
+```bash
+kanbanr feature add --title "Pin the CI image" --milestone MS-001 --kind chore
+```
+
+A chore's first move off Vision asks the path's own conditions (`statement`, `goals`,
+`requirements`, and `ears` where the path lists it) as well as the entered stage's gate, so it still
+records why it exists and how it is verified. A move to a phase off the path is refused, and the
+message names the path. `approved` and the `release` sign-off stay in force; the `design` and `design-review` parts do not apply. An item whose kind is changed to `chore` while it's at a
+phase off the path keeps the ordinary transitions, so it is never stranded.
+
 ## Handing work to sub-agents
 
 A scope limits what an agent working in its own worktree may do, and kanbanr enforces it. Issue one
@@ -206,6 +272,11 @@ refused by agent scope SC-001: agents never push. The coordinator reviews the br
 When the agent finishes its tasks, the item stays where it is until you review the branch and move
 it. See [Sub-agents and agent scopes](../using/with-claude.md#sub-agents-and-agent-scopes).
 
+Stay in the project folder. Never `cd` into an agent's worktree: look inside with `git -C <path>`,
+`make -C <path>`, `npm --prefix <path>` or a subshell `(cd <path> && …)`. If your shell is already
+there, `cd` back to the project folder. Revoking a scope (`kanbanr scope revoke SC-…`) stops the
+agent on its next tool call and never restricts you.
+
 ## Releasing
 
 Release in this order, and you won't have to go back. `kanbanr release promote v1.1.0 --plan` shows
@@ -219,7 +290,7 @@ what a promotion would do and changes nothing.
 | 4. Sign off each item | `kanbanr signoff FEAT-001 release` | If not already given |
 | 5. Main | `kanbanr release promote v1.1.0 main` | Fast-forwards main to the release, without tagging |
 | 6. Push main, wait for CI | `git push origin main` | |
-| 7. Cut | `kanbanr release promote v1.1.0 production` | Tags main, ships the items and moves any not already there to Operations |
+| 7. Cut | `kanbanr release promote v1.1.0 tag` | Tags main, ships the items and moves any not already there to Operations |
 | 8. Push the tag | `git push origin v1.1.0` | |
 | 9. Merge forward | `kanbanr git forward v1.1.0` | Brings the release's commits into the sprint's branch |
 
@@ -230,7 +301,7 @@ today before it moves main. If main moved before then, the cut's `--plan` warns,
 The cut stays refused until main is pushed:
 
 ```text
-✗ pushed (production): dee5a59 is not on origin/main — push main (`git push origin main`), then wait for CI
+✗ pushed (tag): dee5a59 is not on origin/main — push main (`git push origin main`), then wait for CI
 ```
 
 **Freeze the candidate.** Once a release is a candidate, send anything new to the next release, and

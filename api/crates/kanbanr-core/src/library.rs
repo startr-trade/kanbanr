@@ -459,13 +459,16 @@ pub fn drift(
         .map(|c| c.version());
     // The cadence is the project's when the process declares none, and its release stages,
     // branches, git model, release gates and prepare steps are the project's always (FTR-025).
+    // The stages kanbanr wrote when releases were turned on are not an edit of the process either
+    // (FTR-020).
     let mine_rev = |cadence: Cadence| {
         let mut c = config.clone();
         c.cadence = cadence;
         WorkflowFile::from_config(&c).content_rev()
     };
-    let mut same_as_source = mine_rev(config.cadence.clone()) == source.rev
-        || mine_rev(config.cadence.project_facts_cleared()) == source.rev;
+    let own = config.cadence.without_recommended_defaults();
+    let mut same_as_source = mine_rev(own.clone()) == source.rev
+        || mine_rev(own.project_facts_cleared()) == source.rev;
     if !same_as_source && current.as_ref().is_some_and(|c| c.cadence.is_off()) {
         same_as_source = mine_rev(Cadence::default()) == source.rev;
     }
@@ -566,6 +569,16 @@ pub fn diff(from: &WorkflowFile, to: &WorkflowFile) -> Vec<String> {
             }
         }
     }
+    // A kind's path (FTR-019).
+    let kinds: BTreeSet<&String> = from.paths.keys().chain(to.paths.keys()).collect();
+    for k in kinds {
+        match (from.paths.get(k), to.paths.get(k)) {
+            (None, Some(_)) => out.push(format!("+ path '{k}'")),
+            (Some(_), None) => out.push(format!("- path '{k}'")),
+            (Some(a), Some(b)) if a != b => out.push(format!("path '{k}' differs")),
+            _ => {}
+        }
+    }
     if from.cadence != to.cadence {
         out.push("sprints and releases differ".into());
     }
@@ -609,6 +622,27 @@ mod tests {
         let mut file = crate::config::preset("default").unwrap();
         file.statuses.push(about.to_string());
         file
+    }
+
+    #[test]
+    fn diff_names_a_changed_path() {
+        let plain = crate::config::preset("default").unwrap();
+        let mut with = plain.clone();
+        with.paths.insert(
+            "chore".into(),
+            crate::config::KindPath {
+                stages: vec!["Planned".into(), "Completed".into()],
+                ..Default::default()
+            },
+        );
+        assert!(diff(&plain, &plain).is_empty());
+        assert_eq!(diff(&plain, &with), ["+ path 'chore'"]);
+        assert_eq!(diff(&with, &plain), ["- path 'chore'"]);
+        let mut changed = with.clone();
+        changed.paths.get_mut("chore").unwrap().stages = vec!["Planned".into(), "Scheduled".into()];
+        assert_eq!(diff(&with, &changed), ["path 'chore' differs"]);
+        // A process with a path has its own rev; one without hashes as it did.
+        assert_ne!(plain.content_rev(), with.content_rev());
     }
 
     /// FEAT-176: lookup order is board, then personal, then built-in; nothing found names the
@@ -791,6 +825,28 @@ mod tests {
         choose_a_cadence(&mut config);
         config.gates.get_mut("Migration").unwrap().purpose = "x".into();
         assert!(drift(&config, Some(&file)).unwrap().edited);
+    }
+
+    /// DEF-014: sprints and releases chosen on the default process, through the store as the CLI
+    /// does, are not an edit of it; a gate edit still is.
+    #[test]
+    fn drift_ignores_a_cadence_chosen_on_the_default_process() {
+        let d = dirs();
+        let store = Store::new(d.board.clone());
+        let file = crate::config::preset("default").unwrap();
+        let mut config = file.clone().into_config("p");
+        config.process = Some(file.source("default", Library::Builtin));
+        store.init_project("p", config).unwrap();
+        let mut cadence = store.load("p").unwrap().config.cadence;
+        cadence.sprints = true;
+        cadence.releases = true;
+        let config = store.set_cadence("p", None, cadence).unwrap();
+        assert!(!config.cadence.release_stages.is_empty());
+        assert!(!drift(&config, Some(&file)).unwrap().edited);
+        let mut edited = config.clone();
+        let status = edited.default_state.clone();
+        edited.gates.entry(status).or_default().purpose = "x".into();
+        assert!(drift(&edited, Some(&file)).unwrap().edited);
     }
 
     /// FTR-025 R-4: a process with its own cadence is compared as before, apart from the
