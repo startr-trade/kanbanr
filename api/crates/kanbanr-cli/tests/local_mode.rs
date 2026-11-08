@@ -8911,6 +8911,27 @@ fn the_guard_refuses_gate_record_from_claude() {
     assert_eq!(fx.guard(&fx.work, "kanbanr gate record --help"), "");
 }
 
+/// FTR-026 R-7: confirming a stage after the tag and starting a patch from a red tag are verdicts
+/// the guard refuses from Claude; the tag-gate setting is configuration and passes.
+#[test]
+fn the_guard_refuses_release_confirmation_from_claude() {
+    let fx = ScopeFx::new("release-confirm-guard");
+    let out = fx.guard(&fx.work, "kanbanr release promote v1 live");
+    assert!(out.contains("\"deny\""), "{out}");
+    assert!(out.contains("/p/shop/releases"), "{out}");
+    let out = fx.guard(
+        &fx.work,
+        "kanbanr release add v1.0.1 --patch-of v1.0.0 --from-failed-tag",
+    );
+    assert!(out.contains("\"deny\""), "{out}");
+    assert!(out.contains("/p/shop/releases"), "{out}");
+    assert_eq!(
+        fx.guard(&fx.work, "kanbanr release add v1.0.1 --patch-of v1.0.0"),
+        ""
+    );
+    assert_eq!(fx.guard(&fx.work, "kanbanr config tag-gate ci"), "");
+}
+
 /// DEF-021 R-6: `doctor` warns about the current stage only, and prints what later stages will ask
 /// as counts after the warnings, naming `kanbanr check`.
 #[test]

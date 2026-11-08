@@ -3779,7 +3779,10 @@ fn verdict_refusal(command: &str, review_url: &str) -> Option<String> {
             ["approve" | "ratify" | "unapprove" | "signoff"] => (true, false),
             ["adr", "accept" | "reject"] => (true, false),
             ["release", "promote"] => (!rest.iter().any(|w| w == "--plan"), true),
-            ["release", "cut" | "confirm"] => (true, true),
+            ["release", "cut"] => (true, true),
+            // Starting a patch from a red tag is the person's decision (FTR-026). `promote` to a
+            // stage after the tag is covered above; `config tag-gate` is configuration, not a verdict.
+            ["release", "add"] => (rest.iter().any(|w| w == "--from-failed-tag"), true),
             // A gate result recorded by hand is a verdict on the release (FTR-002).
             ["gate", "record"] => (true, true),
             _ => (false, false),
@@ -10335,7 +10338,7 @@ mod tests {
             "kanbanr release cut v1",
             "kanbanr unapprove FTR-1 --reason r",
             "kanbanr signoff FTR-1 design-review --withdraw --reason r",
-            "kanbanr release confirm v1 staging",
+            "kanbanr release add v1.0.1 --patch-of v1.0.0 --from-failed-tag",
             "kanbanr gate record v1 smoke --result pass",
         ] {
             let why = verdict_refusal(refused, url).unwrap_or_else(|| panic!("passed: {refused}"));
@@ -10354,6 +10357,8 @@ mod tests {
         for allowed in [
             "kanbanr review --pending",
             "kanbanr release promote v1 --plan",
+            "kanbanr release add v1.0.1 --patch-of v1.0.0",
+            "kanbanr config tag-gate ci",
             "kanbanr sprint close SP-1",
             "kanbanr release plan v1 FTR-1",
             "kanbanr signoff --help",
