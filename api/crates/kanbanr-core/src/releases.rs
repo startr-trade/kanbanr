@@ -5293,7 +5293,7 @@ pub(crate) mod tests {
                 "",
                 "",
                 Some(&repo),
-            ""
+                ""
             )
             .is_err()
         );

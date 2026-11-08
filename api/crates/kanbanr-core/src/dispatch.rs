@@ -58,8 +58,7 @@ fn ser_already_item(
     item: &crate::models::FeatureItem,
     earlier: &crate::origin::Earlier,
 ) -> Result<String> {
-    let mut out =
-        serde_json::to_value(item).map_err(|e| CoreError::Unsupported(e.to_string()))?;
+    let mut out = serde_json::to_value(item).map_err(|e| CoreError::Unsupported(e.to_string()))?;
     out["already_recorded"] = earlier.to_json();
     ser(&out)
 }
@@ -977,15 +976,14 @@ fn dispatch_routes(
                 str_field(b, "checked_rev").as_deref(),
             )?)
         }
-        ("POST", ["projects", p, "features", code, "unapprove"]) => {
-            ser(&store.unapprove_feature_as(
+        ("POST", ["projects", p, "features", code, "unapprove"]) => ser(&store
+            .unapprove_feature_as(
                 p,
                 code,
                 &approver(b)?,
                 &str_field(b, "reason").unwrap_or_default(),
                 &crate::origin::from_body(b),
-            )?)
-        }
+            )?),
         ("POST", ["projects", p, "features", code, "ratify"]) => {
             shown_rev(store, p, code, b)?;
             if let Some(earlier) = repeat_approval(store, p, code, "ratified")? {
@@ -1146,15 +1144,13 @@ fn dispatch_routes(
                 &items,
             )?)
         }
-        ("POST", ["projects", p, "releases", version, "cut"]) => {
-            ser(&crate::releases::cut_as(
-                store,
-                p,
-                &percent_decode(version),
-                &str_field(b, "by").unwrap_or_default(),
-                &crate::origin::from_body(b),
-            )?)
-        }
+        ("POST", ["projects", p, "releases", version, "cut"]) => ser(&crate::releases::cut_as(
+            store,
+            p,
+            &percent_decode(version),
+            &str_field(b, "by").unwrap_or_default(),
+            &crate::origin::from_body(b),
+        )?),
         // What cutting a release now would ship and carry over, by the cut's own rule, with nothing
         // written (FEAT-185): the monitor's production confirmation lists exactly this.
         ("GET", ["projects", p, "releases", version, "cut-preview"]) => ser(
@@ -1787,17 +1783,15 @@ fn dispatch_routes(
                 .map_err(|e| CoreError::Unsupported(format!("invalid decision: {e}")))?;
             ser(&crate::adr::create(store, p, &title, adr)?)
         }
-        ("POST", ["projects", p, "adrs", id, "accept"]) => {
-            ser(&crate::adr::decide_as(
-                store,
-                p,
-                id,
-                true,
-                &approver(b)?,
-                "",
-                &crate::origin::from_body(b),
-            )?)
-        }
+        ("POST", ["projects", p, "adrs", id, "accept"]) => ser(&crate::adr::decide_as(
+            store,
+            p,
+            id,
+            true,
+            &approver(b)?,
+            "",
+            &crate::origin::from_body(b),
+        )?),
         ("POST", ["projects", p, "adrs", id, "reject"]) => ser(&crate::adr::decide_as(
             store,
             p,

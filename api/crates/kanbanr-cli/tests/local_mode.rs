@@ -2708,6 +2708,8 @@ fn run_in(base: &std::path::Path, work: &std::path::Path, args: &[&str]) -> Outp
         .env_remove("KANBANR_DATA_DIR")
         .env_remove("KANBANR_PROJECT")
         .env_remove("KANBANR_PROCESSES_DIR")
+        // Not inside a Claude Code session unless a test says so (DEF-028).
+        .env_remove("CLAUDECODE")
         .stdin(std::process::Stdio::null())
         .output()
         .expect("run kanbanr CLI")
@@ -9099,4 +9101,139 @@ gates:
         "{approvals:?}"
     );
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-028 R-4: the CLI names the origin of a verdict itself: `terminal` outside a Claude Code
+/// session, `conversation` inside one (`CLAUDECODE` set).
+#[test]
+fn a_verdict_from_a_terminal_and_one_inside_a_claude_session_differ_in_origin() {
+    let (base, work) = togaf_scratch("def028-origin");
+    togaf_board(&base, &work);
+    let signoff = |name: &str, claudecode: Option<&str>| {
+        let mut c = Command::new(cli());
+        c.args(["signoff", "FEAT-001", name])
+            .current_dir(&work)
+            .env("HOME", base.join("home"))
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_PROCESSES_DIR")
+            .env_remove("CLAUDECODE")
+            .stdin(std::process::Stdio::null());
+        if let Some(v) = claudecode {
+            c.env("CLAUDECODE", v);
+        }
+        let o = c.output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    signoff("from-terminal", None);
+    signoff("from-session", Some("1"));
+    // An empty variable is not a session.
+    signoff("from-empty", Some(""));
+    let shown = run_in(&base, &work, &["feature", "show", "FEAT-001", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    let def = &v["definition"];
+    let origin_of = |id: &str| {
+        def["signoffs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == id)
+            .map(|s| s["origin"].as_str().unwrap_or("").to_string())
+            .unwrap()
+    };
+    assert_eq!(origin_of("from-terminal"), "terminal");
+    assert_eq!(origin_of("from-session"), "conversation");
+    assert_eq!(origin_of("from-empty"), "terminal");
+    // The approval the board was set up with came from a command here: a terminal.
+    assert_eq!(def["approvals"][0]["origin"], "terminal");
+    // And the text view says so.
+    let text = run_in(&base, &work, &["feature", "show", "FEAT-001"]);
+    let text = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        text.contains("via the conversation") && text.contains("via the terminal"),
+        "{text}"
+    );
+}
+
+/// DEF-028 R-7: a click on the monitor and then the same verdict as a command records one approval,
+/// makes one commit, and the command says who recorded it first and from where.
+#[test]
+fn a_monitor_click_then_a_command_records_one_approval() {
+    use kanbanr_core::{Origin, Store, agentscope::ProcessScope, eventing, git::PushPolicy, write};
+    let (base, work) = togaf_scratch("def028-double");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    togaf_board(&base, &work);
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "add",
+            "--title",
+            "Wishlist",
+            "--milestone",
+            "MS-001",
+        ],
+    ));
+    let def = base.join("def2.yaml");
+    std::fs::write(&def, "statement: Keep a wishlist\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "define",
+            "FEAT-002",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    let data = base.join("code").join("shop.kanbanr");
+    let store = Store::new(data.clone());
+    // The monitor's server takes the click.
+    write::apply_as(
+        &store,
+        &data,
+        PushPolicy::Off,
+        "POST",
+        "/projects/shop/features/FEAT-002/approve",
+        Some(&serde_json::json!({"by": "A", "origin": "terminal"})),
+        None,
+        &eventing::NullSender,
+        &ProcessScope::Unscoped,
+        Origin::Monitor,
+    )
+    .unwrap();
+    let commits = || {
+        let out = Command::new("git")
+            .args(["rev-list", "--count", "HEAD"])
+            .current_dir(&data)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let before = commits();
+    // Then the same answer, recorded by a command.
+    let again = run_in(&base, &work, &["approve", "FEAT-002"]);
+    assert!(
+        again.status.success(),
+        "{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+    let said = String::from_utf8_lossy(&again.stdout);
+    assert!(
+        said.contains("already approved by A")
+            && said.contains("from the monitor")
+            && said.contains("nothing recorded"),
+        "{said}"
+    );
+    assert_eq!(commits(), before, "a repeat made a commit");
+    let shown = run_in(&base, &work, &["feature", "show", "FEAT-002", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    let events = v["definition"]["approvals"].as_array().unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["origin"], "monitor");
 }

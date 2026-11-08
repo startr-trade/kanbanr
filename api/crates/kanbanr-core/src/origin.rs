@@ -86,11 +86,22 @@ pub fn is_verdict_route(method: &str, path: &str) -> bool {
         .collect();
     matches!(
         seg.as_slice(),
-        ["projects", _, "features", _, "approve" | "ratify" | "unapprove"]
-            | ["projects", _, "features", _, "signoff", _]
+        [
+            "projects",
+            _,
+            "features",
+            _,
+            "approve" | "ratify" | "unapprove"
+        ] | ["projects", _, "features", _, "signoff", _]
             | ["projects", _, "features", _, "signoff", _, "withdraw"]
             | ["projects", _, "adrs", _, "accept" | "reject"]
-            | ["projects", _, "releases", _, "promote" | "cut" | "patch-from-tag"]
+            | [
+                "projects",
+                _,
+                "releases",
+                _,
+                "promote" | "cut" | "patch-from-tag"
+            ]
     )
 }
 
@@ -129,7 +140,12 @@ pub struct Earlier {
 impl Earlier {
     /// `approved by Ada on 2026-11-07 12:26:00 from the monitor`.
     pub fn sentence(&self) -> String {
-        let at: String = self.at.chars().take(19).collect::<String>().replace('T', " ");
+        let at: String = self
+            .at
+            .chars()
+            .take(19)
+            .collect::<String>()
+            .replace('T', " ");
         let from = match self.origin.as_str() {
             "" => "from an unknown origin".to_string(),
             o @ ("monitor" | "conversation" | "terminal") => format!("from the {o}"),
@@ -201,11 +217,33 @@ mod tests {
         assert_eq!(from_body(&s), "monitor");
         assert_eq!(s["by"], "Ada");
         // No body at all is stamped all the same.
-        let s = stamp("POST", "/projects/p/adrs/ADR-0001/accept", None, Origin::Terminal).unwrap();
+        let s = stamp(
+            "POST",
+            "/projects/p/adrs/ADR-0001/accept",
+            None,
+            Origin::Terminal,
+        )
+        .unwrap();
         assert_eq!(from_body(&s), "terminal");
         // Other routes are left alone.
-        assert!(stamp("POST", "/projects/p/features/FEAT-1/todos", Some(&claimed), Origin::Monitor).is_none());
-        assert!(stamp("GET", "/projects/p/features/FEAT-1/approve", None, Origin::Monitor).is_none());
+        assert!(
+            stamp(
+                "POST",
+                "/projects/p/features/FEAT-1/todos",
+                Some(&claimed),
+                Origin::Monitor
+            )
+            .is_none()
+        );
+        assert!(
+            stamp(
+                "GET",
+                "/projects/p/features/FEAT-1/approve",
+                None,
+                Origin::Monitor
+            )
+            .is_none()
+        );
         for p in [
             "/projects/p/features/F-1/ratify",
             "/projects/p/features/F-1/unapprove",
@@ -220,7 +258,9 @@ mod tests {
         }
         assert!(!is_verdict_route("POST", "/projects/p/releases/v1/plan"));
         // The CLI's origin follows CLAUDECODE.
-        let with = |v: Option<&str>| Origin::of_cli_in(|k| (k == "CLAUDECODE").then(|| v.map(String::from)).flatten());
+        let with = |v: Option<&str>| {
+            Origin::of_cli_in(|k| (k == "CLAUDECODE").then(|| v.map(String::from)).flatten())
+        };
         assert_eq!(with(Some("1")), Origin::Conversation);
         assert_eq!(with(Some("")), Origin::Terminal);
         assert_eq!(with(None), Origin::Terminal);
@@ -257,14 +297,20 @@ mod tests {
 
     /// An item with a definition (and, with `bypass`, a recorded unapproved start).
     fn item(store: &Store, bypass: bool) -> String {
-        let f = store.add_feature("demo", "Cart", "spec", "M", None).unwrap();
+        let f = store
+            .add_feature("demo", "Cart", "spec", "M", None)
+            .unwrap();
         store
             .set_feature_definition(
                 "demo",
                 &f.code,
                 Some(FeatureDefinition {
                     statement: "Keep a cart for 7 days".into(),
-                    started_unapproved: if bypass { "urgent".into() } else { String::new() },
+                    started_unapproved: if bypass {
+                        "urgent".into()
+                    } else {
+                        String::new()
+                    },
                     ..Default::default()
                 }),
             )
@@ -287,7 +333,9 @@ mod tests {
     fn an_approval_a_ratification_a_withdrawal_and_a_signoff_record_their_origin() {
         let (store, dir) = board();
         let code = item(&store, true);
-        store.approve_feature_as("demo", &code, "Ada", "monitor").unwrap();
+        store
+            .approve_feature_as("demo", &code, "Ada", "monitor")
+            .unwrap();
         let d = def(&store, &code);
         assert_eq!(d.approval.as_ref().unwrap().origin, "monitor");
         assert_eq!(d.approvals.last().unwrap().origin, "monitor");
@@ -312,7 +360,14 @@ mod tests {
             .signoff_feature_as("demo", &code, "design-review", "Ada", "", "", "monitor")
             .unwrap();
         store
-            .withdraw_signoff_as("demo", &code, "design-review", "Ada", "too early", "terminal")
+            .withdraw_signoff_as(
+                "demo",
+                &code,
+                "design-review",
+                "Ada",
+                "too early",
+                "terminal",
+            )
             .unwrap();
         let d = def(&store, &code);
         let origins: Vec<&str> = d.signoffs.iter().map(|e| e.origin.as_str()).collect();
@@ -342,7 +397,9 @@ mod tests {
         assert_eq!(get(&store, "demo", &yes).unwrap().decided_origin, "monitor");
         assert_eq!(get(&store, "demo", &no).unwrap().decided_origin, "terminal");
         // It is in the front matter, beside who decided and when.
-        let raw = store.read_doc("demo", &get(&store, "demo", &yes).unwrap().path).unwrap();
+        let raw = store
+            .read_doc("demo", &get(&store, "demo", &yes).unwrap().path)
+            .unwrap();
         assert!(raw.contains("decided_origin: monitor"), "{raw}");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -377,7 +434,11 @@ mod tests {
         let d = project.feature(&code).unwrap().definition.clone().unwrap();
         assert_eq!(label(&d.approvals[0].origin), "unknown");
         assert_eq!(label(&d.signoffs[0].origin), "unknown");
-        assert!(!before.iter().any(|(_, b)| String::from_utf8_lossy(b).contains("origin")));
+        assert!(
+            !before
+                .iter()
+                .any(|(_, b)| String::from_utf8_lossy(b).contains("origin"))
+        );
         let shown = crate::export::definition_sections(project.feature(&code).unwrap(), &d);
         assert!(shown.contains("origin unknown"), "{shown}");
         assert_eq!(before, snapshot(&dir), "reading rewrote the board");
@@ -387,19 +448,29 @@ mod tests {
     #[test]
     fn an_origin_an_older_kanbanr_does_not_know_is_kept_when_it_writes() {
         use crate::models::{ApprovalEvent, Signoff};
-        let e: ApprovalEvent = crate::yaml::from_str(
-            "at: a\nby: b\nverdict: approved\norigin: scheduled\nnewer: 1\n",
-        )
-        .unwrap();
+        let e: ApprovalEvent =
+            crate::yaml::from_str("at: a\nby: b\nverdict: approved\norigin: scheduled\nnewer: 1\n")
+                .unwrap();
         assert_eq!(e.origin, "scheduled");
         let out = crate::yaml::to_string(&e).unwrap();
-        assert!(out.contains("origin: scheduled") && out.contains("newer: 1"), "{out}");
-        let s: Signoff = crate::yaml::from_str("id: x\nby: b\nat: a\nrev: r\norigin: scheduled\n").unwrap();
-        assert!(crate::yaml::to_string(&s).unwrap().contains("origin: scheduled"));
+        assert!(
+            out.contains("origin: scheduled") && out.contains("newer: 1"),
+            "{out}"
+        );
+        let s: Signoff =
+            crate::yaml::from_str("id: x\nby: b\nat: a\nrev: r\norigin: scheduled\n").unwrap();
+        assert!(
+            crate::yaml::to_string(&s)
+                .unwrap()
+                .contains("origin: scheduled")
+        );
         let c: crate::releases::StageChange =
             crate::yaml::from_str("stage: s\nby: b\nat: a\norigin: scheduled\nnewer: 2\n").unwrap();
         let out = crate::yaml::to_string(&c).unwrap();
-        assert!(out.contains("origin: scheduled") && out.contains("newer: 2"), "{out}");
+        assert!(
+            out.contains("origin: scheduled") && out.contains("newer: 2"),
+            "{out}"
+        );
         // A value the monitor or CLI would not send is shown as it is.
         assert_eq!(label(&c.origin), "scheduled");
         assert!(via(&c.origin).contains("scheduled"));
@@ -407,7 +478,12 @@ mod tests {
 
     // ---- duplicates and refusals ---------------------------------------------------------
 
-    fn post(store: &Store, path: &str, body: serde_json::Value, origin: Origin) -> serde_json::Value {
+    fn post(
+        store: &Store,
+        path: &str,
+        body: serde_json::Value,
+        origin: Origin,
+    ) -> serde_json::Value {
         let body = stamp("POST", path, Some(&body), origin).unwrap();
         let out = crate::dispatch::dispatch(store, "POST", path, Some(&body)).unwrap();
         serde_json::from_str(&out).unwrap()
@@ -424,12 +500,24 @@ mod tests {
         // and from where the first came.
         let again = post(&store, &path, json!({"by": "Ada"}), Origin::Terminal);
         let said = &again["already_recorded"];
-        assert_eq!((said["by"].as_str(), said["origin"].as_str()), (Some("Ada"), Some("monitor")));
-        assert!(said["sentence"].as_str().unwrap().ends_with("from the monitor"), "{said}");
+        assert_eq!(
+            (said["by"].as_str(), said["origin"].as_str()),
+            (Some("Ada"), Some("monitor"))
+        );
+        assert!(
+            said["sentence"]
+                .as_str()
+                .unwrap()
+                .ends_with("from the monitor"),
+            "{said}"
+        );
         let d = def(&store, &code);
         assert_eq!(d.approvals.len(), 1);
         let earlier = duplicate_approval(&d, "approved").unwrap();
-        assert_eq!((earlier.by.as_str(), earlier.origin.as_str()), ("Ada", "monitor"));
+        assert_eq!(
+            (earlier.by.as_str(), earlier.origin.as_str()),
+            ("Ada", "monitor")
+        );
         // Ratifying an approved item is a different verdict.
         assert!(duplicate_approval(&d, "ratified").is_none());
         let rat = post(
@@ -455,16 +543,27 @@ mod tests {
         assert_eq!(again["already_recorded"]["origin"], "monitor");
         // The same note is still the same sign-off; a new note, or a doc, adds something.
         assert_eq!(def(&store, &code).signoffs.len(), 1);
-        let noted = go(json!({"by": "Ada", "note": "minutes agreed"}), Origin::Terminal);
+        let noted = go(
+            json!({"by": "Ada", "note": "minutes agreed"}),
+            Origin::Terminal,
+        );
         assert!(noted.get("already_recorded").is_none());
-        let same_note = go(json!({"by": "Ada", "note": "minutes agreed"}), Origin::Terminal);
+        let same_note = go(
+            json!({"by": "Ada", "note": "minutes agreed"}),
+            Origin::Terminal,
+        );
         assert!(same_note.get("already_recorded").is_some());
         let doc = go(json!({"by": "Ada", "doc": "minutes.md"}), Origin::Terminal);
         assert!(doc.get("already_recorded").is_none());
         assert_eq!(def(&store, &code).signoffs.len(), 3);
         // After a withdrawal the next one is new.
         let w = format!("{path}/withdraw");
-        post(&store, &w, json!({"by": "Ada", "reason": "wrong"}), Origin::Terminal);
+        post(
+            &store,
+            &w,
+            json!({"by": "Ada", "reason": "wrong"}),
+            Origin::Terminal,
+        );
         let item_now = store.load("demo").unwrap().feature(&code).unwrap().clone();
         assert!(duplicate_signoff(&item_now, "design-review", "", "").is_none());
         let back = go(json!({"by": "Ada"}), Origin::Terminal);
@@ -513,7 +612,7 @@ mod tests {
     #[test]
     fn an_already_done_refusal_names_who_when_and_from_where() {
         use crate::adr::{Adr, create, decide_as, update};
-        use crate::releases::tests::{board_and_repo, clean, staged, STAGED};
+        use crate::releases::tests::{STAGED, board_and_repo, clean, staged};
         let (store, dir) = board();
         // A decision decided twice.
         let mut adr = create(&store, "demo", "Keep it", Adr::default()).unwrap();
@@ -523,23 +622,41 @@ mod tests {
         let why = decide_as(&store, "demo", &adr.id, true, "Bo", "", "terminal")
             .unwrap_err()
             .to_string();
-        assert!(why.contains("decided by Ada on") && why.contains("from the monitor"), "{why}");
+        assert!(
+            why.contains("decided by Ada on") && why.contains("from the monitor"),
+            "{why}"
+        );
         // An approval withdrawn twice, and a sign-off withdrawn twice.
         let code = item(&store, false);
-        store.approve_feature_as("demo", &code, "Ada", "monitor").unwrap();
-        store.unapprove_feature_as("demo", &code, "Ada", "no", "conversation").unwrap();
+        store
+            .approve_feature_as("demo", &code, "Ada", "monitor")
+            .unwrap();
+        store
+            .unapprove_feature_as("demo", &code, "Ada", "no", "conversation")
+            .unwrap();
         let why = store
             .unapprove_feature_as("demo", &code, "Bo", "no", "terminal")
             .unwrap_err()
             .to_string();
-        assert!(why.contains("withdrawn by Ada on") && why.contains("from the conversation"), "{why}");
-        store.signoff_feature_as("demo", &code, "dr", "Ada", "", "", "monitor").unwrap();
-        store.withdraw_signoff_as("demo", &code, "dr", "Ada", "no", "terminal").unwrap();
+        assert!(
+            why.contains("withdrawn by Ada on") && why.contains("from the conversation"),
+            "{why}"
+        );
+        store
+            .signoff_feature_as("demo", &code, "dr", "Ada", "", "", "monitor")
+            .unwrap();
+        store
+            .withdraw_signoff_as("demo", &code, "dr", "Ada", "no", "terminal")
+            .unwrap();
         let why = store
             .withdraw_signoff_as("demo", &code, "dr", "Bo", "no", "monitor")
             .unwrap_err()
             .to_string();
-        assert!(why.contains("already withdrawn: withdrawn by Ada on") && why.contains("from the terminal"), "{why}");
+        assert!(
+            why.contains("already withdrawn: withdrawn by Ada on")
+                && why.contains("from the terminal"),
+            "{why}"
+        );
         let _ = std::fs::remove_dir_all(dir);
         // A cut twice.
         let (rstore, rdir, rrepo) = board_and_repo("def028-twice");
@@ -547,7 +664,12 @@ mod tests {
         let why = crate::releases::cut_as(&rstore, "shop", "v1", "Bo", "monitor")
             .unwrap_err()
             .to_string();
-        assert!(why.contains("already shipped") && why.contains("cut by Grace on") && why.contains("from the terminal"), "{why}");
+        assert!(
+            why.contains("already shipped")
+                && why.contains("cut by Grace on")
+                && why.contains("from the terminal"),
+            "{why}"
+        );
         clean(&rdir, &rrepo);
         // A promotion to the stage a release is at.
         let (pstore, pdir, prepo) = staged("def028-again", STAGED);
@@ -555,7 +677,12 @@ mod tests {
         let why = promote_as(&pstore, &prepo, "candidate", "Bo", "terminal")
             .unwrap_err()
             .to_string();
-        assert!(why.contains("already at candidate") && why.contains("moved there by Ada on") && why.contains("from the monitor"), "{why}");
+        assert!(
+            why.contains("already at candidate")
+                && why.contains("moved there by Ada on")
+                && why.contains("from the monitor"),
+            "{why}"
+        );
         clean(&pdir, &prepo);
     }
 
@@ -617,13 +744,19 @@ mod tests {
         clean(&dir, &repo);
 
         // A patch started from a failed tag: its first stage change carries the origin.
-        let (store, dir, repo, sha) = crate::releases::tests::tagged(
-            "def028-patch",
-            crate::releases::tests::STAGED,
-        );
+        let (store, dir, repo, sha) =
+            crate::releases::tests::tagged("def028-patch", crate::releases::tests::STAGED);
         now_result(&store, &sha, false);
         let made = crate::releases::patch_from_failed_tag(
-            &store, "shop", "v1", "v1.0.1", "Ada", "", "two red", Some(&repo), "terminal",
+            &store,
+            "shop",
+            "v1",
+            "v1.0.1",
+            "Ada",
+            "",
+            "two red",
+            Some(&repo),
+            "terminal",
         )
         .unwrap();
         assert_eq!(made.release.stages[0].origin, "terminal");
@@ -633,7 +766,10 @@ mod tests {
         let (store, dir, repo) = board_and_repo("def028-cut");
         let cut = crate::releases::cut_as(&store, "shop", "v1", "Grace", "conversation").unwrap();
         assert_eq!(
-            (cut.release.shipped_by.as_str(), cut.release.shipped_origin.as_str()),
+            (
+                cut.release.shipped_by.as_str(),
+                cut.release.shipped_origin.as_str()
+            ),
             ("Grace", "conversation")
         );
         clean(&dir, &repo);
@@ -641,13 +777,16 @@ mod tests {
 
     #[test]
     fn a_cut_made_by_promoting_to_the_last_stage_records_the_same_origin() {
-        use crate::releases::tests::{clean, now_result, tagged, v1, STAGED};
+        use crate::releases::tests::{STAGED, clean, now_result, tagged, v1};
         let (store, dir, repo, sha) = tagged("def028-ship", STAGED);
         now_result(&store, &sha, true);
         promote_as(&store, &repo, "staging", "Ada", "monitor").unwrap();
         let r = v1(&store);
         assert_eq!(r.state, crate::releases::ReleaseState::Shipped);
-        assert_eq!((r.shipped_by.as_str(), r.shipped_origin.as_str()), ("Ada", "monitor"));
+        assert_eq!(
+            (r.shipped_by.as_str(), r.shipped_origin.as_str()),
+            ("Ada", "monitor")
+        );
         assert_eq!(r.stages.last().unwrap().origin, "monitor");
         clean(&dir, &repo);
     }
@@ -660,7 +799,10 @@ mod tests {
             .current_dir(dir)
             .output()
             .unwrap();
-        String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(0)
     }
 
     #[test]
@@ -687,7 +829,11 @@ mod tests {
         };
         let path = format!("/projects/demo/features/{code}/approve");
         // The request claims to be a terminal; the front end says monitor, and wins.
-        let first = go(&path, json!({"by": "Ada", "origin": "terminal"}), Origin::Monitor);
+        let first = go(
+            &path,
+            json!({"by": "Ada", "origin": "terminal"}),
+            Origin::Monitor,
+        );
         assert!(!first.body.contains("already_recorded"));
         let d = def(&store, &code);
         assert_eq!(d.approvals[0].origin, "monitor");

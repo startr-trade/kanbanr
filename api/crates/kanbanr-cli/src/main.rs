@@ -7760,10 +7760,23 @@ fn run_portfolio(cli: &Cli, client: &Backend, cmd: &PortfolioCmd) -> anyhow::Res
 fn print_write(cli: &Cli, resp: &str, human: String) {
     if cli.json {
         println!("{}", pretty(resp));
+    } else if let Some(said) = already_recorded(resp) {
+        // A verdict that repeats the latest one records nothing (DEF-028).
+        println!("already {said}; nothing recorded");
     } else {
         println!("{human}");
     }
     print_coverage_warnings(cli, resp);
+}
+
+/// The sentence of an `already_recorded` answer: who recorded the verdict first, when and from
+/// where (DEF-028).
+fn already_recorded(resp: &str) -> Option<String> {
+    if !resp.contains("already_recorded") {
+        return None;
+    }
+    let v: Value = serde_json::from_str(resp).ok()?;
+    v["already_recorded"]["sentence"].as_str().map(String::from)
 }
 
 /// The warnings a release-configuration write returned (FTR-020), one per line on stderr. Silent
@@ -9341,10 +9354,11 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             tag: false,
         } => {
+            let by = verdict_author(cli, None)?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/releases/{}/cut", urlencode_segment(version)),
-                Some(json!({})),
+                Some(json!({ "by": by })),
             )?;
             let v: Value = serde_json::from_str(&resp)?;
             let release = &v["release"];

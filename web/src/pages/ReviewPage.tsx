@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Link } from "react-router-dom";
-import { api } from "../api";
+import { alreadySaid, api } from "../api";
 import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
@@ -9,6 +9,15 @@ import Markdown from "../components/Markdown";
 import { zachmanColumns } from "../types";
 import type { Adr, PendingReview, SpecBrief } from "../types";
 import { approveBlocker, checkBlocks, type DiagramProblem } from "../diagramCheck";
+
+/**
+ * What to show once a verdict went through. A repeat of the latest verdict records nothing; the
+ * answer then says who recorded it first and from where, and that replaces "approved" (DEF-028).
+ */
+function alreadyOr(answer: unknown, done: string): string {
+  const said = alreadySaid(answer);
+  return said ? `already ${said}` : done;
+}
 
 /**
  * What is waiting for agreement, and the one action that gives it (FEAT-067).
@@ -55,11 +64,11 @@ export default function ReviewPage() {
       if (item.approval === "unratified") {
         // Pinned to the definition this page showed (FEAT-159): if it changed meanwhile, the
         // daemon refuses rather than recording a yes to text nobody read.
-        await api.ratify(project, code, who, item.rev ?? "");
-        setDone((d) => ({ ...d, [code]: "ratified" }));
+        const answer = await api.ratify(project, code, who, item.rev ?? "");
+        setDone((d) => ({ ...d, [code]: alreadyOr(answer, "ratified") }));
       } else {
-        await api.approve(project, code, who, item.rev ?? "");
-        setDone((d) => ({ ...d, [code]: "approved" }));
+        const answer = await api.approve(project, code, who, item.rev ?? "");
+        setDone((d) => ({ ...d, [code]: alreadyOr(answer, "approved") }));
       }
     } catch (e) {
       setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
@@ -88,8 +97,8 @@ export default function ReviewPage() {
     const code = item.code;
     setBusy(code);
     try {
-      await api.signoff(project, code, name, who, item.rev ?? "", item.spec_rev ?? "");
-      setDone((d) => ({ ...d, [code]: `signed off ${name}` }));
+      const answer = await api.signoff(project, code, name, who, item.rev ?? "", item.spec_rev ?? "");
+      setDone((d) => ({ ...d, [code]: alreadyOr(answer, `signed off ${name}`) }));
     } catch (e) {
       setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
     } finally {
@@ -476,6 +485,7 @@ function Brief({
   const approved =
     outcome === "approved" ||
     outcome === "ratified" ||
+    (outcome ?? "").startsWith("already ") ||
     (outcome ?? "").startsWith("signed off") ||
     (outcome ?? "").startsWith("planned into");
   const signoffs = item.signoffs_needed ?? [];

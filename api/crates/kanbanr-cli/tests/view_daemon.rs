@@ -1514,3 +1514,126 @@ fn writes_from_the_page_record_a_signoff() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// DEF-028 R-4: a verdict posted to the monitor is recorded as `monitor`, whatever origin the
+/// request claims, and the same verdict again records nothing.
+#[test]
+fn a_verdict_posted_to_the_monitor_is_recorded_as_monitor() {
+    let base = std::env::temp_dir().join(format!("kanbanr-origin-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let data = base.join("data");
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    let run = |args: &[&str]| {
+        let o = Command::new(cli())
+            .args(args)
+            .env("HOME", &home)
+            .env("KANBANR_DATA_DIR", &data)
+            .env_remove("KANBANR_SERVER_URL")
+            .output()
+            .expect("run cli");
+        assert!(
+            o.status.success(),
+            "cmd {args:?}: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    };
+    run(&["identity", "--name", "Tester", "--email", "t@example.com"]);
+    run(&["--project", "demo", "project", "init", "demo"]);
+    run(&["--project", "demo", "config", "method", "--off"]);
+    run(&[
+        "--project",
+        "demo",
+        "milestone",
+        "add",
+        "--name",
+        "M",
+        "--code",
+        "MS-1",
+    ]);
+    run(&[
+        "--project",
+        "demo",
+        "feature",
+        "add",
+        "--title",
+        "Cart",
+        "--milestone",
+        "MS-1",
+    ]);
+    let def = base.join("def.yaml");
+    std::fs::write(&def, "statement: Keep a cart for 7 days\n").unwrap();
+    run(&[
+        "--project",
+        "demo",
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        def.to_str().unwrap(),
+    ]);
+
+    let port = free_port();
+    let child = Command::new(cli())
+        .args([
+            "serve",
+            "--bind",
+            &format!("127.0.0.1:{port}"),
+            "--allow-writes",
+        ])
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &data)
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let _daemon = Daemon(child);
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if Instant::now() > deadline {
+            panic!("daemon did not become ready");
+        }
+        match ureq::get(&format!("{url}/api/projects")).call() {
+            Ok(_) | Err(ureq::Error::Status(_, _)) => break,
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    let post = |body: &str| -> String {
+        ureq::post(&format!(
+            "{url}/api/write/projects/demo/features/FEAT-001/approve"
+        ))
+        .set("content-type", "application/json")
+        .set("x-kanbanr-token", &page_token(&url))
+        .send_string(body)
+        .expect("approve through the daemon")
+        .into_string()
+        .unwrap()
+    };
+    // The request claims a terminal; the monitor's server knows better.
+    let first = post(r#"{"by": "Ada", "origin": "terminal"}"#);
+    assert!(!first.contains("already_recorded"), "{first}");
+    let feature: serde_json::Value = serde_json::from_str(
+        &ureq::get(&format!("{url}/api/projects/demo"))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap(),
+    )
+    .unwrap();
+    let item = feature["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["code"] == "FEAT-001")
+        .unwrap();
+    let approvals = item["definition"]["approvals"].as_array().unwrap();
+    assert_eq!(approvals.len(), 1, "{approvals:?}");
+    assert_eq!(approvals[0]["origin"], "monitor");
+    assert_eq!(item["definition"]["approval"]["origin"], "monitor");
+    // The same click again records nothing and says who recorded it first.
+    let second = post(r#"{"by": "Ada"}"#);
+    assert!(
+        second.contains("already_recorded") && second.contains("from the monitor"),
+        "{second}"
+    );
+}

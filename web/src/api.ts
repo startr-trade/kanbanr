@@ -275,6 +275,28 @@ export type Meta = {
 };
 
 /**
+ * Where a verdict was taken, as words that end a line: " via the monitor", or " · origin unknown"
+ * for a record written before origin existed (DEF-028). A value this version does not know is
+ * shown as it is.
+ */
+export function viaOrigin(origin?: string | null): string {
+  if (!origin) return " · origin unknown";
+  return origin === "monitor" || origin === "conversation" || origin === "terminal"
+    ? ` · via the ${origin}`
+    : ` · via ${origin}`;
+}
+
+/**
+ * The sentence of an `already_recorded` answer: the verdict repeated the latest one, nothing was
+ * recorded, and this says who recorded it first, when and from where (DEF-028). Null for any other
+ * answer. The write itself succeeded, so callers treat it as done.
+ */
+export function alreadySaid(answer: unknown): string | null {
+  const said = (answer as { already_recorded?: { sentence?: string } } | null)?.already_recorded;
+  return said ? (said.sentence ?? "already recorded") : null;
+}
+
+/**
  * Post an approval verdict. A read-only daemon has no write route at all, so a 404 or 405 means
  * "this monitor cannot do that" rather than "something went wrong" — and says which command can.
  */

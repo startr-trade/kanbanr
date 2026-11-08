@@ -76,10 +76,10 @@ pub mod yaml;
 pub use charter::{Charter, Goal, Stakeholder};
 pub use config::ProjectConfig;
 pub use error::{CoreError, Result};
-pub use origin::Origin;
 pub use models::{
     FeatureItem, IndexEntry, IssueLink, Milestone, Source, Status, Task, TaskState, TodoList,
 };
+pub use origin::Origin;
 pub use store::{Project, Store};
 
 use time::OffsetDateTime;
