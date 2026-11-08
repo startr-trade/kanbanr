@@ -8,6 +8,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **A crash while kanbanr writes can no longer leave a board file half-written (DEF-025).** Every
+  file kanbanr writes, in a board and beside it (`CLAUDE.md`, the commit message, the Claude
+  settings), is written to a temporary file and renamed into place, so a kill or a full disk leaves
+  the old file and a reader that takes no lock never sees a short one. A leftover `.tmp` file is
+  ignored by the board's git and named by `kanbanr doctor` after an hour; nothing deletes it.
 - **A promotion no longer carries merged work out of its release, and doctor names what a release
   left behind (DEF-029).** Promoting into the stage that tags, or the last stage, is now held while
   an item planned into the release has its code merged but would be carried over because its end
