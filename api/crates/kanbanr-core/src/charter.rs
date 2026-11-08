@@ -169,7 +169,7 @@ pub fn save(store: &Store, id: &str, charter: &Charter) -> Result<Charter> {
             charter.adopted_at = crate::now_rfc3339();
         }
     }
-    std::fs::write(path, crate::yaml::to_string(&charter)?)?;
+    crate::atomic::write(path, crate::yaml::to_string(&charter)?)?;
     Ok(charter)
 }
 

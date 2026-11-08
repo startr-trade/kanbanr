@@ -106,9 +106,7 @@ pub fn record(store: &Store, id: &str, r: &GateResult) -> Result<PathBuf> {
         path = folder.join(format!("{base}-{n}.yaml"));
         n += 1;
     }
-    let tmp = folder.join(format!(".{base}.tmp"));
-    std::fs::write(&tmp, crate::yaml::to_string(r)?)?;
-    std::fs::rename(&tmp, &path)?;
+    crate::atomic::write(&path, crate::yaml::to_string(r)?)?;
     Ok(path)
 }
 

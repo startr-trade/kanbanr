@@ -68,7 +68,7 @@ pub fn save(
     let (file, changed) = crate::config::versioned(name, file, existing.as_ref(), description)?;
     if changed {
         std::fs::create_dir_all(dir)?;
-        std::fs::write(
+        crate::atomic::write(
             dir.join(format!("{name}.yaml")),
             crate::yaml::to_string(&file)?,
         )?;

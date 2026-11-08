@@ -77,7 +77,7 @@ pub fn save(store: &Store, ws: &Workspace) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let text = crate::yaml::to_string(ws)?;
-    std::fs::write(&path, text)?;
+    crate::atomic::write(&path, text)?;
     Ok(())
 }
 

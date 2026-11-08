@@ -237,7 +237,7 @@ impl Store {
             std::fs::create_dir_all(parent)?;
         }
         let text = crate::yaml::to_string(value)?;
-        std::fs::write(path, text)?;
+        crate::atomic::write(path, text)?;
         Ok(())
     }
 
@@ -559,7 +559,7 @@ impl Store {
         if let Some(parent) = spec.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&spec, &f.specification)?;
+        crate::atomic::write(&spec, &f.specification)?;
         Ok(())
     }
 
@@ -630,7 +630,7 @@ impl Store {
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir)?;
             }
-            std::fs::write(path, text)?;
+            crate::atomic::write(path, text)?;
         }
         for code in &pending.persist_features {
             if let Some(f) = project.features.iter().find(|f| &f.code == code) {
@@ -3052,7 +3052,7 @@ impl Store {
         let mut stuck: Vec<String> = Vec::new();
         for snap in written.into_iter().rev() {
             let restored = match &snap.before {
-                Some(bytes) => std::fs::write(&snap.path, bytes),
+                Some(bytes) => crate::atomic::write(&snap.path, bytes),
                 None => match std::fs::remove_file(&snap.path) {
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
                     other => other,
@@ -3770,7 +3770,7 @@ impl Store {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&path, bytes)?;
+        crate::atomic::write(&path, bytes)?;
         Ok(Self::doc_rel_display(&self.docs_dir(id), &path))
     }
 
@@ -4035,6 +4035,66 @@ fn merge_history<T: PartialEq + Clone>(previous: &[T], incoming: Vec<T>) -> Vec<
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn atomic_board(name: &str) -> (Store, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-store-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        (store, dir)
+    }
+
+    fn tmp_files(dir: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                found.extend(tmp_files(&p));
+            } else if p.to_string_lossy().ends_with(crate::atomic::TEMP_SUFFIX) {
+                found.push(p);
+            }
+        }
+        found
+    }
+
+    /// DEF-025 R-3: a save replaces the item's file instead of writing into it.
+    #[cfg(unix)]
+    #[test]
+    fn an_item_is_saved_by_replacing_its_files() {
+        use std::os::unix::fs::MetadataExt;
+        let (store, dir) = atomic_board("replace");
+        let f = store.add_feature("demo", "A", "spec", "M", None).unwrap();
+        let path = store.feature_path("demo", &f.status, &f.code);
+        let before = std::fs::metadata(&path).unwrap().ino();
+        store.set_feature_points("demo", &f.code, 3.0).unwrap();
+        let after = std::fs::metadata(&path).unwrap().ino();
+        assert_ne!(before, after, "the file was written in place");
+        assert!(tmp_files(&dir).is_empty(), "{:?}", tmp_files(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-025 R-6: a leftover temporary file is not board data.
+    #[test]
+    fn a_leftover_temporary_file_is_not_read_as_board_data() {
+        let (store, dir) = atomic_board("leftover");
+        let f = store.add_feature("demo", "A", "spec", "M", None).unwrap();
+        let before = store.load("demo").unwrap().features;
+        let path = store.feature_path("demo", &f.status, &f.code);
+        let folder = path.parent().unwrap();
+        std::fs::write(folder.join(".F-1.1.1.tmp"), "{ not yaml").unwrap();
+        std::fs::create_dir_all(folder.join("features-spec")).unwrap();
+        std::fs::write(folder.join("features-spec").join(".F-1.1.1.tmp"), "garbage").unwrap();
+        let after = store.load("demo").unwrap().features;
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before[0].code, after[0].code);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// FEAT-214 R-14: a held task change leaves a finished item where it is and says why, by task
     /// write and by batch alike; unheld, the same change finishes it. Every state change is

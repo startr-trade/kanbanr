@@ -226,7 +226,7 @@ pub fn migrate_to_v5(store: &Store) -> Result<MigrationReport> {
 
     for (path, text) in &files {
         if std::fs::read_to_string(path).ok().as_deref() != Some(text.as_str()) {
-            std::fs::write(path, text)?;
+            crate::atomic::write(path, text)?;
             report.files_rewritten += 1;
         }
     }

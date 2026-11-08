@@ -2998,7 +2998,7 @@ fn run_claude(cli: &Cli, client: &Backend, cmd: &ClaudeCmd) -> anyhow::Result<()
                 println!("{} is already current", path.display());
                 return Ok(());
             }
-            std::fs::write(&path, &merged)?;
+            kanbanr_core::atomic::write(&path, &merged)?;
             println!(
                 "{} {} — regenerate it with `kanbanr claude sync` whenever the charter changes",
                 if existing.trim().is_empty() {
@@ -4414,7 +4414,7 @@ fn run_check_msg(cli: &Cli, client: &Backend, file: &Path) -> anyhow::Result<()>
         if let kanbanr_core::agentscope::ProcessScope::Scoped(s) = process_scope(client, &cwd) {
             let with = kanbanr_core::agentscope::with_trailer(&message, &s);
             if with != message {
-                std::fs::write(file, &with)
+                kanbanr_core::atomic::write(file, &with)
                     .map_err(|e| anyhow::anyhow!("could not add the Agent-Scope trailer ({e})"))?;
             }
         }

@@ -14,6 +14,7 @@ use crate::graph::{parse_ref, qualify};
 use crate::{Project, Store};
 use serde::Serialize;
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -131,6 +132,7 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_definitions(project, &charter, &ctx, &mut report);
         scan_decisions(store, project, &mut report);
         scan_stray_folders(store, project, &mut report);
+        scan_leftover_writes(store, &project.id, &mut report);
         scan_process_drift(store, project, &mut report);
         scan_shipped_release_items(store, project, &charter, &ctx, &mut report);
         scan_release_items_outside_sprint(store, project, &mut report);
@@ -142,6 +144,7 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_diagrams(store, project, &mut report);
         scan_method_choice(project, &mut report);
     }
+    scan_leftover_writes(store, "board", &mut report);
     scan_identity(store, "board", &mut report);
     scan_readme(store, "board", &mut report);
     scan_remote_lag(store, "board", &mut report);
@@ -168,6 +171,7 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_definitions(&project, &charter, &ctx, &mut report);
     scan_decisions(store, &project, &mut report);
     scan_stray_folders(store, &project, &mut report);
+    scan_leftover_writes(store, id, &mut report);
     scan_process_drift(store, &project, &mut report);
     scan_shipped_release_items(store, &project, &charter, &ctx, &mut report);
     scan_release_items_outside_sprint(store, &project, &mut report);
@@ -979,6 +983,53 @@ fn describe(r: &crate::refs::Ref) -> String {
     }
 }
 
+/// How old a temporary file of the atomic write must be before doctor names it: long enough that a
+/// write in flight, on a slow disk or under a stopped debugger, is never reported (DEF-025).
+const LEFTOVER_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
+const LEFTOVER_DEPTH: usize = 6;
+
+/// Temporary files left by an interrupted write (DEF-025): one warning each. `id` is a project
+/// id, or `"board"` for the board's own folders outside `projects/`. Deletes nothing: a repair is
+/// the person's explicit act (ADR-0005, factor 12).
+fn scan_leftover_writes(store: &Store, id: &str, report: &mut Report) {
+    fn walk(dir: &Path, depth: usize, skip: &[&str], out: &mut Vec<PathBuf>) {
+        out.extend(crate::atomic::leftovers(dir, LEFTOVER_AGE));
+        if depth >= LEFTOVER_DEPTH {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut dirs: Vec<PathBuf> = entries
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .filter(|e| !skip.contains(&e.file_name().to_string_lossy().as_ref()))
+            .map(|e| e.path())
+            .collect();
+        dirs.sort();
+        for d in dirs {
+            walk(&d, depth + 1, &[".git"], out);
+        }
+    }
+    let mut found = Vec::new();
+    if id == "board" {
+        walk(store.data_dir(), 0, &[".git", "projects"], &mut found);
+    } else {
+        walk(&store.project_dir(id), 0, &[".git"], &mut found);
+    }
+    for path in found {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: id.to_string(),
+            code: None,
+            message: format!(
+                "{} is left from a write that was interrupted; it is not part of the board and is safe to delete",
+                path.display()
+            ),
+        });
+    }
+}
+
 fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
     let known: BTreeSet<&str> = project.config.statuses.iter().map(String::as_str).collect();
     const EXPECTED: [&str; 6] = [
@@ -1145,6 +1196,55 @@ mod tests {
     use super::*;
     use crate::config::ProjectConfig;
     use crate::models::{FeatureDefinition, Requirement, TestRef, Zachman};
+
+    fn leftover_in(store: &Store, age_secs: u64) -> std::path::PathBuf {
+        let path = store
+            .project_dir("demo")
+            .join("features")
+            .join(".f.yaml.1.1.tmp");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "half").unwrap();
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(when)
+            .unwrap();
+        path
+    }
+
+    /// DEF-025 R-7.
+    #[test]
+    fn a_stale_temporary_file_is_reported_and_left_alone() {
+        let (store, dir) = fixture();
+        let path = leftover_in(&store, 2 * 3600);
+        let report = run(&store).unwrap();
+        let named: Vec<_> = report
+            .issues
+            .iter()
+            .filter(|i| i.severity == Severity::Warning && i.message.contains(".f.yaml.1.1.tmp"))
+            .collect();
+        assert_eq!(named.len(), 1, "{:?}", report.issues);
+        assert!(named[0].message.contains("safe to delete"));
+        assert!(path.exists(), "doctor deletes nothing");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "half");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-025 R-7.
+    #[test]
+    fn a_fresh_temporary_file_is_not_reported() {
+        let (store, dir) = fixture();
+        leftover_in(&store, 0);
+        let report = run(&store).unwrap();
+        assert!(
+            !report.issues.iter().any(|i| i.message.contains(".tmp")),
+            "{:?}",
+            report.issues
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn fixture() -> (Store, std::path::PathBuf) {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);

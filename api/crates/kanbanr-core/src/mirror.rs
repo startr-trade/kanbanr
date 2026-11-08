@@ -55,7 +55,7 @@ pub fn save_config(store: &Store, id: &str, config: &MirrorConfig) -> Result<()>
         let _ = std::fs::remove_file(path);
         return Ok(());
     }
-    std::fs::write(path, crate::yaml::to_string(config)?)?;
+    crate::atomic::write(path, crate::yaml::to_string(config)?)?;
     Ok(())
 }
 

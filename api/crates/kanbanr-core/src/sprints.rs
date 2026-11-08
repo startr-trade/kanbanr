@@ -79,7 +79,7 @@ pub fn load(store: &Store, id: &str) -> Result<Vec<Sprint>> {
 }
 
 fn save(store: &Store, id: &str, sprints: &[Sprint]) -> Result<()> {
-    std::fs::write(path(store, id), crate::yaml::to_string(sprints)?)?;
+    crate::atomic::write(path(store, id), crate::yaml::to_string(sprints)?)?;
     Ok(())
 }
 

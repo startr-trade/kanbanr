@@ -414,7 +414,7 @@ pub fn load_all(store: &Store) -> Result<Vec<Scope>> {
 }
 
 fn save(store: &Store, id: &str, scopes: &[Scope]) -> Result<()> {
-    std::fs::write(path(store, id), crate::yaml::to_string(scopes)?)?;
+    crate::atomic::write(path(store, id), crate::yaml::to_string(scopes)?)?;
     Ok(())
 }
 
@@ -786,7 +786,7 @@ pub fn read_pointer(git_dir: &Path) -> Option<PointerFile> {
 
 pub fn write_pointer(git_dir: &Path, p: &PointerFile) -> std::io::Result<()> {
     let yaml = crate::yaml::to_string(p).map_err(|e| std::io::Error::other(e.to_string()))?;
-    std::fs::write(git_dir.join(POINTER_FILE), yaml)
+    crate::atomic::write(git_dir.join(POINTER_FILE), yaml)
 }
 
 /// The closing sentence of a refusal, for a reader who is not the agent it was meant for (DEF-027).

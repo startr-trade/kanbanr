@@ -143,7 +143,7 @@ pub fn append<T: Serialize + DeserializeOwned + Dated>(
     // end rather than a rewrite of the whole file.
     day.sort_by(|a, b| a.at().cmp(b.at()));
     if let Ok(yaml) = crate::yaml::to_string(&day) {
-        let _ = std::fs::write(&file, yaml);
+        let _ = crate::atomic::write(&file, yaml);
     }
 }
 
@@ -176,7 +176,7 @@ pub fn migrate<T: Serialize + DeserializeOwned + Dated>(
         let Ok(yaml) = crate::yaml::to_string(&existing) else {
             return; // leave the old file in place rather than half-migrating
         };
-        if std::fs::write(&file, yaml).is_err() {
+        if crate::atomic::write(&file, yaml).is_err() {
             return;
         }
     }

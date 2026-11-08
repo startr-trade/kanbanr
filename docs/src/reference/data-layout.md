@@ -34,6 +34,14 @@ sibling cannot be.
                 └── overview.md
 ```
 
+**How a file is written** (DEF-025). kanbanr never edits a board file in place. It writes the new
+content to a temporary file in the same folder (`.<name>.<pid>.<n>.tmp`), syncs it, and renames it
+over the old file, so a file is always whole: the old content or the new, even if kanbanr is killed
+or the disk fills mid-write. An interrupted write can leave its `.tmp` file behind. The board's
+`.gitignore` ignores `*.tmp`, nothing reads it as board data, and `kanbanr doctor` warns about one
+older than an hour; it is safe to delete. A file's permissions are kept, and a symbolic link is
+written through.
+
 **Item codes** (FEAT-217). An item's file is named by its code. Where the project maps kinds to
 prefixes (`codes:` in `config.yaml`, set with `kanbanr config codes`), a new item's code says its
 kind — `DEF-001`, `MNT-004`, `FTR-012` — with a counter per prefix; otherwise every code is
