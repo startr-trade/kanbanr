@@ -158,6 +158,9 @@ it finishes, Claude reviews the branch and brings you any decisions.
 
 Start once every item in the release has reached Migration. **Promote to candidate** is offered once
 every item in the release has reached Migration, and the Releases page lists any that has not.
+When you plan an item into a release while a sprint is running, ask Claude to plan it into the
+sprint too; Claude does that unless you say otherwise, and `kanbanr doctor` names any item planned
+into a release but into no sprint.
 
 Follow this order and you won't have to go back:
 
@@ -179,7 +182,10 @@ If the Releases page warns that they carry an earlier date, say "Date the releas
 main again if Claude says to.
 
 **Each button says what it will do**, and stays greyed out with the reason until it's ready. If it
-says an item would carry over, that item usually needs its **Sign off release**.
+says an item would carry over, that item usually needs its **Sign off release**. A promotion to the
+cut or to the last stage is held, not carried, for an item that is already merged: the page names
+the item and the **Sign off release** it lacks, and nothing moves until you give it or plan the item
+into another release. Only work that isn't done or isn't merged is carried to the next release.
 
 **Freeze the candidate.** Once a release is a candidate, tell Claude to send anything new to the next
 release, and change only the notes. Reopening a candidate for each thing you find is how a release
@@ -224,6 +230,7 @@ because new items branch from the running sprint.
 | An item says it's waiting for a sign-off, but the Review page has nothing | A sign-off appears once the stage's other requirements are met | Ask Claude what's left. It's often the docs |
 | An item goes to the backlog when a sprint closes | It's merged but not done for that sprint | Ask Claude to plan it into the next sprint, or count Migration as done |
 | A promotion says an item would carry over | It can't reach Operations yet | Do what the page says, usually **Sign off release**; the cut then moves it |
+| An item stays in Migration after the cut | The release shipped but the item never got what it lacked | Ask Claude to run `kanbanr doctor`, which names it; give the sign-off it lacks, or plan it into a coming release |
 | **Cut** stays greyed out after you pushed | The page hasn't read the push yet | **Check again** |
 | Your remote server rejects your first push, naming a permission | Your sign-in can't change some files yet, often your CI's own files | Ask Claude what the message means, then grant it and push again |
 | A defect in a shipped release | It needs its own fix | Ask Claude for a patch release, and see [Patch releases](../using/processes.md#patch-releases) |

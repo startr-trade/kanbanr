@@ -185,6 +185,15 @@ kanbanr release plan v1.0.0 FEAT-001
 Starting the sprint makes the `sprint/SP-001` branch from main without switching your checkout.
 Items in the sprint branch from it.
 
+When a sprint is running, plan each release item into it too. `kanbanr release plan` does not do it
+for you; it names the items it planned that are in no sprint, and the command that plans them in:
+
+```text
+FEAT-002 is in no sprint and SP-001 is running: kanbanr sprint plan SP-001 FEAT-002
+```
+
+`kanbanr doctor` names any item planned into a release but into no sprint while a sprint runs.
+
 A sprint and a release don't have to line up. One release can take items from several sprints, and
 one sprint can feed several releases.
 
@@ -238,7 +247,9 @@ Your checkout stays on the item's branch, so switch back when you want the line.
 
 **Give the `release` sign-off before promoting to main.** Promoting needs every item able to reach
 Operations, and each item needs its own sign-off to get there. Without it the promotion is refused,
-and nothing changes:
+and nothing changes. A promotion to the cut or to the last stage is held the same way, as
+`merged_items_ship`, for an item whose code is already merged but which would be carried over; it
+names the item and what it lacks, and work that isn't done or isn't merged is still carried:
 
 ```text
 v1.0.0 cannot go to main yet — nothing was changed:
@@ -338,6 +349,7 @@ sprint before starting any item.
 | `approval lapsed` | The definition changed after you approved it | Read the change and approve again |
 | `carried FEAT-001 → backlog` at a sprint close | The item is merged, but not done for the sprint | Plan it into the next sprint, or mark Migration done |
 | `FEAT-001 would carry over` at a promotion | The item can't reach Operations yet | Do what the line names, often `kanbanr signoff FEAT-001 release` |
+| An item stays in Migration after the cut | The release shipped but the item never got what it lacked | `kanbanr doctor` names it; give the sign-off it lacks (`kanbanr check FEAT-001`), or plan it into a coming release with `kanbanr release plan` |
 | `does not exist on release/v1.1.0` at candidate | A file named in `release-prepare` isn't on the sprint's branch | Commit it on an item's branch and merge that first |
 | A defect in a shipped release | It needs a fix on its own | See [Patch releases](../using/processes.md#patch-releases) |
 

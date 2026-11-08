@@ -6,6 +6,18 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A promotion no longer carries merged work out of its release, and doctor names what a release
+  left behind (DEF-029).** Promoting into the stage that tags, or the last stage, is now held while
+  an item planned into the release has its code merged but would be carried over because its end
+  gate fails (usually a missing **Sign off release**). The plan names each such item, what it lacks
+  and the way out (`merged_items_ship`); work that is not done or not merged is carried as before.
+  `kanbanr doctor` warns about an item planned into a shipped release that is not at an end status,
+  and about a live item planned into a release but into no sprint while a sprint runs.
+  `kanbanr release plan` says which of the items it planned are in no sprint, with the
+  `kanbanr sprint plan` line, and plans nothing into the sprint itself.
+
 ## [0.5.0] - 2026-11-06
 
 ### Added

@@ -425,6 +425,7 @@ cadence:
 | `pushed` | the release tip is on main's remote-tracking branch (`origin/main`) | push main (`git push origin main`), then wait for CI |
 | `gate_passed` | every gate named in `commit_gates` has a passed result recorded for the release tip | look at your CI, then record its verdict (see below) |
 | `tag_passed` | the newest result of the tag gate for the tag commit, recorded since the tag was made, is passed; only a stage after the tag can require it | run your CI on the tag and record its verdict, or start a patch release if it failed |
+| `merged_items_ship` | every item planned into the release whose code is merged can ship; a plan to the stage that tags, or the last stage, adds it when no `items_finished` is required, and holds the promotion | give what the item lacks (`kanbanr check <CODE>`), or plan it into another release |
 | `items_merged` | every item planned into the release (other than one in a no-op status) is at the integrate stage or later; read from the board, so it needs no repository | move the item to the integrate stage, which merges its branch, or plan it into another release |
 
 A stage can also list earlier stages in `after` (`kanbanr config release-stage tag --after ci`). The

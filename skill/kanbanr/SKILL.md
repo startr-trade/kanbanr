@@ -703,7 +703,10 @@ branches; fix it before going on.
   cut, and say to push main again if it says so.
 - Plan items into a release before promoting it: a release with nothing planned is refused. So a
   release starts with `release add`, then `release plan <V> <CODE>…`, then promoting it to its
-  first stage (candidate), which makes `release/<V>`; `release add` has no `--branch`.
+  first stage (candidate), which makes `release/<V>`; `release add` has no `--branch`. When a
+  sprint is running, plan the item into it too (`kanbanr sprint plan <SP> <CODE>`) unless the person
+  said otherwise; `release plan` names the ones it missed. A promotion held for a merged item names
+  the sign-off it lacks: send the person to the Review page; never record it.
 - Check with `kanbanr release promote <V> --plan` and tell the user what it still needs; the
   promotion itself, the cut included, is theirs, on the Releases page. **The user pushes main and
   the tag**, by hand; a cut that requires
