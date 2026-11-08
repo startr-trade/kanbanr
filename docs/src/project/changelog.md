@@ -8,6 +8,13 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [0.5.1] - 2026-11-08
 
+### Fixed
+
+- **The monitor answers its own page on a published port (DEF-032).** v0.5.0 counted `localhost`,
+  `127.0.0.1` and `[::1]` only on the port the monitor is bound to, so the documented Docker setup,
+  which publishes 8080 as 18080, got a 403 on every page. Those three names are now answered on any
+  port; every other host is checked exactly as before.
+
 ## [0.5.0] - 2026-11-06
 
 ### Added

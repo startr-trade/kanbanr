@@ -16,14 +16,15 @@ use std::sync::Arc;
 pub const TOKEN_HEADER: &str = "x-kanbanr-token";
 
 pub struct Guard {
-    /// Lowercased, each `name:port` (plus the bare name of an allowed host).
+    /// Lowercased, each `name:port` (plus the bare name of an allowed host). The loopback names
+    /// are not here: they are answered on any port (`loopback_name`).
     hosts: Vec<String>,
     token: String,
 }
 
 impl Guard {
-    /// Loopback names (`localhost`, `127.0.0.1`, `[::1]`) with the bound port, the bound address
-    /// itself, and each host in `allowed` (`name[:port]`, for a reverse proxy).
+    /// Loopback names (`localhost`, `127.0.0.1`, `[::1]`) on any port, the bound address itself,
+    /// and each host in `allowed` (`name[:port]`, for a reverse proxy).
     pub fn new(bind: &str, allowed: &[String]) -> Guard {
         let bind = bind.trim().to_ascii_lowercase();
         let port = bind
@@ -31,9 +32,6 @@ impl Guard {
             .map(|(_, p)| p.to_string())
             .unwrap_or_default();
         let mut hosts = Vec::new();
-        for name in ["localhost", "127.0.0.1", "[::1]"] {
-            hosts.push(format!("{name}:{port}"));
-        }
         hosts.push(bind.clone());
         for host in allowed {
             let host = host.trim().to_ascii_lowercase();
@@ -60,15 +58,17 @@ impl Guard {
     }
 
     /// The hosts this monitor answers for, as the start line and the refusal name them.
-    pub fn hosts(&self) -> &[String] {
-        &self.hosts
+    pub fn hosts(&self) -> Vec<String> {
+        let mut shown = vec!["localhost, 127.0.0.1 and [::1] on any port".to_string()];
+        shown.extend(self.hosts.iter().filter(|h| !loopback_name(h)).cloned());
+        shown
     }
 
     pub fn host_ok(&self, host: Option<&str>) -> bool {
         match host {
             Some(h) => {
                 let h = h.trim().to_ascii_lowercase();
-                self.hosts.contains(&h)
+                loopback_name(&h) || self.hosts.contains(&h)
             }
             None => false,
         }
@@ -95,6 +95,17 @@ impl Guard {
             None => true,
         }
     }
+}
+
+/// Whether a Host names this machine's loopback, on any port or none. A foreign page can't be
+/// served from such a name, so the host check (which stops DNS rebinding) lets it through.
+fn loopback_name(host: &str) -> bool {
+    let name = match host.rsplit_once(':') {
+        Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => name,
+        // `[::1]` ends in a bracket, so its colons are not a port separator.
+        _ => host,
+    };
+    matches!(name, "localhost" | "127.0.0.1" | "[::1]")
 }
 
 /// 32 random bytes as hex.
@@ -156,4 +167,42 @@ pub async fn check(State(g): State<Arc<Guard>>, req: Request, next: Next) -> Res
         }
     }
     next.run(req).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_names_are_answered_on_any_port() {
+        let g = Guard::new("0.0.0.0:8080", &[]);
+        for h in [
+            "localhost",
+            "localhost:18080",
+            "127.0.0.1:1",
+            "127.0.0.1",
+            "[::1]:18080",
+            "[::1]",
+            "LocalHost:9000",
+        ] {
+            assert!(g.host_ok(Some(h)), "{h}");
+        }
+    }
+
+    #[test]
+    fn a_foreign_name_is_still_refused_on_the_bound_port() {
+        let g = Guard::new("127.0.0.1:8080", &[]);
+        for h in [
+            "attacker.example:8080",
+            "attacker.example",
+            "localhost.attacker.example:8080",
+            "127.0.0.1.example:8080",
+            "localhost:",
+            "localhost:80a",
+            "[::2]:8080",
+        ] {
+            assert!(!g.host_ok(Some(h)), "{h}");
+        }
+        assert!(!g.host_ok(None));
+    }
 }
