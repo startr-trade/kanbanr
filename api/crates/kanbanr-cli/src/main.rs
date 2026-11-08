@@ -3768,7 +3768,7 @@ fn verdict_refusal(command: &str, review_url: &str) -> Option<String> {
                 _ if w.starts_with('-') => {}
                 _ => {
                     path.push(w);
-                    if path.len() == 2 || !matches!(w, "adr" | "release") {
+                    if path.len() == 2 || !matches!(w, "adr" | "release" | "gate") {
                         break;
                     }
                 }
@@ -3780,6 +3780,8 @@ fn verdict_refusal(command: &str, review_url: &str) -> Option<String> {
             ["adr", "accept" | "reject"] => (true, false),
             ["release", "promote"] => (!rest.iter().any(|w| w == "--plan"), true),
             ["release", "cut" | "confirm"] => (true, true),
+            // A gate result recorded by hand is a verdict on the release (FTR-002).
+            ["gate", "record"] => (true, true),
             _ => (false, false),
         };
         if verdict {
@@ -10334,12 +10336,18 @@ mod tests {
             "kanbanr unapprove FTR-1 --reason r",
             "kanbanr signoff FTR-1 design-review --withdraw --reason r",
             "kanbanr release confirm v1 staging",
+            "kanbanr gate record v1 smoke --result pass",
         ] {
             let why = verdict_refusal(refused, url).unwrap_or_else(|| panic!("passed: {refused}"));
             assert!(why.contains("http://h:1/p/p/"), "{why}");
         }
         assert!(
             verdict_refusal("kanbanr release cut v1", url)
+                .unwrap()
+                .contains("/p/p/releases")
+        );
+        assert!(
+            verdict_refusal("kanbanr gate record v1 smoke", url)
                 .unwrap()
                 .contains("/p/p/releases")
         );
