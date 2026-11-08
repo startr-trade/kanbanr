@@ -2295,6 +2295,7 @@ mod tests {
             at: "2026-09-29T00:00:00Z".into(),
             rev: def.content_rev(),
             parts: Default::default(),
+            origin: String::new(),
         });
         def.approvals.push(crate::models::ApprovalEvent {
             verdict: "ratified".into(),

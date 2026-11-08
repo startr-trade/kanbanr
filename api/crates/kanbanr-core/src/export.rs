@@ -265,7 +265,7 @@ pub fn definition_brief(feature: &FeatureItem) -> String {
 /// The definition as markdown: why the item exists, the six dimensions with their gaps named, and
 /// each requirement with its evidence. This is what `kanbanr feature show` prints, which is the
 /// whole of what Claude sees about an item — a field rendered nowhere may as well not exist.
-fn definition_sections(feature: &FeatureItem, def: &crate::models::FeatureDefinition) -> String {
+pub(crate) fn definition_sections(feature: &FeatureItem, def: &crate::models::FeatureDefinition) -> String {
     let mut out = String::from("## Definition\n\n");
     if def.statement.trim().is_empty() {
         out.push_str("_[MISSING: statement]_\n");
@@ -293,28 +293,31 @@ fn definition_sections(feature: &FeatureItem, def: &crate::models::FeatureDefini
         crate::models::ApprovalState::Ratified => {
             if let Some(a) = &def.approval {
                 out.push_str(&format!(
-                    "- **Ratified after the work** by {} on {} — it was built under a recorded \
+                    "- **Ratified after the work** by {} on {}{} — it was built under a recorded \
                      bypass and agreed to afterwards\n",
                     a.by,
-                    a.at.get(..10).unwrap_or(&a.at)
+                    a.at.get(..10).unwrap_or(&a.at),
+                    crate::origin::via(&a.origin)
                 ));
             }
         }
         crate::models::ApprovalState::Current => {
             if let Some(a) = &def.approval {
                 out.push_str(&format!(
-                    "- **Approved** by {} on {}\n",
+                    "- **Approved** by {} on {}{}\n",
                     a.by,
-                    a.at.get(..10).unwrap_or(&a.at)
+                    a.at.get(..10).unwrap_or(&a.at),
+                    crate::origin::via(&a.origin)
                 ));
             }
         }
         crate::models::ApprovalState::Extended => {
             if let Some(a) = &def.approval {
                 out.push_str(&format!(
-                    "- **Approved** by {} on {}, with {}\n",
+                    "- **Approved** by {} on {}{}, with {}\n",
                     a.by,
                     a.at.get(..10).unwrap_or(&a.at),
+                    crate::origin::via(&a.origin),
                     added_since(def)
                 ));
             }
@@ -346,10 +349,11 @@ fn definition_sections(feature: &FeatureItem, def: &crate::models::FeatureDefini
         // The latest entry is a withdrawal (FEAT-182): say who took it back and why.
         if !s.verdict.is_given() {
             out.push_str(&format!(
-                "- **Sign-off `{}` withdrawn** by {} on {} — {}\n",
+                "- **Sign-off `{}` withdrawn** by {} on {}{} — {}\n",
                 s.id,
                 s.by,
                 s.at.get(..10).unwrap_or(&s.at),
+                crate::origin::via(&s.origin),
                 s.reason
             ));
             continue;
@@ -358,10 +362,11 @@ fn definition_sections(feature: &FeatureItem, def: &crate::models::FeatureDefini
         // The definition still matches but the spec the sign-off pinned has moved (FTR-023).
         let spec_moved = feature.signoff_spec_changed(&s.id).is_some();
         out.push_str(&format!(
-            "- **Signed off `{}`** by {} on {}{}{}{}\n",
+            "- **Signed off `{}`** by {} on {}{}{}{}{}\n",
             s.id,
             s.by,
             s.at.get(..10).unwrap_or(&s.at),
+            crate::origin::via(&s.origin),
             if s.status.is_empty() {
                 String::new()
             } else {

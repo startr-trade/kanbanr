@@ -1,0 +1,654 @@
+//! Where a verdict was taken (DEF-028).
+//!
+//! Every approval, sign-off, decision, promotion and cut records its origin: a click on the
+//! monitor, an answer given to Claude, or a command in the person's own terminal. The front end
+//! that receives a verdict names the origin; a request cannot. It is an honest label, not
+//! authentication: ADR-0001 keeps kanbanr free of accounts.
+
+use crate::models::{FeatureDefinition, FeatureItem};
+use serde_json::Value;
+
+/// Where a verdict was taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// A click on the monitor's Review, Releases or item page.
+    Monitor,
+    /// A command that ran inside a Claude Code session.
+    Conversation,
+    /// A command that ran in the person's own terminal.
+    Terminal,
+    /// Taken under a recorded delegation (reserved; nothing writes it yet).
+    Delegated,
+}
+
+impl Origin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Origin::Monitor => "monitor",
+            Origin::Conversation => "conversation",
+            Origin::Terminal => "terminal",
+            Origin::Delegated => "delegated",
+        }
+    }
+
+    /// Exact and lower case; anything else is `None`.
+    pub fn parse(s: &str) -> Option<Origin> {
+        match s {
+            "monitor" => Some(Origin::Monitor),
+            "conversation" => Some(Origin::Conversation),
+            "terminal" => Some(Origin::Terminal),
+            "delegated" => Some(Origin::Delegated),
+            _ => None,
+        }
+    }
+
+    /// The origin of a command line run here: the conversation when Claude Code set `CLAUDECODE`
+    /// in this shell, the terminal otherwise.
+    pub fn of_cli() -> Origin {
+        Origin::of_cli_in(|k| std::env::var(k).ok())
+    }
+
+    /// As [`Origin::of_cli`], reading the environment through `env` so a test needs no mutation.
+    pub fn of_cli_in(env: impl Fn(&str) -> Option<String>) -> Origin {
+        match env("CLAUDECODE") {
+            Some(v) if !v.trim().is_empty() => Origin::Conversation,
+            _ => Origin::Terminal,
+        }
+    }
+}
+
+/// A stored origin as words: "" is "unknown"; a value this version does not know is returned as
+/// it is.
+pub fn label(stored: &str) -> &str {
+    if stored.is_empty() { "unknown" } else { stored }
+}
+
+/// A stored origin as it ends a line: " via the monitor", or " — origin unknown" for none.
+pub fn via(stored: &str) -> String {
+    match stored {
+        "" => " — origin unknown".to_string(),
+        "monitor" | "conversation" | "terminal" => format!(" via the {stored}"),
+        other => format!(" via {other}"),
+    }
+}
+
+/// Is this route one that records a verdict?
+pub fn is_verdict_route(method: &str, path: &str) -> bool {
+    if method != "POST" {
+        return false;
+    }
+    let seg: Vec<&str> = path
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    matches!(
+        seg.as_slice(),
+        ["projects", _, "features", _, "approve" | "ratify" | "unapprove"]
+            | ["projects", _, "features", _, "signoff", _]
+            | ["projects", _, "features", _, "signoff", _, "withdraw"]
+            | ["projects", _, "adrs", _, "accept" | "reject"]
+            | ["projects", _, "releases", _, "promote" | "cut" | "patch-from-tag"]
+    )
+}
+
+/// The request body with `origin` set to `origin`, overwriting whatever the client sent, for a
+/// verdict route; `None` for any other route, so no other body is touched.
+pub fn stamp(method: &str, path: &str, body: Option<&Value>, origin: Origin) -> Option<Value> {
+    if !is_verdict_route(method, path) {
+        return None;
+    }
+    let mut v = match body {
+        Some(Value::Object(m)) => Value::Object(m.clone()),
+        _ => Value::Object(Default::default()),
+    };
+    v["origin"] = Value::String(origin.as_str().to_string());
+    Some(v)
+}
+
+/// The origin a verdict body carries, as a stored string: a known value, else "".
+pub fn from_body(body: &Value) -> String {
+    body.get("origin")
+        .and_then(|v| v.as_str())
+        .and_then(Origin::parse)
+        .map(|o| o.as_str().to_string())
+        .unwrap_or_default()
+}
+
+/// The record a repeat verdict collides with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Earlier {
+    pub what: String,
+    pub by: String,
+    pub at: String,
+    pub origin: String,
+}
+
+impl Earlier {
+    /// `approved by Ada on 2026-11-07 12:26:00 from the monitor`.
+    pub fn sentence(&self) -> String {
+        let at: String = self.at.chars().take(19).collect::<String>().replace('T', " ");
+        let from = match self.origin.as_str() {
+            "" => "from an unknown origin".to_string(),
+            o @ ("monitor" | "conversation" | "terminal") => format!("from the {o}"),
+            o => format!("from {o}"),
+        };
+        format!("{} by {} on {} {}", self.what, self.by, at, from)
+    }
+
+    /// The `already_recorded` object an answer carries.
+    pub fn to_json(&self) -> Value {
+        serde_json::json!({
+            "what": self.what, "by": self.by, "at": self.at, "origin": self.origin,
+            "sentence": self.sentence(),
+        })
+    }
+}
+
+/// Would `verdict` (`approved` or `ratified`) repeat the latest one on the definition as it
+/// stands? Returns the earlier record when it would.
+pub fn duplicate_approval(def: &FeatureDefinition, verdict: &str) -> Option<Earlier> {
+    let standing = def.approval.as_ref()?;
+    let rev = def.content_rev();
+    if standing.rev != rev {
+        return None;
+    }
+    let last = def.approvals.last()?;
+    if last.verdict != verdict || last.rev != rev {
+        return None;
+    }
+    Some(Earlier {
+        what: last.verdict.clone(),
+        by: last.by.clone(),
+        at: last.at.clone(),
+        origin: last.origin.clone(),
+    })
+}
+
+/// Would giving sign-off `id` with `note` and `doc` repeat the current one? A repeat that brings a
+/// new note or a doc adds something and is not a duplicate.
+pub fn duplicate_signoff(item: &FeatureItem, id: &str, note: &str, doc: &str) -> Option<Earlier> {
+    let s = item.signoff_current(id)?;
+    let (note, doc) = (note.trim(), doc.trim());
+    if (!note.is_empty() && note != s.note) || (!doc.is_empty() && doc != s.doc) {
+        return None;
+    }
+    Some(Earlier {
+        what: format!("signed off {id}"),
+        by: s.by.clone(),
+        at: s.at.clone(),
+        origin: s.origin.clone(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_front_end_names_the_origin_not_the_request() {
+        let claimed = json!({"by": "Ada", "origin": "terminal"});
+        let s = stamp(
+            "POST",
+            "/projects/p/features/FEAT-1/approve",
+            Some(&claimed),
+            Origin::Monitor,
+        )
+        .unwrap();
+        assert_eq!(from_body(&s), "monitor");
+        assert_eq!(s["by"], "Ada");
+        // No body at all is stamped all the same.
+        let s = stamp("POST", "/projects/p/adrs/ADR-0001/accept", None, Origin::Terminal).unwrap();
+        assert_eq!(from_body(&s), "terminal");
+        // Other routes are left alone.
+        assert!(stamp("POST", "/projects/p/features/FEAT-1/todos", Some(&claimed), Origin::Monitor).is_none());
+        assert!(stamp("GET", "/projects/p/features/FEAT-1/approve", None, Origin::Monitor).is_none());
+        for p in [
+            "/projects/p/features/F-1/ratify",
+            "/projects/p/features/F-1/unapprove",
+            "/projects/p/features/F-1/signoff/design-review",
+            "/projects/p/features/F-1/signoff/design-review/withdraw",
+            "/projects/p/adrs/ADR-0001/reject",
+            "/projects/p/releases/v1/promote",
+            "/projects/p/releases/v1/cut",
+            "/projects/p/releases/v1/patch-from-tag",
+        ] {
+            assert!(is_verdict_route("POST", p), "{p}");
+        }
+        assert!(!is_verdict_route("POST", "/projects/p/releases/v1/plan"));
+        // The CLI's origin follows CLAUDECODE.
+        let with = |v: Option<&str>| Origin::of_cli_in(|k| (k == "CLAUDECODE").then(|| v.map(String::from)).flatten());
+        assert_eq!(with(Some("1")), Origin::Conversation);
+        assert_eq!(with(Some("")), Origin::Terminal);
+        assert_eq!(with(None), Origin::Terminal);
+        // A value the request invents is not an origin.
+        assert_eq!(from_body(&json!({"origin": "elsewhere"})), "");
+        assert_eq!(Origin::parse("Monitor"), None);
+        assert_eq!(label(""), "unknown");
+        assert_eq!(label("scheduled"), "scheduled");
+    }
+
+    // ---- a scratch board -----------------------------------------------------------------
+
+    use crate::config::ProjectConfig;
+    use crate::models::FeatureDefinition;
+    use crate::store::Store;
+
+    fn board() -> (Store, std::path::PathBuf) {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "kanbanr-origin-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        (store, dir)
+    }
+
+    /// An item with a definition (and, with `bypass`, a recorded unapproved start).
+    fn item(store: &Store, bypass: bool) -> String {
+        let f = store.add_feature("demo", "Cart", "spec", "M", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart for 7 days".into(),
+                    started_unapproved: if bypass { "urgent".into() } else { String::new() },
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        f.code
+    }
+
+    fn def(store: &Store, code: &str) -> FeatureDefinition {
+        store
+            .load("demo")
+            .unwrap()
+            .feature(code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap()
+    }
+
+    #[test]
+    fn an_approval_a_ratification_a_withdrawal_and_a_signoff_record_their_origin() {
+        let (store, dir) = board();
+        let code = item(&store, true);
+        store.approve_feature_as("demo", &code, "Ada", "monitor").unwrap();
+        let d = def(&store, &code);
+        assert_eq!(d.approval.as_ref().unwrap().origin, "monitor");
+        assert_eq!(d.approvals.last().unwrap().origin, "monitor");
+
+        store
+            .unapprove_feature_as("demo", &code, "Ada", "wrong item", "terminal")
+            .unwrap();
+        let d = def(&store, &code);
+        assert!(d.approval.is_none());
+        assert_eq!(d.approvals.last().unwrap().origin, "terminal");
+
+        store
+            .ratify_feature_as("demo", &code, "Ada", "built first", "conversation")
+            .unwrap();
+        let d = def(&store, &code);
+        assert_eq!(d.approval.as_ref().unwrap().origin, "conversation");
+        assert_eq!(d.approvals.last().unwrap().origin, "conversation");
+        let origins: Vec<&str> = d.approvals.iter().map(|e| e.origin.as_str()).collect();
+        assert_eq!(origins, ["monitor", "terminal", "conversation"]);
+
+        store
+            .signoff_feature_as("demo", &code, "design-review", "Ada", "", "", "monitor")
+            .unwrap();
+        store
+            .withdraw_signoff_as("demo", &code, "design-review", "Ada", "too early", "terminal")
+            .unwrap();
+        let d = def(&store, &code);
+        let origins: Vec<&str> = d.signoffs.iter().map(|e| e.origin.as_str()).collect();
+        assert_eq!(origins, ["monitor", "terminal"]);
+        // The old names record none: they read as unknown.
+        store.approve_feature("demo", &code, "Ada").unwrap();
+        assert_eq!(def(&store, &code).approvals.last().unwrap().origin, "");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_adr_verdict_records_its_origin() {
+        use crate::adr::{Adr, create, decide_as, get, update};
+        let (store, dir) = board();
+        let filled = |title: &str| {
+            let mut adr = create(&store, "demo", title, Adr::default()).unwrap();
+            adr.body = format!(
+                "# {title}\n\n## Context\n\nc\n\n## Decision\n\nd\n\n\
+                 ## Alternatives considered\n\na\n\n## Consequences\n\nq\n\n## Compliance\n\nt\n"
+            );
+            update(&store, "demo", &adr).unwrap();
+            adr.id
+        };
+        let (yes, no) = (filled("Keep it"), filled("Drop it"));
+        decide_as(&store, "demo", &yes, true, "Ada", "", "monitor").unwrap();
+        decide_as(&store, "demo", &no, false, "Ada", "too dear", "terminal").unwrap();
+        assert_eq!(get(&store, "demo", &yes).unwrap().decided_origin, "monitor");
+        assert_eq!(get(&store, "demo", &no).unwrap().decided_origin, "terminal");
+        // It is in the front matter, beside who decided and when.
+        let raw = store.read_doc("demo", &get(&store, "demo", &yes).unwrap().path).unwrap();
+        assert!(raw.contains("decided_origin: monitor"), "{raw}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_old_record_reads_as_unknown_and_reading_does_not_rewrite_it() {
+        let (store, dir) = board();
+        let code = item(&store, false);
+        // Records as an older kanbanr wrote them: through the names that pass no origin.
+        store.approve_feature("demo", &code, "Ada").unwrap();
+        store
+            .signoff_feature("demo", &code, "design-review", "Ada", "", "")
+            .unwrap();
+        let snapshot = |root: &std::path::Path| {
+            fn walk(p: &std::path::Path, out: &mut Vec<(std::path::PathBuf, Vec<u8>)>) {
+                for e in std::fs::read_dir(p).unwrap() {
+                    let p = e.unwrap().path();
+                    if p.is_dir() {
+                        walk(&p, out);
+                    } else {
+                        out.push((p.clone(), std::fs::read(&p).unwrap()));
+                    }
+                }
+            }
+            let mut out = Vec::new();
+            walk(root, &mut out);
+            out.sort();
+            out
+        };
+        let before = snapshot(&dir);
+        let project = store.load("demo").unwrap();
+        let d = project.feature(&code).unwrap().definition.clone().unwrap();
+        assert_eq!(label(&d.approvals[0].origin), "unknown");
+        assert_eq!(label(&d.signoffs[0].origin), "unknown");
+        assert!(!before.iter().any(|(_, b)| String::from_utf8_lossy(b).contains("origin")));
+        let shown = crate::export::definition_sections(project.feature(&code).unwrap(), &d);
+        assert!(shown.contains("origin unknown"), "{shown}");
+        assert_eq!(before, snapshot(&dir), "reading rewrote the board");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_origin_an_older_kanbanr_does_not_know_is_kept_when_it_writes() {
+        use crate::models::{ApprovalEvent, Signoff};
+        let e: ApprovalEvent = crate::yaml::from_str(
+            "at: a\nby: b\nverdict: approved\norigin: scheduled\nnewer: 1\n",
+        )
+        .unwrap();
+        assert_eq!(e.origin, "scheduled");
+        let out = crate::yaml::to_string(&e).unwrap();
+        assert!(out.contains("origin: scheduled") && out.contains("newer: 1"), "{out}");
+        let s: Signoff = crate::yaml::from_str("id: x\nby: b\nat: a\nrev: r\norigin: scheduled\n").unwrap();
+        assert!(crate::yaml::to_string(&s).unwrap().contains("origin: scheduled"));
+        let c: crate::releases::StageChange =
+            crate::yaml::from_str("stage: s\nby: b\nat: a\norigin: scheduled\nnewer: 2\n").unwrap();
+        let out = crate::yaml::to_string(&c).unwrap();
+        assert!(out.contains("origin: scheduled") && out.contains("newer: 2"), "{out}");
+        // A value the monitor or CLI would not send is shown as it is.
+        assert_eq!(label(&c.origin), "scheduled");
+        assert!(via(&c.origin).contains("scheduled"));
+    }
+
+    // ---- duplicates and refusals ---------------------------------------------------------
+
+    fn post(store: &Store, path: &str, body: serde_json::Value, origin: Origin) -> serde_json::Value {
+        let body = stamp("POST", path, Some(&body), origin).unwrap();
+        let out = crate::dispatch::dispatch(store, "POST", path, Some(&body)).unwrap();
+        serde_json::from_str(&out).unwrap()
+    }
+
+    #[test]
+    fn a_second_identical_approval_records_nothing() {
+        let (store, dir) = board();
+        let code = item(&store, true);
+        let path = format!("/projects/demo/features/{code}/approve");
+        let first = post(&store, &path, json!({"by": "Ada"}), Origin::Monitor);
+        assert!(first.get("already_recorded").is_none());
+        // The same verdict again, from a terminal: nothing is recorded; the answer says who, when
+        // and from where the first came.
+        let again = post(&store, &path, json!({"by": "Ada"}), Origin::Terminal);
+        let said = &again["already_recorded"];
+        assert_eq!((said["by"].as_str(), said["origin"].as_str()), (Some("Ada"), Some("monitor")));
+        assert!(said["sentence"].as_str().unwrap().ends_with("from the monitor"), "{said}");
+        let d = def(&store, &code);
+        assert_eq!(d.approvals.len(), 1);
+        let earlier = duplicate_approval(&d, "approved").unwrap();
+        assert_eq!((earlier.by.as_str(), earlier.origin.as_str()), ("Ada", "monitor"));
+        // Ratifying an approved item is a different verdict.
+        assert!(duplicate_approval(&d, "ratified").is_none());
+        let rat = post(
+            &store,
+            &format!("/projects/demo/features/{code}/ratify"),
+            json!({"by": "Ada", "reason": "built first"}),
+            Origin::Terminal,
+        );
+        assert!(rat.get("already_recorded").is_none());
+        assert_eq!(def(&store, &code).approvals.len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_second_identical_signoff_records_nothing_but_a_new_note_or_doc_does() {
+        let (store, dir) = board();
+        let code = item(&store, false);
+        let path = format!("/projects/demo/features/{code}/signoff/design-review");
+        let go = |body: serde_json::Value, o| post(&store, &path, body, o);
+        let first = go(json!({"by": "Ada"}), Origin::Monitor);
+        assert!(first.get("already_recorded").is_none());
+        let again = go(json!({"by": "Ada"}), Origin::Conversation);
+        assert_eq!(again["already_recorded"]["origin"], "monitor");
+        // The same note is still the same sign-off; a new note, or a doc, adds something.
+        assert_eq!(def(&store, &code).signoffs.len(), 1);
+        let noted = go(json!({"by": "Ada", "note": "minutes agreed"}), Origin::Terminal);
+        assert!(noted.get("already_recorded").is_none());
+        let same_note = go(json!({"by": "Ada", "note": "minutes agreed"}), Origin::Terminal);
+        assert!(same_note.get("already_recorded").is_some());
+        let doc = go(json!({"by": "Ada", "doc": "minutes.md"}), Origin::Terminal);
+        assert!(doc.get("already_recorded").is_none());
+        assert_eq!(def(&store, &code).signoffs.len(), 3);
+        // After a withdrawal the next one is new.
+        let w = format!("{path}/withdraw");
+        post(&store, &w, json!({"by": "Ada", "reason": "wrong"}), Origin::Terminal);
+        let item_now = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert!(duplicate_signoff(&item_now, "design-review", "", "").is_none());
+        let back = go(json!({"by": "Ada"}), Origin::Terminal);
+        assert!(back.get("already_recorded").is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_same_verdict_on_changed_text_is_recorded() {
+        let (store, dir) = board();
+        let code = item(&store, false);
+        let path = format!("/projects/demo/features/{code}/approve");
+        post(&store, &path, json!({"by": "Ada"}), Origin::Monitor);
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart for 14 days".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        assert!(duplicate_approval(&def(&store, &code), "approved").is_none());
+        let again = post(&store, &path, json!({"by": "Ada"}), Origin::Monitor);
+        assert!(again.get("already_recorded").is_none());
+        assert_eq!(def(&store, &code).approvals.len(), 2);
+        // And a sign-off on text that has changed since is not a repeat either.
+        let sp = format!("/projects/demo/features/{code}/signoff/design-review");
+        post(&store, &sp, json!({"by": "Ada"}), Origin::Monitor);
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(FeatureDefinition {
+                    statement: "Keep a cart for 30 days".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let item_now = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert!(duplicate_signoff(&item_now, "design-review", "", "").is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_already_done_refusal_names_who_when_and_from_where() {
+        use crate::adr::{Adr, create, decide_as, update};
+        use crate::releases::tests::{board_and_repo, clean, staged, STAGED};
+        let (store, dir) = board();
+        // A decision decided twice.
+        let mut adr = create(&store, "demo", "Keep it", Adr::default()).unwrap();
+        adr.body = "# Keep it\n\n## Context\n\nc\n\n## Decision\n\nd\n\n## Alternatives considered\n\na\n\n## Consequences\n\nq\n\n## Compliance\n\nt\n".into();
+        update(&store, "demo", &adr).unwrap();
+        decide_as(&store, "demo", &adr.id, true, "Ada", "", "monitor").unwrap();
+        let why = decide_as(&store, "demo", &adr.id, true, "Bo", "", "terminal")
+            .unwrap_err()
+            .to_string();
+        assert!(why.contains("decided by Ada on") && why.contains("from the monitor"), "{why}");
+        // An approval withdrawn twice, and a sign-off withdrawn twice.
+        let code = item(&store, false);
+        store.approve_feature_as("demo", &code, "Ada", "monitor").unwrap();
+        store.unapprove_feature_as("demo", &code, "Ada", "no", "conversation").unwrap();
+        let why = store
+            .unapprove_feature_as("demo", &code, "Bo", "no", "terminal")
+            .unwrap_err()
+            .to_string();
+        assert!(why.contains("withdrawn by Ada on") && why.contains("from the conversation"), "{why}");
+        store.signoff_feature_as("demo", &code, "dr", "Ada", "", "", "monitor").unwrap();
+        store.withdraw_signoff_as("demo", &code, "dr", "Ada", "no", "terminal").unwrap();
+        let why = store
+            .withdraw_signoff_as("demo", &code, "dr", "Bo", "no", "monitor")
+            .unwrap_err()
+            .to_string();
+        assert!(why.contains("already withdrawn: withdrawn by Ada on") && why.contains("from the terminal"), "{why}");
+        let _ = std::fs::remove_dir_all(dir);
+        // A cut twice.
+        let (rstore, rdir, rrepo) = board_and_repo("def028-twice");
+        crate::releases::cut_as(&rstore, "shop", "v1", "Grace", "terminal").unwrap();
+        let why = crate::releases::cut_as(&rstore, "shop", "v1", "Bo", "monitor")
+            .unwrap_err()
+            .to_string();
+        assert!(why.contains("already shipped") && why.contains("cut by Grace on") && why.contains("from the terminal"), "{why}");
+        clean(&rdir, &rrepo);
+        // A promotion to the stage a release is at.
+        let (pstore, pdir, prepo) = staged("def028-again", STAGED);
+        promote_as(&pstore, &prepo, "candidate", "Ada", "monitor").unwrap();
+        let why = promote_as(&pstore, &prepo, "candidate", "Bo", "terminal")
+            .unwrap_err()
+            .to_string();
+        assert!(why.contains("already at candidate") && why.contains("moved there by Ada on") && why.contains("from the monitor"), "{why}");
+        clean(&pdir, &prepo);
+    }
+
+    // ---- releases ------------------------------------------------------------------------
+
+    fn promote_as(
+        store: &Store,
+        repo: &std::path::Path,
+        to: &str,
+        by: &str,
+        origin: &str,
+    ) -> crate::Result<crate::releases::Promoted> {
+        crate::releases::promote_with(
+            store,
+            "shop",
+            "v1",
+            Some(to),
+            by,
+            "",
+            Some(repo),
+            crate::releases::PromoteOptions {
+                expect_tip: None,
+                fetch: crate::releases::Fetch::No,
+                origin,
+            },
+        )
+    }
+
+    #[test]
+    fn a_promotion_a_confirmation_a_patch_and_a_cut_record_their_origin() {
+        use crate::releases::tests::{board_and_repo, clean, now_result, staged, v1};
+        // A promotion, a confirmation (a stage after the tag, which only confirms) in turn.
+        let (store, dir, repo) = staged(
+            "def028-origins",
+            "release_stages: [candidate, main, tag, test, staging]\n\
+             release_gates:\n  candidate: { on_enter: [branch] }\n  \
+             main: { on_enter: [move_main] }\n  tag: { on_enter: [tag] }\n",
+        );
+        promote_as(&store, &repo, "candidate", "Ada", "monitor").unwrap();
+        promote_as(&store, &repo, "main", "Ada", "terminal").unwrap();
+        promote_as(&store, &repo, "tag", "Ada", "conversation").unwrap();
+        now_result(&store, &v1(&store).tag_commit, true);
+        promote_as(&store, &repo, "test", "Grace", "monitor").unwrap();
+        let seen: Vec<(String, String)> = v1(&store)
+            .stages
+            .iter()
+            .map(|c| (c.stage.clone(), c.origin.clone()))
+            .collect();
+        let want: Vec<(String, String)> = [
+            ("candidate", "monitor"),
+            ("main", "terminal"),
+            ("tag", "conversation"),
+            ("test", "monitor"),
+        ]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+        assert_eq!(seen, want);
+        clean(&dir, &repo);
+
+        // A patch started from a failed tag: its first stage change carries the origin.
+        let (store, dir, repo, sha) = crate::releases::tests::tagged(
+            "def028-patch",
+            crate::releases::tests::STAGED,
+        );
+        now_result(&store, &sha, false);
+        let made = crate::releases::patch_from_failed_tag(
+            &store, "shop", "v1", "v1.0.1", "Ada", "", "two red", Some(&repo), "terminal",
+        )
+        .unwrap();
+        assert_eq!(made.release.stages[0].origin, "terminal");
+        clean(&dir, &repo);
+
+        // A cut by `release cut` names who cut it and from where.
+        let (store, dir, repo) = board_and_repo("def028-cut");
+        let cut = crate::releases::cut_as(&store, "shop", "v1", "Grace", "conversation").unwrap();
+        assert_eq!(
+            (cut.release.shipped_by.as_str(), cut.release.shipped_origin.as_str()),
+            ("Grace", "conversation")
+        );
+        clean(&dir, &repo);
+    }
+
+    #[test]
+    fn a_cut_made_by_promoting_to_the_last_stage_records_the_same_origin() {
+        use crate::releases::tests::{clean, now_result, tagged, v1, STAGED};
+        let (store, dir, repo, sha) = tagged("def028-ship", STAGED);
+        now_result(&store, &sha, true);
+        promote_as(&store, &repo, "staging", "Ada", "monitor").unwrap();
+        let r = v1(&store);
+        assert_eq!(r.state, crate::releases::ReleaseState::Shipped);
+        assert_eq!((r.shipped_by.as_str(), r.shipped_origin.as_str()), ("Ada", "monitor"));
+        assert_eq!(r.stages.last().unwrap().origin, "monitor");
+        clean(&dir, &repo);
+    }
+}

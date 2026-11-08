@@ -52,6 +52,7 @@ pub mod mirror;
 pub mod models;
 #[cfg(feature = "schema")]
 pub mod openapi;
+pub mod origin;
 pub mod portfolio;
 pub mod project;
 pub mod query;
@@ -75,6 +76,7 @@ pub mod yaml;
 pub use charter::{Charter, Goal, Stakeholder};
 pub use config::ProjectConfig;
 pub use error::{CoreError, Result};
+pub use origin::Origin;
 pub use models::{
     FeatureItem, IndexEntry, IssueLink, Milestone, Source, Status, Task, TaskState, TodoList,
 };

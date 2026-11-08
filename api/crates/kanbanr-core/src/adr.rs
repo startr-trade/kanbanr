@@ -78,6 +78,9 @@ pub struct Adr {
     /// When the decider accepted or rejected it (FEAT-153). `date` is when it was proposed.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub decided: String,
+    /// Where the verdict was taken (DEF-028): `monitor`, `conversation`, `terminal` or `delegated`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub decided_origin: String,
     /// Why it was rejected: a rejected decision is still a record, and its reason is the record.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
@@ -324,10 +327,36 @@ pub fn decide(
     by: &str,
     reason: &str,
 ) -> Result<Adr> {
+    decide_as(store, project, id, accept, by, reason, "")
+}
+
+/// As [`decide`], recording where the verdict was taken (DEF-028).
+pub fn decide_as(
+    store: &Store,
+    project: &str,
+    id: &str,
+    accept: bool,
+    by: &str,
+    reason: &str,
+    origin: &str,
+) -> Result<Adr> {
     let mut adr = get(store, project, id)?;
     if !adr.status.eq_ignore_ascii_case("proposed") {
+        // Who decided it, when, and from where (DEF-028), when the record says.
+        let who = match (adr.deciders.last(), adr.decided.is_empty()) {
+            (Some(by), false) => {
+                let earlier = crate::origin::Earlier {
+                    what: "decided".into(),
+                    by: by.clone(),
+                    at: adr.decided.clone(),
+                    origin: adr.decided_origin.clone(),
+                };
+                format!(", {}", earlier.sentence())
+            }
+            _ => String::new(),
+        };
         return Err(CoreError::Unsupported(format!(
-            "{} is {}, not proposed: only a proposed decision is accepted or rejected",
+            "{} is {}, not proposed{who}: only a proposed decision is accepted or rejected",
             adr.id, adr.status
         )));
     }
@@ -359,6 +388,7 @@ pub fn decide(
         .get(..10)
         .unwrap_or_default()
         .to_string();
+    adr.decided_origin = origin.to_string();
     adr.reason = if accept {
         String::new()
     } else {
