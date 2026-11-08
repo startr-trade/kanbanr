@@ -111,6 +111,10 @@ pub struct StageChange {
     pub at: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
+    /// The item whose merge into the release's branch caused this change (DEF-031); empty for
+    /// every other change.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub item: String,
 }
 
 /// A release with what it holds and how much of that is finished, as the monitor shows it
@@ -495,6 +499,7 @@ pub fn add_patch(
         by: by.trim().to_string(),
         at: crate::now_rfc3339(),
         reason: "on creation, as a patch".to_string(),
+        ..Default::default()
     });
     let release = r.clone();
     if let Err(e) = save(store, id, &all) {
@@ -658,6 +663,134 @@ pub fn tag_release(
         release.stages.push(change);
     }
     save(store, id, &releases)
+}
+
+/// A release returned to its first stage by a merge (DEF-031).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SentBack {
+    pub version: String,
+    pub from: String,
+    pub to: String,
+    pub item: String,
+    /// What to do from there, in order (`returned_steps`).
+    pub steps: Vec<String>,
+}
+
+/// The steps from the first stage after a release is sent back, in order, each only when this
+/// project has it (DEF-031): notes, the gate again, the promotion to main, the push and CI, the cut.
+pub fn returned_steps(cadence: &Cadence, version: &str) -> Vec<String> {
+    let gates = cadence.effective_release_gates();
+    let holding = |a: ReleaseAction| {
+        gates
+            .iter()
+            .find(|(_, g)| g.on_enter.contains(&a))
+            .map(|(s, _)| s.clone())
+    };
+    let main = cadence
+        .main_branch
+        .clone()
+        .unwrap_or_else(|| "main".to_string());
+    let mut steps = Vec::new();
+    if cadence.release_prepare.notes.is_some() {
+        steps.push("Update the release notes".to_string());
+    }
+    if !cadence.commit_gates.is_empty() {
+        steps.push("Run the release gate again for the new tip and record the result".to_string());
+    }
+    if let Some(stage) = holding(ReleaseAction::MoveMain) {
+        steps.push(format!("Promote to {stage}"));
+    }
+    if !cadence.commit_gates.is_empty()
+        || gates
+            .iter()
+            .any(|(_, g)| g.requires.contains(&ReleaseCheck::Pushed))
+    {
+        steps.push(format!("Push {main} and wait for CI"));
+    }
+    if holding(ReleaseAction::Tag).is_some() {
+        steps.push(format!("Cut {version}"));
+    }
+    steps
+}
+
+/// Refuse a merge into the branch of a release that is tagged and has not shipped (DEF-031): its
+/// tag names one commit and stays in git, so a change to it needs a patch release. Reads only.
+pub fn open_for_merge(store: &Store, id: &str, branch: &str) -> Result<()> {
+    let releases = load(store, id)?;
+    match releases
+        .iter()
+        .find(|r| !branch.is_empty() && r.branch == branch)
+    {
+        Some(r) if r.state != ReleaseState::Shipped && !r.tagged_at.is_empty() => {
+            Err(CoreError::Unsupported(format!(
+                "{} is tagged at {} and waits for its later stages: a change to it needs a patch \
+                 release (kanbanr release patch {}, or Start a patch release on the Releases page)",
+                r.version,
+                if r.tag_commit.is_empty() {
+                    "its tag"
+                } else {
+                    short(&r.tag_commit)
+                },
+                r.version
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Return `version` to its first stage because `item` was merged into its branch (DEF-031), a
+/// board-only stage change recording the item. `Ok(None)`: nothing to do (no stage yet, already at
+/// the first stage, shipped, or a stage the project no longer lists). An error when the release is
+/// tagged and not shipped, or the releases file cannot be written.
+pub fn send_back(
+    store: &Store,
+    id: &str,
+    version: &str,
+    item: &str,
+    by: &str,
+) -> Result<Option<SentBack>> {
+    let project = cadence_on(store, id)?;
+    let cadence = &project.config.cadence;
+    let stages = cadence.stages();
+    let mut releases = load(store, id)?;
+    let release = releases
+        .iter_mut()
+        .find(|r| r.version == version)
+        .ok_or_else(|| CoreError::Unsupported(format!("no release {version}")))?;
+    let at = stages.iter().position(|s| *s == release.stage);
+    if release.state == ReleaseState::Shipped
+        || release.stage.is_empty()
+        || matches!(at, None | Some(0))
+    {
+        return Ok(None);
+    }
+    if !release.tagged_at.is_empty() {
+        let branch = release.branch.clone();
+        open_for_merge(store, id, &branch)?;
+    }
+    let first = stages[0].clone();
+    let from = std::mem::replace(&mut release.stage, first.clone());
+    let steps = returned_steps(cadence, version);
+    release.stages.push(StageChange {
+        stage: first.clone(),
+        by: by.trim().to_string(),
+        at: crate::now_rfc3339(),
+        reason: format!(
+            "{item} was merged into {} after the release left {first}; from here: {}",
+            release.branch,
+            steps.join(", then ")
+        ),
+        item: item.to_string(),
+    });
+    save(store, id, &releases)?;
+    Ok(Some(SentBack {
+        version: version.to_string(),
+        from,
+        to: first,
+        item: item.to_string(),
+        steps,
+    }))
 }
 
 /// Ship a release (FTR-026): its planned items that are finished move to their end status, the
@@ -2631,6 +2764,7 @@ pub fn promote_with(
         } else {
             reason.to_string()
         },
+        ..Default::default()
     };
     let mut releases = w.releases.clone();
     let index = w.index;
@@ -5428,6 +5562,130 @@ mod tests {
         clean(&dir, &repo);
     }
 
+    // ---- DEF-031: a merge into a release past its first stage sends it back ----
+
+    /// DEF-031 R-1: a release at main goes back to its first stage, recording the item and who.
+    #[test]
+    fn send_back_returns_a_promoted_release_to_its_first_stage_and_records_the_item() {
+        let (store, dir, repo) = staged("def031-back", STAGED);
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        let before = super::load(&store, "shop").unwrap();
+        let sent = super::send_back(&store, "shop", "v1", "DEF-030", "Ada")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (sent.from.as_str(), sent.to.as_str(), sent.item.as_str()),
+            ("main", "candidate", "DEF-030")
+        );
+        assert!(sent.steps.iter().any(|s| s == "Cut v1"), "{:?}", sent.steps);
+        let r = v1(&store);
+        assert_eq!(r.stage, "candidate");
+        let last = r.stages.last().unwrap();
+        assert_eq!(
+            (last.stage.as_str(), last.by.as_str(), last.item.as_str()),
+            ("candidate", "Ada", "DEF-030")
+        );
+        assert!(last.reason.contains("DEF-030") && last.reason.contains("release/v1"));
+        assert!(!last.at.is_empty());
+        // Nothing else in the file changed.
+        let mut after = super::load(&store, "shop").unwrap();
+        after[0].stage = before[0].stage.clone();
+        after[0].stages.pop();
+        assert_eq!(
+            crate::yaml::to_string(&after).unwrap(),
+            crate::yaml::to_string(&before).unwrap()
+        );
+        clean(&dir, &repo);
+    }
+
+    /// DEF-031 R-2: a candidate, a shipped release and one with no stage are left alone.
+    #[test]
+    fn send_back_leaves_a_candidate_a_shipped_release_and_a_release_without_a_stage() {
+        let (store, dir, repo) = staged("def031-noop", STAGED);
+        let bytes = |store: &Store| {
+            std::fs::read_to_string(super::path(store, "shop")).unwrap_or_default()
+        };
+        let none = bytes(&store);
+        assert!(
+            super::send_back(&store, "shop", "v1", "DEF-030", "Ada")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(bytes(&store), none, "no stage yet");
+        go(&store, &repo, "candidate");
+        let at_candidate = bytes(&store);
+        assert!(
+            super::send_back(&store, "shop", "v1", "DEF-030", "Ada")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(bytes(&store), at_candidate, "already at the first stage");
+        let mut all = super::load(&store, "shop").unwrap();
+        all[0].stage = "staging".into();
+        all[0].state = super::ReleaseState::Shipped;
+        super::save(&store, "shop", &all).unwrap();
+        let shipped = bytes(&store);
+        assert!(
+            super::send_back(&store, "shop", "v1", "DEF-030", "Ada")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(bytes(&store), shipped, "shipped");
+        clean(&dir, &repo);
+    }
+
+    /// DEF-031 R-3: a tagged release that has not shipped refuses a merge, naming the patch.
+    #[test]
+    fn a_tagged_unshipped_release_refuses_a_merge() {
+        let (store, dir, repo, sha) = tagged("def031-tagged", STAGED);
+        let err = super::open_for_merge(&store, "shop", "release/v1")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("v1") && err.contains(&sha[..7]) && err.contains("release patch"),
+            "{err}"
+        );
+        let before = std::fs::read_to_string(super::path(&store, "shop")).unwrap();
+        assert!(super::send_back(&store, "shop", "v1", "DEF-030", "Ada").is_err());
+        assert_eq!(
+            std::fs::read_to_string(super::path(&store, "shop")).unwrap(),
+            before
+        );
+        // Another branch is open.
+        assert!(super::open_for_merge(&store, "shop", "main").is_ok());
+        clean(&dir, &repo);
+    }
+
+    /// DEF-031 R-4: the steps follow the stages this project has.
+    #[test]
+    fn returned_steps_follow_the_projects_stages() {
+        let (store, dir, repo) = staged("def031-steps", STAGED);
+        let mut c = store.load_meta("shop").unwrap().config.cadence;
+        c.release_prepare.notes = Some("docs/{version}.md".into());
+        assert_eq!(
+            super::returned_steps(&c, "v1"),
+            [
+                "Update the release notes",
+                "Run the release gate again for the new tip and record the result",
+                "Promote to main",
+                "Push main and wait for CI",
+                "Cut v1"
+            ]
+        );
+        c.commit_gates.clear();
+        assert_eq!(
+            super::returned_steps(&c, "v1"),
+            ["Update the release notes", "Promote to main", "Cut v1"]
+        );
+        c.release_prepare.notes = None;
+        assert_eq!(
+            super::returned_steps(&c, "v1"),
+            ["Promote to main", "Cut v1"]
+        );
+        clean(&dir, &repo);
+    }
+
     /// FTR-026 R-8: a release written before the tag fields existed reads and writes back unchanged.
     #[test]
     fn an_older_board_reads_without_change() {
@@ -5662,6 +5920,7 @@ mod tests {
                     by: "Ada L".into(),
                     at: "2026-11-05T10:00:00Z".into(),
                     reason: String::new(),
+                    item: String::new(),
                 })
                 .collect(),
             ..Default::default()
