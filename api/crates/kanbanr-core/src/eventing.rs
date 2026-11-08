@@ -86,6 +86,9 @@ pub struct Event {
     /// Made under an agent scope (FEAT-214): the person, by the agent for its item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_agent: Option<crate::agentscope::ByAgent>,
+    /// Where a verdict was taken (DEF-028); empty for any other change.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin: String,
 }
 
 impl Event {
@@ -105,6 +108,7 @@ impl Event {
             message: message.into(),
             detail,
             by_agent: None,
+            origin: String::new(),
         }
     }
 }
@@ -241,9 +245,23 @@ pub fn record_by(
     result: &str,
     by_agent: Option<&crate::agentscope::ByAgent>,
 ) -> Vec<Event> {
+    record_with(store, data_dir, method, path, result, by_agent, "")
+}
+
+/// [`record_by`], recording on each event where a verdict was taken (DEF-028).
+pub fn record_with(
+    store: &Store,
+    data_dir: &Path,
+    method: &str,
+    path: &str,
+    result: &str,
+    by_agent: Option<&crate::agentscope::ByAgent>,
+    origin: &str,
+) -> Vec<Event> {
     let mut events = compute_events(store, method, path, result);
     for event in &mut events {
         event.by_agent = by_agent.cloned();
+        event.origin = origin.to_string();
         append(data_dir, &event.project, event);
     }
     events

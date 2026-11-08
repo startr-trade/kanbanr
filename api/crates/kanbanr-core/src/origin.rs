@@ -651,4 +651,72 @@ mod tests {
         assert_eq!(r.stages.last().unwrap().origin, "monitor");
         clean(&dir, &repo);
     }
+
+    // ---- the write recipe ----------------------------------------------------------------
+
+    fn commits(dir: &std::path::Path) -> usize {
+        let out = std::process::Command::new("git")
+            .args(["rev-list", "--count", "HEAD"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0)
+    }
+
+    #[test]
+    fn the_activity_entry_and_the_event_carry_the_origin() {
+        use crate::{activity, eventing, git::PushPolicy, write};
+        let (store, dir) = board();
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let code = item(&store, false);
+        let scope = crate::agentscope::ProcessScope::Unscoped;
+        let go = |path: &str, body: serde_json::Value, o: Origin| {
+            write::apply_as(
+                &store,
+                &dir,
+                PushPolicy::Off,
+                "POST",
+                path,
+                Some(&body),
+                None,
+                &eventing::NullSender,
+                &scope,
+                o,
+            )
+            .unwrap()
+        };
+        let path = format!("/projects/demo/features/{code}/approve");
+        // The request claims to be a terminal; the front end says monitor, and wins.
+        let first = go(&path, json!({"by": "Ada", "origin": "terminal"}), Origin::Monitor);
+        assert!(!first.body.contains("already_recorded"));
+        let d = def(&store, &code);
+        assert_eq!(d.approvals[0].origin, "monitor");
+        let said = activity::read(&dir, "demo", 10);
+        assert_eq!(said[0].origin, "monitor", "{said:?}");
+        let events = eventing::read(&dir, "demo", 10);
+        assert!(
+            events.iter().any(|e| e.origin == "monitor"),
+            "the event carries it: {events:?}"
+        );
+        // A repeat from a command records nothing: no entry, no event, no commit.
+        let (n_commits, n_said, n_events) = (
+            commits(&dir),
+            activity::read(&dir, "demo", 50).len(),
+            eventing::read(&dir, "demo", 50).len(),
+        );
+        let again = go(&path, json!({"by": "Ada"}), Origin::Terminal);
+        assert!(again.body.contains("already_recorded"));
+        assert_eq!(def(&store, &code).approvals.len(), 1);
+        assert_eq!(commits(&dir), n_commits, "a commit was made");
+        assert_eq!(activity::read(&dir, "demo", 50).len(), n_said);
+        assert_eq!(eventing::read(&dir, "demo", 50).len(), n_events);
+        // A write that is not a verdict carries no origin.
+        go(
+            &format!("/projects/demo/features/{code}/todos"),
+            json!({"description": "d"}),
+            Origin::Terminal,
+        );
+        assert_eq!(activity::read(&dir, "demo", 1)[0].origin, "");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

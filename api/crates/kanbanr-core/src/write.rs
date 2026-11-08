@@ -12,6 +12,7 @@
 
 use crate::agentscope::{self, ProcessScope};
 use crate::git::{self, PushPolicy};
+use crate::origin::{self, Origin};
 use crate::{CoreError, Store, activity, dispatch, eventing};
 use serde_json::Value;
 use std::path::Path;
@@ -88,13 +89,14 @@ pub fn apply(
     body: Option<&Value>,
     repo: Option<&Path>,
     sender: &dyn eventing::WebhookSender,
+    origin: Origin,
 ) -> Result<Applied, WriteError> {
     let scope = match std::env::current_dir() {
         Ok(cwd) => agentscope::resolve(store, &cwd),
         Err(_) => ProcessScope::Unscoped,
     };
     apply_as(
-        store, data_dir, policy, method, path, body, repo, sender, &scope,
+        store, data_dir, policy, method, path, body, repo, sender, &scope, origin,
     )
 }
 
@@ -135,6 +137,7 @@ pub fn apply_as(
     repo: Option<&Path>,
     sender: &dyn eventing::WebhookSender,
     scope: &ProcessScope,
+    origin: Origin,
 ) -> Result<Applied, WriteError> {
     with_lock(data_dir, || {
         git::ensure_repo(data_dir);
@@ -191,12 +194,26 @@ pub fn apply_as(
             git::require_identity(data_dir).map_err(WriteError::Refused)?;
         }
         let body = held_body.as_ref().or(body);
+        // The front end names where a verdict was taken, never the request (DEF-028).
+        let stamped = origin::stamp(method, path, body, origin);
+        let body = stamped.as_ref().or(body);
+        let verdict = origin::is_verdict_route(method, path);
         let out =
             dispatch::dispatch_in(store, method, path, body, repo).map_err(WriteError::Core)?;
         let mut applied = Applied {
             body: out,
             ..Default::default()
         };
+        // A verdict that adds nothing to the record leaves no activity entry, event or commit.
+        if verdict && applied.body.contains("\"already_recorded\"") {
+            let said = serde_json::from_str::<Value>(&applied.body)
+                .ok()
+                .is_some_and(|v| v.get("already_recorded").is_some());
+            if said {
+                return Ok(applied);
+            }
+        }
+        let origin = if verdict { origin.as_str() } else { "" };
         if records {
             let msg = dispatch::commit_message_after(method, path, body, &applied.body);
             let by = scoped.map(|s| s.by_agent());
@@ -204,7 +221,7 @@ pub fn apply_as(
                 let actor = git::identity(data_dir)
                     .map(|(n, _)| n)
                     .unwrap_or_else(|| "kanbanr".into());
-                activity::append_by(
+                activity::append_with(
                     data_dir,
                     &project,
                     &actor,
@@ -213,10 +230,18 @@ pub fn apply_as(
                         .or_else(|| scope_item(path, &applied.body))
                         .as_deref(),
                     by.as_ref(),
+                    origin,
                 );
             }
-            let events =
-                eventing::record_by(store, data_dir, method, path, &applied.body, by.as_ref());
+            let events = eventing::record_with(
+                store,
+                data_dir,
+                method,
+                path,
+                &applied.body,
+                by.as_ref(),
+                origin,
+            );
             // From an agent's worktree the board is never pushed — under a scope, and by the claim
             // that binds one: the coordinator reviews and pushes.
             let policy = match scope {
@@ -306,6 +331,7 @@ mod tests {
                 None,
                 &eventing::NullSender,
                 scope,
+                Origin::Terminal,
             )
         };
         let none = ProcessScope::Unscoped;
