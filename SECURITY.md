@@ -28,6 +28,10 @@ of the monitor.
 > removed. `security.yaml` is git-ignored defensively; if one exists in your checkout it is inert —
 > delete it.
 
+## What a release carries
+
+Every release is built from the locked dependencies (`Cargo.lock` and `web/package-lock.json`), and its assets are listed in `SHA256SUMS` beside two CycloneDX SBOMs, one for the Rust dependencies and one for the monitor's npm dependencies. Each asset and the container image also has a build attestation naming the repository, commit and workflow that produced it, unless the release notes say it carries none. To check a download, run `gh attestation verify <file> -R startr-trade/kanbanr`; [Installation](https://kanbanr.startr.trade/getting-started/installation.html#checking-a-download) has the full steps.
+
 ## Supported versions
 
 This is a personal project on a `0.x` line; only the **latest released version** is supported.

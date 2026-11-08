@@ -16,6 +16,17 @@ All notable changes to kanbanr are documented here. The format follows
   guard keeps the coordinator out of agents' worktrees and names the way out (`git -C <path>`),
   test capture finds its board from the project folder and records the coordinator's runs, and
   `kanbanr scope issue` needs the Claude Code hooks that tell the two apart (`kanbanr hooks install`).
+### Added
+
+- **Release and install builds are locked, and releases carry SBOMs and attestations (MNT-004).**
+  Every release, image and install build now passes `--locked` to cargo and uses `npm ci`, and
+  `scripts/check_supply_chain.py` fails CI on any that does not. Each release attaches two
+  CycloneDX SBOMs (Rust and monitor npm dependencies, listed in `SHA256SUMS`; `make sbom` builds
+  them locally) and a build-provenance attestation for every asset and the image, with the image
+  also carrying the builder's SBOM and provenance; setting the repository variable
+  `ATTEST_RELEASE=false` skips the attestations and says so in the release notes. The Docker smoke
+  test drives the `docker` CLI directly, so `testcontainers` and its advisory exception
+  (RUSTSEC-2026-0440) are gone.
 
 ## [0.5.0] - 2026-11-06
 

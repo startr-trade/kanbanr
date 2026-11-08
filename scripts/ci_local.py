@@ -93,6 +93,9 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "cargo deny (licences, bans, sources, advisories)": LOCAL,
             "cargo audit (RustSec advisories, yanked crates)": LOCAL,
             "npm audit (the monitor's production dependencies)": LOCAL,
+            "The supply-chain check's own tests pass": LOCAL,
+            "Builds are locked and installs are clean": LOCAL,
+            "The SBOMs build and are valid CycloneDX": LOCAL,
         },
         "installers": {
             "The CLI links a TLS backend": LOCAL,
@@ -143,7 +146,9 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
         "release": {
             "Stage the installers beside the binaries": "needs every leg's artifacts",
             "The release notes, for the release page": LOCAL,
+            "Build the SBOMs": LOCAL,
             "Compute SHA256SUMS": "needs every leg's artifacts",
+            "Attest the release assets": "asks the host to sign; the SBOM it covers is built above",
         },
         "verify-install": {
             "Minimal prerequisites (as a stranger would have)": "installs from a published release",
@@ -173,6 +178,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Lowercase image name": "names the GHCR image; the image build itself is checked below",
             "The commit and its date, for the image's --version": "feeds the image build; checked below with the same values",
             "The image's kanbanr is the released program (its commit, date and skill)": "checks the image built for scanning; run below on the image make ci builds",
+            "Attest the image": "asks the host to sign a pushed digest",
         },
         "crates": {
             "Publish ears-classifier": "publishes to crates.io",
@@ -238,7 +244,7 @@ def fresh_tree() -> None:
 
 def workspace_version() -> str:
     meta = subprocess.check_output(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=TREE / "api", text=True
+        ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], cwd=TREE / "api", text=True
     )
     import json
 
@@ -685,6 +691,8 @@ def main(argv: list[str] | None = None) -> int:
     board_before = board_state()
     ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_ci_local.py"], ROOT)
     say("make ci: verdicts and agents' scoped writes on the board are told apart from other changes", ok, out)
+    ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_check_supply_chain.py"], ROOT)
+    say("make ci: unlocked builds, npm install and an unattested release are caught (MNT-004)", ok, out)
     fresh_tree()
     lint_workflows()
     run_workflow_steps()

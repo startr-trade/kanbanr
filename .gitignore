@@ -36,3 +36,5 @@ docs/book
 
 
 
+*.cdx.json
+dist-sbom/
