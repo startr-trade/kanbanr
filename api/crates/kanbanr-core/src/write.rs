@@ -638,7 +638,14 @@ mod tests {
             "-m",
             "init",
         ]);
-        g(&["worktree", "add", "-q", ".claude/worktrees/agent-1", "-b", "agent-1"]);
+        g(&[
+            "worktree",
+            "add",
+            "-q",
+            ".claude/worktrees/agent-1",
+            "-b",
+            "agent-1",
+        ]);
         let agent_dir = code.join(".claude/worktrees/agent-1");
         let scope = agentscope::Scope {
             id: "SC-001".into(),
@@ -660,7 +667,9 @@ mod tests {
             extra: Default::default(),
         };
         std::fs::write(
-            dir.join("projects").join("demo").join(agentscope::SCOPES_FILE),
+            dir.join("projects")
+                .join("demo")
+                .join(agentscope::SCOPES_FILE),
             crate::yaml::to_string(&vec![scope]).unwrap(),
         )
         .unwrap();

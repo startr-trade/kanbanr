@@ -7584,6 +7584,59 @@ fn revoked_and_expired_scopes_refuse() {
     assert!(err.contains("kanbanr scope renew SC-002 --for 4h"), "{err}");
 }
 
+/// MNT-006 R-2: the capture hook runs in the session that owns it (the main checkout), while the
+/// test run was made in an agent's worktree, which the payload's `cwd` names. The board commit is
+/// made under that worktree's scope, with its trailer, and keeps only that scope's item's results.
+#[test]
+fn capture_run_from_another_directory_commits_under_the_scope_of_the_payload_directory() {
+    let fx = ScopeFx::new("capture-cwd");
+    let wt = fx.claimed("agent-cap");
+    let payload = serde_json::json!({
+        "agent_id": "a1b2c3",
+        "cwd": wt,
+        "tool_name": "Bash",
+        "tool_input": {"command": "cargo test"},
+        "tool_response": {"stdout": "test cart::keeps ... ok\n"},
+    })
+    .to_string();
+    // The hook's own process stands in the main checkout, which no scope governs.
+    let mut c = Command::new(cli());
+    c.args(["capture"]).current_dir(&fx.work);
+    fx.env(&mut c);
+    c.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = c.spawn().unwrap();
+    use std::io::Write as _;
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "capture failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = fx.ok_git(&fx.board, &["log", "-1", "--format=%B"]);
+    assert!(log.contains("record 1 test result(s) from a run"), "{log}");
+    assert!(
+        log.contains("Agent-Scope: SC-001 (build, by the agent for FEAT-001)"),
+        "{log}"
+    );
+    let proven = |code: &str| {
+        fx.ok(&fx.work, &["export", code, "--format", "json"])
+            .contains("\"green\"")
+    };
+    assert!(proven("FEAT-001"), "the scope's own item is recorded");
+    assert!(
+        !proven("FEAT-002"),
+        "another item sharing the test name is not"
+    );
+}
+
 /// DEF-027 R-3: revoking frees a shell standing in the worktree at once. A session there is
 /// governed while the scope lives; after the revoke the coordinator's hook call is let through, and
 /// so is the same command run from that folder.
