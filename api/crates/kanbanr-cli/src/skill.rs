@@ -386,6 +386,23 @@ mod tests {
         assert!(skill_md().contains("**put rework on the board before it starts.**"));
     }
 
+    /// DEF-029 R-6: the skill tells Claude to plan a release item into the running sprint, and to
+    /// leave the sign-off that holds a merged item to the person.
+    #[test]
+    fn skill_plans_release_items_into_the_running_sprint() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).replace("\n  ", " "))
+            .unwrap();
+        for want in [
+            "When a sprint is running, plan the item into it too (`kanbanr sprint plan <SP> <CODE>`) unless the person said otherwise; `release plan` names the ones it missed.",
+            "A promotion held for a merged item names the sign-off it lacks: send the person to the Review page; never record it.",
+        ] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+    }
+
     /// FEAT-215 R-1: the skill states each sub-agent role's boundaries, and the coordinator's
     /// duty to brief with them and keep the board current.
     #[test]
@@ -402,6 +419,25 @@ mod tests {
             "the brief states them **verbatim**",
             "never: no `git push`, no `kanbanr sync`",
             "so the board never lags the code",
+        ] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+    }
+
+    /// DEF-031 R-9: the skill tells Claude that a merge sends a promoted release back, to report
+    /// it, and to confirm no stage.
+    #[test]
+    fn skill_reports_a_release_sent_back_and_confirms_no_stage() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        for want in [
+            "**A merge sends a promoted release back.**",
+            "sends the release back to candidate and says so",
+            "Confirm no stage yourself",
+            "needs a patch release",
         ] {
             assert!(skill.contains(want), "the skill says {want:?}");
         }

@@ -459,6 +459,7 @@ cadence:
 | `pushed` | the release tip is on main's remote-tracking branch (`origin/main`) | push main (`git push origin main`), then wait for CI |
 | `gate_passed` | every gate named in `commit_gates` has a passed result recorded for the release tip | look at your CI, then record its verdict (see below) |
 | `tag_passed` | the newest result of the tag gate for the tag commit, recorded since the tag was made, is passed; only a stage after the tag can require it | run your CI on the tag and record its verdict, or start a patch release if it failed |
+| `merged_items_ship` | every item planned into the release whose code is merged can ship; a plan to the stage that tags, or the last stage, adds it when no `items_finished` is required, and holds the promotion | give what the item lacks (`kanbanr check <CODE>`), or plan it into another release |
 | `items_merged` | every item planned into the release (other than one in a no-op status) is at the integrate stage or later; read from the board, so it needs no repository | move the item to the integrate stage, which merges its branch, or plan it into another release |
 
 A stage can also list earlier stages in `after` (`kanbanr config release-stage tag --after ci`). The
@@ -635,6 +636,24 @@ kanbanr release redate v0.3.0   # one commit onto release/v0.3.0; main moves wit
 When main moved with it, the command says to push main again and wait for CI before the cut. Once
 the release has shipped it refuses. A project with no notes or changelog configured, or a file
 with no date line, has nothing to date.
+
+#### A change merged into a promoted release
+
+A release that has left its first stage and has not been cut goes back to that stage when an item is
+merged into `release/<V>`. `kanbanr move` says so, and the stage history records the item, who moved
+it and when. From the first stage the ordinary steps apply: update the notes (`kanbanr release notes
+<V>` ends with the planned items the notes do not mention), run the gate again, promote to main, push
+main and wait for CI, then cut. `kanbanr release promote <V> --plan` and the Releases page show the
+item and the steps. Until the cut, the stage that tags also needs main at the release tip, the tip
+pushed and, where the project names commit gates, a passed result, whatever the stage's own
+`requires` say.
+
+A recorded pass of a commit gate carries to a later commit of the release when every path changed
+since matches `cadence.gate_docs` (`docs/` and `*.md` unless `kanbanr config gate-docs` names others);
+the plan names the commit it came from. A failed result never carries. A release that is tagged and
+not shipped refuses the merge before anything changes, because its tag names one commit; the change
+goes into a patch release (`kanbanr release patch <V>`). Saving the release notes moves main with
+them as before and does not send the release back.
 
 ### Patch releases
 

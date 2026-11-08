@@ -102,6 +102,9 @@ pub enum ReleaseCheck {
     /// The release has been promoted into a stage a gate names in `after`. Only a plan names it
     /// (a gate lists `after`, not this), so it is not in `ALL`.
     StagePassed,
+    /// Every item planned into the release whose code is merged can ship: the cut would not carry
+    /// merged work away (DEF-029). Only a plan names it, so it is not in `ALL`.
+    MergedItemsShip,
 }
 
 impl ReleaseCheck {
@@ -125,6 +128,7 @@ impl ReleaseCheck {
             ReleaseCheck::TagPassed => "tag_passed",
             ReleaseCheck::ItemsMerged => "items_merged",
             ReleaseCheck::StagePassed => "stage_passed",
+            ReleaseCheck::MergedItemsShip => "merged_items_ship",
         }
     }
 
@@ -153,6 +157,9 @@ impl ReleaseCheck {
                 "every item planned into the release is at the integrate stage or later"
             }
             ReleaseCheck::StagePassed => "the release has been promoted into the stage",
+            ReleaseCheck::MergedItemsShip => {
+                "every item planned into the release whose code is merged can ship"
+            }
         }
     }
 }

@@ -558,6 +558,10 @@ pub struct Moved {
     /// forward <V>`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forward_needed: Option<String>,
+    /// The release the item was merged into was past its first stage, so it went back to it
+    /// (DEF-031).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sent_back: Option<crate::releases::SentBack>,
     /// Something to know, e.g. that the item has no branch, so nothing was merged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -574,6 +578,7 @@ pub fn move_item(
     to: &str,
     reason: Option<&str>,
     repo: Option<&Path>,
+    by: &str,
 ) -> Result<Moved> {
     let project = store.load_meta(id)?;
     let config = &project.config;
@@ -589,6 +594,7 @@ pub fn move_item(
             warnings,
             merged: None,
             forward_needed: None,
+            sent_back: None,
             note,
         })
     };
@@ -621,6 +627,11 @@ pub fn move_item(
              (`kanbanr sprint start <SP>`)"
         ))
     })?;
+    // A release that is tagged and not shipped takes no change: refused before anything moves
+    // (DEF-031).
+    if line.starts_with(RELEASE_PREFIX) {
+        crate::releases::open_for_merge(store, id, &line)?;
+    }
     let make_line = !facts.branches.contains_key(&line);
     if make_line && line == model.main {
         return Err(CoreError::Unsupported(format!(
@@ -691,6 +702,21 @@ pub fn move_item(
         }
     };
     let forward_needed = line.strip_prefix(RELEASE_PREFIX).map(str::to_string);
+    // A real merge into a release past its first stage returns it there (DEF-031). The merge and
+    // the move are done and consistent; if only the stage write fails, say how to finish it.
+    let (mut sent_back, mut note) = (None, None);
+    if let (Some(version), false) = (&forward_needed, already) {
+        match crate::releases::send_back(store, id, version, code, by) {
+            Ok(sent) => sent_back = sent,
+            Err(e) => {
+                let first = config.cadence.stages().first().cloned().unwrap_or_default();
+                note = Some(format!(
+                    "could not return {version} to {first}: {e}; do it with kanbanr release \
+                     promote {version} {first} --reason \"{code} merged\""
+                ));
+            }
+        }
+    }
     Ok(Moved {
         feature: moved,
         warnings,
@@ -701,7 +727,8 @@ pub fn move_item(
             already,
         }),
         forward_needed,
-        note: None,
+        sent_back,
+        note,
     })
 }
 

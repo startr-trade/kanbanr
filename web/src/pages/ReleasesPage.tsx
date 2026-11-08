@@ -284,6 +284,21 @@ function ReleaseButton({
           ))}
         </ul>
       ) : null}
+      {action.returned ? (
+        <div className="small release-returned">
+          <p>
+            <span className="chip warn">sent back</span> to <strong>{release.stage ?? "its first stage"}</strong>:{" "}
+            <Inline text={action.returned.item} /> was merged into <code>{release.branch}</code> on{" "}
+            {action.returned.at.slice(0, 10)}
+            {action.returned.from ? `, when it was at ${action.returned.from}` : ""}.
+          </p>
+          <ol>
+            {action.returned.steps.map((s) => (
+              <li key={s}>{s}</li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
       <div className="review-actions">
         {action.button ? (
           <button
@@ -709,6 +724,11 @@ function ReleaseNotesSection({
           ) : (
             <>
               <Markdown source={notes.data.text} />
+              {section.unmentioned ? (
+                <p className="muted release-unmentioned">
+                  <Inline text={section.unmentioned} />
+                </p>
+              ) : null}
               <div className="review-actions">
                 {section.edit ? (
                   <button

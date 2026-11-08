@@ -751,12 +751,20 @@ branches; fix it before going on.
   `--edit` commits new text there, nothing checked out, until the cut. When the user asks where
   the notes are or wants them changed, use this — never a fix item, never a checkout of
   `release/<V>`. The Releases page shows them too, with Edit on a write-enabled monitor.
+- **A merge sends a promoted release back.** When a move merges an item into a release that is past
+  candidate, kanbanr sends the release back to candidate and says so. Tell the person, in one
+  message, what the Releases page now offers: update the notes, run the gate again, promote to
+  main, push and wait for CI, then cut. Confirm no stage yourself. A release that is tagged and not
+  shipped refuses the merge and needs a patch release.
 - **The date follows the release.** Entering the stage that moves main dates the notes and changelog
   today. If main moved earlier, the cut's plan warns: run `kanbanr release redate <V>` before the
   cut, and say to push main again if it says so.
 - Plan items into a release before promoting it: a release with nothing planned is refused. So a
   release starts with `release add`, then `release plan <V> <CODE>…`, then promoting it to its
-  first stage (candidate), which makes `release/<V>`; `release add` has no `--branch`.
+  first stage (candidate), which makes `release/<V>`; `release add` has no `--branch`. When a
+  sprint is running, plan the item into it too (`kanbanr sprint plan <SP> <CODE>`) unless the person
+  said otherwise; `release plan` names the ones it missed. A promotion held for a merged item names
+  the sign-off it lacks: send the person to the Review page; never record it.
 - Check with `kanbanr release promote <V> --plan` and tell the user what it still needs; the
   promotion itself, the cut included, is theirs, on the Releases page. **The user pushes main and
   the tag**, by hand; a cut that requires

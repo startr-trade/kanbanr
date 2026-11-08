@@ -8,6 +8,25 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **A promotion no longer carries merged work out of its release, and doctor names what a release
+  left behind (DEF-029).** Promoting into the stage that tags, or the last stage, is now held while
+  an item planned into the release has its code merged but would be carried over because its end
+  gate fails (usually a missing **Sign off release**). The plan names each such item, what it lacks
+  and the way out (`merged_items_ship`); work that is not done or not merged is carried as before.
+  `kanbanr doctor` warns about an item planned into a shipped release that is not at an end status,
+  and about a live item planned into a release but into no sprint while a sprint runs.
+  `kanbanr release plan` says which of the items it planned are in no sprint, with the
+  `kanbanr sprint plan` line, and plans nothing into the sprint itself.
+- **A change merged into a promoted release sends it back to candidate (DEF-031).** Merging an item
+  into a release that is past its first stage and not cut returns the release to that stage,
+  recording the item, and `kanbanr move` and Claude say what to do from there. The Releases page
+  and `kanbanr release promote <V> --plan` show the item and the steps in order (notes, the gate,
+  promote to main, push and wait for CI, cut), the release notes list the planned items they do not
+  mention, and the cut of a returned release needs main at the tip, the tip pushed and the gate
+  passed. A recorded gate pass now carries to a later commit when only documentation changed
+  (`docs/` and `*.md` unless `kanbanr config gate-docs` says otherwise), and the plan names the
+  commit it came from; a failed result never carries. A release that is tagged and not shipped
+  refuses the merge and points to a patch release.
 - **A decision records where it was taken, and a repeat records nothing (DEF-028).** Every approval,
   ratification, sign-off and its withdrawal, decision, promotion, confirmation after the tag, patch
   from a failed tag and cut now records its `origin`: `monitor` for a click on the monitor,

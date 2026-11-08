@@ -567,6 +567,54 @@ pub fn velocity(store: &Store, id: &str) -> Result<Option<Vec<(String, f64)>>> {
     ))
 }
 
+/// A live item planned into a release that has not shipped and into no sprint, while a sprint runs
+/// (DEF-029).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OutsideSprint {
+    pub code: String,
+    pub release: String,
+    /// The sprint that is running.
+    pub sprint: String,
+}
+
+/// Live items planned into a release that has not shipped, in no sprint, while a sprint runs.
+/// Empty unless the project runs sprints and one is active. With `only`, just those items (the ones
+/// a plan just put into a release). Sorted by code. Reads only; planning into the sprint is the
+/// person's or Claude's own command.
+pub fn outside_running_sprint(
+    project: &Project,
+    sprints: &[Sprint],
+    releases: &[crate::releases::Release],
+    only: Option<&[String]>,
+) -> Vec<OutsideSprint> {
+    if !project.config.cadence.sprints {
+        return Vec::new();
+    }
+    let Some(running) = active(sprints) else {
+        return Vec::new();
+    };
+    let mut found: Vec<OutsideSprint> = project
+        .features
+        .iter()
+        .filter(|f| f.sprint.is_none())
+        .filter(|f| only.is_none_or(|o| o.contains(&f.code)))
+        .filter(|f| !crate::graph::is_terminal_status(&project.config, &f.status))
+        .filter_map(|f| {
+            let version = f.release.as_deref()?;
+            releases
+                .iter()
+                .any(|r| r.version == version && r.state != crate::releases::ReleaseState::Shipped)
+                .then(|| OutsideSprint {
+                    code: f.code.clone(),
+                    release: version.to_string(),
+                    sprint: running.code.clone(),
+                })
+        })
+        .collect();
+    found.sort_by(|a, b| a.code.cmp(&b.code));
+    found
+}
+
 /// Today's date (UTC, as every timestamp on the board is).
 pub fn today() -> time::Date {
     time::OffsetDateTime::now_utc().date()
@@ -615,6 +663,54 @@ mod tests {
         let sp = super::add(&store, "shop", "2026-10-05", Some(5), "", None, "").unwrap();
         super::plan(&store, "shop", &sp.code, &codes).unwrap();
         (store, codes, dir)
+    }
+
+    /// DEF-029 R-5: items planned into a release while a sprint runs are named when they are in no
+    /// sprint; nothing plans them in.
+    #[test]
+    fn planning_into_a_release_names_items_outside_the_running_sprint() {
+        let (store, codes, dir) = board("def029-outside", Default::default());
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/shop/config/cadence",
+            Some(&serde_json::json!({"sprints": true, "releases": true})),
+        )
+        .unwrap();
+        let outside = |store: &Store, only: Option<&[String]>| {
+            let project = store.load("shop").unwrap();
+            super::outside_running_sprint(
+                &project,
+                &super::load(store, "shop").unwrap(),
+                &crate::releases::load(store, "shop").unwrap(),
+                only,
+            )
+        };
+        crate::releases::add(&store, "shop", "v1", "", "").unwrap();
+        let left_out = store.add_feature("shop", "D", "", "M", None).unwrap().code;
+        let both: Vec<String> = vec![codes[0].clone(), left_out.clone()];
+        crate::releases::plan(&store, "shop", "v1", &both).unwrap();
+        // No sprint runs yet: nothing to say.
+        assert!(outside(&store, Some(&both)).is_empty());
+        super::start(&store, "shop", "SP-001").unwrap();
+        let found = outside(&store, Some(&both));
+        assert_eq!(
+            found,
+            vec![super::OutsideSprint {
+                code: left_out.clone(),
+                release: "v1".into(),
+                sprint: "SP-001".into(),
+            }]
+        );
+        // Only what was asked about, and nothing was planned into the sprint.
+        assert!(outside(&store, Some(&codes[..1])).is_empty());
+        assert_eq!(outside(&store, None).len(), 1);
+        let project = store.load("shop").unwrap();
+        assert!(project.feature(&left_out).unwrap().sprint.is_none());
+        // Planned into the sprint, it is no longer named.
+        super::plan(&store, "shop", "SP-001", std::slice::from_ref(&left_out)).unwrap();
+        assert!(outside(&store, None).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Walk an item along the scrum stages to `status`, then date its arrival there `at`, as the

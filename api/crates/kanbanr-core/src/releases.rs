@@ -116,6 +116,10 @@ pub struct StageChange {
     pub at: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
+    /// The item whose merge into the release's branch caused this change (DEF-031); empty for
+    /// every other change.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub item: String,
     /// Where it was made: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Empty on a
     /// record written before origin existed.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -572,7 +576,7 @@ pub fn add_patch(
         at: crate::now_rfc3339(),
         reason: "on creation, as a patch".to_string(),
         origin: origin.to_string(),
-        extra: Default::default(),
+        ..Default::default()
     });
     let release = r.clone();
     if let Err(e) = save(store, id, &all) {
@@ -608,7 +612,7 @@ pub fn plan(store: &Store, id: &str, version: &str, items: &[String]) -> Result<
 /// Whether an item can ship, and to which end status — or why not. It ships if it is already
 /// finished, or if its work is done (every task complete) and the workflow allows it to an end
 /// status whose gate it meets. A workflow that declares no gates holds it to what `finish` asks.
-fn ship_to(
+pub(crate) fn ship_to(
     project: &Project,
     charter: &crate::Charter,
     ctx: &crate::readiness::Context,
@@ -643,6 +647,58 @@ fn ship_to(
     }
     Store::check_gate(project, charter, ctx, &f.code, end, None).map_err(|e| e.to_string())?;
     Ok(Some(end.clone()))
+}
+
+/// An item planned into a release that has shipped and is not at an end status (DEF-029).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Stranded {
+    pub code: String,
+    pub release: String,
+    /// The day the release shipped, `YYYY-MM-DD`.
+    pub shipped_at: String,
+    pub status: String,
+    /// What holds it, in a sentence.
+    pub why: String,
+}
+
+/// Items planned into a release that has shipped and are not at an end status, with what holds each.
+/// An item the cut carried is planned into another release (or none), so it is not listed. Reads
+/// only (ADR-0005).
+pub fn stranded(
+    project: &Project,
+    charter: &crate::Charter,
+    ctx: &crate::readiness::Context,
+    releases: &[Release],
+) -> Vec<Stranded> {
+    let config = &project.config;
+    let mut found: Vec<Stranded> = Vec::new();
+    for f in &project.features {
+        let Some(release) = f
+            .release
+            .as_deref()
+            .and_then(|v| releases.iter().find(|r| r.version == v))
+            .filter(|r| r.state == ReleaseState::Shipped)
+        else {
+            continue;
+        };
+        if crate::graph::is_terminal_status(config, &f.status) {
+            continue;
+        }
+        let why = match ship_to(project, charter, ctx, f) {
+            Err(why) => why,
+            Ok(Some(end)) => format!("nothing holds it: move it to {end}"),
+            Ok(None) => continue,
+        };
+        found.push(Stranded {
+            code: f.code.clone(),
+            release: release.version.clone(),
+            shipped_at: release.shipped_at.chars().take(10).collect(),
+            status: f.status.clone(),
+            why,
+        });
+    }
+    found.sort_by(|a, b| a.code.cmp(&b.code));
+    found
 }
 
 /// What a cut did.
@@ -691,10 +747,170 @@ pub fn tag_release(
     save(store, id, &releases)
 }
 
+/// A release returned to its first stage by a merge (DEF-031).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SentBack {
+    pub version: String,
+    pub from: String,
+    pub to: String,
+    pub item: String,
+    /// What to do from there, in order (`returned_steps`).
+    pub steps: Vec<String>,
+}
+
+/// The steps from the first stage after a release is sent back, in order, each only when this
+/// project has it (DEF-031): notes, the gate again, the promotion to main, the push and CI, the cut.
+pub fn returned_steps(cadence: &Cadence, version: &str) -> Vec<String> {
+    let gates = cadence.effective_release_gates();
+    let holding = |a: ReleaseAction| {
+        gates
+            .iter()
+            .find(|(_, g)| g.on_enter.contains(&a))
+            .map(|(s, _)| s.clone())
+    };
+    let main = cadence
+        .main_branch
+        .clone()
+        .unwrap_or_else(|| "main".to_string());
+    let mut steps = Vec::new();
+    if cadence.release_prepare.notes.is_some() {
+        steps.push("Update the release notes".to_string());
+    }
+    if !cadence.commit_gates.is_empty() {
+        steps.push("Run the release gate again for the new tip and record the result".to_string());
+    }
+    if let Some(stage) = holding(ReleaseAction::MoveMain) {
+        steps.push(format!("Promote to {stage}"));
+    }
+    if !cadence.commit_gates.is_empty()
+        || gates
+            .iter()
+            .any(|(_, g)| g.requires.contains(&ReleaseCheck::Pushed))
+    {
+        steps.push(format!("Push {main} and wait for CI"));
+    }
+    if holding(ReleaseAction::Tag).is_some() {
+        steps.push(format!("Cut {version}"));
+    }
+    steps
+}
+
+/// A release sent back by a merge that has not been cut yet, as the plan shows it (DEF-031).
+/// Derived, never stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Returned {
+    /// The item whose merge sent it back.
+    pub item: String,
+    pub by: String,
+    pub at: String,
+    /// The stage it was at before.
+    pub from: String,
+    /// What to do from the first stage, in order (`returned_steps`).
+    pub steps: Vec<String>,
+}
+
+/// The newest stage change made by a merge, unless a later change entered the cut stage or one
+/// after it (`cut` is that stage's index): the release was cut since, so it is no longer returned.
+fn open_return<'a>(release: &'a Release, stages: &[String], cut: usize) -> Option<&'a StageChange> {
+    let at = release.stages.iter().rposition(|c| !c.item.is_empty())?;
+    let cut_since = release.stages[at + 1..].iter().any(|c| {
+        stages
+            .iter()
+            .position(|s| *s == c.stage)
+            .is_some_and(|i| i >= cut)
+    });
+    (!cut_since).then(|| &release.stages[at])
+}
+
+/// Refuse a merge into the branch of a release that is tagged and has not shipped (DEF-031): its
+/// tag names one commit and stays in git, so a change to it needs a patch release. Reads only.
+pub fn open_for_merge(store: &Store, id: &str, branch: &str) -> Result<()> {
+    let releases = load(store, id)?;
+    match releases
+        .iter()
+        .find(|r| !branch.is_empty() && r.branch == branch)
+    {
+        Some(r) if r.state != ReleaseState::Shipped && !r.tagged_at.is_empty() => {
+            Err(CoreError::Unsupported(format!(
+                "{} is tagged at {} and waits for its later stages: a change to it needs a patch \
+                 release (kanbanr release patch {}, or Start a patch release on the Releases page)",
+                r.version,
+                if r.tag_commit.is_empty() {
+                    "its tag"
+                } else {
+                    short(&r.tag_commit)
+                },
+                r.version
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Return `version` to its first stage because `item` was merged into its branch (DEF-031), a
+/// board-only stage change recording the item. `Ok(None)`: nothing to do (no stage yet, already at
+/// the first stage, shipped, or a stage the project no longer lists). An error when the release is
+/// tagged and not shipped, or the releases file cannot be written.
+pub fn send_back(
+    store: &Store,
+    id: &str,
+    version: &str,
+    item: &str,
+    by: &str,
+) -> Result<Option<SentBack>> {
+    let project = cadence_on(store, id)?;
+    let cadence = &project.config.cadence;
+    let stages = cadence.stages();
+    let mut releases = load(store, id)?;
+    let release = releases
+        .iter_mut()
+        .find(|r| r.version == version)
+        .ok_or_else(|| CoreError::Unsupported(format!("no release {version}")))?;
+    let at = stages.iter().position(|s| *s == release.stage);
+    if release.state == ReleaseState::Shipped
+        || release.stage.is_empty()
+        || matches!(at, None | Some(0))
+    {
+        return Ok(None);
+    }
+    if !release.tagged_at.is_empty() {
+        let branch = release.branch.clone();
+        open_for_merge(store, id, &branch)?;
+    }
+    let first = stages[0].clone();
+    let from = std::mem::replace(&mut release.stage, first.clone());
+    let steps = returned_steps(cadence, version);
+    release.stages.push(StageChange {
+        stage: first.clone(),
+        by: by.trim().to_string(),
+        at: crate::now_rfc3339(),
+        reason: format!(
+            "{item} was merged into {} after the release left {first}; from here: {}",
+            release.branch,
+            steps.join(", then ")
+        ),
+        item: item.to_string(),
+        ..Default::default()
+    });
+    save(store, id, &releases)?;
+    Ok(Some(SentBack {
+        version: version.to_string(),
+        from,
+        to: first,
+        item: item.to_string(),
+        steps,
+    }))
+}
+
 /// Ship a release (FTR-026): its planned items that are finished move to their end status, the
 /// notes are written, `shipped_at` is recorded and what could not ship is carried. Records the
 /// stage change that made it when there is one (FEAT-183). Either way the release ends at the last
 /// stage: a shipped release is in production, whichever command shipped it.
+///
+/// It carries every item that cannot ship. A merged item is held earlier, by promotion
+/// (`merged_items_ship`); `cut` called directly has no plan to hold and keeps carrying.
 fn ship_release(
     store: &Store,
     id: &str,
@@ -985,6 +1201,9 @@ pub struct ReleasePlan {
     /// The recorded CI result for the tag, once the release is tagged and not shipped (FTR-026).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<TagResult>,
+    /// The merge that sent the release back and the steps from there, until it is cut (DEF-031).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returned: Option<Returned>,
     /// What the one button says: "Promote to main", "Cut v0.2.1", "Promote to main again".
     pub button: String,
     pub conditions: Vec<PlanCondition>,
@@ -1151,10 +1370,12 @@ fn short(sha: &str) -> &str {
 
 /// Whether every gate in `commit_gates` has a passed result recorded for `tip` (FTR-002). Reads
 /// the board's recorded results only: no server is asked. Returns held, the detail and the fix.
+#[allow(clippy::too_many_arguments)]
 fn gate_passed(
     store: &Store,
     id: &str,
-    commit_gates: &[String],
+    cadence: &Cadence,
+    repo: &Path,
     tip: Option<&str>,
     prepares: bool,
     version: &str,
@@ -1186,16 +1407,30 @@ fn gate_passed(
         );
     };
     let results = crate::gates::results(store, id, None).unwrap_or_default();
+    let docs = cadence.gate_docs_patterns();
+    let docs_ok = Cadence::validate_gate_docs(&docs).is_ok();
     let mut recorded = Vec::new();
-    for name in commit_gates {
+    for name in &cadence.commit_gates {
         match crate::gates::newest(&results, name, tip) {
-            None => {
-                return (
-                    false,
-                    format!("{name} has no recorded result for {}", short(tip)),
-                    fix_for(tip),
-                );
-            }
+            // A pass for an earlier commit stands when only documentation changed since (DEF-031).
+            None => match crate::gates::carried(&results, name, tip, repo, &docs)
+                .filter(|_| docs_ok)
+            {
+                Some((r, n)) => recorded.push(format!(
+                    "{name} passed on {} (recorded by {}, {}); only documentation changed since \
+                     ({n} file(s))",
+                    short(&r.commit),
+                    r.by,
+                    r.at.get(..10).unwrap_or(&r.at)
+                )),
+                None => {
+                    return (
+                        false,
+                        format!("{name} has no recorded result for {}", short(tip)),
+                        fix_for(tip),
+                    );
+                }
+            },
             Some(r) if !r.passed => {
                 let note = if r.note.is_empty() {
                     String::new()
@@ -1343,6 +1578,43 @@ fn work_out(
         for a in &gate.after {
             if !afters.iter().any(|(x, _)| x == a) {
                 afters.push((a.clone(), name.clone()));
+            }
+        }
+    }
+    // A release sent back by a merge is not cut for a commit that main and the gate have not
+    // reached, whatever its stages require (DEF-031). The stage's own `requires` stay as they are.
+    let returned = open_return(&release, &stages, cut_stage).map(|c| {
+        let prior = release
+            .stages
+            .iter()
+            .position(|x| std::ptr::eq(x, c))
+            .and_then(|i| i.checked_sub(1))
+            .map(|i| release.stages[i].stage.clone())
+            .unwrap_or_default();
+        Returned {
+            item: c.item.clone(),
+            by: c.by.clone(),
+            at: c.at.clone(),
+            from: prior,
+            steps: returned_steps(cadence, version),
+        }
+    });
+    if returned.is_some() && entered.contains(&cut_stage) {
+        let tag_stage = gates[cut_stage].0.clone();
+        let holds_main = gates
+            .iter()
+            .any(|(_, g)| g.on_enter.contains(&ReleaseAction::MoveMain));
+        let mut add = Vec::new();
+        if holds_main {
+            add.push(ReleaseCheck::MainAtRelease);
+            add.push(ReleaseCheck::Pushed);
+        }
+        if !cadence.commit_gates.is_empty() {
+            add.push(ReleaseCheck::GatePassed);
+        }
+        for c in add {
+            if !requires.iter().any(|(x, _)| *x == c) {
+                requires.push((c, tag_stage.clone()));
             }
         }
     }
@@ -1939,10 +2211,15 @@ fn work_out(
                     ReleaseCheck::StagePassed => {
                         (true, "judged through after".to_string(), String::new())
                     }
+                    // Only a plan names it; it is worked out after the checks.
+                    ReleaseCheck::MergedItemsShip => {
+                        (true, "judged by the plan".to_string(), String::new())
+                    }
                     ReleaseCheck::GatePassed => gate_passed(
                         store,
                         id,
-                        &cadence.commit_gates,
+                        cadence,
+                        repo,
                         tip_before.as_deref(),
                         prepares,
                         version,
@@ -1991,6 +2268,49 @@ fn work_out(
                 fix,
             });
         }
+    }
+
+    // A promotion that tags or ships never carries merged work away (DEF-029): the code is in the
+    // tag. `items_finished`, where a stage names it, already refuses every carry.
+    if direction == Direction::Forward
+        && (cut || ships)
+        && !requires
+            .iter()
+            .any(|(c, _)| *c == ReleaseCheck::ItemsFinished)
+    {
+        let held = merged_but_carried(&project, &preview);
+        let holder = stages[if cut { cut_stage } else { last }].clone();
+        let (holds, detail, fix) = if held.is_empty() {
+            let n = preview.len();
+            (
+                true,
+                format!("{n} planned item(s), no merged one would carry over"),
+                String::new(),
+            )
+        } else {
+            let detail = held
+                .iter()
+                .map(|(c, why)| format!("{c} is merged into {version} but would carry over: {why}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            let fix = held
+                .iter()
+                .map(|(c, _)| {
+                    format!(
+                        "{c}: give what it lacks on the Review page (kanbanr check {c} lists it), or plan it into another release"
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            (false, detail, fix)
+        };
+        conditions.push(PlanCondition {
+            check: ReleaseCheck::MergedItemsShip,
+            stage: holder,
+            holds,
+            detail,
+            fix,
+        });
     }
 
     let reason = reason.trim();
@@ -2109,6 +2429,7 @@ fn work_out(
         confirm,
         ships,
         tag: tag_result(store, id, cadence, &release),
+        returned: returned.clone(),
         button,
         ready: missing.is_empty(),
         missing,
@@ -2144,6 +2465,23 @@ fn work_out(
 /// Why a release with nothing planned into it cannot be promoted, and how to plan into it.
 pub fn empty_release(version: &str) -> String {
     format!("{version} has no items: plan some in with `kanbanr release plan {version} <CODE>…`")
+}
+
+/// Items planned into the release whose code is merged but which the cut would carry over, with
+/// what each lacks (DEF-029). Work not done or not merged is not listed: it is carried.
+fn merged_but_carried(project: &Project, preview: &[CutPreview]) -> Vec<(String, String)> {
+    preview
+        .iter()
+        .filter(|p| !p.ships)
+        .filter(|p| {
+            project.features.iter().any(|f| {
+                f.code == p.code
+                    && crate::gitmodel::is_integrated(&project.config, &f.status)
+                    && !project.config.is_no_op(&f.status)
+            })
+        })
+        .map(|p| (p.code.clone(), p.why.clone()))
+        .collect()
 }
 
 fn items_finished(preview: &[CutPreview]) -> (bool, String) {
@@ -2619,6 +2957,7 @@ pub fn promote_with(
         } else {
             reason.to_string()
         },
+        ..Default::default()
     };
     let mut releases = w.releases.clone();
     let index = w.index;
@@ -3040,6 +3379,9 @@ pub struct ReleaseNotes {
     /// Why not, when not editable.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub why_not: String,
+    /// The items planned into the release whose code the notes do not mention (DEF-031).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unmentioned: Vec<String>,
 }
 
 /// The release, its branch and its notes path, or why its notes cannot be found.
@@ -3089,8 +3431,19 @@ fn branch_tip(repo: &Path, release: &Release) -> Result<String> {
 }
 
 /// The notes of `release` as read at `tip`.
-fn notes_at(release: &Release, path: &str, text: String, tip: &str) -> ReleaseNotes {
+fn notes_at(
+    project: &Project,
+    release: &Release,
+    path: &str,
+    text: String,
+    tip: &str,
+) -> ReleaseNotes {
     let shipped = release.state == ReleaseState::Shipped;
+    let unmentioned = if shipped {
+        Vec::new()
+    } else {
+        unmentioned(project, &release.version, &text)
+    };
     ReleaseNotes {
         version: release.version.clone(),
         branch: release.branch.clone(),
@@ -3106,7 +3459,33 @@ fn notes_at(release: &Release, path: &str, text: String, tip: &str) -> ReleaseNo
         } else {
             String::new()
         },
+        unmentioned,
     }
+}
+
+/// Whether `text` names `code` as a whole code: the character before is not a letter, digit or
+/// `-`, and the one after is not a letter or digit, so `DEF-03` is not found in `DEF-030` (DEF-031).
+fn mentions(text: &str, code: &str) -> bool {
+    text.match_indices(code).any(|(i, _)| {
+        let before = text[..i].chars().next_back();
+        let after = text[i + code.len()..].chars().next();
+        !before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-')
+            && !after.is_some_and(|c| c.is_ascii_alphanumeric())
+    })
+}
+
+/// The codes of the items planned into `version` (not in a no-op status) that `text` does not
+/// mention, sorted (DEF-031).
+fn unmentioned(project: &Project, version: &str, text: &str) -> Vec<String> {
+    let mut codes: Vec<String> = project
+        .features
+        .iter()
+        .filter(|f| f.release.as_deref() == Some(version) && !project.config.is_no_op(&f.status))
+        .filter(|f| !mentions(text, &f.code))
+        .map(|f| f.code.clone())
+        .collect();
+    codes.sort();
+    codes
 }
 
 /// A release's notes as they are at the tip of `release/<V>`, read without checking anything out
@@ -3118,7 +3497,7 @@ pub fn release_notes(
     version: &str,
     repo: Option<&Path>,
 ) -> Result<ReleaseNotes> {
-    let (_, release, _, path) = notes_target(store, id, version)?;
+    let (project, release, _, path) = notes_target(store, id, version)?;
     let repo = repo.ok_or_else(|| notes_need_repo(version))?;
     let tip = branch_tip(repo, &release)?;
     let (_, text) = coderepo::read_blob(repo, &tip, &path)?.ok_or_else(|| {
@@ -3128,7 +3507,7 @@ pub fn release_notes(
             short(&tip)
         ))
     })?;
-    Ok(notes_at(&release, &path, text, &tip))
+    Ok(notes_at(&project, &release, &path, text, &tip))
 }
 
 /// The dates before `today` on the lines of a release's notes and changelog that carry one, at
@@ -3339,7 +3718,7 @@ pub fn redate_release(
             .flatten()
             .map(|(_, t)| t)
             .unwrap_or_default();
-        notes_at(&release, &path, text, at)
+        notes_at(&project, &release, &path, text, at)
     };
     let files = redate_files(&project, &release, repo, &tip, &ymd)?;
     if files.is_empty() {
@@ -3451,7 +3830,7 @@ pub fn set_release_notes(
     if files.is_empty() {
         return Ok(NotesSaved {
             sha: tip.clone(),
-            notes: notes_at(&release, &path, text.to_string(), &tip),
+            notes: notes_at(&project, &release, &path, text.to_string(), &tip),
             main_moved: String::new(),
         });
     }
@@ -3469,7 +3848,7 @@ pub fn set_release_notes(
     )?;
     Ok(NotesSaved {
         sha: new.clone(),
-        notes: notes_at(&release, &path, text.to_string(), &new),
+        notes: notes_at(&project, &release, &path, text.to_string(), &new),
         main_moved,
     })
 }
@@ -5006,6 +5385,35 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    /// DEF-031 R-8: saving notes moves main with them and leaves the release's stage alone.
+    #[test]
+    fn saving_notes_does_not_send_the_release_back() {
+        let (store, dir, repo) = notes_fixture("notes-stays");
+        let tip = coderepo::rev_parse(&repo, "release/v0.2.0").unwrap();
+        coderepo::fast_forward(&repo, "main", &tip).unwrap();
+        let mut all = super::load(&store, "shop").unwrap();
+        let r = all.iter_mut().find(|r| r.version == "v0.2.0").unwrap();
+        let at = super::Cadence::default().stages()[1].clone();
+        r.stage = at.clone();
+        super::save(&store, "shop", &all).unwrap();
+        let before = super::load(&store, "shop").unwrap();
+        super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            "# v0.2.0\n\nMore.\n",
+            "Ada",
+        )
+        .unwrap();
+        assert_eq!(super::load(&store, "shop").unwrap(), before);
+        let r = before.iter().find(|r| r.version == "v0.2.0").unwrap();
+        assert_eq!(r.stage, at);
+        assert!(r.stages.iter().all(|c| c.item.is_empty()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
     /// The notes and both changelogs of v0.2.0 dated `ymd`, committed onto its release branch, as
     /// a candidate prepared on an earlier day has them.
     fn date_candidate(repo: &Path, ymd: &str) -> String {
@@ -5202,6 +5610,179 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(repo);
     }
 
+    // ---- DEF-029: merged work is never carried away ----
+
+    /// A TOGAF board with the staged release flow, v1 added and a charter adopted (so the gates
+    /// are enforced), beside a scratch repository. It holds no items.
+    fn togaf_staged(name: &str) -> (Store, PathBuf, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-def029-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        store
+            .init_project("shop", ProjectConfig::default_for("shop"))
+            .unwrap();
+        let put = |path: &str, body: serde_json::Value| {
+            crate::dispatch::dispatch(&store, "PUT", path, Some(&body)).unwrap();
+        };
+        put(
+            "/projects/shop/config/workflow",
+            serde_json::json!({"preset": "togaf"}),
+        );
+        put(
+            "/projects/shop/config/cadence",
+            serde_json::json!({"releases": true}),
+        );
+        configure(&store, STAGED);
+        let mut c = store.load_meta("shop").unwrap().config.cadence;
+        c.commit_gates = vec!["ci".into()];
+        store.set_cadence("shop", None, c).unwrap();
+        crate::charter::save(
+            &store,
+            "shop",
+            &crate::Charter {
+                purpose: "Ship what was agreed".into(),
+                adopted_at: "2000-01-01T00:00:00Z".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        store
+            .add_milestone("shop", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        super::add(&store, "shop", "v1", "", "").unwrap();
+        let repo = crate::coderepo::tests::scratch_repo(&format!("def029-{name}"));
+        (store, dir, repo)
+    }
+
+    /// An item planned into v1 and walked to `stage` (no gate is judged on the way).
+    fn togaf_item(store: &Store, title: &str, stage: &str) -> String {
+        let code = store
+            .add_feature("shop", title, "", "M", None)
+            .unwrap()
+            .code;
+        for s in [
+            "Business Arch",
+            "System Design",
+            "Implementation",
+            "Migration",
+        ] {
+            if stage == "Vision" {
+                break;
+            }
+            store.move_feature("shop", &code, s).unwrap();
+            if s == stage {
+                break;
+            }
+        }
+        super::plan(store, "shop", "v1", std::slice::from_ref(&code)).unwrap();
+        code
+    }
+
+    fn merged_ship(plan: &super::ReleasePlan) -> super::PlanCondition {
+        plan.conditions
+            .iter()
+            .find(|c| c.check == crate::releasegates::ReleaseCheck::MergedItemsShip)
+            .cloned()
+            .expect("the plan lists merged_items_ship")
+    }
+
+    /// DEF-029 R-1: the stage that tags holds an item whose code is merged and would be carried,
+    /// naming it and what it lacks; unfinished work is not held.
+    #[test]
+    fn the_stage_that_tags_holds_a_merged_item_that_would_carry() {
+        let (store, dir, repo) = togaf_staged("tag");
+        let merged = togaf_item(&store, "Merged", "Migration");
+        let early = togaf_item(&store, "Early", "Implementation");
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        let plan = plan_to(&store, &repo, "tag");
+        let c = merged_ship(&plan);
+        assert!(!c.holds && c.stage == "tag", "{c:?}");
+        assert!(
+            c.detail.contains(&merged) && !c.detail.contains(&early),
+            "{c:?}"
+        );
+        assert!(
+            c.detail.contains("release"),
+            "names the sign-off: {}",
+            c.detail
+        );
+        assert!(
+            c.fix.contains("Review page") && c.fix.contains(&format!("kanbanr check {merged}")),
+            "{}",
+            c.fix
+        );
+        assert!(!plan.ready);
+        let err = super::promote(&store, "shop", "v1", Some("tag"), "Ada", "", Some(&repo))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(&merged) && !err.contains(&early), "{err}");
+        assert_eq!(v1(&store).stage, "main", "nothing moved");
+        assert!(!coderepo::tag_exists(&repo, "v1"));
+        clean(&dir, &repo);
+    }
+
+    /// DEF-029 R-1: so does the stage that ships, when the item reached the merged stage after the
+    /// tag.
+    #[test]
+    fn the_stage_that_ships_holds_a_merged_item_that_would_carry() {
+        let (store, dir, repo) = togaf_staged("ship");
+        let item = togaf_item(&store, "Late", "Implementation");
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        go(&store, &repo, "tag");
+        let sha = v1(&store).tag_commit;
+        now_result(&store, &sha, true);
+        assert!(merged_ship(&plan_to(&store, &repo, "staging")).holds);
+        store.move_feature("shop", &item, "Migration").unwrap();
+        let plan = plan_to(&store, &repo, "staging");
+        let c = merged_ship(&plan);
+        assert!(!c.holds && c.stage == "staging", "{c:?}");
+        assert!(c.detail.contains(&item), "{c:?}");
+        assert!(!plan.ready);
+        let err = super::promote(
+            &store,
+            "shop",
+            "v1",
+            Some("staging"),
+            "Ada",
+            "",
+            Some(&repo),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains(&item), "{err}");
+        assert_eq!(v1(&store).state, super::ReleaseState::Planned);
+        assert_eq!(
+            store
+                .load("shop")
+                .unwrap()
+                .feature(&item)
+                .unwrap()
+                .release
+                .as_deref(),
+            Some("v1"),
+            "the item stays planned into the release"
+        );
+        clean(&dir, &repo);
+    }
+
+    /// DEF-029 R-2: work not done is still carried by the cut, and is not held.
+    #[test]
+    fn an_unfinished_item_is_still_carried_by_the_cut() {
+        let (store, dir, repo) = togaf_staged("carry");
+        let early = togaf_item(&store, "Early", "Implementation");
+        let project = store.load("shop").unwrap();
+        let preview = super::cut_preview(&store, "shop", "v1").unwrap();
+        assert!(!preview[0].ships);
+        assert!(super::merged_but_carried(&project, &preview).is_empty());
+        let cut = super::cut(&store, "shop", "v1").unwrap();
+        assert_eq!(cut.release.carried.len(), 1);
+        assert_eq!(cut.release.carried[0].code, early);
+        clean(&dir, &repo);
+    }
+
     /// FTR-026 R-1: the stage that tags records `tagged_at` and the tag's commit, and ships nothing.
     #[test]
     fn the_tag_stage_tags_but_does_not_ship_when_stages_follow() {
@@ -5323,6 +5904,241 @@ pub(crate) mod tests {
         assert_eq!(cut.tagged, "v1");
         assert!(coderepo::tag_exists(&repo, "v1"));
         assert_eq!(cut.release.shipped.len(), 1);
+        clean(&dir, &repo);
+    }
+
+    // ---- DEF-031: a merge into a release past its first stage sends it back ----
+
+    /// DEF-031 R-1: a release at main goes back to its first stage, recording the item and who.
+    #[test]
+    fn send_back_returns_a_promoted_release_to_its_first_stage_and_records_the_item() {
+        let (store, dir, repo) = staged("def031-back", STAGED);
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        let before = super::load(&store, "shop").unwrap();
+        let sent = super::send_back(&store, "shop", "v1", "DEF-030", "Ada")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (sent.from.as_str(), sent.to.as_str(), sent.item.as_str()),
+            ("main", "candidate", "DEF-030")
+        );
+        assert!(sent.steps.iter().any(|s| s == "Cut v1"), "{:?}", sent.steps);
+        let r = v1(&store);
+        assert_eq!(r.stage, "candidate");
+        let last = r.stages.last().unwrap();
+        assert_eq!(
+            (last.stage.as_str(), last.by.as_str(), last.item.as_str()),
+            ("candidate", "Ada", "DEF-030")
+        );
+        assert!(last.reason.contains("DEF-030") && last.reason.contains("release/v1"));
+        assert!(!last.at.is_empty());
+        // Nothing else in the file changed.
+        let mut after = super::load(&store, "shop").unwrap();
+        after[0].stage = before[0].stage.clone();
+        after[0].stages.pop();
+        assert_eq!(
+            crate::yaml::to_string(&after).unwrap(),
+            crate::yaml::to_string(&before).unwrap()
+        );
+        clean(&dir, &repo);
+    }
+
+    /// DEF-031 R-2: a candidate, a shipped release and one with no stage are left alone.
+    #[test]
+    fn send_back_leaves_a_candidate_a_shipped_release_and_a_release_without_a_stage() {
+        let (store, dir, repo) = staged("def031-noop", STAGED);
+        let bytes =
+            |store: &Store| std::fs::read_to_string(super::path(store, "shop")).unwrap_or_default();
+        let none = bytes(&store);
+        assert!(
+            super::send_back(&store, "shop", "v1", "DEF-030", "Ada")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(bytes(&store), none, "no stage yet");
+        go(&store, &repo, "candidate");
+        let at_candidate = bytes(&store);
+        assert!(
+            super::send_back(&store, "shop", "v1", "DEF-030", "Ada")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(bytes(&store), at_candidate, "already at the first stage");
+        let mut all = super::load(&store, "shop").unwrap();
+        all[0].stage = "staging".into();
+        all[0].state = super::ReleaseState::Shipped;
+        super::save(&store, "shop", &all).unwrap();
+        let shipped = bytes(&store);
+        assert!(
+            super::send_back(&store, "shop", "v1", "DEF-030", "Ada")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(bytes(&store), shipped, "shipped");
+        clean(&dir, &repo);
+    }
+
+    /// DEF-031 R-3: a tagged release that has not shipped refuses a merge, naming the patch.
+    #[test]
+    fn a_tagged_unshipped_release_refuses_a_merge() {
+        let (store, dir, repo, sha) = tagged("def031-tagged", STAGED);
+        let err = super::open_for_merge(&store, "shop", "release/v1")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("v1") && err.contains(&sha[..7]) && err.contains("release patch"),
+            "{err}"
+        );
+        let before = std::fs::read_to_string(super::path(&store, "shop")).unwrap();
+        assert!(super::send_back(&store, "shop", "v1", "DEF-030", "Ada").is_err());
+        assert_eq!(
+            std::fs::read_to_string(super::path(&store, "shop")).unwrap(),
+            before
+        );
+        // Another branch is open.
+        assert!(super::open_for_merge(&store, "shop", "main").is_ok());
+        clean(&dir, &repo);
+    }
+
+    /// DEF-031 R-4: the plan of a release sent back names the item and the steps, until it is cut.
+    #[test]
+    fn the_plan_of_a_returned_release_names_the_item_and_the_steps() {
+        let (store, dir, repo) = staged("def031-plan", STAGED);
+        with_remote(&repo);
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        assert!(
+            plan_to(&store, &repo, "tag").returned.is_none(),
+            "not sent back"
+        );
+        super::send_back(&store, "shop", "v1", "DEF-030", "Ada").unwrap();
+        let plan = plan_to(&store, &repo, "main");
+        let r = plan.returned.expect("sent back");
+        assert_eq!(
+            (r.item.as_str(), r.by.as_str(), r.from.as_str()),
+            ("DEF-030", "Ada", "main")
+        );
+        assert!(r.steps.iter().any(|s| s == "Cut v1") && !r.at.is_empty());
+        // Cut: the plan stops naming it.
+        let tip = coderepo::rev_parse(&repo, "release/v1").unwrap();
+        plain_git(&repo, &["push", "-q", "origin", "main"]);
+        now_result(&store, &tip, true);
+        go(&store, &repo, "tag");
+        assert!(plan_to(&store, &repo, "tag").returned.is_none(), "cut");
+        clean(&dir, &repo);
+    }
+
+    /// DEF-031 R-7: the cut of a returned release needs main at the tip, a push and the gate,
+    /// whatever its stages require.
+    #[test]
+    fn a_returned_release_needs_main_and_a_push_before_the_cut_whatever_its_stages_say() {
+        use crate::releasegates::ReleaseCheck as C;
+        let (store, dir, repo) = staged("def031-cut", STAGED);
+        with_remote(&repo);
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        // Not sent back: the tag stage requires nothing, so the cut is ready.
+        let held =
+            |p: &super::ReleasePlan, c: C| p.conditions.iter().find(|x| x.check == c).cloned();
+        let plain = plan_to(&store, &repo, "tag");
+        assert!(plain.ready, "{:#?}", plain.conditions);
+        assert!(held(&plain, C::Pushed).is_none() && held(&plain, C::GatePassed).is_none());
+        // The fix is merged into the release branch, after main held it.
+        on_release(&repo, "release/v1", "fix", "fixed\n");
+        super::send_back(&store, "shop", "v1", "DEF-030", "Ada").unwrap();
+        let plan = plan_to(&store, &repo, "tag");
+        assert!(!plan.ready, "{:#?}", plan.conditions);
+        assert!(held(&plan, C::MainAtRelease).is_some_and(|c| c.holds && c.stage == "tag"));
+        assert!(held(&plan, C::Pushed).is_some_and(|c| !c.holds));
+        assert!(held(&plan, C::GatePassed).is_some_and(|c| !c.holds));
+        assert!(super::promote(&store, "shop", "v1", Some("tag"), "Ada", "", Some(&repo)).is_err());
+        assert!(!coderepo::tag_exists(&repo, "v1"));
+        // Promoted to main again, pushed and green: ready.
+        go(&store, &repo, "main");
+        let tip = coderepo::rev_parse(&repo, "release/v1").unwrap();
+        plain_git(&repo, &["push", "-q", "origin", "main"]);
+        now_result(&store, &tip, true);
+        let plan = plan_to(&store, &repo, "tag");
+        assert!(plan.ready, "{:#?}", plan.missing);
+        clean(&dir, &repo);
+    }
+
+    /// DEF-031 R-5: the notes name the planned items they do not mention.
+    #[test]
+    fn notes_list_the_items_they_do_not_mention() {
+        let (store, dir, repo) = notes_fixture("def031-unmentioned");
+        let project = store.load("shop").unwrap();
+        let planned: Vec<String> = project
+            .features
+            .iter()
+            .filter(|f| f.release.as_deref() == Some("v0.2.0"))
+            .map(|f| f.code.clone())
+            .collect();
+        assert_eq!(planned.len(), 1, "{planned:?}");
+        let mention = format!("# v0.2.0\n\n- {}: it\n", planned[0]);
+        let saved = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            "# v0.2.0\n\nNothing.\n",
+            "Ada",
+        )
+        .unwrap();
+        assert_eq!(saved.notes.unmentioned, planned);
+        let saved =
+            super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), &mention, "Ada")
+                .unwrap();
+        assert!(saved.notes.unmentioned.is_empty());
+        let read = super::release_notes(&store, "shop", "v0.2.0", Some(&repo)).unwrap();
+        assert!(read.unmentioned.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-031 R-5: a code inside a longer code is not a mention.
+    #[test]
+    fn an_item_code_inside_a_longer_code_is_not_mentioned() {
+        assert!(!super::mentions("fixes DEF-030 and DEF-0301", "DEF-03"));
+        assert!(!super::mentions("see XDEF-030", "DEF-030"));
+        assert!(!super::mentions("see FTR-DEF-030", "DEF-030"));
+        assert!(!super::mentions("DEF-0301", "DEF-030"));
+        assert!(super::mentions("DEF-030: the fix", "DEF-030"));
+        assert!(super::mentions(
+            "[DEF-030](/p/kanbanr/feature/DEF-030)",
+            "DEF-030"
+        ));
+        assert!(super::mentions("DEF-0301 and DEF-030.", "DEF-030"));
+        assert!(!super::mentions("", "DEF-030"));
+    }
+
+    /// DEF-031 R-4: the steps follow the stages this project has.
+    #[test]
+    fn returned_steps_follow_the_projects_stages() {
+        let (store, dir, repo) = staged("def031-steps", STAGED);
+        let mut c = store.load_meta("shop").unwrap().config.cadence;
+        c.release_prepare.notes = Some("docs/{version}.md".into());
+        assert_eq!(
+            super::returned_steps(&c, "v1"),
+            [
+                "Update the release notes",
+                "Run the release gate again for the new tip and record the result",
+                "Promote to main",
+                "Push main and wait for CI",
+                "Cut v1"
+            ]
+        );
+        c.commit_gates.clear();
+        assert_eq!(
+            super::returned_steps(&c, "v1"),
+            ["Update the release notes", "Promote to main", "Cut v1"]
+        );
+        c.release_prepare.notes = None;
+        assert_eq!(
+            super::returned_steps(&c, "v1"),
+            ["Promote to main", "Cut v1"]
+        );
         clean(&dir, &repo);
     }
 

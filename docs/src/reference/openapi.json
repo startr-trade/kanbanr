@@ -451,6 +451,13 @@
             },
             "type": "array"
           },
+          "gate_docs": {
+            "description": "The paths that count as documentation: a recorded pass of a commit gate carries across a\nchange that touches only these (DEF-031). Each entry is a directory prefix ending in `/`, a\nsuffix starting `*` (`*.md`) or an exact path. Unset: [`DEFAULT_GATE_DOCS`]; empty: nothing\ncounts as documentation.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "git_model": {
             "description": "Branching follows the derived git model (FEAT-189): where `start` branches, sprint\nbranches, and lines of integration taking merges only. Off by default, so no board changes.",
             "type": "boolean"
@@ -2996,6 +3003,11 @@
             "const": "stage_passed",
             "description": "The release has been promoted into a stage a gate names in `after`. Only a plan names it\n(a gate lists `after`, not this), so it is not in `ALL`.",
             "type": "string"
+          },
+          {
+            "const": "merged_items_ship",
+            "description": "Every item planned into the release whose code is merged can ship: the cut would not carry\nmerged work away (DEF-029). Only a plan names it, so it is not in `ALL`.",
+            "type": "string"
           }
         ]
       },
@@ -3096,6 +3108,10 @@
           "repo": {
             "description": "Whether the code repository was there to read.",
             "type": "boolean"
+          },
+          "returned": {
+            "$ref": "#/components/schemas/Returned",
+            "description": "The merge that sent the release back and the steps from there, until it is cut (DEF-031)."
           },
           "ships": {
             "description": "This promotion enters the last stage: it ships the release (FTR-026).",
@@ -3347,6 +3363,40 @@
           "nfr"
         ],
         "type": "string"
+      },
+      "Returned": {
+        "description": "A release sent back by a merge that has not been cut yet, as the plan shows it (DEF-031).\nDerived, never stored.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "from": {
+            "description": "The stage it was at before.",
+            "type": "string"
+          },
+          "item": {
+            "description": "The item whose merge sent it back.",
+            "type": "string"
+          },
+          "steps": {
+            "description": "What to do from the first stage, in order (`returned_steps`).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "item",
+          "by",
+          "at",
+          "from",
+          "steps"
+        ],
+        "type": "object"
       },
       "ReviewEntry": {
         "description": "One item waiting for agreement.",
@@ -3771,6 +3821,10 @@
             "type": "string"
           },
           "by": {
+            "type": "string"
+          },
+          "item": {
+            "description": "The item whose merge into the release's branch caused this change (DEF-031); empty for\nevery other change.",
             "type": "string"
           },
           "origin": {

@@ -442,6 +442,12 @@ pub struct Cadence {
     /// `commit_gates`. A result counts only when recorded after the tag was made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag_gate: Option<String>,
+    /// The paths that count as documentation: a recorded pass of a commit gate carries across a
+    /// change that touches only these (DEF-031). Each entry is a directory prefix ending in `/`, a
+    /// suffix starting `*` (`*.md`) or an exact path. Unset: [`DEFAULT_GATE_DOCS`]; empty: nothing
+    /// counts as documentation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_docs: Option<Vec<String>>,
     /// The project has CI, so the recommended `tag` stage also requires a passed `ci` result for
     /// the release tip (FTR-020). Off by default.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -458,6 +464,9 @@ pub struct Cadence {
 }
 
 /// The stages a release moves through when a project names none (FEAT-183).
+/// The paths that count as documentation when `cadence.gate_docs` is unset (DEF-031).
+pub const DEFAULT_GATE_DOCS: [&str; 2] = ["docs/", "*.md"];
+
 pub const DEFAULT_RELEASE_STAGES: [&str; 4] = ["candidate", "test", "staging", "production"];
 
 /// The stages a project gets when it turns releases on and names none (FTR-020). The third is the
@@ -467,6 +476,35 @@ pub const RECOMMENDED_RELEASE_STAGES: [&str; 3] = ["candidate", "main", "tag"];
 impl Cadence {
     pub fn is_off(&self) -> bool {
         *self == Cadence::default()
+    }
+
+    /// The documentation paths in force: the project's own list, else the default (DEF-031).
+    pub fn gate_docs_patterns(&self) -> Vec<String> {
+        match &self.gate_docs {
+            Some(list) => list.clone(),
+            None => DEFAULT_GATE_DOCS.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// A documentation path must not be empty, climb out of the repository with `..`, or start
+    /// with `/` (DEF-031). The error names the entry.
+    pub fn validate_gate_docs(entries: &[String]) -> Result<(), String> {
+        for e in entries {
+            let why = if e.trim().is_empty() {
+                "is empty"
+            } else if e.split('/').any(|part| part == "..") {
+                "contains `..`"
+            } else if e.starts_with('/') {
+                "starts with `/`"
+            } else {
+                continue;
+            };
+            return Err(format!(
+                "documentation path '{e}' {why}: name a folder (`docs/`), a suffix (`*.md`) or a \
+                 path inside the repository"
+            ));
+        }
+        Ok(())
     }
 
     /// This cadence without what belongs to the project's own environments and files: release
@@ -483,6 +521,7 @@ impl Cadence {
             commit_gates: Vec::new(),
             tag_gate: None,
             has_ci: false,
+            gate_docs: None,
             ..self.clone()
         }
     }
@@ -2279,6 +2318,7 @@ mod tests {
             commit_gates: vec!["ci".into()],
             tag_gate: Some("ci".into()),
             has_ci: true,
+            gate_docs: Some(vec!["docs/".into()]),
             extra: Default::default(),
         }
         .project_facts_cleared();
@@ -2288,6 +2328,7 @@ mod tests {
         assert!(c.release_stages.is_empty() && c.integration_branch.is_none());
         assert!(c.main_branch.is_none() && !c.git_model && c.release_gates.is_empty());
         assert!(c.commit_gates.is_empty() && c.tag_gate.is_none() && !c.has_ci);
+        assert!(c.gate_docs.is_none());
     }
 
     /// A path through `stages`, with the conditions a chore's first move asks.

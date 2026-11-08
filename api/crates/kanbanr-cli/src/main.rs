@@ -1086,6 +1086,15 @@ enum ConfigCmd {
     CommitGates {
         names: Vec<String>,
     },
+    /// The paths that count as documentation when a recorded gate pass is carried across a change
+    /// (DEF-031): `kanbanr config gate-docs docs/ '*.md'`. A folder ends in `/`, a suffix starts
+    /// with `*`. With none given, goes back to the default (`docs/` and `*.md`); `--none` says no
+    /// path counts, so a pass carries across no change.
+    GateDocs {
+        entries: Vec<String>,
+        #[arg(long, conflicts_with = "entries")]
+        none: bool,
+    },
     /// The commit gate whose result judges a release's tag (FTR-026): `kanbanr config tag-gate
     /// ci`. It must be one of the commit gates; with none given, the first commit gate judges.
     TagGate {
@@ -4550,6 +4559,10 @@ fn run_start(
     if let Some(reason) = unapproved {
         body["unapproved"] = json!(reason);
     }
+    // Who moved it, for a release this move sends back (DEF-031).
+    if let Ok(by) = verdict_author(cli, None) {
+        body["by"] = json!(by);
+    }
     let resp = client.write_in(
         Method::Post,
         &format!("/projects/{p}/features/{code}/move"),
@@ -4592,6 +4605,24 @@ fn print_merge(cli: &Cli, resp: &str) {
     }
     if let Some(note) = v["note"].as_str() {
         println!("note: {note}");
+    }
+    let sent = &v["release_sent_back"];
+    if let (Some(version), Some(from), Some(to), Some(item)) = (
+        sent["version"].as_str(),
+        sent["from"].as_str(),
+        sent["to"].as_str(),
+        sent["item"].as_str(),
+    ) {
+        let steps: Vec<&str> = sent["steps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        println!(
+            "{version} was at {from}; {item} is merged into it, so it is back at {to}. From here: {}",
+            steps.join(", then ")
+        );
     }
     if let Some(version) = v["forward_needed"].as_str() {
         println!("release/{version} has a fix the line lacks: kanbanr git forward {version}");
@@ -8945,6 +8976,22 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             print_write(cli, &resp, said);
             Ok(())
         }
+        ConfigCmd::GateDocs { entries, none } => {
+            let resp = client.write(
+                Method::Put,
+                &format!("/projects/{p}/config/gate-docs"),
+                Some(json!({ "paths": entries, "none": none })),
+            )?;
+            let said = if *none {
+                "documentation paths: none, so a gate pass carries across no change".to_string()
+            } else if entries.is_empty() {
+                "documentation paths: the default (docs/, *.md)".to_string()
+            } else {
+                format!("documentation paths: {}", entries.join(", "))
+            };
+            print_write(cli, &resp, said);
+            Ok(())
+        }
         ConfigCmd::TagGate { name } => {
             let resp = client.write(
                 Method::Put,
@@ -9752,6 +9799,19 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 &resp,
                 format!("planned {} into {version}", items.join(", ")),
             );
+            // The command's result, not a log (DEF-029): what the sprint is missing and how to add it.
+            if !cli.json {
+                let v: Value = serde_json::from_str(&resp)?;
+                for o in v["not_in_sprint"].as_array().into_iter().flatten() {
+                    let (code, sprint) = (
+                        o["code"].as_str().unwrap_or_default(),
+                        o["sprint"].as_str().unwrap_or_default(),
+                    );
+                    println!(
+                        "{code} is in no sprint and {sprint} is running: kanbanr sprint plan {sprint} {code}"
+                    );
+                }
+            }
         }
         // `cut --tag` is promotion to the last stage (FEAT-183): the tag comes with the main branch
         // fast-forwarded to the release, through the same preflight and rollback.
@@ -9878,6 +9938,15 @@ fn release_notes(
                 }
                 println!();
                 print!("{}", notes["text"].as_str().unwrap_or_default());
+                let missing: Vec<&str> = notes["unmentioned"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect();
+                if !missing.is_empty() {
+                    println!("\nNot mentioned yet: {}", missing.join(", "));
+                }
             }
             return Ok(());
         }
@@ -10133,6 +10202,22 @@ fn print_release_plan(
         return Ok(());
     }
     let plan: Value = serde_json::from_str(&resp)?;
+    if let Some(item) = plan["returned"]["item"].as_str() {
+        let steps: Vec<&str> = plan["returned"]["steps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        println!(
+            "Sent back by {item} on {}; {}",
+            plan["returned"]["at"]
+                .as_str()
+                .and_then(|at| at.get(..10))
+                .unwrap_or_default(),
+            steps.join(", then ")
+        );
+    }
     let from = plan["from"]
         .as_str()
         .filter(|s| !s.is_empty())

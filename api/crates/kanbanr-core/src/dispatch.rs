@@ -947,6 +947,7 @@ fn dispatch_routes(
                 &str_field(b, "to").unwrap_or_default(),
                 reason.as_deref(),
                 repo,
+                &str_field(b, "by").unwrap_or_else(|| "kanbanr".to_string()),
             )?;
             let mut out = serde_json::to_value(&moved.feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
@@ -964,6 +965,9 @@ fn dispatch_routes(
             }
             if let Some(v) = &moved.forward_needed {
                 out["forward_needed"] = json!(v);
+            }
+            if let Some(sent) = &moved.sent_back {
+                out["release_sent_back"] = json!(sent);
             }
             if let Some(note) = &moved.note {
                 out["note"] = json!(note);
@@ -1148,12 +1152,27 @@ fn dispatch_routes(
         },
         ("POST", ["projects", p, "releases", version, "plan"]) => {
             let items = vec_field(b, "items").unwrap_or_default();
-            ser(&crate::releases::plan(
-                store,
-                p,
-                &percent_decode(version),
-                &items,
-            )?)
+            let release = crate::releases::plan(store, p, &percent_decode(version), &items)?;
+            // Items now in a release but in no running sprint are named, not planned in
+            // (DEF-029): the reply is the release as ever, with `not_in_sprint` when there are any.
+            let project = store.load(p)?;
+            let outside = crate::sprints::outside_running_sprint(
+                &project,
+                &crate::sprints::load(store, p)?,
+                &crate::releases::load(store, p)?,
+                Some(&items),
+            );
+            let mut body = serde_json::to_value(&release)
+                .map_err(|e| CoreError::Unsupported(format!("serialize: {e}")))?;
+            if !outside.is_empty() {
+                body["not_in_sprint"] = serde_json::Value::Array(
+                    outside
+                        .iter()
+                        .map(|o| serde_json::json!({"code": o.code, "sprint": o.sprint}))
+                        .collect(),
+                );
+            }
+            ser(&body)
         }
         ("POST", ["projects", p, "releases", version, "cut"]) => ser(&crate::releases::cut_as(
             store,
@@ -1313,6 +1332,25 @@ fn dispatch_routes(
                 .filter(|g| !g.is_empty());
             let mut cadence = store.load_meta(p)?.config.cadence;
             cadence.tag_gate = gate;
+            ser(&store.set_cadence(p, None, cadence)?)
+        }
+        // `{paths: [entry…]}`: the paths that count as documentation when a recorded gate pass is
+        // carried across a change (DEF-031). Empty goes back to the default; `{none: true}` says
+        // that no path counts as documentation.
+        ("PUT", ["projects", p, "config", "gate-docs"]) => {
+            let paths: Vec<String> = vec_field(b, "paths")
+                .unwrap_or_default()
+                .iter()
+                .map(|e| e.trim().to_string())
+                .collect();
+            let mut cadence = store.load_meta(p)?.config.cadence;
+            cadence.gate_docs = if bool_field(b, "none").unwrap_or(false) {
+                Some(Vec::new())
+            } else if paths.is_empty() {
+                None
+            } else {
+                Some(paths)
+            };
             ser(&store.set_cadence(p, None, cadence)?)
         }
         // The release stages with the gate in force on each (FEAT-212).
@@ -1618,6 +1656,7 @@ fn dispatch_routes(
                 // FTR-002: the gates a release stage requires have a route of their own.
                 commit_gates: current.commit_gates.clone(),
                 tag_gate: current.tag_gate.clone(),
+                gate_docs: current.gate_docs.clone(),
                 // FTR-020: whether the project has CI; kept when the body does not say.
                 has_ci: bool_field(b, "has_ci").unwrap_or(current.has_ci),
                 sprints: bool_field(b, "sprints").unwrap_or(current.sprints),
@@ -2180,6 +2219,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
         }
         ["projects", _p, "config", "commit-gates"] => "set the commit gates".into(),
         ["projects", _p, "config", "tag-gate"] => "set the tag gate".into(),
+        ["projects", _p, "config", "gate-docs"] => "set the documentation paths".into(),
         ["projects", _p, "releases", v, "patch-from-tag"] => format!(
             "start a patch release from the failed tag of {}",
             percent_decode(v)

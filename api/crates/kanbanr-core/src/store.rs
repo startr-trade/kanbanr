@@ -3465,6 +3465,8 @@ impl Store {
         cadence
             .validate_release_gates()
             .map_err(CoreError::Unsupported)?;
+        crate::config::Cadence::validate_gate_docs(&cadence.gate_docs_patterns())
+            .map_err(CoreError::Unsupported)?;
         if let Some(unit) = unit {
             project.config.estimate_unit = unit;
         }

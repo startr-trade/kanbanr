@@ -50,6 +50,14 @@ expect("no branch yet: no section", !s.show && !s.edit, s);
 s = notesSection(draft, undefined, notes, true);
 expect("no notes path configured: no section", !s.show && !s.edit, s);
 
+// DEF-031: the notes name the planned items they do not mention, before the cut.
+s = notesSection(draft, path, { ...notes, unmentioned: ["DEF-030", "FTR-002"] }, true);
+expect("web::release_notes_section_lists_unmentioned_items: listed", s.unmentioned === "Not mentioned yet: DEF-030, FTR-002", s);
+s = notesSection(draft, path, notes, true);
+expect("web::release_notes_section_lists_unmentioned_items: none when all are mentioned", s.unmentioned === "", s);
+s = notesSection(shipped, path, { ...shippedNotes, unmentioned: ["DEF-030"] }, true);
+expect("web::release_notes_section_lists_unmentioned_items: none after the cut", s.unmentioned === "", s);
+
 // A read-only monitor never sends the save, and names the command instead.
 setConfig({ readOnly: true });
 const sent = [];
