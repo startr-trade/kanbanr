@@ -140,36 +140,15 @@ record the failed result and run `kanbanr release add <NEW VERSION> --patch-of <
 notes, plans it and the release's items into a patch branched from the tag, and marks the failed
 release as superseded. The tag stays in git.
 
-### Decide when an item is done for its sprint
+### Closing a sprint before its release
 
-Under the TOGAF preset only **Operations** counts as done, and items reach Operations when their release is cut.
-A `release` sign-off or a last task leaves a planned item where it is.
-So if you close a sprint before its release is cut, an item that is merged and sitting in Migration
-is carried over, to the backlog by default:
+Under the TOGAF preset Migration counts as done for a sprint, and Operations is when a release ships
+the item. So closing a sprint before its release is cut carries over only work that has not merged,
+to the backlog by default. An item still at Implementation is carried:
 
 ```text
 closed SP-001; carried FEAT-001 → backlog
 ```
-
-If your sprints end before your releases do, mark Migration as done. Export the workflow, add one
-line, and load it back:
-
-```text
-kanbanr config workflow --export > workflow.yaml
-```
-
-```yaml
-gates:
-  Migration:
-    done: true
-```
-
-```text
-kanbanr config workflow --from-file workflow.yaml
-```
-
-The same close then says `nothing carried over`, and the release still takes the item to Operations
-when it is cut. If you always cut the release before closing the sprint, you can leave this alone.
 
 ## Planning a sprint
 

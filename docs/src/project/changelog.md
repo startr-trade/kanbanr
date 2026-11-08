@@ -34,6 +34,9 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Added
 
+- **TOGAF fits sprints and releases without changing it (FTR-025).** Migration counts as done for a
+  sprint, so closing a sprint carries over only unmerged work. A project's sprints, releases, release
+  stages, branches, git model, release gates and prepare steps no longer make it a different process.
 - **Setup leaves no sprint or release you didn't need (FTR-022).** Setup now asks sprints and
   releases as one question, with no length, dates, capacity or version, and creates neither; the
   first is made when you ask for it. It reads the project's name and description from the README or

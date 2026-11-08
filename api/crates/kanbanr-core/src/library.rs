@@ -6,7 +6,7 @@
 //! daemon has no business in anyone's home folder. Names resolve board, then personal, then
 //! built-in, so a team's agreed process always wins over one person's copy.
 
-use crate::config::{Library, ProcessSource, ProjectConfig, WorkflowFile};
+use crate::config::{Cadence, Library, ProcessSource, ProjectConfig, WorkflowFile};
 use crate::{CoreError, Result, Store};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -450,10 +450,6 @@ pub fn drift(
     current: Option<&WorkflowFile>,
 ) -> Option<Drift> {
     let source = config.process.clone()?;
-    // The stages kanbanr wrote when releases were turned on are not an edit of the process (FTR-020).
-    let mut compared = config.clone();
-    compared.cadence = compared.cadence.without_recommended_defaults();
-    let mine = WorkflowFile::from_config(&compared).content_rev();
     // The process as this project takes it: a part of the method it turned off is a choice, not
     // an edit, and not news (FEAT-193).
     let current = current.map(|c| crate::method::shaped(c.clone(), &config.method));
@@ -461,8 +457,23 @@ pub fn drift(
         .as_ref()
         .filter(|c| c.content_rev() != source.rev)
         .map(|c| c.version());
+    // The cadence is the project's when the process declares none, and its release stages,
+    // branches, git model, release gates and prepare steps are the project's always (FTR-025).
+    // The stages kanbanr wrote when releases were turned on are not an edit of the process either
+    // (FTR-020).
+    let mine_rev = |cadence: Cadence| {
+        let mut c = config.clone();
+        c.cadence = cadence;
+        WorkflowFile::from_config(&c).content_rev()
+    };
+    let own = config.cadence.without_recommended_defaults();
+    let mut same_as_source =
+        mine_rev(own.clone()) == source.rev || mine_rev(own.project_facts_cleared()) == source.rev;
+    if !same_as_source && current.as_ref().is_some_and(|c| c.cadence.is_off()) {
+        same_as_source = mine_rev(Cadence::default()) == source.rev;
+    }
     Some(Drift {
-        edited: mine != source.rev,
+        edited: !same_as_source,
         newer,
         gone: current.is_none(),
         source,
@@ -781,5 +792,90 @@ mod tests {
         config.method = MethodChoice::default();
         let d = drift(&config, Some(&file)).unwrap();
         assert!(d.newer.is_some(), "{d:?}");
+    }
+
+    /// A project applied from `file`, with its source recorded.
+    fn applied(name: &str) -> (WorkflowFile, ProjectConfig) {
+        let file = crate::config::preset(name).unwrap();
+        let mut config = file.clone().into_config("p");
+        config.process = Some(file.source(name, crate::config::Library::Builtin));
+        (file, config)
+    }
+
+    fn choose_a_cadence(config: &mut ProjectConfig) {
+        config.cadence.sprints = true;
+        config.cadence.releases = true;
+        config.cadence.release_stages =
+            vec!["candidate".into(), "main".into(), "production".into()];
+        config.cadence.git_model = true;
+    }
+
+    /// FTR-025 R-2: a cadence the process leaves to the project is not an edit.
+    #[test]
+    fn drift_ignores_a_cadence_the_process_leaves_to_the_project() {
+        let (file, mut config) = applied("togaf");
+        choose_a_cadence(&mut config);
+        assert!(!drift(&config, Some(&file)).unwrap().edited);
+    }
+
+    /// FTR-025 R-3: a gate edit is still an edit, whatever the cadence.
+    #[test]
+    fn drift_still_reports_a_gate_edit_when_cadence_is_on() {
+        let (file, mut config) = applied("togaf");
+        choose_a_cadence(&mut config);
+        config.gates.get_mut("Migration").unwrap().purpose = "x".into();
+        assert!(drift(&config, Some(&file)).unwrap().edited);
+    }
+
+    /// DEF-014: sprints and releases chosen on the default process, through the store as the CLI
+    /// does, are not an edit of it; a gate edit still is.
+    #[test]
+    fn drift_ignores_a_cadence_chosen_on_the_default_process() {
+        let d = dirs();
+        let store = Store::new(d.board.clone());
+        let file = crate::config::preset("default").unwrap();
+        let mut config = file.clone().into_config("p");
+        config.process = Some(file.source("default", Library::Builtin));
+        store.init_project("p", config).unwrap();
+        let mut cadence = store.load("p").unwrap().config.cadence;
+        cadence.sprints = true;
+        cadence.releases = true;
+        let config = store.set_cadence("p", None, cadence).unwrap();
+        assert!(!config.cadence.release_stages.is_empty());
+        assert!(!drift(&config, Some(&file)).unwrap().edited);
+        let mut edited = config.clone();
+        let status = edited.default_state.clone();
+        edited.gates.entry(status).or_default().purpose = "x".into();
+        assert!(drift(&edited, Some(&file)).unwrap().edited);
+    }
+
+    /// FTR-025 R-4: a process with its own cadence is compared as before, apart from the
+    /// project's own release facts.
+    #[test]
+    fn drift_of_a_process_with_its_own_cadence_is_unchanged() {
+        let (file, mut config) = applied("scrum");
+        assert!(!drift(&config, Some(&file)).unwrap().edited);
+        config.cadence.release_stages = vec!["a".into(), "b".into()];
+        assert!(!drift(&config, Some(&file)).unwrap().edited);
+        let mut off = config.clone();
+        off.cadence.sprints = false;
+        assert!(drift(&off, Some(&file)).unwrap().edited);
+        let mut longer = config.clone();
+        longer.cadence.sprint_length_days =
+            Some(config.cadence.sprint_length_days.unwrap_or(7) + 1);
+        assert!(drift(&longer, Some(&file)).unwrap().edited);
+    }
+
+    /// FTR-025 R-5: a project applied from the old preset sees the new one as newer, not as its
+    /// own edit.
+    #[test]
+    fn an_older_togaf_project_sees_the_new_preset_as_newer_only() {
+        let preset = crate::config::preset("togaf").unwrap();
+        let mut old = preset.clone();
+        old.gates.get_mut("Migration").unwrap().done = false;
+        let mut config = old.clone().into_config("p");
+        config.process = Some(old.source("togaf", crate::config::Library::Builtin));
+        let d = drift(&config, Some(&preset)).unwrap();
+        assert!(!d.edited && d.newer.is_some(), "{d:?}");
     }
 }
