@@ -55,7 +55,13 @@ Keep it open. Every decision below happens there.
 
 ## One item, start to finish
 
-> We need saved carts: shoppers should be able to come back to their basket.
+> A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there.
+
+**Claude asks whether it has a user interface.** When you choose the technology (or, if you don't,
+when the first item is designed), Claude asks whether the product has screens a person uses, or is
+a service, library or command-line tool. If it has screens, they become items of their own,
+designed and approved like the rest. If it has none, that goes into the design, so a missing screen
+is a decision and not an oversight.
 
 Claude asks only what it can't work out, then writes the item. It starts in Planned. Entering
 **In Progress** is where the default workflow asks for things, and Completed asks for a little more:
@@ -76,9 +82,9 @@ again.
 
 **Just ask to move it on:**
 
-> Start the cart restore.
+> Start the saved basket.
 >
-> The cart restore is finished. Complete it.
+> The saved basket is finished. Complete it.
 
 If something is missing, Claude tells you what and either fixes it or asks you. Nothing moves past a
 gate unless you say why, and that reason stays on the item.

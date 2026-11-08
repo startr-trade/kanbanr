@@ -62,7 +62,13 @@ Keep it open. Every decision below happens there.
 
 Ask for the work in your own words, and Claude asks only what it can't work out.
 
-> We need to restore a shopper's cart when they come back. Take it through design control.
+> A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there. Take it through design control.
+
+**Claude asks whether it has a user interface.** When you choose the technology (or, if you don't,
+when the first item is designed), Claude asks whether the product has screens a person uses, or is
+a service, library or command-line tool. If it has screens, they become items of their own,
+designed and approved like the rest. If it has none, that goes into the design, so a missing screen
+is a decision and not an oversight.
 
 | Stage | What Claude does | What you do on the Review page |
 |---|---|---|
@@ -82,7 +88,7 @@ item stays where it is and Claude tells you which one is missing.
 
 **Just ask to move it on:**
 
-> Move the cart restore on to Design.
+> Move the saved basket on to Design.
 
 If something's missing, Claude tells you what and either fixes it or asks you. Nothing moves past a
 gate unless you say why, and that reason stays on the item.
@@ -129,7 +135,7 @@ scope stops that agent on its next tool call and never restricts you.
 Moving an item through the process doesn't push anything. Merging into `main` happens on your
 machine only.
 
-> The cart restore is released. What do I push?
+> The saved basket is released. What do I push?
 
 Claude tells you. Then you push `main` from your terminal.
 

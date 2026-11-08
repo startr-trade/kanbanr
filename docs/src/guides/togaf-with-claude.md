@@ -86,8 +86,8 @@ Setup does not create a sprint or a release. Ask for them when you are ready, an
 sprint's goal and dates, or the release's version and target, then. A planned sprint can be changed
 until it starts, and an empty sprint or release made by mistake can be removed.
 
-> Start the first sprint. We need saved carts: shoppers should be able to come back to their basket.
-> Put that in the sprint, for the first release.
+> Start the first sprint. A shopper opens their basket on our shop's web page,
+> leaves, and comes back the next day to find what they chose still there. Put that in the sprint, for the first release.
 
 Claude starts the sprint and creates its branch, creates the item at Vision, and plans it into the
 sprint and the release. Your checkout doesn't move.
@@ -102,7 +102,13 @@ A sprint and a release don't have to line up. One release can take items from se
 Ask for the work in your own words, and Claude asks only what it can't work out. Each phase has a
 gate. When something's missing, Claude either drafts it or brings it to you.
 
-> Take saved carts to Business Arch.
+> Take the saved basket to Business Arch.
+
+**Claude asks whether it has a user interface.** When you choose the technology (or, if you don't,
+when the first item is designed), Claude asks whether the product has screens a person uses, or is
+a service, library or command-line tool. If it has screens, they become items of their own,
+designed and approved like the rest. If it has none, that goes into the design, so a missing screen
+is a decision and not an oversight.
 
 | Phase | What Claude does | What you do on the Review page |
 |---|---|---|
@@ -140,7 +146,7 @@ tells you what has shipped.
 
 **Just ask to move it on:**
 
-> Move saved carts on to System Design.
+> Move the saved basket on to System Design.
 
 If something's missing, Claude tells you what and either fixes it or asks you. Nothing moves past a
 gate unless you say why, and that reason stays on the item.

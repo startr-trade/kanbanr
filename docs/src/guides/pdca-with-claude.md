@@ -58,7 +58,13 @@ Keep it open. Claude gives you the address, and your decisions happen there.
 
 Ask for the work in your own words, and Claude asks only what it can't work out.
 
-> We need to restore a shopper's cart after they return. Plan it.
+> A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there. Plan it.
+
+**Claude asks whether it has a user interface.** When you choose the technology (or, if you don't,
+when the first item is designed), Claude asks whether the product has screens a person uses, or is
+a service, library or command-line tool. If it has screens, they become items of their own,
+designed and approved like the rest. If it has none, that goes into the design, so a missing screen
+is a decision and not an oversight.
 
 | Stage | What Claude does | What you do on the Review page |
 |---|---|---|
@@ -77,7 +83,7 @@ changed or removed, the item returns to the Review page. Read what changed, then
 
 **Just ask to move it on:**
 
-> Take the cart restore to Do.
+> Take the saved basket to Do.
 
 If something's missing, Claude tells you what. Nothing moves past a gate unless you say why, and that
 reason stays on the item.

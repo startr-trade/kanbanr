@@ -56,7 +56,7 @@ Keep it open. Every decision below happens there.
 
 ## Planning a sprint
 
-> Start a two-week sprint for carts surviving a return. Put the cart restore in it, for release 1.0.
+> Start a two-week sprint for the saved basket. Put it in, for release 1.0.
 
 Setup doesn't create a sprint or a release, so Claude asks the sprint's goal and first day, and the
 release's version and target, when you first ask. Then it creates the sprint and its branch, adds the item and plans it into the sprint and the release.
@@ -68,7 +68,13 @@ from several sprints.
 Ask for the work in your own words, and Claude asks only what it can't work out. When something's
 missing, Claude drafts it or brings it to you.
 
-> We need saved carts: shoppers should be able to come back to their basket. Get it to Ready.
+> A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there. Get it to Ready.
+
+**Claude asks whether it has a user interface.** When you choose the technology (or, if you don't,
+when the first item is designed), Claude asks whether the product has screens a person uses, or is
+a service, library or command-line tool. If it has screens, they become items of their own,
+designed and approved like the rest. If it has none, that goes into the design, so a missing screen
+is a decision and not an oversight.
 
 | Stage | What Claude does | What you do on the Review page |
 |---|---|---|
@@ -89,7 +95,7 @@ returns to the Review page. Read what changed, then approve again.
 
 **Just ask to move it on:**
 
-> Move the cart restore on to In Progress.
+> Move the saved basket on to In Progress.
 
 If something's missing, Claude tells you what and either fixes it or asks you. Nothing moves past a
 gate unless you say why, and that reason stays on the item.
