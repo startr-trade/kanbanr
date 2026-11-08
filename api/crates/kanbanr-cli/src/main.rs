@@ -1886,7 +1886,11 @@ fn scope_gate(cli: &Cli) -> anyhow::Result<()> {
     {
         return Ok(());
     }
-    match kanbanr_core::agentscope::outside_core_refusal(&cwd, what) {
+    match kanbanr_core::agentscope::outside_core_refusal(
+        &cwd,
+        what,
+        kanbanr_core::agentscope::Caller::of_process(),
+    ) {
         Some(refusal) => anyhow::bail!("{refusal}"),
         None => Ok(()),
     }
@@ -2902,7 +2906,11 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
-    if let Some(wt) = kanbanr_core::agentscope::agent_context(&here) {
+    // A scope governs the agent it was issued to, never the coordinator (DEF-027).
+    let caller = kanbanr_core::agentscope::Caller::of_hook(&payload);
+    if caller == kanbanr_core::agentscope::Caller::Agent
+        && let Some(wt) = kanbanr_core::agentscope::agent_context(&here)
+    {
         let target = project::normalize(&here.join(path));
         let temp = project::normalize(&std::env::temp_dir());
         let board = project::normalize(client.store().data_dir());
@@ -2910,7 +2918,7 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
             .map(|p| p.scope)
             .unwrap_or_else(|| "none".to_string());
         let design = matches!(
-            process_scope(client, &here),
+            process_scope_as(client, &here, caller),
             kanbanr_core::agentscope::ProcessScope::Scoped(s)
                 if s.role == kanbanr_core::agentscope::Role::Design
         );
@@ -3550,6 +3558,144 @@ fn run_git(cli: &Cli, client: &Backend, cmd: &GitCmd) -> anyhow::Result<()> {
     }
 }
 
+/// What the Bash guard decides about who is calling (DEF-027).
+#[derive(Debug, PartialEq, Eq)]
+enum GuardDecision {
+    Allow,
+    Deny(String),
+}
+
+/// The folder a hook belongs to: the project folder Claude Code started the session in
+/// (`CLAUDE_PROJECT_DIR`, when it exists), else the payload's `cwd`, else this process's folder.
+fn hook_dir(payload: &Value) -> PathBuf {
+    hook_dir_in(payload, std::env::var("CLAUDE_PROJECT_DIR").ok())
+}
+
+fn hook_dir_in(payload: &Value, project_dir: Option<String>) -> PathBuf {
+    project_dir
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .filter(|d| d.is_dir())
+        .or_else(|| payload["cwd"].as_str().map(PathBuf::from))
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default()
+}
+
+/// Who is calling decides which rules apply to a Bash command (DEF-027). A sub-agent is held to
+/// its scope's boundaries, and stopped outright once the scope is revoked or expired. The
+/// coordinator is not governed by a scope, but is kept out of agent worktrees, with the way out
+/// named. A hook call without a board (`board` is `None`) cannot read a scope: an agent's commit
+/// is refused then, as before. Pure apart from reading the board and the folders it names.
+fn bash_guard_decision(payload: &Value, board: Option<&Path>) -> GuardDecision {
+    use kanbanr_core::agentscope::{self, Caller};
+    let command = &without_heredoc_bodies(payload["tool_input"]["command"].as_str().unwrap_or(""));
+    let base = payload["cwd"]
+        .as_str()
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_default();
+    match Caller::of_hook(payload) {
+        Caller::Agent => {
+            let Some(wt) = agentscope::agent_context(&base) else {
+                return GuardDecision::Allow;
+            };
+            if let Some(board) = board
+                && let Some(why) =
+                    agentscope::dead_scope(&kanbanr_core::store::Store::new(board), &base)
+            {
+                return GuardDecision::Deny(why);
+            }
+            if let Some(why) = scoped_command_refusal(command, &base, &wt, board) {
+                return GuardDecision::Deny(why);
+            }
+            if is_git_commit(command)
+                && board.is_none()
+                && let Some(pointer) = agentscope::read_pointer(&wt.git_dir)
+            {
+                return GuardDecision::Deny(format!(
+                    "refused: the scope file here names {}, but its board cannot be read, so \
+                     nothing is committed under it until it can.",
+                    pointer.scope
+                ));
+            }
+            GuardDecision::Allow
+        }
+        Caller::Coordinator => coordinator_refusal(command, &base)
+            .map(GuardDecision::Deny)
+            .unwrap_or(GuardDecision::Allow),
+        // A hook call is never a person's or an unidentified session's.
+        Caller::Person | Caller::Session => GuardDecision::Allow,
+    }
+}
+
+/// Keep the coordinator's shell out of an agent's worktree (DEF-027 R-4, R-5): refuse a kanbanr or
+/// git command that would run in one, and a top-level `cd` or `pushd` into one. A command that
+/// leaves first, or only leaves, passes, so the way out is never blocked; a subshell passes.
+fn coordinator_refusal(command: &str, base: &Path) -> Option<String> {
+    use kanbanr_core::agentscope;
+    let main_root = coderepo::worktree_facts(base)
+        .map(|w| w.main_root)
+        .or_else(|| {
+            std::env::var("CLAUDE_PROJECT_DIR")
+                .ok()
+                .filter(|d| !d.is_empty())
+                .map(PathBuf::from)
+        })?;
+    let home = project::home_dir();
+    let resolve = |from: &Path, to: &str| -> Option<PathBuf> {
+        if to.contains('$') || to.contains('`') || to == "-" {
+            return None;
+        }
+        if to == "~" {
+            return home.clone();
+        }
+        if let Some(rest) = to.strip_prefix("~/") {
+            return home.as_ref().map(|h| h.join(rest));
+        }
+        Some(from.join(to))
+    };
+    let in_agent = |p: &Path| {
+        agentscope::agent_context(p).is_some() || agentscope::is_agent_worktree_path(p, &main_root)
+    };
+    let mut dir = Some(base.to_path_buf());
+    for (_, words) in simple_commands(command) {
+        let Some(first) = words.first() else {
+            continue;
+        };
+        if first == "cd" || first == "pushd" {
+            let target = words.get(1).and_then(|to| resolve(dir.as_deref()?, to));
+            if let Some(t) = &target
+                && agentscope::is_agent_worktree_path(t, &main_root)
+            {
+                return Some(format!(
+                    "do not make an agent's worktree your shell's folder ({}): use `git -C <path>`, \
+                     `make -C <path>`, `npm --prefix <path>`, `cargo --manifest-path \
+                     <path>/Cargo.toml`, or a subshell `(cd <path> && ...)`.",
+                    t.display()
+                ));
+            }
+            dir = target;
+            continue;
+        }
+        let Some(here) = dir.as_deref() else {
+            continue;
+        };
+        // `git -C <path>` runs in <path>, not here: it is how to look inside a worktree.
+        let runs_here = match git_call(&words) {
+            Some(call) => call.dirs.is_empty(),
+            None => is_kanbanr(&words),
+        };
+        if runs_here && in_agent(here) {
+            return Some(format!(
+                "your shell is standing in the agent worktree {}. Run `cd <project folder>` first \
+                 (that command is allowed) and look inside with `git -C <path> ...`.",
+                here.display()
+            ));
+        }
+    }
+    None
+}
+
 /// The Claude Code side of the commit guardrail (FEAT-056): the same rules as the git hooks, but
 /// answered *before* the command runs, with the reference to use. Feedback that arrives as a
 /// failed command teaches avoidance; feedback that arrives with the fix teaches the rule.
@@ -3583,23 +3729,11 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
-    if let Some(wt) = kanbanr_core::agentscope::agent_context(&base) {
-        let board = client.map(|c| c.store().data_dir().to_path_buf());
-        if let Some(why) = scoped_command_refusal(command, &base, &wt, board.as_deref()) {
-            deny(why);
-            return Ok(());
-        }
-        if is_git_commit(command)
-            && client.is_none()
-            && let Some(pointer) = kanbanr_core::agentscope::read_pointer(&wt.git_dir)
-        {
-            deny(format!(
-                "refused: the scope file here names {}, but its board cannot be read, so nothing \
-                 is committed under it until it can.",
-                pointer.scope
-            ));
-            return Ok(());
-        }
+    let caller = kanbanr_core::agentscope::Caller::of_hook(&payload);
+    let board = client.map(|c| c.store().data_dir().to_path_buf());
+    if let GuardDecision::Deny(why) = bash_guard_decision(&payload, board.as_deref()) {
+        deny(why);
+        return Ok(());
     }
     // A verdict is the person's, taken on the monitor: Claude never records one (FTR-024).
     if client.is_some() {
@@ -3650,7 +3784,7 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     // The scope this commit is made under comes first (FEAT-214 R-5).
     if project::normalize(&target) == project::normalize(&base)
         && let Some(client) = client
-        && let Some(why) = scoped_commit_refusal(client, &target, inline_message(command))
+        && let Some(why) = scoped_commit_refusal(client, &target, inline_message(command), caller)
     {
         deny(why);
         return Ok(());
@@ -4076,7 +4210,9 @@ fn run_check_msg(cli: &Cli, client: &Backend, file: &Path) -> anyhow::Result<()>
     // The scope this commit is made under comes first (FEAT-214 R-5), and its commits carry its
     // trailer (R-7).
     if let Ok(cwd) = std::env::current_dir() {
-        if let Some(why) = scoped_commit_refusal(client, &cwd, Some(message.clone())) {
+        if let Some(why) =
+            scoped_commit_refusal(client, &cwd, Some(message.clone()), process_caller())
+        {
             anyhow::bail!("{why}");
         }
         if let kanbanr_core::agentscope::ProcessScope::Scoped(s) = process_scope(client, &cwd) {
@@ -4142,7 +4278,7 @@ fn require_project_quiet() -> Option<String> {
 fn run_check_branch(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     // The scope this commit is made under comes first (FEAT-214 R-5).
     if let Ok(cwd) = std::env::current_dir()
-        && let Some(why) = scoped_commit_refusal(client, &cwd, None)
+        && let Some(why) = scoped_commit_refusal(client, &cwd, None, process_caller())
     {
         anyhow::bail!("{why}");
     }
@@ -6621,14 +6757,32 @@ fn parse_hours(s: &str) -> anyhow::Result<u32> {
     }
 }
 
-/// The scope a process in `dir` works under, against the board of `client`.
+fn process_caller() -> kanbanr_core::agentscope::Caller {
+    kanbanr_core::agentscope::Caller::of_process()
+}
+
+/// The scope this process in `dir` works under, against the board of `client`.
 fn process_scope(client: &Backend, dir: &Path) -> kanbanr_core::agentscope::ProcessScope {
-    kanbanr_core::agentscope::resolve(client.store(), dir)
+    process_scope_as(client, dir, kanbanr_core::agentscope::Caller::of_process())
+}
+
+/// The scope `caller` works under in `dir`: a hook call names its caller from its payload.
+fn process_scope_as(
+    client: &Backend,
+    dir: &Path,
+    caller: kanbanr_core::agentscope::Caller,
+) -> kanbanr_core::agentscope::ProcessScope {
+    kanbanr_core::agentscope::resolve(client.store(), dir, caller)
 }
 
 /// Why a commit from `dir` is refused by the scope it works under, if it is (FEAT-214 R-5).
-fn scoped_commit_refusal(client: &Backend, dir: &Path, message: Option<String>) -> Option<String> {
-    let scope = process_scope(client, dir);
+fn scoped_commit_refusal(
+    client: &Backend,
+    dir: &Path,
+    message: Option<String>,
+    caller: kanbanr_core::agentscope::Caller,
+) -> Option<String> {
+    let scope = process_scope_as(client, dir, caller);
     if scope == kanbanr_core::agentscope::ProcessScope::Unscoped {
         return None;
     }
@@ -6640,6 +6794,9 @@ fn scoped_commit_refusal(client: &Backend, dir: &Path, message: Option<String>) 
 /// An agent's worktree whose board cannot be read: its scope cannot be checked, so a commit or a
 /// push from it is refused (fail closed).
 fn unreadable_scope() -> Option<String> {
+    if !process_caller().is_governed() {
+        return None;
+    }
     let cwd = std::env::current_dir().ok()?;
     let wt = kanbanr_core::agentscope::agent_context(&cwd)?;
     let pointer = kanbanr_core::agentscope::read_pointer(&wt.git_dir)?;
@@ -6652,6 +6809,9 @@ fn unreadable_scope() -> Option<String> {
 
 /// The pre-push hook (FEAT-214 R-6): nothing is pushed from an agent's worktree.
 fn run_check_push(client: Option<&Backend>) -> anyhow::Result<()> {
+    if !process_caller().is_governed() {
+        return Ok(());
+    }
     let Ok(cwd) = std::env::current_dir() else {
         return Ok(());
     };
@@ -6810,6 +6970,20 @@ fn scoped_command_refusal(
         Some(from.join(to))
     };
     let commands = simple_commands(command);
+    // The caller is told apart by CLAUDECODE and the hook payload: an agent never sets, clears or
+    // exports either, nor the coordinator's stamp (DEF-027).
+    let names_caller = |w: &String| w.contains("CLAUDECODE") || w.contains("KANBANR_CALLER");
+    if commands.iter().any(|(env, words)| {
+        env.iter().any(names_caller)
+            || (words.first().is_some_and(|f| {
+                ["export", "unset", "declare", "typeset", "readonly", "-u"].contains(&f.as_str())
+            }) && words.iter().any(names_caller))
+            || words
+                .windows(2)
+                .any(|w| w[0] == "-u" && names_caller(&w[1]))
+    }) {
+        return refuse("who is calling is Claude Code's to say, never set or cleared by an agent");
+    }
     let runs_tool = commands
         .iter()
         .any(|(_, w)| is_kanbanr(w) || git_call(w).is_some());
@@ -6955,7 +7129,15 @@ fn run_scope(cli: &Cli, client: &Backend, cmd: &ScopeCmd) -> anyhow::Result<()> 
             let hooks_ready = root
                 .as_deref()
                 .is_some_and(|r| scm::hooks_installed(r) && scm::push_hook_installed(r));
-            let mut body = json!({ "role": role, "item": code, "hooks_ready": hooks_ready });
+            let claude_hooks_ready = root
+                .as_deref()
+                .is_some_and(hooks::identifying_hooks_registered);
+            let mut body = json!({
+                "role": role,
+                "item": code,
+                "hooks_ready": hooks_ready,
+                "claude_hooks_ready": claude_hooks_ready,
+            });
             if let Some(d) = duration {
                 body["hours"] = json!(parse_hours(d)?);
             }
@@ -7146,7 +7328,9 @@ fn run_scope(cli: &Cli, client: &Backend, cmd: &ScopeCmd) -> anyhow::Result<()> 
             )?;
             print_scope(
                 &resp,
-                format!("revoked {id}: nothing more is recorded under it"),
+                format!(
+                    "revoked {id}: nothing more is recorded under it\nthe agent's next tool call is refused"
+                ),
             )
         }
         ScopeCmd::Renew { id, duration } => {
@@ -10352,5 +10536,196 @@ Refs: kanbanr:FEAT-082/R-1""#;
         );
         // An editor commit has no inline message; the commit-msg hook covers that one.
         assert_eq!(inline_message("git commit"), None);
+    }
+
+    /// A project folder with an agent's worktree under `.claude/worktrees`, and a board beside it
+    /// holding one build scope bound to that worktree (revoked when `revoked`). Returns the
+    /// project folder, the worktree and the board.
+    fn guard_fixture(tag: &str, revoked: bool) -> (PathBuf, PathBuf, PathBuf) {
+        let tmp = std::env::temp_dir().join(format!("kanbanr-guard-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let (work, board) = (tmp.join("work"), tmp.join("board"));
+        std::fs::create_dir_all(&work).unwrap();
+        let git = |args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&work)
+                .env("GIT_AUTHOR_NAME", "T")
+                .env("GIT_AUTHOR_EMAIL", "t@x")
+                .env("GIT_COMMITTER_NAME", "T")
+                .env("GIT_COMMITTER_EMAIL", "t@x")
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+        git(&[
+            "worktree",
+            "add",
+            "-q",
+            ".claude/worktrees/agent-1",
+            "-b",
+            "agent-1",
+        ]);
+        let wt = work.join(".claude/worktrees/agent-1");
+        let shop = board.join("projects").join("shop");
+        std::fs::create_dir_all(&shop).unwrap();
+        std::fs::write(shop.join("config.yaml"), "name: shop\n").unwrap();
+        let scope = kanbanr_core::agentscope::Scope {
+            id: "SC-001".into(),
+            project: "shop".into(),
+            role: kanbanr_core::agentscope::Role::Build,
+            item: "FEAT-001".into(),
+            operations: Vec::new(),
+            branch: Some("agent-1".into()),
+            base: None,
+            issued_by: "V".into(),
+            issued_at: "2099-01-01T00:00:00Z".into(),
+            expires_at: "2099-01-02T00:00:00Z".into(),
+            note: String::new(),
+            worktree: Some(".claude/worktrees/agent-1".into()),
+            claimed_at: Some("2099-01-01T00:01:00Z".into()),
+            revoked_at: revoked.then(|| "2099-01-01T01:00:00Z".to_string()),
+            revoked_by: revoked.then(|| "V".to_string()),
+            revoked_reason: revoked.then(|| "done".to_string()),
+            extra: Default::default(),
+        };
+        std::fs::write(
+            shop.join("scopes.yaml"),
+            kanbanr_core::yaml::to_string(&[scope]).unwrap(),
+        )
+        .unwrap();
+        let wt_info = kanbanr_core::coderepo::worktree_facts(&wt).unwrap();
+        kanbanr_core::agentscope::write_pointer(
+            &wt_info.git_dir,
+            &kanbanr_core::agentscope::PointerFile {
+                scope: "SC-001".into(),
+                project: "shop".into(),
+            },
+        )
+        .unwrap();
+        (work, wt, board)
+    }
+
+    fn bash(cwd: &Path, command: &str, agent: bool) -> Value {
+        let mut v = json!({"tool_input": {"command": command}, "cwd": cwd});
+        if agent {
+            v["agent_id"] = json!("a1b2c3");
+        }
+        v
+    }
+
+    /// DEF-027 R-2: the coordinator's calls are never judged by an agent's scope, wherever the
+    /// shell stands; the way out of the worktree stays open.
+    #[test]
+    fn the_guard_lets_the_coordinator_run_in_an_agent_worktree() {
+        let (work, wt, board) = guard_fixture("coord", false);
+        let allow = |cwd: &Path, c: &str| bash_guard_decision(&bash(cwd, c, false), Some(&board));
+        assert_eq!(
+            allow(&work, "kanbanr task state X TL-001 T1 Completed"),
+            GuardDecision::Allow
+        );
+        assert_eq!(allow(&wt, "ls -la"), GuardDecision::Allow);
+        // The agent is still held to its scope for what the coordinator may do from the project.
+        let sync = bash_guard_decision(&bash(&wt, "kanbanr sync", true), Some(&board));
+        assert!(matches!(sync, GuardDecision::Deny(_)), "{sync:?}");
+        let _ = std::fs::remove_dir_all(work.parent().unwrap());
+    }
+
+    /// DEF-027 R-3: once the scope is revoked every Bash call of its agent is refused, and none of
+    /// the coordinator's.
+    #[test]
+    fn the_guard_denies_an_agent_whose_scope_is_revoked() {
+        let (work, wt, board) = guard_fixture("revoked", true);
+        for c in ["ls", "cargo test", "kanbanr scope here"] {
+            let d = bash_guard_decision(&bash(&wt, c, true), Some(&board));
+            assert!(
+                matches!(&d, GuardDecision::Deny(w) if w.contains("was revoked by V")),
+                "{c}: {d:?}"
+            );
+        }
+        assert_eq!(
+            bash_guard_decision(&bash(&wt, "ls", false), Some(&board)),
+            GuardDecision::Allow
+        );
+        let _ = std::fs::remove_dir_all(work.parent().unwrap());
+    }
+
+    /// DEF-027 R-4: the refusal says the shell is in that worktree and names the way out.
+    #[test]
+    fn the_guard_names_the_way_out_of_an_agent_worktree() {
+        let (work, wt, board) = guard_fixture("wayout", false);
+        let d = bash_guard_decision(&bash(&wt, "git status", false), Some(&board));
+        let GuardDecision::Deny(why) = d else {
+            panic!("{d:?}")
+        };
+        assert!(why.contains("standing in the agent worktree"), "{why}");
+        assert!(
+            why.contains("agent-1") && why.contains("cd <project folder>"),
+            "{why}"
+        );
+        assert!(why.contains("git -C <path>"), "{why}");
+        // Leaving first, or only leaving, is allowed; so is looking inside with -C.
+        for c in [
+            format!("cd {} && git status", work.display()),
+            format!("cd {}", work.display()),
+            format!("git -C {} status", wt.display()),
+        ] {
+            assert_eq!(
+                bash_guard_decision(&bash(&wt, &c, false), Some(&board)),
+                GuardDecision::Allow,
+                "{c}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(work.parent().unwrap());
+    }
+
+    /// DEF-027 R-5: a top-level cd or pushd into an agent worktree is refused; a subshell, `-C` and
+    /// the tools' own directory flags pass.
+    #[test]
+    fn the_guard_keeps_the_coordinator_out_of_agent_worktrees() {
+        let (work, wt, board) = guard_fixture("goingin", false);
+        let w = wt.display();
+        for c in [
+            format!("cd {w}"),
+            format!("pushd {w}"),
+            format!("cd {w} && make"),
+            "cd .claude/worktrees/agent-1 && make".to_string(),
+        ] {
+            let d = bash_guard_decision(&bash(&work, &c, false), Some(&board));
+            let GuardDecision::Deny(why) = d else {
+                panic!("{c}: {d:?}")
+            };
+            assert!(
+                why.contains("git -C <path>") && why.contains("subshell"),
+                "{why}"
+            );
+        }
+        for c in [
+            format!("(cd {w} && make)"),
+            format!("git -C {w} log"),
+            format!("make -C {w}"),
+            format!("npm --prefix {w} test"),
+            "cd api && cargo test".to_string(),
+        ] {
+            assert_eq!(
+                bash_guard_decision(&bash(&work, &c, false), Some(&board)),
+                GuardDecision::Allow,
+                "{c}"
+            );
+        }
+        // An agent may not dress as someone else.
+        for c in [
+            "unset CLAUDECODE",
+            "export CLAUDECODE=",
+            "CLAUDECODE= kanbanr scope here",
+            "env -u CLAUDECODE ls",
+            "KANBANR_CALLER=coordinator ls",
+        ] {
+            let d = bash_guard_decision(&bash(&wt, c, true), Some(&board));
+            assert!(matches!(d, GuardDecision::Deny(_)), "{c}: {d:?}");
+        }
+        let _ = std::fs::remove_dir_all(work.parent().unwrap());
     }
 }

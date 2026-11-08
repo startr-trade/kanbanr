@@ -39,7 +39,7 @@ pub fn outside_core_refusal(data_dir: &Path, what: &str) -> Result<()> {
     let Ok(cwd) = std::env::current_dir() else {
         return Ok(());
     };
-    match agentscope::outside_core_refusal(&cwd, what) {
+    match agentscope::outside_core_refusal(&cwd, what, agentscope::Caller::of_process()) {
         Some(refusal) => Err(anyhow!(refusal)),
         None => Ok(()),
     }

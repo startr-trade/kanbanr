@@ -1701,6 +1701,7 @@ fn dispatch_routes(
                     .filter(|w| !w.trim().is_empty())
                     .map(std::path::PathBuf::from),
                 hooks_ready: bool_field(b, "hooks_ready").unwrap_or(false),
+                claude_hooks_ready: bool_field(b, "claude_hooks_ready").unwrap_or(false),
             };
             let by = crate::git::verdict_author(store.data_dir(), str_field(b, "by").as_deref())?;
             ser(&crate::agentscope::issue(
@@ -2341,7 +2342,7 @@ mod tests {
                 "POST",
                 "/projects/demo/scopes",
                 json!({ "role": "design", "item": "FEAT-001", "by": "Ada", "note": note,
-                        "hooks_ready": true }),
+                        "hooks_ready": true, "claude_hooks_ready": true }),
             )
         };
         let first = issue("one");

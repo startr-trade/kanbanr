@@ -6151,7 +6151,27 @@ impl ScopeFx {
             fx.ok(&fx.work, &["task", "add", code, "TL-001", "--text", "two"]);
         }
         fx.ok(&fx.work, &["git", "install-hooks"]);
+        fx.register_claude_hooks();
         fx
+    }
+
+    /// The three hooks that tell an agent from the coordinator, in the project's settings.
+    fn register_claude_hooks(&self) {
+        let dir = self.work.join(".claude");
+        std::fs::create_dir_all(&dir).unwrap();
+        let hook = |matcher: &str, command: &str| serde_json::json!([{ "matcher": matcher, "hooks": [{ "type": "command", "command": command }] }]);
+        let settings = serde_json::json!({ "hooks": {
+            "PreToolUse": [
+                hook("Bash", "kanbanr git guard")[0].clone(),
+                hook("Write|Edit", "kanbanr claude guard")[0].clone(),
+            ],
+            "PostToolUse": hook("Bash", "kanbanr capture"),
+        }});
+        std::fs::write(dir.join("settings.json"), settings.to_string()).unwrap();
+    }
+
+    fn unregister_claude_hooks(&self) {
+        let _ = std::fs::remove_file(self.work.join(".claude").join("settings.json"));
     }
 
     /// The test build first on PATH, so the git hooks run it.
@@ -6168,6 +6188,8 @@ impl ScopeFx {
             .env("PATH", self.path())
             .env("KANBANR_DATA_DIR", &self.board)
             .env("KANBANR_PROJECT", "shop")
+            // These tests run as a Claude Code session does; a person's terminal has no CLAUDECODE.
+            .env("CLAUDECODE", "1")
             .env_remove("KANBANR_BOARD_FENCE")
             .env_remove("KANBANR_PUSH")
             .env_remove("CLAUDE_CONFIG_DIR")
@@ -6243,7 +6265,13 @@ impl ScopeFx {
         v["status"].as_str().unwrap_or_default().to_string()
     }
 
+    /// The Bash guard, called as a sub-agent (the payload carries an `agent_id`).
     fn guard(&self, cwd: &Path, command: &str) -> String {
+        self.guard_as(cwd, command, true)
+    }
+
+    /// The Bash guard, called as a sub-agent or, without `agent_id`, as the coordinator.
+    fn guard_as(&self, cwd: &Path, command: &str, agent: bool) -> String {
         let mut c = Command::new(cli());
         c.args(["git", "guard"]).current_dir(cwd);
         self.env(&mut c);
@@ -6256,9 +6284,15 @@ impl ScopeFx {
             .take()
             .unwrap()
             .write_all(
-                serde_json::json!({"tool_input": {"command": command}, "cwd": cwd})
-                    .to_string()
-                    .as_bytes(),
+                {
+                    let mut p = serde_json::json!({"tool_input": {"command": command}, "cwd": cwd});
+                    if agent {
+                        p["agent_id"] = serde_json::json!("a1b2c3");
+                    }
+                    p
+                }
+                .to_string()
+                .as_bytes(),
             )
             .unwrap();
         String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
@@ -6766,8 +6800,9 @@ fn scoped_writes_are_attributed() {
     );
 }
 
-/// FEAT-214 R-8: once a scope is revoked, or its expiry passes, every further write and commit
-/// under it is refused.
+/// FEAT-214 R-8, reshaped by DEF-027 R-3: once a scope is revoked, or its expiry passes, every
+/// further call of its agent is refused through the hooks (the agent's payload carries an
+/// `agent_id`).
 #[test]
 fn revoked_and_expired_scopes_refuse() {
     let fx = ScopeFx::new("ended");
@@ -6775,15 +6810,11 @@ fn revoked_and_expired_scopes_refuse() {
     std::fs::write(wt.join("cart.rs"), "\n").unwrap();
     fx.ok_git(&wt, &["add", "cart.rs"]);
     fx.ok(&fx.work, &["scope", "revoke", "SC-001", "--reason", "done"]);
-    let err = fx.refused(
-        &wt,
-        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
-    );
-    assert!(err.contains("agent scope SC-001 was revoked by A"), "{err}");
-    assert!(err.contains("(done)"), "{err}");
-    let commit = fx.git(&wt, &["commit", "-q", "-m", "x\n\nRefs: kanbanr:FEAT-001"]);
-    assert!(!commit.status.success());
-    assert!(String::from_utf8_lossy(&commit.stderr).contains("was revoked"));
+    for command in ["ls", "kanbanr task state FEAT-001 TL-001 T1 InProgress"] {
+        let err = fx.guard(&wt, command);
+        assert!(err.contains("agent scope SC-001 was revoked by A"), "{err}");
+        assert!(err.contains("(done)"), "{err}");
+    }
 
     // The coordinator takes the first agent's worktree away, and issues a second scope.
     fx.ok_git(
@@ -6801,15 +6832,90 @@ fn revoked_and_expired_scopes_refuse() {
     );
     std::fs::write(&file, ended).unwrap();
     fx.ok_git(&fx.board, &["commit", "-q", "-am", "the clock passes"]);
-    let err = fx.refused(
-        &wt2,
-        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
-    );
+    let err = fx.guard(&wt2, "ls");
     assert!(
         err.contains("agent scope SC-002 expired at 2020-01-01 00:00 UTC"),
         "{err}"
     );
     assert!(err.contains("kanbanr scope renew SC-002 --for 4h"), "{err}");
+}
+
+/// DEF-027 R-3: revoking frees a shell standing in the worktree at once. A session there is
+/// governed while the scope lives; after the revoke the coordinator's hook call is let through, and
+/// so is the same command run from that folder.
+#[test]
+fn revoking_a_scope_frees_a_shell_standing_in_its_worktree() {
+    let fx = ScopeFx::new("freed");
+    let wt = fx.claimed("agent-t1");
+    let state = ["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"];
+    // Alive: the session in the worktree is held to the scope (FEAT-002 is not its item).
+    let err = fx.refused(
+        &wt,
+        &["task", "state", "FEAT-002", "TL-001", "T1", "InProgress"],
+    );
+    assert!(err.contains("SC-001"), "{err}");
+    let out = fx.ok(&fx.work, &["scope", "revoke", "SC-001", "--reason", "done"]);
+    assert!(
+        out.contains("the agent's next tool call is refused"),
+        "{out}"
+    );
+    // Revoked: the agent is stopped, the coordinator is not, wherever its shell stands.
+    assert!(fx.guard(&wt, "ls").contains("was revoked by A"));
+    assert_eq!(fx.guard_as(&wt, "ls", false), "");
+    fx.ok(&wt, &state);
+    fx.ok(
+        &wt,
+        &["task", "state", "FEAT-002", "TL-001", "T1", "InProgress"],
+    );
+}
+
+/// DEF-027 R-1: a person at their own terminal (no CLAUDECODE) is never scoped, even standing in an
+/// agent's worktree, so they can install the hooks from there.
+#[test]
+fn a_person_in_an_agent_worktree_can_install_hooks() {
+    let fx = ScopeFx::new("person");
+    let wt = fx.claimed("agent-t1");
+    let run = |session: bool| {
+        let mut c = Command::new(cli());
+        c.args(["identity", "--name", "P", "--email", "p@x"])
+            .current_dir(&wt);
+        fx.env(&mut c);
+        if !session {
+            c.env_remove("CLAUDECODE");
+        }
+        c.output().unwrap()
+    };
+    let session = run(true);
+    assert!(!session.status.success(), "a session there stays governed");
+    let person = run(false);
+    assert!(
+        person.status.success(),
+        "{}",
+        String::from_utf8_lossy(&person.stderr)
+    );
+    let mut c = Command::new(cli());
+    c.args(["hooks", "install"]).current_dir(&wt);
+    fx.env(&mut c);
+    c.env_remove("CLAUDECODE");
+    let o = c.output().unwrap();
+    assert!(
+        !String::from_utf8_lossy(&o.stderr).contains("refused by agent scope"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+}
+
+/// DEF-027 R-8: a scope is issued only where the Claude Code hooks that identify the caller are
+/// registered, and the refusal names `kanbanr hooks install`.
+#[test]
+fn scope_issue_needs_the_claude_code_hooks() {
+    let fx = ScopeFx::new("needhooks");
+    fx.unregister_claude_hooks();
+    let err = fx.refused(&fx.work, &["scope", "issue", "build", "FEAT-001"]);
+    assert!(err.contains("kanbanr hooks install"), "{err}");
+    assert!(err.contains("Claude Code's hooks"), "{err}");
+    fx.register_claude_hooks();
+    fx.ok(&fx.work, &["scope", "issue", "build", "FEAT-001"]);
 }
 
 /// FEAT-214 R-9: a build scope's commits made after its item's tasks last changed are named by
