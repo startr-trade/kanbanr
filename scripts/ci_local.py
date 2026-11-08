@@ -460,6 +460,46 @@ def vars_are_variables() -> None:
         + " — create it with `gh variable set NAME --body …` and delete the secret")
 
 
+def image_build_command(sha: str, date: str, refresh: str) -> list[str]:
+    """The local release image build. --pull takes the registry's current base image, and the
+    refresh argument (declared before the Dockerfile's apt-get upgrade layer) changes every run, so
+    that layer is never taken from the cache and hides a fixable finding (MNT-006)."""
+    return ["docker", "build", "--pull", "-q", "-f", "docker/Dockerfile", "-t", "kanbanr:ci-local",
+            "--build-arg", f"KANBANR_GIT_SHA={sha}",
+            "--build-arg", f"KANBANR_BUILD_DATE={date}",
+            "--build-arg", f"KANBANR_APT_REFRESH={refresh}", "."]
+
+
+def refresh_token() -> str:
+    """A value that differs on every call, down to the microsecond."""
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+
+
+def dockerfile_refreshes_packages(text: str | None = None) -> str | None:
+    """A problem sentence when the Dockerfile's final stage would let its apt-get upgrade layer come
+    from the cache, else None: the last ARG KANBANR_APT_REFRESH must follow the last FROM and come
+    before the first RUN that upgrades, and that RUN must use it."""
+    source = text if text is not None else (TREE / "docker/Dockerfile").read_text()
+    # One instruction per entry: a trailing backslash continues onto the next line.
+    steps = [re.sub(r"\\\n\s*", " ", step).strip() for step in re.split(r"(?<!\\)\n", source)]
+    steps = [step for step in steps if step and not step.startswith("#")]
+    froms = [i for i, s in enumerate(steps) if s.startswith("FROM ")]
+    args = [i for i, s in enumerate(steps) if s.startswith("ARG KANBANR_APT_REFRESH")]
+    runs = [i for i, s in enumerate(steps) if s.startswith("RUN ") and "apt-get upgrade" in s]
+    if not froms or not runs:
+        return "docker/Dockerfile has no final stage with an apt-get upgrade layer"
+    run = next((r for r in runs if r > froms[-1]), None)
+    if run is None:
+        return "the final stage has no apt-get upgrade layer"
+    if not args or args[-1] < froms[-1]:
+        return "the final stage does not declare ARG KANBANR_APT_REFRESH"
+    if args[-1] > run:
+        return "ARG KANBANR_APT_REFRESH is declared after the apt-get upgrade layer, so it cannot change it"
+    if "KANBANR_APT_REFRESH" not in steps[run]:
+        return "the apt-get upgrade layer does not use KANBANR_APT_REFRESH"
+    return None
+
+
 def uses_equivalents() -> None:
     """What workflows do through actions rather than scripts, done the same way here."""
     want = yaml.safe_load((TREE / ".github/workflows/docs.yml").read_text())["env"]
@@ -468,10 +508,11 @@ def uses_equivalents() -> None:
     verify_install_script()
     _, sha = sh(["git", "rev-parse", "HEAD"], TREE)
     _, date = sh(["git", "log", "-1", "--format=%cd", "--date=short"], TREE)
-    ok, out = sh(["docker", "build", "-q", "-f", "docker/Dockerfile", "-t", "kanbanr:ci-local",
-                  "--build-arg", f"KANBANR_GIT_SHA={sha.strip()}",
-                  "--build-arg", f"KANBANR_BUILD_DATE={date.strip()}", "."], TREE)
-    say("release image: docker/Dockerfile builds (docker/build-push-action, without the push)", ok, out)
+    problem = dockerfile_refreshes_packages()
+    say("release image: the package layer is refreshed on every local build (MNT-006)", problem is None,
+        problem or "")
+    ok, out = sh(image_build_command(sha.strip(), date.strip(), refresh_token()), TREE)
+    say("release image: docker/Dockerfile builds, package layer refreshed (docker/build-push-action, without the push)", ok, out)
     ok, out = sh([str(TREE / "scripts/check-image.sh"), "kanbanr:ci-local"], TREE)
     say("release image: its kanbanr names its commit and date, and carries the repository's skill", ok, out)
     ok, out = sh([str(TREE / "scripts/security-scan.sh"), "image", "kanbanr:ci-local"], TREE)

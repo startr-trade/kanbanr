@@ -130,7 +130,7 @@ serve: web cli
 	api/target/release/kanbanr serve
 
 docker-build:
-	docker build -f docker/Dockerfile -t $(IMAGE) .
+	docker build --pull -f docker/Dockerfile --build-arg KANBANR_APT_REFRESH=$(shell date -u +%Y%m%dT%H%M%S) -t $(IMAGE) .
 
 # Compose cannot run a command to find the board, so pass it in from the same source everything
 # else uses — the `.kanbanr` marker, read by the CLI.

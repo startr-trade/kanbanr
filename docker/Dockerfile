@@ -77,7 +77,11 @@ FROM debian:trixie-slim
 # `upgrade` applies the security fixes Debian has published since the base image was last built
 # (FEAT-161): the release's scan refuses a fixable finding, and the base image can lag the archive
 # by days.
-RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+# Changes on every local release-gate build, so this layer is never taken from the cache and
+# the image carries today's fixes (MNT-006). Empty in a build that has no cache to hide behind.
+ARG KANBANR_APT_REFRESH=""
+RUN echo "package refresh: ${KANBANR_APT_REFRESH:-none}" \
+    && apt-get update && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
