@@ -46,8 +46,13 @@ the process before it is read or written. Keep every test's scratch folder in
 a test there would find the real board. `make ci` also checks that your board did not change while
 it ran — apart from approvals and sign-offs you give in the meantime, scopes you issue or revoke,
 and a sub-agent's task and test updates on its own item under an active scope, which it reports
-and lets through. The fence covers `cargo run` in `api/` too: run `target/debug/kanbanr` against a real
+and lets through; that includes the test results a sub-agent's capture hook records from a run in
+its worktree, which carry the agent's scope trailer. The fence covers `cargo run` in `api/` too: run `target/debug/kanbanr` against a real
 board instead.
+
+`make ci` builds the release image with `--pull` and a build argument that changes on every run, so
+the image's package layer is never taken from Docker's cache and a fixable finding is never hidden by
+an old one. It also refuses a tracked `*.orig` or `*.rej` file, which a merge tool leaves behind.
 
 `make ci` also records its verdict as the gate `local` for HEAD (`kanbanr gate record local`): a
 failure always, a pass only when the working tree is clean. A project that wants its local run
