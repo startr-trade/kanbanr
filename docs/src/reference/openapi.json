@@ -71,6 +71,10 @@
             "description": "A short human description of the change.",
             "type": "string"
           },
+          "origin": {
+            "description": "Where a verdict was taken (DEF-028); empty for any other change.",
+            "type": "string"
+          },
           "time": {
             "description": "RFC3339 timestamp.",
             "type": "string"
@@ -103,6 +107,10 @@
           },
           "decided": {
             "description": "When the decider accepted or rejected it (FEAT-153). `date` is when it was proposed.",
+            "type": "string"
+          },
+          "decided_origin": {
+            "description": "Where the verdict was taken (DEF-028): `monitor`, `conversation`, `terminal` or `delegated`.",
             "type": "string"
           },
           "deciders": {
@@ -199,6 +207,17 @@
           "by": {
             "type": "string"
           },
+          "origin": {
+            "description": "Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a\nrecord written before origin existed, which reads as unknown; kept as a string so a newer\nkanbanr's value survives.",
+            "type": "string"
+          },
+          "parts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "A hash of each part of the definition it covered (FTR-018), keyed as\n[`FeatureDefinition::part_revs`]. Empty on a record an older kanbanr wrote: such a record is\nno baseline, and any change to the definition lapses it.",
+            "type": "object"
+          },
           "rev": {
             "type": "string"
           }
@@ -218,6 +237,10 @@
             "type": "string"
           },
           "by": {
+            "type": "string"
+          },
+          "origin": {
+            "description": "Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a\nrecord written before origin existed, which reads as unknown; kept as a string so a newer\nkanbanr's value survives.",
             "type": "string"
           },
           "reason": {
@@ -270,6 +293,16 @@
           {
             "const": "lapsed",
             "description": "Approved, then the definition changed.",
+            "type": "string"
+          },
+          {
+            "const": "added",
+            "description": "Approved, then the definition gained parts that now need a decision (FTR-018): the item is\nat or past its build stage, or its next stage would refuse the additions.",
+            "type": "string"
+          },
+          {
+            "const": "spec_changed",
+            "description": "The spec a sign-off pinned changed after it was given, and the item has passed the gate\nthat asks for it (FTR-023).",
             "type": "string"
           }
         ]
@@ -993,6 +1026,31 @@
           "strict"
         ],
         "type": "object"
+      },
+      "DiffLine": {
+        "description": "One line of a [`line_diff`].",
+        "properties": {
+          "op": {
+            "$ref": "#/components/schemas/DiffOp"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "text"
+        ],
+        "type": "object"
+      },
+      "DiffOp": {
+        "description": "How a line stands in a [`line_diff`].",
+        "enum": [
+          "same",
+          "added",
+          "removed"
+        ],
+        "type": "string"
       },
       "Disposition": {
         "description": "A project-independent lane a feature falls into, since statuses are per-project (no shared\nvocabulary). Computed from the project config + the feature's task activity.",
@@ -1837,6 +1895,36 @@
         ],
         "type": "object"
       },
+      "KindPath": {
+        "description": "The path an item of one kind takes through a process (FTR-019): the stages it passes, what its\nfirst move asks, and the method parts that do not apply to it. A subset of the workflow's own\nstages in its own order, so no stage is invented and the board's columns do not change.",
+        "properties": {
+          "method_off": {
+            "description": "Method parts not asked of this kind. Approvals and sign-offs the stage itself names stay.",
+            "items": {
+              "$ref": "#/components/schemas/Part"
+            },
+            "type": "array"
+          },
+          "requires": {
+            "description": "Asked, in addition to the entered stage's gate, of the first move off the starting stage:\nwhere an item of this kind records why it exists and how it is verified.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "stages": {
+            "description": "At least two statuses, no no-op status, none twice, in the workflow's order, the first the\ndefault state. Neighbours on the path may move to each other whatever `transitions` says.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "stages"
+        ],
+        "type": "object"
+      },
       "Lesson": {
         "properties": {
           "at": {
@@ -2269,6 +2357,35 @@
           }
         ]
       },
+      "PartChanges": {
+        "description": "What differs between the parts a decision covered and the definition now (FTR-018). Keys are\nthose of [`FeatureDefinition::part_revs`], sorted.",
+        "properties": {
+          "added": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "changed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "removed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "added",
+          "changed",
+          "removed"
+        ],
+        "type": "object"
+      },
       "PlanCondition": {
         "description": "One condition of a stage entered or passed, and whether it holds (FEAT-212).",
         "properties": {
@@ -2578,6 +2695,13 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "paths": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/KindPath"
+            },
+            "description": "A shorter path through the workflow for some work kinds (FTR-019), keyed by kind in lower\ncase. Absent: every kind walks every stage, and absent stays absent on disk.",
+            "type": "object"
           },
           "process": {
             "$ref": "#/components/schemas/ProcessSource",
@@ -3128,6 +3252,13 @@
           "shipped_at": {
             "type": "string"
           },
+          "shipped_by": {
+            "description": "Who cut the release, and from where (DEF-028). Empty on a release cut before origin existed.",
+            "type": "string"
+          },
+          "shipped_origin": {
+            "type": "string"
+          },
           "stage": {
             "description": "Where the release is now, from `cadence.release_stages` (FEAT-183). Empty until first\npromoted: a release added before stages existed reads as \"not yet a candidate\".",
             "type": "string"
@@ -3274,6 +3405,10 @@
             "$ref": "#/components/schemas/ApprovalKind",
             "description": "What is being asked."
           },
+          "changes": {
+            "$ref": "#/components/schemas/PartChanges",
+            "description": "The parts added, changed and removed since the last decision (FTR-018); present on\n`lapsed`, `added` and `signoff` entries that have a baseline to compare with."
+          },
           "code": {
             "type": "string"
           },
@@ -3305,6 +3440,14 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/SpecBrief",
+            "description": "The spec the sign-off asked pins, with what changed since the last sign-off (FTR-023)."
+          },
+          "spec_rev": {
+            "description": "The hash of the spec's current text, when the sign-off asked pins the spec (FTR-023): what\nthe verdict is pinned to, sent back with it.",
+            "type": "string"
           },
           "started_unapproved": {
             "type": "string"
@@ -3374,12 +3517,27 @@
           "note": {
             "type": "string"
           },
+          "origin": {
+            "description": "Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a\nrecord written before origin existed, which reads as unknown; kept as a string so a newer\nkanbanr's value survives.",
+            "type": "string"
+          },
+          "parts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "A hash of each part of the definition it covered (FTR-018), keyed as\n[`FeatureDefinition::part_revs`]. Empty on a record an older kanbanr wrote: such a record is\nno baseline, and any change to the definition lapses it.",
+            "type": "object"
+          },
           "reason": {
             "description": "Why it was withdrawn. Giving a sign-off needs no reason; taking one back does.",
             "type": "string"
           },
           "rev": {
             "description": "The definition content it covered.",
+            "type": "string"
+          },
+          "spec_rev": {
+            "description": "A hash of the whole normalised spec it covered (FTR-023), when a gate that lists this\nsign-off also asks for spec sections. Empty on a record an older kanbanr wrote, or one no\ngate pins: such a sign-off is judged by the definition alone.",
             "type": "string"
           },
           "status": {
@@ -3447,6 +3605,46 @@
           "ref",
           "imported_at",
           "key"
+        ],
+        "type": "object"
+      },
+      "SpecBrief": {
+        "description": "The spec a sign-off pins, as the person is shown it (FTR-023).",
+        "properties": {
+          "diff": {
+            "description": "The current text against the kept one; empty on a first sign-off, when the earlier text\nwas not kept, or when nothing differs.",
+            "items": {
+              "$ref": "#/components/schemas/DiffLine"
+            },
+            "type": "array"
+          },
+          "previous_kept": {
+            "description": "False when an earlier sign-off pinned the spec but its text is missing from the board.\nTrue otherwise, including a first sign-off with nothing earlier to keep.",
+            "type": "boolean"
+          },
+          "signed_at": {
+            "type": "string"
+          },
+          "signed_by": {
+            "description": "Who gave the earlier sign-off, and when; empty on a first sign-off.",
+            "type": "string"
+          },
+          "signoff": {
+            "description": "The sign-off that pins it.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The spec's current text, normalised as it is pinned.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signoff",
+          "text",
+          "previous_kept",
+          "signed_by",
+          "signed_at",
+          "diff"
         ],
         "type": "object"
       },
@@ -3616,6 +3814,7 @@
         "type": "string"
       },
       "StageChange": {
+        "additionalProperties": true,
         "description": "One move of a release between stages: where to, who moved it, and when (FEAT-183). A move back\ncarries the reason it was made.",
         "properties": {
           "at": {
@@ -3626,6 +3825,10 @@
           },
           "item": {
             "description": "The item whose merge into the release's branch caused this change (DEF-031); empty for\nevery other change.",
+            "type": "string"
+          },
+          "origin": {
+            "description": "Where it was made: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Empty on a\nrecord written before origin existed.",
             "type": "string"
           },
           "reason": {

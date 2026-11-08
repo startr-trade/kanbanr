@@ -90,6 +90,18 @@ gate unless you say why, and that reason stays on the item.
 **Review has no sign-off of its own.** The review is recorded as the `verification-review` sign-off
 you give before Verification starts.
 
+### Chores
+
+A chore doesn't walk every stage. It goes Planning → Design → Verification → Released, skipping Inputs, Review and Validation, because their
+questions don't fit small maintenance work. Tell Claude it's a chore when you ask for it.
+
+> Pin the CI image: it's a chore.
+
+Before its first move Claude asks once for what every item records: a one-sentence statement, the goal
+it serves, and a requirement in the EARS form that says how it's verified. You still approve it, and the sign-offs that belong to the stages it enters (such as the one before release) are still yours. A chore has no Design section and no **design-review**. If
+you change an item's kind to a chore while it's at a stage the chore path leaves out, it's off
+the path: it moves by the ordinary moves, or back to Planning.
+
 ## When an item counts as done
 
 Only **Released** ends the process. Until you sign off validation, the item is not finished, even
@@ -107,6 +119,10 @@ Claude gives each agent a scope, which kanbanr enforces. An agent can record its
 results and commit on its own branch. It can't move items, approve anything, give a sign-off or push.
 Its progress shows on the item's page, and its scope on the **Workflow** page. When it finishes,
 Claude reviews the branch and brings you any decisions.
+
+Claude stays in the project folder while an agent works, and looks inside the agent's worktree
+without moving into it (`git -C`), so a scope never gets in your way or Claude's. Revoking an agent's
+scope stops that agent on its next tool call and never restricts you.
 
 ## Pushing
 

@@ -150,7 +150,8 @@ created feat/FEAT-001-restore-the-cart from main
 error: unsupported operation: cannot move FEAT-001 to 'In Progress': not approved. To proceed anyway, record why with --override "<reason>"
 ```
 
-**An edit to the definition lapses your approval**, so approve once the definition is as you want it:
+**Changing or removing approved text lapses your approval** (adding to the definition keeps it, and
+the additions are reviewed at the next decision), so approve once the definition is as you want it:
 
 ```text
 kanbanr approve FEAT-001

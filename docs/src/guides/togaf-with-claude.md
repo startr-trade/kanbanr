@@ -76,16 +76,15 @@ you promote to them. Add them when you have a pipeline and environments behind t
 
 Keep it open. Claude gives you the address, and every decision below happens there.
 
-**Decide when an item is done for its sprint.** Under TOGAF only Operations counts as done, and items
-reach Operations when a release is cut. So closing a sprint before its release sends merged items
-back to the backlog. If your sprints end before your releases do, say so:
-
-> Our sprints often end before the release. Count Migration as done for a sprint.
+**Sprints and Migration.** Migration counts as done for a sprint, and Operations is when the release
+ships the item. So closing a sprint before its release is cut carries over only work that has not
+merged.
 
 ## Planning a sprint
 
-Setup offers to create a first sprint and a first release. Use them rather than asking for new ones,
-because a sprint can be closed but not edited or deleted, so settle its dates and goal during setup.
+Setup does not create a sprint or a release. Ask for them when you are ready, and Claude asks the
+sprint's goal and dates, or the release's version and target, then. A planned sprint can be changed
+until it starts, and an empty sprint or release made by mistake can be removed.
 
 > Start the first sprint. We need saved carts: shoppers should be able to come back to their basket.
 > Put that in the sprint, for the first release.
@@ -107,27 +106,33 @@ gate. When something's missing, Claude either drafts it or brings it to you.
 
 | Phase | What Claude does | What you do on the Review page |
 |---|---|---|
-| **Vision** | Writes what it is and why | Nothing yet. The page may offer **Approve**, but it isn't needed here and lapses when the definition grows |
+| **Vision** | Writes what it is and why | Nothing yet. The page may offer **Approve**, but it isn't needed here |
 | **Business Arch** | Drafts who, what, why and the requirements | **Approve** |
-| **System Design** | Proposes how and where, and checks that against the requirements | **Approve** again, because the definition grew |
-| **Implementation** | Writes the design and its task list, and names a test for each requirement | **Approve** again, then **Sign off design-review** |
+| **System Design** | Proposes how and where, and checks that against the requirements | Nothing: the approval stands while the definition grows |
+| **Implementation** | Writes the design and its task list, and names a test for each requirement | **Sign off design-review**, which also reviews what was added |
 | **Migration** | Builds on the item's branch, runs the tests and updates the docs | **Sign off docs-folded**, which appears once the docs are updated |
 | **Operations** | Nothing: the cut moves it here | **Sign off release** |
 
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
 
-**You'll approve more than once, and that's deliberate.** Each approval covers exactly the text you
-saw. If the definition changes, your approval lapses and the item returns to the Review page. Read
-what changed, then approve again.
+**Each decision notes where you made it.** The monitor, your terminal, and your answer to Claude
+are told apart, and the item shows which one next to each approval and sign-off. If you decide
+the same thing twice, say a click and then an answer to Claude, the second one records nothing and
+Claude tells you who decided first and when.
+
+**You approve once, and review what's added.** Each approval covers the text you saw. Adding answers
+keeps it, and the Review page shows what was added when the next decision comes, usually the design
+review. Changing or removing what you approved lapses it, and the item returns to the Review page.
 
 **You decide on the Review page.** Claude tells you what's waiting there and links to it, and never records a decision for you. kanbanr refuses if it tries. If the monitor isn't running, Claude offers to start it.
 
 **A design can bring decisions with it.** Claude drafts each one as a decision record, and you use
 **Accept** or **Reject** on the Review page.
 
-**A sign-off doesn't lapse when the design changes.** Changing the design in the item's spec leaves
-**design-review** standing, so ask Claude to bring you any corrections it makes during the build.
+**A changed spec comes back to you.** Your **design-review** covers the item's spec as you saw it. If
+the spec changes afterwards, even outside the Design, the item returns to the Review page showing
+only what changed, and you sign again.
 
 **Operations means shipped.** **Sign off release** records your sign-off and leaves the item where it
 is. The item moves to Operations when the release it is planned into is cut. The **Releases** page
@@ -143,6 +148,18 @@ gate unless you say why, and that reason stays on the item.
 **Moving to Migration is the merge.** kanbanr merges the item's branch into the sprint's branch. It
 isn't released yet.
 
+### Chores
+
+A chore doesn't walk every phase. It goes Vision → Implementation → Migration → Operations, skipping Business Arch and System Design, because their
+questions don't fit small maintenance work. Tell Claude it's a chore when you ask for it.
+
+> Pin the CI image: it's a chore.
+
+Before its first move Claude asks once for what every item records: a one-sentence statement, the goal
+it serves, and a requirement in the EARS form that says how it's verified. You still approve it before the build starts, and you still give the **release** sign-off at the end. A chore has no Design section and no **design-review**, because there is no design to review. If
+you change an item's kind to a chore while it's at a phase the chore path leaves out, it's off
+the path: it moves by the ordinary moves, or back to Vision.
+
 ## Handing work to sub-agents
 
 > Have a sub-agent build these tasks.
@@ -153,6 +170,10 @@ move items, approve anything or push.
 
 You'll see its progress on the item's page as it works, and its scope on the **Workflow** page. When
 it finishes, Claude reviews the branch and brings you any decisions.
+
+Claude stays in the project folder while an agent works, and looks inside the agent's worktree
+without moving into it (`git -C`), so a scope never gets in your way or Claude's. Revoking an agent's
+scope stops that agent on its next tool call and never restricts you.
 
 ## Releasing
 

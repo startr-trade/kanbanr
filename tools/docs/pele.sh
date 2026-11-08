@@ -13,7 +13,7 @@ dst=docs/pele.global.js
 # Pele is MIT: its licence travels with the copy committed here.
 lic_src=web/node_modules/pele/LICENSE
 lic_dst=docs/pele.LICENSE
-[ -f "$src" ] || { echo "no $src — run npm install in web/ first" >&2; exit 1; }
+[ -f "$src" ] || { echo "no $src — run npm ci in web/ first" >&2; exit 1; }
 if [ "${1:-}" = "--check" ]; then
   if ! cmp -s "$src" "$dst" || ! cmp -s "$lic_src" "$lic_dst"; then
     echo "$dst or $lic_dst is not the pinned Pele's — run tools/docs/pele.sh" >&2

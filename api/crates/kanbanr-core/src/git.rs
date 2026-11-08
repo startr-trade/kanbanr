@@ -183,13 +183,15 @@ fn agent_refusal(dir: &Path, what: &str) -> Option<String> {
         return None;
     }
     let cwd = std::env::current_dir().ok()?;
-    crate::agentscope::outside_core_refusal(&cwd, what)
+    crate::agentscope::outside_core_refusal(&cwd, what, crate::agentscope::Caller::of_process())
 }
 
 /// The scope id (or `none`) of an agent context this process runs in, when it would push a governed
 /// board (FEAT-214 R-6).
 fn agent_pusher(dir: &Path) -> Option<String> {
-    if !crate::agentscope::is_governed_board(dir) {
+    if !crate::agentscope::Caller::of_process().is_governed()
+        || !crate::agentscope::is_governed_board(dir)
+    {
         return None;
     }
     let wt = crate::agentscope::agent_context(&std::env::current_dir().ok()?)?;

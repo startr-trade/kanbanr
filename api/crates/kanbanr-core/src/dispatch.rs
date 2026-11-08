@@ -37,6 +37,42 @@ fn with_diagram_warnings(
     ser(&v)
 }
 
+/// The earlier verdict a repeat approval or ratification of `code` collides with, if any (DEF-028).
+fn repeat_approval(
+    store: &Store,
+    p: &str,
+    code: &str,
+    verdict: &str,
+) -> Result<Option<crate::origin::Earlier>> {
+    let project = store.load_meta(p)?;
+    Ok(project
+        .feature(code)?
+        .definition
+        .as_ref()
+        .and_then(|d| crate::origin::duplicate_approval(d, verdict)))
+}
+
+/// The answer to a verdict that adds nothing to the record: the item as it stands, with
+/// `already_recorded` saying who recorded it first, when and from where. Nothing was written.
+fn ser_already_item(
+    item: &crate::models::FeatureItem,
+    earlier: &crate::origin::Earlier,
+) -> Result<String> {
+    let mut out = serde_json::to_value(item).map_err(|e| CoreError::Unsupported(e.to_string()))?;
+    out["already_recorded"] = earlier.to_json();
+    ser(&out)
+}
+
+fn ser_already(
+    store: &Store,
+    p: &str,
+    code: &str,
+    earlier: &crate::origin::Earlier,
+) -> Result<String> {
+    let item = store.load_meta(p)?.feature(code)?.clone();
+    ser_already_item(&item, earlier)
+}
+
 /// Who is recording this verdict — required, never defaulted (FEAT-077).
 ///
 /// This used to fall back to the string "unknown", and the monitor sent "reviewed in the monitor":
@@ -75,6 +111,26 @@ fn shown_rev(store: &Store, p: &str, code: &str, b: &Value) -> Result<()> {
         return Err(CoreError::Unsupported(format!(
             "{code}'s definition changed after it was shown (shown {shown}, now {now}): show the \
              brief again and ask again — nothing was recorded"
+        )));
+    }
+    Ok(())
+}
+
+/// A sign-off that pins the spec covers the text the person was shown (FTR-023). When the request
+/// names the hash of the spec it was given on, it is refused if the spec has moved on since.
+fn shown_spec_rev(store: &Store, p: &str, code: &str, name: &str, b: &Value) -> Result<()> {
+    let Some(shown) = str_field(b, "spec_rev").filter(|r| !r.trim().is_empty()) else {
+        return Ok(());
+    };
+    let project = store.load(p)?;
+    if !project.config.signoff_pins_spec(name) {
+        return Ok(());
+    }
+    let now = crate::readiness::spec_pin(&project.feature(code)?.specification).1;
+    if now != shown.trim() {
+        return Err(CoreError::Unsupported(format!(
+            "{code}'s spec changed after it was shown (shown {shown}, now {now}): show the brief \
+             again and ask again; nothing was recorded"
         )));
     }
     Ok(())
@@ -405,6 +461,7 @@ fn build_project_config(store: &Store, name: &str, body: &Value) -> Result<Proje
                 diagrams: Default::default(),
                 codes: Default::default(),
                 coverage: Vec::new(),
+                paths: Default::default(),
             }
         }
         None => {
@@ -486,7 +543,16 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         ),
         None => base.as_ref().map(|x| x.gates.clone()),
     };
-    let config = store.set_workflow_with_gates(
+    // Kind paths (FTR-019): null or absent means none, except that an applied process brings its own.
+    let paths: Option<BTreeMap<String, crate::config::KindPath>> =
+        match body.get("paths").filter(|v| !v.is_null()) {
+            Some(v) => Some(
+                serde_json::from_value(v.clone())
+                    .map_err(|e| CoreError::Unsupported(format!("invalid paths: {e}")))?,
+            ),
+            None => base.as_ref().map(|x| x.paths.clone()),
+        };
+    let config = store.set_workflow_with_paths(
         p,
         statuses,
         transitions,
@@ -495,6 +561,7 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         no_ops,
         terminals,
         gates,
+        paths,
     )?;
     // A process that works in sprints, releases or points brings that with it (FEAT-122); one that
     // does not leaves the project's cadence as it was.
@@ -924,43 +991,64 @@ fn dispatch_routes(
                 str_field(b, "checked_rev").as_deref(),
             )?)
         }
-        ("POST", ["projects", p, "features", code, "unapprove"]) => ser(&store.unapprove_feature(
-            p,
-            code,
-            &approver(b)?,
-            &str_field(b, "reason").unwrap_or_default(),
-        )?),
-        ("POST", ["projects", p, "features", code, "ratify"]) => ser(&{
-            shown_rev(store, p, code, b)?;
-            store.ratify_feature(
+        ("POST", ["projects", p, "features", code, "unapprove"]) => ser(&store
+            .unapprove_feature_as(
                 p,
                 code,
                 &approver(b)?,
                 &str_field(b, "reason").unwrap_or_default(),
-            )?
-        }),
+                &crate::origin::from_body(b),
+            )?),
+        ("POST", ["projects", p, "features", code, "ratify"]) => {
+            shown_rev(store, p, code, b)?;
+            if let Some(earlier) = repeat_approval(store, p, code, "ratified")? {
+                return ser_already(store, p, code, &earlier);
+            }
+            ser(&store.ratify_feature_as(
+                p,
+                code,
+                &approver(b)?,
+                &str_field(b, "reason").unwrap_or_default(),
+                &crate::origin::from_body(b),
+            )?)
+        }
         ("POST", ["projects", p, "features", code, "approve"]) => {
             shown_rev(store, p, code, b)?;
-            ser(&store.approve_feature(p, code, &approver(b)?)?)
+            if let Some(earlier) = repeat_approval(store, p, code, "approved")? {
+                return ser_already(store, p, code, &earlier);
+            }
+            ser(&store.approve_feature_as(p, code, &approver(b)?, &crate::origin::from_body(b))?)
         }
         // Withdraw a sign-off given in error (FEAT-182). Matched before the sign-off route.
         ("POST", ["projects", p, "features", code, "signoff", name, "withdraw"]) => ser(&store
-            .withdraw_signoff(
+            .withdraw_signoff_as(
                 p,
                 code,
                 &percent_decode(name),
                 &approver(b)?,
                 &str_field(b, "reason").unwrap_or_default(),
+                &crate::origin::from_body(b),
             )?),
         ("POST", ["projects", p, "features", code, "signoff", name]) => {
             shown_rev(store, p, code, b)?;
-            let (feature, held) = store.signoff_feature_reported(
+            shown_spec_rev(store, p, code, &percent_decode(name), b)?;
+            let (name, note, doc) = (
+                percent_decode(name),
+                str_field(b, "note").unwrap_or_default(),
+                str_field(b, "doc").unwrap_or_default(),
+            );
+            let item = store.load_meta(p)?.feature(code)?.clone();
+            if let Some(earlier) = crate::origin::duplicate_signoff(&item, &name, &note, &doc) {
+                return ser_already_item(&item, &earlier);
+            }
+            let (feature, held) = store.signoff_feature_reported_as(
                 p,
                 code,
-                &percent_decode(name),
+                &name,
                 &approver(b)?,
-                &str_field(b, "note").unwrap_or_default(),
-                &str_field(b, "doc").unwrap_or_default(),
+                &note,
+                &doc,
+                &crate::origin::from_body(b),
             )?;
             let mut out = serde_json::to_value(&feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
@@ -1052,6 +1140,7 @@ fn dispatch_routes(
                 &parent,
                 &str_field(b, "by").unwrap_or_default(),
                 repo,
+                &crate::origin::from_body(b),
             )?),
             None => ser(&crate::releases::add(
                 store,
@@ -1085,9 +1174,13 @@ fn dispatch_routes(
             }
             ser(&body)
         }
-        ("POST", ["projects", p, "releases", version, "cut"]) => {
-            ser(&crate::releases::cut(store, p, &percent_decode(version))?)
-        }
+        ("POST", ["projects", p, "releases", version, "cut"]) => ser(&crate::releases::cut_as(
+            store,
+            p,
+            &percent_decode(version),
+            &str_field(b, "by").unwrap_or_default(),
+            &crate::origin::from_body(b),
+        )?),
         // What cutting a release now would ship and carry over, by the cut's own rule, with nothing
         // written (FEAT-185): the monitor's production confirmation lists exactly this.
         ("GET", ["projects", p, "releases", version, "cut-preview"]) => ser(
@@ -1108,6 +1201,7 @@ fn dispatch_routes(
                 crate::releases::PromoteOptions {
                     expect_tip: expect.as_deref(),
                     fetch: crate::releases::Fetch::Try,
+                    origin: &crate::origin::from_body(b),
                 },
             )?)
         }
@@ -1123,6 +1217,7 @@ fn dispatch_routes(
                 &str_field(b, "link").unwrap_or_default(),
                 &str_field(b, "notes").unwrap_or_default(),
                 repo,
+                &crate::origin::from_body(b),
             )?)
         }
         // What promoting a release would do, with nothing changed (FEAT-212): `?stage=` (default
@@ -1163,6 +1258,12 @@ fn dispatch_routes(
                 &str_field(b, "by").unwrap_or_default(),
             )?)
         }
+        // Only an empty release that has not started (FTR-022).
+        ("DELETE", ["projects", p, "releases", version]) => ser(&crate::releases::remove(
+            store,
+            p,
+            &percent_decode(version),
+        )?),
         // `{by}`: date the release's notes and changelog today, one commit onto release/<V>, main
         // moving with it when it holds the release (DEF-001).
         ("POST", ["projects", p, "releases", version, "redate"]) => {
@@ -1351,6 +1452,32 @@ fn dispatch_routes(
             b.get("capacity").and_then(Value::as_f64),
             &str_field(b, "name").unwrap_or_default(),
         )?),
+        // `{name?, goal?, start?, length_days?, end?, capacity?}`: reshape a sprint that has not
+        // started; `capacity: null` clears it (FTR-022).
+        ("PATCH", ["projects", p, "sprints", code]) => {
+            let edit = crate::sprints::SprintEdit {
+                name: str_field(b, "name"),
+                goal: str_field(b, "goal"),
+                start: str_field(b, "start"),
+                length_days: b
+                    .get("length_days")
+                    .and_then(Value::as_u64)
+                    .map(|d| d as u32),
+                end: str_field(b, "end"),
+                capacity: match b.get("capacity") {
+                    None => None,
+                    Some(Value::Null) => Some(None),
+                    Some(v) => Some(Some(v.as_f64().ok_or_else(|| {
+                        CoreError::Unsupported("capacity must be a number or null".into())
+                    })?)),
+                },
+            };
+            ser(&crate::sprints::edit(store, p, code, &edit)?)
+        }
+        // Only an empty sprint that has not started (FTR-022).
+        ("DELETE", ["projects", p, "sprints", code]) => {
+            ser(&crate::sprints::remove(store, p, code)?)
+        }
         ("POST", ["projects", p, "sprints", code, "plan"]) => {
             let items = vec_field(b, "items").unwrap_or_default();
             ser(&crate::sprints::plan(store, p, code, &items)?)
@@ -1738,16 +1865,23 @@ fn dispatch_routes(
                 .map_err(|e| CoreError::Unsupported(format!("invalid decision: {e}")))?;
             ser(&crate::adr::create(store, p, &title, adr)?)
         }
-        ("POST", ["projects", p, "adrs", id, "accept"]) => {
-            ser(&crate::adr::decide(store, p, id, true, &approver(b)?, "")?)
-        }
-        ("POST", ["projects", p, "adrs", id, "reject"]) => ser(&crate::adr::decide(
+        ("POST", ["projects", p, "adrs", id, "accept"]) => ser(&crate::adr::decide_as(
+            store,
+            p,
+            id,
+            true,
+            &approver(b)?,
+            "",
+            &crate::origin::from_body(b),
+        )?),
+        ("POST", ["projects", p, "adrs", id, "reject"]) => ser(&crate::adr::decide_as(
             store,
             p,
             id,
             false,
             &approver(b)?,
             &str_field(b, "reason").unwrap_or_default(),
+            &crate::origin::from_body(b),
         )?),
         ("POST", ["projects", p, "adrs", id, "supersede"]) => {
             let replaces = str_field(b, "replaces").unwrap_or_default();
@@ -1854,6 +1988,7 @@ fn dispatch_routes(
                     .filter(|w| !w.trim().is_empty())
                     .map(std::path::PathBuf::from),
                 hooks_ready: bool_field(b, "hooks_ready").unwrap_or(false),
+                claude_hooks_ready: bool_field(b, "claude_hooks_ready").unwrap_or(false),
             };
             let by = crate::git::verdict_author(store.data_dir(), str_field(b, "by").as_deref())?;
             ser(&crate::agentscope::issue(
@@ -2101,6 +2236,9 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| "its next stage".into())
         ),
+        ["projects", _p, "releases", v] if del => format!("remove release {}", percent_decode(v)),
+        ["projects", _p, "sprints", c] if del => format!("remove sprint {c}"),
+        ["projects", _p, "sprints", c] => format!("edit sprint {c}"),
         ["projects", _p, "releases", v, "notes"] => {
             format!("release {}: notes edited", percent_decode(v))
         }
@@ -2160,6 +2298,82 @@ mod tests {
         )
         .unwrap();
         (store, dir)
+    }
+
+    /// FTR-023 R-9: a sign-off sent with the hash of a spec that has since changed is refused, and
+    /// nothing is recorded.
+    #[test]
+    fn a_signoff_on_a_design_that_moved_on_is_refused() {
+        let (store, _dir) = release_board("signoff-moved-on");
+        store
+            .add_milestone("shop", "M", "", vec![], Some("MS-001".into()))
+            .unwrap();
+        let f = store
+            .add_feature("shop", "Cart", "## Design\nUse a map.", "MS-001", None)
+            .unwrap();
+        store
+            .set_feature_definition(
+                "shop",
+                &f.code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Scheduled".to_string(),
+            crate::config::Gate {
+                requires: vec![crate::readiness::Condition::Check(
+                    crate::readiness::Check::SpecSections,
+                )],
+                signoffs: vec!["design-review".into()],
+                ..Default::default()
+            },
+        );
+        store.set_gates("shop", gates).unwrap();
+        let shown = crate::readiness::spec_pin("## Design\nUse a map.").1;
+        store
+            .edit_feature(
+                "shop",
+                &f.code,
+                None,
+                Some("## Design\nUse a vec.".into()),
+                None,
+                None,
+            )
+            .unwrap();
+        let path = format!("/projects/shop/features/{}/signoff/design-review", f.code);
+        let err = dispatch(
+            &store,
+            "POST",
+            &path,
+            Some(&serde_json::json!({"by": "Ada", "spec_rev": shown})),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("spec changed after it was shown"), "{err}");
+        let after = store.load("shop").unwrap();
+        assert!(
+            after
+                .feature(&f.code)
+                .unwrap()
+                .definition
+                .as_ref()
+                .unwrap()
+                .signoffs
+                .is_empty()
+        );
+        // Shown the current text, it is recorded.
+        let now = crate::readiness::spec_pin("## Design\nUse a vec.").1;
+        dispatch(
+            &store,
+            "POST",
+            &path,
+            Some(&serde_json::json!({"by": "Ada", "spec_rev": now})),
+        )
+        .unwrap();
     }
 
     /// FEAT-217: the codes routes show the next code per prefix and set the map; a feature POSTed
@@ -2511,7 +2725,7 @@ mod tests {
                 "POST",
                 "/projects/demo/scopes",
                 json!({ "role": "design", "item": "FEAT-001", "by": "Ada", "note": note,
-                        "hooks_ready": true }),
+                        "hooks_ready": true, "claude_hooks_ready": true }),
             )
         };
         let first = issue("one");

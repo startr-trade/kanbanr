@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api";
+import { api, viaOrigin } from "../api";
 import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
@@ -78,6 +78,28 @@ export default function ReleasesPage() {
     }
   };
 
+  // Offered only for a release that holds nothing and has not started (FTR-022): the same rule the
+  // daemon applies, so the button never offers what would be refused.
+  const removable = (r: Release) =>
+    r.state === "planned" &&
+    !r.stage &&
+    !r.branch &&
+    !r.notes_doc &&
+    (r.items ?? []).length === 0 &&
+    !list.some((o) => o.parent === r.version);
+  const remove = async (r: Release) => {
+    if (!window.confirm(`Remove release ${r.version}? It holds nothing.`)) return;
+    setBusy(r.version);
+    try {
+      await api.removeRelease(project, r.version);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setOutcome((o) => ({ ...o, [r.version]: `${message} — from the project folder: kanbanr release remove ${r.version}` }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="releases-page">
       <div className="page-head">
@@ -108,7 +130,7 @@ export default function ReleasesPage() {
                     title={
                       (r.stages ?? []).length > 0
                         ? (r.stages ?? [])
-                            .map((c) => `${c.stage} · ${c.by} · ${c.at.slice(0, 10)}${c.reason ? ` — ${c.reason}` : ""}`)
+                            .map((c) => `${c.stage} · ${c.by} · ${c.at.slice(0, 10)}${viaOrigin(c.origin)}${c.reason ? ` — ${c.reason}` : ""}`)
                             .join("\n")
                         : "not yet promoted"
                     }
@@ -142,6 +164,14 @@ export default function ReleasesPage() {
                     </li>
                   ))}
                 </ul>
+                {writable && removable(r) ? (
+                  <p>
+                    <button className="btn" onClick={() => remove(r)} disabled={busy === r.version}>
+                      Remove
+                    </button>
+                    {outcome[r.version] ? <span className="muted small"> {outcome[r.version]}</span> : null}
+                  </p>
+                ) : null}
                 {next ? (
                   <ReleaseButton
                     project={project}

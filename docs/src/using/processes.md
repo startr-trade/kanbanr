@@ -23,11 +23,11 @@ kanbanr project init shop --workflow pdca      # choose at creation
 |---|---|---|
 | `default` | Planned → In Progress → Completed, plus Deferred and Ongoing | the built-in rule, plus the method |
 | `scheduled` | Planned → Scheduled → Completed | the built-in rule, plus the method |
-| `togaf` | Vision → Business Arch → System Design → Implementation → Migration → Operations | the definition grows phase by phase |
+| `togaf` | Vision → Business Arch → System Design → Implementation → Migration → Operations | the definition grows phase by phase; Migration finishes an item for the sprint views; chores skip Business Arch and System Design |
 | `pdca` | Plan → Do → Check → Act | agreement to start, evidence to check, a review sign-off to act |
-| `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs before verification and before release |
-| `scrum` | Backlog → Ready → In Progress → Review → Testing → Done → Released | Definition of Ready and of Done; work starts in the sprint; sprints, releases and points on |
-| `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on |
+| `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs before verification and before release; chores skip Inputs, Review and Validation |
+| `scrum` | Backlog → Ready → In Progress → Review → Testing → Done → Released | Definition of Ready and of Done; work starts in the sprint; sprints, releases and points on; chores skip Review |
+| `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on; chores skip Design and Review |
 
 Every built-in process also carries [the method](#the-method-on-by-default): a design before
 build, and the docs it changes kept current.
@@ -143,6 +143,39 @@ A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (sem
   releases, an item planned into a release that has not been cut stays where it is, however its last
   task or sign-off arrives; the cut moves it to its end status. Moving it yourself needs an `--override` reason.
 
+## A lighter path for a kind
+
+A process can give a work kind its own path: the stages an item of that kind passes through, what
+its first move asks, and the parts of [the method](#the-method-on-by-default) that don't apply to
+it. The built-in `togaf`, `scrum`, `agile` and `design-control` processes give `chore` one, so a
+small maintenance item isn't forced through stages whose questions don't fit it. `default`,
+`scheduled` and `pdca` are short already and have none.
+
+```yaml
+paths:
+  chore:                                   # an item's kind, matched without regard to case
+    stages: [Vision, Implementation, Migration, Operations]
+    requires: [statement, goals, requirements, ears]
+    method_off: [design, design-review]    # parts of the method that don't apply to this kind
+```
+
+- **`stages`** are statuses of the workflow, in its own order, at least two, none a no-op status
+  or listed twice, the first the default state. An item of the kind moves to the next or previous
+  stage on its path, to a no-op disposition, or back to the start, and is refused any other stage.
+  The board's columns don't change.
+- **`requires`** are conditions asked, as well as the entered stage's gate, of the first move off
+  the starting stage. That is where a chore records why it exists and how it is verified.
+- **`method_off`** names method parts (`design`, `design-review`, `docs`, `docs-folded`, `links`)
+  not asked of this kind. A path can drop a method part, never an approval or sign-off that the
+  stage it enters asks for: those stay yours.
+
+A kind with no path walks every stage with every gate, as before. A workflow whose path names an
+unknown stage, a no-op stage, a stage twice, stages out of order or a first stage other than the
+default state is refused when it is saved or checked. `kanbanr process show` lists each kind's
+path, `kanbanr process diff` names a path that differs, and the monitor's Workflow page shows them
+with the skipped stages struck through. A process file with a `paths` key needs this version of
+kanbanr: an older one doesn't know the key, so check the file with `kanbanr process check` there.
+
 ## Stage roles
 
 Every process, whatever its stages are called, has four kinds of stage. A gate says which ones its
@@ -222,13 +255,14 @@ kanbanr signoff FEAT-042 design-review --note "held 30 Sep" --doc reviews/checko
 
 - **What it records:** who gave it, when, in which status, and the definition it covered.
 - **When it lapses:** changing the definition lapses it, just as it lapses an approval. A review
-  of a different design is not a review of this one. Earlier sign-offs are kept.
+  of a different design is not a review of this one. Given on a definition that only grew since
+  its approval, it also counts as the review of what was added. Earlier sign-offs are kept.
 - **How it is asked for:** a gate asks for it by name (`signoffs: [design-review]`). The Review
   page offers a **Sign off** button for each one the next stage is waiting on.
 - **Where it can be given:** the review queue offers a sign-off only for the stage the item
   reaches next, and only once that stage's other requirements are met. A workflow that lets an
   item skip ahead doesn't get the later stage's sign-off offered early. A finished item is listed
-  only when its approval lapsed, and then only to approve again.
+  only when its approval lapsed or text was added since, and then only to approve again.
 - **Who gives it:** a sign-off is a person's agreement. Claude asks for it and never gives it.
 - **Taking it back:** a sign-off given in error is withdrawn with a reason:
 
@@ -256,9 +290,9 @@ what the next stage needs:
 ```
 
 `doctor` follows the same rule on a workflow with gates: it reports what the next stage asks, not
-what a later stage will. Each time the definition grows, its approval lapses and is given again.
-Each approval records the status it was given in, so the history reads "approved at Business
-Arch, again at System Design".
+what a later stage will. When the definition only grows, the approval stands: it is extended, and the additions are
+reviewed at the next decision the stage asks for, such as `design-review`. Changing or removing
+approved text lapses it and it is given again. Each approval records the status it was given in.
 
 ## The design stage: a build-ready design in the spec
 

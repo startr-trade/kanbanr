@@ -36,7 +36,7 @@ From the repo root (the `Makefile` wraps the common flows):
 make build          # cargo build --release (api/) + web build
 make test           # cargo test --workspace (unit + Docker-less integration)
 make install-cli    # build the monitor, then install the CLI with it and the skill baked in
-make itest          # packaging smoke: build the image + testcontainers test (needs Docker)
+make itest          # packaging smoke: build the image + Docker smoke test (needs Docker)
 ```
 
 **Tests never touch a real board.** Cargo sets `KANBANR_BOARD_FENCE=temp` for everything it runs
@@ -64,13 +64,13 @@ cache) and runs every CI check that can run off GitHub, reading each step's scri
 workflow file itself, plus actionlint and a check that every action the workflows use exists. It
 ends by listing what only GitHub can verify: the macOS and Windows legs, uploads and publishing.
 It needs Docker (for actionlint and PowerShell), an authenticated `gh`, `shellcheck`, and the
-`mdbook` version pinned in `docs.yml`, and `cargo-deny` + `cargo-audit`
-(`cargo install cargo-deny cargo-audit --locked`). The individual checks, if you want one:
+`mdbook` version pinned in `docs.yml`, and `cargo-deny`, `cargo-audit` + `cargo-cyclonedx`
+(`cargo install cargo-deny cargo-audit cargo-cyclonedx --locked`). The individual checks, if you want one:
 
 ```bash
 cd api && cargo fmt --all --check          # formatting
-cd api && cargo clippy --workspace -- -D warnings   # lints (warnings are errors)
-cd api && cargo test --workspace
+cd api && cargo clippy --locked --workspace -- -D warnings   # lints (warnings are errors)
+cd api && cargo test --locked --workspace
 cd web && npm ci && npm run build          # web type-check + build
 ```
 
@@ -90,7 +90,7 @@ switching theme needs no re-render. `npm run check:docs` draws every diagram in 
 README and the skill with that Pele and fails on one it cannot draw.
 
 Pele is pinned to an exact version in `web/package.json`. To update it, change the pin, run
-`npm install` in `web/`, then `tools/docs/pele.sh` to copy its build into the book, and check every
+`npm ci` in `web/`, then `tools/docs/pele.sh` to copy its build into the book, and check every
 diagram again (`npm run check:docs`, and a look at the book and the monitor in light and dark).
 `check:docs` fails while the book's copy differs from the pinned package.
 

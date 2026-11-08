@@ -101,10 +101,10 @@ export const api = {
   approve: (id: string, code: string, by: string, rev = "") =>
     verdict(id, code, "approve", { by, rev }, "approve"),
   /** Record a named sign-off a stage asks for (FEAT-114). */
-  signoff: async (id: string, code: string, name: string, by: string, rev = "") => {
+  signoff: async (id: string, code: string, name: string, by: string, rev = "", specRev = "") => {
     const res = await postWrite(
       apiUrl(`/write/projects/${encodeURIComponent(id)}/features/${encodeURIComponent(code)}/signoff/${encodeURIComponent(name)}`),
-      { by, rev },
+      { by, rev, spec_rev: specRev },
       `kanbanr signoff ${code} ${name}`,
     );
     if (!res.ok) {
@@ -177,6 +177,18 @@ export const api = {
       { version, target, name },
       "add a release",
       `kanbanr release add ${version}`,
+    ),
+  /**
+   * Remove a release that holds nothing (FTR-022), as `kanbanr release remove` does; the daemon
+   * refuses any other and says why.
+   */
+  removeRelease: (id: string, version: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}`,
+      undefined,
+      "remove a release",
+      `kanbanr release remove ${version}`,
+      "DELETE",
     ),
   /**
    * Move a release to its next stage, or the named one (FEAT-183, FEAT-185): the same core
@@ -273,6 +285,28 @@ export type Meta = {
   schema_version?: number;
   identity: { name: string; email: string } | null;
 };
+
+/**
+ * Where a verdict was taken, as words that end a line: " via the monitor", or " · origin unknown"
+ * for a record written before origin existed (DEF-028). A value this version does not know is
+ * shown as it is.
+ */
+export function viaOrigin(origin?: string | null): string {
+  if (!origin) return " · origin unknown";
+  return origin === "monitor" || origin === "conversation" || origin === "terminal"
+    ? ` · via the ${origin}`
+    : ` · via ${origin}`;
+}
+
+/**
+ * The sentence of an `already_recorded` answer: the verdict repeated the latest one, nothing was
+ * recorded, and this says who recorded it first, when and from where (DEF-028). Null for any other
+ * answer. The write itself succeeded, so callers treat it as done.
+ */
+export function alreadySaid(answer: unknown): string | null {
+  const said = (answer as { already_recorded?: { sentence?: string } } | null)?.already_recorded;
+  return said ? (said.sentence ?? "already recorded") : null;
+}
 
 /**
  * Post an approval verdict. A read-only daemon has no write route at all, so a 404 or 405 means

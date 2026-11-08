@@ -6,7 +6,7 @@
  * Every rule here is the daemon's: these only put its answers into words, each with the CLI
  * command that changes it. The page is read-only, like the rest of the monitor.
  */
-import type { GitDoctorIssue, GitModelView, Guards, ProjectConfig, Release, Sprint } from "./types";
+import type { Condition, GitDoctorIssue, GitModelView, Guards, ProjectConfig, Release, Sprint } from "./types";
 
 /** How a line reads: on, off, worth a look, or not known here. */
 export type Tone = "on" | "off" | "warn" | "unknown";
@@ -311,4 +311,26 @@ export function guardRows(g: Guards): GuardRow[] {
     command: hook === null ? "kanbanr git status" : "kanbanr git install-hooks",
   });
   return rows;
+}
+
+/** One kind's path through the stages (FTR-019). */
+export interface PathSection {
+  kind: string;
+  /** Every stage of the workflow in order, with the ones the path leaves out marked. */
+  stages: { name: string; skipped: boolean }[];
+  /** What the first move asks as well; the page words them as the gates are worded. */
+  asks: Condition[];
+  /** Method parts that do not apply to this kind. */
+  leavesOut: string[];
+}
+
+/** The lighter paths a project's process declares, kind by kind; none when it declares none. */
+export function pathSections(config: ProjectConfig): PathSection[] {
+  const active = config.statuses.filter((s) => !(config.no_op_states ?? []).includes(s));
+  return Object.entries(config.paths ?? {}).map(([kind, path]) => ({
+    kind,
+    stages: active.map((name) => ({ name, skipped: !path.stages.includes(name) })),
+    asks: path.requires ?? [],
+    leavesOut: path.method_off ?? [],
+  }));
 }

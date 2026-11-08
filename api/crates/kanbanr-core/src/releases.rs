@@ -94,6 +94,11 @@ pub struct Release {
     /// stays in git; the release never ships.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub superseded_by: String,
+    /// Who cut the release, and from where (DEF-028). Empty on a release cut before origin existed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub shipped_by: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub shipped_origin: String,
     /// Keys this version does not know, kept and written back unchanged, so an older binary never
     /// deletes what a newer one recorded (as `Cadence` does, FEAT-151).
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
@@ -103,7 +108,7 @@ pub struct Release {
 
 /// One move of a release between stages: where to, who moved it, and when (FEAT-183). A move back
 /// carries the reason it was made.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct StageChange {
     pub stage: String,
@@ -115,6 +120,14 @@ pub struct StageChange {
     /// every other change.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub item: String,
+    /// Where it was made: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Empty on a
+    /// record written before origin existed.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin: String,
+    /// Keys this version does not know, kept and written back unchanged (FEAT-151).
+    #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
+    pub extra: Extra,
 }
 
 /// A release with what it holds and how much of that is finished, as the monitor shows it
@@ -233,6 +246,7 @@ pub fn patch_from_failed_tag(
     run_link: &str,
     notes: &str,
     repo: Option<&Path>,
+    origin: &str,
 ) -> Result<PatchFromTag> {
     let project = cadence_on(store, id)?;
     let parent = parent.trim();
@@ -279,7 +293,7 @@ pub fn patch_from_failed_tag(
         .ok_or_else(|| {
             CoreError::Unsupported("the defect needs a milestone, and the project has none".into())
         })?;
-    let patch = add_patch(store, id, version, "", "", parent, by, repo)?;
+    let patch = add_patch(store, id, version, "", "", parent, by, repo, origin)?;
     let undo = |store: &Store, e: CoreError| {
         let _ = remove_release(store, id, &patch.version);
         if let Some(repo) = repo {
@@ -379,6 +393,67 @@ pub fn add(store: &Store, id: &str, version: &str, target: &str, name: &str) -> 
     Ok(release)
 }
 
+/// Remove a release that holds nothing: planned, no stage, no branch, no notes, no patch of it and
+/// no item planned into it. Anything else is a reference (an item's release, a branch, a stage
+/// history), so it is refused and the reason named (FTR-022).
+pub fn remove(store: &Store, id: &str, version: &str) -> Result<Release> {
+    cadence_on(store, id)?;
+    let mut releases = load(store, id)?;
+    let at = releases
+        .iter()
+        .position(|r| r.version == version)
+        .ok_or_else(|| CoreError::Unsupported(format!("no release {version}")))?;
+    let r = &releases[at];
+    let refuse = |why: String| {
+        Err(CoreError::Unsupported(format!(
+            "{version} cannot be removed: {why}; only an empty release that has not started is removed"
+        )))
+    };
+    if r.state != ReleaseState::Planned {
+        return refuse("it has shipped".into());
+    }
+    if !r.stage.is_empty() {
+        return refuse(format!("it is at stage {}", r.stage));
+    }
+    if !r.branch.is_empty() {
+        return refuse(format!("it has the branch {}", r.branch));
+    }
+    if !r.notes_doc.is_empty() {
+        return refuse(format!("it has release notes ({})", r.notes_doc));
+    }
+    let patches: Vec<&str> = releases
+        .iter()
+        .filter(|o| o.parent == version)
+        .map(|o| o.version.as_str())
+        .collect();
+    if !patches.is_empty() {
+        return refuse(format!("{} patch it", patches.join(", ")));
+    }
+    let project = store.load_meta(id)?;
+    let held: Vec<&str> = project
+        .features
+        .iter()
+        .filter(|f| f.release.as_deref() == Some(version))
+        .map(|f| f.code.as_str())
+        .collect();
+    if !held.is_empty() {
+        let shown: Vec<&str> = held.iter().copied().take(10).collect();
+        let more = held.len() - shown.len();
+        return refuse(format!(
+            "it holds {}{}",
+            shown.join(", "),
+            if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            }
+        ));
+    }
+    let removed = releases.remove(at);
+    save(store, id, &releases)?;
+    Ok(removed)
+}
+
 /// Add a patch of a cut release (FEAT-184): it records its parent, branches `release/<V>` from the
 /// parent's tag, and starts at the first stage. Any cut release can be patched (Q1), an older
 /// supported one included; the version is the user's to name.
@@ -392,6 +467,7 @@ pub fn add_patch(
     parent: &str,
     by: &str,
     repo: Option<&Path>,
+    origin: &str,
 ) -> Result<Release> {
     let project = cadence_on(store, id)?;
     let releases = load(store, id)?;
@@ -499,6 +575,7 @@ pub fn add_patch(
         by: by.trim().to_string(),
         at: crate::now_rfc3339(),
         reason: "on creation, as a patch".to_string(),
+        origin: origin.to_string(),
         ..Default::default()
     });
     let release = r.clone();
@@ -558,7 +635,7 @@ pub(crate) fn ship_to(
     let Some(end) = config
         .statuses
         .iter()
-        .find(|s| is_end(s) && config.transition_allowed(&f.status, s))
+        .find(|s| is_end(s) && config.transition_allowed_for(&f.status, s, f.kind.as_deref()))
     else {
         return Err(format!("not finished — it is at {}", f.status));
     };
@@ -635,7 +712,12 @@ pub struct Cut {
 /// gate), release notes are written from their definitions, and the rest is carried to the next
 /// planned release — or back to unplanned — with the reason it did not make it.
 pub fn cut(store: &Store, id: &str, version: &str) -> Result<Cut> {
-    ship_release(store, id, version, None)
+    cut_as(store, id, version, "", "")
+}
+
+/// As [`cut`], recording who cut the release and from where (DEF-028).
+pub fn cut_as(store: &Store, id: &str, version: &str, by: &str, origin: &str) -> Result<Cut> {
+    ship_release(store, id, version, None, by, origin)
 }
 
 /// Record that the stage holding the tag action was entered (FTR-026): `tagged_at`, the commit the
@@ -810,6 +892,7 @@ pub fn send_back(
             steps.join(", then ")
         ),
         item: item.to_string(),
+        ..Default::default()
     });
     save(store, id, &releases)?;
     Ok(Some(SentBack {
@@ -833,6 +916,8 @@ fn ship_release(
     id: &str,
     version: &str,
     change: Option<StageChange>,
+    by: &str,
+    origin: &str,
 ) -> Result<Cut> {
     let project = cadence_on(store, id)?;
     let charter = crate::charter::load(store, id)?;
@@ -843,8 +928,20 @@ fn ship_release(
         .position(|r| r.version == version)
         .ok_or_else(|| CoreError::Unsupported(format!("no release {version}")))?;
     if releases[index].state == ReleaseState::Shipped {
+        let r = &releases[index];
+        let by = if r.shipped_by.is_empty() {
+            String::new()
+        } else {
+            let earlier = crate::origin::Earlier {
+                what: "cut".into(),
+                by: r.shipped_by.clone(),
+                at: r.shipped_at.clone(),
+                origin: r.shipped_origin.clone(),
+            };
+            format!(": {}", earlier.sentence())
+        };
         return Err(CoreError::Unsupported(format!(
-            "{version} has already shipped"
+            "{version} has already shipped{by}"
         )));
     }
     let next = releases
@@ -892,6 +989,11 @@ fn ship_release(
     let release = &mut releases[index];
     release.state = ReleaseState::Shipped;
     release.shipped_at = crate::now_rfc3339();
+    // A cut made by promoting to the last stage carries that stage change's person and origin.
+    (release.shipped_by, release.shipped_origin) = match &change {
+        Some(c) => (c.by.clone(), c.origin.clone()),
+        None => (by.trim().to_string(), origin.to_string()),
+    };
     release.shipped = shipped.iter().map(|f| f.code.clone()).collect();
     release.notes_doc = doc;
     release.carried = carried;
@@ -2713,6 +2815,8 @@ pub struct PromoteOptions<'a> {
     /// refused.
     pub expect_tip: Option<&'a str>,
     pub fetch: Fetch,
+    /// Where the promotion was asked for (DEF-028), recorded on the stage change.
+    pub origin: &'a str,
 }
 
 /// A git step taken, and how to take it back.
@@ -2779,6 +2883,7 @@ pub fn promote(
         PromoteOptions {
             expect_tip: None,
             fetch: Fetch::Try,
+            origin: "",
         },
     )
 }
@@ -2839,6 +2944,8 @@ pub fn promote_with(
         stage: w.stage.clone(),
         by: by.to_string(),
         at: crate::now_rfc3339(),
+        origin: opts.origin.to_string(),
+        extra: Default::default(),
         reason: if w.direction == Direction::Again {
             let names: Vec<&str> = taken.iter().map(|s| s.action.name()).collect();
             let again = format!("again: {}", names.join(", "));
@@ -3017,7 +3124,7 @@ pub fn promote_with(
             done.next = next_hint(store, id, version, repo, &done, &w.main);
             return Ok(done);
         }
-        match ship_release(store, id, version, Some(change)) {
+        match ship_release(store, id, version, Some(change), by, opts.origin) {
             Ok(cut) => {
                 let mut notes = cut.notes;
                 // The notes that shipped, when there are some at the tip, replace the generated
@@ -3098,7 +3205,24 @@ fn refusal(w: &Worked) -> CoreError {
         return CoreError::Unsupported(empty_release(&p.version));
     }
     if p.needs_reason || (w.direction == Direction::Again && p.steps.iter().all(|s| s.noop)) {
-        return CoreError::Unsupported(p.missing[0].clone());
+        let mut said = p.missing[0].clone();
+        // Who moved it there first, when, and from where (DEF-028).
+        if !p.needs_reason
+            && let Some(c) = w.releases[w.index]
+                .stages
+                .iter()
+                .rev()
+                .find(|c| c.stage == w.stage)
+        {
+            let earlier = crate::origin::Earlier {
+                what: "moved there".into(),
+                by: c.by.clone(),
+                at: c.at.clone(),
+                origin: c.origin.clone(),
+            };
+            said.push_str(&format!(" ({})", earlier.sentence()));
+        }
+        return CoreError::Unsupported(said);
     }
     let failing: Vec<&PlanCondition> = p.conditions.iter().filter(|c| !c.holds).collect();
     if failing.is_empty()
@@ -3730,8 +3854,72 @@ pub fn set_release_notes(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use crate::{ProjectConfig, Store};
+
+    /// A store with releases on and a milestone, for the removal tests.
+    fn plain_board(tag: &str) -> (Store, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-relrm-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        store
+            .init_project("shop", ProjectConfig::default_for("shop"))
+            .unwrap();
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/shop/config/cadence",
+            Some(&serde_json::json!({"releases": true})),
+        )
+        .unwrap();
+        store
+            .add_milestone("shop", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        (store, dir)
+    }
+
+    /// FTR-022 R-10: an empty planned release can be removed, and the others stay.
+    #[test]
+    fn an_empty_unstarted_release_can_be_removed() {
+        let (store, dir) = plain_board("ok");
+        super::add(&store, "shop", "v0.1.0", "", "").unwrap();
+        super::add(&store, "shop", "v0.2.0", "", "").unwrap();
+        let gone = super::remove(&store, "shop", "v0.1.0").unwrap();
+        assert_eq!(gone.version, "v0.1.0");
+        let left = super::load(&store, "shop").unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].version, "v0.2.0");
+        assert!(super::remove(&store, "shop", "v9").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-022 R-10: a release with an item, a stage, a branch or a patch stays, and says which.
+    #[test]
+    fn a_release_with_items_a_stage_or_a_patch_is_not_removed() {
+        let (store, dir) = plain_board("no");
+        for v in ["v1", "v2", "v3"] {
+            super::add(&store, "shop", v, "", "").unwrap();
+        }
+        let item = store.add_feature("shop", "A", "", "M", None).unwrap();
+        super::plan(&store, "shop", "v1", std::slice::from_ref(&item.code)).unwrap();
+        let err = super::remove(&store, "shop", "v1").unwrap_err().to_string();
+        assert!(err.contains(&item.code), "{err}");
+        let mut all = super::load(&store, "shop").unwrap();
+        all[1].stage = "rc".into();
+        all[1].branch = "release/v2".into();
+        all.push(super::Release {
+            version: "v3.0.1".into(),
+            parent: "v3".into(),
+            ..Default::default()
+        });
+        super::save(&store, "shop", &all).unwrap();
+        let err = super::remove(&store, "shop", "v2").unwrap_err().to_string();
+        assert!(err.contains("stage rc"), "{err}");
+        let err = super::remove(&store, "shop", "v3").unwrap_err().to_string();
+        assert!(err.contains("v3.0.1"), "{err}");
+        assert_eq!(super::load(&store, "shop").unwrap().len(), 4);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// FEAT-184 R-2: a patch's notes say what it patches, what it adds, and what it keeps from
     /// its parent.
@@ -3814,7 +4002,7 @@ mod tests {
     }
 
     /// A board with releases on and v1 added, beside a scratch code repository on `main`.
-    fn board_and_repo(tag: &str) -> (Store, std::path::PathBuf, std::path::PathBuf) {
+    pub(crate) fn board_and_repo(tag: &str) -> (Store, std::path::PathBuf, std::path::PathBuf) {
         let dir =
             std::env::temp_dir().join(format!("kanbanr-promote-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -3944,7 +4132,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     /// Set the release stages, gates and preparation from a cadence fragment.
-    fn configure(store: &Store, yaml: &str) {
+    pub(crate) fn configure(store: &Store, yaml: &str) {
         let mut c = store.load_meta("shop").unwrap().config.cadence;
         let given: crate::config::Cadence = crate::yaml::from_str(yaml).unwrap();
         c.release_stages = given.release_stages;
@@ -4047,7 +4235,7 @@ mod tests {
             .unwrap()
     }
 
-    fn record_gate(store: &Store, name: &str, commit: &str, passed: bool, at: &str) {
+    pub(crate) fn record_gate(store: &Store, name: &str, commit: &str, passed: bool, at: &str) {
         let r = crate::gates::GateResult {
             name: name.into(),
             commit: commit.into(),
@@ -4597,7 +4785,7 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(err.ends_with("v0.2.0 is already at candidate"), "{err}");
+        assert!(err.contains("v0.2.0 is already at candidate"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }
@@ -4854,6 +5042,7 @@ mod tests {
         let opts = super::PromoteOptions {
             expect_tip: Some(&plan.release_tip),
             fetch: super::Fetch::No,
+            origin: "",
         };
         let err = super::promote_with(
             &store,
@@ -4878,6 +5067,7 @@ mod tests {
         let opts = super::PromoteOptions {
             expect_tip: Some(&now),
             fetch: super::Fetch::No,
+            origin: "",
         };
         super::promote_with(
             &store,
@@ -5364,11 +5554,11 @@ mod tests {
     // ---- FTR-026: release stages that follow the tag ----
 
     /// Candidate branches, main moves, `tag` tags; `staging` after it only confirms.
-    const STAGED: &str = "release_stages: [candidate, main, tag, staging]\n\
+    pub(crate) const STAGED: &str = "release_stages: [candidate, main, tag, staging]\n\
          release_gates:\n  candidate: { on_enter: [branch] }\n  \
          main: { on_enter: [move_main] }\n  tag: { on_enter: [tag] }\n";
 
-    fn staged(name: &str, yaml: &str) -> (Store, PathBuf, PathBuf) {
+    pub(crate) fn staged(name: &str, yaml: &str) -> (Store, PathBuf, PathBuf) {
         let (store, dir, repo) = board_and_repo(name);
         configure(&store, yaml);
         let mut c = store.load_meta("shop").unwrap().config.cadence;
@@ -5377,11 +5567,11 @@ mod tests {
         (store, dir, repo)
     }
 
-    fn go(store: &Store, repo: &Path, to: &str) -> super::Promoted {
+    pub(crate) fn go(store: &Store, repo: &Path, to: &str) -> super::Promoted {
         super::promote(store, "shop", "v1", Some(to), "Ada", "", Some(repo)).unwrap()
     }
 
-    fn v1(store: &Store) -> super::Release {
+    pub(crate) fn v1(store: &Store) -> super::Release {
         super::load(store, "shop")
             .unwrap()
             .into_iter()
@@ -5389,7 +5579,7 @@ mod tests {
             .unwrap()
     }
 
-    fn tagged(name: &str, yaml: &str) -> (Store, PathBuf, PathBuf, String) {
+    pub(crate) fn tagged(name: &str, yaml: &str) -> (Store, PathBuf, PathBuf, String) {
         let (store, dir, repo) = staged(name, yaml);
         go(&store, &repo, "candidate");
         go(&store, &repo, "main");
@@ -5398,7 +5588,7 @@ mod tests {
         (store, dir, repo, sha)
     }
 
-    fn now_result(store: &Store, commit: &str, passed: bool) {
+    pub(crate) fn now_result(store: &Store, commit: &str, passed: bool) {
         record_gate(store, "ci", commit, passed, &crate::now_rfc3339());
     }
 
@@ -5415,7 +5605,7 @@ mod tests {
         .unwrap()
     }
 
-    fn clean(dir: &Path, repo: &Path) {
+    pub(crate) fn clean(dir: &Path, repo: &Path) {
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(repo);
     }
@@ -6028,6 +6218,7 @@ mod tests {
             "",
             "",
             Some(&repo),
+            "",
         )
         .unwrap_err()
         .to_string();
@@ -6042,7 +6233,8 @@ mod tests {
                 "Ada",
                 "",
                 "",
-                Some(&repo)
+                Some(&repo),
+                ""
             )
             .is_err()
         );
@@ -6056,6 +6248,7 @@ mod tests {
             "https://ci.example/run/9",
             "two tests red on arm",
             Some(&repo),
+            "",
         )
         .unwrap();
         assert_eq!(made.release.parent, "v1");
@@ -6186,7 +6379,7 @@ mod tests {
                     by: "Ada L".into(),
                     at: "2026-11-05T10:00:00Z".into(),
                     reason: String::new(),
-                    item: String::new(),
+                    ..Default::default()
                 })
                 .collect(),
             ..Default::default()

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api";
+import { api, viaOrigin } from "../api";
 import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
 import { useScrollToHash } from "../useBoardIndex";
@@ -94,7 +94,7 @@ export default function FeaturePage() {
       )}
 
       <Provenance feature={feature} />
-      <Definition feature={feature} project={project} />
+      <Definition feature={feature} project={project} tick={tick} />
       <LessonsFor project={project} code={feature.code} />
 
       <section className="section">
@@ -227,7 +227,7 @@ function LessonsFor({ project, code }: { project: string; code: string }) {
   );
 }
 
-function Definition({ feature, project }: { feature: Feature; project: string }) {
+function Definition({ feature, project, tick }: { feature: Feature; project: string; tick: number }) {
   const def = feature.definition;
   const [asking, setAsking] = useState(false);
   const [reason, setReason] = useState("");
@@ -240,7 +240,10 @@ function Definition({ feature, project }: { feature: Feature; project: string })
   const approval =
     def.approval == null
       ? { label: "not approved", cls: "chip warn" }
-      : { label: `approved by ${def.approval.by} · ${day(def.approval.at)}`, cls: "chip" };
+      : {
+          label: `approved by ${def.approval.by} · ${day(def.approval.at)}${viaOrigin(def.approval.origin)}`,
+          cls: "chip",
+        };
 
   /// Withdrawing is the other half of agreeing (FEAT-069): an approval recorded by the wrong hand,
   /// or a mind since changed, needs a remedy that is not editing yaml.
@@ -363,6 +366,7 @@ function Definition({ feature, project }: { feature: Feature; project: string })
             {(def.approvals ?? []).map((event, i) => (
               <li key={i} className="muted small">
                 {day(event.at)} — {event.verdict} by {event.by}
+                {viaOrigin(event.origin)}
                 {event.reason ? `: ${event.reason}` : ""}
               </li>
             ))}
@@ -373,6 +377,7 @@ function Definition({ feature, project }: { feature: Feature; project: string })
           project={project}
           writable={meta.data?.writes === true}
           who={who}
+          tick={tick}
         />
         <div className="tiles">
           {zachmanColumns(def.zachman).map(({ column, answer }) => (
@@ -528,13 +533,21 @@ function Signoffs({
   project,
   writable,
   who,
+  tick,
 }: {
   feature: Feature;
   project: string;
   writable: boolean;
   who: string | null;
+  tick: number;
 }) {
   const entries = feature.definition?.signoffs ?? [];
+  // Whether a sign-off's spec changed is the review queue's answer, so the rule lives in one place
+  // (FTR-023).
+  const queue = useAsync(() => api.getPendingReviews(project).catch(() => []), [project, tick]);
+  const specChanged = (queue.data ?? []).find(
+    (e) => e.code === feature.code && e.approval === "spec_changed",
+  )?.spec?.signoff;
   const [asking, setAsking] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -568,12 +581,22 @@ function Signoffs({
           return (
             <li key={s.id}>
               <span className={gone ? "chip warn" : "chip done"}>{s.id}</span>{" "}
+              {!gone && specChanged === s.id ? (
+                <>
+                  <Link
+                    className="chip warn"
+                    to={`/p/${encodeURIComponent(project)}/review#${encodeURIComponent(feature.code)}`}
+                  >
+                    changed since sign-off
+                  </Link>{" "}
+                </>
+              ) : null}
               <span className="muted small">
                 {gone && s.verdict === "withdrawn"
-                  ? `withdrawn by ${s.by} · ${day(s.at)}: ${s.reason ?? ""}`
+                  ? `withdrawn by ${s.by} · ${day(s.at)}${viaOrigin(s.origin)}: ${s.reason ?? ""}`
                   : gone
                     ? "withdrawn"
-                    : `by ${s.by} · ${day(s.at)}${s.status ? ` (at ${s.status})` : ""}${s.note ? ` — ${s.note}` : ""}`}
+                    : `by ${s.by} · ${day(s.at)}${viaOrigin(s.origin)}${s.status ? ` (at ${s.status})` : ""}${s.note ? ` — ${s.note}` : ""}`}
               </span>
               {writable && !gone ? (
                 asking === s.id ? (

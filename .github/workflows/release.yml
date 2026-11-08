@@ -83,7 +83,7 @@ jobs:
           # Reading the crate's own Cargo.toml returns the literal "version.workspace = true",
           # which compares unequal to every tag — a guard that refuses every valid release is
           # worse than none, and only running it caught that.
-          crate="$(cargo metadata --no-deps --format-version 1 --manifest-path api/Cargo.toml \
+          crate="$(cargo metadata --locked --no-deps --format-version 1 --manifest-path api/Cargo.toml \
             | python3 -c "import json,sys; m=json.load(sys.stdin); print(next(p['version'] for p in m['packages'] if p['name']=='kanbanr-cli'))")"
           if [ "$crate" != "$version" ]; then
             echo "::error::tag ${tag} names version ${version}, but the workspace builds ${crate}." >&2
@@ -179,7 +179,7 @@ jobs:
       - name: Build CLI
         env:
           KANBANR_GIT_SHA: ${{ github.sha }}
-        run: cargo build --release -p kanbanr-cli --target ${{ matrix.target }}
+        run: cargo build --locked --release -p kanbanr-cli --target ${{ matrix.target }}
 
       # The binary must be able to say which build it is. A release whose binaries report "unknown"
       # cannot be matched against the release page, which is the whole point of stamping it.
@@ -322,6 +322,12 @@ jobs:
     name: publish the release
     needs: [binaries, vscode, monitor]
     runs-on: ubuntu-24.04
+    # Narrower than the workflow's, plus what an attestation needs: the OIDC token the build
+    # identity is signed with, and the right to store the attestation (MNT-004).
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
@@ -332,6 +338,18 @@ jobs:
 
       - name: Stage the installers beside the binaries
         run: cp scripts/install.sh scripts/install.ps1 staged/
+
+      # What is inside the release, from the lockfiles (MNT-004). Built before SHA256SUMS so the
+      # checksums list the SBOMs, and before the attestation so that covers them.
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-cyclonedx@0.5.10
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+      - name: Build the SBOMs
+        run: scripts/make-sbom.sh "$GITHUB_REF_NAME" staged
 
       # Bare filenames — no `./` prefix, no directories — so a consumer can run
       # `sha256sum --ignore-missing -c SHA256SUMS` from the directory it downloaded into, which is
@@ -345,10 +363,21 @@ jobs:
           mv ../SHA256SUMS .
           cat SHA256SUMS
 
+      # A signed statement of which repository, commit and workflow built each asset (MNT-004).
+      # Switched off with the repository variable ATTEST_RELEASE=false, for a fork on a plan that
+      # cannot attest; the notes then say so.
+      - name: Attest the release assets
+        if: vars.ATTEST_RELEASE != 'false'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: staged/*
+
       # The release page opens with the notes written for it (FEAT-154); GitHub's generated list of
       # commits and contributors follows. Links between docs pages are made absolute, because on
       # the release page there is no book around them.
       - name: The release notes, for the release page
+        env:
+          ATTEST_RELEASE: ${{ vars.ATTEST_RELEASE }}
         run: |
           set -eu
           python3 - "docs/src/releases/${GITHUB_REF_NAME}.md" "$RUNNER_TEMP/notes.md" <<'PY'
@@ -367,6 +396,9 @@ jobs:
           text = re.sub(r"(\[[^\]]*\])\(([^)]+)\)", link, text)
           open(out, "w").write(text + f"\n---\n\nThe complete list of changes is in the [changelog]({site}/project/changelog.html).\n")
           PY
+          if [ "$ATTEST_RELEASE" = false ]; then
+            printf '\nThis release carries no build attestations.\n' >> "$RUNNER_TEMP/notes.md"
+          fi
           cat "$RUNNER_TEMP/notes.md"
 
       - name: Create the release and upload every asset
@@ -502,6 +534,11 @@ jobs:
     name: docker image (GHCR)
     needs: tag
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -549,12 +586,17 @@ jobs:
           format: table
           trivyignores: .trivyignore.yaml
 
+      # The builder's own SBOM and max-mode provenance travel with the image (MNT-004). The scan
+      # build above keeps neither: a loaded image cannot hold attestations.
       - name: Build & push
+        id: push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: docker/Dockerfile
           push: true
+          sbom: true
+          provenance: mode=max
           build-args: |
             KANBANR_GIT_SHA=${{ github.sha }}
             KANBANR_BUILD_DATE=${{ steps.stamp.outputs.date }}
@@ -563,6 +605,14 @@ jobs:
           tags: |
             ${{ steps.img.outputs.name }}:${{ github.ref_name }}
             ${{ needs.tag.outputs.prerelease == 'false' && format('{0}:latest', steps.img.outputs.name) || '' }}
+
+      - name: Attest the image
+        if: vars.ATTEST_RELEASE != 'false'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.img.outputs.name }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
   # ---- 3. Publish the standalone library to crates.io (optional) ------------
   crates:

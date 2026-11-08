@@ -163,6 +163,8 @@ export interface ApprovalEvent {
   verdict: "approved" | "ratified" | "withdrawn";
   reason?: string;
   rev?: string;
+  /** Where it was taken: monitor, conversation, terminal or delegated (DEF-028). Absent means unknown. */
+  origin?: string;
 }
 
 export interface FeatureDefinition {
@@ -192,12 +194,18 @@ export interface Signoff {
   at: string;
   /** The definition content it covered; empty on a withdrawal. */
   rev: string;
+  /** A hash per part of the definition it covered (FTR-018). */
+  parts?: Record<string, string>;
+  /** A hash of the whole spec it covered, when its gate asks for spec sections (FTR-023). */
+  spec_rev?: string;
   note?: string;
   doc?: string;
   status?: string;
   /** Absent means given. */
   verdict?: "given" | "withdrawn";
   reason?: string;
+  /** Where it was taken (DEF-028). Absent means unknown. */
+  origin?: string;
 }
 
 /** The six completeness dimensions, one line each. */
@@ -214,6 +222,10 @@ export interface Approval {
   by: string;
   at: string;
   rev: string;
+  /** A hash per part of the definition the approval covered (FTR-018). */
+  parts?: Record<string, string>;
+  /** Where it was taken (DEF-028). Absent means unknown. */
+  origin?: string;
 }
 
 export interface Requirement {
@@ -266,7 +278,11 @@ export interface PendingReview {
   status: string;
   /** `unratified`: finished under a recorded bypass and never agreed to (FEAT-109). */
   /** `release`: agreed, and its next stage is the end — which planned release is it in (FEAT-185)? */
-  approval: "missing" | "lapsed" | "unratified" | "signoff" | "release";
+  /** `added`: approved, then text was added that now needs a decision (FTR-018). */
+  /** `spec_changed`: the spec a sign-off pinned changed after it was given (FTR-023). */
+  approval: "missing" | "lapsed" | "unratified" | "signoff" | "release" | "added" | "spec_changed";
+  /** Parts added, changed and removed since the last decision (FTR-018), by part key. */
+  changes?: { added: string[]; changed: string[]; removed: string[] };
   /** Finished work listed only because its approval lapsed (DEF-013). */
   finished?: boolean;
   /** Sign-offs the item's next stage is waiting on (FEAT-117). */
@@ -278,6 +294,20 @@ export interface PendingReview {
   rev?: string;
   started_unapproved?: string;
   definition: FeatureDefinition;
+  /** The hash of the spec's current text, when the sign-off asked pins the spec (FTR-023). */
+  spec_rev?: string;
+  /** The spec that sign-off pins, with what changed since the last one (FTR-023). */
+  spec?: SpecBrief;
+}
+
+export interface SpecBrief {
+  signoff: string;
+  text: string;
+  /** False when the earlier sign-off's text is missing from the board. */
+  previous_kept: boolean;
+  signed_by: string;
+  signed_at: string;
+  diff: { op: "same" | "added" | "removed"; text: string }[];
 }
 
 /** One thing an item is missing, as the daemon's readiness engine reports it (FEAT-112). The rules
@@ -413,6 +443,8 @@ export interface ProjectConfig {
   gates?: Record<string, Gate>;
   /** Which prefix an item's code gets from its kind (FEAT-217). Absent: FEAT for every item. */
   codes?: CodesConfig;
+  /** A shorter path through the stages for some kinds, keyed by kind (FTR-019). Absent: none. */
+  paths?: Record<string, KindPath>;
   /** Days or story points (FEAT-121). */
   estimate_unit?: "days" | "points";
   /** Whether the project uses sprints and releases at all (FEAT-121). */
@@ -485,9 +517,21 @@ export interface Release {
   /** Where it is now, from the project's release stages; absent until first promoted (FEAT-183). */
   stage?: string;
   /** Every stage change, oldest first. A move back carries its reason. */
-  stages?: { stage: string; by: string; at: string; reason?: string; item?: string }[];
+  stages?: {
+    stage: string;
+    by: string;
+    at: string;
+    reason?: string;
+    item?: string;
+    origin?: string;
+  }[];
+  /** Who cut the release and from where (DEF-028). Absent means unknown. */
+  shipped_by?: string;
+  shipped_origin?: string;
   /** The code branch, made on entering the first stage. */
   branch?: string;
+  /** The cut release this patches (FEAT-184); absent for an ordinary release. */
+  parent?: string;
   /** When the stage that tags was entered (FTR-026); a tagged release still `planned` is waiting on its later stages. */
   tagged_at?: string;
   /** The commit the tag names. */
@@ -602,6 +646,13 @@ export interface ReleasePlan {
   empty: boolean;
   /** Worth knowing, not stopping: e.g. the notes carry an earlier date (DEF-001). */
   warnings?: string[];
+}
+
+/** The stages an item of one kind passes, what its first move asks, and the method parts left out. */
+export interface KindPath {
+  stages: string[];
+  requires?: Condition[];
+  method_off?: string[];
 }
 
 export interface Gate {
@@ -750,6 +801,8 @@ export type Adr = {
   title?: string;
   date?: string;
   decided?: string;
+  /** Where the verdict was taken (DEF-028). Absent means unknown. */
+  decided_origin?: string;
   reason?: string;
   deciders?: string[];
   affects?: string[];

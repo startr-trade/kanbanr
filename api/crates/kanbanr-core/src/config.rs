@@ -127,6 +127,10 @@ pub struct ProjectConfig {
     /// is read for coverage.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub coverage: Vec<crate::coverage::CoverageRule>,
+    /// A shorter path through the workflow for some work kinds (FTR-019), keyed by kind in lower
+    /// case. Absent: every kind walks every stage, and absent stays absent on disk.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub paths: BTreeMap<String, KindPath>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -503,6 +507,24 @@ impl Cadence {
         Ok(())
     }
 
+    /// This cadence without what belongs to the project's own environments and files: release
+    /// stages, branches, the git model, release gates, prepare steps, commit gates, the tag gate
+    /// and the CI flag. The rhythm is kept (FTR-025).
+    pub fn project_facts_cleared(&self) -> Cadence {
+        Cadence {
+            release_stages: Vec::new(),
+            integration_branch: None,
+            main_branch: None,
+            git_model: false,
+            release_gates: BTreeMap::new(),
+            release_prepare: Default::default(),
+            commit_gates: Vec::new(),
+            tag_gate: None,
+            has_ci: false,
+            ..self.clone()
+        }
+    }
+
     /// The release stages in force: the project's own list, else the default. The first makes the
     /// release branch, the last is the cut (FEAT-183).
     pub fn stages(&self) -> Vec<String> {
@@ -737,6 +759,29 @@ pub fn default_no_op_states() -> Vec<String> {
     ]
 }
 
+/// The path an item of one kind takes through a process (FTR-019): the stages it passes, what its
+/// first move asks, and the method parts that do not apply to it. A subset of the workflow's own
+/// stages in its own order, so no stage is invented and the board's columns do not change.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct KindPath {
+    /// At least two statuses, no no-op status, none twice, in the workflow's order, the first the
+    /// default state. Neighbours on the path may move to each other whatever `transitions` says.
+    pub stages: Vec<String>,
+    /// Asked, in addition to the entered stage's gate, of the first move off the starting stage:
+    /// where an item of this kind records why it exists and how it is verified.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<crate::readiness::Condition>,
+    /// Method parts not asked of this kind. Approvals and sign-offs the stage itself names stay.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub method_off: Vec<crate::method::Part>,
+}
+
+/// The paths of a file or request as the map keys them: kinds trimmed and lowercased.
+fn path_keys(paths: BTreeMap<String, KindPath>) -> BTreeMap<String, KindPath> {
+    paths.into_iter().map(|(k, v)| (kind_key(&k), v)).collect()
+}
+
 /// A workflow as a file: what `--from-file` reads, `--export` writes, and every preset is
 /// (FEAT-116). The project-specific parts of a config (name, description, branch pattern) are not in
 /// it, so one process file serves any number of projects.
@@ -764,6 +809,9 @@ pub struct WorkflowFile {
     /// A process that works in sprints and releases switches them on (FEAT-122).
     #[serde(default, skip_serializing_if = "Cadence::is_off")]
     pub cadence: Cadence,
+    /// A shorter path for some work kinds (FTR-019).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub paths: BTreeMap<String, KindPath>,
 }
 
 /// The built-in processes, as data (FEAT-116). Each file's leading comment is its description.
@@ -912,6 +960,7 @@ impl WorkflowFile {
             diagrams: Default::default(),
             codes: Default::default(),
             coverage: Vec::new(),
+            paths: path_keys(self.paths),
         };
         config.schema_version = config.required_schema_version();
         config
@@ -930,6 +979,7 @@ impl WorkflowFile {
             gates: config.gates.clone(),
             estimate_unit: config.estimate_unit,
             cadence: config.cadence.clone(),
+            paths: config.paths.clone(),
         }
     }
 }
@@ -948,6 +998,7 @@ pub fn check_workflow(
     no_op_states: Option<Vec<String>>,
     terminal_states: Option<Vec<String>>,
     gates: BTreeMap<String, Gate>,
+    paths: BTreeMap<String, KindPath>,
 ) -> (WorkflowFile, Vec<crate::CoreError>) {
     use crate::CoreError;
     let mut problems = Vec::new();
@@ -994,6 +1045,8 @@ pub fn check_workflow(
         unknown(s, &mut problems);
     }
     problems.extend(gate_problems(&statuses, &no_ops, &terminals, &gates));
+    let paths = path_keys(paths);
+    problems.extend(path_problems(&statuses, &no_ops, &default_state, &paths));
     let file = WorkflowFile {
         statuses,
         default_state,
@@ -1002,9 +1055,68 @@ pub fn check_workflow(
         terminal_states: terminals,
         transitions,
         gates,
+        paths,
         ..Default::default()
     };
     (file, problems)
+}
+
+/// What is wrong with a workflow's kind paths (FTR-019): each must name stages of the workflow,
+/// none a no-op or repeated, in the workflow's order, starting at the default state. A path that
+/// can never be walked is a lighter route that silently isn't there.
+pub fn path_problems(
+    statuses: &[String],
+    no_ops: &[String],
+    default_state: &str,
+    paths: &BTreeMap<String, KindPath>,
+) -> Vec<crate::CoreError> {
+    use crate::CoreError;
+    let mut problems = Vec::new();
+    let mut bad = |kind: &str, what: String| {
+        problems.push(CoreError::Unsupported(format!("path '{kind}': {what}")));
+    };
+    for (kind, path) in paths {
+        if path.stages.len() < 2 {
+            bad(kind, "needs at least two stages".to_string());
+            continue;
+        }
+        let mut last: Option<usize> = None;
+        let mut seen: Vec<&String> = Vec::new();
+        for stage in &path.stages {
+            let Some(at) = statuses.iter().position(|s| s == stage) else {
+                bad(kind, format!("'{stage}' is not a status of the workflow"));
+                continue;
+            };
+            if no_ops.contains(stage) {
+                bad(kind, format!("'{stage}' is a no-op status, not a stage"));
+            }
+            if seen.contains(&stage) {
+                bad(kind, format!("'{stage}' is listed twice"));
+                continue;
+            }
+            seen.push(stage);
+            if let Some(prev) = last.filter(|&p| at < p) {
+                bad(
+                    kind,
+                    format!("{stage} comes before {} in the workflow", statuses[prev]),
+                );
+            }
+            last = Some(last.map_or(at, |p| p.max(at)));
+        }
+        if path.stages.first().map(String::as_str) != Some(default_state) {
+            bad(kind, format!("must start at {default_state}"));
+        }
+        if let Some(column) = path.requires.iter().find_map(|c| c.invalid_column()) {
+            bad(
+                kind,
+                format!(
+                    "names '{column}', which is not a Zachman column \
+                     (what, how, where, when, who, why)"
+                ),
+            );
+        }
+    }
+    problems
 }
 
 /// What is wrong with a workflow's gates (FEAT-113): each must name a status of the workflow, name
@@ -1231,6 +1343,7 @@ impl WorkflowFile {
             "no_op_states": self.no_op_states,
             "terminal_states": self.terminal_states,
             "gates": self.gates,
+            "paths": self.paths,
             "cadence": (!self.cadence.is_off()).then_some(&self.cadence),
             "estimate_unit": (!self.estimate_unit.is_days()).then_some(self.estimate_unit),
         });
@@ -1267,6 +1380,7 @@ impl WorkflowFile {
             Some(self.no_op_states.clone()),
             Some(self.terminal_states.clone()),
             self.gates.clone(),
+            self.paths.clone(),
         )
         .1
     }
@@ -1355,6 +1469,29 @@ pub fn working_agreement(project: &str, config: &ProjectConfig) -> String {
         }
         if gate.on_enter.contains(&Action::Branch) {
             out.push_str("\nThe item's branch is made here.\n");
+        }
+        out.push('\n');
+    }
+    // Each kind's own path (FTR-019): the stages it passes, what its first move asks, and the
+    // method parts it leaves out.
+    if !config.paths.is_empty() {
+        out.push_str("## Lighter paths\n\n");
+        for (kind, path) in &config.paths {
+            out.push_str(&format!(
+                "- **{kind}**: {}\n",
+                path.stages.join(" \u{2192} ")
+            ));
+            if !path.requires.is_empty() {
+                let asks: Vec<String> = path.requires.iter().map(text).collect();
+                out.push_str(&format!(
+                    "  - the first move also asks: {}\n",
+                    asks.join(", ")
+                ));
+            }
+            if !path.method_off.is_empty() {
+                let parts: Vec<&str> = path.method_off.iter().map(|p| p.as_str()).collect();
+                out.push_str(&format!("  - leaves out: {}\n", parts.join(", ")));
+            }
         }
         out.push('\n');
     }
@@ -1485,9 +1622,93 @@ impl ProjectConfig {
             .cloned()
     }
 
+    /// The path declared for items of `kind` (FTR-019): the kind trimmed, empty meaning `feature`,
+    /// matched without regard to case.
+    pub fn path_for(&self, kind: Option<&str>) -> Option<&KindPath> {
+        let key = kind.map(kind_key).filter(|k| !k.is_empty());
+        self.paths.get(key.as_deref().unwrap_or("feature"))
+    }
+
+    /// As [`ProjectConfig::transition_allowed`] for an item of `kind` (FTR-019). An item whose kind
+    /// has a path moves only to the next or previous stage on it, to a no-op disposition, or back
+    /// to the starting stage; an item off its path (its kind changed, or it sits in a no-op status)
+    /// keeps the plain transitions, so it is never stranded.
+    pub fn transition_allowed_for(&self, from: &str, to: &str, kind: Option<&str>) -> bool {
+        let Some(path) = self.path_for(kind) else {
+            return self.transition_allowed(from, to);
+        };
+        if from == to {
+            return true;
+        }
+        let at = |s: &str| path.stages.iter().position(|x| x == s);
+        let Some(here) = at(from) else {
+            return self.transition_allowed(from, to);
+        };
+        if self.is_no_op(to) {
+            return self.transition_allowed(from, to);
+        }
+        match at(to) {
+            Some(there) if here.abs_diff(there) == 1 => true,
+            // The way back to the starting stage is the workflow's own.
+            _ if to == self.default_state => self.transition_allowed(from, to),
+            _ => false,
+        }
+    }
+
+    /// What to add to a refused move of an item of `kind` when its path was what refused it
+    /// (FTR-019): the path, in order. Empty when the kind has none, or the item is off it.
+    pub fn path_note(&self, code: &str, from: &str, kind: Option<&str>) -> String {
+        match self
+            .path_for(kind)
+            .filter(|p| p.stages.iter().any(|s| s == from))
+        {
+            Some(path) => {
+                let kind = kind
+                    .map(str::trim)
+                    .filter(|k| !k.is_empty())
+                    .unwrap_or("feature");
+                format!(
+                    "; {code} is a {kind}: its path is {}",
+                    path.stages.join(" → ")
+                )
+            }
+            None => String::new(),
+        }
+    }
+
     /// The shortest chain of allowed transitions from one status to another, both ends included;
     /// `None` when the workflow has no way between them.
     pub fn path_between(&self, from: &str, to: &str) -> Option<Vec<String>> {
+        self.shortest_chain(from, to, |at| {
+            self.transitions.get(at).cloned().unwrap_or_default()
+        })
+    }
+
+    /// As [`ProjectConfig::path_between`] for an item of `kind` (FTR-019).
+    pub fn path_between_for(
+        &self,
+        from: &str,
+        to: &str,
+        kind: Option<&str>,
+    ) -> Option<Vec<String>> {
+        if self.path_for(kind).is_none() {
+            return self.path_between(from, to);
+        }
+        self.shortest_chain(from, to, |at| {
+            self.statuses
+                .iter()
+                .filter(|s| s.as_str() != at && self.transition_allowed_for(at, s, kind))
+                .cloned()
+                .collect()
+        })
+    }
+
+    fn shortest_chain(
+        &self,
+        from: &str,
+        to: &str,
+        next_of: impl Fn(&str) -> Vec<String>,
+    ) -> Option<Vec<String>> {
         let mut previous: BTreeMap<String, String> = BTreeMap::new();
         let mut queue = std::collections::VecDeque::from([from.to_string()]);
         let mut seen = std::collections::BTreeSet::from([from.to_string()]);
@@ -1502,10 +1723,10 @@ impl ProjectConfig {
                 path.reverse();
                 return Some(path);
             }
-            for next in self.transitions.get(&at).into_iter().flatten() {
+            for next in next_of(&at) {
                 if seen.insert(next.clone()) {
                     previous.insert(next.clone(), at.clone());
-                    queue.push_back(next.clone());
+                    queue.push_back(next);
                 }
             }
         }
@@ -1517,13 +1738,18 @@ impl ProjectConfig {
     /// item may still have stages to walk to. The first declared end was taken before, and refused
     /// from any stage that does not lead straight to it — Implementation under TOGAF.
     pub fn finish_target(&self, from: &str) -> String {
+        self.finish_target_for(from, None)
+    }
+
+    /// As [`ProjectConfig::finish_target`] for an item of `kind` (FTR-019).
+    pub fn finish_target_for(&self, from: &str, kind: Option<&str>) -> String {
         let ends: Vec<&String> = self
             .statuses
             .iter()
             .filter(|s| crate::graph::is_terminal_status(self, s) && !self.is_no_op(s))
             .collect();
         ends.iter()
-            .find(|s| self.transition_allowed(from, s))
+            .find(|s| self.transition_allowed_for(from, s, kind))
             .or(ends.first())
             .map(|s| (*s).clone())
             .unwrap_or_else(|| "Completed".to_string())
@@ -1662,6 +1888,21 @@ impl ProjectConfig {
     /// Where `start` makes the item's branch: the build role's status.
     pub fn branch_status(&self) -> Option<String> {
         self.role_status(Role::Build)
+    }
+
+    /// Does sign-off `name` pin the spec (FTR-023)? True when a gate that lists it under `signoffs`
+    /// also requires spec sections. Derived from the process, so it needs no configuration.
+    pub fn signoff_pins_spec(&self, name: &str) -> bool {
+        use crate::readiness::{Check, Condition};
+        self.effective_gates().values().any(|g| {
+            g.signoffs.iter().any(|s| s == name)
+                && g.requires.iter().any(|c| {
+                    matches!(
+                        c,
+                        Condition::SpecSections { .. } | Condition::Check(Check::SpecSections)
+                    )
+                })
+        })
     }
 
     /// The gates this workflow enforces: the declared ones, or — when none are declared — today's
@@ -2049,6 +2290,236 @@ mod tests {
         preset_bare(name).unwrap().into_config("p")
     }
 
+    /// FTR-025 R-1: Migration finishes an item for the sprint views; Operations ships it.
+    #[test]
+    fn togaf_counts_migration_as_done() {
+        let togaf = config_of("togaf");
+        assert!(togaf.counts_as_done("Migration"));
+        assert!(togaf.counts_as_done("Operations"));
+        assert!(!togaf.counts_as_done("Implementation"));
+        assert!(!togaf.counts_as_done("Vision"));
+    }
+
+    /// FTR-025: a project's own facts are set aside, its rhythm is kept.
+    #[test]
+    fn project_facts_cleared_keeps_the_rhythm() {
+        let c = Cadence {
+            sprints: true,
+            releases: true,
+            sprint_length_days: Some(14),
+            release: Some("per_sprint".into()),
+            release_stages: vec!["a".into(), "b".into()],
+            integration_branch: Some("dev".into()),
+            main_branch: Some("main".into()),
+            git_model: true,
+            release_gates: [("a".to_string(), Default::default())].into(),
+            release_prepare: Default::default(),
+            commit_gates: vec!["ci".into()],
+            tag_gate: Some("ci".into()),
+            has_ci: true,
+            extra: Default::default(),
+        }
+        .project_facts_cleared();
+        assert!(c.sprints && c.releases);
+        assert_eq!(c.sprint_length_days, Some(14));
+        assert_eq!(c.release.as_deref(), Some("per_sprint"));
+        assert!(c.release_stages.is_empty() && c.integration_branch.is_none());
+        assert!(c.main_branch.is_none() && !c.git_model && c.release_gates.is_empty());
+        assert!(c.commit_gates.is_empty() && c.tag_gate.is_none() && !c.has_ci);
+    }
+
+    /// A path through `stages`, with the conditions a chore's first move asks.
+    fn chore_path(stages: &[&str]) -> KindPath {
+        KindPath {
+            stages: stages.iter().map(|s| s.to_string()).collect(),
+            requires: vec![crate::readiness::Condition::Check(
+                crate::readiness::Check::Statement,
+            )],
+            method_off: vec![crate::method::Part::Design],
+        }
+    }
+
+    /// `config` with a chore path through the TOGAF stages the lighter way.
+    fn togaf_with_chore_path() -> ProjectConfig {
+        let mut config = config_of("togaf");
+        config.paths.insert(
+            "chore".into(),
+            chore_path(&["Vision", "Implementation", "Migration", "Operations"]),
+        );
+        config
+    }
+
+    #[test]
+    fn a_chore_path_skips_stages() {
+        let config = togaf_with_chore_path();
+        let chore = Some("chore");
+        assert!(config.transition_allowed_for("Vision", "Implementation", chore));
+        assert!(config.transition_allowed_for("Implementation", "Vision", chore));
+        assert!(config.transition_allowed_for("Migration", "Operations", chore));
+        // Matched without regard to case, and a feature is unchanged.
+        assert!(config.transition_allowed_for("Vision", "Implementation", Some(" Chore ")));
+        assert!(!config.transition_allowed_for("Vision", "Implementation", None));
+        assert!(config.transition_allowed_for("Vision", "Business Arch", None));
+        let path = config
+            .path_between_for("Vision", "Operations", chore)
+            .unwrap();
+        assert_eq!(
+            path,
+            ["Vision", "Implementation", "Migration", "Operations"]
+        );
+    }
+
+    #[test]
+    fn a_chore_cannot_enter_a_stage_off_its_path() {
+        let config = togaf_with_chore_path();
+        let chore = Some("chore");
+        assert!(!config.transition_allowed_for("Vision", "Business Arch", chore));
+        assert!(!config.transition_allowed_for("Implementation", "System Design", chore));
+        assert!(!config.transition_allowed_for("Vision", "Migration", chore));
+        // A disposition stays open, and so does the way back to the start.
+        assert!(config.transition_allowed_for("Vision", "Out-of-Scope", chore));
+        assert_eq!(
+            config.transition_allowed_for("Migration", "Vision", chore),
+            config.transition_allowed("Migration", "Vision")
+        );
+        // An item off its path (its kind changed) keeps the plain transitions.
+        assert!(config.transition_allowed_for("Business Arch", "System Design", chore));
+    }
+
+    #[test]
+    fn built_in_processes_give_chores_a_lighter_path() {
+        for name in ["togaf", "scrum", "agile", "design-control"] {
+            let file = preset(name).unwrap();
+            let path = file
+                .paths
+                .get("chore")
+                .unwrap_or_else(|| panic!("{name}: no chore path"));
+            assert!(file.problems().is_empty(), "{name}: {:?}", file.problems());
+            let stages = file.statuses.len() - file.no_op_states.len();
+            assert!(path.stages.len() < stages, "{name}: not shorter");
+            // The first move asks for the statement, whether on the path or in the entered gate.
+            let config = file.clone().into_config("p");
+            let entered = &path.stages[1];
+            let gates = config.effective_gates();
+            let asks_statement = path
+                .requires
+                .iter()
+                .chain(
+                    gates
+                        .get(entered)
+                        .map(|g| g.requires.iter())
+                        .into_iter()
+                        .flatten(),
+                )
+                .any(|c| {
+                    *c == crate::readiness::Condition::Check(crate::readiness::Check::Statement)
+                });
+            assert!(asks_statement, "{name}");
+        }
+        // The others are untouched.
+        for name in ["default", "scheduled", "pdca"] {
+            assert!(preset(name).unwrap().paths.is_empty(), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_working_agreement_names_each_kinds_path() {
+        let text = working_agreement("p", &togaf_with_chore_path());
+        let section = text.split("## Lighter paths").nth(1).expect(&text);
+        assert!(
+            section.contains(
+                "**chore**: Vision \u{2192} Implementation \u{2192} Migration \u{2192} Operations"
+            ),
+            "{section}"
+        );
+        assert!(
+            section.contains("the first move also asks: statement"),
+            "{section}"
+        );
+        assert!(section.contains("leaves out: design"), "{section}");
+        let mut plain = config_of("togaf");
+        plain.paths.clear();
+        assert!(!working_agreement("p", &plain).contains("Lighter paths"));
+    }
+
+    #[test]
+    fn a_bad_path_is_refused_when_the_workflow_is_saved() {
+        let togaf = config_of("togaf");
+        let cases: [(&[&str], &str); 6] = [
+            (&["Vision", "Nowhere"], "'Nowhere' is not a status"),
+            (&["Vision", "No Action"], "'No Action' is a no-op"),
+            (
+                &["Vision", "Implementation", "Implementation"],
+                "'Implementation' is listed twice",
+            ),
+            (
+                &["Vision", "Implementation", "Business Arch"],
+                "Business Arch comes before Implementation",
+            ),
+            (&["Business Arch", "Implementation"], "must start at Vision"),
+            (&["Vision"], "needs at least two stages"),
+        ];
+        for (stages, expect) in cases {
+            let mut paths = BTreeMap::new();
+            paths.insert("chore".to_string(), chore_path(stages));
+            let (_, problems) = check_workflow(
+                togaf.statuses.clone(),
+                togaf.transitions.clone(),
+                Some(togaf.default_state.clone()),
+                Some(togaf.displayed_states.clone()),
+                Some(togaf.no_op_states.clone()),
+                Some(togaf.terminal_states.clone()),
+                togaf.gates.clone(),
+                paths,
+            );
+            let text: Vec<String> = problems.iter().map(|p| p.to_string()).collect();
+            assert!(
+                text.iter()
+                    .any(|t| t.contains("path 'chore'") && t.contains(expect)),
+                "{stages:?}: wanted {expect:?} in {text:?}"
+            );
+        }
+        // A good path, keyed in any case, is accepted and stored lower case.
+        let mut paths = BTreeMap::new();
+        paths.insert(
+            " Chore ".to_string(),
+            chore_path(&["Vision", "Implementation"]),
+        );
+        let (file, problems) = check_workflow(
+            togaf.statuses.clone(),
+            togaf.transitions.clone(),
+            None,
+            None,
+            Some(togaf.no_op_states.clone()),
+            None,
+            togaf.gates.clone(),
+            paths,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(file.paths.contains_key("chore"));
+    }
+
+    #[test]
+    fn a_board_without_paths_loads_and_saves_unchanged() {
+        let config = config_of("default");
+        let text = crate::yaml::to_string(&config).unwrap();
+        assert!(!text.contains("paths"), "{text}");
+        let file: WorkflowFile =
+            crate::yaml::from_str("statuses: [A, B]\ndefault_state: A\n").unwrap();
+        assert!(file.paths.is_empty());
+        assert!(!crate::yaml::to_string(&file).unwrap().contains("paths"));
+        // With paths, they round-trip and come back keyed in lower case.
+        let file: WorkflowFile = crate::yaml::from_str(
+            "statuses: [A, B]\ndefault_state: A\npaths:\n  Chore:\n    stages: [A, B]\n",
+        )
+        .unwrap();
+        let config = file.into_config("p");
+        assert!(config.paths.contains_key("chore"));
+        let again: ProjectConfig =
+            crate::yaml::from_str(&crate::yaml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(again.paths, config.paths);
+    }
+
     fn codes(default: Option<&str>, kinds: &[(&str, &str)]) -> CodesConfig {
         CodesConfig {
             default: default.map(str::to_string),
@@ -2298,6 +2769,17 @@ mod tests {
                 "{name}"
             );
             assert!(i.signoffs.contains(&"docs-folded".to_string()), "{name}");
+        }
+    }
+
+    /// FTR-023: a sign-off pins the spec when a gate that lists it also asks for spec sections.
+    #[test]
+    fn signoff_covers_spec_follows_the_gates_that_ask_for_spec_sections() {
+        for (name, _) in presets() {
+            let config = preset(name).unwrap().into_config("p");
+            assert!(config.signoff_pins_spec("design-review"), "{name}");
+            assert!(!config.signoff_pins_spec("docs-folded"), "{name}");
+            assert!(!config.signoff_pins_spec("nobody"), "{name}");
         }
     }
 

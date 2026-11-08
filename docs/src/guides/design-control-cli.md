@@ -244,6 +244,23 @@ FEAT-001 -> Released
 and no tag to cut.
 
 ```text
+
+### Chores
+
+A process can give a kind its own path. The built-in `design-control` process gives `chore` the path
+Planning → Design → Verification → Released, skipping Inputs, Review and Validation. `kanbanr process show design-control` lists each kind's path under
+"Lighter paths".
+
+```bash
+kanbanr feature add --title "Pin the CI image" --milestone MS-001 --kind chore
+```
+
+A chore's first move off Planning asks the path's own conditions (`statement`, `goals`,
+`requirements`, and `ears` where the path lists it) as well as the entered stage's gate, so it still
+records why it exists and how it is verified. A move to a stage off the path is refused, and the
+message names the path. The entered stage's gate still applies, `approved` and sign-offs included; the sign-offs at Review and Validation belong to stages a chore does not enter. The `design` and `design-review` parts do not apply. An item whose kind is changed to `chore` while it's at a
+stage off the path keeps the ordinary transitions, so it is never stranded.
+
 ## Released (1)
   - FEAT-001 Restore the cart [0/0]
 ```
@@ -273,6 +290,11 @@ A scope limits what an agent working in its own worktree may do, and kanbanr enf
 can record its own tasks and tests and commit on its item's branch. It can't move items, approve,
 give sign-offs or push. See
 [Sub-agents and agent scopes](../using/with-claude.md#sub-agents-and-agent-scopes).
+
+Stay in the project folder. Never `cd` into an agent's worktree: look inside with `git -C <path>`,
+`make -C <path>`, `npm --prefix <path>` or a subshell `(cd <path> && …)`. If your shell is already
+there, `cd` back to the project folder. Revoking a scope (`kanbanr scope revoke SC-…`) stops the
+agent on its next tool call and never restricts you.
 
 ## When things go wrong
 

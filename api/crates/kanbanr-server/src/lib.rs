@@ -61,6 +61,34 @@ pub async fn run(
     allow_writes: bool,
     code_repo: Option<(String, PathBuf)>,
 ) -> anyhow::Result<()> {
+    run_with(data_dir, bind, ui_dir, allow_writes, code_repo, false).await
+}
+
+/// `run`, with `remote_writes`: the person passed `--allow-remote-writes`. With writes on, a bind
+/// other machines can reach is refused before anything starts unless that flag or
+/// `KANBANR_ALLOW_REMOTE_WRITES` accepts it (DEF-026).
+pub async fn run_with(
+    data_dir: PathBuf,
+    bind: String,
+    ui_dir: Option<String>,
+    allow_writes: bool,
+    code_repo: Option<(String, PathBuf)>,
+    remote_writes: bool,
+) -> anyhow::Result<()> {
+    // Settings are read once, here, and checked where read (factor 3); every refusal comes before
+    // the monitor binds, watches or writes anything.
+    let from_env =
+        origin::accepted_from_env(std::env::var("KANBANR_ALLOW_REMOTE_WRITES").ok().as_deref())
+            .map_err(anyhow::Error::msg)?;
+    let accepted = remote_writes || from_env;
+    if let Some(text) =
+        origin::bind_refusal(&bind, allow_writes, accepted).map_err(anyhow::Error::msg)?
+    {
+        anyhow::bail!(text);
+    }
+    let origins =
+        origin::parse_origins(&std::env::var("KANBANR_ALLOWED_ORIGINS").unwrap_or_default())
+            .map_err(anyhow::Error::msg)?;
     std::fs::create_dir_all(data_dir.join("projects"))?;
     let store = Arc::new(Store::new(data_dir.clone()));
     let (tx, _rx) = broadcast::channel::<String>(256);
@@ -127,7 +155,7 @@ pub async fn run(
         .map(|h| h.trim().to_string())
         .filter(|h| !h.is_empty())
         .collect();
-    let guard = Arc::new(origin::Guard::new(&bind, &allowed));
+    let guard = Arc::new(origin::Guard::new(&bind, &allowed).with_origins(origins));
     let token = guard.token().to_string();
 
     let meta_dir = data_dir.clone();
@@ -251,8 +279,29 @@ pub async fn run(
 
     // Keep the watcher alive for the lifetime of the server.
     let _keep = _watcher;
+    if allow_writes && accepted && !origin::bind_is_loopback(&bind).map_err(anyhow::Error::msg)? {
+        let how = if remote_writes {
+            "--allow-remote-writes"
+        } else {
+            "KANBANR_ALLOW_REMOTE_WRITES"
+        };
+        eprintln!(
+            "kanbanr: WARNING writes are ON at {bind}, an address other machines can reach: anyone who can open the page can record decisions. You accepted this with {how}."
+        );
+    }
+    let accepted_from = if allow_writes {
+        let mut from: Vec<String> = guard
+            .hosts()
+            .iter()
+            .map(|h| format!("http://{h}"))
+            .collect();
+        from.extend(guard.origins().iter().cloned());
+        format!("\nwrites accepted from: {}", from.join(", "))
+    } else {
+        String::new()
+    };
     eprintln!(
-        "kanbanr view daemon on http://{bind}  (data: {})\nanswering for: {}",
+        "kanbanr view daemon on http://{bind}  (data: {})\nanswering for: {}{accepted_from}",
         data_dir.display(),
         guard.hosts().join(", ")
     );

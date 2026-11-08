@@ -27,11 +27,105 @@ All notable changes to kanbanr are documented here. The format follows
   (`docs/` and `*.md` unless `kanbanr config gate-docs` says otherwise), and the plan names the
   commit it came from; a failed result never carries. A release that is tagged and not shipped
   refuses the merge and points to a patch release.
+- **A decision records where it was taken, and a repeat records nothing (DEF-028).** Every approval,
+  ratification, sign-off and its withdrawal, decision, promotion, confirmation after the tag, patch
+  from a failed tag and cut now records its `origin`: `monitor` for a click on the monitor,
+  `conversation` for a command run inside a Claude Code session, `terminal` otherwise. The front end
+  names it; a request cannot. `feature show` ends each verdict line with it and `--json` carries
+  it; a record from an earlier version reads as origin unknown and is not rewritten. A release's cut
+  also records `shipped_by` and `shipped_origin`, and a decision `decided_origin`. The same
+  approval, ratification or sign-off repeated on text that has not changed records nothing, with no
+  activity entry, event or commit, and answers with `already_recorded` saying who recorded it first,
+  when and from where; a decision, promotion or cut asked for twice is refused and now says the
+  same. Release stage changes keep keys they do not know: a kanbanr older than this one that
+  rewrites `releases.yaml` drops `origin` from them.
+- **A scope issued with `--worktree` no longer tells its agent to claim it (DEF-023).** The scope
+  is bound at once, so the brief's claim step was refused when the agent ran it. A bound scope's
+  brief now says which worktree it is bound to and the branch it is on, and that nothing needs
+  claiming; an unbound scope's brief is unchanged.
+- **The monitor refuses to start with writes on at an address other machines can reach (DEF-026).**
+  Accept it with `--allow-remote-writes` or `KANBANR_ALLOW_REMOTE_WRITES`; `KANBANR_ALLOWED_ORIGINS`
+  lets a write come from an https origin through a proxy you name.
+- **A scope binds the agent it was issued to, not whoever stands in its folder (DEF-027).** The
+  coordinator's shell was trapped once it entered an agent's worktree, and revoking the scope
+  trapped it further. A process outside Claude Code is a person, a hook call without an `agent_id`
+  is the coordinator's, and one with an `agent_id` is that agent's; scopes govern agents only. A
+  revoked or expired scope stops its agent's next tool call and frees every other shell. The Bash
+  guard keeps the coordinator out of agents' worktrees and names the way out (`git -C <path>`),
+  test capture finds its board from the project folder and records the coordinator's runs, and
+  `kanbanr scope issue` needs the Claude Code hooks that tell the two apart (`kanbanr hooks install`).
+- **A scope's brief allows temporary boards, and the guard now lets an agent use one (DEF-015).**
+  Every brief said "Tests: temporary boards only", but the Bash guard refused `--data-dir`,
+  `KANBANR_DATA_DIR`, `KANBANR_PROJECT` and `cd $TMPDIR/…` for any board, so agents could not walk a
+  process through on a throwaway one. One rule in core now decides what a temporary board is (a
+  folder under the temporary directory that holds no agent scope); the guard, the brief and the
+  board-governing check all use it. A real board, a copy of it (it holds scopes), a link to it and a
+  path the guard cannot resolve stay refused, and the refusal and the brief name the form to use.
+  `$TMPDIR` cannot be reassigned in a command.
+
+### Added
+
+- **TOGAF fits sprints and releases without changing it (FTR-025).** Migration counts as done for a
+  sprint, so closing a sprint carries over only unmerged work. A project's sprints, releases, release
+  stages, branches, git model, release gates and prepare steps no longer make it a different process.
+- **Setup leaves no sprint or release you didn't need (FTR-022).** Setup now asks sprints and
+  releases as one question, with no length, dates, capacity or version, and creates neither; the
+  first is made when you ask for it. It reads the project's name and description from the README or
+  manifest, asks for the commit identity once for the board and the repository, asks for the
+  charter as one confirmation, and asks once whether the project has CI. A sprint that has not
+  started can be changed (`kanbanr sprint edit`), and an empty unstarted sprint or release can be
+  removed (`kanbanr sprint remove`, `kanbanr release remove`, and a Remove button on the Releases
+  page).
+- **Chores take a lighter path through a process (FTR-019).** A process can give a work kind its own
+  `paths`: the stages an item of that kind passes through, the conditions its first move asks, and
+  the method parts that do not apply to it. The built-in TOGAF, Scrum, agile and design-control
+  processes give chores one, so a chore no longer goes through stages whose questions do not fit it,
+  while it still records why it exists and how it is verified, and still needs your approval and
+  sign-offs. Other kinds and boards without `paths` behave as before. A process file with `paths`
+  needs this version; an older kanbanr does not know the key.
+- **Release and install builds are locked, and releases carry SBOMs and attestations (MNT-004).**
+  Every release, image and install build now passes `--locked` to cargo and uses `npm ci`, and
+  `scripts/check_supply_chain.py` fails CI on any that does not. Each release attaches two
+  CycloneDX SBOMs (Rust and monitor npm dependencies, listed in `SHA256SUMS`; `make sbom` builds
+  them locally) and a build-provenance attestation for every asset and the image, with the image
+  also carrying the builder's SBOM and provenance; setting the repository variable
+  `ATTEST_RELEASE=false` skips the attestations and says so in the release notes. The Docker smoke
+  test drives the `docker` CLI directly, so `testcontainers` and its advisory exception
+  (RUSTSEC-2026-0440) are gone.
+## [0.5.1] - 2026-11-08
+
+### Fixed
+
+- **The monitor answers its own page on a published port (DEF-032).** v0.5.0 counted `localhost`,
+  `127.0.0.1` and `[::1]` only on the port the monitor is bound to, so the documented Docker setup,
+  which publishes 8080 as 18080, got a 403 on every page. Those three names are now answered on any
+  port; every other host is checked exactly as before.
 
 ## [0.5.0] - 2026-11-06
 
 ### Added
 
+- **An approval lapses only when the text you approved changes (FTR-018).** Adding to a definition
+  no longer lapses its approval: each approval, ratification and sign-off now records a hash per
+  part of the definition (`parts`), and an approval whose parts are all unchanged but which gained
+  new ones reads `extended`. Before the build stage the additions wait for the next decision, such
+  as `design-review`, which reviews them; from the build stage on a gate that asks for no sign-off
+  refuses the move and names the additions, and the Review page lists the item as `added`. Changing
+  or removing approved text still lapses it. The Review page shows the parts added or changed
+  first, with the approved text collapsed. Additive to the API: the `extended` approval state, the
+  `added` review entry, `changes` on review entries and `parts` on approvals and sign-offs.
+  Records from an older kanbanr have no parts and lapse on any change, as before.
+
+- **A changed design comes back for sign-off (FTR-023).** A sign-off whose gate asks for spec
+  sections, such as `design-review`, now records a hash of the whole spec it was given on (`spec_rev`)
+  and keeps the text under `pins/`. If the spec changes afterwards, even outside `## Design`, the
+  sign-off reads changed since sign-off, and the item returns to the Review page as `spec_changed`
+  with a line diff against the kept text; signing again pins the new text. Whitespace at line ends,
+  line endings and outer blank lines don't count as changes. `kanbanr signoff --spec-rev` and the
+  sign-off route refuse a sign-off given on a spec that moved on after it was shown. Additive to the
+  API: the `spec_changed` review entry, `spec_rev` and `spec` on review entries, and `spec_rev` on
+  sign-offs. The guide sentence that a sign-off doesn't lapse when the design changes is replaced.
+  An older kanbanr on the same board ignores `spec_rev` and reads such a sign-off as current.
 - **Turning releases on gives release stages that each do something (FTR-020).** A project that
   turns releases on, and names no stages and declares no stage gate, now gets `candidate` (branch
   and prepare), `main` (move main once the items are finished) and `tag` (the cut, needing main at
@@ -1345,7 +1439,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/startr-trade/kanbanr/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/startr-trade/kanbanr/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/startr-trade/kanbanr/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/startr-trade/kanbanr/compare/v0.2.1...v0.3.0

@@ -1,14 +1,23 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Link } from "react-router-dom";
-import { api } from "../api";
+import { alreadySaid, api } from "../api";
 import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
 import { zachmanColumns } from "../types";
-import type { Adr, PendingReview, PlannedRelease } from "../types";
+import type { Adr, PendingReview, PlannedRelease, SpecBrief } from "../types";
 import { approveBlocker, checkBlocks, type DiagramProblem } from "../diagramCheck";
+
+/**
+ * What to show once a verdict went through. A repeat of the latest verdict records nothing; the
+ * answer then says who recorded it first and from where, and that replaces "approved" (DEF-028).
+ */
+function alreadyOr(answer: unknown, done: string): string {
+  const said = alreadySaid(answer);
+  return said ? `already ${said}` : done;
+}
 
 /**
  * What is waiting for agreement, and the one action that gives it (FEAT-067).
@@ -63,11 +72,11 @@ export default function ReviewPage() {
       if (item.approval === "unratified") {
         // Pinned to the definition this page showed (FEAT-159): if it changed meanwhile, the
         // daemon refuses rather than recording a yes to text nobody read.
-        await api.ratify(project, code, who, item.rev ?? "");
-        setDone((d) => ({ ...d, [code]: "ratified" }));
+        const answer = await api.ratify(project, code, who, item.rev ?? "");
+        setDone((d) => ({ ...d, [code]: alreadyOr(answer, "ratified") }));
       } else {
-        await api.approve(project, code, who, item.rev ?? "");
-        setDone((d) => ({ ...d, [code]: "approved" }));
+        const answer = await api.approve(project, code, who, item.rev ?? "");
+        setDone((d) => ({ ...d, [code]: alreadyOr(answer, "approved") }));
       }
     } catch (e) {
       setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
@@ -96,8 +105,8 @@ export default function ReviewPage() {
     const code = item.code;
     setBusy(code);
     try {
-      await api.signoff(project, code, name, who, item.rev ?? "");
-      setDone((d) => ({ ...d, [code]: `signed off ${name}` }));
+      const answer = await api.signoff(project, code, name, who, item.rev ?? "", item.spec_rev ?? "");
+      setDone((d) => ({ ...d, [code]: alreadyOr(answer, `signed off ${name}`) }));
     } catch (e) {
       setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
     } finally {
@@ -146,13 +155,14 @@ export default function ReviewPage() {
       ) : items.length === 0 ? (
         <p className="muted">
           Nothing is waiting for agreement. An item appears here when its definition has never been
-          approved, or when the definition changed after a yes — which lapses the approval rather
-          than silently keeping it.
+          approved, or when approved text was changed or removed, which lapses the approval, or when
+          text was added once the item is being built.
         </p>
       ) : (
         <p className="muted">
           {items.length} item{items.length === 1 ? "" : "s"} waiting. Approving records agreement
-          pinned to the definition below: change it afterwards and the approval lapses.
+          pinned to the definition below: change or remove approved text afterwards and the approval
+          lapses; added text is reviewed at the next decision.
           {items.some((i) => i.approval === "unratified")
             ? " Work already finished under a recorded bypass is listed first, to ratify."
             : null}
@@ -372,6 +382,75 @@ function problemHref(project: string, code: string, p: DiagramProblem): string {
     : `/p/${enc(project)}/feature/${enc(code)}`;
 }
 
+/** Context kept around each change, and the shortest run of unchanged lines worth folding (FTR-023). */
+const DIFF_CONTEXT = 2;
+
+type DiffRow = { op: "same" | "added" | "removed" | "fold"; text: string };
+
+/** The changed lines with two lines of context; each longer unchanged run folds to a count. */
+function foldDiff(diff: SpecBrief["diff"]): DiffRow[] {
+  const rows: DiffRow[] = [];
+  let i = 0;
+  while (i < diff.length) {
+    if (diff[i].op !== "same") {
+      rows.push(diff[i]);
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < diff.length && diff[j].op === "same") j++;
+    const run = diff.slice(i, j);
+    const head = i === 0 ? 0 : DIFF_CONTEXT;
+    const tail = j === diff.length ? 0 : DIFF_CONTEXT;
+    if (run.length > 4) {
+      rows.push(...run.slice(0, head));
+      const hidden = run.length - head - tail;
+      rows.push({ op: "fold", text: `… ${hidden} unchanged ${hidden === 1 ? "line" : "lines"}` });
+      rows.push(...run.slice(run.length - tail));
+    } else {
+      rows.push(...run);
+    }
+    i = j;
+  }
+  return rows;
+}
+
+/** The spec a sign-off pins: only what changed since the last sign-off, the whole spec on request. */
+function SpecDiff({ spec, changed }: { spec: SpecBrief; changed: boolean }) {
+  const whole = <Markdown source={spec.text} />;
+  if (spec.diff.length > 0) {
+    return (
+      <div className="spec-diff">
+        <h3>The spec, changed since sign-off</h3>
+        <pre className="diff">
+          {foldDiff(spec.diff).map((r, n) => (
+            <div key={n} className={`diff-${r.op}`} style={{ color: r.op === "added" ? "var(--ok, #1a7f37)" : r.op === "removed" ? "var(--bad, #cf222e)" : undefined }}>
+              {r.op === "added" ? "+ " : r.op === "removed" ? "− " : "  "}
+              {r.text}
+            </div>
+          ))}
+        </pre>
+        <details>
+          <summary>Show the whole spec</summary>
+          {whole}
+        </details>
+      </div>
+    );
+  }
+  return (
+    <div className="spec-diff">
+      <h3>The spec this sign-off covers</h3>
+      {changed && !spec.previous_kept ? (
+        <p className="muted small">
+          The text signed off on {spec.signed_at.slice(0, 10)} wasn't kept on this board (it was signed before
+          kanbanr kept it), so the whole spec is shown.
+        </p>
+      ) : null}
+      {whole}
+    </div>
+  );
+}
+
 function Brief({
   project,
   item,
@@ -405,6 +484,8 @@ function Brief({
   const dimensions = zachmanColumns(def.zachman).filter((d) => d.answer.trim());
   const ratify = item.approval === "unratified";
   const waitingOnSignoff = item.approval === "signoff";
+  // The design was signed off, then the spec changed (FTR-023): signing again is the answer.
+  const specChanged = item.approval === "spec_changed";
   // Ready for release and in none (FEAT-185); asked beside any other question this item has.
   const releaseChoices = item.release_choices;
   const whichRelease = item.approval === "release";
@@ -412,48 +493,20 @@ function Brief({
   const approved =
     outcome === "approved" ||
     outcome === "ratified" ||
+    (outcome ?? "").startsWith("already ") ||
     (outcome ?? "").startsWith("signed off") ||
     (outcome ?? "").startsWith("planned into");
   const signoffs = item.signoffs_needed ?? [];
   const diagrams = useDiagramCheck(project, item.code, tick);
   const blocker = approveBlocker(diagrams);
 
-  return (
-    <details className="review-item" id={item.code} open={defaultOpen}>
-      {/* The summary is the row you scan; the brief is what you expand to read. */}
-      <summary>
-        <code className="taskkey">{item.code}</code>
-        <span className="review-title">{item.title}</span>
-        <span className={`chip ${item.approval === "missing" ? "" : "warn"}`}>
-          {ratify
-            ? `${item.status} without agreement`
-            : waitingOnSignoff
-              ? `waiting on sign-off: ${signoffs.join(", ")}`
-              : whichRelease
-                ? "ready for release: which one?"
-              : item.approval === "lapsed"
-                ? item.finished
-                  ? `${item.status}: approval lapsed`
-                  : "approval lapsed"
-                : "never approved"}
-        </span>
-        {approved ? <span className="chip done">{outcome}</span> : null}
-      </summary>
-
-      <div className="review-body">
-      <p className="muted small">
-        <Link to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(item.code)}`}>
-          open {item.code}
-        </Link>
-        {item.approval === "lapsed"
-          ? ` · approved once, then the definition changed — agreeing again covers what it says now${
-              item.finished ? ". The work is done." : ""
-            }`
-          : ratify
-            ? " · built under a recorded bypass — ratifying agrees to it after the fact, and the record says so"
-            : null}
-      </p>
-
+  // Parts added or changed since the last decision lead; the rest is collapsed (FTR-018).
+  const changes =
+    item.changes && (item.changes.added.length > 0 || item.changes.changed.length > 0 || item.changes.removed.length > 0)
+      ? item.changes
+      : undefined;
+  const definitionBody = (
+    <>
       {def.statement ? <Markdown source={`> ${def.statement}`} /> : null}
       {(def.goals ?? []).length > 0 && (
         <div className="tile-states">
@@ -508,6 +561,78 @@ function Brief({
           ))}
         </div>
       )}
+    </>
+  );
+
+  return (
+    <details className="review-item" id={item.code} open={defaultOpen}>
+      {/* The summary is the row you scan; the brief is what you expand to read. */}
+      <summary>
+        <code className="taskkey">{item.code}</code>
+        <span className="review-title">{item.title}</span>
+        <span className={`chip ${item.approval === "missing" ? "" : "warn"}`}>
+          {ratify
+            ? `${item.status} without agreement`
+            : waitingOnSignoff
+              ? `waiting on sign-off: ${signoffs.join(", ")}`
+              : whichRelease
+                ? "ready for release: which one?"
+              : specChanged
+                ? item.finished
+                  ? `${item.status}: spec changed since sign-off`
+                  : "spec changed since sign-off"
+              : item.approval === "added"
+                ? item.finished
+                  ? `${item.status}: added since approval`
+                  : "added since approval"
+              : item.approval === "lapsed"
+                ? item.finished
+                  ? `${item.status}: approval lapsed`
+                  : "approval lapsed"
+                : "never approved"}
+        </span>
+        {approved ? <span className="chip done">{outcome}</span> : null}
+      </summary>
+
+      <div className="review-body">
+      <p className="muted small">
+        <Link to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(item.code)}`}>
+          open {item.code}
+        </Link>
+        {specChanged
+          ? ` · signed off by ${item.spec?.signed_by ?? ""} on ${(item.spec?.signed_at ?? "").slice(0, 10)}; since then the spec changed. Signing again covers it as it stands now.`
+          : item.approval === "added"
+          ? " · approved once; since then text was only added. Approving again covers what it says now."
+          : item.approval === "lapsed"
+          ? ` · approved once, then the definition changed — agreeing again covers what it says now${
+              item.finished ? ". The work is done." : ""
+            }`
+          : ratify
+            ? " · built under a recorded bypass — ratifying agrees to it after the fact, and the record says so"
+            : null}
+      </p>
+
+      {changes ? (
+        <Changes
+          item={item}
+          changes={changes}
+          heading={
+            waitingOnSignoff
+              ? "Also reviewed by this sign-off: added since approval"
+              : "Since your last decision"
+          }
+        />
+      ) : null}
+      {changes ? (
+        <details className="review-unchanged">
+          <summary>The approved text, unchanged</summary>
+          {definitionBody}
+        </details>
+      ) : (
+        definitionBody
+      )}
+
+      {item.spec ? <SpecDiff spec={item.spec} changed={specChanged} /> : null}
 
       {diagrams.failed || diagrams.problems.length > 0 ? (
         <div className="diagram-problems">
@@ -533,7 +658,7 @@ function Brief({
           <span className="chip done">{outcome} — it leaves this list on the next refresh</span>
         ) : writable ? (
           <>
-            {waitingOnSignoff || whichRelease ? null : (
+            {waitingOnSignoff || specChanged || whichRelease ? null : (
               <button
                 className="btn btn-primary"
                 onClick={onApprove}
@@ -546,7 +671,7 @@ function Brief({
             {signoffs.map((name) => (
               <button
                 key={name}
-                className={`btn ${waitingOnSignoff ? "btn-primary" : ""}`}
+                className={`btn ${waitingOnSignoff || specChanged ? "btn-primary" : ""}`}
                 onClick={() => onSignoff(name)}
                 disabled={busy}
               >
@@ -621,5 +746,64 @@ function Brief({
       </div>
       </div>
     </details>
+  );
+}
+
+/** The text of one definition part, by its key (FTR-018): `statement`, `goals/<id>`,
+ * `zachman/<column>`, `requirements/<id>` and `requirements/<id>/tests/<name>`. */
+function partText(def: NonNullable<PendingReview["definition"]>, key: string): string {
+  if (key === "statement") return def.statement ?? "";
+  if (key.startsWith("goals/")) return key.slice("goals/".length);
+  if (key.startsWith("zachman/")) {
+    const column = key.slice("zachman/".length);
+    const found = zachmanColumns(def.zachman).find((d) => d.column.toLowerCase() === column);
+    return found ? `${found.column}. ${found.answer}` : column;
+  }
+  if (key.startsWith("requirements/")) {
+    const rest = key.slice("requirements/".length);
+    // A test's name may hold "/", so split on the tests marker and never on every slash.
+    const at = rest.indexOf("/tests/");
+    const id = at < 0 ? rest : rest.slice(0, at);
+    const requirement = (def.requirements ?? []).find((r, i) => (r.id || `#${i}`) === id);
+    if (at < 0) return requirement ? `${requirement.id} ${requirement.text}` : id;
+    const name = rest.slice(at + "/tests/".length);
+    const test = (requirement?.tests ?? []).find((t) => t.name === name);
+    return test ? `${id} test ${test.name}${test.kind ? ` (${test.kind})` : ""}` : name;
+  }
+  return key;
+}
+
+/** What was added or changed since the last decision, first on the brief (FTR-018). */
+function Changes({
+  item,
+  changes,
+  heading,
+}: {
+  item: PendingReview;
+  changes: NonNullable<PendingReview["changes"]>;
+  heading: string;
+}) {
+  const def = item.definition ?? {};
+  return (
+    <div className="review-changes">
+      <h3>{heading}</h3>
+      <ul className="dep-list">
+        {changes.added.map((k) => (
+          <li key={`a-${k}`}>
+            <span className="chip tasks">added</span> {partText(def, k)}
+          </li>
+        ))}
+        {changes.changed.map((k) => (
+          <li key={`c-${k}`}>
+            <span className="chip warn">changed</span> {partText(def, k)}
+          </li>
+        ))}
+        {changes.removed.map((k) => (
+          <li key={`r-${k}`}>
+            <code>{k}</code> removed
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
