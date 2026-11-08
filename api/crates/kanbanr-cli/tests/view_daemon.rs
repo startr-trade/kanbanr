@@ -1007,6 +1007,13 @@ fn release_scratch(base: &std::path::Path) -> (PathBuf, PathBuf, PathBuf) {
         board.display()
     );
     run(&["config", "cadence", "--releases", "on"]);
+    // The four stages the expectations assume, not the recommended ones (FTR-020).
+    run(&[
+        "config",
+        "cadence",
+        "--release-stages",
+        "candidate,test,staging,production",
+    ]);
     run(&["release", "add", "v1.0.0"]);
     // A release with nothing planned into it is never promoted (FEAT-212 R-17): one finished item.
     run(&["milestone", "add", "--name", "M", "--code", "MS-001"]);
