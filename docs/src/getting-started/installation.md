@@ -175,7 +175,10 @@ docker run --rm -p 8080:8080 -v "$(kanbanr where)":/data ghcr.io/startr-trade/ka
 ```
 
 The image is the same binary in serve mode, with the board mounted at `/data`. It is read-only and
-unauthenticated: expose it beyond localhost only behind a reverse proxy you control.
+unauthenticated: expose it beyond localhost only behind a reverse proxy you control. If you add
+`--allow-writes`, the image binds a reachable address, so it also needs `--allow-remote-writes` (or
+`-e KANBANR_ALLOW_REMOTE_WRITES=1`); to take writes through a TLS proxy, pass
+`-e KANBANR_ALLOWED_ORIGINS=https://board.example.com` as well.
 
 ## Staying current
 
