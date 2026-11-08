@@ -674,8 +674,21 @@ branches; fix it before going on.
   first stage makes `release/<V>` and the last, production, is the cut: kanbanr brings main up to
   the release (a fast-forward, refused with nothing changed if main has commits the release lacks)
   and tags the version.
+- Stages can follow the tag (`tag_passed`): the stage holding `tag` is the cut and ships nothing;
+  each later stage is the user's confirmation (`kanbanr release promote <V> --note …`, or the
+  Releases page), and the last one ships. **Report where the release is and what the tag's CI
+  result is; never confirm a stage, start a patch from a failed tag, or record the result for the
+  user.** Those are their verdicts.
+- Turning releases on (`kanbanr config cadence --releases on`) with no stages named gives
+  `candidate`, `main` and `tag` with their gates; `--has-ci on` makes `tag` also require a passed
+  `ci` result. A board that already had releases on keeps `candidate, test, staging, production`,
+  where `test` and `staging` do nothing: configuring a stage that has no condition and no action
+  prints a warning and `kanbanr release stages` marks it `does nothing`. Tell the user; don't
+  remove the stage for them. `kanbanr config cadence --release-stages candidate,main,tag` moves an old board to
+  the three.
 - Stages can act (`kanbanr release stages`, `kanbanr config release-stage`): each may require
-  `items_finished`, `prepared`, `main_at_release`, `pushed`, and do `branch`, `prepare`,
+  `items_finished`, `prepared`, `main_at_release`, `pushed`, `items_merged` (every planned item at the integrate
+  stage or later), or name earlier stages in `--after` (the release must have been promoted into each), and do `branch`, `prepare`,
   `move_main`, `tag` on entry. A refusal lists every missing condition with its fix; nothing changed.
 - **A release prepares itself.** The stage with `prepare` commits the version files, the dated
   changelog heading and a notes draft onto `release/<V>` (`kanbanr config release-prepare`). Never
@@ -695,6 +708,11 @@ branches; fix it before going on.
   promotion itself, the cut included, is theirs, on the Releases page. **The user pushes main and
   the tag**, by hand; a cut that requires
   `pushed` waits until main is pushed (and CI has run on it).
+- **A CI result is the user's to record.** A stage that requires `gate_passed` needs a recorded
+  passed result for the release tip. kanbanr never asks a server; the user looks at their CI and
+  records the verdict on the Releases page (or `kanbanr gate record <gate> --passed`). When it is
+  missing, say what the plan names and where to record it. **Never run `kanbanr gate record`
+  yourself**, and never pass it a verdict you did not see.
 - A patch is `kanbanr release add <V> --patch-of <P>`: `release/<V>` is made from `<P>`'s tag. A fix
   integrated into a release branch reaches the line through `kanbanr git forward <V>`, which the
   move says is needed; it is never done for you.
@@ -969,6 +987,9 @@ Treat kanbanr updates as part of doing the work, not an afterthought:
   `green` once they actually pass, update the **specification** and any **documentation**
   affected, and **move** the feature's status as appropriate. When every task
   across all of a feature's todo-lists is Completed it auto-advances to "Completed".
+  On a project with releases, an item planned into a release that has not been cut stays where it
+  is, however its last task or sign-off arrives: the cut moves it to its end status. A move of your
+  own to an end status needs a `--override "<reason>"`.
 - **Before merging a sprint or cutting a release**, run `kanbanr doctor` and fix every coverage
   rule it lists, so the architecture views describe everything that ships.
 
@@ -1141,16 +1162,17 @@ kanbanr sprint start SP-001 | show [SP-001] | list | close SP-001 --carry-to SP-
 kanbanr retro --sprint SP-001                     # the sprint's items, what it carried, its burndown
 kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # the user's, on the monitor; refused when Claude runs it. Ship the finished items, write notes, carry the rest
-kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # the user's, on the monitor; refused when Claude runs it (so is each stage confirmed after the tag). Next or named stage, doing what its gates say (default candidate → test → staging → production: the first makes release/<V>; the last is the cut — fast-forwards main and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
+kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # the user's, on the monitor; refused when Claude runs it (so is each stage confirmed after the tag). Next or named stage, doing what its gates say (default candidate → main → tag: the first makes release/<V>, main fast-forwards main, the stage holding `tag` is the cut and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
 kanbanr release promote v0.1.0 [<stage>] --plan [--fetch]  # what it would do and still needs; changes nothing
+kanbanr gate list [--name ci] [--commit REV]   # recorded gate results, newest first (reading is yours; `gate record` is the user's)
 kanbanr release redate v0.1.0                     # date the notes and changelog today, before the cut
 kanbanr release notes v0.1.0 [--file F | --edit]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut
 kanbanr release stages                            # each stage: requires, on_enter, declared or default
-kanbanr config release-stage main --requires items_finished --on-enter move_main [--clear]
+kanbanr config release-stage main --requires items_finished --on-enter move_main [--after ci] [--clear]
 kanbanr config release-prepare --version-file api/Cargo.toml --changelog CHANGELOG.md --notes 'docs/src/releases/{version}.md'
 kanbanr config release-prepare --version-file 'api/Cargo.lock=name = "a"\nversion = "{version}"' --version-file 'api/Cargo.lock=name = "b"\nversion = "{version}"'   # one file, several entries, each applied
 kanbanr release add v0.1.1 --patch-of v0.1.0      # a patch: release/v0.1.1 from v0.1.0's tag, at the first stage
-kanbanr config cadence --release-stages candidate,qa,live [--integration-branch develop] [--main-branch main]
+kanbanr config cadence --release-stages candidate,qa,live [--integration-branch develop] [--main-branch main] [--has-ci on]
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a shipped release
 kanbanr config workflow --export > process.yaml   # this project's workflow, gates included
 kanbanr process check process.yaml|-              # check a process without applying it (- reads stdin): every problem, then its agreement and diagram

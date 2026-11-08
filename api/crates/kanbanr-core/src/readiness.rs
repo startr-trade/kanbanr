@@ -320,6 +320,9 @@ pub struct Context {
     /// What the coverage rules' source docs reference (FEAT-197), read only when the project has
     /// rules and some gate asks for `docs_cover`.
     pub coverage: Option<std::sync::Arc<crate::coverage::Snapshot>>,
+    /// The versions of the releases not yet cut, when the project works in releases (DEF-019).
+    /// An item planned into one waits for the cut before it reaches its end status.
+    pub unshipped_releases: std::collections::BTreeSet<String>,
     /// The board's git history, shared by every doc judged in this evaluation (DEF-022): opened
     /// and walked once, on the first doc. Make a new `Context` per evaluation; nothing outlives it.
     pub history: std::sync::Arc<crate::git::DocHistory>,
@@ -339,6 +342,18 @@ impl Context {
             },
             docs_dir: Some(store.project_dir(id).join("docs")),
             coverage: Self::coverage(store, id, config),
+            unshipped_releases: if config.cadence.releases {
+                crate::releases::load(store, id)
+                    .map(|rs| {
+                        rs.into_iter()
+                            .filter(|r| r.state != crate::releases::ReleaseState::Shipped)
+                            .map(|r| r.version)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Default::default()
+            },
             history: Default::default(),
         }
     }
@@ -722,7 +737,7 @@ pub fn next_gates(
 
 /// The gate of the stage an item reaches next in the workflow's own order (FEAT-182): of the
 /// stages it can move to in one step, the earliest. A workflow that lets an item skip ahead
-/// (Implementation → Operations) still has one next stage, and only its sign-offs are due.
+/// (a stage that skips ahead) still has one next stage, and only its sign-offs are due.
 pub fn immediate_next_gate(
     project: &crate::store::Project,
     charter: Option<&crate::Charter>,
@@ -1643,6 +1658,25 @@ mod tests {
             Some(&serde_json::json!({"preset": "togaf"})),
         )
         .unwrap();
+        // The preset has no move from Implementation to Operations (DEF-019); these cards are
+        // about a workflow that lets an item skip ahead, so add that move back.
+        let cfg = store.load("demo").unwrap().config;
+        let mut transitions = cfg.transitions.clone();
+        transitions
+            .get_mut("Implementation")
+            .unwrap()
+            .push("Operations".into());
+        store
+            .set_workflow(
+                "demo",
+                cfg.statuses.clone(),
+                transitions,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
         store
             .add_milestone("demo", "M", "", vec![], Some("M".into()))
             .unwrap();

@@ -45,16 +45,30 @@ the process, the branches it will use and where each one merges. **Accepting the
 Ask for the things that make the rest of this guide work:
 
 > Agree a charter with me first, then set up release stages so that main has to be pushed before
-> anything is tagged. Use only candidate, main and production.
+> anything is tagged.
 
 **Do the charter first.** Gates aren't enforced until a project has one, and items created before it
 are exempt. Without one, a move that a gate would have refused still goes through, with a warning
 saying what was missing. Claude asks for the project's purpose and goals. Every item then links to a goal.
 
-**CI is yours to check.** kanbanr can see that main was pushed, but it can't see whether CI passed, so
-you look at CI yourself before the cut.
+**Releases can have stages after the tag.** The tag only says which commit the release is. Stages
+after it, such as staging or production, are for you to confirm once you have seen the release
+work there. The release ships, and its items reach their last status, when you confirm the last
+one. If CI fails on the tag, record the failed result and choose **Start a patch release**: Claude
+files the defect with the run's link and your notes, and the failed release is marked superseded.
+Claude tells you where the release is and never confirms a stage for you.
 
-**Name the stages you want.** Otherwise you get the defaults, which include `test` and `staging`.
+**You record CI's verdict.** kanbanr can see that main was pushed, but it never asks a server whether
+CI passed. You look at CI yourself, then record what it said on the **Releases** page (**Record
+result**, with a link to the run if you like). A release stage can require that result before the
+cut. Claude tells you when it is missing and never records it for you.
+
+**The stages are candidate, main and tag.** A project that turns releases on gets these three, each
+doing something: candidate prepares the release, main moves main once the items are finished, and tag
+cuts the release once main is pushed. If you have CI, say so and the tag waits for your recorded
+result. Ask for other stages only if you have a pipeline behind them. Releases on a board made before
+this keep the four they had, `test` and `staging` among them. Those two do nothing, and Claude says so
+when you configure them.
 Those two record that a release passed a point and do nothing else: nothing builds or deploys when
 you promote to them. Add them when you have a pipeline and environments behind them.
 
@@ -98,7 +112,7 @@ gate. When something's missing, Claude either drafts it or brings it to you.
 | **System Design** | Proposes how and where, and checks that against the requirements | **Approve** again, because the definition grew |
 | **Implementation** | Writes the design and its task list, and names a test for each requirement | **Approve** again, then **Sign off design-review** |
 | **Migration** | Builds on the item's branch, runs the tests and updates the docs | **Sign off docs-folded**, which appears once the docs are updated |
-| **Operations** | Nothing: your sign-off or the cut moves it here | **Sign off release** |
+| **Operations** | Nothing: the cut moves it here | **Sign off release** |
 
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
@@ -115,9 +129,9 @@ what changed, then approve again.
 **A sign-off doesn't lapse when the design changes.** Changing the design in the item's spec leaves
 **design-review** standing, so ask Claude to bring you any corrections it makes during the build.
 
-**Operations doesn't mean shipped yet.** Once all an item's tasks are done, **Sign off release** moves
-it to Operations straight away, even though the phase says "Released and running". The **Releases**
-page tells you what has shipped.
+**Operations means shipped.** **Sign off release** records your sign-off and leaves the item where it
+is. The item moves to Operations when the release it is planned into is cut. The **Releases** page
+tells you what has shipped.
 
 **Just ask to move it on:**
 
@@ -142,8 +156,8 @@ it finishes, Claude reviews the branch and brings you any decisions.
 
 ## Releasing
 
-Start once every item in the release has reached Migration. **Promote to candidate** is offered as
-soon as the release holds an item, even while work is still going on.
+Start once every item in the release has reached Migration. **Promote to candidate** is offered once
+every item in the release has reached Migration, and the Releases page lists any that has not.
 
 Follow this order and you won't have to go back:
 
@@ -156,7 +170,7 @@ Follow this order and you won't have to go back:
 | 5 | You | **Review** page: **Sign off release** on each item, if you haven't already |
 | 6 | You | **Releases** page: **Promote to main**. This moves main to the release, without tagging |
 | 7 | You | Terminal: `git push origin main`, then wait for CI to go green |
-| 8 | You | **Releases** page: **Check again**, then, with CI green, **Cut v0.1.0**. This tags main and moves any item not already there to Operations |
+| 8 | You | **Releases** page: **Check again**, then, with CI green, **Cut v0.1.0**. This tags main. If your stages continue after the tag, the page shows the result you recorded for it; when it is green, **Confirm** each later stage with a note of what you checked. Confirming the last one moves any item not already there to Operations |
 | 9 | You | Terminal: `git push origin v0.1.0`, then wait for the release workflow |
 | 10 | Claude | Say "The release is out. Bring it forward into the sprint" |
 
@@ -209,7 +223,7 @@ because new items branch from the running sprint.
 | An item is back on the Review page | Its definition changed after you approved it | Read the change, then **Approve** again |
 | An item says it's waiting for a sign-off, but the Review page has nothing | A sign-off appears once the stage's other requirements are met | Ask Claude what's left. It's often the docs |
 | An item goes to the backlog when a sprint closes | It's merged but not done for that sprint | Ask Claude to plan it into the next sprint, or count Migration as done |
-| A promotion says an item would carry over | It can't reach Operations yet | Do what the page says, usually **Sign off release** |
+| A promotion says an item would carry over | It can't reach Operations yet | Do what the page says, usually **Sign off release**; the cut then moves it |
 | **Cut** stays greyed out after you pushed | The page hasn't read the push yet | **Check again** |
 | Your remote server rejects your first push, naming a permission | Your sign-in can't change some files yet, often your CI's own files | Ask Claude what the message means, then grant it and push again |
 | A defect in a shipped release | It needs its own fix | Ask Claude for a patch release, and see [Patch releases](../using/processes.md#patch-releases) |

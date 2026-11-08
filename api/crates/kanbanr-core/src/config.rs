@@ -430,6 +430,18 @@ pub struct Cadence {
         skip_serializing_if = "crate::releasegates::ReleasePrepare::is_empty"
     )]
     pub release_prepare: crate::releasegates::ReleasePrepare,
+    /// The gates (`ci`, `local`, ...) a release stage needing `gate_passed` requires a passed
+    /// result of for the release tip (FTR-002). Empty by default.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commit_gates: Vec<String>,
+    /// The commit gate whose result judges a release's tag (FTR-026). Unset: the first of
+    /// `commit_gates`. A result counts only when recorded after the tag was made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag_gate: Option<String>,
+    /// The project has CI, so the recommended `tag` stage also requires a passed `ci` result for
+    /// the release tip (FTR-020). Off by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_ci: bool,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -443,6 +455,10 @@ pub struct Cadence {
 
 /// The stages a release moves through when a project names none (FEAT-183).
 pub const DEFAULT_RELEASE_STAGES: [&str; 4] = ["candidate", "test", "staging", "production"];
+
+/// The stages a project gets when it turns releases on and names none (FTR-020). The third is the
+/// cut; stages a project adds after it follow the tag.
+pub const RECOMMENDED_RELEASE_STAGES: [&str; 3] = ["candidate", "main", "tag"];
 
 impl Cadence {
     pub fn is_off(&self) -> bool {
@@ -1713,6 +1729,283 @@ impl ProjectConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::releasegates::{ReleaseAction, ReleaseCheck};
+
+    /// A project on a board of its own in the temp dir, removed on drop.
+    struct Board(std::path::PathBuf, crate::store::Store);
+
+    impl Board {
+        fn new() -> Board {
+            static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "kanbanr-cfg-test-{}-{}",
+                std::process::id(),
+                N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let store = crate::store::Store::new(dir.clone());
+            store
+                .init_project("demo", ProjectConfig::default_for("demo"))
+                .unwrap();
+            Board(dir, store)
+        }
+
+        fn cadence(&self) -> Cadence {
+            self.1.load("demo").unwrap().config.cadence
+        }
+
+        fn write(&self, cadence: Cadence) -> Result<Cadence, String> {
+            self.1
+                .set_cadence("demo", None, cadence)
+                .map(|c| c.cadence)
+                .map_err(|e| e.to_string())
+        }
+
+        /// Change the cadence the way a route does: from what is stored.
+        fn change(&self, f: impl FnOnce(&mut Cadence)) -> Result<Cadence, String> {
+            let mut c = self.cadence();
+            f(&mut c);
+            self.write(c)
+        }
+    }
+
+    impl Drop for Board {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// FTR-020 R-1: turning releases on with nothing named writes the recommended stages; the
+    /// table passes validation, with and without CI, and is what the effective gates yield.
+    #[test]
+    fn turning_releases_on_sets_the_recommended_stages() {
+        for has_ci in [false, true] {
+            let (stages, gates, commit_gates) = Cadence::recommended(has_ci);
+            assert_eq!(stages, RECOMMENDED_RELEASE_STAGES);
+            assert_eq!(commit_gates.is_empty(), !has_ci);
+            let c = Cadence {
+                releases: true,
+                has_ci,
+                release_stages: stages,
+                release_gates: gates.clone(),
+                commit_gates,
+                ..Cadence::default()
+            };
+            c.validate_release_gates().unwrap();
+            assert!(c.is_recommended());
+            let effective = c.effective_release_gates();
+            assert_eq!(effective.len(), 3);
+            for (stage, gate) in effective {
+                assert_eq!(gate, gates[&stage]);
+            }
+            assert_eq!(c.cut_index(), 2);
+        }
+        let board = Board::new();
+        let c = board.change(|c| c.releases = true).unwrap();
+        assert_eq!(c.release_stages, ["candidate", "main", "tag"]);
+        assert!(c.is_recommended() && c.commit_gates.is_empty());
+        assert_eq!(c.release_gates["tag"].on_enter, [ReleaseAction::Tag]);
+        assert!(
+            !c.release_gates["tag"]
+                .requires
+                .contains(&ReleaseCheck::GatePassed)
+        );
+        // Saying it has CI in the same write that turns releases on asks for CI at the tag.
+        let board = Board::new();
+        let c = board
+            .change(|c| {
+                c.releases = true;
+                c.has_ci = true;
+            })
+            .unwrap();
+        assert!(c.is_recommended());
+        assert_eq!(c.commit_gates, ["ci"]);
+    }
+
+    /// FTR-021 R-5: the recommended candidate stage waits for the items to be merged, and a board
+    /// that turns releases on is given it.
+    #[test]
+    fn the_recommended_candidate_requires_items_merged() {
+        for has_ci in [false, true] {
+            let (_, gates, _) = Cadence::recommended(has_ci);
+            assert_eq!(gates["candidate"].requires, [ReleaseCheck::ItemsMerged]);
+        }
+        let board = Board::new();
+        let c = board.change(|c| c.releases = true).unwrap();
+        assert_eq!(
+            c.release_gates["candidate"].requires,
+            [ReleaseCheck::ItemsMerged]
+        );
+        assert!(c.is_recommended());
+    }
+
+    /// FTR-021 R-5: gates a board already holds are never changed by reading it, nor by a write
+    /// that does not turn releases on.
+    #[test]
+    fn existing_gates_gain_no_condition_by_reading() {
+        let c = crate::yaml::from_str::<Cadence>(
+            "releases: true\nrelease_stages: [candidate, main, tag]\nrelease_gates: { candidate: { on_enter: [branch] }, tag: { on_enter: [tag] } }\n",
+        )
+        .unwrap();
+        assert!(c.release_gates["candidate"].requires.is_empty());
+        assert!(c.effective_release_gates()[0].1.requires.is_empty());
+        let board = Board::new();
+        board.change(|c| c.releases = true).unwrap();
+        board
+            .change(|c| {
+                c.release_gates
+                    .get_mut("candidate")
+                    .unwrap()
+                    .requires
+                    .clear()
+            })
+            .unwrap();
+        let c = board.change(|c| c.sprints = true).unwrap();
+        assert!(c.release_gates["candidate"].requires.is_empty());
+        // A board with no stages keeps the four it always had, with no condition added.
+        let old = Cadence::default();
+        assert!(
+            old.effective_release_gates()
+                .iter()
+                .all(|(_, g)| g.requires.is_empty())
+        );
+    }
+
+    /// FTR-020 R-2: saying later that the project has CI adds the requirement to the untouched
+    /// recommended tag stage.
+    #[test]
+    fn has_ci_adds_the_ci_requirement_to_the_recommended_tag_stage() {
+        let board = Board::new();
+        board.change(|c| c.releases = true).unwrap();
+        let c = board.change(|c| c.has_ci = true).unwrap();
+        assert_eq!(
+            c.release_gates["tag"].requires,
+            [
+                ReleaseCheck::MainAtRelease,
+                ReleaseCheck::Pushed,
+                ReleaseCheck::GatePassed
+            ]
+        );
+        assert_eq!(c.commit_gates, ["ci"]);
+        assert!(c.is_recommended());
+        // On a board whose gates were changed, nothing changes and the note says what to run.
+        let board = Board::new();
+        board.change(|c| c.releases = true).unwrap();
+        let before = board
+            .change(|c| {
+                c.release_gates.get_mut("main").unwrap().purpose = "mine".into();
+            })
+            .unwrap();
+        let after = board.change(|c| c.has_ci = true).unwrap();
+        assert_eq!(after.release_gates, before.release_gates);
+        assert!(after.commit_gates.is_empty());
+        let note = after.has_ci_note(&before).expect("it says how");
+        assert!(note.contains("kanbanr config release-stage tag"), "{note}");
+        assert!(board.cadence().has_ci_note(&after).is_none());
+    }
+
+    /// FTR-020 R-2: without CI the tag requires only main at the release and pushed.
+    #[test]
+    fn without_has_ci_tag_requires_only_pushed() {
+        let board = Board::new();
+        let c = board.change(|c| c.releases = true).unwrap();
+        assert!(!c.has_ci);
+        assert_eq!(
+            c.release_gates["tag"].requires,
+            [ReleaseCheck::MainAtRelease, ReleaseCheck::Pushed]
+        );
+        assert!(c.commit_gates.is_empty());
+    }
+
+    /// FTR-020 R-3: a board that names no stages keeps the four it always had when it is read, and
+    /// a write that does not turn releases on adds nothing.
+    #[test]
+    fn a_board_with_no_stages_keeps_the_four_it_always_had() {
+        let board = Board::new();
+        let c = board.change(|c| c.sprints = true).unwrap();
+        assert!(c.release_stages.is_empty() && c.release_gates.is_empty());
+        assert_eq!(c.stages(), DEFAULT_RELEASE_STAGES);
+        assert!(!c.is_recommended());
+    }
+
+    /// FTR-020 R-3: naming stages while turning releases on keeps them.
+    #[test]
+    fn naming_stages_while_turning_releases_on_keeps_them() {
+        let board = Board::new();
+        let c = board
+            .change(|c| {
+                c.releases = true;
+                c.release_stages = vec!["build".into(), "ship".into()];
+            })
+            .unwrap();
+        assert_eq!(c.release_stages, ["build", "ship"]);
+        assert!(c.release_gates.is_empty());
+        // So does declaring a gate.
+        let board = Board::new();
+        let c = board
+            .change(|c| {
+                c.releases = true;
+                c.release_gates.insert(
+                    "production".into(),
+                    crate::releasegates::ReleaseGate::default(),
+                );
+            })
+            .unwrap();
+        assert!(c.release_stages.is_empty());
+        assert_eq!(c.release_gates.len(), 1);
+    }
+
+    /// FTR-020 R-3: a cadence write on a board with releases already on adds nothing.
+    #[test]
+    fn cadence_write_on_a_board_with_releases_already_on_adds_nothing() {
+        let board = Board::new();
+        board.change(|c| c.releases = true).unwrap();
+        board
+            .change(|c| {
+                c.release_stages.clear();
+                c.release_gates.clear();
+            })
+            .unwrap();
+        let c = board.change(|c| c.sprints = true).unwrap();
+        assert!(c.release_stages.is_empty() && c.release_gates.is_empty());
+        // Turning releases off and on again from a board with none named does give them.
+        let off = board.change(|c| c.releases = false).unwrap();
+        assert!(off.release_stages.is_empty());
+    }
+
+    /// FTR-020 R-4: stages changed while the gates are still the recommended ones drop those
+    /// gates instead of being refused.
+    #[test]
+    fn renaming_untouched_recommended_stages_drops_their_gates() {
+        let board = Board::new();
+        board.change(|c| c.releases = true).unwrap();
+        let c = board
+            .change(|c| {
+                c.release_stages = vec!["candidate".into(), "main".into(), "production".into()]
+            })
+            .unwrap();
+        assert!(c.release_gates.is_empty());
+        assert_eq!(c.release_stages, ["candidate", "main", "production"]);
+        c.validate_release_gates().unwrap();
+    }
+
+    /// FTR-020 R-4: a gate the project changed still blocks a rename.
+    #[test]
+    fn a_customised_gate_still_blocks_a_rename() {
+        let board = Board::new();
+        board.change(|c| c.releases = true).unwrap();
+        board
+            .change(|c| {
+                c.release_gates.get_mut("main").unwrap().purpose = "mine".into();
+            })
+            .unwrap();
+        let err = board
+            .change(|c| {
+                c.release_stages = vec!["candidate".into(), "main".into(), "production".into()]
+            })
+            .unwrap_err();
+        assert!(err.contains("release-stage tag --clear"), "{err}");
+    }
 
     fn config_of(name: &str) -> ProjectConfig {
         preset_bare(name).unwrap().into_config("p")
@@ -1861,6 +2154,16 @@ mod tests {
             let at = togaf.status(role).unwrap();
             assert_eq!(togaf.of(at), vec![role], "{at} holds only {}", role.name());
         }
+    }
+
+    /// DEF-019 R-7: TOGAF has no move from Implementation straight to Operations, so an item
+    /// passes Migration, where its branch is merged and its docs sign-off is asked.
+    #[test]
+    fn togaf_has_no_edge_from_implementation_to_operations() {
+        let togaf = preset("togaf").unwrap();
+        let to = &togaf.transitions["Implementation"];
+        assert!(!to.iter().any(|s| s == "Operations"), "{to:?}");
+        assert!(to.iter().any(|s| s == "Migration"), "{to:?}");
     }
 
     /// FEAT-188 R-2: every built-in process declares all four roles, the branch is made at build,

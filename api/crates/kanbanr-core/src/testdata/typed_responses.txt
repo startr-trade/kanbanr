@@ -11,7 +11,7 @@
 {"code":"FEAT-003","rev":"55cebad5348179a1","gaps":[],"next":[{"status":"Operations","purpose":"Released and running.","enforce":"block","gaps":[{"check":"signoff","level":"warning","label":"no sign-off 'release'","message":"no sign-off 'release' — `kanbanr signoff FEAT-003 release`"}],"requires_gaps":[],"warnings":[],"signoffs_needed":["release"]}]}
 
 /projects/demo/process
-{"source":{"name":"togaf","library":"builtin","version":0,"rev":"87a4745c6d32d0a4"},"drift":{"source":{"name":"togaf","library":"builtin","version":0,"rev":"87a4745c6d32d0a4"},"edited":true,"newer":null,"gone":false},"messages":["this project's workflow was edited after 'togaf' (built-in) was applied — `kanbanr process diff` shows how; save it as a new version, or `kanbanr process update` to go back"]}
+{"source":{"name":"togaf","library":"builtin","version":0,"rev":"be3ea007d6e56fd8"},"drift":{"source":{"name":"togaf","library":"builtin","version":0,"rev":"be3ea007d6e56fd8"},"edited":true,"newer":null,"gone":false},"messages":["this project's workflow was edited after 'togaf' (built-in) was applied — `kanbanr process diff` shows how; save it as a new version, or `kanbanr process update` to go back"]}
 
 /processes
-{"name":"togaf","library":"builtin","version":0,"description":"The TOGAF phases as columns, with the definition growing phase by phase: each phase asks only for what it needs, and agreement is renewed as the definition grows.","rev":"87a4745c6d32d0a4","used_by":["demo"]}
+{"name":"togaf","library":"builtin","version":0,"description":"The TOGAF phases as columns, with the definition growing phase by phase: each phase asks only for what it needs, and agreement is renewed as the definition grows.","rev":"be3ea007d6e56fd8","used_by":["demo"]}
