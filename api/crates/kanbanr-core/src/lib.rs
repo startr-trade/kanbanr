@@ -2463,6 +2463,54 @@ requirements:
         assert_eq!(recorded.checked[0].correction, "DEF-040");
     }
 
+    fn entry_for<'a>(q: &'a [serde_json::Value], code: &str) -> &'a serde_json::Value {
+        q.iter().find(|e| e["code"] == code).unwrap()
+    }
+
+    /// FTR-013 R-5: the Review entry for an offered `docs-folded` lists the texts to check, with
+    /// the names found and the lines; an entry for a quiet board lists none.
+    #[test]
+    fn the_review_entry_lists_the_texts_to_check_when_docs_folded_is_offered() {
+        let (store, _d, code, repo) = drift_board();
+        let out =
+            crate::dispatch::dispatch_in(&store, "GET", "/projects/demo/review", None, Some(&repo))
+                .unwrap();
+        let q: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        let e = entry_for(&q, &code);
+        let flags = e["to_check"].as_array().expect("to_check");
+        assert_eq!(flags.len(), 1, "{e}");
+        assert_eq!(flags[0]["target"]["id"], "design/data.md");
+        assert_eq!(flags[0]["hits"][0]["name"]["text"], "--since");
+        assert_eq!(flags[0]["hits"][0]["lines"], serde_json::json!([7]));
+        assert!(e.get("drift_skipped").is_none());
+    }
+
+    /// FTR-013 R-9: with no code repository the entry says the check was skipped and why, offers
+    /// the sign-off as before, and does not say there is nothing to check.
+    #[test]
+    fn the_review_entry_says_the_drift_check_was_skipped_without_a_repository() {
+        let (store, _d, code, _repo) = drift_board();
+        let q = review_queue(&store);
+        let e = entry_for(&q, &code);
+        assert_eq!(e["signoffs_needed"], serde_json::json!(["docs-folded"]));
+        assert!(e.get("to_check").is_none(), "{e}");
+        assert!(
+            e["drift_skipped"]
+                .as_str()
+                .unwrap()
+                .contains("code repository"),
+            "{e}"
+        );
+        // Offered as before: the sign-off is accepted with no `checked` at all.
+        crate::dispatch::dispatch(
+            &store,
+            "POST",
+            &format!("/projects/demo/features/{code}/signoff/docs-folded"),
+            Some(&serde_json::json!({"by": "Ada L"})),
+        )
+        .unwrap();
+    }
+
     /// DEF-033 R-6: a `docs-folded` sign-off given before the check existed stays recorded and
     /// counted, and reading the board does not rewrite it.
     #[test]
