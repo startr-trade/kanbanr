@@ -154,6 +154,32 @@ Zachman coverage has no column nothing answers (`kanbanr trace MS-… --zachman`
 `kanbanr doctor` before merging a sprint or cutting a release: it lists every coverage rule a
 view still fails.
 
+### Drift as work lands
+
+A doc can name `--since` or a route that an item then changed, and stay as it was. kanbanr finds
+these when the work lands, rather than when someone notices. It reads the names an item put in the
+code, from the diff of the commits whose `Refs:` trailer names it: long flags, commands, routes,
+`KANBANR_` variables, settings, stage, check and status names, and files. Documentation files add no
+names. It then looks at the texts linked to the item: the docs in its `affects_docs`, the docs whose
+front matter lists it under `items` or `refs`, the ADRs whose `affects` names it, the docs and items
+that link it, and the items its spec links. A text is **flagged** when it holds one of those names as
+a whole token and last changed before the commit that changed the name. A config key, check, stage
+or status name counts only inside a code span, and a command only on a line that says `kanbanr`.
+
+A flag says which text names which changed name. It never says the text is wrong, so read it and
+decide:
+
+- On the Review page, `docs-folded` lists each flagged text with the names found and their lines.
+  For each, say it is still right, or ask Claude to file a correction and enter its code. The
+  sign-off is accepted only once every text is settled, and it records how.
+- When an item is merged, the flagged texts are listed on stderr.
+- `kanbanr drift` lists them for the board, grouped by text, for the items with commits since
+  `--since` (default: the latest shipped release's tag date, else 60 days back). `--json` adds when
+  it was generated, so two runs can be compared.
+
+Without the code repository the check is skipped, the Review page says so, and the sign-off is
+offered as before. A skipped check is never read as "no drift".
+
 ### When docs-folded is offered
 
 The `docs-folded` sign-off says the documents are folded into the record, so it is offered only

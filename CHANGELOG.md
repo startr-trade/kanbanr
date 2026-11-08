@@ -6,6 +6,19 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Docs and items that fell behind the code are found as work lands (FTR-013).** When an item's
+  `docs-folded` sign-off is offered, the Review page lists the docs and items linked to it (its
+  `affects_docs`, a doc's front matter `items` or `refs`, an ADR's `affects`, and plain links) that
+  name something the item changed, such as a flag, route, `KANBANR_` variable, setting, stage or
+  status name, or file, and have not changed since. Each is confirmed as still right or settled by
+  a filed correction before the sign-off is accepted, and the sign-off records which. When an item
+  is merged, the same texts are listed on stderr. `kanbanr drift [--since DATE] [--item CODE]
+  [--json]` lists them for the whole board, grouped by text, back to the latest release's tag
+  date (else 60 days). It flags what to read and never judges prose. Without a code repository the
+  check is skipped, and says so.
+
 ### Fixed
 
 - **A docs-folded sign-off is offered only once the work it confirms is done (DEF-033).** The

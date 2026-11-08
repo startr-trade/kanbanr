@@ -728,6 +728,11 @@ Before the move:
   `Affects docs` and each task that writes docs. Until then the Review page does not offer
   **docs-folded** and `kanbanr check` names what is unbuilt;
 - say **docs-folded** is waiting for the user's sign-off on the Review page, once it is offered.
+  The Review page may list **texts to check**: docs and items that name a flag, route, setting,
+  stage, status or file the item changed and have not changed since (`kanbanr drift` lists them for
+  the board; a merge prints them on stderr). A flag says what to read, never that the text is wrong.
+  For each, the user says it is still right, or asks you to file a correction. Fix a filed
+  correction as any defect, and never confirm a text on the user's behalf.
 
 With the git model on, entering the integrate role (`kanbanr move <CODE> <status>`) merges the item
 branch into its line, `--no-ff`, with `Refs: kanbanr:<CODE>`. If the merge would conflict, the move

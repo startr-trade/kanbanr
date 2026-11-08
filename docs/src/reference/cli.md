@@ -88,6 +88,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | Command | What it does |
 |---|---|
 | `kanbanr readme` | write or refresh the board's README: what it is, its projects, and how to install kanbanr and see it as a board; text outside its markers is kept |
+| `kanbanr drift [--since DATE] [--item CODE]` | the docs and items that name something work changed (a flag, command, route, `KANBANR_` variable, setting, stage, status or file) and have not changed since, grouped by text, for the items with commits since `DATE` (default: the latest shipped release's tag date, else 60 days back; with `--item`, all of that item's history). `--json` adds when it was generated. It flags what to read, never judges it, and exits 0 whatever it finds. Run it from the project folder: without the code repository it cannot check, and says so |
 | `kanbanr doctor` | every broken reference and every gap, across the board — including links in specs and docs to items, requirements, ADRs, goals or docs the board does not have, diagram problems: each Mermaid block in a spec or doc the lint rejects, with its file, diagram number, line and rule, and each coverage rule a view still fails, with its first ten uncovered subjects. Warns only about what each item's current stage asks; what later stages will ask is printed after the warnings as counts |
 | `kanbanr check [CODE]` | what one item has not said, and what it cannot yet show |
 | `kanbanr review [CODE] [--pending] [--ui]` | the decision brief — one item, all of them, or in the browser |
