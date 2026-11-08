@@ -92,6 +92,14 @@ All notable changes to kanbanr are documented here. The format follows
   `ATTEST_RELEASE=false` skips the attestations and says so in the release notes. The Docker smoke
   test drives the `docker` CLI directly, so `testcontainers` and its advisory exception
   (RUSTSEC-2026-0440) are gone.
+- **The guides cover the delivery pipeline and a product people use (DOC-007).** A new page,
+  Designing CI and the release workflow, says what to settle before a first release (start small,
+  check what the account's plan allows, take the release description from kanbanr's notes, run the
+  release workflow without a tag, run each check once per commit, run the product the way a person
+  will, check CI before the cut), and each guide with releases points to it. The with-Claude guides'
+  first item now describes what a person does, not a capability, and the guides say Claude asks whether
+  the product has a user interface when the technology is chosen. The skill has both rules.
+
 ## [0.5.1] - 2026-11-08
 
 ### Fixed
