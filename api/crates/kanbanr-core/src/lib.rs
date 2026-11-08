@@ -2278,6 +2278,120 @@ requirements:
         );
     }
 
+    /// A board whose `Completed` gate asks for `docs-folded`, with one approved item at
+    /// `Scheduled` that names no documents and has one open task (DEF-033).
+    fn docs_folded_board() -> (Store, tempdir::TempDirLike, String, String) {
+        let (store, d) = temp_store();
+        new_project(&store, "demo");
+        let gate = crate::config::Gate {
+            signoffs: vec!["docs-folded".into()],
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Completed".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        let (code, list) = defined_in_progress(&store, "Held");
+        (store, d, code, list)
+    }
+
+    fn review_queue(store: &Store) -> Vec<serde_json::Value> {
+        let out = crate::dispatch::dispatch(store, "GET", "/projects/demo/review", None).unwrap();
+        serde_json::from_str(&out).unwrap()
+    }
+
+    fn complete_first_task(store: &Store, code: &str, list: &str) {
+        store
+            .set_task_state(
+                "demo",
+                code,
+                list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+    }
+
+    /// DEF-033 R-1: the Review page does not offer `docs-folded` for an item whose work is not
+    /// built, however few docs it names; once the work is done it is offered, once.
+    #[test]
+    fn the_review_queue_withholds_docs_folded_until_documents_are_built() {
+        let (store, _d, code, list) = docs_folded_board();
+        let mine =
+            |q: &[serde_json::Value]| q.iter().filter(|e| e["code"] == code.as_str()).count();
+        assert_eq!(mine(&review_queue(&store)), 0, "{:?}", review_queue(&store));
+        complete_first_task(&store, &code, &list);
+        let q = review_queue(&store);
+        assert_eq!(mine(&q), 1, "{q:?}");
+        let e = q.iter().find(|e| e["code"] == code.as_str()).unwrap();
+        assert_eq!(e["signoffs_needed"], serde_json::json!(["docs-folded"]));
+    }
+
+    /// DEF-033 R-3: an item that changes no documents is offered the sign-off saying so.
+    #[test]
+    fn the_review_queue_says_an_item_changes_no_documents() {
+        let (store, _d, code, list) = docs_folded_board();
+        complete_first_task(&store, &code, &list);
+        let q = review_queue(&store);
+        let e = q.iter().find(|e| e["code"] == code.as_str()).unwrap();
+        assert_eq!(e["changes_no_documents"], true, "{e:?}");
+    }
+
+    /// DEF-033 R-4: the sign-off route refuses `docs-folded` before the documents are built,
+    /// names what is unbuilt, and accepts it afterwards.
+    #[test]
+    fn signing_off_docs_folded_before_the_documents_are_built_is_refused() {
+        let (store, _d, code, list) = docs_folded_board();
+        let sign = || {
+            crate::dispatch::dispatch(
+                &store,
+                "POST",
+                &format!("/projects/demo/features/{code}/signoff/docs-folded"),
+                Some(&serde_json::json!({"by": "Ada L"})),
+            )
+        };
+        let err = sign().unwrap_err().to_string();
+        assert!(err.contains("documents are not built"), "{err}");
+        assert!(err.contains("tasks are not all done"), "{err}");
+        let project = store.load("demo").unwrap();
+        assert!(
+            project
+                .feature(&code)
+                .unwrap()
+                .signoff_current("docs-folded")
+                .is_none()
+        );
+        complete_first_task(&store, &code, &list);
+        sign().unwrap();
+    }
+
+    /// DEF-033 R-6: a `docs-folded` sign-off given before the check existed stays recorded and
+    /// counted, and reading the board does not rewrite it.
+    #[test]
+    fn an_early_docs_folded_signoff_stays_recorded_and_counted() {
+        let (store, _d, code, _list) = docs_folded_board();
+        store
+            .signoff_feature("demo", &code, "docs-folded", "Ada L", "", "")
+            .unwrap();
+        let before = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        let q = review_queue(&store);
+        assert!(q.iter().all(|e| e["code"] != code.as_str()), "{q:?}");
+        crate::dispatch::dispatch(&store, "GET", "/projects/demo/readiness", None).unwrap();
+        let after = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert!(after.signoff_current("docs-folded").is_some());
+        assert_eq!(
+            before.definition.as_ref().unwrap().signoffs,
+            after.definition.as_ref().unwrap().signoffs
+        );
+        let project = store.load_for_gates("demo").unwrap();
+        let ctx = crate::readiness::Context::load(&store, "demo", &project.config);
+        let next =
+            crate::readiness::next_gates(&project, None, project.feature(&code).unwrap(), &ctx);
+        assert!(
+            next.iter()
+                .all(|g| g.signoffs_held.is_empty() && g.signoffs_needed.is_empty())
+        );
+    }
+
     /// FEAT-204 R-1: a sign-off that lifts the last hold finishes an item whose work is done; one
     /// that does not (another sign-off still due, or an open task) leaves it where it is.
     #[test]

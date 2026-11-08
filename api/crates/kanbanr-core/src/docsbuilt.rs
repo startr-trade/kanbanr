@@ -105,7 +105,10 @@ fn affects_section(spec: &str) -> String {
             }
             let text = t[level..].trim().trim_end_matches('#').trim();
             if (2..=4).contains(&level)
-                && text.trim_end_matches(':').trim().eq_ignore_ascii_case("affects docs")
+                && text
+                    .trim_end_matches(':')
+                    .trim()
+                    .eq_ignore_ascii_case("affects docs")
             {
                 level_in = Some(level);
             }
@@ -183,7 +186,10 @@ fn names_file(text: &str, word: &str) -> bool {
 /// Whether a task writes docs: its text names a listed document, a path under `docs/`, or the file
 /// `CHANGELOG.md`, `SECURITY.md` or `README.md`.
 pub fn is_docs_task(text: &str, listed: &[String]) -> bool {
-    if listed.iter().any(|l| !l.is_empty() && text.contains(l.as_str())) {
+    if listed
+        .iter()
+        .any(|l| !l.is_empty() && text.contains(l.as_str()))
+    {
         return true;
     }
     if text
@@ -236,7 +242,11 @@ pub fn evaluate(
     }
 
     // Tasks that write docs.
-    let listed_paths: Vec<String> = declared.iter().cloned().chain(built.listed.clone()).collect();
+    let listed_paths: Vec<String> = declared
+        .iter()
+        .cloned()
+        .chain(built.listed.clone())
+        .collect();
     for task in feature.all_tasks() {
         if is_docs_task(&task.text, &listed_paths) {
             built.listed.push(format!("{}: {}", task.key, task.text));
@@ -359,7 +369,10 @@ mod tests {
     #[test]
     fn a_task_writes_docs_when_it_names_a_listed_document() {
         let listed = vec!["skill/kanbanr/SKILL.md".to_string()];
-        assert!(is_docs_task("Update skill/kanbanr/SKILL.md for the rule", &listed));
+        assert!(is_docs_task(
+            "Update skill/kanbanr/SKILL.md for the rule",
+            &listed
+        ));
         assert!(is_docs_task("Write docs/src/using/x.md", &[]));
         assert!(is_docs_task("Changelog entry in CHANGELOG.md", &[]));
         assert!(is_docs_task("Mention it in README.md.", &[]));
@@ -411,11 +424,7 @@ mod tests {
             .unwrap();
     }
 
-    fn judge(
-        store: &crate::Store,
-        code: &str,
-        repo: Option<&std::path::Path>,
-    ) -> DocsBuilt {
+    fn judge(store: &crate::Store, code: &str, repo: Option<&std::path::Path>) -> DocsBuilt {
         let project = store.load("demo").unwrap();
         let ctx = Context::load_in(store, "demo", &project.config, repo);
         evaluate(&project, project.feature(code).unwrap(), &ctx)
@@ -467,7 +476,11 @@ mod tests {
         let got = judge(&store, &c, Some(&repo));
         assert_eq!(got.unbuilt.len(), 1, "{got:?}");
         assert_eq!(got.unbuilt[0].kind, DocKind::Task);
-        assert!(got.unbuilt[0].why.contains("writes docs and is not complete"));
+        assert!(
+            got.unbuilt[0]
+                .why
+                .contains("writes docs and is not complete")
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }
@@ -495,7 +508,13 @@ mod tests {
         let project = store.load_for_gates("demo").unwrap();
         let first = project.feature(&code).unwrap().todo_lists[0].clone();
         store
-            .set_task_state("demo", &code, &first.code, &first.tasks[0].key, TaskState::Completed)
+            .set_task_state(
+                "demo",
+                &code,
+                &first.code,
+                &first.tasks[0].key,
+                TaskState::Completed,
+            )
             .unwrap();
         let got = judge(&store, &code, None);
         assert!(got.is_built(), "{got:?}");
@@ -507,12 +526,7 @@ mod tests {
     #[test]
     fn unreadable_repository_docs_hold_the_signoff_and_say_why() {
         let (store, dir, repo) = fixture("unreadable");
-        let code = item(
-            &store,
-            "R",
-            "### Affects docs\n`docs/src/r.md`\n",
-            &[],
-        );
+        let code = item(&store, "R", "### Affects docs\n`docs/src/r.md`\n", &[]);
         task(&store, &code, "Build it", TaskState::Completed);
         let got = judge(&store, &code, None);
         assert!(!got.is_built());
@@ -521,7 +535,9 @@ mod tests {
         let got = judge(&store, &code, Some(&repo));
         assert!(!got.is_built());
         assert!(
-            got.unbuilt[0].why.contains(&format!("no branch for {code}")),
+            got.unbuilt[0]
+                .why
+                .contains(&format!("no branch for {code}")),
             "{got:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);

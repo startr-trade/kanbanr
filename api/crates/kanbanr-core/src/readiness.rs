@@ -879,7 +879,10 @@ pub fn next_gates(
             // `docs-folded` is offered only once the documents it confirms are built (DEF-033).
             let mut signoffs_held = Vec::new();
             let mut docs_built = None;
-            if signoffs_needed.iter().any(|n| n == crate::method::DOCS_FOLDED) {
+            if signoffs_needed
+                .iter()
+                .any(|n| n == crate::method::DOCS_FOLDED)
+            {
                 let built = crate::docsbuilt::evaluate(project, feature, ctx);
                 if !built.is_built() {
                     signoffs_needed.retain(|n| n != crate::method::DOCS_FOLDED);
@@ -1901,7 +1904,11 @@ mod tests {
         let (gates, hold, other) = next(&store);
         assert_eq!(gates[0].signoffs_needed, vec!["design-review".to_string()]);
         assert_eq!(gates[0].signoffs_held.len(), 1, "{gates:?}");
-        assert!(gates[0].signoffs_held[0].message.contains("architecture/data.md"));
+        assert!(
+            gates[0].signoffs_held[0]
+                .message
+                .contains("architecture/data.md")
+        );
         assert!(gates[0].gaps.iter().any(|g| g.label == "docs not built"));
         assert!(hold.unwrap().contains("architecture/data.md"));
         assert!(other.is_none());
@@ -2057,7 +2064,9 @@ mod tests {
             )
             .unwrap();
         // Finished work, so `docs-folded` is offered (DEF-033).
-        let list = store.add_todo_list("demo", &item.code, "work", None).unwrap();
+        let list = store
+            .add_todo_list("demo", &item.code, "work", None)
+            .unwrap();
         let task = store
             .add_task("demo", &item.code, &list.code, "build it", None)
             .unwrap();

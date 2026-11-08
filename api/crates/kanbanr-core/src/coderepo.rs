@@ -494,7 +494,11 @@ pub fn changed_paths(root: &Path, from: &str, to: &str) -> Result<Vec<String>> {
 
 /// The files `branch` changed since it left `line`: `git diff --name-only line...branch`, three
 /// dots, from the merge base (DEF-033). A `line` or `branch` that does not exist is an error.
-pub fn changed_files(root: &Path, line: &str, branch: &str) -> Result<std::collections::BTreeSet<String>> {
+pub fn changed_files(
+    root: &Path,
+    line: &str,
+    branch: &str,
+) -> Result<std::collections::BTreeSet<String>> {
     let range = format!("{line}...{branch}");
     let out = git(
         root,

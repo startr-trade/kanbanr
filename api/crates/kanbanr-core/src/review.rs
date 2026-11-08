@@ -128,6 +128,10 @@ pub struct ReviewEntry {
     pub approval: ApprovalKind,
     /// The sign-offs the next stage still needs, by name; empty unless `approval` is `signoff`.
     pub signoffs_needed: Vec<String>,
+    /// `docs-folded` is among them and the item lists no documents: the sign-off confirms that it
+    /// changes none (DEF-033).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub changes_no_documents: bool,
     pub started_unapproved: String,
     pub definition: FeatureDefinition,
     /// What a verdict given from this brief is pinned to (FEAT-159).
@@ -194,10 +198,13 @@ fn spec_brief(
 }
 
 /// The review queue for project `p`.
-pub fn pending(store: &Store, p: &str) -> Result<Vec<ReviewEntry>> {
+///
+/// `repo` is the project's code repository when the caller has one: the repository docs an item
+/// lists are judged against it before `docs-folded` is offered (DEF-033).
+pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result<Vec<ReviewEntry>> {
     let project = store.load_for_gates(p)?;
     let charter = crate::charter::load(store, p)?;
-    let ctx = crate::readiness::Context::load(store, p, &project.config);
+    let ctx = crate::readiness::Context::load_in(store, p, &project.config, repo);
     // The planned releases, in file order: the choices of the which-release question
     // (FEAT-185). Only loaded when the project works in releases.
     let release_choices: Vec<String> = if project.config.cadence.releases {
@@ -297,10 +304,16 @@ pub fn pending(store: &Store, p: &str) -> Result<Vec<ReviewEntry>> {
                             .iter()
                             .any(|g| g.label == "added since approval")
                     }));
-            let signoffs_needed: Vec<String> = next
-                .filter(|n| n.requires_gaps.is_empty())
-                .map(|n| n.signoffs_needed)
-                .unwrap_or_default();
+            let next = next.filter(|n| n.requires_gaps.is_empty());
+            let changes_no_documents = next.as_ref().is_some_and(|n| {
+                n.signoffs_needed
+                    .iter()
+                    .any(|s| s == crate::method::DOCS_FOLDED)
+                    && n.docs_built
+                        .as_ref()
+                        .is_some_and(|d| d.changes_no_documents)
+            });
+            let signoffs_needed: Vec<String> = next.map(|n| n.signoffs_needed).unwrap_or_default();
             let approval = match definition.approval_state() {
                 _ if unratified => ApprovalKind::Unratified,
                 // Agreed is agreed, however late — a ratified item is not still a
@@ -361,6 +374,10 @@ pub fn pending(store: &Store, p: &str) -> Result<Vec<ReviewEntry>> {
                 title: f.title.clone(),
                 status: f.status.clone(),
                 approval,
+                changes_no_documents: changes_no_documents
+                    && signoffs_needed
+                        .iter()
+                        .any(|s| s == crate::method::DOCS_FOLDED),
                 signoffs_needed,
                 started_unapproved: definition.started_unapproved.clone(),
                 definition: definition.clone(),
@@ -565,7 +582,7 @@ mod perf {
     fn review_on_a_board_with_many_commits_and_doc_refs() {
         let (store, dir) = generated_board(2_500, 70, 7);
         let started = std::time::Instant::now();
-        let queue = pending(&store, "demo").unwrap();
+        let queue = pending(&store, "demo", None).unwrap();
         let elapsed = started.elapsed();
         eprintln!("review::pending: {} entries in {elapsed:?}", queue.len());
         assert_eq!(queue.len(), 70);
