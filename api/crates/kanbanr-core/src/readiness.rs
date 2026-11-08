@@ -1625,6 +1625,9 @@ pub struct ItemCheck {
     /// Manual tests not yet green, as `R-4: <name>` (DEF-003). A note, never a gap.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub open_manual: Vec<String>,
+    /// The documents still unbuilt while the next stage holds `docs-folded` (DEF-033).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub docs_unbuilt: Vec<crate::docsbuilt::Unbuilt>,
 }
 
 /// The manual tests of an item that are not green, as `R-4: <name>` (DEF-003): a check nobody
@@ -1664,6 +1667,7 @@ pub fn check_board(
     store: &crate::Store,
     p: &str,
     scope: Option<&str>,
+    repo: Option<&std::path::Path>,
 ) -> crate::Result<CheckReport> {
     let project = store.load(p)?;
     let features: Vec<&FeatureItem> = match scope {
@@ -1685,8 +1689,19 @@ pub fn check_board(
         .map(|f| {
             // What each item's next stage asks, with the project's unit and active sprint in hand
             // (FEAT-117, FEAT-119).
-            let view = ReadinessView::load(store, p, &f.code).ok();
+            let view = ReadinessView::load_in(store, p, &f.code, repo).ok();
+            let docs_unbuilt = view
+                .as_ref()
+                .and_then(|v| {
+                    let first = immediate_status(&project, &v.next)?;
+                    v.next.iter().find(|n| n.status == first)
+                })
+                .filter(|n| !n.signoffs_held.is_empty())
+                .and_then(|n| n.docs_built.as_ref())
+                .map(|d| d.unbuilt.clone())
+                .unwrap_or_default();
             ItemCheck {
+                docs_unbuilt,
                 code: f.code.clone(),
                 title: f.title.clone(),
                 status: f.status.clone(),
@@ -2125,7 +2140,7 @@ mod tests {
     #[test]
     fn card_next_stage_counts_match_check() {
         let (store, dir, code) = togaf_item_at_implementation("counts");
-        let report = check_board(&store, "demo", Some(&code)).unwrap();
+        let report = check_board(&store, "demo", Some(&code), None).unwrap();
         let checked = &report.items[0].next;
         let card = card_of(&store, &code);
         assert!(!card.next.is_empty());
