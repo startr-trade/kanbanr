@@ -23,6 +23,8 @@ export interface ReleaseAction {
   command: string;
   /** An unmet `gate_passed`: the commit a result is needed for, and the command that records it. */
   gate?: { commit: string; record: string };
+  /** The merge that sent the release back to its first stage, and the steps from there (DEF-031). */
+  returned?: { item: string; by: string; at: string; from: string; steps: string[] };
   /** A line shown instead of a button, when there is none to offer. */
   note?: string;
   /** A stage after the tag: the button confirms what the user checked, with an optional note (FTR-026). */
@@ -114,6 +116,7 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
       : undefined;
   return {
     gate,
+    returned: plan.returned,
     button: writable,
     label: plan.button,
     enabled: writable && plan.ready && plan.repo && !tagBlocked,

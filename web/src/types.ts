@@ -485,7 +485,7 @@ export interface Release {
   /** Where it is now, from the project's release stages; absent until first promoted (FEAT-183). */
   stage?: string;
   /** Every stage change, oldest first. A move back carries its reason. */
-  stages?: { stage: string; by: string; at: string; reason?: string }[];
+  stages?: { stage: string; by: string; at: string; reason?: string; item?: string }[];
   /** The code branch, made on entering the first stage. */
   branch?: string;
   /** When the stage that tags was entered (FTR-026); a tagged release still `planned` is waiting on its later stages. */
@@ -509,6 +509,8 @@ export interface ReleaseNotes {
   editable: boolean;
   /** Why not, when not editable. */
   why_not?: string;
+  /** Items planned into the release whose code the notes do not mention (DEF-031). */
+  unmentioned?: string[];
 }
 
 /** A check a gate names, the Zachman check narrowed to some columns, the spec's named sections
@@ -580,6 +582,8 @@ export interface ReleasePlan {
   ships: boolean;
   /** The tag's recorded CI result, while the release is tagged and not shipped (FTR-026). */
   tag?: TagResult;
+  /** The merge that sent the release back and the steps from there, until it is cut (DEF-031). */
+  returned?: { item: string; by: string; at: string; from: string; steps: string[] };
   /** What the one button says: "Promote to main", "Cut v0.2.1". */
   button: string;
   conditions: PlanCondition[];

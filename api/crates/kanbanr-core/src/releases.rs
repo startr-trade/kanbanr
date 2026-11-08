@@ -1268,6 +1268,7 @@ fn short(sha: &str) -> &str {
 
 /// Whether every gate in `commit_gates` has a passed result recorded for `tip` (FTR-002). Reads
 /// the board's recorded results only: no server is asked. Returns held, the detail and the fix.
+#[allow(clippy::too_many_arguments)]
 fn gate_passed(
     store: &Store,
     id: &str,

@@ -4370,6 +4370,24 @@ fn print_merge(cli: &Cli, resp: &str) {
     if let Some(note) = v["note"].as_str() {
         println!("note: {note}");
     }
+    let sent = &v["release_sent_back"];
+    if let (Some(version), Some(from), Some(to), Some(item)) = (
+        sent["version"].as_str(),
+        sent["from"].as_str(),
+        sent["to"].as_str(),
+        sent["item"].as_str(),
+    ) {
+        let steps: Vec<&str> = sent["steps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        println!(
+            "{version} was at {from}; {item} is merged into it, so it is back at {to}. From here: {}",
+            steps.join(", then ")
+        );
+    }
     if let Some(version) = v["forward_needed"].as_str() {
         println!("release/{version} has a fix the line lacks: kanbanr git forward {version}");
     }
@@ -9696,6 +9714,22 @@ fn print_release_plan(
         return Ok(());
     }
     let plan: Value = serde_json::from_str(&resp)?;
+    if let Some(item) = plan["returned"]["item"].as_str() {
+        let steps: Vec<&str> = plan["returned"]["steps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        println!(
+            "Sent back by {item} on {}; {}",
+            plan["returned"]["at"]
+                .as_str()
+                .and_then(|at| at.get(..10))
+                .unwrap_or_default(),
+            steps.join(", then ")
+        );
+    }
     let from = plan["from"]
         .as_str()
         .filter(|s| !s.is_empty())
