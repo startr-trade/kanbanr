@@ -281,6 +281,20 @@ mod tests {
         );
     }
 
+    /// DEF-023: the skill says a `--worktree` scope is bound at once and its brief has no claim step.
+    #[test]
+    fn skill_says_a_worktree_flag_binds_the_scope() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        assert!(
+            skill.contains("--worktree") && skill.contains("no claim step"),
+            "the skill says --worktree binds the scope and the brief has no claim step"
+        );
+    }
+
     /// FEAT-197 R-16 (its automatable half): the skill says when to list the view docs, index a
     /// new ADR, fix coverage warnings before a move and run doctor before a sprint merge or a cut,
     /// what a `docs_cover` gate asks, and names `config coverage`. Whether the guidance matches the

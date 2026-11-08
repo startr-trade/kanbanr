@@ -8,6 +8,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **A scope issued with `--worktree` no longer tells its agent to claim it (DEF-023).** The scope
+  is bound at once, so the brief's claim step was refused when the agent ran it. A bound scope's
+  brief now says which worktree it is bound to and the branch it is on, and that nothing needs
+  claiming; an unbound scope's brief is unchanged.
 - **A scope binds the agent it was issued to, not whoever stands in its folder (DEF-027).** The
   coordinator's shell was trapped once it entered an agent's worktree, and revoking the scope
   trapped it further. A process outside Claude Code is a person, a hook call without an `agent_id`

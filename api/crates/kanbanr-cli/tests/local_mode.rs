@@ -6578,6 +6578,29 @@ fn scope_claim_binds_a_worktree() {
     );
 }
 
+/// DEF-023 R-1: a scope issued with `--worktree` is bound at once, so its brief has no claim step,
+/// `scope brief` says the same, and the agent's own claim is still refused.
+#[test]
+fn scope_issued_with_a_worktree_prints_no_claim_step() {
+    let fx = ScopeFx::new("boundbrief");
+    let wt = fx.worktree("agent-t1");
+    let wt_arg = wt.to_string_lossy().to_string();
+    let out = fx.ok(
+        &fx.work,
+        &["scope", "issue", "build", "FEAT-001", "--worktree", &wt_arg],
+    );
+    for text in [out.clone(), fx.ok(&fx.work, &["scope", "brief", "SC-001"])] {
+        assert!(
+            !text.contains("First, in your worktree: `kanbanr scope claim"),
+            "{text}"
+        );
+        assert!(text.contains("already bound"), "{text}");
+        assert!(text.contains("nothing needs claiming"), "{text}");
+    }
+    let err = fx.refused(&wt, &["scope", "claim", "SC-001"]);
+    assert!(err.contains("scope.claim"), "{err}");
+}
+
 /// FEAT-214 R-3: an agent under a build scope records its own item's task and test states; a move,
 /// an approval, another item's task and a batch carrying a move are refused, naming the scope and
 /// the boundary, and the board is left byte for byte as it was.
