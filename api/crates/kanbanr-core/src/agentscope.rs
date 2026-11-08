@@ -1279,7 +1279,7 @@ pub fn with_trailer(message: &str, scope: &Scope) -> String {
     format!("{body}{sep}{}\n", trailer(scope))
 }
 
-/// The boundary table for the agent's brief (R-1), with the claim command.
+/// The boundary table for the agent's brief (R-1), with the claim command for an unbound scope.
 pub fn brief(scope: &Scope, project: &Project) -> String {
     let _ = project;
     let item = &scope.item;
@@ -1288,12 +1288,22 @@ pub fn brief(scope: &Scope, project: &Project) -> String {
         scope.id,
         scope.role.name()
     );
-    match (&scope.branch, scope.role) {
-        (Some(branch), Role::Build) => out.push_str(&format!(
+    // The brief tells an agent only what it still has to do: a bound scope has nothing to claim,
+    // and a claim from its agent is refused.
+    match (&scope.worktree, &scope.branch, scope.role) {
+        (Some(rel), Some(branch), Role::Build) => out.push_str(&format!(
+            "Your worktree ({rel}) is already bound to this scope and is on {branch}. Do not run \
+             `kanbanr scope claim`: nothing needs claiming, and a bound scope refuses it.\n\n"
+        )),
+        (Some(rel), _, _) => out.push_str(&format!(
+            "Your worktree ({rel}) is already bound to this scope. Do not run `kanbanr scope \
+             claim`: nothing needs claiming, and a bound scope refuses it.\n\n"
+        )),
+        (None, Some(branch), Role::Build) => out.push_str(&format!(
             "First, in your worktree: `kanbanr scope claim {}` (switches you to {branch})\n\n",
             scope.id
         )),
-        _ => out.push_str(&format!(
+        (None, _, _) => out.push_str(&format!(
             "First, in your worktree: `kanbanr scope claim {}`\n\n",
             scope.id
         )),
@@ -1760,7 +1770,12 @@ mod tests {
             features: Vec::new(),
             milestones: Vec::new(),
         };
-        let b = brief(&scope(Role::Build), &project);
+        let unbound = |role| Scope {
+            worktree: None,
+            claimed_at: None,
+            ..scope(role)
+        };
+        let b = brief(&unbound(Role::Build), &project);
         for want in [
             "## Your boundaries — kanbanr agent scope SC-007 (build, FEAT-214), enforced by kanbanr",
             "`kanbanr scope claim SC-007` (switches you to feat/FEAT-214-agent-scopes)",
@@ -1775,7 +1790,7 @@ mod tests {
         ] {
             assert!(b.contains(want), "the brief says {want:?}:\n{b}");
         }
-        let d = brief(&scope(Role::Design), &project);
+        let d = brief(&unbound(Role::Design), &project);
         assert!(d.contains("(design, FEAT-214)"), "{d}");
         assert!(
             d.contains("| FEAT-214's record | nothing | every write |"),
@@ -1786,6 +1801,38 @@ mod tests {
             "{d}"
         );
         assert!(!d.contains("switches you"), "{d}");
+    }
+
+    /// DEF-023 R-1, R-3: a bound scope's brief has no claim step; it names the worktree and branch.
+    #[test]
+    fn a_bound_scopes_brief_has_no_claim_step() {
+        let project = Project {
+            id: "kanbanr".into(),
+            config: crate::ProjectConfig::for_new_project("kanbanr"),
+            features: Vec::new(),
+            milestones: Vec::new(),
+        };
+        let b = brief(&scope(Role::Build), &project);
+        assert!(!b.contains("scope claim SC-007"), "{b}");
+        assert!(!b.contains("First, in your worktree"), "{b}");
+        assert!(
+            b.contains("Your worktree (.claude/worktrees/agent-x) is already bound to this scope and is on feat/FEAT-214-agent-scopes."),
+            "{b}"
+        );
+        assert!(b.contains("nothing needs claiming"), "{b}");
+        assert!(b.contains("| Remote | nothing |"), "{b}");
+        let d = brief(&scope(Role::Design), &project);
+        assert!(!d.contains("scope claim SC-007"), "{d}");
+        assert!(
+            d.contains("Your worktree (.claude/worktrees/agent-x) is already bound to this scope. Do not run"),
+            "{d}"
+        );
+        let unbound = Scope {
+            worktree: None,
+            claimed_at: None,
+            ..scope(Role::Build)
+        };
+        assert!(brief(&unbound, &project).contains("`kanbanr scope claim SC-007`"));
     }
 
     /// FEAT-214 R-4: every `resolve_with` rule, and that it fails closed — a missing, foreign,
