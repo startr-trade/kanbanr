@@ -354,7 +354,10 @@ mod tests {
     #[test]
     fn an_unreadable_acceptance_value_is_refused() {
         let e = accepted_from_env(Some("maybe")).unwrap_err();
-        assert!(e.contains("maybe") && e.contains("KANBANR_ALLOW_REMOTE_WRITES"), "{e}");
+        assert!(
+            e.contains("maybe") && e.contains("KANBANR_ALLOW_REMOTE_WRITES"),
+            "{e}"
+        );
     }
 
     #[test]

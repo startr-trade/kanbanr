@@ -77,18 +77,18 @@ pub async fn run_with(
 ) -> anyhow::Result<()> {
     // Settings are read once, here, and checked where read (factor 3); every refusal comes before
     // the monitor binds, watches or writes anything.
-    let from_env = origin::accepted_from_env(
-        std::env::var("KANBANR_ALLOW_REMOTE_WRITES").ok().as_deref(),
-    )
-    .map_err(anyhow::Error::msg)?;
+    let from_env =
+        origin::accepted_from_env(std::env::var("KANBANR_ALLOW_REMOTE_WRITES").ok().as_deref())
+            .map_err(anyhow::Error::msg)?;
     let accepted = remote_writes || from_env;
     if let Some(text) =
         origin::bind_refusal(&bind, allow_writes, accepted).map_err(anyhow::Error::msg)?
     {
         anyhow::bail!(text);
     }
-    let origins = origin::parse_origins(&std::env::var("KANBANR_ALLOWED_ORIGINS").unwrap_or_default())
-        .map_err(anyhow::Error::msg)?;
+    let origins =
+        origin::parse_origins(&std::env::var("KANBANR_ALLOWED_ORIGINS").unwrap_or_default())
+            .map_err(anyhow::Error::msg)?;
     std::fs::create_dir_all(data_dir.join("projects"))?;
     let store = Arc::new(Store::new(data_dir.clone()));
     let (tx, _rx) = broadcast::channel::<String>(256);
@@ -290,7 +290,11 @@ pub async fn run_with(
         );
     }
     let accepted_from = if allow_writes {
-        let mut from: Vec<String> = guard.hosts().iter().map(|h| format!("http://{h}")).collect();
+        let mut from: Vec<String> = guard
+            .hosts()
+            .iter()
+            .map(|h| format!("http://{h}"))
+            .collect();
         from.extend(guard.origins().iter().cloned());
         format!("\nwrites accepted from: {}", from.join(", "))
     } else {

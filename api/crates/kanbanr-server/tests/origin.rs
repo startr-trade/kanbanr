@@ -282,7 +282,10 @@ fn writes_on_a_non_local_bind_refuse_to_start() {
         None,
         false,
     ));
-    let text = format!("{:#}", r.expect_err("a reachable bind with writes is refused"));
+    let text = format!(
+        "{:#}",
+        r.expect_err("a reachable bind with writes is refused")
+    );
     assert!(text.contains("--allow-remote-writes"), "{text}");
     assert!(
         std::net::TcpListener::bind(format!("0.0.0.0:{port}")).is_ok(),

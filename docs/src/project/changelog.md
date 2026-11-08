@@ -6,6 +6,12 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **The monitor refuses to start with writes on at an address other machines can reach (DEF-026).**
+  Accept it with `--allow-remote-writes` or `KANBANR_ALLOW_REMOTE_WRITES`; `KANBANR_ALLOWED_ORIGINS`
+  lets a write come from an https origin through a proxy you name.
+
 ## [0.5.0] - 2026-11-06
 
 ### Added
