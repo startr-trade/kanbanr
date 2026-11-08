@@ -287,6 +287,8 @@ export interface PendingReview {
   finished?: boolean;
   /** Sign-offs the item's next stage is waiting on (FEAT-117). */
   signoffs_needed?: string[];
+  /** The item lists no documents, so signing off docs-folded confirms that it changes none (DEF-033). */
+  changes_no_documents?: boolean;
   /** Present when the item is ready for release and in none: the planned releases, in file order
    * (FEAT-185). Empty means there is none yet, and only a new release can be chosen. */
   release_choices?: string[];
