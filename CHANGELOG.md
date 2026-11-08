@@ -16,6 +16,15 @@ All notable changes to kanbanr are documented here. The format follows
   guard keeps the coordinator out of agents' worktrees and names the way out (`git -C <path>`),
   test capture finds its board from the project folder and records the coordinator's runs, and
   `kanbanr scope issue` needs the Claude Code hooks that tell the two apart (`kanbanr hooks install`).
+- **A batch refuses a field its operation does not take, instead of ignoring it and reporting
+  success (DEF-018).** `{"op":"feature.edit","code":"FEAT-001","sprint":""}` used to print
+  `applied 1 operation(s)` and change nothing. Every operation now refuses a field it does not
+  accept, in a dry run as in a real one, naming the operation by position and kind and the field
+  (`operation 1 (feature.edit): unknown field ...`), and writes nothing. For `sprint` the refusal
+  says sprint membership is changed with `kanbanr sprint plan` and `kanbanr sprint unplan`. A bundle
+  that sent a field no operation ever took, such as `ref` on `feature.edit`, now fails where it was
+  silently ignored; remove the field to get the old result.
+
 ### Added
 
 - **Release and install builds are locked, and releases carry SBOMs and attestations (MNT-004).**
