@@ -90,7 +90,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr doctor` | every broken reference and every gap, across the board — including links in specs and docs to items, requirements, ADRs, goals or docs the board does not have, diagram problems: each Mermaid block in a spec or doc the lint rejects, with its file, diagram number, line and rule, and each coverage rule a view still fails, with its first ten uncovered subjects. Warns only about what each item's current stage asks; what later stages will ask is printed after the warnings as counts |
 | `kanbanr check [CODE]` | what one item has not said, and what it cannot yet show |
 | `kanbanr review [CODE] [--pending] [--ui]` | the decision brief — one item, all of them, or in the browser |
-| `kanbanr approve <CODE> [--by …]` | records agreement, attributed to the board's commit identity |
+| `kanbanr approve <CODE> [--by …]` | records agreement, attributed to the board's commit identity, and where it was taken (`conversation` inside a Claude Code session, else `terminal`). If the latest verdict on the same text is the same, it records nothing and prints `already approved by … from the monitor; nothing recorded`; `ratify` and `signoff` do the same |
 | `kanbanr unapprove <CODE> --reason "…"` | takes an agreement back, with a reason it refuses to go without; the record of having given it stays |
 | `kanbanr capture` | reads a test run's output (run by the hook; you never call it) |
 | `kanbanr split-from <CODE> <PARENT>` | records that an item was sliced out of another |

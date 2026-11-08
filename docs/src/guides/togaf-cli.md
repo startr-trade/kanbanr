@@ -209,6 +209,13 @@ removed, the next move says so, and you approve again:
 cannot move FEAT-001 to 'System Design': approval lapsed — the definition changed after it was approved.
 ```
 
+**A verdict records where it was taken.** Each approval, ratification, sign-off and decision notes
+whether it came from the monitor, from a command inside a Claude Code session (`conversation`), or
+from your terminal. `kanbanr feature show` ends each line with it, and `--json` carries `origin`; an
+item from before 0.6.0 reads origin unknown. Repeating a verdict on text that hasn't changed records
+nothing and prints `already approved by Ada on 2026-11-07 12:26:00 from the monitor; nothing
+recorded`. A sign-off repeated with a new note or doc is recorded.
+
 **A changed spec comes back for sign-off.** A `design-review` sign-off covers the whole spec as it
 was when you gave it. If the spec changes afterwards, even outside `## Design`, the sign-off reads
 "changed since sign-off", and `kanbanr review --pending` lists the item as `spec_changed` with the
