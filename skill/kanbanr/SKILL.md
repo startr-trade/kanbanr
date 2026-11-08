@@ -450,7 +450,10 @@ When items are waiting (`kanbanr review --pending --json`, `kanbanr adr list --j
 `proposed` decisions, and the Releases page for a release ready to move), say so in one message:
 how many, which, and the page's address. Never list them as questions. If the user asks you to
 explain one, explain it, then send them back to the page. If they want a change, make it; the item
-returns to the queue as its approval or sign-off requires. **If a verdict was ever recorded that
+returns to the queue as its approval or sign-off requires. A verdict records where it was taken (monitor,
+conversation or terminal), and one that repeats the latest on unchanged text records nothing: if a
+command answers "already …; nothing recorded", tell the user who decided first and stop.
+**If a verdict was ever recorded that
 the user did not give, say so at once**, and ask them to withdraw it on the item's page.
 
 The queue offers a sign-off only for the stage the item reaches **next**, and only once that

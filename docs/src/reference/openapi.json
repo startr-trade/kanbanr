@@ -71,6 +71,10 @@
             "description": "A short human description of the change.",
             "type": "string"
           },
+          "origin": {
+            "description": "Where a verdict was taken (DEF-028); empty for any other change.",
+            "type": "string"
+          },
           "time": {
             "description": "RFC3339 timestamp.",
             "type": "string"
@@ -103,6 +107,10 @@
           },
           "decided": {
             "description": "When the decider accepted or rejected it (FEAT-153). `date` is when it was proposed.",
+            "type": "string"
+          },
+          "decided_origin": {
+            "description": "Where the verdict was taken (DEF-028): `monitor`, `conversation`, `terminal` or `delegated`.",
             "type": "string"
           },
           "deciders": {
@@ -199,6 +207,10 @@
           "by": {
             "type": "string"
           },
+          "origin": {
+            "description": "Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a\nrecord written before origin existed, which reads as unknown; kept as a string so a newer\nkanbanr's value survives.",
+            "type": "string"
+          },
           "parts": {
             "additionalProperties": {
               "type": "string"
@@ -225,6 +237,10 @@
             "type": "string"
           },
           "by": {
+            "type": "string"
+          },
+          "origin": {
+            "description": "Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a\nrecord written before origin existed, which reads as unknown; kept as a string so a newer\nkanbanr's value survives.",
             "type": "string"
           },
           "reason": {
@@ -3220,6 +3236,13 @@
           "shipped_at": {
             "type": "string"
           },
+          "shipped_by": {
+            "description": "Who cut the release, and from where (DEF-028). Empty on a release cut before origin existed.",
+            "type": "string"
+          },
+          "shipped_origin": {
+            "type": "string"
+          },
           "stage": {
             "description": "Where the release is now, from `cadence.release_stages` (FEAT-183). Empty until first\npromoted: a release added before stages existed reads as \"not yet a candidate\".",
             "type": "string"
@@ -3442,6 +3465,10 @@
             "type": "string"
           },
           "note": {
+            "type": "string"
+          },
+          "origin": {
+            "description": "Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a\nrecord written before origin existed, which reads as unknown; kept as a string so a newer\nkanbanr's value survives.",
             "type": "string"
           },
           "parts": {
@@ -3737,12 +3764,17 @@
         "type": "string"
       },
       "StageChange": {
+        "additionalProperties": true,
         "description": "One move of a release between stages: where to, who moved it, and when (FEAT-183). A move back\ncarries the reason it was made.",
         "properties": {
           "at": {
             "type": "string"
           },
           "by": {
+            "type": "string"
+          },
+          "origin": {
+            "description": "Where it was made: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Empty on a\nrecord written before origin existed.",
             "type": "string"
           },
           "reason": {

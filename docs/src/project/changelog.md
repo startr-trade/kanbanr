@@ -8,6 +8,18 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **A decision records where it was taken, and a repeat records nothing (DEF-028).** Every approval,
+  ratification, sign-off and its withdrawal, decision, promotion, confirmation after the tag, patch
+  from a failed tag and cut now records its `origin`: `monitor` for a click on the monitor,
+  `conversation` for a command run inside a Claude Code session, `terminal` otherwise. The front end
+  names it; a request cannot. `feature show` ends each verdict line with it and `--json` carries
+  it; a record from an earlier version reads as origin unknown and is not rewritten. A release's cut
+  also records `shipped_by` and `shipped_origin`, and a decision `decided_origin`. The same
+  approval, ratification or sign-off repeated on text that has not changed records nothing, with no
+  activity entry, event or commit, and answers with `already_recorded` saying who recorded it first,
+  when and from where; a decision, promotion or cut asked for twice is refused and now says the
+  same. Release stage changes keep keys they do not know: a kanbanr older than this one that
+  rewrites `releases.yaml` drops `origin` from them.
 - **A scope issued with `--worktree` no longer tells its agent to claim it (DEF-023).** The scope
   is bound at once, so the brief's claim step was refused when the agent ran it. A bound scope's
   brief now says which worktree it is bound to and the branch it is on, and that nothing needs

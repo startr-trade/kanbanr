@@ -52,6 +52,7 @@ pub mod mirror;
 pub mod models;
 #[cfg(feature = "schema")]
 pub mod openapi;
+pub mod origin;
 pub mod portfolio;
 pub mod project;
 pub mod query;
@@ -78,6 +79,7 @@ pub use error::{CoreError, Result};
 pub use models::{
     FeatureItem, IndexEntry, IssueLink, Milestone, Source, Status, Task, TaskState, TodoList,
 };
+pub use origin::Origin;
 pub use store::{Project, Store};
 
 use time::OffsetDateTime;

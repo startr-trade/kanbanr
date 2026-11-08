@@ -128,6 +128,15 @@ created items may carry a `ref` alias later ops reference; the first failure nam
 A daemon started with `--allow-writes` takes the same writes over HTTP, under `/api/write/...`,
 for the monitor's approval and release actions. Those routes are not part of the read API.
 
+A verdict route (approve, ratify, unapprove, sign-off and its withdrawal, accepting or rejecting a
+decision, promote, cut, patch-from-tag) records where it was taken. The daemon stamps `monitor`
+itself and ignores an `origin` in the request. When the same approval, ratification or sign-off
+repeats the latest one on text that has not changed, nothing is recorded, no activity entry, event
+or commit is made, and the answer is the item with an `already_recorded` object: `what`, `by`, `at`,
+`origin` and a `sentence` saying who recorded it first, when and from where. A sign-off repeated
+with a new note or doc is recorded. A decision, promotion or cut asked for a second time is
+refused as before, and the refusal now names who did it first.
+
 ## The OpenAPI document
 
 The document is generated, never edited by hand:

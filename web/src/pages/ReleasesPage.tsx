@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api";
+import { api, viaOrigin } from "../api";
 import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
@@ -130,7 +130,7 @@ export default function ReleasesPage() {
                     title={
                       (r.stages ?? []).length > 0
                         ? (r.stages ?? [])
-                            .map((c) => `${c.stage} · ${c.by} · ${c.at.slice(0, 10)}${c.reason ? ` — ${c.reason}` : ""}`)
+                            .map((c) => `${c.stage} · ${c.by} · ${c.at.slice(0, 10)}${viaOrigin(c.origin)}${c.reason ? ` — ${c.reason}` : ""}`)
                             .join("\n")
                         : "not yet promoted"
                     }

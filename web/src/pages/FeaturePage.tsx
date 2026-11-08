@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api";
+import { api, viaOrigin } from "../api";
 import { isReadOnly } from "../runtimeConfig";
 import { useAsync, useLiveTick } from "../live";
 import { useScrollToHash } from "../useBoardIndex";
@@ -240,7 +240,10 @@ function Definition({ feature, project, tick }: { feature: Feature; project: str
   const approval =
     def.approval == null
       ? { label: "not approved", cls: "chip warn" }
-      : { label: `approved by ${def.approval.by} · ${day(def.approval.at)}`, cls: "chip" };
+      : {
+          label: `approved by ${def.approval.by} · ${day(def.approval.at)}${viaOrigin(def.approval.origin)}`,
+          cls: "chip",
+        };
 
   /// Withdrawing is the other half of agreeing (FEAT-069): an approval recorded by the wrong hand,
   /// or a mind since changed, needs a remedy that is not editing yaml.
@@ -363,6 +366,7 @@ function Definition({ feature, project, tick }: { feature: Feature; project: str
             {(def.approvals ?? []).map((event, i) => (
               <li key={i} className="muted small">
                 {day(event.at)} — {event.verdict} by {event.by}
+                {viaOrigin(event.origin)}
                 {event.reason ? `: ${event.reason}` : ""}
               </li>
             ))}
@@ -589,10 +593,10 @@ function Signoffs({
               ) : null}
               <span className="muted small">
                 {gone && s.verdict === "withdrawn"
-                  ? `withdrawn by ${s.by} · ${day(s.at)}: ${s.reason ?? ""}`
+                  ? `withdrawn by ${s.by} · ${day(s.at)}${viaOrigin(s.origin)}: ${s.reason ?? ""}`
                   : gone
                     ? "withdrawn"
-                    : `by ${s.by} · ${day(s.at)}${s.status ? ` (at ${s.status})` : ""}${s.note ? ` — ${s.note}` : ""}`}
+                    : `by ${s.by} · ${day(s.at)}${viaOrigin(s.origin)}${s.status ? ` (at ${s.status})` : ""}${s.note ? ` — ${s.note}` : ""}`}
               </span>
               {writable && !gone ? (
                 asking === s.id ? (

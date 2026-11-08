@@ -59,6 +59,18 @@ git directory (`.git/worktrees/<name>/`): it cannot be committed, survives `git 
 with the worktree. A task records when its state last changed (`changed_at`), which agent drift is
 measured from.
 
+**Where a verdict was taken** (DEF-028). Every approval event and standing approval, every
+sign-off entry (given or withdrawn) and every release stage change carries an optional `origin`:
+`monitor` for a click on the monitor, `conversation` for a command that ran inside a Claude Code
+session (`CLAUDECODE` set), `terminal` for any other, and `delegated`, reserved. The front end
+that received the verdict sets it; a value in the request is ignored. A release also records
+`shipped_by` and `shipped_origin` when it is cut, and a decision records `decided_origin` in its
+front matter beside `deciders` and `decided`. A record with no `origin` was written before this
+existed and reads as unknown; it is not back-filled. The value is kept as a string, so an origin an
+older kanbanr does not know survives its write. Release stage changes also keep keys they do not
+know now; a kanbanr older than 0.6.0 that rewrites `releases.yaml` drops `origin` from them. An
+origin is a label for review, not proof of who was at the keyboard.
+
 **Side files, not new entities.** `charter.yaml`, `lessons.yaml` and `mirror.yaml` follow one
 pattern: absent means "none", empty removes the file, and none of them is part of `Project` — so
 `GET /projects/{p}` is unchanged by their presence and an older board loads without them.

@@ -37,6 +37,42 @@ fn with_diagram_warnings(
     ser(&v)
 }
 
+/// The earlier verdict a repeat approval or ratification of `code` collides with, if any (DEF-028).
+fn repeat_approval(
+    store: &Store,
+    p: &str,
+    code: &str,
+    verdict: &str,
+) -> Result<Option<crate::origin::Earlier>> {
+    let project = store.load_meta(p)?;
+    Ok(project
+        .feature(code)?
+        .definition
+        .as_ref()
+        .and_then(|d| crate::origin::duplicate_approval(d, verdict)))
+}
+
+/// The answer to a verdict that adds nothing to the record: the item as it stands, with
+/// `already_recorded` saying who recorded it first, when and from where. Nothing was written.
+fn ser_already_item(
+    item: &crate::models::FeatureItem,
+    earlier: &crate::origin::Earlier,
+) -> Result<String> {
+    let mut out = serde_json::to_value(item).map_err(|e| CoreError::Unsupported(e.to_string()))?;
+    out["already_recorded"] = earlier.to_json();
+    ser(&out)
+}
+
+fn ser_already(
+    store: &Store,
+    p: &str,
+    code: &str,
+    earlier: &crate::origin::Earlier,
+) -> Result<String> {
+    let item = store.load_meta(p)?.feature(code)?.clone();
+    ser_already_item(&item, earlier)
+}
+
 /// Who is recording this verdict — required, never defaulted (FEAT-077).
 ///
 /// This used to fall back to the string "unknown", and the monitor sent "reviewed in the monitor":
@@ -951,44 +987,64 @@ fn dispatch_routes(
                 str_field(b, "checked_rev").as_deref(),
             )?)
         }
-        ("POST", ["projects", p, "features", code, "unapprove"]) => ser(&store.unapprove_feature(
-            p,
-            code,
-            &approver(b)?,
-            &str_field(b, "reason").unwrap_or_default(),
-        )?),
-        ("POST", ["projects", p, "features", code, "ratify"]) => ser(&{
-            shown_rev(store, p, code, b)?;
-            store.ratify_feature(
+        ("POST", ["projects", p, "features", code, "unapprove"]) => ser(&store
+            .unapprove_feature_as(
                 p,
                 code,
                 &approver(b)?,
                 &str_field(b, "reason").unwrap_or_default(),
-            )?
-        }),
+                &crate::origin::from_body(b),
+            )?),
+        ("POST", ["projects", p, "features", code, "ratify"]) => {
+            shown_rev(store, p, code, b)?;
+            if let Some(earlier) = repeat_approval(store, p, code, "ratified")? {
+                return ser_already(store, p, code, &earlier);
+            }
+            ser(&store.ratify_feature_as(
+                p,
+                code,
+                &approver(b)?,
+                &str_field(b, "reason").unwrap_or_default(),
+                &crate::origin::from_body(b),
+            )?)
+        }
         ("POST", ["projects", p, "features", code, "approve"]) => {
             shown_rev(store, p, code, b)?;
-            ser(&store.approve_feature(p, code, &approver(b)?)?)
+            if let Some(earlier) = repeat_approval(store, p, code, "approved")? {
+                return ser_already(store, p, code, &earlier);
+            }
+            ser(&store.approve_feature_as(p, code, &approver(b)?, &crate::origin::from_body(b))?)
         }
         // Withdraw a sign-off given in error (FEAT-182). Matched before the sign-off route.
         ("POST", ["projects", p, "features", code, "signoff", name, "withdraw"]) => ser(&store
-            .withdraw_signoff(
+            .withdraw_signoff_as(
                 p,
                 code,
                 &percent_decode(name),
                 &approver(b)?,
                 &str_field(b, "reason").unwrap_or_default(),
+                &crate::origin::from_body(b),
             )?),
         ("POST", ["projects", p, "features", code, "signoff", name]) => {
             shown_rev(store, p, code, b)?;
             shown_spec_rev(store, p, code, &percent_decode(name), b)?;
-            let (feature, held) = store.signoff_feature_reported(
+            let (name, note, doc) = (
+                percent_decode(name),
+                str_field(b, "note").unwrap_or_default(),
+                str_field(b, "doc").unwrap_or_default(),
+            );
+            let item = store.load_meta(p)?.feature(code)?.clone();
+            if let Some(earlier) = crate::origin::duplicate_signoff(&item, &name, &note, &doc) {
+                return ser_already_item(&item, &earlier);
+            }
+            let (feature, held) = store.signoff_feature_reported_as(
                 p,
                 code,
-                &percent_decode(name),
+                &name,
                 &approver(b)?,
-                &str_field(b, "note").unwrap_or_default(),
-                &str_field(b, "doc").unwrap_or_default(),
+                &note,
+                &doc,
+                &crate::origin::from_body(b),
             )?;
             let mut out = serde_json::to_value(&feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
@@ -1080,6 +1136,7 @@ fn dispatch_routes(
                 &parent,
                 &str_field(b, "by").unwrap_or_default(),
                 repo,
+                &crate::origin::from_body(b),
             )?),
             None => ser(&crate::releases::add(
                 store,
@@ -1098,9 +1155,13 @@ fn dispatch_routes(
                 &items,
             )?)
         }
-        ("POST", ["projects", p, "releases", version, "cut"]) => {
-            ser(&crate::releases::cut(store, p, &percent_decode(version))?)
-        }
+        ("POST", ["projects", p, "releases", version, "cut"]) => ser(&crate::releases::cut_as(
+            store,
+            p,
+            &percent_decode(version),
+            &str_field(b, "by").unwrap_or_default(),
+            &crate::origin::from_body(b),
+        )?),
         // What cutting a release now would ship and carry over, by the cut's own rule, with nothing
         // written (FEAT-185): the monitor's production confirmation lists exactly this.
         ("GET", ["projects", p, "releases", version, "cut-preview"]) => ser(
@@ -1121,6 +1182,7 @@ fn dispatch_routes(
                 crate::releases::PromoteOptions {
                     expect_tip: expect.as_deref(),
                     fetch: crate::releases::Fetch::Try,
+                    origin: &crate::origin::from_body(b),
                 },
             )?)
         }
@@ -1136,6 +1198,7 @@ fn dispatch_routes(
                 &str_field(b, "link").unwrap_or_default(),
                 &str_field(b, "notes").unwrap_or_default(),
                 repo,
+                &crate::origin::from_body(b),
             )?)
         }
         // What promoting a release would do, with nothing changed (FEAT-212): `?stage=` (default
@@ -1763,16 +1826,23 @@ fn dispatch_routes(
                 .map_err(|e| CoreError::Unsupported(format!("invalid decision: {e}")))?;
             ser(&crate::adr::create(store, p, &title, adr)?)
         }
-        ("POST", ["projects", p, "adrs", id, "accept"]) => {
-            ser(&crate::adr::decide(store, p, id, true, &approver(b)?, "")?)
-        }
-        ("POST", ["projects", p, "adrs", id, "reject"]) => ser(&crate::adr::decide(
+        ("POST", ["projects", p, "adrs", id, "accept"]) => ser(&crate::adr::decide_as(
+            store,
+            p,
+            id,
+            true,
+            &approver(b)?,
+            "",
+            &crate::origin::from_body(b),
+        )?),
+        ("POST", ["projects", p, "adrs", id, "reject"]) => ser(&crate::adr::decide_as(
             store,
             p,
             id,
             false,
             &approver(b)?,
             &str_field(b, "reason").unwrap_or_default(),
+            &crate::origin::from_body(b),
         )?),
         ("POST", ["projects", p, "adrs", id, "supersede"]) => {
             let replaces = str_field(b, "replaces").unwrap_or_default();

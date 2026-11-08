@@ -163,6 +163,8 @@ export interface ApprovalEvent {
   verdict: "approved" | "ratified" | "withdrawn";
   reason?: string;
   rev?: string;
+  /** Where it was taken: monitor, conversation, terminal or delegated (DEF-028). Absent means unknown. */
+  origin?: string;
 }
 
 export interface FeatureDefinition {
@@ -202,6 +204,8 @@ export interface Signoff {
   /** Absent means given. */
   verdict?: "given" | "withdrawn";
   reason?: string;
+  /** Where it was taken (DEF-028). Absent means unknown. */
+  origin?: string;
 }
 
 /** The six completeness dimensions, one line each. */
@@ -220,6 +224,8 @@ export interface Approval {
   rev: string;
   /** A hash per part of the definition the approval covered (FTR-018). */
   parts?: Record<string, string>;
+  /** Where it was taken (DEF-028). Absent means unknown. */
+  origin?: string;
 }
 
 export interface Requirement {
@@ -508,7 +514,10 @@ export interface Release {
   /** Where it is now, from the project's release stages; absent until first promoted (FEAT-183). */
   stage?: string;
   /** Every stage change, oldest first. A move back carries its reason. */
-  stages?: { stage: string; by: string; at: string; reason?: string }[];
+  stages?: { stage: string; by: string; at: string; reason?: string; origin?: string }[];
+  /** Who cut the release and from where (DEF-028). Absent means unknown. */
+  shipped_by?: string;
+  shipped_origin?: string;
   /** The code branch, made on entering the first stage. */
   branch?: string;
   /** The cut release this patches (FEAT-184); absent for an ordinary release. */
@@ -778,6 +787,8 @@ export type Adr = {
   title?: string;
   date?: string;
   decided?: string;
+  /** Where the verdict was taken (DEF-028). Absent means unknown. */
+  decided_origin?: string;
   reason?: string;
   deciders?: string[];
   affects?: string[];

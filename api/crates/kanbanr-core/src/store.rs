@@ -1214,6 +1214,17 @@ impl Store {
 
     /// Record agreement to an item's definition as it currently stands (FEAT-048).
     pub fn approve_feature(&self, id: &str, code: &str, by: &str) -> Result<FeatureItem> {
+        self.approve_feature_as(id, code, by, "")
+    }
+
+    /// As [`Store::approve_feature`], recording where it was taken (DEF-028).
+    pub fn approve_feature_as(
+        &self,
+        id: &str,
+        code: &str,
+        by: &str,
+        origin: &str,
+    ) -> Result<FeatureItem> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let feature = project.feature_mut(code)?;
@@ -1231,9 +1242,11 @@ impl Store {
             at: at.clone(),
             rev: rev.clone(),
             parts: definition.part_revs(),
+            origin: origin.to_string(),
         });
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
+            origin: origin.to_string(),
             at: at.clone(),
             by: by.to_string(),
             verdict: "approved".to_string(),
@@ -1265,6 +1278,18 @@ impl Store {
         by: &str,
         reason: &str,
     ) -> Result<FeatureItem> {
+        self.ratify_feature_as(id, code, by, reason, "")
+    }
+
+    /// As [`Store::ratify_feature`], recording where it was taken (DEF-028).
+    pub fn ratify_feature_as(
+        &self,
+        id: &str,
+        code: &str,
+        by: &str,
+        reason: &str,
+        origin: &str,
+    ) -> Result<FeatureItem> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let feature = project.feature_mut(code)?;
@@ -1288,9 +1313,11 @@ impl Store {
             at: at.clone(),
             rev: rev.clone(),
             parts: definition.part_revs(),
+            origin: origin.to_string(),
         });
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
+            origin: origin.to_string(),
             at: at.clone(),
             by: by.to_string(),
             verdict: "ratified".to_string(),
@@ -1315,6 +1342,18 @@ impl Store {
         by: &str,
         reason: &str,
     ) -> Result<FeatureItem> {
+        self.unapprove_feature_as(id, code, by, reason, "")
+    }
+
+    /// As [`Store::unapprove_feature`], recording where it was taken (DEF-028).
+    pub fn unapprove_feature_as(
+        &self,
+        id: &str,
+        code: &str,
+        by: &str,
+        reason: &str,
+        origin: &str,
+    ) -> Result<FeatureItem> {
         // Taking an agreement back needs a reason, wherever it is asked from (FEAT-182 R-5): the
         // monitor's button enforced this, the store did not.
         if reason.trim().is_empty() {
@@ -1331,8 +1370,23 @@ impl Store {
             .as_mut()
             .ok_or_else(|| CoreError::Unsupported(format!("{code} has no definition")))?;
         if definition.approval.is_none() {
+            // When the last verdict was a withdrawal, say who made it, when and from where.
+            let first = definition
+                .approvals
+                .last()
+                .filter(|e| e.verdict == "withdrawn")
+                .map(|e| {
+                    let earlier = crate::origin::Earlier {
+                        what: "withdrawn".into(),
+                        by: e.by.clone(),
+                        at: e.at.clone(),
+                        origin: e.origin.clone(),
+                    };
+                    format!(" ({})", earlier.sentence())
+                })
+                .unwrap_or_default();
             return Err(CoreError::Unsupported(format!(
-                "{code} is not approved, so there is nothing to withdraw"
+                "{code} is not approved, so there is nothing to withdraw{first}"
             )));
         }
         let at = now_rfc3339();
@@ -1340,6 +1394,7 @@ impl Store {
         definition.approval = None;
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
+            origin: origin.to_string(),
             at: at.clone(),
             by: by.to_string(),
             verdict: "withdrawn".to_string(),
@@ -1365,7 +1420,22 @@ impl Store {
         note: &str,
         doc: &str,
     ) -> Result<FeatureItem> {
-        self.signoff_feature_reported(id, code, signoff, by, note, doc)
+        self.signoff_feature_as(id, code, signoff, by, note, doc, "")
+    }
+
+    /// As [`Store::signoff_feature`], recording where it was taken (DEF-028).
+    #[allow(clippy::too_many_arguments)]
+    pub fn signoff_feature_as(
+        &self,
+        id: &str,
+        code: &str,
+        signoff: &str,
+        by: &str,
+        note: &str,
+        doc: &str,
+        origin: &str,
+    ) -> Result<FeatureItem> {
+        self.signoff_feature_reported_as(id, code, signoff, by, note, doc, origin)
             .map(|(f, _)| f)
     }
 
@@ -1379,6 +1449,21 @@ impl Store {
         by: &str,
         note: &str,
         doc: &str,
+    ) -> Result<(FeatureItem, Option<String>)> {
+        self.signoff_feature_reported_as(id, code, signoff, by, note, doc, "")
+    }
+
+    /// As [`Store::signoff_feature_reported`], recording where it was taken (DEF-028).
+    #[allow(clippy::too_many_arguments)]
+    pub fn signoff_feature_reported_as(
+        &self,
+        id: &str,
+        code: &str,
+        signoff: &str,
+        by: &str,
+        note: &str,
+        doc: &str,
+        origin: &str,
     ) -> Result<(FeatureItem, Option<String>)> {
         let signoff = signoff.trim();
         if signoff.is_empty() {
@@ -1425,6 +1510,7 @@ impl Store {
             note: note.trim().to_string(),
             doc: doc.trim().to_string(),
             status,
+            origin: origin.to_string(),
             ..Default::default()
         });
         feature.updated_at = at;
@@ -1454,6 +1540,19 @@ impl Store {
         by: &str,
         reason: &str,
     ) -> Result<FeatureItem> {
+        self.withdraw_signoff_as(id, code, signoff, by, reason, "")
+    }
+
+    /// As [`Store::withdraw_signoff`], recording where it was taken (DEF-028).
+    pub fn withdraw_signoff_as(
+        &self,
+        id: &str,
+        code: &str,
+        signoff: &str,
+        by: &str,
+        reason: &str,
+        origin: &str,
+    ) -> Result<FeatureItem> {
         let signoff = signoff.trim();
         if reason.trim().is_empty() {
             return Err(CoreError::Unsupported(
@@ -1481,8 +1580,15 @@ impl Store {
                 )));
             }
             Some(s) if !s.verdict.is_given() => {
+                let earlier = crate::origin::Earlier {
+                    what: "withdrawn".into(),
+                    by: s.by.clone(),
+                    at: s.at.clone(),
+                    origin: s.origin.clone(),
+                };
                 return Err(CoreError::Unsupported(format!(
-                    "sign-off '{signoff}' on {code} is already withdrawn"
+                    "sign-off '{signoff}' on {code} is already withdrawn: {}",
+                    earlier.sentence()
                 )));
             }
             Some(_) => {}
@@ -1496,6 +1602,7 @@ impl Store {
             status,
             verdict: crate::models::SignoffVerdict::Withdrawn,
             reason: reason.trim().to_string(),
+            origin: origin.to_string(),
             ..Default::default()
         });
         feature.updated_at = at;
@@ -2695,6 +2802,7 @@ impl Store {
                         at: now_rfc3339(),
                         rev: definition.content_rev(),
                         parts: definition.part_revs(),
+                        origin: String::new(),
                     });
                     feature.updated_at = now_rfc3339();
                     pending.persist_features.insert(resolved.clone());

@@ -25,6 +25,9 @@ pub struct Activity {
     /// Made under an agent scope (FEAT-214): the person, by the agent for its item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by_agent: Option<crate::agentscope::ByAgent>,
+    /// Where a verdict was taken (DEF-028); empty for any other change.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin: String,
 }
 
 impl crate::daylog::Dated for Activity {
@@ -114,6 +117,19 @@ pub fn append_by(
     item: Option<&str>,
     by_agent: Option<&crate::agentscope::ByAgent>,
 ) {
+    append_with(data_dir, project, actor, message, item, by_agent, "");
+}
+
+/// [`append_by`], recording where a verdict was taken (DEF-028).
+pub fn append_with(
+    data_dir: &Path,
+    project: &str,
+    actor: &str,
+    message: &str,
+    item: Option<&str>,
+    by_agent: Option<&crate::agentscope::ByAgent>,
+    origin: &str,
+) {
     crate::daylog::append(
         data_dir,
         project,
@@ -124,6 +140,7 @@ pub fn append_by(
             message: message.to_string(),
             item: item.map(String::from),
             by_agent: by_agent.cloned(),
+            origin: origin.to_string(),
         },
     );
 }
@@ -151,6 +168,7 @@ mod tests {
             message: message.to_string(),
             item: None,
             by_agent: None,
+            origin: String::new(),
         }
     }
 
