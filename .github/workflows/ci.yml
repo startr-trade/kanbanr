@@ -505,7 +505,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
-          tool: cargo-deny,cargo-audit
+          tool: cargo-deny,cargo-audit,cargo-cyclonedx
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
@@ -521,3 +521,14 @@ jobs:
       - name: npm audit (the monitor's production dependencies)
         working-directory: web
         run: npm audit --omit=dev
+
+      # Builds read only the lockfiles, and a release says what is inside it (MNT-004). The
+      # SBOM step runs the release's own script, so a broken one shows here before a tag does.
+      - name: The supply-chain check's own tests pass
+        run: python3 -m unittest -q scripts/tests/test_check_supply_chain.py
+
+      - name: Builds are locked and installs are clean
+        run: python3 scripts/check_supply_chain.py
+
+      - name: The SBOMs build and are valid CycloneDX
+        run: scripts/make-sbom.sh ci "$RUNNER_TEMP/sbom"

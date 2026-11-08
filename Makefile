@@ -16,15 +16,16 @@ DATA_DIR ?= $(shell kanbanr where 2>/dev/null || echo $(CURDIR)/../$(notdir $(CU
 SKILLS_DIR ?= $(HOME)/.claude/skills
 IMAGE ?= kanbanr:latest
 
-.PHONY: help build test itest ci audit scan-deps scan-image codeql cli web monitor-bundle check-docs install-cli install-skill install serve docker-build docker-up docker-down screenshots clean
+.PHONY: help build test itest ci audit sbom scan-deps scan-image codeql cli web monitor-bundle check-docs install-cli install-skill install serve docker-build docker-up docker-down screenshots clean
 
 help:
 	@echo "Targets:"
 	@echo "  build         Build the Rust workspace + web SPA"
 	@echo "  test          Unit + Docker-less integration (CLI local writes + 'kanbanr serve' reads)"
-	@echo "  itest         Packaging smoke: build the image + run the testcontainers test"
+	@echo "  itest         Packaging smoke: build the image + run the Docker smoke test"
 	@echo "  ci            Every CI check that can run off GitHub, before a push (scripts/ci-local.sh)"
 	@echo "  audit         Supply chain: cargo deny + cargo audit + npm audit (fails on findings)"
+	@echo "  sbom          The two CycloneDX SBOMs a release carries, into dist-sbom/ (TAG=, default dev)"
 	@echo "  scan-deps     Trivy over the tracked tree: deps, secrets, Dockerfile (fails on any finding)"
 	@echo "  scan-image    Trivy over an image as a release scans it (IMAGE=, default kanbanr:ci-local)"
 	@echo "  codeql        CodeQL for Rust, TypeScript and the workflows; several minutes"
@@ -44,7 +45,7 @@ build:
 test:
 	cd api && cargo test --locked
 
-# Packaging smoke: spin up the real Docker image via testcontainers and confirm it boots and
+# Packaging smoke: run the real Docker image with the docker CLI and confirm it boots and
 # serves the read-only view. Functional coverage is in `make test` (no Docker). The test is
 # #[ignore]d, so build the image first.
 itest: docker-build
@@ -77,6 +78,13 @@ audit:
 	cd api && cargo deny check
 	cd api && cargo audit
 	cd web && npm audit --omit=dev
+	python3 scripts/check_supply_chain.py
+
+# The SBOMs a release attaches (MNT-004): Rust and monitor npm dependencies, CycloneDX, from the
+# lockfiles. Needs cargo-cyclonedx (cargo install cargo-cyclonedx --locked).
+TAG ?= dev
+sbom:
+	scripts/make-sbom.sh "$(TAG)" dist-sbom
 
 # The scanners trivy.yml, release.yml and codeql.yml run, locally (scripts/security-scan.sh). Each
 # fails on a finding, where the workflows report: better seen here than on a public Security tab.
