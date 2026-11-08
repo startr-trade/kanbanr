@@ -567,6 +567,58 @@ pub(crate) fn ship_to(
     Ok(Some(end.clone()))
 }
 
+/// An item planned into a release that has shipped and is not at an end status (DEF-029).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Stranded {
+    pub code: String,
+    pub release: String,
+    /// The day the release shipped, `YYYY-MM-DD`.
+    pub shipped_at: String,
+    pub status: String,
+    /// What holds it, in a sentence.
+    pub why: String,
+}
+
+/// Items planned into a release that has shipped and are not at an end status, with what holds each.
+/// An item the cut carried is planned into another release (or none), so it is not listed. Reads
+/// only (ADR-0005).
+pub fn stranded(
+    project: &Project,
+    charter: &crate::Charter,
+    ctx: &crate::readiness::Context,
+    releases: &[Release],
+) -> Vec<Stranded> {
+    let config = &project.config;
+    let mut found: Vec<Stranded> = Vec::new();
+    for f in &project.features {
+        let Some(release) = f
+            .release
+            .as_deref()
+            .and_then(|v| releases.iter().find(|r| r.version == v))
+            .filter(|r| r.state == ReleaseState::Shipped)
+        else {
+            continue;
+        };
+        if crate::graph::is_terminal_status(config, &f.status) {
+            continue;
+        }
+        let why = match ship_to(project, charter, ctx, f) {
+            Err(why) => why,
+            Ok(Some(end)) => format!("nothing holds it: move it to {end}"),
+            Ok(None) => continue,
+        };
+        found.push(Stranded {
+            code: f.code.clone(),
+            release: release.version.clone(),
+            shipped_at: release.shipped_at.chars().take(10).collect(),
+            status: f.status.clone(),
+            why,
+        });
+    }
+    found.sort_by(|a, b| a.code.cmp(&b.code));
+    found
+}
+
 /// What a cut did.
 #[derive(Debug, Clone, Serialize)]
 pub struct Cut {
