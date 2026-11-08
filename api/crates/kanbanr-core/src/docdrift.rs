@@ -1037,6 +1037,235 @@ pub fn flags_for_changes(
     Ok(flags)
 }
 
+// ---- the board-wide report ------------------------------------------------------------------
+
+/// What the code repository must be for a drift read, in the words the person sees.
+pub const NEEDS_REPO: &str =
+    "the drift check needs the code repository: run it from the project folder";
+
+/// Every flag for the board (or one item), with when it was generated, so two runs can be compared
+/// later (FTR-013 R-8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Report {
+    /// RFC 3339.
+    pub generated_at: String,
+    /// The date the log was read from; empty when all of an item's history was read.
+    pub since: String,
+    /// Grouped by linked text: one flag per text, across the items that flagged it.
+    pub flags: Vec<Flag>,
+}
+
+/// Where `kanbanr drift` looks back to by default: the date of the latest shipped release's tag,
+/// else 60 days before now.
+pub fn default_since(store: &Store, project: &str) -> String {
+    let shipped = crate::releases::load(store, project)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| r.state == crate::releases::ReleaseState::Shipped)
+        .filter_map(|r| {
+            let at = if r.tagged_at.is_empty() {
+                r.shipped_at
+            } else {
+                r.tagged_at
+            };
+            at.get(..10).map(str::to_string)
+        })
+        .max();
+    shipped.unwrap_or_else(|| {
+        let back = OffsetDateTime::now_utc() - time::Duration::days(60);
+        format!(
+            "{:04}-{:02}-{:02}",
+            back.year(),
+            u8::from(back.month()),
+            back.day()
+        )
+    })
+}
+
+/// The item codes a commit message's `Refs:` trailers name (`Refs: kanbanr:FTR-013/R-2`).
+fn refs_in_message(message: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for line in message.lines().filter(|l| l.starts_with("Refs:")) {
+        for (at, _) in line.match_indices("kanbanr:") {
+            let rest = &line[at + "kanbanr:".len()..];
+            let end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                .unwrap_or(rest.len());
+            if valid_code(&rest[..end]) {
+                out.insert(rest[..end].to_string());
+            }
+        }
+    }
+    out
+}
+
+/// One `git log -p -U0` over `since`, split into per-item changes by the commits' `Refs:` trailers.
+fn board_changes(repo: &Path, since: &str) -> Result<BTreeMap<String, Vec<Change>>> {
+    if !valid_since(since) {
+        return Err(CoreError::Refused(format!(
+            "{since:?} is not a date (try 2026-11-01)"
+        )));
+    }
+    let since_arg = format!("--since={since}");
+    let out = coderepo::git(
+        repo,
+        &[
+            "log",
+            "--no-merges",
+            "--all",
+            "--format=@@@%H %cI%n%B%n@@@PATCH",
+            "-p",
+            "-U0",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            &since_arg,
+        ],
+    )?;
+    #[derive(PartialEq)]
+    enum In {
+        Message,
+        Patch,
+    }
+    let mut by_item: BTreeMap<String, Vec<Change>> = BTreeMap::new();
+    let mut flush = |header: &str, message: &str, patch: &str| {
+        let Some((sha, at)) = header.split_once(' ') else {
+            return;
+        };
+        let items = refs_in_message(message);
+        if items.is_empty() {
+            return;
+        }
+        let names = names_in_diff(patch);
+        if names.is_empty() {
+            return;
+        }
+        for item in items {
+            by_item.entry(item.clone()).or_default().push(Change {
+                sha: sha.to_string(),
+                at: at.trim().to_string(),
+                item,
+                names: names.clone(),
+            });
+        }
+    };
+    let (mut header, mut message, mut patch) = (String::new(), String::new(), String::new());
+    let mut state = In::Patch;
+    let mut started = false;
+    for line in out.lines() {
+        if line == "@@@PATCH" {
+            state = In::Patch;
+        } else if state == In::Patch && line.starts_with("@@@") {
+            if started {
+                flush(&header, &message, &patch);
+            }
+            started = true;
+            header = line[3..].to_string();
+            message.clear();
+            patch.clear();
+            state = In::Message;
+        } else if state == In::Message {
+            message.push_str(line);
+            message.push('\n');
+        } else {
+            patch.push_str(line);
+            patch.push('\n');
+        }
+    }
+    if started {
+        flush(&header, &message, &patch);
+    }
+    Ok(by_item)
+}
+
+/// One flag per text, whichever items flagged it.
+fn merge_flags(flags: Vec<Flag>) -> Vec<Flag> {
+    let mut merged: BTreeMap<(TargetKind, String), Flag> = BTreeMap::new();
+    for flag in flags {
+        match merged.entry((flag.target.kind, flag.target.id.clone())) {
+            std::collections::btree_map::Entry::Vacant(e) => {
+                e.insert(flag);
+            }
+            std::collections::btree_map::Entry::Occupied(mut e) => {
+                let into = e.get_mut();
+                let vias: BTreeSet<String> = into.via.drain(..).chain(flag.via).collect();
+                into.via = vias.into_iter().collect();
+                for hit in flag.hits {
+                    match into.hits.iter_mut().find(|h| h.name == hit.name) {
+                        Some(h) => {
+                            let lines: BTreeSet<usize> =
+                                h.lines.iter().chain(&hit.lines).copied().collect();
+                            h.lines = lines.into_iter().collect();
+                        }
+                        None => into.hits.push(hit),
+                    }
+                }
+                into.hits.sort_by(|a, b| a.name.cmp(&b.name));
+                for c in flag.commits {
+                    match into
+                        .commits
+                        .iter_mut()
+                        .find(|k| k.sha == c.sha && k.item == c.item)
+                    {
+                        Some(k) => {
+                            let names: BTreeSet<Name> = k.names.drain(..).chain(c.names).collect();
+                            k.names = names.into_iter().collect();
+                        }
+                        None => into.commits.push(c),
+                    }
+                }
+                into.commits
+                    .sort_by(|a, b| (&a.at, &a.sha).cmp(&(&b.at, &b.sha)));
+            }
+        }
+    }
+    merged.into_values().collect()
+}
+
+/// Every flag for the items with commits since `since` (default: [`default_since`]), or for one
+/// item only. With one item and no `since`, all of that item's history is read, as the Review page
+/// does. Needs the code repository.
+pub fn report(
+    store: &Store,
+    project: &str,
+    since: Option<&str>,
+    item: Option<&str>,
+    repo: Option<&Path>,
+) -> Result<Report> {
+    let repo = repo.ok_or_else(|| CoreError::Unsupported(NEEDS_REPO.into()))?;
+    let generated_at = crate::now_rfc3339();
+    let board = store.load_meta(project)?;
+    let (since_used, by_item) = match (since, item) {
+        (_, Some(code)) => {
+            let changes = item_changes(repo, code, since)?;
+            (
+                since.unwrap_or_default().to_string(),
+                BTreeMap::from([(code.to_string(), changes)]),
+            )
+        }
+        (Some(s), None) => (s.to_string(), board_changes(repo, s)?),
+        (None, None) => {
+            let s = default_since(store, project);
+            let changes = board_changes(repo, &s)?;
+            (s, changes)
+        }
+    };
+    let mut flags = Vec::new();
+    for (code, changes) in &by_item {
+        // A trailer can name an item the board does not have (another board's, or deleted).
+        if board.feature(code).is_err() {
+            continue;
+        }
+        flags.extend(flags_for_changes(store, project, code, changes)?);
+    }
+    Ok(Report {
+        generated_at,
+        since: since_used,
+        flags: merge_flags(flags),
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod testkit {
     use super::*;

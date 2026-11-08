@@ -761,6 +761,28 @@ fn dispatch_routes(
             }
             ser(&report)
         }
+        // The docs and items that name what work changed and have not changed since (FTR-013).
+        ("GET", ["projects", p, "drift"]) => {
+            let since = query_param(query, "since").filter(|s| !s.is_empty());
+            let item = query_param(query, "item").filter(|s| !s.is_empty());
+            ser(&crate::docdrift::report(
+                store,
+                p,
+                since.as_deref(),
+                item.as_deref(),
+                repo,
+            )?)
+        }
+        ("GET", ["projects", p, "features", code, "drift"]) => {
+            let since = query_param(query, "since").filter(|s| !s.is_empty());
+            ser(&crate::docdrift::report(
+                store,
+                p,
+                since.as_deref(),
+                Some(code),
+                repo,
+            )?)
+        }
         // Drift between the board and the branches (FEAT-191), on demand.
         ("GET", ["projects", p, "git", "doctor"]) => {
             let repo = repo.ok_or_else(|| {

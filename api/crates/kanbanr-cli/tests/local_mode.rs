@@ -4986,6 +4986,69 @@ fn a_merge_reports_the_texts_that_name_what_it_changed() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// FTR-013 R-8: `kanbanr drift` lists the flags for the board as text, grouped by linked text,
+/// and as JSON with the time it was generated; it fails outside a code repository and exits 0
+/// when nothing is flagged.
+#[test]
+fn drift_lists_flags_for_the_board_as_text_and_json() {
+    let (base, work) = togaf_scratch("gm-drift-command");
+    git_model_board(&base, &work, false, false);
+    let run = |args: &[&str]| run_in(&base, &work, args);
+    let good = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    good(run(&[
+        "doc",
+        "add",
+        "design/cart.md",
+        "--content",
+        "# Cart\n\nHow FEAT-001 keeps a cart; pass --expires to set the time.\n",
+    ]));
+    good(run(&["start", "FEAT-001"]));
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    commit_file_in(
+        &base,
+        &work,
+        "cart.txt",
+        "flag: --expires\n",
+        "feat: cart\n\nRefs: kanbanr:FEAT-001",
+    );
+
+    let text = good(run(&["drift"]));
+    assert!(text.contains("design/cart.md"), "{text}");
+    assert!(text.contains("names --expires"), "{text}");
+    assert!(text.contains("changed by FEAT-001"), "{text}");
+    assert!(text.contains("generated"), "{text}");
+
+    let json: serde_json::Value = serde_json::from_str(&good(run(&["--json", "drift"]))).unwrap();
+    assert!(
+        json["generated_at"]
+            .as_str()
+            .is_some_and(|t| t.contains('T')),
+        "{json}"
+    );
+    let flags = json["flags"].as_array().unwrap();
+    assert_eq!(flags.len(), 1, "{json}");
+    assert_eq!(flags[0]["target"]["id"], "design/cart.md");
+    assert_eq!(flags[0]["hits"][0]["name"]["text"], "--expires");
+    let item = good(run(&["drift", "--item", "FEAT-001"]));
+    assert!(item.contains("design/cart.md"), "{item}");
+
+    // Nothing since a later date: it says so and still exits 0.
+    let quiet = good(run(&["drift", "--since", "2090-01-01"]));
+    assert!(quiet.contains("No linked doc or item"), "{quiet}");
+    let bad = run(&["drift", "--since", "--oops"]);
+    assert!(!bad.status.success());
+
+    // Outside a code repository it cannot check, and says so rather than reporting no drift.
+    let outside = base.join("elsewhere");
+    std::fs::create_dir_all(&outside).unwrap();
+    let out = run_in(&base, &outside, &["drift"]);
+    assert!(!out.status.success());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-189 R-2: with releases on, `start` branches from the integration line, making it from
 /// main the first time.
 #[test]

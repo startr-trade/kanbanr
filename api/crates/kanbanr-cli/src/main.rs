@@ -544,6 +544,19 @@ enum Command {
         #[arg(long)]
         all_projects: bool,
     },
+    /// List the docs and items that name something work changed and have not changed since
+    /// (FTR-013): for each item with commits since a date, the linked texts that hold a flag,
+    /// route, setting, stage or file name it changed. It flags what to read and never judges it;
+    /// it exits 0 whatever it finds. Run it from the project folder.
+    Drift {
+        /// Look at commits since this date (YYYY-MM-DD). Default: the latest shipped release's tag
+        /// date, else 60 days back; with --item, all of that item's history.
+        #[arg(long)]
+        since: Option<String>,
+        /// Only this item's commits.
+        #[arg(long)]
+        item: Option<String>,
+    },
     /// Rebuild the per-project index cache (index.yaml) from the source-of-truth files. (FEAT-033)
     /// A maintenance command; defaults to the current/selected project, --all-projects for all.
     Index {
@@ -1856,7 +1869,8 @@ fn command_access(cmd: &Command) -> Access {
         | Command::Query(_)
         | Command::Gantt { .. }
         | Command::CriticalPath { .. }
-        | Command::Doctor { .. } => Read,
+        | Command::Doctor { .. }
+        | Command::Drift { .. } => Read,
         Command::Init { .. } => Outside("`kanbanr init` changes kanbanr itself"),
         Command::SelfUpdate { check: true, .. } => Read,
         Command::SelfUpdate { .. } => Outside("`kanbanr self-update` changes kanbanr itself"),
@@ -7081,6 +7095,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Doctor { all_projects } => run_doctor(cli, &client, *all_projects),
+        Command::Drift { since, item } => {
+            run_drift(cli, &client, since.as_deref(), item.as_deref())
+        }
         Command::Migrate => run_migrate(cli, &client),
         Command::Readme => {
             let resp = client.write(Method::Post, "/readme", Some(json!({})))?;
@@ -8022,6 +8039,60 @@ fn run_migrate(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
             "nothing changed on disk, so nothing was committed"
         }
     );
+    Ok(())
+}
+
+/// `kanbanr drift` (FTR-013): every flag, grouped by linked text. A read; it reports and never
+/// fails on what it finds.
+fn run_drift(
+    cli: &Cli,
+    client: &Backend,
+    since: Option<&str>,
+    item: Option<&str>,
+) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let mut query = Vec::new();
+    if let Some(since) = since {
+        query.push(format!("since={}", urlencode(since)));
+    }
+    if let Some(item) = item {
+        query.push(format!("item={}", urlencode(item)));
+    }
+    let path = if query.is_empty() {
+        format!("/projects/{p}/drift")
+    } else {
+        format!("/projects/{p}/drift?{}", query.join("&"))
+    };
+    let repo =
+        code_repo().ok_or_else(|| anyhow::anyhow!("{}", kanbanr_core::docdrift::NEEDS_REPO))?;
+    let resp = client.get_in(&path, Some(&repo))?;
+    if cli.json {
+        println!("{resp}");
+        return Ok(());
+    }
+    let report: kanbanr_core::docdrift::Report = serde_json::from_str(&resp)?;
+    let from = if report.since.is_empty() {
+        "all history".to_string()
+    } else {
+        format!("since {}", report.since)
+    };
+    if report.flags.is_empty() {
+        println!(
+            "No linked doc or item names something changed ({from}); generated {}.",
+            report.generated_at
+        );
+        return Ok(());
+    }
+    println!(
+        "Docs and items that name something changed ({from}); generated {}.",
+        report.generated_at
+    );
+    for flag in &report.flags {
+        println!("\n{}", flag.heading());
+        for line in flag.lines() {
+            println!("  {line}");
+        }
+    }
     Ok(())
 }
 

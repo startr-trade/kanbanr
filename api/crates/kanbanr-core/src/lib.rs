@@ -2511,6 +2511,48 @@ requirements:
         .unwrap();
     }
 
+    /// FTR-013 R-8: the drift routes answer with the flags the command prints, grouped by text,
+    /// stamped with when they were generated; without a code repository they say so.
+    #[test]
+    fn the_drift_route_answers_with_the_same_flags_as_the_command() {
+        let (store, _d, code, repo) = drift_board();
+        let get = |path: &str, repo: Option<&std::path::Path>| {
+            crate::dispatch::dispatch_in(&store, "GET", path, None, repo)
+        };
+        let report = crate::docdrift::report(&store, "demo", None, None, Some(&repo)).unwrap();
+        assert_eq!(report.flags.len(), 1, "{report:?}");
+        assert_eq!(report.flags[0].target.id, "design/data.md");
+        assert!(!report.generated_at.is_empty() && !report.since.is_empty());
+
+        let routed: crate::docdrift::Report =
+            serde_json::from_str(&get("/projects/demo/drift", Some(&repo)).unwrap()).unwrap();
+        assert_eq!(routed.flags, report.flags);
+        let for_item: crate::docdrift::Report = serde_json::from_str(
+            &get(
+                &format!("/projects/demo/features/{code}/drift"),
+                Some(&repo),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(for_item.flags, report.flags);
+        assert_eq!(for_item.since, "", "an item's own history is read whole");
+        let narrow: crate::docdrift::Report = serde_json::from_str(
+            &get("/projects/demo/drift?since=2099-06-01", Some(&repo)).unwrap(),
+        )
+        .unwrap();
+        assert!(narrow.flags.is_empty(), "{narrow:?}");
+        assert_eq!(narrow.since, "2099-06-01");
+        let other: crate::docdrift::Report =
+            serde_json::from_str(&get("/projects/demo/drift?item=FEAT-999", Some(&repo)).unwrap())
+                .unwrap();
+        assert!(other.flags.is_empty());
+
+        let err = get("/projects/demo/drift", None).unwrap_err().to_string();
+        assert!(err.contains("code repository"), "{err}");
+        assert!(get("/projects/demo/drift?since=--bad", Some(&repo)).is_err());
+    }
+
     /// DEF-033 R-6: a `docs-folded` sign-off given before the check existed stays recorded and
     /// counted, and reading the board does not rewrite it.
     #[test]
