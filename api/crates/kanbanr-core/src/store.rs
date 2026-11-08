@@ -1214,6 +1214,17 @@ impl Store {
 
     /// Record agreement to an item's definition as it currently stands (FEAT-048).
     pub fn approve_feature(&self, id: &str, code: &str, by: &str) -> Result<FeatureItem> {
+        self.approve_feature_as(id, code, by, "")
+    }
+
+    /// As [`Store::approve_feature`], recording where it was taken (DEF-028).
+    pub fn approve_feature_as(
+        &self,
+        id: &str,
+        code: &str,
+        by: &str,
+        origin: &str,
+    ) -> Result<FeatureItem> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let feature = project.feature_mut(code)?;
@@ -1231,9 +1242,11 @@ impl Store {
             at: at.clone(),
             rev: rev.clone(),
             parts: definition.part_revs(),
+            origin: origin.to_string(),
         });
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
+            origin: origin.to_string(),
             at: at.clone(),
             by: by.to_string(),
             verdict: "approved".to_string(),
@@ -1265,6 +1278,18 @@ impl Store {
         by: &str,
         reason: &str,
     ) -> Result<FeatureItem> {
+        self.ratify_feature_as(id, code, by, reason, "")
+    }
+
+    /// As [`Store::ratify_feature`], recording where it was taken (DEF-028).
+    pub fn ratify_feature_as(
+        &self,
+        id: &str,
+        code: &str,
+        by: &str,
+        reason: &str,
+        origin: &str,
+    ) -> Result<FeatureItem> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let feature = project.feature_mut(code)?;
@@ -1288,9 +1313,11 @@ impl Store {
             at: at.clone(),
             rev: rev.clone(),
             parts: definition.part_revs(),
+            origin: origin.to_string(),
         });
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
+            origin: origin.to_string(),
             at: at.clone(),
             by: by.to_string(),
             verdict: "ratified".to_string(),
@@ -1315,6 +1342,18 @@ impl Store {
         by: &str,
         reason: &str,
     ) -> Result<FeatureItem> {
+        self.unapprove_feature_as(id, code, by, reason, "")
+    }
+
+    /// As [`Store::unapprove_feature`], recording where it was taken (DEF-028).
+    pub fn unapprove_feature_as(
+        &self,
+        id: &str,
+        code: &str,
+        by: &str,
+        reason: &str,
+        origin: &str,
+    ) -> Result<FeatureItem> {
         // Taking an agreement back needs a reason, wherever it is asked from (FEAT-182 R-5): the
         // monitor's button enforced this, the store did not.
         if reason.trim().is_empty() {
@@ -1331,8 +1370,23 @@ impl Store {
             .as_mut()
             .ok_or_else(|| CoreError::Unsupported(format!("{code} has no definition")))?;
         if definition.approval.is_none() {
+            // When the last verdict was a withdrawal, say who made it, when and from where.
+            let first = definition
+                .approvals
+                .last()
+                .filter(|e| e.verdict == "withdrawn")
+                .map(|e| {
+                    let earlier = crate::origin::Earlier {
+                        what: "withdrawn".into(),
+                        by: e.by.clone(),
+                        at: e.at.clone(),
+                        origin: e.origin.clone(),
+                    };
+                    format!(" ({})", earlier.sentence())
+                })
+                .unwrap_or_default();
             return Err(CoreError::Unsupported(format!(
-                "{code} is not approved, so there is nothing to withdraw"
+                "{code} is not approved, so there is nothing to withdraw{first}"
             )));
         }
         let at = now_rfc3339();
@@ -1340,6 +1394,7 @@ impl Store {
         definition.approval = None;
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
+            origin: origin.to_string(),
             at: at.clone(),
             by: by.to_string(),
             verdict: "withdrawn".to_string(),
@@ -1365,7 +1420,22 @@ impl Store {
         note: &str,
         doc: &str,
     ) -> Result<FeatureItem> {
-        self.signoff_feature_reported(id, code, signoff, by, note, doc)
+        self.signoff_feature_as(id, code, signoff, by, note, doc, "")
+    }
+
+    /// As [`Store::signoff_feature`], recording where it was taken (DEF-028).
+    #[allow(clippy::too_many_arguments)]
+    pub fn signoff_feature_as(
+        &self,
+        id: &str,
+        code: &str,
+        signoff: &str,
+        by: &str,
+        note: &str,
+        doc: &str,
+        origin: &str,
+    ) -> Result<FeatureItem> {
+        self.signoff_feature_reported_as(id, code, signoff, by, note, doc, origin)
             .map(|(f, _)| f)
     }
 
@@ -1379,6 +1449,21 @@ impl Store {
         by: &str,
         note: &str,
         doc: &str,
+    ) -> Result<(FeatureItem, Option<String>)> {
+        self.signoff_feature_reported_as(id, code, signoff, by, note, doc, "")
+    }
+
+    /// As [`Store::signoff_feature_reported`], recording where it was taken (DEF-028).
+    #[allow(clippy::too_many_arguments)]
+    pub fn signoff_feature_reported_as(
+        &self,
+        id: &str,
+        code: &str,
+        signoff: &str,
+        by: &str,
+        note: &str,
+        doc: &str,
+        origin: &str,
     ) -> Result<(FeatureItem, Option<String>)> {
         let signoff = signoff.trim();
         if signoff.is_empty() {
@@ -1425,6 +1510,7 @@ impl Store {
             note: note.trim().to_string(),
             doc: doc.trim().to_string(),
             status,
+            origin: origin.to_string(),
             ..Default::default()
         });
         feature.updated_at = at;
@@ -1454,6 +1540,19 @@ impl Store {
         by: &str,
         reason: &str,
     ) -> Result<FeatureItem> {
+        self.withdraw_signoff_as(id, code, signoff, by, reason, "")
+    }
+
+    /// As [`Store::withdraw_signoff`], recording where it was taken (DEF-028).
+    pub fn withdraw_signoff_as(
+        &self,
+        id: &str,
+        code: &str,
+        signoff: &str,
+        by: &str,
+        reason: &str,
+        origin: &str,
+    ) -> Result<FeatureItem> {
         let signoff = signoff.trim();
         if reason.trim().is_empty() {
             return Err(CoreError::Unsupported(
@@ -1481,8 +1580,15 @@ impl Store {
                 )));
             }
             Some(s) if !s.verdict.is_given() => {
+                let earlier = crate::origin::Earlier {
+                    what: "withdrawn".into(),
+                    by: s.by.clone(),
+                    at: s.at.clone(),
+                    origin: s.origin.clone(),
+                };
                 return Err(CoreError::Unsupported(format!(
-                    "sign-off '{signoff}' on {code} is already withdrawn"
+                    "sign-off '{signoff}' on {code} is already withdrawn: {}",
+                    earlier.sentence()
                 )));
             }
             Some(_) => {}
@@ -1496,6 +1602,7 @@ impl Store {
             status,
             verdict: crate::models::SignoffVerdict::Withdrawn,
             reason: reason.trim().to_string(),
+            origin: origin.to_string(),
             ..Default::default()
         });
         feature.updated_at = at;
@@ -1585,9 +1692,16 @@ impl Store {
         if !project.config.has_status(to) {
             return Err(CoreError::UnknownStatus(to.to_string()));
         }
-        let from = project.feature(code)?.status.clone();
-        if !project.config.transition_allowed(&from, to) {
+        let (from, kind) = {
+            let f = project.feature(code)?;
+            (f.status.clone(), f.kind.clone())
+        };
+        if !project
+            .config
+            .transition_allowed_for(&from, to, kind.as_deref())
+        {
             return Err(CoreError::TransitionNotAllowed {
+                via: project.config.path_note(code, &from, kind.as_deref()),
                 from,
                 to: to.to_string(),
             });
@@ -1716,12 +1830,28 @@ impl Store {
             return Ok(pass);
         }
         let gates = project.config.effective_gates();
-        let Some(gate) = gates.get(to) else {
+        // A kind's path (FTR-019): the method parts it leaves out are not asked of it, and its
+        // first move off the starting stage asks the path's own conditions as well.
+        let path = project.config.path_for(feature.kind.as_deref());
+        let mut gate = gates
+            .get(to)
+            .filter(|g| g.applies_to(feature.kind.as_deref()))
+            .cloned();
+        if let (Some(path), Some(gate)) = (path, gate.as_mut()) {
+            crate::method::strip_gate(gate, &path.method_off);
+        }
+        let first_move = feature.status == project.config.default_state;
+        if let Some(path) = path.filter(|p| first_move && p.stages.iter().any(|s| s == to)) {
+            let gate = gate.get_or_insert_with(Default::default);
+            for c in &path.requires {
+                if !gate.requires.contains(c) {
+                    gate.requires.push(c.clone());
+                }
+            }
+        }
+        let Some(gate) = gate else {
             return Ok(pass);
         };
-        if !gate.applies_to(feature.kind.as_deref()) {
-            return Ok(pass);
-        }
         // There are no goals to judge against without a charter, so the goal checks are left out.
         let goal_ids = charter.goal_ids();
         let known = (!no_charter).then_some(&goal_ids);
@@ -1800,8 +1930,9 @@ impl Store {
         let config = project.config.clone();
         let feature = project.feature_mut(code)?;
         let from = feature.status.clone();
-        if !config.transition_allowed(&from, to) {
+        if !config.transition_allowed_for(&from, to, feature.kind.as_deref()) {
             return Err(CoreError::TransitionNotAllowed {
+                via: config.path_note(code, &from, feature.kind.as_deref()),
                 from,
                 to: to.to_string(),
             });
@@ -2036,6 +2167,7 @@ impl Store {
         let config = project.config.clone();
         let f = project.feature(feature)?;
         let from = f.status.clone();
+        let kind = f.kind.clone();
         let done = f.all_tasks_completed();
 
         // Auto-complete the feature when every task (across all lists) is done — but NOT when
@@ -2051,7 +2183,7 @@ impl Store {
                 .find(|s| {
                     crate::graph::is_terminal_status(&config, s)
                         && !config.is_no_op(s)
-                        && config.transition_allowed(&from, s)
+                        && config.transition_allowed_for(&from, s, kind.as_deref())
                 })
                 .cloned()
         } else {
@@ -2670,6 +2802,7 @@ impl Store {
                         at: now_rfc3339(),
                         rev: definition.content_rev(),
                         parts: definition.part_revs(),
+                        origin: String::new(),
                     });
                     feature.updated_at = now_rfc3339();
                     pending.persist_features.insert(resolved.clone());
@@ -3026,10 +3159,40 @@ impl Store {
         terminal_states: Option<Vec<String>>,
         gates: Option<std::collections::BTreeMap<String, crate::config::Gate>>,
     ) -> Result<ProjectConfig> {
+        self.set_workflow_with_paths(
+            id,
+            statuses,
+            transitions,
+            default_state,
+            displayed_states,
+            no_op_states,
+            terminal_states,
+            gates,
+            None,
+        )
+    }
+
+    /// As [`Store::set_workflow_with_gates`], replacing the kind paths in the same write when
+    /// `paths` is given (FTR-019): a path names stages, so it is checked against the statuses it
+    /// arrives with.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_workflow_with_paths(
+        &self,
+        id: &str,
+        statuses: Vec<String>,
+        transitions: std::collections::BTreeMap<String, Vec<String>>,
+        default_state: Option<String>,
+        displayed_states: Option<Vec<String>>,
+        no_op_states: Option<Vec<String>>,
+        terminal_states: Option<Vec<String>>,
+        gates: Option<std::collections::BTreeMap<String, crate::config::Gate>>,
+        paths: Option<std::collections::BTreeMap<String, crate::config::KindPath>>,
+    ) -> Result<ProjectConfig> {
         let mut project = self.load(id)?;
         // The gates this workflow will have must name its statuses: the new ones when given, or
         // the ones already declared, which a change of statuses must not orphan.
         let gates = gates.unwrap_or_else(|| project.config.gates.clone());
+        let paths = paths.unwrap_or_else(|| project.config.paths.clone());
         let (workflow, problems) = crate::config::check_workflow(
             statuses,
             transitions,
@@ -3038,6 +3201,7 @@ impl Store {
             no_op_states,
             terminal_states,
             gates,
+            paths,
         );
         if let Some(problem) = problems.into_iter().next() {
             return Err(problem);
@@ -3047,6 +3211,7 @@ impl Store {
             return Err(CoreError::StatusInUse(old.clone(), *refs));
         }
         project.config.gates = workflow.gates;
+        project.config.paths = workflow.paths;
         project.config.statuses = workflow.statuses;
         project.config.transitions = workflow.transitions;
         project.config.default_state = workflow.default_state;
@@ -3299,6 +3464,8 @@ impl Store {
         // FEAT-212: the gates must fit the stages, so a stage with a gate is not renamed away.
         cadence
             .validate_release_gates()
+            .map_err(CoreError::Unsupported)?;
+        crate::config::Cadence::validate_gate_docs(&cadence.gate_docs_patterns())
             .map_err(CoreError::Unsupported)?;
         if let Some(unit) = unit {
             project.config.estimate_unit = unit;

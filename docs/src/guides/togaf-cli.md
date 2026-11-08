@@ -140,38 +140,21 @@ record the failed result and run `kanbanr release add <NEW VERSION> --patch-of <
 notes, plans it and the release's items into a patch branched from the tag, and marks the failed
 release as superseded. The tag stays in git.
 
-### Decide when an item is done for its sprint
+### Closing a sprint before its release
 
-Under the TOGAF preset only **Operations** counts as done, and items reach Operations when their release is cut.
-A `release` sign-off or a last task leaves a planned item where it is.
-So if you close a sprint before its release is cut, an item that is merged and sitting in Migration
-is carried over, to the backlog by default:
+Under the TOGAF preset Migration counts as done for a sprint, and Operations is when a release ships
+the item. So closing a sprint before its release is cut carries over only work that has not merged,
+to the backlog by default. An item still at Implementation is carried:
 
 ```text
 closed SP-001; carried FEAT-001 → backlog
 ```
 
-If your sprints end before your releases do, mark Migration as done. Export the workflow, add one
-line, and load it back:
-
-```text
-kanbanr config workflow --export > workflow.yaml
-```
-
-```yaml
-gates:
-  Migration:
-    done: true
-```
-
-```text
-kanbanr config workflow --from-file workflow.yaml
-```
-
-The same close then says `nothing carried over`, and the release still takes the item to Operations
-when it is cut. If you always cut the release before closing the sprint, you can leave this alone.
-
 ## Planning a sprint
+
+Setup creates no sprint or release; make them when you are ready. A sprint can be changed until it
+starts (`kanbanr sprint edit SP-001 --goal "…" --start 2026-11-10`), and an empty sprint or release
+made by mistake is removed with `kanbanr sprint remove SP-001` or `kanbanr release remove v1.0.0`.
 
 ```text
 kanbanr sprint add --start 2026-11-03 --length 2w --goal "Carts survive a return"
@@ -184,6 +167,15 @@ kanbanr release plan v1.0.0 FEAT-001
 
 Starting the sprint makes the `sprint/SP-001` branch from main without switching your checkout.
 Items in the sprint branch from it.
+
+When a sprint is running, plan each release item into it too. `kanbanr release plan` does not do it
+for you; it names the items it planned that are in no sprint, and the command that plans them in:
+
+```text
+FEAT-002 is in no sprint and SP-001 is running: kanbanr sprint plan SP-001 FEAT-002
+```
+
+`kanbanr doctor` names any item planned into a release but into no sprint while a sprint runs.
 
 A sprint and a release don't have to line up. One release can take items from several sprints, and
 one sprint can feed several releases.
@@ -208,6 +200,13 @@ removed, the next move says so, and you approve again:
 ```text
 cannot move FEAT-001 to 'System Design': approval lapsed — the definition changed after it was approved.
 ```
+
+**A verdict records where it was taken.** Each approval, ratification, sign-off and decision notes
+whether it came from the monitor, from a command inside a Claude Code session (`conversation`), or
+from your terminal. `kanbanr feature show` ends each line with it, and `--json` carries `origin`; an
+item from before 0.6.0 reads origin unknown. Repeating a verdict on text that hasn't changed records
+nothing and prints `already approved by Ada on 2026-11-07 12:26:00 from the monitor; nothing
+recorded`. A sign-off repeated with a new note or doc is recorded.
 
 **A changed spec comes back for sign-off.** A `design-review` sign-off covers the whole spec as it
 was when you gave it. If the spec changes afterwards, even outside `## Design`, the sign-off reads
@@ -245,12 +244,30 @@ Your checkout stays on the item's branch, so switch back when you want the line.
 
 **Give the `release` sign-off before promoting to main.** Promoting needs every item able to reach
 Operations, and each item needs its own sign-off to get there. Without it the promotion is refused,
-and nothing changes:
+and nothing changes. A promotion to the cut or to the last stage is held the same way, as
+`merged_items_ship`, for an item whose code is already merged but which would be carried over; it
+names the item and what it lacks, and work that isn't done or isn't merged is still carried:
 
 ```text
 v1.0.0 cannot go to main yet — nothing was changed:
   - items_finished (main): FEAT-001 would carry over — FEAT-001 carries over: … no sign-off 'release' — `kanbanr signoff FEAT-001 release`.
 ```
+
+### Chores
+
+A process can give a kind its own path. The built-in `togaf` process gives `chore` the path
+Vision → Implementation → Migration → Operations, skipping Business Arch and System Design. `kanbanr process show togaf` lists each kind's path under
+"Lighter paths".
+
+```bash
+kanbanr feature add --title "Pin the CI image" --milestone MS-001 --kind chore
+```
+
+A chore's first move off Vision asks the path's own conditions (`statement`, `goals`,
+`requirements`, and `ears` where the path lists it) as well as the entered stage's gate, so it still
+records why it exists and how it is verified. A move to a phase off the path is refused, and the
+message names the path. `approved` and the `release` sign-off stay in force; the `design` and `design-review` parts do not apply. An item whose kind is changed to `chore` while it's at a
+phase off the path keeps the ordinary transitions, so it is never stranded.
 
 ## Handing work to sub-agents
 
@@ -331,6 +348,30 @@ made, and promoting to main dates them today. If main moved earlier and the cut 
 cut's `--plan` warns, and `kanbanr release redate v1.1.0` dates them today. Notes can't be edited
 after the cut.
 
+**A merge into a promoted release sends it back.** `kanbanr move` of an item into a release that is
+past candidate and not cut returns the release to its first stage and says so:
+
+```text
+v1.1.0 was at main; FEAT-002 is merged into it, so it is back at candidate. From here: Update the release notes, then Run the release gate again for the new tip and record the result, then Promote to main, then Push main and wait for CI, then Cut v1.1.0
+```
+
+`kanbanr release promote v1.1.0 --plan` and `kanbanr release stages` begin with "Sent back by
+FEAT-002". Do the steps in order:
+
+1. `kanbanr release notes v1.1.0 --edit`; the notes end with "Not mentioned yet: FEAT-002" until they
+   name each item planned into the release.
+2. Run your full checks over the release, then `kanbanr gate record ci --passed --commit <sha>`. A
+   pass recorded for an earlier commit stands when only documentation changed since; the plan names
+   the commit. `kanbanr config gate-docs` sets which paths count as documentation (`docs/` and `*.md`
+   by default).
+3. `kanbanr release promote v1.1.0 main`
+4. `git push origin main`, then wait for CI.
+5. `kanbanr release promote v1.1.0 tag`, which is refused until main is at the release tip, pushed,
+   and the gate has passed where the project names commit gates.
+
+Saving notes does not send a release back. A release that is tagged and not shipped refuses the
+move before anything is merged, naming the tag; the change needs `kanbanr release patch v1.1.0`.
+
 ## Closing the sprint
 
 ```text
@@ -350,6 +391,9 @@ sprint before starting any item.
 | `approval lapsed` | The definition changed after you approved it | Read the change and approve again |
 | `carried FEAT-001 → backlog` at a sprint close | The item is merged, but not done for the sprint | Plan it into the next sprint, or mark Migration done |
 | `FEAT-001 would carry over` at a promotion | The item can't reach Operations yet | Do what the line names, often `kanbanr signoff FEAT-001 release` |
+| An item stays in Migration after the cut | The release shipped but the item never got what it lacked | `kanbanr doctor` names it; give the sign-off it lacks (`kanbanr check FEAT-001`), or plan it into a coming release with `kanbanr release plan` |
+| A release is back at candidate after a move | An item was merged into it after it left candidate | Do the steps `kanbanr release promote <V> --plan` lists |
+| `v1.1.0 is tagged at …` on a move | The release is tagged and waits for its later stages | `kanbanr release patch v1.1.0`, and plan the change into the patch |
 | `does not exist on release/v1.1.0` at candidate | A file named in `release-prepare` isn't on the sprint's branch | Commit it on an item's branch and merge that first |
 | A defect in a shipped release | It needs a fix on its own | See [Patch releases](../using/processes.md#patch-releases) |
 

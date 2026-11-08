@@ -15,6 +15,8 @@ export interface NotesSection {
   edit: boolean;
   /** The CLI command that does the same thing. */
   command: string;
+  /** "Not mentioned yet: DEF-030, FTR-002" when the notes leave out planned items, else empty (DEF-031). */
+  unmentioned: string;
 }
 
 export function notesSection(
@@ -29,5 +31,7 @@ export function notesSection(
   const heading = show ? `${shipped ? "as shipped on" : "draft on"} ${where}` : "";
   const edit = show && writable && !shipped && (notes?.editable ?? false);
   const command = `kanbanr release notes ${release.version}${shipped ? "" : " --edit"}`;
-  return { show, heading, edit, command };
+  const missing = shipped ? [] : (notes?.unmentioned ?? []);
+  const unmentioned = missing.length ? `Not mentioned yet: ${missing.join(", ")}` : "";
+  return { show, heading, edit, command, unmentioned };
 }

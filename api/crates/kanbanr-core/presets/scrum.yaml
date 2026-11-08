@@ -50,3 +50,9 @@ cadence:
   releases: true
   sprint_length_days: 14
   release: per_sprint
+# A chore skips Review; Ready already asks the statement, goals, requirements and estimate (FTR-019).
+paths:
+  chore:
+    stages: [Backlog, Ready, In Progress, Testing, Done, Released]
+    requires: []
+    method_off: [design, design-review]

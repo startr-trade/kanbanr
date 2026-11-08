@@ -185,6 +185,54 @@ expect("a confirmation stage gets no such line", a.does.every((d) => !d.startsWi
 a = releaseAction(base, true);
 expect("a promotion with a step gets no such line", a.does.every((d) => !d.startsWith("Nothing happens")), a);
 
+// DEF-029: a promotion held for a merged item that would carry over says so, also with no repository.
+const heldMerged = {
+  ...cut,
+  ready: false,
+  conditions: [
+    {
+      check: "merged_items_ship",
+      stage: "production",
+      holds: false,
+      detail: "FEAT-1 is merged into v0.3.0 but would carry over: needs sign-off release",
+      fix: "FEAT-1: give what it lacks on the Review page (kanbanr check FEAT-1 lists it), or plan it into another release",
+    },
+  ],
+  missing: ["FEAT-1: give what it lacks on the Review page (kanbanr check FEAT-1 lists it), or plan it into another release"],
+};
+a = releaseAction(heldMerged, true);
+expect(
+  "held for a merged item: disabled, names the item and the Review page",
+  !a.enabled && a.missing.some((m) => m.text.startsWith("merged_items_ship: FEAT-1") && m.fix.includes("Review page")),
+  a,
+);
+a = releaseAction({ ...heldMerged, repo: false }, true);
+expect(
+  "held for a merged item, no repo: still named beside the repository line",
+  a.missing[0]?.text === NO_REPO && a.missing.some((m) => m.text.startsWith("merged_items_ship: FEAT-1")),
+  a,
+);
+
+// DEF-031: a release sent back by a merge shows the item and the steps from candidate, until cut.
+const returned = {
+  item: "DEF-030",
+  by: "Ada L",
+  at: "2026-11-07T10:00:00Z",
+  from: "main",
+  steps: ["Update the release notes", "Promote to main", "Push main and wait for CI", "Cut v0.3.0"],
+};
+a = releaseAction({ ...base, from: "candidate", returned }, true);
+expect(
+  "web::release_returned_banner: names the item and the steps in order",
+  a.returned?.item === "DEF-030" && a.returned.from === "main" && a.returned.steps.join("|") === returned.steps.join("|"),
+  a,
+);
+expect("web::release_returned_banner: the button stays the ordinary next step", a.label === "Promote to main" && a.enabled, a);
+a = releaseAction(base, true);
+expect("web::release_returned_banner: no banner for a release that was not sent back", a.returned === undefined, a);
+a = releaseAction({ ...base, returned }, false);
+expect("web::release_returned_banner: shown on a read-only monitor too", a.returned?.item === "DEF-030" && !a.button, a);
+
 if (problems.length) {
   for (const p of problems) console.error(`web::release_button_says_what_it_does — ${p}`);
   process.exit(1);

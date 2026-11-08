@@ -46,3 +46,9 @@ gates:
     purpose: Released, with validation recorded.
     requires: [tests_green]
     signoffs: [validation]
+# A chore skips Inputs, Review and Validation, and the design review (FTR-019).
+paths:
+  chore:
+    stages: [Planning, Design, Verification, Released]
+    requires: [statement, goals, requirements, ears]
+    method_off: [design, design-review]

@@ -71,6 +71,10 @@
             "description": "A short human description of the change.",
             "type": "string"
           },
+          "origin": {
+            "description": "Where a verdict was taken (DEF-028); empty for any other change.",
+            "type": "string"
+          },
           "time": {
             "description": "RFC3339 timestamp.",
             "type": "string"
@@ -103,6 +107,10 @@
           },
           "decided": {
             "description": "When the decider accepted or rejected it (FEAT-153). `date` is when it was proposed.",
+            "type": "string"
+          },
+          "decided_origin": {
+            "description": "Where the verdict was taken (DEF-028): `monitor`, `conversation`, `terminal` or `delegated`.",
             "type": "string"
           },
           "deciders": {
@@ -199,6 +207,10 @@
           "by": {
             "type": "string"
           },
+          "origin": {
+            "description": "Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a\nrecord written before origin existed, which reads as unknown; kept as a string so a newer\nkanbanr's value survives.",
+            "type": "string"
+          },
           "parts": {
             "additionalProperties": {
               "type": "string"
@@ -225,6 +237,10 @@
             "type": "string"
           },
           "by": {
+            "type": "string"
+          },
+          "origin": {
+            "description": "Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a\nrecord written before origin existed, which reads as unknown; kept as a string so a newer\nkanbanr's value survives.",
             "type": "string"
           },
           "reason": {
@@ -430,6 +446,13 @@
         "properties": {
           "commit_gates": {
             "description": "The gates (`ci`, `local`, ...) a release stage needing `gate_passed` requires a passed\nresult of for the release tip (FTR-002). Empty by default.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "gate_docs": {
+            "description": "The paths that count as documentation: a recorded pass of a commit gate carries across a\nchange that touches only these (DEF-031). Each entry is a directory prefix ending in `/`, a\nsuffix starting `*` (`*.md`) or an exact path. Unset: [`DEFAULT_GATE_DOCS`]; empty: nothing\ncounts as documentation.",
             "items": {
               "type": "string"
             },
@@ -1872,6 +1895,36 @@
         ],
         "type": "object"
       },
+      "KindPath": {
+        "description": "The path an item of one kind takes through a process (FTR-019): the stages it passes, what its\nfirst move asks, and the method parts that do not apply to it. A subset of the workflow's own\nstages in its own order, so no stage is invented and the board's columns do not change.",
+        "properties": {
+          "method_off": {
+            "description": "Method parts not asked of this kind. Approvals and sign-offs the stage itself names stay.",
+            "items": {
+              "$ref": "#/components/schemas/Part"
+            },
+            "type": "array"
+          },
+          "requires": {
+            "description": "Asked, in addition to the entered stage's gate, of the first move off the starting stage:\nwhere an item of this kind records why it exists and how it is verified.",
+            "items": {
+              "$ref": "#/components/schemas/Condition"
+            },
+            "type": "array"
+          },
+          "stages": {
+            "description": "At least two statuses, no no-op status, none twice, in the workflow's order, the first the\ndefault state. Neighbours on the path may move to each other whatever `transitions` says.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "stages"
+        ],
+        "type": "object"
+      },
       "Lesson": {
         "properties": {
           "at": {
@@ -2643,6 +2696,13 @@
             },
             "type": "array"
           },
+          "paths": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/KindPath"
+            },
+            "description": "A shorter path through the workflow for some work kinds (FTR-019), keyed by kind in lower\ncase. Absent: every kind walks every stage, and absent stays absent on disk.",
+            "type": "object"
+          },
           "process": {
             "$ref": "#/components/schemas/ProcessSource",
             "description": "The saved process this workflow was applied from, if it was (FEAT-169): what drift is\nmeasured against. An older kanbanr keeps it through `extra`, so it needs no schema bump."
@@ -2943,6 +3003,11 @@
             "const": "stage_passed",
             "description": "The release has been promoted into a stage a gate names in `after`. Only a plan names it\n(a gate lists `after`, not this), so it is not in `ALL`.",
             "type": "string"
+          },
+          {
+            "const": "merged_items_ship",
+            "description": "Every item planned into the release whose code is merged can ship: the cut would not carry\nmerged work away (DEF-029). Only a plan names it, so it is not in `ALL`.",
+            "type": "string"
           }
         ]
       },
@@ -3043,6 +3108,10 @@
           "repo": {
             "description": "Whether the code repository was there to read.",
             "type": "boolean"
+          },
+          "returned": {
+            "$ref": "#/components/schemas/Returned",
+            "description": "The merge that sent the release back and the steps from there, until it is cut (DEF-031)."
           },
           "ships": {
             "description": "This promotion enters the last stage: it ships the release (FTR-026).",
@@ -3183,6 +3252,13 @@
           "shipped_at": {
             "type": "string"
           },
+          "shipped_by": {
+            "description": "Who cut the release, and from where (DEF-028). Empty on a release cut before origin existed.",
+            "type": "string"
+          },
+          "shipped_origin": {
+            "type": "string"
+          },
           "stage": {
             "description": "Where the release is now, from `cadence.release_stages` (FEAT-183). Empty until first\npromoted: a release added before stages existed reads as \"not yet a candidate\".",
             "type": "string"
@@ -3287,6 +3363,40 @@
           "nfr"
         ],
         "type": "string"
+      },
+      "Returned": {
+        "description": "A release sent back by a merge that has not been cut yet, as the plan shows it (DEF-031).\nDerived, never stored.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "from": {
+            "description": "The stage it was at before.",
+            "type": "string"
+          },
+          "item": {
+            "description": "The item whose merge sent it back.",
+            "type": "string"
+          },
+          "steps": {
+            "description": "What to do from the first stage, in order (`returned_steps`).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "item",
+          "by",
+          "at",
+          "from",
+          "steps"
+        ],
+        "type": "object"
       },
       "ReviewEntry": {
         "description": "One item waiting for agreement.",
@@ -3405,6 +3515,10 @@
             "type": "string"
           },
           "note": {
+            "type": "string"
+          },
+          "origin": {
+            "description": "Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a\nrecord written before origin existed, which reads as unknown; kept as a string so a newer\nkanbanr's value survives.",
             "type": "string"
           },
           "parts": {
@@ -3700,12 +3814,21 @@
         "type": "string"
       },
       "StageChange": {
+        "additionalProperties": true,
         "description": "One move of a release between stages: where to, who moved it, and when (FEAT-183). A move back\ncarries the reason it was made.",
         "properties": {
           "at": {
             "type": "string"
           },
           "by": {
+            "type": "string"
+          },
+          "item": {
+            "description": "The item whose merge into the release's branch caused this change (DEF-031); empty for\nevery other change.",
+            "type": "string"
+          },
+          "origin": {
+            "description": "Where it was made: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Empty on a\nrecord written before origin existed.",
             "type": "string"
           },
           "reason": {

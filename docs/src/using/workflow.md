@@ -28,6 +28,12 @@ a feature parked in one does **not** auto-complete. Move a feature into one with
 links on the home tiles and the dashboard.
 
 
+## Releases and the workflow
+
+Merging an item into a release that is past its first stage and not yet cut sends the release back
+to that stage, whatever the item's own workflow. The release then follows its steps again; see
+[A change merged into a promoted release](processes.md#a-change-merged-into-a-promoted-release).
+
 ## Permanence & deletion
 
 - **Feature items can't be deleted** — they're the project's work. To retire one, `move` it to a

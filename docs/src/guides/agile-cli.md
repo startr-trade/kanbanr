@@ -99,6 +99,10 @@ well, use `gate_passed`.
 
 ## Planning a sprint
 
+Setup creates no sprint or release; make them when you are ready. A sprint can be changed until it
+starts (`kanbanr sprint edit SP-001 --goal "…" --start 2026-11-10`), and an empty sprint or release
+made by mistake is removed with `kanbanr sprint remove SP-001` or `kanbanr release remove v1.0.0`.
+
 ```text
 kanbanr milestone add --name "Carts"
 kanbanr sprint add --start 2026-11-03 --length 2w --goal "Carts survive a return"
@@ -203,6 +207,22 @@ Now `kanbanr check` says the item is ready for Released:
 Your checkout stays on the item's branch, so switch back when you want the sprint's line. A move can
 also go past its gate with `--override "<reason>"`, and the reason stays on the item. Save it for real
 exceptions.
+
+### Chores
+
+A process can give a kind its own path. The built-in `agile` process gives `chore` the path
+Plan → Develop → Test → Released, skipping Design and Review. `kanbanr process show agile` lists each kind's path under
+"Lighter paths".
+
+```bash
+kanbanr feature add --title "Pin the CI image" --milestone MS-001 --kind chore
+```
+
+A chore's first move off Plan asks the path's own conditions (`statement`, `goals`,
+`requirements`, and `ears` where the path lists it) as well as the entered stage's gate, so it still
+records why it exists and how it is verified. A move to a stage off the path is refused, and the
+message names the path. The entered stage's gate still applies, `approved` included; the `design` and `design-review` parts do not apply. An item whose kind is changed to `chore` while it's at a
+stage off the path keeps the ordinary transitions, so it is never stranded.
 
 ## Releasing
 

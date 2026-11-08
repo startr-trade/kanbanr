@@ -58,7 +58,8 @@ Keep it open. Every decision below happens there.
 
 > Start a two-week sprint for carts surviving a return. Put the cart restore in it, for release 1.0.
 
-Claude creates the sprint and its branch, adds the item and plans it into the sprint and the release.
+Setup doesn't create a sprint or a release, so Claude asks the sprint's goal and first day, and the
+release's version and target, when you first ask. Then it creates the sprint and its branch, adds the item and plans it into the sprint and the release.
 Your checkout doesn't move. A sprint and a release don't have to line up: one release can take items
 from several sprints.
 
@@ -90,6 +91,18 @@ reached Review, so there is no per-item sign-off at the release.
 
 If something is missing for a move, Claude tells you what and either fixes it or asks you. Nothing
 moves past a gate unless you say why, and that reason stays on the item.
+
+### Chores
+
+A chore doesn't walk every stage. It goes Plan → Develop → Test → Released, skipping Design and Review, because their
+questions don't fit small maintenance work. Tell Claude it's a chore when you ask for it.
+
+> Pin the CI image: it's a chore.
+
+Before its first move Claude asks once for what every item records: a one-sentence statement, the goal
+it serves, and a requirement in the EARS form that says how it's verified. You still approve it before work starts. A chore has no Design section and no **design-review**. If
+you change an item's kind to a chore while it's at a stage the chore path leaves out, it's off
+the path: it moves by the ordinary moves, or back to Plan.
 
 ## When an item is done for a sprint
 

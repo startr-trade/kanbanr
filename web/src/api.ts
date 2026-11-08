@@ -1,5 +1,5 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -139,7 +139,7 @@ export const api = {
       { items: [code] },
       "plan into a release",
       `kanbanr release plan ${version} ${code}`,
-    ),
+    ) as Promise<PlannedRelease>,
   /** What cutting `version` now would ship and carry over, nothing written (FEAT-185). */
   getCutPreview: (id: string, version: string) =>
     getJson<CutPreview[]>(
@@ -177,6 +177,18 @@ export const api = {
       { version, target, name },
       "add a release",
       `kanbanr release add ${version}`,
+    ),
+  /**
+   * Remove a release that holds nothing (FTR-022), as `kanbanr release remove` does; the daemon
+   * refuses any other and says why.
+   */
+  removeRelease: (id: string, version: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}`,
+      undefined,
+      "remove a release",
+      `kanbanr release remove ${version}`,
+      "DELETE",
     ),
   /**
    * Move a release to its next stage, or the named one (FEAT-183, FEAT-185): the same core
@@ -273,6 +285,28 @@ export type Meta = {
   schema_version?: number;
   identity: { name: string; email: string } | null;
 };
+
+/**
+ * Where a verdict was taken, as words that end a line: " via the monitor", or " · origin unknown"
+ * for a record written before origin existed (DEF-028). A value this version does not know is
+ * shown as it is.
+ */
+export function viaOrigin(origin?: string | null): string {
+  if (!origin) return " · origin unknown";
+  return origin === "monitor" || origin === "conversation" || origin === "terminal"
+    ? ` · via the ${origin}`
+    : ` · via ${origin}`;
+}
+
+/**
+ * The sentence of an `already_recorded` answer: the verdict repeated the latest one, nothing was
+ * recorded, and this says who recorded it first, when and from where (DEF-028). Null for any other
+ * answer. The write itself succeeded, so callers treat it as done.
+ */
+export function alreadySaid(answer: unknown): string | null {
+  const said = (answer as { already_recorded?: { sentence?: string } } | null)?.already_recorded;
+  return said ? (said.sentence ?? "already recorded") : null;
+}
 
 /**
  * Post an approval verdict. A read-only daemon has no write route at all, so a 404 or 405 means

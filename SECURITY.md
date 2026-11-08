@@ -11,9 +11,14 @@ kanbanr is deliberately small in attack surface:
   decisions, and those writes are limited to the monitor's own page. At each start the monitor makes a
   new random token and gives it only to the page it serves; a write is accepted only with that token
   and, when the browser sends an `Origin`, only from the monitor's own origin. It sends no
-  cross-origin headers, and it answers a request only for the loopback names, the address it is bound
+  cross-origin headers, and it answers a request only for the loopback names (on any port, so a published container port works), the address it is bound
   to and the hosts listed in `KANBANR_ALLOWED_HOSTS` (comma-separated `name[:port]`, for a reverse
-  proxy). Anything else gets a 403 and changes nothing.
+  proxy). Anything else gets a 403 and changes nothing. A monitor with writes on refuses to start on
+  an address other machines can reach, unless you pass `--allow-remote-writes` or set
+  `KANBANR_ALLOW_REMOTE_WRITES=1`. To take writes through a TLS proxy, name the browser's origin in
+  `KANBANR_ALLOWED_ORIGINS` (for example `https://board.example.com`) and the host the proxy sends in
+  `KANBANR_ALLOWED_HOSTS`. The proxy must authenticate: the token proves a write came from the
+  monitor's page, not who the person is.
 - **Exposing the monitor beyond localhost is the operator's responsibility.** If you put `serve`
   behind a network, front it with a reverse proxy that you control (TLS + authentication). kanbanr
   itself does no access control.

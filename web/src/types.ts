@@ -163,6 +163,8 @@ export interface ApprovalEvent {
   verdict: "approved" | "ratified" | "withdrawn";
   reason?: string;
   rev?: string;
+  /** Where it was taken: monitor, conversation, terminal or delegated (DEF-028). Absent means unknown. */
+  origin?: string;
 }
 
 export interface FeatureDefinition {
@@ -202,6 +204,8 @@ export interface Signoff {
   /** Absent means given. */
   verdict?: "given" | "withdrawn";
   reason?: string;
+  /** Where it was taken (DEF-028). Absent means unknown. */
+  origin?: string;
 }
 
 /** The six completeness dimensions, one line each. */
@@ -220,6 +224,8 @@ export interface Approval {
   rev: string;
   /** A hash per part of the definition the approval covered (FTR-018). */
   parts?: Record<string, string>;
+  /** Where it was taken (DEF-028). Absent means unknown. */
+  origin?: string;
 }
 
 export interface Requirement {
@@ -437,6 +443,8 @@ export interface ProjectConfig {
   gates?: Record<string, Gate>;
   /** Which prefix an item's code gets from its kind (FEAT-217). Absent: FEAT for every item. */
   codes?: CodesConfig;
+  /** A shorter path through the stages for some kinds, keyed by kind (FTR-019). Absent: none. */
+  paths?: Record<string, KindPath>;
   /** Days or story points (FEAT-121). */
   estimate_unit?: "days" | "points";
   /** Whether the project uses sprints and releases at all (FEAT-121). */
@@ -490,6 +498,9 @@ export interface SprintReport extends Sprint {
 }
 
 /** A release, planned up front and cut from finished work (FEAT-120). */
+/** What `release plan` answers: the release, and the planned items that are in no running sprint (DEF-029). */
+export type PlannedRelease = Release & { not_in_sprint?: { code: string; sprint: string }[] };
+
 export interface Release {
   version: string;
   name?: string;
@@ -506,9 +517,21 @@ export interface Release {
   /** Where it is now, from the project's release stages; absent until first promoted (FEAT-183). */
   stage?: string;
   /** Every stage change, oldest first. A move back carries its reason. */
-  stages?: { stage: string; by: string; at: string; reason?: string }[];
+  stages?: {
+    stage: string;
+    by: string;
+    at: string;
+    reason?: string;
+    item?: string;
+    origin?: string;
+  }[];
+  /** Who cut the release and from where (DEF-028). Absent means unknown. */
+  shipped_by?: string;
+  shipped_origin?: string;
   /** The code branch, made on entering the first stage. */
   branch?: string;
+  /** The cut release this patches (FEAT-184); absent for an ordinary release. */
+  parent?: string;
   /** When the stage that tags was entered (FTR-026); a tagged release still `planned` is waiting on its later stages. */
   tagged_at?: string;
   /** The commit the tag names. */
@@ -530,6 +553,8 @@ export interface ReleaseNotes {
   editable: boolean;
   /** Why not, when not editable. */
   why_not?: string;
+  /** Items planned into the release whose code the notes do not mention (DEF-031). */
+  unmentioned?: string[];
 }
 
 /** A check a gate names, the Zachman check narrowed to some columns, the spec's named sections
@@ -563,7 +588,7 @@ export interface GateResult {
 
 /** One condition of a release stage a promotion enters, and whether it holds (FEAT-212). */
 export interface PlanCondition {
-  check: "items_finished" | "prepared" | "main_at_release" | "pushed" | "gate_passed" | "tag_passed" | "items_merged" | "stage_passed";
+  check: "items_finished" | "prepared" | "main_at_release" | "pushed" | "gate_passed" | "tag_passed" | "items_merged" | "stage_passed" | "merged_items_ship";
   stage: string;
   holds: boolean;
   detail: string;
@@ -601,6 +626,8 @@ export interface ReleasePlan {
   ships: boolean;
   /** The tag's recorded CI result, while the release is tagged and not shipped (FTR-026). */
   tag?: TagResult;
+  /** The merge that sent the release back and the steps from there, until it is cut (DEF-031). */
+  returned?: { item: string; by: string; at: string; from: string; steps: string[] };
   /** What the one button says: "Promote to main", "Cut v0.2.1". */
   button: string;
   conditions: PlanCondition[];
@@ -619,6 +646,13 @@ export interface ReleasePlan {
   empty: boolean;
   /** Worth knowing, not stopping: e.g. the notes carry an earlier date (DEF-001). */
   warnings?: string[];
+}
+
+/** The stages an item of one kind passes, what its first move asks, and the method parts left out. */
+export interface KindPath {
+  stages: string[];
+  requires?: Condition[];
+  method_off?: string[];
 }
 
 export interface Gate {
@@ -767,6 +801,8 @@ export type Adr = {
   title?: string;
   date?: string;
   decided?: string;
+  /** Where the verdict was taken (DEF-028). Absent means unknown. */
+  decided_origin?: string;
   reason?: string;
   deciders?: string[];
   affects?: string[];

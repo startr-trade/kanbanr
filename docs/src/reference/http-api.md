@@ -98,7 +98,8 @@ now and then; a client re-reads what it shows when an event arrives.
 The daemon sends no cross-origin headers, so a page from another origin cannot read the API or its
 SSE streams. It answers only for the loopback names, its bound address and the hosts in
 `KANBANR_ALLOWED_HOSTS`, and a write needs the token its own page was given at this start. Anyone who
-can reach the daemon with an accepted host can read the board. See
+can reach the daemon with an accepted host can read the board. A write from a page behind a TLS
+proxy is accepted only when its origin is named in `KANBANR_ALLOWED_ORIGINS`. See
 [Hosting the monitor elsewhere](../using/the-monitor.md#hosting-the-monitor-elsewhere).
 
 ## Internal routes
@@ -126,6 +127,15 @@ created items may carry a `ref` alias later ops reference; the first failure nam
 
 A daemon started with `--allow-writes` takes the same writes over HTTP, under `/api/write/...`,
 for the monitor's approval and release actions. Those routes are not part of the read API.
+
+A verdict route (approve, ratify, unapprove, sign-off and its withdrawal, accepting or rejecting a
+decision, promote, cut, patch-from-tag) records where it was taken. The daemon stamps `monitor`
+itself and ignores an `origin` in the request. When the same approval, ratification or sign-off
+repeats the latest one on text that has not changed, nothing is recorded, no activity entry, event
+or commit is made, and the answer is the item with an `already_recorded` object: `what`, `by`, `at`,
+`origin` and a `sentence` saying who recorded it first, when and from where. A sign-off repeated
+with a new note or doc is recorded. A decision, promotion or cut asked for a second time is
+refused as before, and the refusal now names who did it first.
 
 ## The OpenAPI document
 

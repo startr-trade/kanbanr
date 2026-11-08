@@ -132,6 +132,8 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_decisions(store, project, &mut report);
         scan_stray_folders(store, project, &mut report);
         scan_process_drift(store, project, &mut report);
+        scan_shipped_release_items(store, project, &charter, &ctx, &mut report);
+        scan_release_items_outside_sprint(store, project, &mut report);
         if project.config.method.is_on(crate::method::Part::Links) {
             scan_references(store, project, &mut report);
         }
@@ -167,6 +169,8 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_decisions(store, &project, &mut report);
     scan_stray_folders(store, &project, &mut report);
     scan_process_drift(store, &project, &mut report);
+    scan_shipped_release_items(store, &project, &charter, &ctx, &mut report);
+    scan_release_items_outside_sprint(store, &project, &mut report);
     if project.config.method.is_on(crate::method::Part::Links) {
         scan_references(store, &project, &mut report);
     }
@@ -561,6 +565,55 @@ fn scan_process_drift(store: &Store, project: &Project, report: &mut Report) {
             project: project.id.clone(),
             code: None,
             message,
+        });
+    }
+}
+
+/// An item planned into a release that has shipped and is not at an end status (DEF-029): the
+/// board says it shipped, but the item still stands where it was. Reported, never moved: the way
+/// out is the person's own sign-off or move.
+fn scan_shipped_release_items(
+    store: &Store,
+    project: &Project,
+    charter: &crate::Charter,
+    ctx: &crate::readiness::Context,
+    report: &mut Report,
+) {
+    let Ok(releases) = crate::releases::load(store, &project.id) else {
+        return;
+    };
+    for s in crate::releases::stranded(project, charter, ctx, &releases) {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.id.clone(),
+            message: format!(
+                "{} is planned into {}, which shipped on {}, but is at {}: {}. Give what it lacks, \
+                 or plan it into a coming release",
+                s.code, s.release, s.shipped_at, s.status, s.why
+            ),
+            code: Some(s.code),
+        });
+    }
+}
+
+/// A live item planned into a release that has not shipped, and into no sprint, while a sprint
+/// runs (DEF-029). Quiet when no sprint runs, so it never fires on everything.
+fn scan_release_items_outside_sprint(store: &Store, project: &Project, report: &mut Report) {
+    let (Ok(sprints), Ok(releases)) = (
+        crate::sprints::load(store, &project.id),
+        crate::releases::load(store, &project.id),
+    ) else {
+        return;
+    };
+    for o in crate::sprints::outside_running_sprint(project, &sprints, &releases, None) {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.id.clone(),
+            message: format!(
+                "{} is planned into {} but into no sprint, and {} is running: kanbanr sprint plan {} {}",
+                o.code, o.release, o.sprint, o.sprint, o.code
+            ),
+            code: Some(o.code),
         });
     }
 }
@@ -1123,6 +1176,132 @@ mod tests {
         )
         .unwrap();
         (store, dir)
+    }
+
+    /// A board with releases and sprints on, and v1 added.
+    fn release_board() -> (Store, std::path::PathBuf) {
+        let (store, dir) = fixture();
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&serde_json::json!({"releases": true, "sprints": true})),
+        )
+        .unwrap();
+        crate::releases::add(&store, "demo", "v1", "", "").unwrap();
+        (store, dir)
+    }
+
+    fn item_in(store: &Store, release: &str, finished: bool) -> String {
+        let code = store
+            .add_feature("demo", "Item", "", "M", None)
+            .unwrap()
+            .code;
+        if finished {
+            for s in ["Scheduled", "Completed"] {
+                store.move_feature("demo", &code, s).unwrap();
+            }
+        }
+        crate::releases::plan(store, "demo", release, std::slice::from_ref(&code)).unwrap();
+        code
+    }
+
+    fn said(store: &Store, needle: &str) -> Vec<String> {
+        run_project(store, "demo")
+            .unwrap()
+            .issues
+            .into_iter()
+            .filter(|i| i.message.contains(needle))
+            .map(|i| i.message)
+            .collect()
+    }
+
+    /// DEF-029 R-3: an item planned into a shipped release that is not at an end status is named,
+    /// with the release and its date, its status and what holds it.
+    #[test]
+    fn doctor_names_an_item_a_shipped_release_left_unfinished() {
+        let (store, dir) = release_board();
+        let code = item_in(&store, "v1", true);
+        crate::releases::cut(&store, "demo", "v1").unwrap();
+        assert!(
+            said(&store, "shipped on").is_empty(),
+            "shipped and finished"
+        );
+        // It slips back after the cut, as three items did in the walkthrough.
+        store.move_feature("demo", &code, "Scheduled").unwrap();
+        let found = said(&store, "shipped on");
+        assert_eq!(found.len(), 1, "{found:?}");
+        let m = &found[0];
+        assert!(
+            m.contains(&format!("{code} is planned into v1, which shipped on 20"))
+                && m.contains("but is at Scheduled")
+                && m.contains("plan it into a coming release"),
+            "{m}"
+        );
+        let issue = run_project(&store, "demo")
+            .unwrap()
+            .issues
+            .into_iter()
+            .find(|i| i.message.contains("shipped on"))
+            .unwrap();
+        assert_eq!(issue.code.as_deref(), Some(code.as_str()));
+        assert!(matches!(issue.severity, Severity::Warning));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-029 R-3: an item the cut carried into another release is not named.
+    #[test]
+    fn doctor_is_quiet_about_a_carried_item() {
+        let (store, dir) = release_board();
+        crate::releases::add(&store, "demo", "v2", "", "").unwrap();
+        let carried = item_in(&store, "v1", false);
+        crate::releases::cut(&store, "demo", "v1").unwrap();
+        let board = store.load("demo").unwrap();
+        assert_eq!(
+            board.feature(&carried).unwrap().release.as_deref(),
+            Some("v2")
+        );
+        assert!(said(&store, "shipped on").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-029 R-4: while a sprint runs, a live item planned into an unshipped release and into no
+    /// sprint is named, with the command that plans it in.
+    #[test]
+    fn doctor_names_a_release_item_missing_from_the_running_sprint() {
+        let (store, dir) = release_board();
+        let code = item_in(&store, "v1", false);
+        crate::sprints::add(&store, "demo", "2026-10-05", Some(5), "", None, "").unwrap();
+        crate::sprints::start(&store, "demo", "SP-001").unwrap();
+        let found = said(&store, "into no sprint");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].contains(&format!(
+                "{code} is planned into v1 but into no sprint, and SP-001 is running: kanbanr sprint plan SP-001 {code}"
+            )),
+            "{}",
+            found[0]
+        );
+        crate::sprints::plan(&store, "demo", "SP-001", std::slice::from_ref(&code)).unwrap();
+        assert!(
+            said(&store, "into no sprint").is_empty(),
+            "planned in, so quiet"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-029 R-4: with no sprint running there is nothing to say.
+    #[test]
+    fn doctor_is_quiet_when_no_sprint_runs() {
+        let (store, dir) = release_board();
+        item_in(&store, "v1", false);
+        assert!(said(&store, "into no sprint").is_empty());
+        crate::sprints::add(&store, "demo", "2026-10-05", Some(5), "", None, "").unwrap();
+        assert!(
+            said(&store, "into no sprint").is_empty(),
+            "planned, not started"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FEAT-217 R-11: codes a hand edit broke are a doctor error naming the entry, and allocation

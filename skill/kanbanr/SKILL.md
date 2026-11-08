@@ -44,37 +44,43 @@ project"** (or anything equivalent):
    `git config user.email`, `git remote -v`, the README and manifests, any tracker files), then ask
    only what that cannot answer, a few questions at a time with AskUserQuestion. **Every entry in
    `ask_the_user` from `kanbanr where --json` is asked, always**: the board's place, the process,
-   its cadence (sprints, releases), and the repository's git identity when git has none. Each
+   its cadence (sprints, releases), whether the project has CI (only with releases on), the
+   commit identity (once, when git has none), and the charter (once). Each
    usually has an obvious answer; recommend it as the first option, and let the user give it. Never
    write one of these into the plan as decided. **Ask them in order, each after the answer it
    depends on**: the process question only once the board is chosen (its options are that board's
-   saved processes first), the cadence question only once the process is chosen (it recommends the
-   process's own setting), and the git identity question only once the board's commit identity is
-   given (it offers that identity). Collect three groups:
+   saved processes first), and the cadence question only once the process is chosen (it recommends
+   the process's own setting). The name and description are not asked: read `suggested_name` and
+   `suggested_description` from `kanbanr where --json` and ask only if they are null or unclear.
+   Collect three things: (a) board, process and cadence; (b) the identity, once; (c) the charter,
+   once.
 
-   **a. Board and identity**
+   **a. Board**
    - *Where the board lives.* It is its own git repo and should sit **outside** the project folder,
      so it never nests inside the project's repo. Options from `kanbanr where --json`:
      `suggested_data_dir` (a new `<repo>.kanbanr` beside the repo; recommended, list it first),
      each of `existing_data_dirs` (share a board with other projects: needed for portfolio views,
      cross-project dependencies and the cross-project Gantt), or a path the user types. Never pick
      silently; if the folder is inside a git repo (`suggested_inside_git_repo`), say so.
-   - *Project name and one-line description* (default name: the folder's).
-   - *Commit identity*: name and email, defaulted from `git config`. Every board change is
-     committed as this identity.
-   - *The repository's git identity*, only when git itself has none (`git config user.name` and
-     `user.email` are empty): without one, neither the user nor you can commit in this repository
-     after setup. Ask once, recommending the identity just given for the board: "Use Venkatraman B
-     <…> for this repository's commits too?" — **Yes (Recommended)** sets it for this repository
-     only (`git config user.name "<name>"` and `git config user.email "<email>"`, run in the project
-     folder; never `--global`); **another name/email** sets that instead; **No** leaves git alone,
-     and then the initial commit passes the board's identity for that one commit
-     (`git -c user.name="<name>" -c user.email="<email>" commit …`) and the plan tells the user to
-     set their own before committing again.
+   - *Project name and one-line description*: not asked. Use `suggested_name` (the folder's) and
+     `suggested_description` (the README's first line, or a manifest's `description`); ask only
+     when the description is null or the README is empty.
 
-   **b. Charter**: why the project exists, which every item will link to.
+   **b. Identity, once.** One question for the board and the repository both: name and email,
+   defaulted from `git config`, else the board's author. It is asked when git has none here;
+   when git already has an identity, use it and do not ask. Every board change is committed as
+   this identity, and it is also set for this repository (`git config user.name "<name>"` and
+   `git config user.email "<email>"`, run in the project folder; never `--global`). Offer **Yes
+   (Recommended)**, or **another name/email**; **No** leaves git alone, and then the initial commit
+   passes the identity for that one commit (`git -c user.name="<name>" -c user.email="<email>"
+   commit …`) and the plan tells the user to set their own before committing again.
+
+   **c. Charter**: why the project exists, which every item will link to. **One confirmation for
+   the whole charter**, not one question per goal or field.
    - Draft it from what the repository already says (the README, manifests, existing docs), and
-     mark the draft **as a draft** in the plan so the user reads it as a proposal. The file
+     show the whole draft, marked **as a draft**, in the plan. Ask one question: confirm, or say
+     what to change. Exiting plan mode on the plan is the approval of the draft; nothing is adopted
+     before it. The file
      `kanbanr charter set` takes has exactly these fields. A goal's text is `statement`, not
      `outcome`:
 
@@ -97,7 +103,7 @@ project"** (or anything equivalent):
    - Suggest a standing `G-0: the system stays operable and maintainable` for maintenance work,
      so chores link to something honest.
 
-   **c. Process**
+   **Process, cadence and the rest**
    - *Saved processes first.* `kanbanr process list --json --data-dir <board>` (with the board
      chosen in **a**; it needs no board otherwise) lists the processes the team saved on the board
      (`"library": "board"`) and the user's own (`"personal"`). In the process question, **those are
@@ -122,11 +128,11 @@ project"** (or anything equivalent):
      design.
    - *Cadence*, asked for **every** process, as one question with two parts: "Sprints? Releases?"
      Recommend the chosen process's own setting: on for scrum and agile, off for the rest, which
-     most projects need. Only when one is on, ask its details:
-     - sprints: their length (1, 2, 3 or 4 weeks, defaulting to 2), when the first starts (default
-       next Monday), and its capacity (in story points for Scrum);
-     - releases: how often one is cut (every sprint, every few sprints, or on demand), and the first
-       release's version (default `v0.1.0`).
+     most projects need. Ask nothing more about it: no sprint length, start or capacity, no release
+     rhythm or version. The defaults apply (14-day sprints, releases on demand; a sprint can be
+     edited until it starts). **Setup creates no sprint and no release**: the first is made when the
+     user asks for it (see "Starting the first sprint or release"). When releases are on, ask once
+     whether the project has CI (Yes or No, default No).
 
      After the answer, run `kanbanr git model --sprints on|off --releases on|off` with it. It needs
      no board. Show its output verbatim in the follow-up and in the plan: where items branch from
@@ -167,9 +173,7 @@ project"** (or anything equivalent):
                                                    # these two only if the folder was not a git repo
    kanbanr git install-hooks                       # if chosen
    kanbanr config cadence --sprints on|off --releases on|off   # every process: the answer given
-   kanbanr config cadence --sprint-length 14 --release per_sprint   # only when sprints are on
-   kanbanr sprint add --start <date> --goal "<first goal>" --capacity <n>   # sprints on
-   kanbanr release add v0.1.0 --target <date>      # releases on
+   kanbanr config cadence --has-ci on|off          # only when releases are on: the CI answer
    kanbanr config workflow --write-agreement       # the working agreement, generated from the gates
    kanbanr remote add <name> <url>                 # if chosen
    kanbanr mirror enable --repo <owner/repo>       # if chosen
@@ -203,6 +207,21 @@ The charter is read back at the start of every session with `kanbanr charter sho
 `kanbanr board`. If a `.kanbanr` marker (or `$KANBANR_PROJECT`) is already present, the project is
 already tracked, so behave as if activated. Every change is committed to the data repo **authored
 by the configured identity** (`kanbanr identity`), and sharing happens through git remotes.
+
+## Starting the first sprint or release
+
+Setup makes neither, so the first one is made when the user asks for it, with the answers then
+known:
+
+- **A sprint.** When the user first asks to start or plan a sprint, ask its goal, its first day
+  (default next Monday) and its capacity (points under Scrum), then `kanbanr sprint add`. If a
+  planned sprint with no items already exists, offer `kanbanr sprint edit <SP>` or reuse it. Never
+  add a second sprint to change a date. A mistaken empty sprint is `kanbanr sprint remove <SP>`.
+- **A release.** When the user first plans an item into a release and none is suitable, ask the
+  version and the target date, then `kanbanr release add`. If an empty planned release exists,
+  reuse it; a mistaken empty one is `kanbanr release remove <V>`.
+- A started sprint is a record and is not edited. A sprint or release that holds items, a stage,
+  a branch or a patch is not removed.
 
 ## Importing existing task trackers
 
@@ -359,6 +378,14 @@ organisation's own process file changes what you ask with nothing changed here:
 Warnings go into the plan with a choice: fix it, or go ahead with the warning on record. When more
 than one next stage is possible, ask which. Head the plan with the stage's own `purpose`.
 
+**A kind can have its own path.** An item of a kind with a path (`kanbanr process show` lists them
+under "Lighter paths"; the built-in processes give `chore` one) skips the stages the path leaves
+out. Do not walk a chore through stages its path omits, and do not pad answers to satisfy a stage it
+never meets: `kanbanr check` lists only the next stage on its path. Its first move asks the path's
+own conditions too (a statement, goals and requirements), so draft those once. Make one with
+`kanbanr feature add --kind chore`. The approval and the sign-offs the stage it enters asks for
+stay the user's, as ever.
+
 **Stages have roles** (`kanbanr process checks` lists them): design, build, integrate, release.
 Whatever a process calls its stages, the design is due before the build role's stage, and code is
 written there, on the item's branch. Say which stage holds which role when you plan work. What
@@ -423,7 +450,10 @@ When items are waiting (`kanbanr review --pending --json`, `kanbanr adr list --j
 `proposed` decisions, and the Releases page for a release ready to move), say so in one message:
 how many, which, and the page's address. Never list them as questions. If the user asks you to
 explain one, explain it, then send them back to the page. If they want a change, make it; the item
-returns to the queue as its approval or sign-off requires. **If a verdict was ever recorded that
+returns to the queue as its approval or sign-off requires. A verdict records where it was taken (monitor,
+conversation or terminal), and one that repeats the latest on unchanged text records nothing: if a
+command answers "already …; nothing recorded", tell the user who decided first and stop.
+**If a verdict was ever recorded that
 the user did not give, say so at once**, and ask them to withdraw it on the item's page.
 
 The queue offers a sign-off only for the stage the item reaches **next**, and only once that
@@ -620,7 +650,9 @@ and the brief states them **verbatim**:
 | Everything else on the board | refused: moves, approvals, sign-offs, definitions, specs, docs, other items, config; a `batch` only of these ops | refused |
 | Code | commits only on its item's branch, each naming the item | no edits, no commits |
 | Remote | never: no `git push`, no `kanbanr sync` | never |
-| Tests | on temporary boards only, never a real board | — |
+| Tests | on a temporary board: a folder under the system temporary directory that holds no scope, named by a literal path or `$TMPDIR/…`; never a real board | — |
+
+To walk a process through, an agent runs `kanbanr --data-dir $TMPDIR/walk init …` and then the same `--data-dir` (or `KANBANR_DATA_DIR`) on each command.
 
 **Issue a scope before each sub-agent.** One command records what the agent may do on the board
 and prints its brief:
@@ -630,6 +662,8 @@ and prints its brief:
 Then:
 - start the agent with `isolation: worktree`, design agents included: a scope binds to the agent's
   own worktree, never to your checkout;
+- with `--worktree <path>` the scope is bound at once and the brief has no claim step; without it
+  the agent's first command is the claim;
 - paste the printed brief **verbatim** at the top of the agent's brief. Its first line has the
   agent claim the scope (`kanbanr scope claim SC-…`); from then on kanbanr refuses, and names, every
   board write, commit and push that agent makes from that worktree that the scope does not allow;
@@ -717,12 +751,20 @@ branches; fix it before going on.
   `--edit` commits new text there, nothing checked out, until the cut. When the user asks where
   the notes are or wants them changed, use this — never a fix item, never a checkout of
   `release/<V>`. The Releases page shows them too, with Edit on a write-enabled monitor.
+- **A merge sends a promoted release back.** When a move merges an item into a release that is past
+  candidate, kanbanr sends the release back to candidate and says so. Tell the person, in one
+  message, what the Releases page now offers: update the notes, run the gate again, promote to
+  main, push and wait for CI, then cut. Confirm no stage yourself. A release that is tagged and not
+  shipped refuses the merge and needs a patch release.
 - **The date follows the release.** Entering the stage that moves main dates the notes and changelog
   today. If main moved earlier, the cut's plan warns: run `kanbanr release redate <V>` before the
   cut, and say to push main again if it says so.
 - Plan items into a release before promoting it: a release with nothing planned is refused. So a
   release starts with `release add`, then `release plan <V> <CODE>…`, then promoting it to its
-  first stage (candidate), which makes `release/<V>`; `release add` has no `--branch`.
+  first stage (candidate), which makes `release/<V>`; `release add` has no `--branch`. When a
+  sprint is running, plan the item into it too (`kanbanr sprint plan <SP> <CODE>`) unless the person
+  said otherwise; `release plan` names the ones it missed. A promotion held for a merged item names
+  the sign-off it lacks: send the person to the Review page; never record it.
 - Check with `kanbanr release promote <V> --plan` and tell the user what it still needs; the
   promotion itself, the cut included, is theirs, on the Releases page. **The user pushes main and
   the tag**, by hand; a cut that requires
@@ -1178,6 +1220,9 @@ kanbanr feature edit FEAT-001 --points 5          # a story-point estimate (--es
 kanbanr sprint add --start 2026-10-05 --length 2w --goal "…" [--capacity 20]
 kanbanr sprint plan SP-001 FEAT-001 FEAT-002      # warns over capacity
 kanbanr sprint start SP-001 | show [SP-001] | list | close SP-001 --carry-to SP-002|backlog
+kanbanr sprint edit SP-001 [--name N] [--goal G] [--start D] [--length 2w | --end D] [--capacity N|0]   # only while planned
+kanbanr sprint remove SP-001                      # only an empty, unstarted sprint
+kanbanr release remove v0.1.0                     # only an empty, unstarted release
 kanbanr retro --sprint SP-001                     # the sprint's items, what it carried, its burndown
 kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # the user's, on the monitor; refused when Claude runs it. Ship the finished items, write notes, carry the rest

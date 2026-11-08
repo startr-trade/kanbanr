@@ -168,6 +168,27 @@ fn a_request_for_another_host_is_refused() {
 }
 
 #[test]
+fn a_published_port_serves_the_page() {
+    // A container binds one port and publishes another: the browser names the published one.
+    let s = Scratch::new("published");
+    let data = board(&s);
+    let url = serve(&s, &data);
+    let bound: u16 = url.rsplit(':').next().unwrap().parse().unwrap();
+    let other = if bound == 18080 { 18081 } else { 18080 };
+    for host in [
+        format!("localhost:{other}"),
+        format!("127.0.0.1:{other}"),
+        format!("[::1]:{other}"),
+        "localhost".to_string(),
+    ] {
+        for path in ["/", "/api/projects"] {
+            let r = ureq::get(&format!("{url}{path}")).set("Host", &host).call();
+            assert_eq!(status(r), 200, "{path} for {host}");
+        }
+    }
+}
+
+#[test]
 fn another_origin_gets_no_cross_origin_headers() {
     let s = Scratch::new("cors");
     let data = board(&s);
@@ -252,4 +273,72 @@ fn each_start_gets_a_new_token_in_the_page() {
     assert_ne!(ta, tb, "two starts, two tokens");
     // The token of one start does not write on the other.
     assert_eq!(create_project(&ub, &[("x-kanbanr-token", &ta)]), 403);
+}
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+#[test]
+fn writes_on_a_non_local_bind_refuse_to_start() {
+    // The test never sets or clears variables: it needs the acceptance unset.
+    assert!(
+        std::env::var("KANBANR_ALLOW_REMOTE_WRITES").is_err(),
+        "unset KANBANR_ALLOW_REMOTE_WRITES to run this test"
+    );
+    let s = Scratch::new("refuse");
+    let data = board(&s);
+    let before = commits(&data);
+    let port = free_port();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let r = rt.block_on(kanbanr_server::run_with(
+        data.clone(),
+        format!("0.0.0.0:{port}"),
+        None,
+        true,
+        None,
+        false,
+    ));
+    let text = format!(
+        "{:#}",
+        r.expect_err("a reachable bind with writes is refused")
+    );
+    assert!(text.contains("--allow-remote-writes"), "{text}");
+    assert!(
+        std::net::TcpListener::bind(format!("0.0.0.0:{port}")).is_ok(),
+        "nothing listens on the port"
+    );
+    assert_eq!(commits(&data), before);
+}
+
+#[test]
+fn a_read_only_monitor_binds_anywhere() {
+    let s = Scratch::new("readonly");
+    let data = board(&s);
+    let port = free_port();
+    let dir = data.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(kanbanr_server::run_with(
+            dir,
+            format!("0.0.0.0:{port}"),
+            None,
+            false,
+            None,
+            false,
+        ))
+        .unwrap();
+    });
+    let url = format!("http://127.0.0.1:{port}/healthz");
+    for _ in 0..200 {
+        if ureq::get(&url).call().is_ok() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!("the read-only monitor did not come up on 0.0.0.0:{port}");
 }

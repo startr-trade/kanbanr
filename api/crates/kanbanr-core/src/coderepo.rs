@@ -479,6 +479,19 @@ pub fn is_ancestor(root: &Path, ancestor: &str, of: &str) -> bool {
     succeeds(root, &["merge-base", "--is-ancestor", ancestor, of])
 }
 
+/// The paths that differ between two commits, without checking anything out (DEF-031).
+pub fn changed_paths(root: &Path, from: &str, to: &str) -> Result<Vec<String>> {
+    let out = git(
+        root,
+        &["diff", "--name-only", "--no-renames", "-z", from, to, "--"],
+    )?;
+    Ok(out
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 /// The worktree that has `branch` checked out, if any. A branch checked out somewhere must be
 /// moved there, by git's merge or reset, or that worktree's files no longer match its branch.
 fn checked_out_in(root: &Path, branch: &str) -> Option<PathBuf> {

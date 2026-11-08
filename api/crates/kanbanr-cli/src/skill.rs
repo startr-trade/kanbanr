@@ -235,6 +235,21 @@ mod tests {
         }
     }
 
+    /// DEF-015 R-4: the skill tells the coordinator what a temporary board is and the form an agent
+    /// uses to name one.
+    #[test]
+    fn skill_names_the_temporary_board_form() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        for want in ["temporary board", "$TMPDIR", "--data-dir"] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+        assert!(!skill.contains("temporary boards only"));
+    }
+
     /// FEAT-200 R-18: the skill tells Claude how to write diagrams that draw — quote flowchart
     /// labels, plain words in sequence messages, never `end` as an id, `kanbanr doctor` after — and
     /// what a `diagrams_valid` gate asks of it.
@@ -278,6 +293,20 @@ mod tests {
         assert!(
             skill.contains("**A design-review covers the whole spec as it was when given.**"),
             "the skill says a design-review covers the whole spec"
+        );
+    }
+
+    /// DEF-023: the skill says a `--worktree` scope is bound at once and its brief has no claim step.
+    #[test]
+    fn skill_says_a_worktree_flag_binds_the_scope() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        assert!(
+            skill.contains("--worktree") && skill.contains("no claim step"),
+            "the skill says --worktree binds the scope and the brief has no claim step"
         );
     }
 
@@ -357,6 +386,23 @@ mod tests {
         assert!(skill_md().contains("**put rework on the board before it starts.**"));
     }
 
+    /// DEF-029 R-6: the skill tells Claude to plan a release item into the running sprint, and to
+    /// leave the sign-off that holds a merged item to the person.
+    #[test]
+    fn skill_plans_release_items_into_the_running_sprint() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).replace("\n  ", " "))
+            .unwrap();
+        for want in [
+            "When a sprint is running, plan the item into it too (`kanbanr sprint plan <SP> <CODE>`) unless the person said otherwise; `release plan` names the ones it missed.",
+            "A promotion held for a merged item names the sign-off it lacks: send the person to the Review page; never record it.",
+        ] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+    }
+
     /// FEAT-215 R-1: the skill states each sub-agent role's boundaries, and the coordinator's
     /// duty to brief with them and keep the board current.
     #[test]
@@ -373,6 +419,25 @@ mod tests {
             "the brief states them **verbatim**",
             "never: no `git push`, no `kanbanr sync`",
             "so the board never lags the code",
+        ] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+    }
+
+    /// DEF-031 R-9: the skill tells Claude that a merge sends a promoted release back, to report
+    /// it, and to confirm no stage.
+    #[test]
+    fn skill_reports_a_release_sent_back_and_confirms_no_stage() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        for want in [
+            "**A merge sends a promoted release back.**",
+            "sends the release back to candidate and says so",
+            "Confirm no stage yourself",
+            "needs a patch release",
         ] {
             assert!(skill.contains(want), "the skill says {want:?}");
         }

@@ -57,8 +57,13 @@ pub enum CoreError {
     NoStatuses,
     #[error("status '{0}' is a no-op state and cannot be displayed")]
     DisplayedNoOp(String),
-    #[error("transition from '{from}' to '{to}' is not allowed")]
-    TransitionNotAllowed { from: String, to: String },
+    #[error("transition from '{from}' to '{to}' is not allowed{via}")]
+    TransitionNotAllowed {
+        from: String,
+        to: String,
+        /// Why, when a kind's path refused it (FTR-019): empty for the plain transitions.
+        via: String,
+    },
     #[error("'{0}' is not a valid task state (use NotStarted | InProgress | Completed)")]
     InvalidTaskState(String),
     #[error("batch operation #{0} failed: {1}")]

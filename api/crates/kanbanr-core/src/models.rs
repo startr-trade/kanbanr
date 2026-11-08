@@ -331,6 +331,11 @@ pub struct Signoff {
     /// Why it was withdrawn. Giving a sign-off needs no reason; taking one back does.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
+    /// Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a
+    /// record written before origin existed, which reads as unknown; kept as a string so a newer
+    /// kanbanr's value survives.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -396,6 +401,11 @@ pub struct ApprovalEvent {
     /// stage by stage leaves a readable trail: approved at Vision, again at System Design.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub status: String,
+    /// Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a
+    /// record written before origin existed, which reads as unknown; kept as a string so a newer
+    /// kanbanr's value survives.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -418,6 +428,11 @@ pub struct Approval {
     /// no baseline, and any change to the definition lapses it.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub parts: std::collections::BTreeMap<String, String>,
+    /// Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a
+    /// record written before origin existed, which reads as unknown; kept as a string so a newer
+    /// kanbanr's value survives.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(

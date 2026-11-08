@@ -15,6 +15,9 @@ Three things are worth knowing up front:
   page's address, and never records one for you: kanbanr refuses if it tries, and never asks for
   one in a plan or a question. If no monitor accepts writes, Claude offers to start one with
   `kanbanr review --ui`.
+- **A verdict records where it was taken.** The monitor, a command in your terminal and an answer
+  recorded in a Claude Code session are told apart, and the item shows which beside each approval
+  and sign-off. Deciding the same thing twice records nothing the second time.
 - **A verdict covers what you were shown.** The page pins your choice to the definition you saw
   (`--rev`). If the definition changed in between, it refuses and you read the change first.
 

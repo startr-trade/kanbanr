@@ -8,6 +8,44 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **A promotion no longer carries merged work out of its release, and doctor names what a release
+  left behind (DEF-029).** Promoting into the stage that tags, or the last stage, is now held while
+  an item planned into the release has its code merged but would be carried over because its end
+  gate fails (usually a missing **Sign off release**). The plan names each such item, what it lacks
+  and the way out (`merged_items_ship`); work that is not done or not merged is carried as before.
+  `kanbanr doctor` warns about an item planned into a shipped release that is not at an end status,
+  and about a live item planned into a release but into no sprint while a sprint runs.
+  `kanbanr release plan` says which of the items it planned are in no sprint, with the
+  `kanbanr sprint plan` line, and plans nothing into the sprint itself.
+- **A change merged into a promoted release sends it back to candidate (DEF-031).** Merging an item
+  into a release that is past its first stage and not cut returns the release to that stage,
+  recording the item, and `kanbanr move` and Claude say what to do from there. The Releases page
+  and `kanbanr release promote <V> --plan` show the item and the steps in order (notes, the gate,
+  promote to main, push and wait for CI, cut), the release notes list the planned items they do not
+  mention, and the cut of a returned release needs main at the tip, the tip pushed and the gate
+  passed. A recorded gate pass now carries to a later commit when only documentation changed
+  (`docs/` and `*.md` unless `kanbanr config gate-docs` says otherwise), and the plan names the
+  commit it came from; a failed result never carries. A release that is tagged and not shipped
+  refuses the merge and points to a patch release.
+- **A decision records where it was taken, and a repeat records nothing (DEF-028).** Every approval,
+  ratification, sign-off and its withdrawal, decision, promotion, confirmation after the tag, patch
+  from a failed tag and cut now records its `origin`: `monitor` for a click on the monitor,
+  `conversation` for a command run inside a Claude Code session, `terminal` otherwise. The front end
+  names it; a request cannot. `feature show` ends each verdict line with it and `--json` carries
+  it; a record from an earlier version reads as origin unknown and is not rewritten. A release's cut
+  also records `shipped_by` and `shipped_origin`, and a decision `decided_origin`. The same
+  approval, ratification or sign-off repeated on text that has not changed records nothing, with no
+  activity entry, event or commit, and answers with `already_recorded` saying who recorded it first,
+  when and from where; a decision, promotion or cut asked for twice is refused and now says the
+  same. Release stage changes keep keys they do not know: a kanbanr older than this one that
+  rewrites `releases.yaml` drops `origin` from them.
+- **A scope issued with `--worktree` no longer tells its agent to claim it (DEF-023).** The scope
+  is bound at once, so the brief's claim step was refused when the agent ran it. A bound scope's
+  brief now says which worktree it is bound to and the branch it is on, and that nothing needs
+  claiming; an unbound scope's brief is unchanged.
+- **The monitor refuses to start with writes on at an address other machines can reach (DEF-026).**
+  Accept it with `--allow-remote-writes` or `KANBANR_ALLOW_REMOTE_WRITES`; `KANBANR_ALLOWED_ORIGINS`
+  lets a write come from an https origin through a proxy you name.
 - **A scope binds the agent it was issued to, not whoever stands in its folder (DEF-027).** The
   coordinator's shell was trapped once it entered an agent's worktree, and revoking the scope
   trapped it further. A process outside Claude Code is a person, a hook call without an `agent_id`
@@ -24,9 +62,35 @@ All notable changes to kanbanr are documented here. The format follows
   says sprint membership is changed with `kanbanr sprint plan` and `kanbanr sprint unplan`. A bundle
   that sent a field no operation ever took, such as `ref` on `feature.edit`, now fails where it was
   silently ignored; remove the field to get the old result.
+- **A scope's brief allows temporary boards, and the guard now lets an agent use one (DEF-015).**
+  Every brief said "Tests: temporary boards only", but the Bash guard refused `--data-dir`,
+  `KANBANR_DATA_DIR`, `KANBANR_PROJECT` and `cd $TMPDIR/…` for any board, so agents could not walk a
+  process through on a throwaway one. One rule in core now decides what a temporary board is (a
+  folder under the temporary directory that holds no agent scope); the guard, the brief and the
+  board-governing check all use it. A real board, a copy of it (it holds scopes), a link to it and a
+  path the guard cannot resolve stay refused, and the refusal and the brief name the form to use.
+  `$TMPDIR` cannot be reassigned in a command.
 
 ### Added
 
+- **TOGAF fits sprints and releases without changing it (FTR-025).** Migration counts as done for a
+  sprint, so closing a sprint carries over only unmerged work. A project's sprints, releases, release
+  stages, branches, git model, release gates and prepare steps no longer make it a different process.
+- **Setup leaves no sprint or release you didn't need (FTR-022).** Setup now asks sprints and
+  releases as one question, with no length, dates, capacity or version, and creates neither; the
+  first is made when you ask for it. It reads the project's name and description from the README or
+  manifest, asks for the commit identity once for the board and the repository, asks for the
+  charter as one confirmation, and asks once whether the project has CI. A sprint that has not
+  started can be changed (`kanbanr sprint edit`), and an empty unstarted sprint or release can be
+  removed (`kanbanr sprint remove`, `kanbanr release remove`, and a Remove button on the Releases
+  page).
+- **Chores take a lighter path through a process (FTR-019).** A process can give a work kind its own
+  `paths`: the stages an item of that kind passes through, the conditions its first move asks, and
+  the method parts that do not apply to it. The built-in TOGAF, Scrum, agile and design-control
+  processes give chores one, so a chore no longer goes through stages whose questions do not fit it,
+  while it still records why it exists and how it is verified, and still needs your approval and
+  sign-offs. Other kinds and boards without `paths` behave as before. A process file with `paths`
+  needs this version; an older kanbanr does not know the key.
 - **Release and install builds are locked, and releases carry SBOMs and attestations (MNT-004).**
   Every release, image and install build now passes `--locked` to cargo and uses `npm ci`, and
   `scripts/check_supply_chain.py` fails CI on any that does not. Each release attaches two
@@ -36,6 +100,14 @@ All notable changes to kanbanr are documented here. The format follows
   `ATTEST_RELEASE=false` skips the attestations and says so in the release notes. The Docker smoke
   test drives the `docker` CLI directly, so `testcontainers` and its advisory exception
   (RUSTSEC-2026-0440) are gone.
+## [0.5.1] - 2026-11-08
+
+### Fixed
+
+- **The monitor answers its own page on a published port (DEF-032).** v0.5.0 counted `localhost`,
+  `127.0.0.1` and `[::1]` only on the port the monitor is bound to, so the documented Docker setup,
+  which publishes 8080 as 18080, got a 403 on every page. Those three names are now answered on any
+  port; every other host is checked exactly as before.
 
 ## [0.5.0] - 2026-11-06
 
@@ -1375,7 +1447,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/startr-trade/kanbanr/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/startr-trade/kanbanr/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/startr-trade/kanbanr/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/startr-trade/kanbanr/compare/v0.2.1...v0.3.0

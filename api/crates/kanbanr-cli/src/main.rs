@@ -134,6 +134,10 @@ enum Command {
         /// (single-writer daemon). OFF by default — the default daemon only reads. (FEAT-034)
         #[arg(long)]
         allow_writes: bool,
+        /// Accept writes on an address other machines can reach (default: refused). Also
+        /// $KANBANR_ALLOW_REMOTE_WRITES. (DEF-026)
+        #[arg(long)]
+        allow_remote_writes: bool,
     },
     /// Push local commits to the configured git remotes now (FEAT-034). Writes commit locally and
     /// push is debounced off the hot path by default; this flushes anything pending immediately.
@@ -1082,6 +1086,15 @@ enum ConfigCmd {
     CommitGates {
         names: Vec<String>,
     },
+    /// The paths that count as documentation when a recorded gate pass is carried across a change
+    /// (DEF-031): `kanbanr config gate-docs docs/ '*.md'`. A folder ends in `/`, a suffix starts
+    /// with `*`. With none given, goes back to the default (`docs/` and `*.md`); `--none` says no
+    /// path counts, so a pass carries across no change.
+    GateDocs {
+        entries: Vec<String>,
+        #[arg(long, conflicts_with = "entries")]
+        none: bool,
+    },
     /// The commit gate whose result judges a release's tag (FTR-026): `kanbanr config tag-gate
     /// ci`. It must be one of the commit gates; with none given, the first commit gate judges.
     TagGate {
@@ -1273,6 +1286,9 @@ enum ReleaseCmd {
         #[arg(long, requires = "from_failed_tag")]
         notes: Option<String>,
     },
+    /// Remove a release that holds nothing: planned, with no stage, branch, notes, patch or item.
+    /// Anything else is refused, naming why.
+    Remove { version: String },
     /// List the project's releases.
     List,
     /// Move a release to its next stage, or to the one named (FEAT-183), doing what the stages
@@ -1378,9 +1394,33 @@ enum SprintCmd {
         #[arg(required = true)]
         items: Vec<String>,
     },
+    /// Change a sprint that has not started: name, goal, first day, length or last day, capacity.
+    /// A started sprint is a record and is refused.
+    Edit {
+        code: String,
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        goal: Option<String>,
+        /// First day, YYYY-MM-DD; the sprint keeps its length unless one is given.
+        #[arg(long)]
+        start: Option<String>,
+        /// Length, e.g. `2w` or `10d`.
+        #[arg(long, conflicts_with = "end")]
+        length: Option<String>,
+        /// Last day, YYYY-MM-DD.
+        #[arg(long)]
+        end: Option<String>,
+        /// What it can take, in the project's estimate unit; 0 clears it.
+        #[arg(long)]
+        capacity: Option<f64>,
+    },
+    /// Remove a sprint that holds no item and has not started. A sprint with items is refused.
+    Remove { code: String },
     /// Make a sprint the active one.
     Start { code: String },
-    /// Close a sprint, carrying unfinished items to another sprint or back to the backlog.
+    /// Close a sprint, carrying unfinished items to another sprint or back to the backlog. An
+    /// empty sprint made by mistake is removed instead (`sprint remove`).
     Close {
         code: String,
         /// A sprint code, or `backlog` (the default).
@@ -2006,6 +2046,7 @@ fn run_serve(
     bind: Option<String>,
     ui_dir: Option<String>,
     allow_writes: bool,
+    allow_remote_writes: bool,
 ) -> anyhow::Result<()> {
     let dir = project::resolve_data_dir(cli.data_dir.as_deref());
     if allow_writes {
@@ -2040,12 +2081,13 @@ fn run_serve(
         );
     }
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(kanbanr_server::run(
+    rt.block_on(kanbanr_server::run_with(
         dir,
         bind,
         ui_dir,
         allow_writes,
         code_repo,
+        allow_remote_writes,
     ))
 }
 
@@ -4517,6 +4559,10 @@ fn run_start(
     if let Some(reason) = unapproved {
         body["unapproved"] = json!(reason);
     }
+    // Who moved it, for a release this move sends back (DEF-031).
+    if let Ok(by) = verdict_author(cli, None) {
+        body["by"] = json!(by);
+    }
     let resp = client.write_in(
         Method::Post,
         &format!("/projects/{p}/features/{code}/move"),
@@ -4559,6 +4605,24 @@ fn print_merge(cli: &Cli, resp: &str) {
     }
     if let Some(note) = v["note"].as_str() {
         println!("note: {note}");
+    }
+    let sent = &v["release_sent_back"];
+    if let (Some(version), Some(from), Some(to), Some(item)) = (
+        sent["version"].as_str(),
+        sent["from"].as_str(),
+        sent["to"].as_str(),
+        sent["item"].as_str(),
+    ) {
+        let steps: Vec<&str> = sent["steps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        println!(
+            "{version} was at {from}; {item} is merged into it, so it is back at {to}. From here: {}",
+            steps.join(", then ")
+        );
     }
     if let Some(version) = v["forward_needed"].as_str() {
         println!("release/{version} has a fix the line lacks: kanbanr git forward {version}");
@@ -5052,6 +5116,12 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
         "marker": resolved.marker.as_ref().map(|m| show(&m.path)),
         "project": project::resolve_project(cli.project.as_deref()),
         "project_root": show(&project::project_root(&cwd, home)),
+        // What the folder already says about the project: Claude asks only when these are null
+        // or unclear (FTR-022).
+        "suggested_name": project::project_root(&cwd, home)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string()),
+        "suggested_description": project::suggested_description(&project::project_root(&cwd, home)),
         "suggested_data_dir": suggested.as_deref().map(show),
         "suggested_inside_git_repo": suggested
             .as_deref()
@@ -6076,7 +6146,16 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             bind,
             ui_dir,
             allow_writes,
-        } => return run_serve(cli, bind.clone(), ui_dir.clone(), *allow_writes),
+            allow_remote_writes,
+        } => {
+            return run_serve(
+                cli,
+                bind.clone(),
+                ui_dir.clone(),
+                *allow_writes,
+                *allow_remote_writes,
+            );
+        }
         Command::Open { check } => return run_open(cli, *check),
         Command::Where => return run_where(cli),
         // A preview of the git model needs no board (FEAT-194): setup shows it before `init`.
@@ -6512,7 +6591,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     std::thread::sleep(std::time::Duration::from_millis(600));
                     open_in_browser(&opened);
                 });
-                return run_serve(cli, Some(bind), ui_dir_for_review(), true);
+                return run_serve(cli, Some(bind), ui_dir_for_review(), true, false);
             }
             // What is waiting is the daemon's answer, the one the Review page shows (FEAT-159):
             // never approved, lapsed, unratified, or waiting on a sign-off — and not live work
@@ -7171,6 +7250,84 @@ fn is_kanbanr(words: &[String]) -> bool {
         .is_some_and(|w| w == "kanbanr" || w.ends_with("/kanbanr"))
 }
 
+/// A path word the guard can resolve: a leading `$TMPDIR` or `${TMPDIR}` is the temporary
+/// directory, `~` and `~/x` the home, anything else relative to `from`. `None` for any other `$`,
+/// a backtick, an empty word or `-`: the guard cannot know where it points, so it fails closed.
+fn expand_path_word(from: &Path, word: &str, temp: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    if word.is_empty() || word == "-" || word.contains('`') {
+        return None;
+    }
+    let tmp_rest = word
+        .strip_prefix("${TMPDIR}")
+        .or_else(|| word.strip_prefix("$TMPDIR"));
+    if let Some(rest) = tmp_rest {
+        if rest.contains('$') || !(rest.is_empty() || rest.starts_with('/')) {
+            return None;
+        }
+        return Some(temp.join(rest.trim_start_matches('/')));
+    }
+    if word.contains('$') {
+        return None;
+    }
+    if word == "~" {
+        return home.map(Path::to_path_buf);
+    }
+    if let Some(rest) = word.strip_prefix("~/") {
+        return home.map(|h| h.join(rest));
+    }
+    Some(from.join(word))
+}
+
+/// The assignments one simple command carries that name `var`: a prefix assignment of a kanbanr
+/// command or of nothing (`VAR=x` alone), and an `export` of it. Values unexpanded.
+fn named_values(env: &[String], words: &[String], var: &str) -> Vec<String> {
+    let prefix = format!("{var}=");
+    let carries =
+        words.is_empty() || is_kanbanr(words) || words.first().is_some_and(|w| w == "export");
+    let mut out: Vec<String> = Vec::new();
+    if carries {
+        out.extend(
+            env.iter()
+                .filter_map(|e| e.strip_prefix(&prefix))
+                .map(String::from),
+        );
+    }
+    if words.first().is_some_and(|w| w == "export") {
+        out.extend(
+            words
+                .iter()
+                .filter_map(|w| w.strip_prefix(&prefix))
+                .map(String::from),
+        );
+    }
+    out
+}
+
+/// The data dirs one simple command names, unexpanded: `--data-dir X` / `--data-dir=X` on a
+/// kanbanr command, `KANBANR_DATA_DIR=X` as a prefix assignment of a kanbanr command, and the same
+/// assignment after `export`. A `--data-dir` with no value is named as an empty word.
+fn named_data_dirs(env: &[String], words: &[String]) -> Vec<String> {
+    let mut out = named_values(env, words, "KANBANR_DATA_DIR");
+    if is_kanbanr(words) {
+        let mut it = words.iter().skip(1);
+        while let Some(w) = it.next() {
+            if w == "--data-dir" {
+                out.push(it.next().cloned().unwrap_or_default());
+            } else if let Some(v) = w.strip_prefix("--data-dir=") {
+                out.push(v.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Does the command name `KANBANR_PROJECT` (prefix assignment of a kanbanr command, or `export`)?
+fn names_project(env: &[String], words: &[String]) -> bool {
+    !named_values(env, words, "KANBANR_PROJECT").is_empty()
+        || (words.first().is_some_and(|w| w == "export")
+            && words.iter().any(|w| w == "KANBANR_PROJECT"))
+}
+
 /// What a Bash command in an agent's worktree may not do (FEAT-214): push, sync, point kanbanr at
 /// another board or project, leave the worktree to run git or kanbanr, touch the scope file,
 /// remove or move a worktree, redirect or skip the hooks, or write the board's files directly.
@@ -7194,24 +7351,24 @@ fn scoped_command_refusal(
     if command.contains("kanbanr-scope") {
         return refuse("the scope file is kanbanr's, never an agent's to read around or change");
     }
-    let temp = project::normalize(&std::env::temp_dir());
+    let temp = kanbanr_core::agentscope::temp_root();
     let inside = |p: &Path| {
         let p = project::normalize(p);
         p.starts_with(&wt.root) || p.starts_with(&temp)
     };
     let home = project::home_dir();
     let resolve = |from: &Path, to: &str| -> Option<PathBuf> {
-        if to.contains('$') || to.contains('`') || to == "-" {
-            return None;
-        }
-        if to == "~" {
-            return home.clone();
-        }
-        if let Some(rest) = to.strip_prefix("~/") {
-            return home.as_ref().map(|h| h.join(rest));
-        }
-        Some(from.join(to))
+        expand_path_word(from, to, &temp, home.as_deref())
     };
+    let temp_shown = temp.display();
+    let folder_refusal = format!(
+        "git and kanbanr run in this worktree or under {temp_shown}, never from another folder"
+    );
+    let board_refusal = format!(
+        "kanbanr runs on the board and project this worktree names, or on a temporary board (a \
+         folder under {temp_shown} that holds no agent scope, written as a literal path or \
+         `$TMPDIR/…`, for example `kanbanr --data-dir {temp_shown}/walk init …`), never another"
+    );
     let commands = simple_commands(command);
     // The caller is told apart by CLAUDECODE and the hook payload: an agent never sets, clears or
     // exports either, nor the coordinator's stamp (DEF-027).
@@ -7227,36 +7384,40 @@ fn scoped_command_refusal(
     }) {
         return refuse("who is calling is Claude Code's to say, never set or cleared by an agent");
     }
+    // `$TMPDIR` is where this guard reads the temporary directory from: an agent that reassigns it
+    // would make the guard and the shell disagree about where `$TMPDIR/…` points (DEF-015).
+    let names_tmpdir = |w: &String| w == "TMPDIR" || w.starts_with("TMPDIR=");
+    if commands.iter().any(|(env, words)| {
+        env.iter().any(names_tmpdir)
+            || (words.first().is_some_and(|f| {
+                ["export", "unset", "declare", "typeset", "readonly"].contains(&f.as_str())
+            }) && words.iter().any(names_tmpdir))
+    }) {
+        return refuse(
+            "$TMPDIR is what this guard reads the temporary directory from; do not change it",
+        );
+    }
     let runs_tool = commands
         .iter()
         .any(|(_, w)| is_kanbanr(w) || git_call(w).is_some());
     let mut dir = base.to_path_buf();
+    let (mut temp_board, mut names_a_project) = (false, false);
     for (env, words) in &commands {
         if is_kanbanr(words) {
             let sub = words[1..].iter().find(|w| !w.starts_with('-'));
             if sub.is_some_and(|s| s == "sync") {
                 return Some(kanbanr_core::agentscope::push_refusal(&id));
             }
-            if words
-                .iter()
-                .any(|w| w == "--data-dir" || w.starts_with("--data-dir="))
-                || env.iter().any(|e| {
-                    e.starts_with("KANBANR_DATA_DIR=") || e.starts_with("KANBANR_PROJECT=")
-                })
-            {
-                return refuse(
-                    "kanbanr runs on the board and project this worktree names, never another",
-                );
+        }
+        for d in named_data_dirs(env, words) {
+            if resolve(&dir, &d).is_some_and(|p| kanbanr_core::agentscope::is_temporary_board(&p)) {
+                temp_board = true;
+            } else {
+                return refuse(&board_refusal);
             }
         }
-        if words.first().is_some_and(|w| w == "export")
-            && words
-                .iter()
-                .any(|w| w.starts_with("KANBANR_DATA_DIR") || w.starts_with("KANBANR_PROJECT"))
-        {
-            return refuse(
-                "kanbanr runs on the board and project this worktree names, never another",
-            );
+        if names_project(env, words) {
+            names_a_project = true;
         }
         if let Some(call) = git_call(words) {
             if call.sub == Some("push") {
@@ -7285,9 +7446,10 @@ fn scoped_command_refusal(
             }
             for d in &call.dirs {
                 if !resolve(&dir, d).is_some_and(|p| inside(&p)) {
-                    return refuse(
-                        "git runs in this worktree, never in another repository or checkout",
-                    );
+                    return refuse(&format!(
+                        "git runs in this worktree or under {temp_shown}, never in another \
+                         repository or checkout"
+                    ));
                 }
             }
         }
@@ -7298,17 +7460,9 @@ fn scoped_command_refusal(
             match words.get(1) {
                 Some(to) => match resolve(&dir, to) {
                     Some(next) if inside(&next) => dir = next,
-                    _ => {
-                        return refuse(
-                            "git and kanbanr run in this worktree, never from another folder",
-                        );
-                    }
+                    _ => return refuse(&folder_refusal),
                 },
-                None => {
-                    return refuse(
-                        "git and kanbanr run in this worktree, never from another folder",
-                    );
-                }
+                None => return refuse(&folder_refusal),
             }
         }
         if let Some(board) = board {
@@ -7343,6 +7497,12 @@ fn scoped_command_refusal(
                 return refuse("the board is written only through kanbanr");
             }
         }
+    }
+    if names_a_project && !temp_board {
+        return refuse(&format!(
+            "{board_refusal}. `KANBANR_PROJECT` is for a temporary board: give `--data-dir \
+             {temp_shown}/…` in the same command"
+        ));
     }
     None
 }
@@ -8033,10 +8193,23 @@ fn run_portfolio(cli: &Cli, client: &Backend, cmd: &PortfolioCmd) -> anyhow::Res
 fn print_write(cli: &Cli, resp: &str, human: String) {
     if cli.json {
         println!("{}", pretty(resp));
+    } else if let Some(said) = already_recorded(resp) {
+        // A verdict that repeats the latest one records nothing (DEF-028).
+        println!("already {said}; nothing recorded");
     } else {
         println!("{human}");
     }
     print_coverage_warnings(cli, resp);
+}
+
+/// The sentence of an `already_recorded` answer: who recorded the verdict first, when and from
+/// where (DEF-028).
+fn already_recorded(resp: &str) -> Option<String> {
+    if !resp.contains("already_recorded") {
+        return None;
+    }
+    let v: Value = serde_json::from_str(resp).ok()?;
+    v["already_recorded"]["sentence"].as_str().map(String::from)
 }
 
 /// The warnings a release-configuration write returned (FTR-020), one per line on stderr. Silent
@@ -8799,6 +8972,22 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 "commit gates cleared".to_string()
             } else {
                 format!("commit gates: {}", names.join(", "))
+            };
+            print_write(cli, &resp, said);
+            Ok(())
+        }
+        ConfigCmd::GateDocs { entries, none } => {
+            let resp = client.write(
+                Method::Put,
+                &format!("/projects/{p}/config/gate-docs"),
+                Some(json!({ "paths": entries, "none": none })),
+            )?;
+            let said = if *none {
+                "documentation paths: none, so a gate pass carries across no change".to_string()
+            } else if entries.is_empty() {
+                "documentation paths: the default (docs/, *.md)".to_string()
+            } else {
+                format!("documentation paths: {}", entries.join(", "))
             };
             print_write(cli, &resp, said);
             Ok(())
@@ -9591,6 +9780,14 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 );
             }
         }
+        ReleaseCmd::Remove { version } => {
+            let resp = client.write(
+                Method::Delete,
+                &format!("/projects/{p}/releases/{}", urlencode_segment(version)),
+                None,
+            )?;
+            print_write(cli, &resp, format!("removed {version}"));
+        }
         ReleaseCmd::Plan { version, items } => {
             let resp = client.write(
                 Method::Post,
@@ -9602,6 +9799,19 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 &resp,
                 format!("planned {} into {version}", items.join(", ")),
             );
+            // The command's result, not a log (DEF-029): what the sprint is missing and how to add it.
+            if !cli.json {
+                let v: Value = serde_json::from_str(&resp)?;
+                for o in v["not_in_sprint"].as_array().into_iter().flatten() {
+                    let (code, sprint) = (
+                        o["code"].as_str().unwrap_or_default(),
+                        o["sprint"].as_str().unwrap_or_default(),
+                    );
+                    println!(
+                        "{code} is in no sprint and {sprint} is running: kanbanr sprint plan {sprint} {code}"
+                    );
+                }
+            }
         }
         // `cut --tag` is promotion to the last stage (FEAT-183): the tag comes with the main branch
         // fast-forwarded to the release, through the same preflight and rollback.
@@ -9614,10 +9824,11 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             tag: false,
         } => {
+            let by = verdict_author(cli, None)?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/releases/{}/cut", urlencode_segment(version)),
-                Some(json!({})),
+                Some(json!({ "by": by })),
             )?;
             let v: Value = serde_json::from_str(&resp)?;
             let release = &v["release"];
@@ -9727,6 +9938,15 @@ fn release_notes(
                 }
                 println!();
                 print!("{}", notes["text"].as_str().unwrap_or_default());
+                let missing: Vec<&str> = notes["unmentioned"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect();
+                if !missing.is_empty() {
+                    println!("\nNot mentioned yet: {}", missing.join(", "));
+                }
             }
             return Ok(());
         }
@@ -9982,6 +10202,22 @@ fn print_release_plan(
         return Ok(());
     }
     let plan: Value = serde_json::from_str(&resp)?;
+    if let Some(item) = plan["returned"]["item"].as_str() {
+        let steps: Vec<&str> = plan["returned"]["steps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        println!(
+            "Sent back by {item} on {}; {}",
+            plan["returned"]["at"]
+                .as_str()
+                .and_then(|at| at.get(..10))
+                .unwrap_or_default(),
+            steps.join(", then ")
+        );
+    }
     let from = plan["from"]
         .as_str()
         .filter(|s| !s.is_empty())
@@ -10198,6 +10434,50 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
                     v["end"].as_str().unwrap_or("")
                 ),
             );
+        }
+        SprintCmd::Edit {
+            code,
+            name,
+            goal,
+            start,
+            length,
+            end,
+            capacity,
+        } => {
+            let length = length.as_deref().map(parse_length).transpose()?;
+            let resp = client.write(
+                Method::Patch,
+                &format!("/projects/{p}/sprints/{code}"),
+                Some(obj(vec![
+                    ("name", name.clone().map(|n| json!(n))),
+                    ("goal", goal.clone().map(|g| json!(g))),
+                    ("start", start.clone().map(|s| json!(s))),
+                    ("length_days", length.map(|d| json!(d))),
+                    ("end", end.clone().map(|e| json!(e))),
+                    (
+                        "capacity",
+                        capacity.map(|c| if c == 0.0 { Value::Null } else { json!(c) }),
+                    ),
+                ])),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            print_write(
+                cli,
+                &resp,
+                format!(
+                    "edited {code} ({} → {})",
+                    v["start"].as_str().unwrap_or(""),
+                    v["end"].as_str().unwrap_or("")
+                ),
+            );
+        }
+        SprintCmd::Remove { code } => {
+            let resp = client.write(
+                Method::Delete,
+                &format!("/projects/{p}/sprints/{code}"),
+                None,
+            )?;
+            print_write(cli, &resp, format!("removed {code}"));
         }
         SprintCmd::List => {
             let resp = client.get(&format!("/projects/{p}/sprints"))?;
@@ -11425,5 +11705,164 @@ Refs: kanbanr:FEAT-082/R-1""#;
             may_claim: false,
         };
         assert!(capture_plan(&run, &p, &dead, Caller::Agent, Some("abc")).is_empty());
+    }
+
+    /// A scratch worktree's facts: enough for the guard's command rules, which read no folder.
+    fn scratch_wt(root: &Path) -> kanbanr_core::agentscope::WorktreeFacts {
+        kanbanr_core::agentscope::WorktreeFacts {
+            root: root.to_path_buf(),
+            git_dir: root.join(".git"),
+            main_root: root.to_path_buf(),
+            linked: true,
+            branch: Some("feat/DEF-015-x".into()),
+        }
+    }
+
+    /// A folder of its own under the temporary directory, removed when the test ends.
+    struct TempBoard(PathBuf);
+    impl TempBoard {
+        fn new(name: &str) -> Self {
+            let dir = kanbanr_core::agentscope::temp_root()
+                .join(format!("kanbanr-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("projects/shop")).unwrap();
+            TempBoard(dir)
+        }
+    }
+    impl Drop for TempBoard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// DEF-015 R-1: a temporary board, written as a literal path or under `$TMPDIR`, is allowed by
+    /// `--data-dir` and `KANBANR_DATA_DIR`, and `KANBANR_PROJECT` may name a project on it.
+    #[test]
+    fn the_guard_lets_an_agent_use_a_temporary_board() {
+        let b = TempBoard::new("guard-allows");
+        let wt = scratch_wt(Path::new("/work/tree"));
+        let name = b.0.file_name().unwrap().to_string_lossy().into_owned();
+        let at = b.0.display();
+        for command in [
+            format!("kanbanr --data-dir {at} board"),
+            format!("kanbanr --data-dir={at} board"),
+            format!("kanbanr --data-dir {at}/new init walk --no-hooks"),
+            format!("kanbanr --data-dir $TMPDIR/{name} board"),
+            format!("KANBANR_DATA_DIR={at} kanbanr board"),
+            format!("KANBANR_DATA_DIR={at} KANBANR_PROJECT=shop kanbanr board"),
+            format!("KANBANR_PROJECT=shop kanbanr --data-dir {at} board"),
+            format!("export KANBANR_DATA_DIR={at} && kanbanr board"),
+        ] {
+            let got = scoped_command_refusal(&command, Path::new("/work/tree"), &wt, None);
+            assert_eq!(got, None, "{command}");
+        }
+    }
+
+    /// DEF-015 R-2: a real board, any folder outside the temporary directory, a link into the
+    /// temporary directory from outside it, a path the guard cannot resolve, and a project with no
+    /// temporary board are all refused, with the form to use.
+    #[test]
+    fn the_guard_still_refuses_a_real_board_for_an_agent() {
+        let b = TempBoard::new("guard-refuses");
+        let outside = std::env::current_dir().unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, b.0.join("link")).unwrap();
+        let wt = scratch_wt(Path::new("/work/tree"));
+        let at = b.0.display();
+        let real = outside.display();
+        for command in [
+            format!("kanbanr --data-dir {real} board"),
+            "kanbanr --data-dir /elsewhere board".to_string(),
+            format!("kanbanr --data-dir {at}/link board"),
+            "kanbanr --data-dir $(mktemp -d) board".to_string(),
+            "kanbanr --data-dir $HOME/board board".to_string(),
+            "kanbanr --data-dir board".to_string(),
+            "kanbanr --data-dir".to_string(),
+            "KANBANR_DATA_DIR=/elsewhere kanbanr board".to_string(),
+            "export KANBANR_DATA_DIR=/elsewhere".to_string(),
+            "KANBANR_PROJECT=other kanbanr board".to_string(),
+            "export KANBANR_PROJECT=other".to_string(),
+        ] {
+            let why = scoped_command_refusal(&command, Path::new("/work/tree"), &wt, None)
+                .unwrap_or_else(|| panic!("{command} was allowed"));
+            assert!(why.contains("never another"), "{command}: {why}");
+            assert!(why.contains("temporary board"), "{command}: {why}");
+        }
+        let alone = scoped_command_refusal(
+            "KANBANR_PROJECT=other kanbanr board",
+            Path::new("/work/tree"),
+            &wt,
+            None,
+        )
+        .unwrap();
+        assert!(alone.contains("KANBANR_PROJECT"), "{alone}");
+        let tmpdir =
+            scoped_command_refusal("TMPDIR=/ kanbanr board", Path::new("/work/tree"), &wt, None)
+                .expect("refused");
+        assert!(tmpdir.contains("$TMPDIR"), "{tmpdir}");
+        assert!(
+            scoped_command_refusal("export TMPDIR=/", Path::new("/work/tree"), &wt, None).is_some()
+        );
+    }
+
+    /// DEF-015 R-2: a copy of a real board put in the temporary directory holds scopes, so it
+    /// stays governed and the guard refuses it.
+    #[test]
+    fn a_copy_of_the_board_that_holds_scopes_is_not_temporary() {
+        let b = TempBoard::new("guard-copy");
+        std::fs::write(
+            b.0.join("projects/shop")
+                .join(kanbanr_core::agentscope::SCOPES_FILE),
+            "- id: SC-001\n",
+        )
+        .unwrap();
+        let wt = scratch_wt(Path::new("/work/tree"));
+        let command = format!("kanbanr --data-dir {} board", b.0.display());
+        let why = scoped_command_refusal(&command, Path::new("/work/tree"), &wt, None)
+            .expect("a copy that holds scopes is refused");
+        assert!(why.contains("never another"), "{why}");
+    }
+
+    /// DEF-015 R-3: `$TMPDIR` (bare or braced) resolves for `cd` and `git -C`, and any other folder
+    /// is refused with the worktree and the temporary directory named.
+    #[test]
+    fn the_guard_resolves_tmpdir_and_names_where_an_agent_may_work() {
+        let wt = scratch_wt(Path::new("/work/tree"));
+        let base = Path::new("/work/tree");
+        for command in [
+            "cd $TMPDIR/b && kanbanr board",
+            "cd ${TMPDIR}/b && git status",
+            "cd \"$TMPDIR/b\" && git status",
+            "git -C $TMPDIR/b status",
+            "cd $TMPDIR && kanbanr board",
+            "cd /work/tree/sub && git status",
+        ] {
+            assert_eq!(
+                scoped_command_refusal(command, base, &wt, None),
+                None,
+                "{command}"
+            );
+        }
+        let temp = kanbanr_core::agentscope::temp_root();
+        for command in [
+            "cd /usr && git status",
+            "cd $(mktemp -d) && kanbanr board",
+            "cd $TMPDIR/$X && git status",
+            "cd $HOME && git status",
+        ] {
+            let why = scoped_command_refusal(command, base, &wt, None)
+                .unwrap_or_else(|| panic!("{command} was allowed"));
+            assert!(
+                why.contains("never from another folder"),
+                "{command}: {why}"
+            );
+            assert!(why.contains("this worktree"), "{command}: {why}");
+            assert!(
+                why.contains(&temp.display().to_string()),
+                "{command}: {why}"
+            );
+        }
+        let why = scoped_command_refusal("git -C /usr status", base, &wt, None).expect("refused");
+        assert!(why.contains(&temp.display().to_string()), "{why}");
     }
 }

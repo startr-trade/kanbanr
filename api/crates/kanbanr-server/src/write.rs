@@ -47,6 +47,8 @@ pub fn write(
         repo,
         &eventing::NullSender,
         &kanbanr_core::agentscope::ProcessScope::Unscoped,
+        // The monitor's server names the origin itself, never a header or a body (DEF-028).
+        kanbanr_core::Origin::Monitor,
     )?;
     Ok(WriteOutcome {
         body: applied.body,

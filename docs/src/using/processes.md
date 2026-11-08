@@ -23,11 +23,11 @@ kanbanr project init shop --workflow pdca      # choose at creation
 |---|---|---|
 | `default` | Planned → In Progress → Completed, plus Deferred and Ongoing | the built-in rule, plus the method |
 | `scheduled` | Planned → Scheduled → Completed | the built-in rule, plus the method |
-| `togaf` | Vision → Business Arch → System Design → Implementation → Migration → Operations | the definition grows phase by phase |
+| `togaf` | Vision → Business Arch → System Design → Implementation → Migration → Operations | the definition grows phase by phase; Migration finishes an item for the sprint views; chores skip Business Arch and System Design |
 | `pdca` | Plan → Do → Check → Act | agreement to start, evidence to check, a review sign-off to act |
-| `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs before verification and before release |
-| `scrum` | Backlog → Ready → In Progress → Review → Testing → Done → Released | Definition of Ready and of Done; work starts in the sprint; sprints, releases and points on |
-| `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on |
+| `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs before verification and before release; chores skip Inputs, Review and Validation |
+| `scrum` | Backlog → Ready → In Progress → Review → Testing → Done → Released | Definition of Ready and of Done; work starts in the sprint; sprints, releases and points on; chores skip Review |
+| `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on; chores skip Design and Review |
 
 Every built-in process also carries [the method](#the-method-on-by-default): a design before
 build, and the docs it changes kept current.
@@ -142,6 +142,39 @@ A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (sem
   that ticks the last task and then adds another never completes the item. On a project with
   releases, an item planned into a release that has not been cut stays where it is, however its last
   task or sign-off arrives; the cut moves it to its end status. Moving it yourself needs an `--override` reason.
+
+## A lighter path for a kind
+
+A process can give a work kind its own path: the stages an item of that kind passes through, what
+its first move asks, and the parts of [the method](#the-method-on-by-default) that don't apply to
+it. The built-in `togaf`, `scrum`, `agile` and `design-control` processes give `chore` one, so a
+small maintenance item isn't forced through stages whose questions don't fit it. `default`,
+`scheduled` and `pdca` are short already and have none.
+
+```yaml
+paths:
+  chore:                                   # an item's kind, matched without regard to case
+    stages: [Vision, Implementation, Migration, Operations]
+    requires: [statement, goals, requirements, ears]
+    method_off: [design, design-review]    # parts of the method that don't apply to this kind
+```
+
+- **`stages`** are statuses of the workflow, in its own order, at least two, none a no-op status
+  or listed twice, the first the default state. An item of the kind moves to the next or previous
+  stage on its path, to a no-op disposition, or back to the start, and is refused any other stage.
+  The board's columns don't change.
+- **`requires`** are conditions asked, as well as the entered stage's gate, of the first move off
+  the starting stage. That is where a chore records why it exists and how it is verified.
+- **`method_off`** names method parts (`design`, `design-review`, `docs`, `docs-folded`, `links`)
+  not asked of this kind. A path can drop a method part, never an approval or sign-off that the
+  stage it enters asks for: those stay yours.
+
+A kind with no path walks every stage with every gate, as before. A workflow whose path names an
+unknown stage, a no-op stage, a stage twice, stages out of order or a first stage other than the
+default state is refused when it is saved or checked. `kanbanr process show` lists each kind's
+path, `kanbanr process diff` names a path that differs, and the monitor's Workflow page shows them
+with the skipped stages struck through. A process file with a `paths` key needs this version of
+kanbanr: an older one doesn't know the key, so check the file with `kanbanr process check` there.
 
 ## Stage roles
 
@@ -426,6 +459,7 @@ cadence:
 | `pushed` | the release tip is on main's remote-tracking branch (`origin/main`) | push main (`git push origin main`), then wait for CI |
 | `gate_passed` | every gate named in `commit_gates` has a passed result recorded for the release tip | look at your CI, then record its verdict (see below) |
 | `tag_passed` | the newest result of the tag gate for the tag commit, recorded since the tag was made, is passed; only a stage after the tag can require it | run your CI on the tag and record its verdict, or start a patch release if it failed |
+| `merged_items_ship` | every item planned into the release whose code is merged can ship; a plan to the stage that tags, or the last stage, adds it when no `items_finished` is required, and holds the promotion | give what the item lacks (`kanbanr check <CODE>`), or plan it into another release |
 | `items_merged` | every item planned into the release (other than one in a no-op status) is at the integrate stage or later; read from the board, so it needs no repository | move the item to the integrate stage, which merges its branch, or plan it into another release |
 
 A stage can also list earlier stages in `after` (`kanbanr config release-stage tag --after ci`). The
@@ -602,6 +636,24 @@ kanbanr release redate v0.3.0   # one commit onto release/v0.3.0; main moves wit
 When main moved with it, the command says to push main again and wait for CI before the cut. Once
 the release has shipped it refuses. A project with no notes or changelog configured, or a file
 with no date line, has nothing to date.
+
+#### A change merged into a promoted release
+
+A release that has left its first stage and has not been cut goes back to that stage when an item is
+merged into `release/<V>`. `kanbanr move` says so, and the stage history records the item, who moved
+it and when. From the first stage the ordinary steps apply: update the notes (`kanbanr release notes
+<V>` ends with the planned items the notes do not mention), run the gate again, promote to main, push
+main and wait for CI, then cut. `kanbanr release promote <V> --plan` and the Releases page show the
+item and the steps. Until the cut, the stage that tags also needs main at the release tip, the tip
+pushed and, where the project names commit gates, a passed result, whatever the stage's own
+`requires` say.
+
+A recorded pass of a commit gate carries to a later commit of the release when every path changed
+since matches `cadence.gate_docs` (`docs/` and `*.md` unless `kanbanr config gate-docs` names others);
+the plan names the commit it came from. A failed result never carries. A release that is tagged and
+not shipped refuses the merge before anything changes, because its tag names one commit; the change
+goes into a patch release (`kanbanr release patch <V>`). Saving the release notes moves main with
+them as before and does not send the release back.
 
 ### Patch releases
 
