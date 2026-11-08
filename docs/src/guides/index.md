@@ -20,3 +20,5 @@ to run any of them:
 
 To compare the processes and their gates, see
 [Processes: presets, gates and sign-offs](../using/processes.md).
+
+Before your first release, read [Designing CI and the release workflow](delivery-pipeline.md).
