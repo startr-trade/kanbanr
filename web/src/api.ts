@@ -101,10 +101,10 @@ export const api = {
   approve: (id: string, code: string, by: string, rev = "") =>
     verdict(id, code, "approve", { by, rev }, "approve"),
   /** Record a named sign-off a stage asks for (FEAT-114). */
-  signoff: async (id: string, code: string, name: string, by: string, rev = "") => {
+  signoff: async (id: string, code: string, name: string, by: string, rev = "", specRev = "") => {
     const res = await postWrite(
       apiUrl(`/write/projects/${encodeURIComponent(id)}/features/${encodeURIComponent(code)}/signoff/${encodeURIComponent(name)}`),
-      { by, rev },
+      { by, rev, spec_rev: specRev },
       `kanbanr signoff ${code} ${name}`,
     );
     if (!res.ok) {
@@ -182,13 +182,36 @@ export const api = {
    * Move a release to its next stage, or the named one (FEAT-183, FEAT-185): the same core
    * promotion as `kanbanr release promote`, recorded as `by`. The last stage is the cut.
    */
-  promoteRelease: (id: string, version: string, by: string, stage?: string, expect?: string) =>
+  promoteRelease: (id: string, version: string, by: string, stage?: string, expect?: string, reason?: string) =>
     writePost(
       `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/promote`,
       // `expect`: the release tip the plan showed (FEAT-212) — refused if the branch moved since.
-      { by, ...(stage ? { stage } : {}), ...(expect ? { expect } : {}) },
+      // `reason`: for a stage after the tag, what the user checked (FTR-026).
+      { by, ...(stage ? { stage } : {}), ...(expect ? { expect } : {}), ...(reason ? { reason } : {}) },
       "promote a release",
-      `kanbanr release promote ${version}${stage ? ` ${stage}` : ""}`,
+      `kanbanr release promote ${version}${stage ? ` ${stage}` : ""}${reason ? ` --note "${reason}"` : ""}`,
+    ),
+  /**
+   * Start a patch release from a release whose tag's recorded result is failed (FTR-026): a defect
+   * carrying the run's link and the notes, planned with the release's items into the patch.
+   */
+  patchFromFailedTag: (id: string, parent: string, version: string, by: string, link: string, notes: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(parent)}/patch-from-tag`,
+      { version, by, ...(link ? { link } : {}), ...(notes ? { notes } : {}) },
+      "start a patch release",
+      `kanbanr release add ${version} --patch-of ${parent} --from-failed-tag`,
+    ) as Promise<{ release: Release; defect: string; planned: string[] }>,
+  /**
+   * Record a gate's verdict for a commit (FTR-002), through the route `kanbanr gate record` uses.
+   * What your CI said, as a person saw it: kanbanr asks no server.
+   */
+  recordGate: (id: string, name: string, commit: string, passed: boolean, by: string, url = "", note = "") =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/gate-results`,
+      { name, commit, passed, by, ...(url ? { url } : {}), ...(note ? { note } : {}) },
+      "record a gate result",
+      `kanbanr gate record ${name} ${passed ? "--passed" : "--failed"} --commit ${commit}`,
     ),
   /** Every architecture decision on the board, newest first (FEAT-057). */
   getAdrs: (id: string) => getJson<Adr[]>(apiUrl(`/projects/${encodeURIComponent(id)}/adrs`)),

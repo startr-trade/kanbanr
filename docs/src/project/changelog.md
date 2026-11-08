@@ -11,11 +11,87 @@ All notable changes to kanbanr are documented here. The format follows
 - **The monitor refuses to start with writes on at an address other machines can reach (DEF-026).**
   Accept it with `--allow-remote-writes` or `KANBANR_ALLOW_REMOTE_WRITES`; `KANBANR_ALLOWED_ORIGINS`
   lets a write come from an https origin through a proxy you name.
+- **A scope binds the agent it was issued to, not whoever stands in its folder (DEF-027).** The
+  coordinator's shell was trapped once it entered an agent's worktree, and revoking the scope
+  trapped it further. A process outside Claude Code is a person, a hook call without an `agent_id`
+  is the coordinator's, and one with an `agent_id` is that agent's; scopes govern agents only. A
+  revoked or expired scope stops its agent's next tool call and frees every other shell. The Bash
+  guard keeps the coordinator out of agents' worktrees and names the way out (`git -C <path>`),
+  test capture finds its board from the project folder and records the coordinator's runs, and
+  `kanbanr scope issue` needs the Claude Code hooks that tell the two apart (`kanbanr hooks install`).
+### Added
+
+- **Release and install builds are locked, and releases carry SBOMs and attestations (MNT-004).**
+  Every release, image and install build now passes `--locked` to cargo and uses `npm ci`, and
+  `scripts/check_supply_chain.py` fails CI on any that does not. Each release attaches two
+  CycloneDX SBOMs (Rust and monitor npm dependencies, listed in `SHA256SUMS`; `make sbom` builds
+  them locally) and a build-provenance attestation for every asset and the image, with the image
+  also carrying the builder's SBOM and provenance; setting the repository variable
+  `ATTEST_RELEASE=false` skips the attestations and says so in the release notes. The Docker smoke
+  test drives the `docker` CLI directly, so `testcontainers` and its advisory exception
+  (RUSTSEC-2026-0440) are gone.
 
 ## [0.5.0] - 2026-11-06
 
 ### Added
 
+- **An approval lapses only when the text you approved changes (FTR-018).** Adding to a definition
+  no longer lapses its approval: each approval, ratification and sign-off now records a hash per
+  part of the definition (`parts`), and an approval whose parts are all unchanged but which gained
+  new ones reads `extended`. Before the build stage the additions wait for the next decision, such
+  as `design-review`, which reviews them; from the build stage on a gate that asks for no sign-off
+  refuses the move and names the additions, and the Review page lists the item as `added`. Changing
+  or removing approved text still lapses it. The Review page shows the parts added or changed
+  first, with the approved text collapsed. Additive to the API: the `extended` approval state, the
+  `added` review entry, `changes` on review entries and `parts` on approvals and sign-offs.
+  Records from an older kanbanr have no parts and lapse on any change, as before.
+
+- **A changed design comes back for sign-off (FTR-023).** A sign-off whose gate asks for spec
+  sections, such as `design-review`, now records a hash of the whole spec it was given on (`spec_rev`)
+  and keeps the text under `pins/`. If the spec changes afterwards, even outside `## Design`, the
+  sign-off reads changed since sign-off, and the item returns to the Review page as `spec_changed`
+  with a line diff against the kept text; signing again pins the new text. Whitespace at line ends,
+  line endings and outer blank lines don't count as changes. `kanbanr signoff --spec-rev` and the
+  sign-off route refuse a sign-off given on a spec that moved on after it was shown. Additive to the
+  API: the `spec_changed` review entry, `spec_rev` and `spec` on review entries, and `spec_rev` on
+  sign-offs. The guide sentence that a sign-off doesn't lapse when the design changes is replaced.
+  An older kanbanr on the same board ignores `spec_rev` and reads such a sign-off as current.
+- **Turning releases on gives release stages that each do something (FTR-020).** A project that
+  turns releases on, and names no stages and declares no stage gate, now gets `candidate` (branch
+  and prepare), `main` (move main once the items are finished) and `tag` (the cut, needing main at
+  the release and pushed), written into the board's config. `kanbanr config cadence --has-ci on`
+  also makes `tag` require a passed `ci` result for the release tip, on a board whose stages are
+  still the recommended ones. A board that has releases on already, or names its own stages, is left
+  alone, and one with no stages named keeps reading `candidate`, `test`, `staging` and
+  `production`. Changing the stages of a board whose gates are still the recommended ones drops
+  those gates instead of refusing. A stage before the cut with no condition and no action is
+  warned about when configured, and marked `does nothing` in `kanbanr release stages` and the
+  `inert` field of the release-stages route.
+- **Release stages can follow the tag, with the tag's CI result on the Releases page (FTR-026).**
+  The stage holding the `tag` action is now the cut and tags the commit, recording `tagged_at` and
+  the commit, but ships nothing unless it is also the last stage. Each later stage is a
+  confirmation you give, with an optional note (`kanbanr release promote <V> --note …`), and
+  confirming the last one ships the release and moves its items to their last status. The
+  Releases page shows the result you recorded for the tag (`kanbanr config tag-gate`, else the
+  first commit gate), offers **Check again** or **Start a patch release** when it is red, and the
+  next confirmation when it is green. `kanbanr release add <V> --patch-of <T> --from-failed-tag`
+  files a defect with the run's link and your notes, plans it and the release's items into a patch
+  and supersedes the failed release. A project with no stage after the tag behaves as before.
+- **A release stage can require merged items, or an earlier stage (FTR-021).** A new release
+  check, `items_merged`, holds when every item planned into the release is at the integrate stage
+  or later, judged from the board with no repository, so **Promote to candidate** can wait for
+  merged work. A stage can also list `--after` stages (`kanbanr config release-stage tag --after ci`):
+  the release must have been promoted into each first, so a named promotion cannot jump over
+  them. Both appear in the promotion plan as conditions with what was found and what to do.
+  A board that uses neither sees no change.
+
+- **A release stage can require that the gate passed (FTR-002).** A new release check,
+  `gate_passed`, needs a recorded passed result for the release tip from every gate named by
+  `kanbanr config commit-gates`. You look at your CI and record its verdict with
+  `kanbanr gate record <gate> --passed --url <link>` or the Releases page's Record result form;
+  kanbanr never asks a server. A result is a file of its own and the newest for the commit decides,
+  so a pass for another commit counts for nothing. `make ci` records its own run as the gate
+  `local` (a pass only on a clean tree). A project that names no gate sees no change.
 - **Claude takes decisions one way, and keeps quiet while it works (FTR-024).** Claude sends every
   verdict to the monitor's Review and Releases pages, says what is waiting there, and never
   records one or asks for one in a plan or a question. Plan mode is kept for setup and process
@@ -48,6 +124,13 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **An item is no longer shown as released before its release is cut (DEF-019).** On a project
+  that works in releases, an item planned into a release that has not been cut stays where it is
+  when its last task is done or its `release` sign-off is given, in every process; `task` and
+  `signoff` say which release it waits for, and the cut moves it to its end status. Moving it
+  yourself to an end status now needs a reason. The TOGAF preset no longer offers a direct move from
+  Implementation to Operations, so an item passes Migration; a board already running TOGAF keeps
+  its own copy until `kanbanr process update`.
 - **Dependencies with no open advisory (MNT-005).** libz-sys 1.1.32, tokio 1.54.1 and DOMPurify
   3.4.17 replace versions with advisories published after 0.4.0. `astral-tokio-tar`, unmaintained and
   reached only through a test-only dependency, is listed in `deny.toml` with its reason until 0.6.0

@@ -283,9 +283,13 @@ through; `kanbanr doctor` lists the same ones. A requirement link lands on that 
 
 ![An item's page](../images/feature.png)
 
-The **Review** page also lists a finished item whose approval lapsed, labelled with its status,
-after all the live decisions. The work is done, but the definition changed after you approved it:
-approving again covers what it says now. A finished item that was never approved isn't listed.
+The **Review** page also lists a finished item whose approval lapsed or that gained text since
+you approved it, labelled with its status, after all the live decisions. The work is done, but the
+definition changed after you approved it: approving again covers what it says now.
+
+Where text was added to an approved definition, or changed or removed, the brief shows those parts
+first, marked **added** or **changed**, and collapses the approved text that is unchanged. Adding
+keeps the approval and waits for the next decision; changing or removing approved text lapses it. A finished item that was never approved isn't listed.
 
 Before you approve, the **Review** page parses every Mermaid diagram the item's brief covers — its
 spec and each doc in its `affects_docs` — with Pele, the library that draws them (FEAT-200). Each
@@ -359,6 +363,10 @@ same whichever you use. A read-only monitor shows the command instead.
   it. This is `kanbanr release plan <VERSION> <CODE>`, plus `kanbanr release add` for a new one.
   The question comes after any approval or sign-off the item is waiting on. Once the item is in a
   release, it leaves the queue.
+- **Spec changed since sign-off.** A sign-off whose gate asks for spec sections, such as
+  design-review, covers the whole spec as it was when you gave it. If the spec changes later, the
+  item returns to the Review page showing only the changed lines, with the whole spec on request,
+  and you sign again. The item's page marks the sign-off "changed since sign-off".
 - **Promote.** Each release on the Releases page shows its stage, with the stage history on hover,
   and one button named for its next step — **Promote to \<next stage\>**, or **Cut \<VERSION\>**
   for the last — until it ships. This is `kanbanr release promote <VERSION>`. Beside the button,

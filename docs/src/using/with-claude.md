@@ -172,6 +172,15 @@ that are newer than its item's last task change, and so do the Stop hook, sessio
 (`kanbanr scope revoke SC-007 --reason done`); `kanbanr scope list` shows the ones in force, and
 `kanbanr scope renew SC-007 --for 4h` extends one. Your own checkout is never scoped.
 
+A scope binds the agent it was issued to, never whoever stands in its folder. The three hooks
+(the Bash guard, the Write guard and test capture) tell a sub-agent's calls, which carry an
+`agent_id`, from Claude's own, and a command run in your own terminal is not an agent's at all. So a
+scope never governs you or Claude's session, and a revoke stops the agent on its next tool call and
+frees every other shell at once. Issuing a scope therefore needs those hooks: `kanbanr hooks
+install`. Claude stays in the project folder and looks inside an agent's worktree with `git -C
+<path>`, `make -C <path>` or `npm --prefix <path>`; a `cd` into one is refused, with the way out
+named.
+
 Scopes guard against mistakes and casual crossings, not a hostile process: the agent runs as you,
 with your file permissions. A script that leaves the worktree, a commit with its hooks switched off
 inside a script, or a hand edit to the board's `scopes.yaml` is not stopped, though every scoped
@@ -240,8 +249,8 @@ browser?"), and you approve the definition on the Review page. That's approval 1
 **System Design.** Now only `[MISSING: How] [MISSING: Where]`. Claude proposes the design and checks
 it against the requirement you agreed: "server-side storage keyed by account satisfies R-1 across
 devices; browser storage would not". It asks for a quality target. The definition grew, so the
-earlier approval lapsed (`Approval lapsed — the definition changed after it was approved`), and
-accepting this plan approves the larger definition. That's approval 2. The gate's warning (`R-2 is
+earlier approval stands, since text was only added, and the additions are reviewed at the next
+decision, the design review. Nothing to approve here. The gate's warning (`R-2 is
 a quality requirement with no scenario`) is in the plan for you to fix or accept. The architecture
 decision is drafted as *proposed* for you to accept.
 

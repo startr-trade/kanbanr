@@ -80,24 +80,50 @@ charter saved for 'shop': 1 goal(s) G-1
 
 ### Release stages
 
-By default a release has four stages and the cut does everything at once. We recommend three, so
-that main has to be pushed before anything is tagged. kanbanr can't see whether CI passed, so check
-that yourself before the cut:
+A project that turns releases on gets three stages, `candidate`, `main` and `tag`, with their gates
+written into the board's config, so you can see and edit them. Main has to be pushed before
+anything is tagged. Candidate waits for `items_merged`, so the release branch is made only once the items are
+merged; the commands below set the same thing. kanbanr can't see whether CI passed. Look at your CI yourself, then record what it
+said with `kanbanr gate record ci --passed --url <link to the run>`. Say the project has CI with
+`kanbanr config cadence --has-ci on` and the `tag` stage requires that result
+([Gate results](../using/processes.md#gate-results)); without the flag it requires only
+`main_at_release` and `pushed`.
+
+A board made before 0.6 that has releases on and names no stages keeps the four it had,
+`candidate`, `test`, `staging` and `production`. `test` and `staging` do nothing, and kanbanr says so
+when you configure them and in `kanbanr release stages`. To move such a board to the three, run
+`kanbanr config cadence --release-stages candidate,main,tag`, then the `release-stage` lines below.
+Stages you add after `tag` follow the cut and are confirmed by you.
 
 ```text
-kanbanr config cadence --release-stages candidate,main,production
-kanbanr config release-stage candidate --on-enter branch,prepare
+kanbanr config cadence --release-stages candidate,main,tag
+kanbanr config release-stage candidate --requires items_merged --on-enter branch,prepare
 kanbanr config release-stage main --requires items_finished --on-enter move_main
-kanbanr config release-stage production --requires main_at_release,pushed --on-enter tag
+kanbanr config release-stage tag --requires main_at_release,pushed --on-enter tag
 kanbanr config release-prepare --version-file package.json --changelog CHANGELOG.md --notes "docs/releases/{version}.md"
 ```
 
 ```text
 STAGE          REQUIRES                           ON ENTER
-candidate      —                                  branch, prepare
+candidate      items_merged                       branch, prepare
 main           items_finished                     move_main
-production     main_at_release, pushed            tag                            the cut
+tag            main_at_release, pushed            tag                            the cut
 ```
+
+To stop a release being promoted while work is still going on, have the candidate stage require
+`items_merged`: every item planned into the release must be at the integrate stage or later (for
+TOGAF, Migration), and the plan names each item that is not, with the status it is at. And to stop a
+named promotion jumping over a stage, list it in `--after`: kanbanr then refuses to enter the stage
+until the release has been promoted into the one named. For example, with a `ci` stage you record
+yourself:
+
+```text
+kanbanr config cadence --release-stages candidate,main,ci,tag
+kanbanr config release-stage tag --after ci
+```
+
+kanbanr records that the stage was entered, not that CI passed. To require a recorded CI result as
+well, use `gate_passed`.
 
 The `release-prepare` line names your own files. The version file must already be on the sprint's
 branch, or promoting to candidate is refused.
@@ -185,8 +211,9 @@ created feat/FEAT-001-restore-the-cart from sprint/SP-001
 FEAT-001 -> In Progress
 ```
 
-**An edit lapses your approval.** When the definition changes, the next move says so, and you approve
-the larger definition.
+**Adding keeps your approval; changing lapses it.** Text added to the definition is reviewed at the
+next decision. When approved text is changed or removed, the next move says so, and you approve
+again.
 
 Commit with `kanbanr commit`, which adds `Refs: kanbanr:FEAT-001` to the commit:
 
@@ -244,6 +271,11 @@ A scope limits what an agent working in its own worktree may do, and kanbanr enf
 may record its own item's tasks and tests and commit on its item's branch. It can't move items,
 approve or push. See [Sub-agents and agent scopes](../using/with-claude.md#sub-agents-and-agent-scopes).
 
+Stay in the project folder. Never `cd` into an agent's worktree: look inside with `git -C <path>`,
+`make -C <path>`, `npm --prefix <path>` or a subshell `(cd <path> && …)`. If your shell is already
+there, `cd` back to the project folder. Revoking a scope (`kanbanr scope revoke SC-…`) stops the
+agent on its next tool call and never restricts you.
+
 ## Releasing
 
 `kanbanr release promote v1.0.0 --plan` shows what a promotion would do and changes nothing:
@@ -265,7 +297,7 @@ v1.0.0: Promote to candidate (— → candidate)
 | 3. Run your full checks | Your project's own | Over the release |
 | 4. Main | `kanbanr release promote v1.0.0 main` | Fast-forwards main to the release, without tagging |
 | 5. Push main, wait for CI | `git push origin main` | |
-| 6. Cut | `kanbanr release promote v1.0.0 production` | Tags main, ships the items and moves them to Released |
+| 6. Cut | `kanbanr release promote v1.0.0 tag` | Tags main, ships the items and moves them to Released |
 | 7. Push the tag | `git push origin v1.0.0` | |
 | 8. Merge forward | `kanbanr git forward v1.0.0` | Brings the release's commits into the sprint's branch |
 
@@ -294,6 +326,28 @@ _Released 2026-11-04._
 
 ## What shipped
 
+
+#### Stages after the tag
+
+The stage that tags is the cut, but it does not have to be the last. Add stages after it, for the
+places you run the release before it counts as out, and each becomes a confirmation you give:
+
+```text
+kanbanr config cadence --release-stages candidate,main,tag,staging,production
+kanbanr config release-stage tag --on-enter tag
+kanbanr config commit-gates ci
+```
+
+Promoting to `tag` tags the commit and ships nothing. The Releases page then shows the result you
+recorded for the tag and asks for the next stage only after a passed one. Each stage after the
+tag, `staging` and `production` here, is confirmed with
+`kanbanr release promote <VERSION> --note "what you checked"`. Confirming the last stage ships the
+release: the items reach their last status and the notes are written. If your CI fails on the tag,
+record the failed result and run `kanbanr release add <NEW VERSION> --patch-of <VERSION>
+--from-failed-tag --link <run> --notes "what you saw"`: it files a defect with the link and your
+notes, plans it and the release's items into a patch branched from the tag, and marks the failed
+release as superseded. The tag stays in git.
+
 ### FEAT-001 — Restore the cart
 
 A returning shopper finds their cart for shoppers so that they don't lose it
@@ -320,7 +374,7 @@ To <tmp>/origin.git
 The cut, then the tag push:
 
 ```text
-v1.0.0 -> production; tagged v1.0.0, where main already is
+v1.0.0 -> tag; tagged v1.0.0, where main already is
   tags 59e2014 "Release v1.0.0" as v1.0.0
   shipped 1 item(s); notes in releases/v1.0.0.md
   merge these forward into sprint/SP-001 (`kanbanr git forward v1.0.0` with the git model on, or by hand):
@@ -338,7 +392,7 @@ The item is now Released, and the release is shipped:
 
 ```text
 - **Status:** Released
-v1.0.0       shipped  production   target —           1 item(s)
+v1.0.0       shipped  tag          target —           1 item(s)
 ```
 
 Merge forward so the sprint's branch has the release commit:

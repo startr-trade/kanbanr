@@ -276,6 +276,29 @@ pub fn public_routes() -> Vec<RouteDoc> {
             response: Response::Json(schema_of::<Vec<crate::releases::CutPreview>>),
         },
         RouteDoc {
+            path: "/api/projects/{project}/gate-results",
+            summary: "The gate results recorded for the project, oldest first: which gate, which \
+                      commit, passed or failed, who and when",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "name",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only this gate's results.",
+                },
+                Param {
+                    name: "commit",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only results for the commit with this hash (or prefix).",
+                },
+            ],
+            response: Response::Json(schema_of::<Vec<crate::gates::GateResult>>),
+        },
+        RouteDoc {
             path: "/api/projects/{project}/releases/{version}/plan",
             summary: "What promoting a release would do, with nothing changed: the button, each \
                       step and condition, what is missing and, for the cut, what ships. The \

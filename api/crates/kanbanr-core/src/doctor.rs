@@ -507,8 +507,7 @@ fn push(
 /// approval is not an answer: the definition changed, so the agreement no longer covers what was
 /// built, and the question is open again.
 pub(crate) fn unreconciled_bypass(def: &crate::models::FeatureDefinition) -> bool {
-    use crate::models::ApprovalState::{Current, Ratified};
-    !def.started_unapproved.trim().is_empty() && !matches!(def.approval_state(), Current | Ratified)
+    !def.started_unapproved.trim().is_empty() && !def.approval_state().is_agreed()
 }
 
 /// Live work under the method: not finished, on the board, and created since adoption. The first two
@@ -929,7 +928,14 @@ fn describe(r: &crate::refs::Ref) -> String {
 
 fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
     let known: BTreeSet<&str> = project.config.statuses.iter().map(String::as_str).collect();
-    const EXPECTED: [&str; 5] = ["features", "milestones", "docs", "activity", "events"];
+    const EXPECTED: [&str; 6] = [
+        "features",
+        "milestones",
+        "docs",
+        "activity",
+        "events",
+        "pins",
+    ];
     let Ok(entries) = std::fs::read_dir(store.project_dir(&project.id)) else {
         return;
     };

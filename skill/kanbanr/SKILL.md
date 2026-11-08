@@ -411,6 +411,12 @@ and say it is waiting for their approval on the Review page, with the link. Choi
 make go in the brief under **Choices I made**, so the approval is informed. Moving an item on is
 the same: grow the definition, then say what the next decision is and where it waits.
 
+Moving an item on to a stage that asks for more is the same loop: plan the growth, the user
+accepts, record the next decision the stage asks for. Adding to an approved definition keeps the
+approval; what you add is shown and reviewed at the next decision the stage asks for (usually
+design-review). Changing or removing approved text lapses it, and the item returns to the Review
+page.
+
 ### Waiting decisions: on the Review and Releases pages
 
 When items are waiting (`kanbanr review --pending --json`, `kanbanr adr list --json` for
@@ -496,8 +502,8 @@ view behind: add the links each one names before you move the item on.
   approver is refused, so never invent `--by`: if it fails, the board has no identity and the user
   sets one with `kanbanr identity`.
 - kanbanr enforces the gates: a move into a stage whose gate needs `approved` is refused unless the
-  definition's approval is current. Change the definition after approval and it **lapses** — scope
-  cannot drift silently past a yes.
+  definition's approval is current. Change or remove approved text and it **lapses**; added text is
+  reviewed at the next decision — scope cannot drift silently past a yes.
 - **Subagents inherit, never invent.** A coordinator passes the approved definition to each
   subagent as its brief. A subagent that finds work outside it returns a **proposed change to the
   definition**, not merged code.
@@ -537,6 +543,13 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
 Leaving the design role, the build stage's gate asks for `spec_sections: [Design]` and the
 `design-review` sign-off. Say **design-review** is waiting on the Review page once the section exists; the user gives
 it, never you.
+
+**A design-review covers the whole spec as it was when given.** Any edit to the spec afterwards (a
+correction, a note, a link) brings the sign-off back to the Review page, with only the change shown.
+Make spec edits after design-review together, not one by one. Then say the sign-off is waiting again
+on the Review page; don't ask the user to carry on in a question. A queue entry with
+`"approval": "spec_changed"` carries `spec_rev` and the diff; pass `--spec-rev <spec_rev>` with the
+sign-off so it is refused if the spec moved on after the user was shown it.
 
 ### The design stage: the spec carries the build-ready design
 
@@ -619,18 +632,24 @@ Then:
   own worktree, never to your checkout;
 - paste the printed brief **verbatim** at the top of the agent's brief. Its first line has the
   agent claim the scope (`kanbanr scope claim SC-…`); from then on kanbanr refuses, and names, every
-  board write, commit and push from that worktree that the scope does not allow;
+  board write, commit and push that agent makes from that worktree that the scope does not allow;
+- **stay in the project folder.** A scope binds the agent it was issued to, never you, but your own
+  shell is kept out of an agent's worktree: never `cd` into an agent's worktree. Look inside with
+  `git -C <path>`, `make -C <path>`, `npm --prefix <path>`, `cargo --manifest-path <path>/Cargo.toml`
+  or a subshell `(cd <path> && …)`. If your shell is already there, `cd` back to the project folder;
+  the Bash guard says so too;
 - add the item, its todo-list and the tasks the agent takes, and nothing that contradicts the
   table;
 - when the agent's work has been reviewed, revoke the scope: `kanbanr scope revoke SC-… --reason
   done`. `kanbanr scope list` shows what is in force; `kanbanr scope renew SC-… --for 4h` extends
-  one;
+  one. Revoking a scope stops the agent on its next tool call and never restricts you;
 - never issue scopes from inside an agent: an agent's worktree refuses it;
 - put your own worktree, for a merge or a finished item, under `.claude/worktrees/` too, with a
   name that does not start `agent-`: only `agent-*` worktrees are refused without a scope.
 
 A build scope needs its item at the build stage and kanbanr's hooks installed
-(`kanbanr git install-hooks`, which adds the pre-push hook). It finds or makes the item branch;
+(`kanbanr git install-hooks`, which adds the pre-push hook, and `kanbanr hooks install`, whose
+Claude Code hooks tell an agent from you). It finds or makes the item branch;
 the claim switches the agent's worktree to it.
 
 As the coordinator you:
@@ -674,8 +693,21 @@ branches; fix it before going on.
   first stage makes `release/<V>` and the last, production, is the cut: kanbanr brings main up to
   the release (a fast-forward, refused with nothing changed if main has commits the release lacks)
   and tags the version.
+- Stages can follow the tag (`tag_passed`): the stage holding `tag` is the cut and ships nothing;
+  each later stage is the user's confirmation (`kanbanr release promote <V> --note …`, or the
+  Releases page), and the last one ships. **Report where the release is and what the tag's CI
+  result is; never confirm a stage, start a patch from a failed tag, or record the result for the
+  user.** Those are their verdicts.
+- Turning releases on (`kanbanr config cadence --releases on`) with no stages named gives
+  `candidate`, `main` and `tag` with their gates; `--has-ci on` makes `tag` also require a passed
+  `ci` result. A board that already had releases on keeps `candidate, test, staging, production`,
+  where `test` and `staging` do nothing: configuring a stage that has no condition and no action
+  prints a warning and `kanbanr release stages` marks it `does nothing`. Tell the user; don't
+  remove the stage for them. `kanbanr config cadence --release-stages candidate,main,tag` moves an old board to
+  the three.
 - Stages can act (`kanbanr release stages`, `kanbanr config release-stage`): each may require
-  `items_finished`, `prepared`, `main_at_release`, `pushed`, and do `branch`, `prepare`,
+  `items_finished`, `prepared`, `main_at_release`, `pushed`, `items_merged` (every planned item at the integrate
+  stage or later), or name earlier stages in `--after` (the release must have been promoted into each), and do `branch`, `prepare`,
   `move_main`, `tag` on entry. A refusal lists every missing condition with its fix; nothing changed.
 - **A release prepares itself.** The stage with `prepare` commits the version files, the dated
   changelog heading and a notes draft onto `release/<V>` (`kanbanr config release-prepare`). Never
@@ -695,6 +727,11 @@ branches; fix it before going on.
   promotion itself, the cut included, is theirs, on the Releases page. **The user pushes main and
   the tag**, by hand; a cut that requires
   `pushed` waits until main is pushed (and CI has run on it).
+- **A CI result is the user's to record.** A stage that requires `gate_passed` needs a recorded
+  passed result for the release tip. kanbanr never asks a server; the user looks at their CI and
+  records the verdict on the Releases page (or `kanbanr gate record <gate> --passed`). When it is
+  missing, say what the plan names and where to record it. **Never run `kanbanr gate record`
+  yourself**, and never pass it a verdict you did not see.
 - A patch is `kanbanr release add <V> --patch-of <P>`: `release/<V>` is made from `<P>`'s tag. A fix
   integrated into a release branch reaches the line through `kanbanr git forward <V>`, which the
   move says is needed; it is never done for you.
@@ -969,6 +1006,9 @@ Treat kanbanr updates as part of doing the work, not an afterthought:
   `green` once they actually pass, update the **specification** and any **documentation**
   affected, and **move** the feature's status as appropriate. When every task
   across all of a feature's todo-lists is Completed it auto-advances to "Completed".
+  On a project with releases, an item planned into a release that has not been cut stays where it
+  is, however its last task or sign-off arrives: the cut moves it to its end status. A move of your
+  own to an end status needs a `--override "<reason>"`.
 - **Before merging a sprint or cutting a release**, run `kanbanr doctor` and fix every coverage
   rule it lists, so the architecture views describe everything that ships.
 
@@ -1141,16 +1181,17 @@ kanbanr sprint start SP-001 | show [SP-001] | list | close SP-001 --carry-to SP-
 kanbanr retro --sprint SP-001                     # the sprint's items, what it carried, its burndown
 kanbanr release add v0.1.0 --target 2026-10-31 | plan v0.1.0 FEAT-001 … | list
 kanbanr release cut v0.1.0 [--tag]                # the user's, on the monitor; refused when Claude runs it. Ship the finished items, write notes, carry the rest
-kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # the user's, on the monitor; refused when Claude runs it (so is each stage confirmed after the tag). Next or named stage, doing what its gates say (default candidate → test → staging → production: the first makes release/<V>; the last is the cut — fast-forwards main and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
+kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # the user's, on the monitor; refused when Claude runs it (so is each stage confirmed after the tag). Next or named stage, doing what its gates say (default candidate → main → tag: the first makes release/<V>, main fast-forwards main, the stage holding `tag` is the cut and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
 kanbanr release promote v0.1.0 [<stage>] --plan [--fetch]  # what it would do and still needs; changes nothing
+kanbanr gate list [--name ci] [--commit REV]   # recorded gate results, newest first (reading is yours; `gate record` is the user's)
 kanbanr release redate v0.1.0                     # date the notes and changelog today, before the cut
 kanbanr release notes v0.1.0 [--file F | --edit]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut
 kanbanr release stages                            # each stage: requires, on_enter, declared or default
-kanbanr config release-stage main --requires items_finished --on-enter move_main [--clear]
+kanbanr config release-stage main --requires items_finished --on-enter move_main [--after ci] [--clear]
 kanbanr config release-prepare --version-file api/Cargo.toml --changelog CHANGELOG.md --notes 'docs/src/releases/{version}.md'
 kanbanr config release-prepare --version-file 'api/Cargo.lock=name = "a"\nversion = "{version}"' --version-file 'api/Cargo.lock=name = "b"\nversion = "{version}"'   # one file, several entries, each applied
 kanbanr release add v0.1.1 --patch-of v0.1.0      # a patch: release/v0.1.1 from v0.1.0's tag, at the first stage
-kanbanr config cadence --release-stages candidate,qa,live [--integration-branch develop] [--main-branch main]
+kanbanr config cadence --release-stages candidate,qa,live [--integration-branch develop] [--main-branch main] [--has-ci on]
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a shipped release
 kanbanr config workflow --export > process.yaml   # this project's workflow, gates included
 kanbanr process check process.yaml|-              # check a process without applying it (- reads stdin): every problem, then its agreement and diagram
@@ -1170,14 +1211,16 @@ once items are in flight.
 Under a phased process, grow an item's definition stage by stage.
 - **A named manual test is an open check.** `kanbanr check` lists `manual test not run: R-n: <name>`
   without blocking. Tell the user, and don't call the item done until someone has run it.
-- **A finished item on the Review page** is there because its approval lapsed: ask the user to read
-  what changed and approve again, or say why the change doesn't need it.
+- **A finished item on the Review page** is there because its approval lapsed or text was added since: ask
+  the user to read what changed and approve again, or say why the change doesn't need it.
 - **Guides for each built-in process** are in the book, under Process guides. Point a user there
   when they ask how a whole project runs under their process.
 - **Before each move,** run `kanbanr check <CODE>`. It names what the next stage needs: fill in
   that, and not everything at once.
-- **Approval is renewed as the definition grows.** Each change lapses the approval, so ask the
-  user to approve again before the move.
+- **Growth keeps the approval; changes lapse it.** Adding to the definition leaves the approval
+  standing, to be reviewed at the next decision (before build) or at once (from build on, when the
+  Review page shows it as `added`). Changing or removing approved text lapses it, so ask the user
+  to approve again before the move.
 - **A sign-off (`kanbanr signoff`) is the user's**, like an approval: say it is waiting on the Review page; never record it
   yourself.
 - **Overrides:** `--override "<reason>"` gets past a gate on the record. Use it only when the

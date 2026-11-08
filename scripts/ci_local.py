@@ -93,6 +93,9 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "cargo deny (licences, bans, sources, advisories)": LOCAL,
             "cargo audit (RustSec advisories, yanked crates)": LOCAL,
             "npm audit (the monitor's production dependencies)": LOCAL,
+            "The supply-chain check's own tests pass": LOCAL,
+            "Builds are locked and installs are clean": LOCAL,
+            "The SBOMs build and are valid CycloneDX": LOCAL,
         },
         "installers": {
             "The CLI links a TLS backend": LOCAL,
@@ -143,7 +146,9 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
         "release": {
             "Stage the installers beside the binaries": "needs every leg's artifacts",
             "The release notes, for the release page": LOCAL,
+            "Build the SBOMs": LOCAL,
             "Compute SHA256SUMS": "needs every leg's artifacts",
+            "Attest the release assets": "asks the host to sign; the SBOM it covers is built above",
         },
         "verify-install": {
             "Minimal prerequisites (as a stranger would have)": "installs from a published release",
@@ -173,6 +178,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Lowercase image name": "names the GHCR image; the image build itself is checked below",
             "The commit and its date, for the image's --version": "feeds the image build; checked below with the same values",
             "The image's kanbanr is the released program (its commit, date and skill)": "checks the image built for scanning; run below on the image make ci builds",
+            "Attest the image": "asks the host to sign a pushed digest",
         },
         "crates": {
             "Publish ears-classifier": "publishes to crates.io",
@@ -238,7 +244,7 @@ def fresh_tree() -> None:
 
 def workspace_version() -> str:
     meta = subprocess.check_output(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=TREE / "api", text=True
+        ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], cwd=TREE / "api", text=True
     )
     import json
 
@@ -633,6 +639,40 @@ def board_state() -> tuple[Path, str, str] | None:
     return board, head.strip(), status
 
 
+def gate_record_args(ok: bool, head: str, dirty: bool, failed_steps: list[str]) -> list[str] | None:
+    """The `kanbanr` arguments that record this run as the gate `local` for `head` (FTR-002).
+
+    A failure is always recorded; a pass only when the working tree is clean, because a pass for a
+    tree with uncommitted changes is not about `head`. None means record nothing."""
+    base = ["gate", "record", "local", "--source", "local", "--commit", head]
+    if not ok:
+        return [*base, "--failed", "--note", "failed: " + ", ".join(failed_steps)]
+    if dirty:
+        return None
+    return [*base, "--passed"]
+
+
+def record_gate(ok: bool, failed_steps: list[str]) -> None:
+    """Record the run's verdict on the board, after every check. It never changes the exit code."""
+    exe = shutil.which("kanbanr")
+    if not exe:
+        print("gate local not recorded: kanbanr is not on PATH")
+        return
+    head_ok, head = sh(["git", "rev-parse", "HEAD"], ROOT)
+    status_ok, status = sh(["git", "status", "--porcelain"], ROOT)
+    if not (head_ok and status_ok):
+        print("gate local not recorded: could not read the repository's HEAD and status")
+        return
+    args = gate_record_args(ok, head.strip(), bool(status.strip()), failed_steps)
+    if args is None:
+        print("gate local not recorded: uncommitted changes")
+        return
+    env = {k: v for k, v in os.environ.items() if k not in ("KANBANR_BOARD_FENCE", "KANBANR_DATA_DIR")}
+    rec_ok, out = sh([exe, *args], ROOT, env)
+    last = out.strip().splitlines()[-1] if out.strip() else ""
+    print(f"gate local {'recorded' if rec_ok else 'not recorded'}" + (f": {last}" if last else ""))
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Read the command line before any work starts: `--help` and a mistyped flag run no check."""
     parser = argparse.ArgumentParser(
@@ -651,6 +691,8 @@ def main(argv: list[str] | None = None) -> int:
     board_before = board_state()
     ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_ci_local.py"], ROOT)
     say("make ci: verdicts and agents' scoped writes on the board are told apart from other changes", ok, out)
+    ok, out = sh([sys.executable, "-m", "unittest", "-q", "scripts/tests/test_check_supply_chain.py"], ROOT)
+    say("make ci: unlocked builds, npm install and an unattested release are caught (MNT-004)", ok, out)
     fresh_tree()
     lint_workflows()
     run_workflow_steps()
@@ -679,6 +721,7 @@ def main(argv: list[str] | None = None) -> int:
                 "write(s) during the run: " + "; ".join(verdicts)
             )
     failed = [name for name, ok, _ in results if not ok]
+    record_gate(not failed, failed)
     print("\nNot verified locally (runs only on GitHub):")
     for item in not_verified:
         print(f"  - {item}")

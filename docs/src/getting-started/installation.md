@@ -96,6 +96,21 @@ anything newer. On an older distribution than that, build from source or use the
 a glibc mismatch shows up as `libc.so.6: version 'GLIBC_2.xx' not found` at startup, not as a
 subtle failure.
 
+### Checking a download
+
+Every release carries three kinds of evidence:
+
+- **`SHA256SUMS`** lists every asset. `sha256sum --ignore-missing -c SHA256SUMS` checks the ones you downloaded.
+- **Two SBOMs** (`kanbanr-<tag>.sbom.cargo.cdx.json` and `kanbanr-<tag>.sbom.npm.cdx.json`) list the Rust and monitor dependencies the binary was built from, in CycloneDX format.
+- **A build attestation** for each asset and for the image, signed by the workflow that built it. It says which repository, commit and workflow produced the file. With the GitHub CLI:
+
+  ```bash
+  gh attestation verify kanbanr-v0.6.0-x86_64-unknown-linux-gnu.tar.gz -R startr-trade/kanbanr
+  gh attestation verify oci://ghcr.io/startr-trade/kanbanr:v0.6.0 -R startr-trade/kanbanr
+  ```
+
+A release made with `ATTEST_RELEASE=false` has no attestations and its notes say so. The checksum and SBOM are always there.
+
 ## Install the skill
 
 The program is half of kanbanr; the other half is the **skill** that teaches Claude Code to use it.
@@ -271,7 +286,7 @@ make test          # the whole suite, no Docker
 make install       # builds the SPA, installs the binary, links the Claude skill
 ```
 
-`cargo install --path api/crates/kanbanr-cli` on its own works too, but without a built `web/dist`
+`cargo install --locked --path api/crates/kanbanr-cli` on its own works too, but without a built `web/dist`
 present it embeds no monitor — `kanbanr serve` then says so at startup and tells you what to do.
 That is also why **kanbanr is not published to crates.io**: a published crate cannot carry the
 built assets without committing generated files to the repository, so the archive and the installer

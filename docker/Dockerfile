@@ -9,8 +9,8 @@
 # ---- Stage 1: build the web SPA ----
 FROM node:22-slim AS web
 WORKDIR /web
-COPY web/package.json web/package-lock.json* ./
-RUN npm install
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
 COPY web/ ./
 RUN npm run build      # -> /web/dist
 
@@ -47,7 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Cook the dependencies. This is the expensive (vendored-C) step and its layer is cached until the
 # Cargo manifests/lockfile change — source-only edits skip it entirely.
 COPY --from=planner /api/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release --locked --recipe-path recipe.json
 # Now the real source; with deps already compiled in ./target, only the kanbanr crates rebuild.
 COPY api/ ./
 # The monitor is baked INTO the binary (FEAT-084), so the built SPA has to be present for this
@@ -69,7 +69,7 @@ ENV KANBANR_UI_DIST=/web/dist
 ARG KANBANR_GIT_SHA=""
 ARG KANBANR_BUILD_DATE=""
 RUN KANBANR_GIT_SHA="$KANBANR_GIT_SHA" KANBANR_BUILD_DATE="$KANBANR_BUILD_DATE" \
-    cargo build --release -p kanbanr-cli
+    cargo build --release --locked -p kanbanr-cli
 
 # ---- Stage 3: slim runtime — the one binary, in serve mode ----
 FROM debian:trixie-slim

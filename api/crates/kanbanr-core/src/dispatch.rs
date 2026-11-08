@@ -80,6 +80,26 @@ fn shown_rev(store: &Store, p: &str, code: &str, b: &Value) -> Result<()> {
     Ok(())
 }
 
+/// A sign-off that pins the spec covers the text the person was shown (FTR-023). When the request
+/// names the hash of the spec it was given on, it is refused if the spec has moved on since.
+fn shown_spec_rev(store: &Store, p: &str, code: &str, name: &str, b: &Value) -> Result<()> {
+    let Some(shown) = str_field(b, "spec_rev").filter(|r| !r.trim().is_empty()) else {
+        return Ok(());
+    };
+    let project = store.load(p)?;
+    if !project.config.signoff_pins_spec(name) {
+        return Ok(());
+    }
+    let now = crate::readiness::spec_pin(&project.feature(code)?.specification).1;
+    if now != shown.trim() {
+        return Err(CoreError::Unsupported(format!(
+            "{code}'s spec changed after it was shown (shown {shown}, now {now}): show the brief \
+             again and ask again; nothing was recorded"
+        )));
+    }
+    Ok(())
+}
+
 fn str_field(body: &Value, k: &str) -> Option<String> {
     body.get(k).and_then(|v| v.as_str()).map(String::from)
 }
@@ -528,6 +548,11 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
             // keeps the project's own; if its stages no longer fit them, the refusal names the fix.
             if cadence.release_gates.is_empty() {
                 cadence.release_gates = config.cadence.release_gates.clone();
+                // The kept gates name the project's stages (the recommended ones, FTR-020), so a
+                // process that names none keeps those too.
+                if cadence.release_stages.is_empty() {
+                    cadence.release_stages = config.cadence.release_stages.clone();
+                }
             }
             if cadence.release_prepare.is_empty() {
                 cadence.release_prepare = config.cadence.release_prepare.clone();
@@ -943,17 +968,24 @@ fn dispatch_routes(
                 &approver(b)?,
                 &str_field(b, "reason").unwrap_or_default(),
             )?),
-        ("POST", ["projects", p, "features", code, "signoff", name]) => ser(&{
+        ("POST", ["projects", p, "features", code, "signoff", name]) => {
             shown_rev(store, p, code, b)?;
-            store.signoff_feature(
+            shown_spec_rev(store, p, code, &percent_decode(name), b)?;
+            let (feature, held) = store.signoff_feature_reported(
                 p,
                 code,
                 &percent_decode(name),
                 &approver(b)?,
                 &str_field(b, "note").unwrap_or_default(),
                 &str_field(b, "doc").unwrap_or_default(),
-            )?
-        }),
+            )?;
+            let mut out = serde_json::to_value(&feature)
+                .map_err(|e| CoreError::Unsupported(e.to_string()))?;
+            if let Some(held) = held {
+                out["auto_advance_held"] = json!(held);
+            }
+            ser(&out)
+        }
         ("POST", ["projects", p, "features", code, "todos"]) => ser(&store.add_todo_list(
             p,
             code,
@@ -1081,6 +1113,20 @@ fn dispatch_routes(
                 },
             )?)
         }
+        // FTR-026: `{version, by, link?, notes?}`: a patch release started from the release's
+        // failed tag result, with a defect carrying the run's link and the notes.
+        ("POST", ["projects", p, "releases", version, "patch-from-tag"]) => {
+            ser(&crate::releases::patch_from_failed_tag(
+                store,
+                p,
+                &percent_decode(version),
+                &str_field(b, "version").unwrap_or_default(),
+                &str_field(b, "by").unwrap_or_default(),
+                &str_field(b, "link").unwrap_or_default(),
+                &str_field(b, "notes").unwrap_or_default(),
+                repo,
+            )?)
+        }
         // What promoting a release would do, with nothing changed (FEAT-212): `?stage=` (default
         // the next), `?reason=` for a move back, `?fetch=1` to fetch main first (the CLI's
         // `--plan --fetch`; the monitor never asks).
@@ -1130,11 +1176,70 @@ fn dispatch_routes(
                 &str_field(b, "by").unwrap_or_default(),
             )?)
         }
+        // Recorded gate results, oldest first (FTR-002). `?name=` and `?commit=` narrow them.
+        ("GET", ["projects", p, "gate-results"]) => {
+            let name = query_param(query, "name");
+            let commit = query_param(query, "commit").filter(|c| !c.is_empty());
+            let mut all = crate::gates::results(store, p, name.as_deref())?;
+            if let Some(c) = commit {
+                all.retain(|r| r.commit.starts_with(&c));
+            }
+            ser(&all)
+        }
+        // `{name, commit, passed, by, url?, note?, source?}`: keep a gate result as a new file
+        // (FTR-002). The time is the server's; `source` is `person` unless `local`.
+        ("POST", ["projects", p, "gate-results"]) => {
+            let need = |k: &str| {
+                str_field(b, k)
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+                    .ok_or_else(|| CoreError::Unsupported(format!("a gate result needs '{k}'")))
+            };
+            let passed = bool_field(b, "passed")
+                .ok_or_else(|| CoreError::Unsupported("a gate result needs 'passed'".into()))?;
+            let result = crate::gates::GateResult {
+                name: need("name")?,
+                commit: need("commit")?,
+                passed,
+                by: need("by")?,
+                at: crate::now_rfc3339(),
+                source: str_field(b, "source")
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or_else(|| "person".into()),
+                url: str_field(b, "url").unwrap_or_default().trim().to_string(),
+                note: str_field(b, "note").unwrap_or_default().trim().to_string(),
+            };
+            crate::gates::record(store, p, &result)?;
+            ser(&result)
+        }
+        // `{gates: [name…]}`: the gates `gate_passed` requires; empty clears them (FTR-002).
+        ("PUT", ["projects", p, "config", "commit-gates"]) => {
+            let names: Vec<String> = vec_field(b, "gates")
+                .unwrap_or_default()
+                .iter()
+                .map(|g| g.trim().to_string())
+                .filter(|g| !g.is_empty())
+                .collect();
+            let mut cadence = store.load_meta(p)?.config.cadence;
+            cadence.commit_gates = names;
+            ser(&store.set_cadence(p, None, cadence)?)
+        }
+        // `{gate}`: the commit gate whose result judges a release's tag; empty goes back to the
+        // first commit gate (FTR-026).
+        ("PUT", ["projects", p, "config", "tag-gate"]) => {
+            let gate = str_field(b, "gate")
+                .map(|g| g.trim().to_string())
+                .filter(|g| !g.is_empty());
+            let mut cadence = store.load_meta(p)?.config.cadence;
+            cadence.tag_gate = gate;
+            ser(&store.set_cadence(p, None, cadence)?)
+        }
         // The release stages with the gate in force on each (FEAT-212).
         ("GET", ["projects", p, "release-stages"]) => {
             ser(&store.load_meta(p)?.config.cadence.release_stage_views())
         }
-        // `{purpose?, requires?, on_enter?, clear?}`: declare a stage's gate, starting from the
+        // `{purpose?, requires?, after?, on_enter?, clear?}`: declare a stage's gate, starting from the
         // one in force, or clear it back to the default (FEAT-212).
         ("PUT", ["projects", p, "config", "release-stages", stage]) => {
             let stage = percent_decode(stage);
@@ -1159,6 +1264,13 @@ fn dispatch_routes(
                 if let Some(v) = b.get("requires").filter(|v| !v.is_null()) {
                     gate.requires = serde_json::from_value(v.clone())
                         .map_err(|e| CoreError::Unsupported(e.to_string()))?;
+                }
+                if let Some(after) = vec_field(b, "after") {
+                    gate.after = after
+                        .into_iter()
+                        .map(|a| a.trim().to_string())
+                        .filter(|a| !a.is_empty())
+                        .collect();
                 }
                 if let Some(v) = b.get("on_enter").filter(|v| !v.is_null()) {
                     gate.on_enter = serde_json::from_value(v.clone())
@@ -1389,12 +1501,19 @@ fn dispatch_routes(
                 }
             };
             let current = store.load_meta(p)?.config.cadence;
+            let current_inert = current.inert_stages();
+            let current_cadence = current.clone();
             let cadence = crate::config::Cadence {
                 extra: current.extra.clone(),
                 // FEAT-212: the stages' gates and what `prepare` writes have routes of their own;
                 // a cadence write that does not name them keeps them.
                 release_gates: current.release_gates.clone(),
                 release_prepare: current.release_prepare.clone(),
+                // FTR-002: the gates a release stage requires have a route of their own.
+                commit_gates: current.commit_gates.clone(),
+                tag_gate: current.tag_gate.clone(),
+                // FTR-020: whether the project has CI; kept when the body does not say.
+                has_ci: bool_field(b, "has_ci").unwrap_or(current.has_ci),
                 sprints: bool_field(b, "sprints").unwrap_or(current.sprints),
                 releases: bool_field(b, "releases").unwrap_or(current.releases),
                 sprint_length_days: b
@@ -1426,7 +1545,23 @@ fn dispatch_routes(
                 // FEAT-189: branching follows the git model only when switched on.
                 git_model: bool_field(b, "git_model").unwrap_or(current.git_model),
             };
-            ser(&store.set_cadence(p, unit, cadence)?)
+            let config = store.set_cadence(p, unit, cadence)?;
+            // FTR-020: an inert stage that is newly there, and how to make the tag wait for CI.
+            let was = current_inert;
+            let mut warnings: Vec<String> = config
+                .cadence
+                .inert_stages()
+                .iter()
+                .filter(|s| !was.contains(s))
+                .map(|s| crate::config::Cadence::inert_warning(s))
+                .collect();
+            warnings.extend(config.cadence.has_ci_note(&current_cadence));
+            let mut body =
+                serde_json::to_value(&config).map_err(|e| CoreError::Unsupported(e.to_string()))?;
+            if !warnings.is_empty() {
+                body["warnings"] = serde_json::json!(warnings);
+            }
+            ser(&body)
         }
         // Workflow export (FEAT-039): the config rendered as a Mermaid state diagram.
         ("GET", ["projects", p, "workflow"]) => {
@@ -1701,6 +1836,7 @@ fn dispatch_routes(
                     .filter(|w| !w.trim().is_empty())
                     .map(std::path::PathBuf::from),
                 hooks_ready: bool_field(b, "hooks_ready").unwrap_or(false),
+                claude_hooks_ready: bool_field(b, "claude_hooks_ready").unwrap_or(false),
             };
             let by = crate::git::verdict_author(store.data_dir(), str_field(b, "by").as_deref())?;
             ser(&crate::agentscope::issue(
@@ -1919,6 +2055,22 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
                 if on { "on" } else { "off" }
             )
         }
+        ["projects", _p, "gate-results"] => {
+            let f = |k: &str| body.and_then(|b| str_field(b, k)).unwrap_or_default();
+            let passed = body.and_then(|b| bool_field(b, "passed")).unwrap_or(false);
+            format!(
+                "record gate {} {} on {}",
+                f("name"),
+                if passed { "passed" } else { "failed" },
+                f("commit").chars().take(7).collect::<String>()
+            )
+        }
+        ["projects", _p, "config", "commit-gates"] => "set the commit gates".into(),
+        ["projects", _p, "config", "tag-gate"] => "set the tag gate".into(),
+        ["projects", _p, "releases", v, "patch-from-tag"] => format!(
+            "start a patch release from the failed tag of {}",
+            percent_decode(v)
+        ),
         ["projects", _p, "config", what] => format!("update config: {what}"),
         ["projects", _p, "coverage"] => "config: coverage rules".into(),
         ["projects", _p, "sprints"] => "add a sprint".into(),
@@ -1990,6 +2142,82 @@ mod tests {
         )
         .unwrap();
         (store, dir)
+    }
+
+    /// FTR-023 R-9: a sign-off sent with the hash of a spec that has since changed is refused, and
+    /// nothing is recorded.
+    #[test]
+    fn a_signoff_on_a_design_that_moved_on_is_refused() {
+        let (store, _dir) = release_board("signoff-moved-on");
+        store
+            .add_milestone("shop", "M", "", vec![], Some("MS-001".into()))
+            .unwrap();
+        let f = store
+            .add_feature("shop", "Cart", "## Design\nUse a map.", "MS-001", None)
+            .unwrap();
+        store
+            .set_feature_definition(
+                "shop",
+                &f.code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Scheduled".to_string(),
+            crate::config::Gate {
+                requires: vec![crate::readiness::Condition::Check(
+                    crate::readiness::Check::SpecSections,
+                )],
+                signoffs: vec!["design-review".into()],
+                ..Default::default()
+            },
+        );
+        store.set_gates("shop", gates).unwrap();
+        let shown = crate::readiness::spec_pin("## Design\nUse a map.").1;
+        store
+            .edit_feature(
+                "shop",
+                &f.code,
+                None,
+                Some("## Design\nUse a vec.".into()),
+                None,
+                None,
+            )
+            .unwrap();
+        let path = format!("/projects/shop/features/{}/signoff/design-review", f.code);
+        let err = dispatch(
+            &store,
+            "POST",
+            &path,
+            Some(&serde_json::json!({"by": "Ada", "spec_rev": shown})),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("spec changed after it was shown"), "{err}");
+        let after = store.load("shop").unwrap();
+        assert!(
+            after
+                .feature(&f.code)
+                .unwrap()
+                .definition
+                .as_ref()
+                .unwrap()
+                .signoffs
+                .is_empty()
+        );
+        // Shown the current text, it is recorded.
+        let now = crate::readiness::spec_pin("## Design\nUse a vec.").1;
+        dispatch(
+            &store,
+            "POST",
+            &path,
+            Some(&serde_json::json!({"by": "Ada", "spec_rev": now})),
+        )
+        .unwrap();
     }
 
     /// FEAT-217: the codes routes show the next code per prefix and set the map; a feature POSTed
@@ -2105,7 +2333,7 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("only the last stage"), "{err}");
+        assert!(err.contains("'tag' is placed at both"), "{err}");
         let err = call(
             "PUT",
             "/projects/shop/config/release-stages/staging",
@@ -2341,7 +2569,7 @@ mod tests {
                 "POST",
                 "/projects/demo/scopes",
                 json!({ "role": "design", "item": "FEAT-001", "by": "Ada", "note": note,
-                        "hooks_ready": true }),
+                        "hooks_ready": true, "claude_hooks_ready": true }),
             )
         };
         let first = issue("one");
