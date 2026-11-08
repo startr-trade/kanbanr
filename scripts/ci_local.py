@@ -83,6 +83,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "The extension compiles and packages": LOCAL,
         },
         "workflows": {
+            "No tracked merge leftovers (*.orig, *.rej)": LOCAL,
             "The version being built has release notes": LOCAL,
             "The guides cover the pipeline and a product people use": LOCAL,
             "Every gate check is described in Working with Claude": LOCAL,

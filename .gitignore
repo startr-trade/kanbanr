@@ -38,3 +38,5 @@ docs/book
 
 *.cdx.json
 dist-sbom/
+*.orig
+*.rej
