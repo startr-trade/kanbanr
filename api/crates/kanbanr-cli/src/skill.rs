@@ -352,6 +352,25 @@ mod tests {
         }
     }
 
+    /// DEF-031 R-9: the skill tells Claude that a merge sends a promoted release back, to report
+    /// it, and to confirm no stage.
+    #[test]
+    fn skill_reports_a_release_sent_back_and_confirms_no_stage() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        for want in [
+            "**A merge sends a promoted release back.**",
+            "sends the release back to candidate and says so",
+            "Confirm no stage yourself",
+            "needs a patch release",
+        ] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+    }
+
     /// FEAT-214 R-12: the skill tells Claude to issue a scope with one command before starting
     /// each sub-agent, to start it in its own worktree (design agents too), to put the printed
     /// brief into its brief, and to revoke the scope when the work is reviewed.

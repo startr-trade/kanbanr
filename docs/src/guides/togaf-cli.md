@@ -330,6 +330,30 @@ made, and promoting to main dates them today. If main moved earlier and the cut 
 cut's `--plan` warns, and `kanbanr release redate v1.1.0` dates them today. Notes can't be edited
 after the cut.
 
+**A merge into a promoted release sends it back.** `kanbanr move` of an item into a release that is
+past candidate and not cut returns the release to its first stage and says so:
+
+```text
+v1.1.0 was at main; FEAT-002 is merged into it, so it is back at candidate. From here: Update the release notes, then Run the release gate again for the new tip and record the result, then Promote to main, then Push main and wait for CI, then Cut v1.1.0
+```
+
+`kanbanr release promote v1.1.0 --plan` and `kanbanr release stages` begin with "Sent back by
+FEAT-002". Do the steps in order:
+
+1. `kanbanr release notes v1.1.0 --edit`; the notes end with "Not mentioned yet: FEAT-002" until they
+   name each item planned into the release.
+2. Run your full checks over the release, then `kanbanr gate record ci --passed --commit <sha>`. A
+   pass recorded for an earlier commit stands when only documentation changed since; the plan names
+   the commit. `kanbanr config gate-docs` sets which paths count as documentation (`docs/` and `*.md`
+   by default).
+3. `kanbanr release promote v1.1.0 main`
+4. `git push origin main`, then wait for CI.
+5. `kanbanr release promote v1.1.0 tag`, which is refused until main is at the release tip, pushed,
+   and the gate has passed where the project names commit gates.
+
+Saving notes does not send a release back. A release that is tagged and not shipped refuses the
+move before anything is merged, naming the tag; the change needs `kanbanr release patch v1.1.0`.
+
 ## Closing the sprint
 
 ```text
@@ -350,6 +374,8 @@ sprint before starting any item.
 | `carried FEAT-001 → backlog` at a sprint close | The item is merged, but not done for the sprint | Plan it into the next sprint, or mark Migration done |
 | `FEAT-001 would carry over` at a promotion | The item can't reach Operations yet | Do what the line names, often `kanbanr signoff FEAT-001 release` |
 | An item stays in Migration after the cut | The release shipped but the item never got what it lacked | `kanbanr doctor` names it; give the sign-off it lacks (`kanbanr check FEAT-001`), or plan it into a coming release with `kanbanr release plan` |
+| A release is back at candidate after a move | An item was merged into it after it left candidate | Do the steps `kanbanr release promote <V> --plan` lists |
+| `v1.1.0 is tagged at …` on a move | The release is tagged and waits for its later stages | `kanbanr release patch v1.1.0`, and plan the change into the patch |
 | `does not exist on release/v1.1.0` at candidate | A file named in `release-prepare` isn't on the sprint's branch | Commit it on an item's branch and merge that first |
 | A defect in a shipped release | It needs a fix on its own | See [Patch releases](../using/processes.md#patch-releases) |
 

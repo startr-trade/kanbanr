@@ -698,6 +698,11 @@ branches; fix it before going on.
   `--edit` commits new text there, nothing checked out, until the cut. When the user asks where
   the notes are or wants them changed, use this — never a fix item, never a checkout of
   `release/<V>`. The Releases page shows them too, with Edit on a write-enabled monitor.
+- **A merge sends a promoted release back.** When a move merges an item into a release that is past
+  candidate, kanbanr sends the release back to candidate and says so. Tell the person, in one
+  message, what the Releases page now offers: update the notes, run the gate again, promote to
+  main, push and wait for CI, then cut. Confirm no stage yourself. A release that is tagged and not
+  shipped refuses the merge and needs a patch release.
 - **The date follows the release.** Entering the stage that moves main dates the notes and changelog
   today. If main moved earlier, the cut's plan warns: run `kanbanr release redate <V>` before the
   cut, and say to push main again if it says so.

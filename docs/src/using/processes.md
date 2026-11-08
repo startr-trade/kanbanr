@@ -603,6 +603,24 @@ When main moved with it, the command says to push main again and wait for CI bef
 the release has shipped it refuses. A project with no notes or changelog configured, or a file
 with no date line, has nothing to date.
 
+#### A change merged into a promoted release
+
+A release that has left its first stage and has not been cut goes back to that stage when an item is
+merged into `release/<V>`. `kanbanr move` says so, and the stage history records the item, who moved
+it and when. From the first stage the ordinary steps apply: update the notes (`kanbanr release notes
+<V>` ends with the planned items the notes do not mention), run the gate again, promote to main, push
+main and wait for CI, then cut. `kanbanr release promote <V> --plan` and the Releases page show the
+item and the steps. Until the cut, the stage that tags also needs main at the release tip, the tip
+pushed and, where the project names commit gates, a passed result, whatever the stage's own
+`requires` say.
+
+A recorded pass of a commit gate carries to a later commit of the release when every path changed
+since matches `cadence.gate_docs` (`docs/` and `*.md` unless `kanbanr config gate-docs` names others);
+the plan names the commit it came from. A failed result never carries. A release that is tagged and
+not shipped refuses the merge before anything changes, because its tag names one commit; the change
+goes into a patch release (`kanbanr release patch <V>`). Saving the release notes moves main with
+them as before and does not send the release back.
+
 ### Patch releases
 
 A fix to a release already in production gets a release of its own, a **patch**:

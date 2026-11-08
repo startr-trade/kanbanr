@@ -201,6 +201,24 @@ again and wait for CI before the cut.
 earlier and the cut comes later, the page warns you: ask Claude to re-date them before you cut,
 because shipped notes can't be edited.
 
+**A change merged into a promoted release sends it back.** When a fix is merged into a release that
+has gone past candidate and isn't cut, the release goes back to candidate, and Claude tells you in
+one message which item did it. The Releases page then shows a panel with the item and the steps from
+there, and you do them in order:
+
+1. Say "Write the release notes again"; the page lists the items the notes don't mention yet.
+2. Say "Run the full checks over the release". A recorded pass for an earlier commit still counts if
+   only documentation changed since, and the page names that commit.
+3. **Releases** page: **Promote to main**.
+4. Terminal: `git push origin main`, then wait for CI to go green.
+5. **Releases** page: **Check again**, then **Cut**. The cut stays greyed out until main is at the
+   release and pushed.
+
+Claude reports where the release is and confirms no stage; the buttons are yours. Saving notes alone
+doesn't send the release back. A release that is already tagged and waiting for its later stages
+takes no change: the merge is refused, and the change needs a patch release (**Start a patch
+release** on the page, or ask Claude).
+
 ## Closing the sprint
 
 > Close the sprint and do a retro.
@@ -232,6 +250,7 @@ because new items branch from the running sprint.
 | A promotion says an item would carry over | It can't reach Operations yet | Do what the page says, usually **Sign off release**; the cut then moves it |
 | An item stays in Migration after the cut | The release shipped but the item never got what it lacked | Ask Claude to run `kanbanr doctor`, which names it; give the sign-off it lacks, or plan it into a coming release |
 | **Cut** stays greyed out after you pushed | The page hasn't read the push yet | **Check again** |
+| The release is behind main, or only a greyed-out **Cut** is offered | A merge sent the release back to candidate | Read the panel on the Releases page and do its steps in order |
 | Your remote server rejects your first push, naming a permission | Your sign-in can't change some files yet, often your CI's own files | Ask Claude what the message means, then grant it and push again |
 | A defect in a shipped release | It needs its own fix | Ask Claude for a patch release, and see [Patch releases](../using/processes.md#patch-releases) |
 
