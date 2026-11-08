@@ -117,7 +117,7 @@ pub fn write(store: &Store) -> Result<bool> {
     if existing.as_deref() == Some(next.as_str()) {
         return Ok(false);
     }
-    std::fs::write(&path, next)?;
+    crate::atomic::write(&path, next)?;
     Ok(true)
 }
 

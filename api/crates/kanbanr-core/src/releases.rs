@@ -354,7 +354,7 @@ fn remove_release(store: &Store, id: &str, version: &str) -> Result<()> {
 }
 
 fn save(store: &Store, id: &str, releases: &[Release]) -> Result<()> {
-    std::fs::write(path(store, id), crate::yaml::to_string(releases)?)?;
+    crate::atomic::write(path(store, id), crate::yaml::to_string(releases)?)?;
     Ok(())
 }
 

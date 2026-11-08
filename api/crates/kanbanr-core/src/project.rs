@@ -391,7 +391,7 @@ pub fn resolve_project(explicit: Option<&str>) -> Option<String> {
 /// Write a marker into `dir`, returning its path.
 pub fn write_marker(dir: &Path, marker: &Marker) -> std::io::Result<PathBuf> {
     let path = dir.join(MARKER_FILE);
-    std::fs::write(&path, marker.render())?;
+    crate::atomic::write(&path, marker.render())?;
     Ok(path)
 }
 

@@ -178,7 +178,7 @@ fn save(store: &Store, id: &str, lessons: &[Lesson]) -> Result<()> {
         let _ = std::fs::remove_file(file);
         return Ok(());
     }
-    std::fs::write(file, crate::yaml::to_string(lessons)?)?;
+    crate::atomic::write(file, crate::yaml::to_string(lessons)?)?;
     Ok(())
 }
 

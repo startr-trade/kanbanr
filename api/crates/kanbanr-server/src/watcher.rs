@@ -38,3 +38,37 @@ fn project_of(path: &Path, base: &Path) -> Option<String> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// DEF-025: a board file is now replaced by a rename, not modified in place; the page must
+    /// still hear about it.
+    #[test]
+    fn an_atomic_write_still_fires_a_change_event() {
+        let base = std::env::temp_dir().join(format!("kanbanr-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let folder = base.join("demo");
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("item.yaml");
+        std::fs::write(&file, "old").unwrap();
+        let (tx, mut rx) = broadcast::channel(64);
+        let _watcher = spawn(base.clone(), tx).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        kanbanr_core::atomic::write(&file, "new").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut heard = false;
+        while std::time::Instant::now() < deadline && !heard {
+            while let Ok(id) = rx.try_recv() {
+                heard |= id == "demo";
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(
+            heard,
+            "no change event for the project after an atomic write"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}

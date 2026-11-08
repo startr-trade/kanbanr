@@ -307,14 +307,13 @@ fn read(path: &Path) -> anyhow::Result<Value> {
     }
 }
 
-/// Write via a temp file + rename, so an interrupted write never leaves a broken settings file.
+/// Write whole or not at all (DEF-025), so an interrupted write never leaves a broken settings file.
 fn write(path: &Path, settings: &Value) -> anyhow::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("json.kanbanr-tmp");
-    std::fs::write(&tmp, serde_json::to_string_pretty(settings)? + "\n")?;
-    std::fs::rename(&tmp, path).with_context(|| format!("could not write {}", path.display()))
+    kanbanr_core::atomic::write(path, serde_json::to_string_pretty(settings)? + "\n")
+        .with_context(|| format!("could not write {}", path.display()))
 }
 
 #[derive(Debug, PartialEq)]

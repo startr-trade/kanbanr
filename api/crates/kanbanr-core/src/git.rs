@@ -106,6 +106,8 @@ fn ensure_secret_ignored(repo: &Repository, dir: &Path) {
         UNPUSHED_FILE,
         crate::eventing::CONFIG_FILE,
         SESSIONS_DIR,
+        // Leftovers of an interrupted atomic write (DEF-025) are never board data.
+        "*.tmp",
     ] {
         if !contents.lines().any(|l| l.trim() == entry) {
             if !contents.is_empty() && !contents.ends_with('\n') {
@@ -117,7 +119,7 @@ fn ensure_secret_ignored(repo: &Repository, dir: &Path) {
         }
     }
     if changed {
-        let _ = std::fs::write(&gitignore, contents);
+        let _ = crate::atomic::write(&gitignore, contents);
     }
     if let Ok(mut index) = repo.index()
         && index.get_path(Path::new(SECRET_FILE), 0).is_some()
@@ -1187,6 +1189,29 @@ mod tests {
         assert!(tree.get_name(".sessions").is_none(), "the summary was not");
         let ignore = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
         assert!(ignore.lines().any(|l| l.trim() == SESSIONS_DIR), "{ignore}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-025 R-6: a leftover of an interrupted write never reaches the board's history.
+    #[test]
+    fn the_board_ignores_leftover_temporary_files() {
+        let dir = temp("leftover-tmp");
+        ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        std::fs::write(dir.join(".x.1.1.tmp"), "half").unwrap();
+        std::fs::write(dir.join("item.yaml"), "x: 1").unwrap();
+        assert!(commit_local(&dir, "a write"));
+        let repo = Repository::open(&dir).unwrap();
+        let tree = repo.head().unwrap().peel_to_tree().unwrap();
+        assert!(
+            tree.get_name("item.yaml").is_some(),
+            "the write was committed"
+        );
+        assert!(
+            tree.get_name(".x.1.1.tmp").is_none(),
+            "the leftover was not"
+        );
+        let ignore = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert!(ignore.lines().any(|l| l.trim() == "*.tmp"), "{ignore}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -22,8 +22,8 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 /// every moment (DEF-025). The bytes go to `.<name>.<pid>.<n>.tmp` in the SAME folder (a rename
 /// across folders is not atomic and can fail across mounts), are synced, and are renamed over
 /// `path`. A symbolic link is written through: the file it points to is replaced, the link stays.
-pub fn write(path: &Path, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
-    write_with(path, bytes.as_ref(), |_| Ok(()))
+pub fn write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+    write_with(path.as_ref(), bytes.as_ref(), |_| Ok(()))
 }
 
 /// `write` with a hook that runs after the temporary file is complete and synced and before the
@@ -236,7 +236,7 @@ mod tests {
     fn a_missing_folder_is_an_error_and_makes_nothing() {
         let dir = scratch("missing");
         let folder = dir.join("nope");
-        let err = write(&folder.join("f.yaml"), "x").unwrap_err();
+        let err = write(folder.join("f.yaml"), "x").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
         assert!(!folder.exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -300,7 +300,7 @@ mod tests {
         let mut ms: Vec<f64> = (0..200)
             .map(|i| {
                 let t = std::time::Instant::now();
-                write(&dir.join(format!("f{}.yaml", i % 20)), &bytes).unwrap();
+                write(dir.join(format!("f{}.yaml", i % 20)), &bytes).unwrap();
                 t.elapsed().as_secs_f64() * 1000.0
             })
             .collect();
