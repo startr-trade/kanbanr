@@ -427,3 +427,174 @@ mod tests {
         assert!(d[1500..].iter().all(|l| l.op == DiffOp::Added));
     }
 }
+
+#[cfg(test)]
+mod perf {
+    //! DEF-022: the review queue on a board whose history and doc references have grown.
+    use super::*;
+    use crate::models::FeatureDefinition;
+    use crate::readiness::{Check, Condition};
+
+    /// The first commit's time and the gap between commits, in seconds.
+    const T0: i64 = 1_700_000_000;
+    const STEP: i64 = 60;
+    const DOCS: usize = 40;
+
+    fn rfc3339(secs: i64) -> String {
+        use time::format_description::well_known::Rfc3339;
+        time::OffsetDateTime::from_unix_timestamp(secs)
+            .unwrap()
+            .format(&Rfc3339)
+            .unwrap()
+    }
+
+    /// A board in a temp git repository: `items` items waiting at the first stage, each declaring
+    /// `refs_per_item` of `DOCS` docs, with a gate on the next stage that asks for `docs_updated`,
+    /// and `commits` commits to the docs, made with git2 at increasing times. Each item's entry time
+    /// is spread across that history.
+    fn generated_board(
+        commits: usize,
+        items: usize,
+        refs_per_item: usize,
+    ) -> (crate::Store, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-perf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = crate::Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Scheduled".to_string(),
+            crate::config::Gate {
+                warns: vec![Condition::Check(Check::DocsUpdated)],
+                ..Default::default()
+            },
+        );
+        store.set_gates("demo", gates).unwrap();
+        let docs = store.project_dir("demo").join("docs").join("architecture");
+        std::fs::create_dir_all(&docs).unwrap();
+        for d in 0..DOCS {
+            std::fs::write(docs.join(format!("d{d}.md")), "v0").unwrap();
+        }
+        let span = (commits as i64 * STEP).max(1);
+        for i in 0..items {
+            let item = store
+                .add_feature("demo", &format!("Item {i}"), "", "M", None)
+                .unwrap();
+            let affects_docs = (0..refs_per_item)
+                .map(|j| format!("architecture/d{}.md", (i * refs_per_item + j) % DOCS))
+                .collect();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &item.code,
+                    Some(FeatureDefinition {
+                        statement: format!("Item {i}"),
+                        affects_docs,
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+            // Entry times from before the first commit to the last, spread evenly.
+            let entered = rfc3339(T0 - STEP + span * i as i64 / items as i64);
+            let path = store.feature_path("demo", &item.status, &item.code);
+            let text = std::fs::read_to_string(&path).unwrap();
+            let text: Vec<String> = text
+                .lines()
+                .map(|l| {
+                    if l.starts_with("created_at:") {
+                        format!("created_at: {entered}")
+                    } else {
+                        l.to_string()
+                    }
+                })
+                .collect();
+            std::fs::write(&path, text.join("\n") + "\n").unwrap();
+        }
+
+        let repo = git2::Repository::open(&dir).unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        // The board's own first commit stays the root; the generated history grows from it.
+        let mut parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        for i in 0..commits {
+            let rel = store
+                .project_dir("demo")
+                .join("docs")
+                .join(format!("architecture/d{}.md", i % DOCS));
+            std::fs::write(&rel, format!("v{}", i + 1)).unwrap();
+            let rel = rel
+                .strip_prefix(repo.workdir().unwrap())
+                .unwrap()
+                .to_owned();
+            index.add_path(&rel).unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let sig = git2::Signature::new(
+                "Ada",
+                "ada@example.com",
+                &git2::Time::new(T0 + i as i64 * STEP, 0),
+            )
+            .unwrap();
+            let parents: Vec<&git2::Commit> = parent.iter().collect();
+            let oid = repo
+                .commit(Some("HEAD"), &sig, &sig, "docs", &tree, &parents)
+                .unwrap();
+            parent = Some(repo.find_commit(oid).unwrap());
+        }
+        index.write().unwrap();
+        (store, dir)
+    }
+
+    /// The most the queue may take on the generated board: under a third of the 15.0 s measured
+    /// before DEF-022, and under a second.
+    const BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// DEF-022 R-4: the review queue on 2,500 commits, 70 items and 490 doc references.
+    /// Run: `cargo test -p kanbanr-core --release review::perf -- --ignored --nocapture`
+    #[test]
+    #[ignore = "a timing measure; run it on its own in release"]
+    fn review_on_a_board_with_many_commits_and_doc_refs() {
+        let (store, dir) = generated_board(2_500, 70, 7);
+        let started = std::time::Instant::now();
+        let queue = pending(&store, "demo").unwrap();
+        let elapsed = started.elapsed();
+        eprintln!("review::pending: {} entries in {elapsed:?}", queue.len());
+        assert_eq!(queue.len(), 70);
+        assert!(
+            elapsed <= BUDGET,
+            "{elapsed:?} is over the budget {BUDGET:?}"
+        );
+
+        // The shared history answers as the walk of each doc alone does.
+        let project = store.load("demo").unwrap();
+        let docs = store.project_dir("demo").join("docs");
+        let history = crate::git::DocHistory::default();
+        for f in &project.features {
+            let since = f.entered_status_at();
+            for doc in &f.definition.as_ref().unwrap().affects_docs {
+                let path = docs.join(crate::readiness::affects_doc_key(doc));
+                assert_eq!(
+                    history.changed_since(&path, since),
+                    crate::git::doc_changed_since_single_walk(&path, since),
+                    "{} {doc}",
+                    f.code
+                );
+            }
+        }
+        eprintln!("history: {:?}", history.stats());
+        assert_eq!(
+            history.stats(),
+            crate::git::HistoryStats { opens: 1, walks: 1 }
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

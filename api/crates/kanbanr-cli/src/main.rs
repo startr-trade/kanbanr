@@ -139,7 +139,12 @@ enum Command {
     /// push is debounced off the hot path by default; this flushes anything pending immediately.
     Sync,
     /// Open the live monitor in your browser (warns if it isn't running).
-    Open,
+    Open {
+        /// Report whether the monitor is up and accepts writes, and its Review and Releases
+        /// addresses; opens nothing.
+        #[arg(long)]
+        check: bool,
+    },
     /// Print the data folder (board) this directory uses. With --json, also where that came from,
     /// the recommended `<repo>.kanbanr` folder, and existing kanbanr folders next to the project.
     Where,
@@ -243,6 +248,11 @@ enum Command {
     /// them on: `kanbanr config cadence --releases on`.
     #[command(subcommand)]
     Release(ReleaseCmd),
+    /// Gate results (FTR-002): the verdict of your CI, or of `make ci`, recorded against one
+    /// commit. kanbanr runs no gate and asks no server; a release stage that requires
+    /// `gate_passed` reads what was recorded here.
+    #[command(subcommand)]
+    Gate(GateCmd),
     /// Record that an item was sliced out of another, so a wave's growth can be accounted for.
     SplitFrom {
         code: String,
@@ -1045,7 +1055,8 @@ enum ConfigCmd {
         /// How often a release is cut: per_sprint | every_n | on_demand.
         #[arg(long)]
         release: Option<String>,
-        /// The stages a release moves through, in order; the last is the cut (FEAT-183). Default:
+        /// The stages a release moves through, in order; the stage holding `tag` is the cut
+        /// (FEAT-183). Turning releases on gives candidate,main,tag; a board from before 0.6 keeps
         /// candidate,test,staging,production.
         #[arg(long, value_delimiter = ',')]
         release_stages: Option<Vec<String>>,
@@ -1061,6 +1072,20 @@ enum ConfigCmd {
         /// branches, lines taking merges only. on | off; off by default.
         #[arg(long, value_parser = ["on", "off"])]
         git_model: Option<String>,
+        /// The project has CI (FTR-020): the recommended `tag` stage then also waits for a passed
+        /// `ci` result for the release tip. on | off; off by default.
+        #[arg(long, value_parser = ["on", "off"])]
+        has_ci: Option<String>,
+    },
+    /// The gates a release stage needing `gate_passed` requires a passed result of for the release
+    /// tip (FTR-002): `kanbanr config commit-gates ci`. With none given, clears them.
+    CommitGates {
+        names: Vec<String>,
+    },
+    /// The commit gate whose result judges a release's tag (FTR-026): `kanbanr config tag-gate
+    /// ci`. It must be one of the commit gates; with none given, the first commit gate judges.
+    TagGate {
+        name: Option<String>,
     },
     /// A release stage's gate (FEAT-212): what must hold before a release enters it, and what
     /// entering it does. Starts from the gate in force (`release stages`); `--clear` goes back to
@@ -1070,15 +1095,19 @@ enum ConfigCmd {
         /// What the stage is for, in a sentence.
         #[arg(long)]
         purpose: Option<String>,
-        /// Conditions: items_finished, prepared, main_at_release, pushed ("" for none).
+        /// Conditions: items_finished, prepared, main_at_release, pushed, gate_passed,
+        /// items_merged ("" for none).
         #[arg(long, value_delimiter = ',')]
         requires: Option<Vec<String>>,
+        /// Earlier stages the release must have been promoted into first ("" for none).
+        #[arg(long, value_delimiter = ',')]
+        after: Option<Vec<String>>,
         /// Actions, applied in this order whatever the order given: branch, prepare, move_main,
         /// tag ("" for none).
         #[arg(long, value_delimiter = ',')]
         on_enter: Option<Vec<String>>,
         /// Remove the stage's own gate: it acts as the default again.
-        #[arg(long, conflicts_with_all = ["purpose", "requires", "on_enter"])]
+        #[arg(long, conflicts_with_all = ["purpose", "requires", "after", "on_enter"])]
         clear: bool,
     },
     /// What a release's `prepare` action commits onto `release/<V>` (FEAT-212). With no flag,
@@ -1177,6 +1206,46 @@ enum ConfigCmd {
 }
 
 #[derive(Subcommand)]
+enum GateCmd {
+    /// Record a gate's verdict for a commit, as a new result beside the earlier ones. Look at
+    /// your CI first, then record what it said.
+    Record {
+        /// The gate: `ci`, `local`, `security`... (lowercase letters, digits, - and _).
+        name: String,
+        /// The run passed.
+        #[arg(long, conflicts_with = "failed", required_unless_present = "failed")]
+        passed: bool,
+        /// The run failed.
+        #[arg(long)]
+        failed: bool,
+        /// The commit the verdict is about (default: HEAD of this repository).
+        #[arg(long, value_name = "REV")]
+        commit: Option<String>,
+        /// A link to the run, http or https.
+        #[arg(long)]
+        url: Option<String>,
+        /// A note, such as what failed.
+        #[arg(long)]
+        note: Option<String>,
+        /// Who gave the verdict (default: the board's commit identity).
+        #[arg(long)]
+        by: Option<String>,
+        /// `local` for the project's own `make ci` run (default: person).
+        #[arg(long, hide = true, value_parser = ["person", "local"])]
+        source: Option<String>,
+    },
+    /// The recorded results, newest first.
+    List {
+        /// Only this gate.
+        #[arg(long)]
+        name: Option<String>,
+        /// Only results for this commit.
+        #[arg(long, value_name = "REV")]
+        commit: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum ReleaseCmd {
     /// Add a planned release.
     Add {
@@ -1190,6 +1259,19 @@ enum ReleaseCmd {
         /// starts at the first stage (FEAT-184). Run it from the project folder.
         #[arg(long)]
         patch_of: Option<String>,
+        /// With --patch-of: the parent's tag has a failed CI result recorded (FTR-026). A defect
+        /// is filed carrying the failed run's link and --notes, the defect and the parent's items
+        /// are planned into the patch, and the parent is marked superseded. Your own verdict:
+        /// Claude does not run it.
+        #[arg(long, requires = "patch_of")]
+        from_failed_tag: bool,
+        /// With --from-failed-tag: the failed run's link (default: the link on the recorded
+        /// result).
+        #[arg(long, requires = "from_failed_tag")]
+        link: Option<String>,
+        /// With --from-failed-tag: what you saw, kept in the defect.
+        #[arg(long, requires = "from_failed_tag")]
+        notes: Option<String>,
     },
     /// List the project's releases.
     List,
@@ -1207,6 +1289,10 @@ enum ReleaseCmd {
         /// Why the release moves back a stage (required for that, and recorded).
         #[arg(long)]
         reason: Option<String>,
+        /// What you checked, kept on the stage change when you confirm a stage after the tag
+        /// (FTR-026). The same field as --reason.
+        #[arg(long, conflicts_with = "reason")]
+        note: Option<String>,
         /// Who moved it (default: the board's commit identity).
         #[arg(long)]
         by: Option<String>,
@@ -1706,7 +1792,7 @@ fn command_access(cmd: &Command) -> Access {
     use Access::*;
     match cmd {
         Command::Whoami
-        | Command::Open
+        | Command::Open { .. }
         | Command::Where
         | Command::Activity
         | Command::Trace { .. }
@@ -1801,6 +1887,7 @@ fn command_access(cmd: &Command) -> Access {
         | Command::Lesson(_)
         | Command::Sprint(_)
         | Command::Release(_)
+        | Command::Gate(_)
         | Command::Commit { .. }
         | Command::Tests { .. }
         | Command::Sources { .. }
@@ -3600,6 +3687,19 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
             return Ok(());
         }
     }
+    // A verdict is the person's, taken on the monitor: Claude never records one (FTR-024).
+    if client.is_some() {
+        let project = project::resolve_project(cli.project.as_deref());
+        let review_url = format!(
+            "{}/p/{}/review",
+            monitor_url(),
+            urlencode_segment(project.as_deref().unwrap_or("<project>"))
+        );
+        if let Some(why) = verdict_refusal(command, &review_url) {
+            deny(why);
+            return Ok(());
+        }
+    }
     if !is_git_commit(command) {
         return Ok(());
     }
@@ -3648,6 +3748,66 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
         deny(why);
     }
     Ok(())
+}
+
+/// The verdict commands Claude may not run (FTR-024): approving, ratifying, signing off or
+/// withdrawing either, accepting or rejecting a decision, and promoting or cutting a release. A
+/// verdict is the person's own, recorded on the monitor. Returns the refusal, naming the page
+/// where the person decides (`review_url`, or its Releases sibling for a release).
+///
+/// Reads the tokens of each kanbanr invocation, not substrings of the line. `--help` is never
+/// refused, and anything it can't parse passes (ADR-0004).
+fn verdict_refusal(command: &str, review_url: &str) -> Option<String> {
+    for (_, words) in simple_commands(command) {
+        if !is_kanbanr(&words) || words.iter().any(|w| w == "--help" || w == "-h") {
+            continue;
+        }
+        let mut path: Vec<&str> = Vec::new();
+        let mut it = words[1..].iter().map(String::as_str);
+        while let Some(w) = it.next() {
+            match w {
+                "--data-dir" | "--project" => {
+                    it.next();
+                }
+                _ if w.starts_with('-') => {}
+                _ => {
+                    path.push(w);
+                    if path.len() == 2 || !matches!(w, "adr" | "release" | "gate") {
+                        break;
+                    }
+                }
+            }
+        }
+        let rest = &words[1..];
+        let (verdict, releases) = match path.as_slice() {
+            ["approve" | "ratify" | "unapprove" | "signoff"] => (true, false),
+            ["adr", "accept" | "reject"] => (true, false),
+            ["release", "promote"] => (!rest.iter().any(|w| w == "--plan"), true),
+            ["release", "cut"] => (true, true),
+            // Starting a patch from a red tag is the person's decision (FTR-026). `promote` to a
+            // stage after the tag is covered above; `config tag-gate` is configuration, not a verdict.
+            ["release", "add"] => (rest.iter().any(|w| w == "--from-failed-tag"), true),
+            // A gate result recorded by hand is a verdict on the release (FTR-002).
+            ["gate", "record"] => (true, true),
+            _ => (false, false),
+        };
+        if verdict {
+            let page = if releases {
+                match review_url.strip_suffix("/review") {
+                    Some(base) => format!("{base}/releases"),
+                    None => review_url.to_string(),
+                }
+            } else {
+                review_url.to_string()
+            };
+            return Some(format!(
+                "refused: a verdict is the person's own, recorded on the monitor, never by Claude \
+                 (FTR-024). Tell them what is waiting: {page}. If no monitor accepts writes, offer \
+                 `kanbanr review --ui`."
+            ));
+        }
+    }
+    None
 }
 
 /// The command line with every heredoc body removed, keeping the lines that introduce them.
@@ -4724,8 +4884,67 @@ fn monitor_down_hint(url: &str) -> String {
     )
 }
 
+/// What `kanbanr open --check` reports about the monitor (FTR-024).
+#[derive(serde::Serialize)]
+struct MonitorStatus {
+    url: String,
+    up: bool,
+    writes: bool,
+    review: Option<String>,
+    releases: Option<String>,
+}
+
+/// The monitor's status from its `/api/meta` answer (`None`: nothing answered) and the project.
+fn monitor_status(url: &str, project: Option<&str>, meta: Option<&Value>) -> MonitorStatus {
+    let page = |name: &str| project.map(|p| format!("{url}/p/{}/{name}", urlencode_segment(p)));
+    MonitorStatus {
+        url: url.to_string(),
+        up: meta.is_some(),
+        writes: meta.is_some_and(|m| m["writes"] == true),
+        review: page("review"),
+        releases: page("releases"),
+    }
+}
+
+/// `kanbanr open --check`: ask the monitor, print its status, open nothing.
+fn run_open_check(cli: &Cli) -> anyhow::Result<()> {
+    let url = monitor_url();
+    // A transport error, a non-2xx answer or a body that isn't JSON all count as down.
+    let meta = ureq::get(&format!("{url}/api/meta"))
+        .timeout(std::time::Duration::from_millis(800))
+        .call()
+        .ok()
+        .and_then(|r| r.into_json::<Value>().ok());
+    let project = project::resolve_project(cli.project.as_deref());
+    let status = monitor_status(&url, project.as_deref(), meta.as_ref());
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(&status)?);
+        return Ok(());
+    }
+    println!(
+        "{}",
+        match (status.up, status.writes) {
+            (true, true) => format!("monitor at {url}: up, writes on"),
+            (true, false) => format!(
+                "monitor at {url}: up, read-only (start one with writes: kanbanr review --ui)"
+            ),
+            (false, _) => format!("monitor at {url}: not running (start it: kanbanr review --ui)"),
+        }
+    );
+    if let Some(r) = &status.review {
+        println!("Review: {r}");
+    }
+    if let Some(r) = &status.releases {
+        println!("Releases: {r}");
+    }
+    Ok(())
+}
+
 /// Open the live monitor in the default browser (best-effort; warns if it isn't reachable).
-fn run_open(_cli: &Cli) -> anyhow::Result<()> {
+fn run_open(cli: &Cli, check: bool) -> anyhow::Result<()> {
+    if check {
+        return run_open_check(cli);
+    }
     let url = monitor_url();
     // Any HTTP status means the daemon is up; a transport error means it isn't.
     let up = !matches!(
@@ -5633,7 +5852,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             ui_dir,
             allow_writes,
         } => return run_serve(cli, bind.clone(), ui_dir.clone(), *allow_writes),
-        Command::Open => return run_open(cli),
+        Command::Open { check } => return run_open(cli, *check),
         Command::Where => return run_where(cli),
         // A preview of the git model needs no board (FEAT-194): setup shows it before `init`.
         Command::Git(GitCmd::Model { sprints, releases })
@@ -5687,7 +5906,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Identity { .. }
         | Command::Init { .. }
         | Command::Serve { .. }
-        | Command::Open
+        | Command::Open { .. }
         | Command::Where
         | Command::SelfUpdate { .. }
         | Command::Skill(_)
@@ -6332,10 +6551,18 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 &resp,
                 format!("{code}: sign-off '{name}' recorded by {who}"),
             );
+            if !cli.json
+                && let Some(held) = serde_json::from_str::<Value>(&resp)
+                    .ok()
+                    .and_then(|v| v["auto_advance_held"].as_str().map(str::to_string))
+            {
+                eprintln!("  {held}");
+            }
             Ok(())
         }
         Command::Sprint(cmd) => run_sprint(cli, &client, cmd),
         Command::Release(cmd) => run_release(cli, &client, cmd),
+        Command::Gate(cmd) => run_gate(cli, &client, cmd),
         Command::Todo(cmd) => run_todo(cli, &client, cmd),
         Command::Task(cmd) => run_task(cli, &client, cmd),
         Command::Milestone(cmd) => run_milestone(cli, &client, cmd),
@@ -7390,6 +7617,20 @@ fn run_doctor(cli: &Cli, client: &Backend, all_projects: bool) -> anyhow::Result
             print_issue(i);
         }
     }
+    // What later stages will ask: counts, not warnings (DEF-021).
+    let ahead = report["ahead"].as_array().cloned().unwrap_or_default();
+    if !ahead.is_empty() {
+        println!("Later stages will ask (not warnings; kanbanr check lists them):");
+        for a in &ahead {
+            println!(
+                "  {} {}: {} item(s), {} thing(s)",
+                a["project"].as_str().unwrap_or(""),
+                a["stage"].as_str().unwrap_or(""),
+                a["items"],
+                a["things"]
+            );
+        }
+    }
     if issues.is_empty() {
         println!("clean: no integrity issues found");
     }
@@ -7523,6 +7764,22 @@ fn print_write(cli: &Cli, resp: &str, human: String) {
         println!("{human}");
     }
     print_coverage_warnings(cli, resp);
+}
+
+/// The warnings a release-configuration write returned (FTR-020), one per line on stderr. Silent
+/// with `--json`, which carries them as `warnings`.
+fn print_release_warnings(cli: &Cli, warnings: &Value) {
+    if cli.json {
+        return;
+    }
+    for w in warnings
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        eprintln!("warning: {w}");
+    }
 }
 
 /// The coverage rules a write now fails (FEAT-197), on stderr: the first ten, then how many more
@@ -8259,10 +8516,38 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             }
             Ok(())
         }
+        ConfigCmd::CommitGates { names } => {
+            let resp = client.write(
+                Method::Put,
+                &format!("/projects/{p}/config/commit-gates"),
+                Some(json!({ "gates": names })),
+            )?;
+            let said = if names.is_empty() {
+                "commit gates cleared".to_string()
+            } else {
+                format!("commit gates: {}", names.join(", "))
+            };
+            print_write(cli, &resp, said);
+            Ok(())
+        }
+        ConfigCmd::TagGate { name } => {
+            let resp = client.write(
+                Method::Put,
+                &format!("/projects/{p}/config/tag-gate"),
+                Some(json!({ "gate": name })),
+            )?;
+            let said = match name {
+                Some(n) => format!("tag gate: {n}"),
+                None => "tag gate cleared: the first commit gate judges".to_string(),
+            };
+            print_write(cli, &resp, said);
+            Ok(())
+        }
         ConfigCmd::ReleaseStage {
             stage,
             purpose,
             requires,
+            after,
             on_enter,
             clear,
         } => {
@@ -8287,6 +8572,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 Some(obj(vec![
                     ("purpose", purpose.clone().map(|x| json!(x))),
                     ("requires", list(requires)),
+                    ("after", list(after)),
                     ("on_enter", list(on_enter)),
                     ("clear", clear.then(|| json!(true))),
                 ])),
@@ -8298,6 +8584,19 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             };
             print_write(cli, &resp, said);
             if !cli.json {
+                // The route returns the stages; the one just set says whether it does nothing.
+                let rows: Vec<Value> = serde_json::from_str(&resp)?;
+                if let Some(row) = rows
+                    .iter()
+                    .find(|r| r["name"] == stage.as_str() && r["inert"] == true)
+                {
+                    eprintln!(
+                        "warning: {}",
+                        kanbanr_core::config::Cadence::inert_warning(
+                            row["name"].as_str().unwrap_or_default()
+                        )
+                    );
+                }
                 print_release_stages(cli, client, &p)?;
             }
             Ok(())
@@ -8384,8 +8683,10 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
             integration_branch,
             main_branch,
             git_model,
+            has_ci,
         } => {
             let body = obj(vec![
+                ("has_ci", has_ci.as_deref().map(|v| json!(v == "on"))),
                 ("git_model", git_model.as_deref().map(|v| json!(v == "on"))),
                 ("sprints", sprints.as_deref().map(|v| json!(v == "on"))),
                 ("releases", releases.as_deref().map(|v| json!(v == "on"))),
@@ -8435,6 +8736,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                     v["estimate_unit"].as_str().unwrap_or("days")
                 ),
             );
+            print_release_warnings(cli, &v["warnings"]);
             Ok(())
         }
         ConfigCmd::Show => {
@@ -8739,6 +9041,125 @@ fn merge_version_files(current: &Value, flags: &[String], clear: bool) -> Vec<Va
     files
 }
 
+fn run_gate(cli: &Cli, client: &Backend, cmd: &GateCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    match cmd {
+        GateCmd::Record {
+            name,
+            passed,
+            failed: _,
+            commit,
+            url,
+            note,
+            by,
+            source,
+        } => {
+            let repo = code_repo();
+            let root = repo.as_deref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "this is not inside a code repository, so there is no commit to record"
+                )
+            })?;
+            // A pass with no commit named is about HEAD, which a dirty tree makes untrue.
+            if *passed && commit.is_none() && !coderepo::is_clean(root) {
+                anyhow::bail!(
+                    "the working tree has uncommitted changes, so a pass would not be about HEAD: \
+                     commit them, or name the commit with --commit"
+                );
+            }
+            let rev = commit.as_deref().unwrap_or("HEAD");
+            let sha = coderepo::rev_parse(root, rev)
+                .map_err(|e| anyhow::anyhow!("'{rev}' is not a commit here: {e}"))?;
+            let by = verdict_author(cli, by.as_ref())?;
+            let resp = client.write(
+                Method::Post,
+                &format!("/projects/{p}/gate-results"),
+                Some(obj(vec![
+                    ("name", Some(json!(name))),
+                    ("commit", Some(json!(sha))),
+                    ("passed", Some(json!(*passed))),
+                    ("by", Some(json!(by))),
+                    ("url", url.clone().map(|u| json!(u))),
+                    ("note", note.clone().map(|n| json!(n))),
+                    ("source", source.clone().map(|s| json!(s))),
+                ])),
+            )?;
+            print_write(
+                cli,
+                &resp,
+                format!(
+                    "gate {name} {} on {}, recorded by {by}",
+                    if *passed { "passed" } else { "failed" },
+                    &sha[..7]
+                ),
+            );
+            Ok(())
+        }
+        GateCmd::List { name, commit } => {
+            let sha = match commit {
+                Some(rev) => {
+                    let root = code_repo().ok_or_else(|| {
+                        anyhow::anyhow!("--commit needs a code repository to resolve '{rev}' in")
+                    })?;
+                    Some(
+                        coderepo::rev_parse(&root, rev)
+                            .map_err(|e| anyhow::anyhow!("'{rev}' is not a commit here: {e}"))?,
+                    )
+                }
+                None => None,
+            };
+            let mut q: Vec<String> = Vec::new();
+            if let Some(n) = name {
+                q.push(format!("name={}", urlencode_segment(n)));
+            }
+            if let Some(c) = &sha {
+                q.push(format!("commit={c}"));
+            }
+            let path = if q.is_empty() {
+                format!("/projects/{p}/gate-results")
+            } else {
+                format!("/projects/{p}/gate-results?{}", q.join("&"))
+            };
+            let resp = client.get(&path)?;
+            let mut rows: Vec<Value> = serde_json::from_str(&resp)?;
+            rows.reverse();
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else if rows.is_empty() {
+                println!("(no gate results recorded)");
+            } else {
+                for r in &rows {
+                    let g = |k: &str| r[k].as_str().unwrap_or("").to_string();
+                    let commit = g("commit");
+                    let mut line = format!(
+                        "{:<10} {:<6} {}  {}  {}",
+                        g("name"),
+                        if r["passed"].as_bool().unwrap_or(false) {
+                            "passed"
+                        } else {
+                            "FAILED"
+                        },
+                        &commit[..commit.len().min(7)],
+                        g("at"),
+                        g("by"),
+                    );
+                    if g("source") == "local" {
+                        line.push_str("  (local)");
+                    }
+                    if !g("url").is_empty() {
+                        line.push_str(&format!("  {}", g("url")));
+                    }
+                    if !g("note").is_empty() {
+                        line.push_str(&format!("  - {}", g("note")));
+                    }
+                    println!("{line}");
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     match cmd {
@@ -8746,7 +9167,41 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             target,
             name,
+            patch_of: Some(parent),
+            from_failed_tag: true,
+            link,
+            notes,
+        } => {
+            let _ = (target, name);
+            let by = verdict_author(cli, None)?;
+            let resp = client.write_in(
+                Method::Post,
+                &format!(
+                    "/projects/{p}/releases/{}/patch-from-tag",
+                    urlencode_segment(parent)
+                ),
+                Some(obj(vec![
+                    ("version", Some(json!(version))),
+                    ("by", Some(json!(by))),
+                    ("link", link.clone().map(|l| json!(l))),
+                    ("notes", notes.clone().map(|n| json!(n))),
+                ])),
+                code_repo().as_deref(),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            let said = format!(
+                "added {version}, a patch of {parent}: defect {} filed, {} planned, {parent} superseded",
+                v["defect"].as_str().unwrap_or_default(),
+                v["planned"].as_array().map_or(0, Vec::len)
+            );
+            print_write(cli, &resp, said);
+        }
+        ReleaseCmd::Add {
+            version,
+            target,
+            name,
             patch_of,
+            ..
         } => {
             let by = match patch_of {
                 Some(_) => Some(verdict_author(cli, None)?),
@@ -8784,6 +9239,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             by,
             plan: true,
             fetch,
+            ..
         } => {
             let _ = by;
             print_release_plan(
@@ -8818,6 +9274,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             stage,
             reason,
+            note,
             by,
             plan: false,
             ..
@@ -8828,7 +9285,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 &p,
                 version,
                 stage.as_deref(),
-                reason.as_deref(),
+                reason.as_deref().or(note.as_deref()),
                 by.as_ref(),
             )?;
         }
@@ -9316,8 +9773,23 @@ fn print_release_plan(
             t["subject"].as_str().unwrap_or_default()
         );
     }
+    if let Some(t) = plan["tag"].as_object() {
+        let sha = t["commit"].as_str().unwrap_or_default();
+        let sha = &sha[..sha.len().min(7)];
+        let gate = t["gate"].as_str().unwrap_or_default();
+        match t["state"].as_str().unwrap_or_default() {
+            "none" => println!("  tag {sha}: no {gate} result recorded since the tag was made"),
+            state => println!(
+                "  tag {sha}: {gate} {state}{}",
+                t["result"]["by"]
+                    .as_str()
+                    .map(|b| format!(" (recorded by {b})"))
+                    .unwrap_or_default()
+            ),
+        }
+    }
     let preview = plan["preview"].as_array().cloned().unwrap_or_default();
-    if plan["cut"] == true {
+    if plan["ships"] == true {
         let ships: Vec<&str> = preview
             .iter()
             .filter(|c| c["ships"] == true)
@@ -9387,13 +9859,29 @@ fn print_release_stages(cli: &Cli, client: &Backend, p: &str) -> anyhow::Result<
         if s["cut"] == true {
             note.push("the cut");
         }
+        if s["after_cut"] == true {
+            note.push("confirmed by you");
+        }
         if s["declared"] != true {
             note.push("default");
+        }
+        if s["inert"] == true {
+            note.push("does nothing");
+        }
+        let mut requires = names(&s["requires"]);
+        if let Some(after) = s["after"].as_array().filter(|a| !a.is_empty()) {
+            let after: Vec<&str> = after.iter().filter_map(Value::as_str).collect();
+            let text = format!("after {}", after.join(", "));
+            requires = if requires == "—" {
+                text
+            } else {
+                format!("{requires}, {text}")
+            };
         }
         println!(
             "{:<14} {:<34} {:<30} {}",
             s["name"].as_str().unwrap_or_default(),
-            names(&s["requires"]),
+            requires,
             names(&s["on_enter"]),
             note.join(", ")
         );
@@ -9818,6 +10306,147 @@ fn print_board(project: &Project) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The text between `from` and `to` in `source` (to the end when `to` is None).
+    fn between<'a>(source: &'a str, from: &str, to: Option<&str>) -> &'a str {
+        let start = source.find(from).unwrap_or_else(|| panic!("no '{from}'"));
+        let rest = &source[start..];
+        match to {
+            Some(to) => {
+                &rest[..rest[from.len()..]
+                    .find(to)
+                    .map_or(rest.len(), |i| i + from.len())]
+            }
+            None => rest,
+        }
+    }
+
+    /// FTR-002 R-9: the gate commands, messages, page and guide text say CI, the run or the
+    /// remote, and name no CI product, git host or workflow file.
+    #[test]
+    fn gate_text_names_no_ci_product() {
+        let core = include_str!("../../kanbanr-core/src/gates.rs");
+        let releases = include_str!("../../kanbanr-core/src/releases.rs");
+        let gates_rs = between(core, "//! Gate results", Some("#[cfg(test)]"));
+        let gate_arm = between(releases, "fn gate_passed(", Some("fn today_ymd"));
+        let this = include_str!("main.rs");
+        let help = between(this, "enum GateCmd {", Some("enum ReleaseCmd"));
+        let run = between(this, "fn run_gate(", Some("fn run_release("));
+        let page = include_str!("../../../../web/src/pages/ReleasesPage.tsx");
+        let form = between(
+            page,
+            "function RecordResult(",
+            Some("function ReleaseNotesSection"),
+        );
+        let guide = include_str!("../../../../docs/src/using/processes.md");
+        let guide = between(guide, "### Gate results", Some("\n## "));
+        let cli_ref = include_str!("../../../../docs/src/reference/cli.md");
+        let named = [
+            "github",
+            "gitlab",
+            "bitbucket",
+            "jenkins",
+            "circleci",
+            "travis",
+            "buildkite",
+            "teamcity",
+            "azure",
+            ".github",
+            "workflow file",
+            "workflows/",
+        ];
+        let mut found = Vec::new();
+        for (where_, text) in [
+            ("gates.rs", gates_rs),
+            ("the gate_passed judgement", gate_arm),
+            ("GateCmd help", help),
+            ("gate command messages", run),
+            ("the Record result form", form),
+            ("the gate guide section", guide),
+        ] {
+            let lower = text.to_lowercase();
+            for n in named {
+                if lower.contains(n) {
+                    found.push(format!("{where_} names '{n}'"));
+                }
+            }
+        }
+        for line in cli_ref.lines().filter(|l| l.contains("kanbanr gate ")) {
+            let lower = line.to_lowercase();
+            for n in named {
+                if lower.contains(n) {
+                    found.push(format!("the cli reference names '{n}': {line}"));
+                }
+            }
+        }
+        assert!(found.is_empty(), "{found:#?}");
+    }
+
+    /// FTR-024 R-4, R-5: the guard refuses the commands that record or withdraw a verdict, and
+    /// lets every other kanbanr command through.
+    #[test]
+    fn the_guard_refuses_a_verdict_claude_would_record() {
+        let url = "http://h:1/p/p/review";
+        for refused in [
+            "kanbanr approve FTR-1 --rev x",
+            "kanbanr --project p signoff FTR-1 design-review",
+            "cd x && kanbanr adr accept ADR-1",
+            "kanbanr adr reject ADR-1",
+            "kanbanr ratify FTR-1",
+            "kanbanr release promote v1",
+            "kanbanr release cut v1",
+            "kanbanr unapprove FTR-1 --reason r",
+            "kanbanr signoff FTR-1 design-review --withdraw --reason r",
+            "kanbanr release add v1.0.1 --patch-of v1.0.0 --from-failed-tag",
+            "kanbanr gate record v1 smoke --result pass",
+        ] {
+            let why = verdict_refusal(refused, url).unwrap_or_else(|| panic!("passed: {refused}"));
+            assert!(why.contains("http://h:1/p/p/"), "{why}");
+        }
+        assert!(
+            verdict_refusal("kanbanr release cut v1", url)
+                .unwrap()
+                .contains("/p/p/releases")
+        );
+        assert!(
+            verdict_refusal("kanbanr gate record v1 smoke", url)
+                .unwrap()
+                .contains("/p/p/releases")
+        );
+        for allowed in [
+            "kanbanr review --pending",
+            "kanbanr release promote v1 --plan",
+            "kanbanr release add v1.0.1 --patch-of v1.0.0",
+            "kanbanr config tag-gate ci",
+            "kanbanr sprint close SP-1",
+            "kanbanr release plan v1 FTR-1",
+            "kanbanr signoff --help",
+            "kanbanr adr list",
+            "echo \"kanbanr approve\"",
+            "git commit -m \"kanbanr approve\"",
+        ] {
+            assert!(
+                verdict_refusal(allowed, url).is_none(),
+                "refused: {allowed}"
+            );
+        }
+        let heredoc = without_heredoc_bodies("cat <<EOF\nkanbanr approve X\nEOF\n");
+        assert!(verdict_refusal(&heredoc, url).is_none());
+    }
+
+    /// FTR-024 R-3: the monitor's status reads `writes` from its meta, and names the pages only
+    /// when a project is known.
+    #[test]
+    fn monitor_status_reads_writes_from_meta() {
+        let down = monitor_status("http://h:1", None, None);
+        assert!(!down.up && !down.writes && down.review.is_none() && down.releases.is_none());
+        let ro = monitor_status("http://h:1", Some("p"), Some(&json!({"writes": false})));
+        assert!(ro.up && !ro.writes);
+        let rw = monitor_status("http://h:1", Some("my p"), Some(&json!({"writes": true})));
+        assert!(rw.up && rw.writes);
+        assert_eq!(rw.review.as_deref(), Some("http://h:1/p/my%20p/review"));
+        assert_eq!(rw.releases.as_deref(), Some("http://h:1/p/my%20p/releases"));
+    }
 
     /// FEAT-212 R-8: `config release-prepare --version-file` keeps several entries for one path,
     /// each with its own match, in order, through the config and back; an exact duplicate is kept

@@ -43,6 +43,7 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/projects/{project}/process` | — | JSON `ProcessStatus` | How the project's workflow stands against the process it was applied from |
 | `GET /api/projects/{project}/gates` | — | JSON `object` | The gate each status's moves are judged by, keyed by status: role-addressed gates resolved, the built-in rule included |
 | `GET /api/projects/{project}/releases/{version}/cut-preview` | — | JSON `CutPreview[]` | What cutting a release now would ship and carry over, with nothing written |
+| `GET /api/projects/{project}/gate-results` | `name` (optional), `commit` (optional) | JSON `GateResult[]` | The gate results recorded for the project, oldest first: which gate, which commit, passed or failed, who and when |
 | `GET /api/projects/{project}/releases/{version}/plan` | `stage` (optional), `reason` (optional) | JSON `ReleasePlan` | What promoting a release would do, with nothing changed: the button, each step and condition, what is missing and, for the cut, what ships. The monitor reads the code repository only when started in the project folder |
 | `GET /api/projects/{project}/workflow` | `format=mermaid` | `text/plain` | The workflow as a Mermaid state diagram |
 | `GET /api/projects/{project}/gantt` | — | `text/plain` | The schedule as a Mermaid gantt diagram, by milestone |
@@ -94,9 +95,10 @@ now and then; a client re-reads what it shows when an event arrives.
 
 ## CORS and access
 
-The daemon sends permissive CORS headers, so a monitor served from another origin, such as the
-standalone bundle each release attaches, can read the API and its SSE streams. CORS is not access
-control: anyone who can reach the daemon can read the board. See
+The daemon sends no cross-origin headers, so a page from another origin cannot read the API or its
+SSE streams. It answers only for the loopback names, its bound address and the hosts in
+`KANBANR_ALLOWED_HOSTS`, and a write needs the token its own page was given at this start. Anyone who
+can reach the daemon with an accepted host can read the board. See
 [Hosting the monitor elsewhere](../using/the-monitor.md#hosting-the-monitor-elsewhere).
 
 ## Internal routes

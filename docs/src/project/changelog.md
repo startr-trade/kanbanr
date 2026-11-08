@@ -6,6 +6,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-06
+
 ### Added
 
 - **An approval lapses only when the text you approved changes (FTR-018).** Adding to a definition
@@ -29,6 +31,51 @@ All notable changes to kanbanr are documented here. The format follows
   API: the `spec_changed` review entry, `spec_rev` and `spec` on review entries, and `spec_rev` on
   sign-offs. The guide sentence that a sign-off doesn't lapse when the design changes is replaced.
   An older kanbanr on the same board ignores `spec_rev` and reads such a sign-off as current.
+- **Turning releases on gives release stages that each do something (FTR-020).** A project that
+  turns releases on, and names no stages and declares no stage gate, now gets `candidate` (branch
+  and prepare), `main` (move main once the items are finished) and `tag` (the cut, needing main at
+  the release and pushed), written into the board's config. `kanbanr config cadence --has-ci on`
+  also makes `tag` require a passed `ci` result for the release tip, on a board whose stages are
+  still the recommended ones. A board that has releases on already, or names its own stages, is left
+  alone, and one with no stages named keeps reading `candidate`, `test`, `staging` and
+  `production`. Changing the stages of a board whose gates are still the recommended ones drops
+  those gates instead of refusing. A stage before the cut with no condition and no action is
+  warned about when configured, and marked `does nothing` in `kanbanr release stages` and the
+  `inert` field of the release-stages route.
+- **Release stages can follow the tag, with the tag's CI result on the Releases page (FTR-026).**
+  The stage holding the `tag` action is now the cut and tags the commit, recording `tagged_at` and
+  the commit, but ships nothing unless it is also the last stage. Each later stage is a
+  confirmation you give, with an optional note (`kanbanr release promote <V> --note …`), and
+  confirming the last one ships the release and moves its items to their last status. The
+  Releases page shows the result you recorded for the tag (`kanbanr config tag-gate`, else the
+  first commit gate), offers **Check again** or **Start a patch release** when it is red, and the
+  next confirmation when it is green. `kanbanr release add <V> --patch-of <T> --from-failed-tag`
+  files a defect with the run's link and your notes, plans it and the release's items into a patch
+  and supersedes the failed release. A project with no stage after the tag behaves as before.
+- **A release stage can require merged items, or an earlier stage (FTR-021).** A new release
+  check, `items_merged`, holds when every item planned into the release is at the integrate stage
+  or later, judged from the board with no repository, so **Promote to candidate** can wait for
+  merged work. A stage can also list `--after` stages (`kanbanr config release-stage tag --after ci`):
+  the release must have been promoted into each first, so a named promotion cannot jump over
+  them. Both appear in the promotion plan as conditions with what was found and what to do.
+  A board that uses neither sees no change.
+
+- **A release stage can require that the gate passed (FTR-002).** A new release check,
+  `gate_passed`, needs a recorded passed result for the release tip from every gate named by
+  `kanbanr config commit-gates`. You look at your CI and record its verdict with
+  `kanbanr gate record <gate> --passed --url <link>` or the Releases page's Record result form;
+  kanbanr never asks a server. A result is a file of its own and the newest for the commit decides,
+  so a pass for another commit counts for nothing. `make ci` records its own run as the gate
+  `local` (a pass only on a clean tree). A project that names no gate sees no change.
+- **Claude takes decisions one way, and keeps quiet while it works (FTR-024).** Claude sends every
+  verdict to the monitor's Review and Releases pages, says what is waiting there, and never
+  records one or asks for one in a plan or a question. Plan mode is kept for setup and process
+  changes, and never used while a sub-agent runs. Progress is reported as changes, not events, and
+  rework goes on the item's todo-list before it starts. New: `kanbanr open --check` reports whether
+  the monitor is up and accepts writes, with its Review and Releases addresses; the guard refuses
+  verdict commands (`approve`, `ratify`, `unapprove`, `signoff`, `adr accept|reject`,
+  `release promote` without `--plan`, `release cut`) run by Claude in a folder that keeps a board;
+  and a build scope is refused for an item with no open task.
 
 - **Guides for every built-in process (DOC-003).** The Process guides section now covers default,
   scheduled, PDCA, design control, Scrum and agile, each with Claude and from the command line, and
@@ -51,6 +98,40 @@ All notable changes to kanbanr are documented here. The format follows
   and names agent scopes, release stages and kind codes as experimental in 1.0, stable from 1.1.
 
 ### Fixed
+
+- **An item is no longer shown as released before its release is cut (DEF-019).** On a project
+  that works in releases, an item planned into a release that has not been cut stays where it is
+  when its last task is done or its `release` sign-off is given, in every process; `task` and
+  `signoff` say which release it waits for, and the cut moves it to its end status. Moving it
+  yourself to an end status now needs a reason. The TOGAF preset no longer offers a direct move from
+  Implementation to Operations, so an item passes Migration; a board already running TOGAF keeps
+  its own copy until `kanbanr process update`.
+- **Dependencies with no open advisory (MNT-005).** libz-sys 1.1.32, tokio 1.54.1 and DOMPurify
+  3.4.17 replace versions with advisories published after 0.4.0. `astral-tokio-tar`, unmaintained and
+  reached only through a test-only dependency, is listed in `deny.toml` with its reason until 0.6.0
+  replaces it.
+- **The monitor answers only its own page and hosts (DEF-024).** The monitor serves and accepts
+  requests only for its own page and the hosts it is bound to, so nothing else running in your
+  browser can read the board through it or record a decision. A write needs the token its page was
+  given at this start. `SECURITY.md` now describes write mode and how it is limited.
+- **Doctor warns only about the stage an item is at (DEF-021).** On a healthy TOGAF project it
+  showed 25 warnings, mostly the next stage's requirements on items still at Vision. It now warns
+  about what the item's current stage asks, which an edit may have undone, and counts what the stage
+  reached next still lacks, per stage, on a separate "Later stages will ask" line that is not a
+  warning and does not change the exit status. This changes the wording of FEAT-117 R-2, which had
+  doctor report the next stage's needs. The JSON report gains an optional `ahead` list.
+
+- **The monitor's next-stage counts match `kanbanr check` (DEF-020).** A board card left sign-offs
+  out of "Migration needs 4" and listed every stage the item could skip to. It now names only the
+  stage reached next, counts every gap `check` counts, and says how many are yours: "Migration needs
+  6, 1 yours", or "waiting on you: docs-folded" when only your part remains. The readiness answer
+  gains `immediate` and `for_you` on each next stage.
+- **The Review page no longer slows down as a board grows (DEF-022).** The `docs_updated` check
+  opened the board's repository and walked its history again for every doc an item declares. It now
+  opens it once and walks it once per request, and the Review page refetches once after a burst of
+  board changes settles. On a generated board of 2,500 commits and 70 items naming 490 docs, the
+  review queue went from 15.0 s to 0.05 s. `kanbanr check` and `doctor` share the check and gain
+  too; their answers are unchanged.
 
 - **The book and the skill match this release (DOC-006).** The no-charter warning, the date set when
   main moves, `why` on an uncommitted line, `git doctor` with no integrate stage and lapsed approvals
@@ -1263,7 +1344,8 @@ reported against it.
 - Optional Docker image and a two-layer test story (Docker-less integration + a testcontainers
   packaging smoke).
 
-[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/startr-trade/kanbanr/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/startr-trade/kanbanr/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/startr-trade/kanbanr/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/startr-trade/kanbanr/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/startr-trade/kanbanr/compare/v0.2.0...v0.2.1

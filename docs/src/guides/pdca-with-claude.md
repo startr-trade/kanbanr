@@ -5,6 +5,8 @@ This guide takes one item through Plan, Do, Check and Act. You don't need to lea
 - **You talk to Claude** for everything except decisions and pushes. Use your own words. The ones
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page.
+  Claude tells you what is waiting there and links to it. It never records a decision, and it
+  doesn't ask for one in a plan or a question.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [PDCA from the command line](pdca-cli.md). For the other

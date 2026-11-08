@@ -357,7 +357,7 @@ export interface ItemDiagrams {
 /** Per live item, keyed by code: what its card counts, and the next stage with how much it lacks. */
 export type Readiness = Record<
   string,
-  { gaps: Gap[]; next: { status: string; missing: number; signoffs: string[]; tasks_open: number; ends: boolean }[] }
+  { gaps: Gap[]; next: { status: string; missing: number; signoffs: string[]; tasks_open: number; ends: boolean; immediate?: boolean; for_you?: number }[] }
 >;
 
 /** A mirrored external issue (e.g. a GitHub issue kept in step with this feature). */
@@ -447,12 +447,14 @@ export interface ProjectConfig {
     release?: string;
     /** The stages a release moves through; the last is the cut (FEAT-183). */
     release_stages?: string[];
+    /** The gates a stage needing `gate_passed` requires a passed result of (FTR-002). */
+    commit_gates?: string[];
     integration_branch?: string;
     main_branch?: string;
     /** Branching follows the git model the cadence implies (FEAT-189). */
     git_model?: boolean;
     /** Each release stage's conditions and entry actions, keyed by stage name (FEAT-212). */
-    release_gates?: Record<string, { purpose?: string; requires?: string[]; on_enter?: string[] }>;
+    release_gates?: Record<string, { purpose?: string; requires?: string[]; after?: string[]; on_enter?: string[] }>;
     /** What a release's `prepare` action commits onto `release/<V>` (FEAT-212). */
     release_prepare?: {
       version_files?: { path: string; match?: string }[];
@@ -507,6 +509,12 @@ export interface Release {
   stages?: { stage: string; by: string; at: string; reason?: string }[];
   /** The code branch, made on entering the first stage. */
   branch?: string;
+  /** When the stage that tags was entered (FTR-026); a tagged release still `planned` is waiting on its later stages. */
+  tagged_at?: string;
+  /** The commit the tag names. */
+  tag_commit?: string;
+  /** The patch release that replaced it after its tag's CI run failed; its tag stays in git. */
+  superseded_by?: string;
 }
 
 /** A release's notes as they are on its branch `release/<V>` (FEAT-216). */
@@ -541,9 +549,21 @@ export interface CutPreview {
   why?: string;
 }
 
+/** A gate's verdict recorded for one commit (FTR-002). */
+export interface GateResult {
+  name: string;
+  commit: string;
+  passed: boolean;
+  by: string;
+  at: string;
+  source: "person" | "local";
+  url?: string;
+  note?: string;
+}
+
 /** One condition of a release stage a promotion enters, and whether it holds (FEAT-212). */
 export interface PlanCondition {
-  check: "items_finished" | "prepared" | "main_at_release" | "pushed";
+  check: "items_finished" | "prepared" | "main_at_release" | "pushed" | "gate_passed" | "tag_passed" | "items_merged" | "stage_passed";
   stage: string;
   holds: boolean;
   detail: string;
@@ -559,13 +579,28 @@ export interface PlanStep {
   blocked?: string;
 }
 
+/** The newest result recorded for a release's tag (FTR-026). */
+export interface TagResult {
+  commit: string;
+  gate: string;
+  state: "passed" | "failed" | "none";
+  result?: GateResult;
+}
+
 /** What promoting a release would do, with nothing changed (FEAT-212). */
 export interface ReleasePlan {
   version: string;
   from: string;
   to: string;
   direction: string;
+  /** This promotion enters the stage that tags. */
   cut: boolean;
+  /** This promotion enters a stage after the cut: a confirmation by the user (FTR-026). */
+  confirm: boolean;
+  /** This promotion enters the last stage and ships the release (FTR-026). */
+  ships: boolean;
+  /** The tag's recorded CI result, while the release is tagged and not shipped (FTR-026). */
+  tag?: TagResult;
   /** What the one button says: "Promote to main", "Cut v0.2.1". */
   button: string;
   conditions: PlanCondition[];

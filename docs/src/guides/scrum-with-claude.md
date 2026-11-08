@@ -8,6 +8,8 @@ any commands:
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page, promotions and the
   cut on the **Releases** page.
+  Claude tells you what is waiting there and links to it. It never records a decision, and it
+  doesn't ask for one in a plan or a question.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [Scrum from the command line](scrum-cli.md). For the other
@@ -113,7 +115,7 @@ the branch and brings you any decisions.
 | 4 | Claude | Say "Run the full checks over the release" |
 | 5 | You | **Releases** page: **Promote to main**. This moves main to the release, without tagging |
 | 6 | You | Terminal: `git push origin main`, then wait for CI to go green |
-| 7 | You | **Releases** page: **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Released |
+| 7 | You | **Releases** page: **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Released, unless your stages continue after the tag: then **Confirm** each later stage, and the last one moves the items |
 | 8 | You | Terminal: `git push origin v1.0.0`, then wait for the release workflow |
 | 9 | Claude | Say "The release is out. Bring it forward into the sprint" |
 

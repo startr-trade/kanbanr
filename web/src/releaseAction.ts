@@ -21,8 +21,14 @@ export interface ReleaseAction {
   missing: { text: string; fix: string }[];
   /** The CLI command that does the same thing. */
   command: string;
+  /** An unmet `gate_passed`: the commit a result is needed for, and the command that records it. */
+  gate?: { commit: string; record: string };
   /** A line shown instead of a button, when there is none to offer. */
   note?: string;
+  /** A stage after the tag: the button confirms what the user checked, with an optional note (FTR-026). */
+  confirm: boolean;
+  /** A failed result for the tag: look again after a rerun, or start a patch release (FTR-026). */
+  secondary: ("runAgain" | "startPatch")[];
 }
 
 /** When the daemon was not started in the project folder, it cannot read the code repository. */
@@ -41,14 +47,29 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
       missing: [{ text, fix: "" }],
       command: `kanbanr release plan ${plan.version} <CODE>…`,
       note: text,
+      confirm: false,
+      secondary: [],
     };
   }
   const does = plan.steps.filter((s) => !s.noop && !s.blocked).map((s) => s.does);
+  // A promotion that asks for nothing and does nothing only records the pass (FTR-020 R-5). The
+  // button stays: a `note` would replace it, and an older board still promotes through its stages.
+  if (!plan.cut && !plan.confirm && plan.steps.length === 0 && plan.conditions.length === 0) {
+    does.push(`Nothing happens when you promote to ${plan.to}: it only records that the release passed it.`);
+  }
   let missing: { text: string; fix: string }[] = [];
   if (!plan.repo && plan.steps.length + plan.conditions.length > 0) {
     // Everything that reads the repository would say the same thing: say it once, with the way out.
     missing.push({ text: NO_REPO, fix: `run \`${command}\` from the project folder` });
-    for (const c of plan.conditions.filter((c) => !c.holds && c.check === "items_finished")) {
+    // A gate result needs the release tip, which the plan carries whether or not the repository
+    // could be read; without a tip there is nothing to record against.
+    // items_merged and stage_passed read the board and the release's history, not the repository.
+    const wanted = (c: { check: string }) =>
+      c.check === "items_finished" ||
+      c.check === "items_merged" ||
+      c.check === "stage_passed" ||
+      (c.check === "gate_passed" && plan.release_tip);
+    for (const c of plan.conditions.filter((c) => !c.holds && wanted(c))) {
       missing.push({ text: `${c.check}: ${c.detail}`, fix: c.fix ?? "" });
     }
   } else {
@@ -63,8 +84,19 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
       if (!missing.some((x) => x.text === m || x.fix === m)) missing.push({ text: m, fix: "" });
     }
   }
+  // A confirmation after the tag waits for a passed result for the tag; when the plan names no
+  // condition for it (a project that has no commit gate to judge by judges nothing), the result
+  // is still the thing to wait for if one is being judged (FTR-026).
+  const judged = plan.confirm && plan.tag != null && plan.tag.gate !== "";
+  const tagBlocked = judged && plan.tag?.state !== "passed";
   if (plan.ready && plan.repo) missing = [];
-  const preview = plan.cut
+  if (tagBlocked && !missing.some((m) => m.text.startsWith("tag_passed"))) {
+    missing.push({
+      text: plan.tag?.state === "failed" ? `the tag's ${plan.tag.gate} result is failed` : "no result recorded for the tag since it was made",
+      fix: "run your CI on the tag, then record its verdict",
+    });
+  }
+  const preview = plan.ships
     ? {
         tag: plan.tag_commit
           ? `${plan.tag_commit.sha.slice(0, 7)}${plan.tag_commit.sha ? " " : ""}${plan.tag_commit.subject}`.trim()
@@ -73,13 +105,21 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
         carries: (plan.preview ?? []).filter((p) => !p.ships).map((p) => ({ code: p.code, why: p.why ?? "" })),
       }
     : undefined;
+  const unmetGate = plan.conditions.find((c) => !c.holds && c.check === "gate_passed");
+  const gate =
+    unmetGate && plan.release_tip && !plan.ready
+      ? { commit: plan.release_tip, record: `kanbanr gate record <gate> --passed --commit ${plan.release_tip}` }
+      : undefined;
   return {
+    gate,
     button: writable,
     label: plan.button,
-    enabled: writable && plan.ready && plan.repo,
+    enabled: writable && plan.ready && plan.repo && !tagBlocked,
     does,
     preview,
     missing,
     command,
+    confirm: plan.confirm,
+    secondary: plan.confirm && plan.tag?.state === "failed" ? ["runAgain", "startPatch"] : [],
   };
 }

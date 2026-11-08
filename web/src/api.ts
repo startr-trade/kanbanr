@@ -182,13 +182,36 @@ export const api = {
    * Move a release to its next stage, or the named one (FEAT-183, FEAT-185): the same core
    * promotion as `kanbanr release promote`, recorded as `by`. The last stage is the cut.
    */
-  promoteRelease: (id: string, version: string, by: string, stage?: string, expect?: string) =>
+  promoteRelease: (id: string, version: string, by: string, stage?: string, expect?: string, reason?: string) =>
     writePost(
       `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/promote`,
       // `expect`: the release tip the plan showed (FEAT-212) — refused if the branch moved since.
-      { by, ...(stage ? { stage } : {}), ...(expect ? { expect } : {}) },
+      // `reason`: for a stage after the tag, what the user checked (FTR-026).
+      { by, ...(stage ? { stage } : {}), ...(expect ? { expect } : {}), ...(reason ? { reason } : {}) },
       "promote a release",
-      `kanbanr release promote ${version}${stage ? ` ${stage}` : ""}`,
+      `kanbanr release promote ${version}${stage ? ` ${stage}` : ""}${reason ? ` --note "${reason}"` : ""}`,
+    ),
+  /**
+   * Start a patch release from a release whose tag's recorded result is failed (FTR-026): a defect
+   * carrying the run's link and the notes, planned with the release's items into the patch.
+   */
+  patchFromFailedTag: (id: string, parent: string, version: string, by: string, link: string, notes: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(parent)}/patch-from-tag`,
+      { version, by, ...(link ? { link } : {}), ...(notes ? { notes } : {}) },
+      "start a patch release",
+      `kanbanr release add ${version} --patch-of ${parent} --from-failed-tag`,
+    ) as Promise<{ release: Release; defect: string; planned: string[] }>,
+  /**
+   * Record a gate's verdict for a commit (FTR-002), through the route `kanbanr gate record` uses.
+   * What your CI said, as a person saw it: kanbanr asks no server.
+   */
+  recordGate: (id: string, name: string, commit: string, passed: boolean, by: string, url = "", note = "") =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/gate-results`,
+      { name, commit, passed, by, ...(url ? { url } : {}), ...(note ? { note } : {}) },
+      "record a gate result",
+      `kanbanr gate record ${name} ${passed ? "--passed" : "--failed"} --commit ${commit}`,
     ),
   /** Every architecture decision on the board, newest first (FEAT-057). */
   getAdrs: (id: string) => getJson<Adr[]>(apiUrl(`/projects/${encodeURIComponent(id)}/adrs`)),
@@ -283,13 +306,20 @@ async function verdict(
  * not offer the action then; this is the guarantee that the standalone bundle never calls a write
  * route even if one did.
  */
+/** The token the monitor gave its own page at this start (DEF-024); a write is refused without it.
+ * Outside a page (the web checks run this module under Node) there is none to send. */
+function token(): string {
+  if (typeof document === "undefined") return "";
+  return document.querySelector<HTMLMetaElement>('meta[name="kanbanr-token"]')?.content ?? "";
+}
+
 async function postWrite(url: string, body: unknown, command: string, method = "POST"): Promise<Response> {
   if (isReadOnly()) {
     throw new Error(`This monitor is read-only. Run \`${command}\` instead.`);
   }
   return fetch(url, {
     method,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-kanbanr-token": token() },
     body: JSON.stringify(body),
   });
 }
