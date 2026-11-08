@@ -92,7 +92,7 @@ pub fn apply(
     origin: Origin,
 ) -> Result<Applied, WriteError> {
     let scope = match std::env::current_dir() {
-        Ok(cwd) => agentscope::resolve(store, &cwd),
+        Ok(cwd) => agentscope::resolve(store, &cwd, agentscope::Caller::of_process()),
         Err(_) => ProcessScope::Unscoped,
     };
     apply_as(

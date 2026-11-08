@@ -36,7 +36,8 @@ pub fn write(
     body: Option<&Value>,
     repo: Option<&Path>,
 ) -> Result<WriteOutcome, kanbanr_core::write::WriteError> {
-    let applied = kanbanr_core::write::apply(
+    // The monitor is never an agent: its start folder must not scope what it writes (DEF-027).
+    let applied = kanbanr_core::write::apply_as(
         store,
         data_dir,
         policy,
@@ -45,6 +46,7 @@ pub fn write(
         body,
         repo,
         &eventing::NullSender,
+        &kanbanr_core::agentscope::ProcessScope::Unscoped,
         // The monitor's server names the origin itself, never a header or a body (DEF-028).
         kanbanr_core::Origin::Monitor,
     )?;
@@ -62,6 +64,7 @@ pub fn sync(data_dir: &Path) -> git::SyncOutcome {
             kanbanr_core::agentscope::outside_core_refusal(
                 &cwd,
                 "the daemon's sync pushes the board",
+                kanbanr_core::agentscope::Caller::Person,
             )
         })
     {

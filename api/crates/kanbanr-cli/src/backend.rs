@@ -39,7 +39,7 @@ pub fn outside_core_refusal(data_dir: &Path, what: &str) -> Result<()> {
     let Ok(cwd) = std::env::current_dir() else {
         return Ok(());
     };
-    match agentscope::outside_core_refusal(&cwd, what) {
+    match agentscope::outside_core_refusal(&cwd, what, agentscope::Caller::of_process()) {
         Some(refusal) => Err(anyhow!(refusal)),
         None => Ok(()),
     }
@@ -95,6 +95,9 @@ pub struct Backend {
     push: PushPolicy,
     /// Set while an issue-mirror sync runs, so the sync's own write-back doesn't sync again.
     mirroring: std::cell::Cell<bool>,
+    /// Set while the coordinator's hook records a run: its writes carry no agent scope, whatever
+    /// folder the process stands in (DEF-027).
+    unscoped: std::cell::Cell<bool>,
 }
 
 impl Backend {
@@ -112,6 +115,7 @@ impl Backend {
             store,
             push,
             mirroring: std::cell::Cell::new(false),
+            unscoped: std::cell::Cell::new(false),
         }
     }
 
@@ -224,6 +228,14 @@ impl Backend {
         self.mirroring.set(true);
     }
 
+    /// Run `f` with its writes unscoped: they belong to the coordinator, not to an agent.
+    pub fn as_unscoped<T>(&self, f: impl FnOnce() -> T) -> T {
+        let was = self.unscoped.replace(true);
+        let out = f();
+        self.unscoped.set(was);
+        out
+    }
+
     /// Run `f` with the automatic issue mirror switched off (for the mirror's own writes).
     pub fn with_mirror_suppressed<T>(&self, f: impl FnOnce() -> T) -> T {
         let was = self.mirroring.replace(true);
@@ -294,17 +306,32 @@ impl Backend {
                 Ok(json!({ "name": name, "url": url }).to_string())
             });
         }
-        let applied = kanbanr_core::write::apply(
-            &self.store,
-            &self.data_dir,
-            self.push,
-            method_str(method),
-            path,
-            body.as_ref(),
-            repo,
-            &UreqSender,
-            kanbanr_core::Origin::of_cli(),
-        )
+        let applied = if self.unscoped.get() {
+            kanbanr_core::write::apply_as(
+                &self.store,
+                &self.data_dir,
+                self.push,
+                method_str(method),
+                path,
+                body.as_ref(),
+                repo,
+                &UreqSender,
+                &agentscope::ProcessScope::Unscoped,
+                kanbanr_core::Origin::of_cli(),
+            )
+        } else {
+            kanbanr_core::write::apply(
+                &self.store,
+                &self.data_dir,
+                self.push,
+                method_str(method),
+                path,
+                body.as_ref(),
+                repo,
+                &UreqSender,
+                kanbanr_core::Origin::of_cli(),
+            )
+        }
         .map_err(|e| anyhow!(e.to_string()))?;
         for w in &applied.push_failures {
             eprintln!("kanbanr: {w}");

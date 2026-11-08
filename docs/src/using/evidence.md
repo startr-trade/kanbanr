@@ -23,5 +23,5 @@ below the threshold retires: kept as a record, no longer surfaced.
 
 - `make test` — Rust unit tests + the Docker-less integration tests: the real CLI writes a local
   data dir, and `kanbanr serve` serves it read-only over a port.
-- `make itest` — builds the Docker image and runs the **testcontainers** smoke test (the image
+- `make itest` — builds the Docker image and runs the Docker smoke test (the image
   boots and serves the read-only view, no auth).

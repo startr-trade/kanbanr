@@ -732,19 +732,50 @@ pub fn next_gates(
     let position = |s: &str| config.statuses.iter().position(|x| x == s);
     let here = position(&feature.status);
     let goal_ids = charter.map(|c| c.goal_ids());
-    config
-        .transitions
-        .get(&feature.status)
+    let kind = feature.kind.as_deref();
+    // An item on a kind's path (FTR-019) meets the next stage on it, not the stages it skips.
+    let path = config.path_for(kind);
+    let reachable: Vec<&String> = match path {
+        Some(_) => config
+            .statuses
+            .iter()
+            .filter(|to| config.transition_allowed_for(&feature.status, to, kind))
+            .collect(),
+        None => config
+            .transitions
+            .get(&feature.status)
+            .into_iter()
+            .flatten()
+            .collect(),
+    };
+    let first_move = feature.status == config.default_state;
+    reachable
         .into_iter()
-        .flatten()
         .filter(|to| !config.is_no_op(to))
         .filter(|to| match (here, position(to)) {
             (Some(h), Some(t)) => t > h,
             _ => false,
         })
         .filter_map(|to| {
-            let gate = gates.get(to)?;
-            if !gate.applies_to(feature.kind.as_deref()) {
+            let mut gate = gates
+                .get(to)
+                .filter(|g| g.applies_to(kind))
+                .cloned()
+                .unwrap_or_default();
+            if let Some(path) = path {
+                crate::method::strip_gate(&mut gate, &path.method_off);
+                if first_move {
+                    for c in &path.requires {
+                        if !gate.requires.contains(c) {
+                            gate.requires.push(c.clone());
+                        }
+                    }
+                }
+            }
+            // A stage with nothing to say about this kind is not listed, as before.
+            if gates.get(to).filter(|g| g.applies_to(kind)).is_none()
+                && !(first_move && path.is_some_and(|p| !p.requires.is_empty()))
+            {
                 return None;
             }
             let mut requires_gaps =
@@ -2838,5 +2869,57 @@ mod tests {
         // No definition is not a coverage gap of its own.
         let f = item(None);
         assert!(evaluate(&f, None, &[Check::DocsCover]).is_empty());
+    }
+
+    /// FTR-019 R-5: a chore at Vision is told about Implementation and what its first move asks, not
+    /// the stages its path skips; a feature still meets Business Arch.
+    #[test]
+    fn next_gates_for_a_chore_follow_its_path() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-chore-next-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = crate::Store::new(dir.clone());
+        let config = crate::config::preset("togaf").unwrap().into_config("demo");
+        store.init_project("demo", config).unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let chore = store
+            .add_feature_of_kind("demo", "Pin", "", "M", None, Some("chore"))
+            .unwrap();
+        let feature = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        for code in [&chore.code, &feature.code] {
+            store
+                .set_feature_definition("demo", code, Some(FeatureDefinition::default()))
+                .unwrap();
+        }
+        let project = store.load("demo").unwrap();
+        let ctx = Context::load(&store, "demo", &project.config);
+        let next = |code: &str| next_gates(&project, None, project.feature(code).unwrap(), &ctx);
+
+        let chore_next = next(&chore.code);
+        let stages: Vec<&str> = chore_next.iter().map(|g| g.status.as_str()).collect();
+        assert_eq!(stages, ["Implementation"]);
+        let gaps: Vec<&str> = chore_next[0]
+            .gaps
+            .iter()
+            .map(|g| g.message.as_str())
+            .collect();
+        let said = gaps.join(" | ");
+        // The path's own questions, and the entered stage's.
+        assert!(said.contains("statement"), "{said}");
+        assert!(said.contains("requirement"), "{said}");
+        assert!(said.contains("approv"), "{said}");
+        // No Design section or design review for a chore.
+        assert!(!said.contains("Design"), "{said}");
+        assert!(
+            chore_next[0].signoffs_needed.is_empty(),
+            "{:?}",
+            chore_next[0]
+        );
+
+        let stages: Vec<String> = next(&feature.code).into_iter().map(|g| g.status).collect();
+        assert_eq!(stages, ["Business Arch"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

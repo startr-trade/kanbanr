@@ -98,7 +98,8 @@ now and then; a client re-reads what it shows when an event arrives.
 The daemon sends no cross-origin headers, so a page from another origin cannot read the API or its
 SSE streams. It answers only for the loopback names, its bound address and the hosts in
 `KANBANR_ALLOWED_HOSTS`, and a write needs the token its own page was given at this start. Anyone who
-can reach the daemon with an accepted host can read the board. See
+can reach the daemon with an accepted host can read the board. A write from a page behind a TLS
+proxy is accepted only when its origin is named in `KANBANR_ALLOWED_ORIGINS`. See
 [Hosting the monitor elsewhere](../using/the-monitor.md#hosting-the-monitor-elsewhere).
 
 ## Internal routes

@@ -443,6 +443,8 @@ export interface ProjectConfig {
   gates?: Record<string, Gate>;
   /** Which prefix an item's code gets from its kind (FEAT-217). Absent: FEAT for every item. */
   codes?: CodesConfig;
+  /** A shorter path through the stages for some kinds, keyed by kind (FTR-019). Absent: none. */
+  paths?: Record<string, KindPath>;
   /** Days or story points (FEAT-121). */
   estimate_unit?: "days" | "points";
   /** Whether the project uses sprints and releases at all (FEAT-121). */
@@ -518,6 +520,8 @@ export interface Release {
   shipped_origin?: string;
   /** The code branch, made on entering the first stage. */
   branch?: string;
+  /** The cut release this patches (FEAT-184); absent for an ordinary release. */
+  parent?: string;
   /** When the stage that tags was entered (FTR-026); a tagged release still `planned` is waiting on its later stages. */
   tagged_at?: string;
   /** The commit the tag names. */
@@ -628,6 +632,13 @@ export interface ReleasePlan {
   empty: boolean;
   /** Worth knowing, not stopping: e.g. the notes carry an earlier date (DEF-001). */
   warnings?: string[];
+}
+
+/** The stages an item of one kind passes, what its first move asks, and the method parts left out. */
+export interface KindPath {
+  stages: string[];
+  requires?: Condition[];
+  method_off?: string[];
 }
 
 export interface Gate {

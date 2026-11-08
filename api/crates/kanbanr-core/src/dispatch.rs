@@ -461,6 +461,7 @@ fn build_project_config(store: &Store, name: &str, body: &Value) -> Result<Proje
                 diagrams: Default::default(),
                 codes: Default::default(),
                 coverage: Vec::new(),
+                paths: Default::default(),
             }
         }
         None => {
@@ -542,7 +543,16 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         ),
         None => base.as_ref().map(|x| x.gates.clone()),
     };
-    let config = store.set_workflow_with_gates(
+    // Kind paths (FTR-019): null or absent means none, except that an applied process brings its own.
+    let paths: Option<BTreeMap<String, crate::config::KindPath>> =
+        match body.get("paths").filter(|v| !v.is_null()) {
+            Some(v) => Some(
+                serde_json::from_value(v.clone())
+                    .map_err(|e| CoreError::Unsupported(format!("invalid paths: {e}")))?,
+            ),
+            None => base.as_ref().map(|x| x.paths.clone()),
+        };
+    let config = store.set_workflow_with_paths(
         p,
         statuses,
         transitions,
@@ -551,6 +561,7 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
         no_ops,
         terminals,
         gates,
+        paths,
     )?;
     // A process that works in sprints, releases or points brings that with it (FEAT-122); one that
     // does not leaves the project's cadence as it was.
@@ -1228,6 +1239,12 @@ fn dispatch_routes(
                 &str_field(b, "by").unwrap_or_default(),
             )?)
         }
+        // Only an empty release that has not started (FTR-022).
+        ("DELETE", ["projects", p, "releases", version]) => ser(&crate::releases::remove(
+            store,
+            p,
+            &percent_decode(version),
+        )?),
         // `{by}`: date the release's notes and changelog today, one commit onto release/<V>, main
         // moving with it when it holds the release (DEF-001).
         ("POST", ["projects", p, "releases", version, "redate"]) => {
@@ -1397,6 +1414,32 @@ fn dispatch_routes(
             b.get("capacity").and_then(Value::as_f64),
             &str_field(b, "name").unwrap_or_default(),
         )?),
+        // `{name?, goal?, start?, length_days?, end?, capacity?}`: reshape a sprint that has not
+        // started; `capacity: null` clears it (FTR-022).
+        ("PATCH", ["projects", p, "sprints", code]) => {
+            let edit = crate::sprints::SprintEdit {
+                name: str_field(b, "name"),
+                goal: str_field(b, "goal"),
+                start: str_field(b, "start"),
+                length_days: b
+                    .get("length_days")
+                    .and_then(Value::as_u64)
+                    .map(|d| d as u32),
+                end: str_field(b, "end"),
+                capacity: match b.get("capacity") {
+                    None => None,
+                    Some(Value::Null) => Some(None),
+                    Some(v) => Some(Some(v.as_f64().ok_or_else(|| {
+                        CoreError::Unsupported("capacity must be a number or null".into())
+                    })?)),
+                },
+            };
+            ser(&crate::sprints::edit(store, p, code, &edit)?)
+        }
+        // Only an empty sprint that has not started (FTR-022).
+        ("DELETE", ["projects", p, "sprints", code]) => {
+            ser(&crate::sprints::remove(store, p, code)?)
+        }
         ("POST", ["projects", p, "sprints", code, "plan"]) => {
             let items = vec_field(b, "items").unwrap_or_default();
             ser(&crate::sprints::plan(store, p, code, &items)?)
@@ -1906,6 +1949,7 @@ fn dispatch_routes(
                     .filter(|w| !w.trim().is_empty())
                     .map(std::path::PathBuf::from),
                 hooks_ready: bool_field(b, "hooks_ready").unwrap_or(false),
+                claude_hooks_ready: bool_field(b, "claude_hooks_ready").unwrap_or(false),
             };
             let by = crate::git::verdict_author(store.data_dir(), str_field(b, "by").as_deref())?;
             ser(&crate::agentscope::issue(
@@ -2152,6 +2196,9 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| "its next stage".into())
         ),
+        ["projects", _p, "releases", v] if del => format!("remove release {}", percent_decode(v)),
+        ["projects", _p, "sprints", c] if del => format!("remove sprint {c}"),
+        ["projects", _p, "sprints", c] => format!("edit sprint {c}"),
         ["projects", _p, "releases", v, "notes"] => {
             format!("release {}: notes edited", percent_decode(v))
         }
@@ -2638,7 +2685,7 @@ mod tests {
                 "POST",
                 "/projects/demo/scopes",
                 json!({ "role": "design", "item": "FEAT-001", "by": "Ada", "note": note,
-                        "hooks_ready": true }),
+                        "hooks_ready": true, "claude_hooks_ready": true }),
             )
         };
         let first = issue("one");

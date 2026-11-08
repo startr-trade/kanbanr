@@ -389,6 +389,67 @@ pub fn add(store: &Store, id: &str, version: &str, target: &str, name: &str) -> 
     Ok(release)
 }
 
+/// Remove a release that holds nothing: planned, no stage, no branch, no notes, no patch of it and
+/// no item planned into it. Anything else is a reference (an item's release, a branch, a stage
+/// history), so it is refused and the reason named (FTR-022).
+pub fn remove(store: &Store, id: &str, version: &str) -> Result<Release> {
+    cadence_on(store, id)?;
+    let mut releases = load(store, id)?;
+    let at = releases
+        .iter()
+        .position(|r| r.version == version)
+        .ok_or_else(|| CoreError::Unsupported(format!("no release {version}")))?;
+    let r = &releases[at];
+    let refuse = |why: String| {
+        Err(CoreError::Unsupported(format!(
+            "{version} cannot be removed: {why}; only an empty release that has not started is removed"
+        )))
+    };
+    if r.state != ReleaseState::Planned {
+        return refuse("it has shipped".into());
+    }
+    if !r.stage.is_empty() {
+        return refuse(format!("it is at stage {}", r.stage));
+    }
+    if !r.branch.is_empty() {
+        return refuse(format!("it has the branch {}", r.branch));
+    }
+    if !r.notes_doc.is_empty() {
+        return refuse(format!("it has release notes ({})", r.notes_doc));
+    }
+    let patches: Vec<&str> = releases
+        .iter()
+        .filter(|o| o.parent == version)
+        .map(|o| o.version.as_str())
+        .collect();
+    if !patches.is_empty() {
+        return refuse(format!("{} patch it", patches.join(", ")));
+    }
+    let project = store.load_meta(id)?;
+    let held: Vec<&str> = project
+        .features
+        .iter()
+        .filter(|f| f.release.as_deref() == Some(version))
+        .map(|f| f.code.as_str())
+        .collect();
+    if !held.is_empty() {
+        let shown: Vec<&str> = held.iter().copied().take(10).collect();
+        let more = held.len() - shown.len();
+        return refuse(format!(
+            "it holds {}{}",
+            shown.join(", "),
+            if more > 0 {
+                format!(" and {more} more")
+            } else {
+                String::new()
+            }
+        ));
+    }
+    let removed = releases.remove(at);
+    save(store, id, &releases)?;
+    Ok(removed)
+}
+
 /// Add a patch of a cut release (FEAT-184): it records its parent, branches `release/<V>` from the
 /// parent's tag, and starts at the first stage. Any cut release can be patched (Q1), an older
 /// supported one included; the version is the user's to name.
@@ -570,7 +631,7 @@ fn ship_to(
     let Some(end) = config
         .statuses
         .iter()
-        .find(|s| is_end(s) && config.transition_allowed(&f.status, s))
+        .find(|s| is_end(s) && config.transition_allowed_for(&f.status, s, f.kind.as_deref()))
     else {
         return Err(format!("not finished — it is at {}", f.status));
     };
@@ -3416,6 +3477,70 @@ pub fn set_release_notes(
 #[cfg(test)]
 pub(crate) mod tests {
     use crate::{ProjectConfig, Store};
+
+    /// A store with releases on and a milestone, for the removal tests.
+    fn plain_board(tag: &str) -> (Store, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-relrm-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Store::new(dir.clone());
+        store
+            .init_project("shop", ProjectConfig::default_for("shop"))
+            .unwrap();
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/shop/config/cadence",
+            Some(&serde_json::json!({"releases": true})),
+        )
+        .unwrap();
+        store
+            .add_milestone("shop", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        (store, dir)
+    }
+
+    /// FTR-022 R-10: an empty planned release can be removed, and the others stay.
+    #[test]
+    fn an_empty_unstarted_release_can_be_removed() {
+        let (store, dir) = plain_board("ok");
+        super::add(&store, "shop", "v0.1.0", "", "").unwrap();
+        super::add(&store, "shop", "v0.2.0", "", "").unwrap();
+        let gone = super::remove(&store, "shop", "v0.1.0").unwrap();
+        assert_eq!(gone.version, "v0.1.0");
+        let left = super::load(&store, "shop").unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].version, "v0.2.0");
+        assert!(super::remove(&store, "shop", "v9").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-022 R-10: a release with an item, a stage, a branch or a patch stays, and says which.
+    #[test]
+    fn a_release_with_items_a_stage_or_a_patch_is_not_removed() {
+        let (store, dir) = plain_board("no");
+        for v in ["v1", "v2", "v3"] {
+            super::add(&store, "shop", v, "", "").unwrap();
+        }
+        let item = store.add_feature("shop", "A", "", "M", None).unwrap();
+        super::plan(&store, "shop", "v1", std::slice::from_ref(&item.code)).unwrap();
+        let err = super::remove(&store, "shop", "v1").unwrap_err().to_string();
+        assert!(err.contains(&item.code), "{err}");
+        let mut all = super::load(&store, "shop").unwrap();
+        all[1].stage = "rc".into();
+        all[1].branch = "release/v2".into();
+        all.push(super::Release {
+            version: "v3.0.1".into(),
+            parent: "v3".into(),
+            ..Default::default()
+        });
+        super::save(&store, "shop", &all).unwrap();
+        let err = super::remove(&store, "shop", "v2").unwrap_err().to_string();
+        assert!(err.contains("stage rc"), "{err}");
+        let err = super::remove(&store, "shop", "v3").unwrap_err().to_string();
+        assert!(err.contains("v3.0.1"), "{err}");
+        assert_eq!(super::load(&store, "shop").unwrap().len(), 4);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// FEAT-184 R-2: a patch's notes say what it patches, what it adds, and what it keeps from
     /// its parent.

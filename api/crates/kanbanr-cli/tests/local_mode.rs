@@ -3552,22 +3552,35 @@ fn where_names_the_questions_setup_must_ask() {
     };
     let (v, questions) = ask(&work);
     assert_eq!(v["git_identity"]["name"], serde_json::Value::Null);
-    assert_eq!(questions.len(), 4, "{questions:?}");
+    assert_eq!(questions.len(), 6, "{questions:?}");
     assert!(questions[0].starts_with("Where the board lives"));
     assert!(
         questions[1].starts_with("Which process")
             && questions[1].contains("saved processes first")
             && questions[1].contains("after the board is chosen")
-            && questions[3].contains("after the board's commit identity")
     );
-    assert!(questions[3].contains("git identity") && questions[3].contains("never --global"));
+    // FTR-022 R-3: the identity is one question for the board and the repository both.
+    let identity: Vec<&String> = questions
+        .iter()
+        .filter(|q| q.contains("identity"))
+        .collect();
+    assert_eq!(identity.len(), 1, "{questions:?}");
+    assert!(
+        identity[0].contains("board and this repository both")
+            && identity[0].contains("never --global"),
+        "{identity:?}"
+    );
 
     // With a repository identity, that question goes.
     ok(git_in(&base, &work, &["config", "user.name", "T"]));
     ok(git_in(&base, &work, &["config", "user.email", "t@x"]));
     let (v, questions) = ask(&work);
     assert_eq!(v["git_identity"]["name"], "T");
-    assert_eq!(questions.len(), 3, "{questions:?}");
+    assert_eq!(questions.len(), 5, "{questions:?}");
+    assert!(
+        !questions.iter().any(|q| q.contains("identity")),
+        "{questions:?}"
+    );
 
     // Set up: nothing left to ask.
     ok(run_in(
@@ -3615,7 +3628,7 @@ fn setup_asks_cadence_and_shows_git_model() {
 
     let asked = json(&["where", "--json"]);
     let questions = asked["ask_the_user"].as_array().unwrap();
-    assert_eq!(questions.len(), 4, "{questions:?}");
+    assert_eq!(questions.len(), 6, "{questions:?}");
     let cadence = questions[2].as_str().unwrap();
     assert!(
         cadence.contains("sprints and releases")
@@ -4629,6 +4642,213 @@ fn start_branches_from_integration_line() {
         merge_base.status.success(),
         "the item branch grows from integration"
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The questions `where --json` asks in a scratch repository with git's identity set.
+fn setup_questions_here(base: &std::path::Path, work: &std::path::Path) -> Vec<String> {
+    let out = run_in(base, work, &["where", "--json"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    v["ask_the_user"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|q| q.as_str().unwrap().to_string())
+        .collect()
+}
+
+/// FTR-022 R-1: sprints and releases are one question with no follow-up details, and it says to
+/// create neither.
+#[test]
+fn setup_cadence_question_asks_no_details() {
+    let (base, work) = togaf_scratch("ftr22-cadence");
+    let questions = setup_questions_here(&base, &work);
+    let cadence: Vec<&String> = questions
+        .iter()
+        .filter(|q| q.contains("sprints and releases"))
+        .collect();
+    assert_eq!(cadence.len(), 1, "{questions:?}");
+    let q = cadence[0];
+    assert!(q.contains("do not create a sprint or a release"), "{q}");
+    assert!(
+        q.contains("Do not ask a sprint's length, start or capacity"),
+        "{q}"
+    );
+    // Nothing asks for a first version, a rhythm, or a length as a question of its own.
+    assert!(
+        !questions.iter().any(|q| q.starts_with("The sprint length")
+            || q.starts_with("The first version")
+            || q.starts_with("The release rhythm")),
+        "{questions:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-022 R-2: the repository's README (or a manifest) gives the name and description to offer.
+#[test]
+fn where_json_offers_name_and_description_from_the_repository() {
+    let (base, work) = togaf_scratch("ftr22-describe");
+    let suggested = |work: &std::path::Path| -> serde_json::Value {
+        let out = run_in(&base, work, &["where", "--json"]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice(&out.stdout).unwrap()
+    };
+    let v = suggested(&work);
+    assert_eq!(v["suggested_description"], serde_json::Value::Null);
+    assert_eq!(v["suggested_name"], "shop");
+    std::fs::write(
+        work.join("README.md"),
+        "# Shop\n\nA small shop for hand-made chairs. It has a cart.\n",
+    )
+    .unwrap();
+    let v = suggested(&work);
+    assert_eq!(
+        v["suggested_description"],
+        "A small shop for hand-made chairs. It has a cart."
+    );
+    // With no README prose, a manifest's description is offered.
+    std::fs::write(work.join("README.md"), "# Shop\n").unwrap();
+    std::fs::write(
+        work.join("package.json"),
+        r#"{"name":"shop","description":"Chairs, online"}"#,
+    )
+    .unwrap();
+    assert_eq!(suggested(&work)["suggested_description"], "Chairs, online");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-022 R-4: the charter is one question for the whole of it, asked once.
+#[test]
+fn setup_asks_the_charter_as_one_confirmation() {
+    let (base, work) = togaf_scratch("ftr22-charter");
+    let questions = setup_questions_here(&base, &work);
+    let charter: Vec<&String> = questions
+        .iter()
+        .filter(|q| q.starts_with("The charter"))
+        .collect();
+    assert_eq!(charter.len(), 1, "{questions:?}");
+    assert!(
+        charter[0].contains("one question") && charter[0].contains("nothing is adopted before"),
+        "{charter:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-022 R-5: whether the project has CI is asked once, when releases are on, and recorded as
+/// `cadence.has_ci`.
+#[test]
+fn setup_asks_once_whether_the_project_has_ci() {
+    let (base, work) = togaf_scratch("ftr22-ci");
+    let questions = setup_questions_here(&base, &work);
+    let ci: Vec<&String> = questions.iter().filter(|q| q.contains("has CI")).collect();
+    assert_eq!(ci.len(), 1, "{questions:?}");
+    assert!(
+        ci[0].contains("only when releases are on") && ci[0].contains("--has-ci on|off"),
+        "{ci:?}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-022 R-7: an unstarted sprint is reshaped in place, and a started one is refused.
+#[test]
+fn sprint_edit_changes_a_planned_sprint() {
+    let (base, work) = togaf_scratch("ftr22-sprint-edit");
+    git_model_board(&base, &work, true, false);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "add", "--start", "2026-10-05", "--length", "5d"],
+    ));
+    let said = ok(run_in(
+        &base,
+        &work,
+        &[
+            "sprint",
+            "edit",
+            "SP-001",
+            "--start",
+            "2026-10-12",
+            "--goal",
+            "ship the cart",
+        ],
+    ));
+    assert!(
+        said.contains("edited SP-001 (2026-10-12 → 2026-10-16)"),
+        "{said}"
+    );
+    let said = ok(run_in(
+        &base,
+        &work,
+        &[
+            "sprint",
+            "edit",
+            "SP-001",
+            "--length",
+            "2w",
+            "--capacity",
+            "20",
+        ],
+    ));
+    assert!(said.contains("(2026-10-12 → 2026-10-25)"), "{said}");
+    let shown = ok(run_in(&base, &work, &["sprint", "list", "--json"]));
+    let v: serde_json::Value = serde_json::from_str(&shown).unwrap();
+    assert_eq!(v[0]["goal"], "ship the cart");
+    assert_eq!(v[0]["capacity"], 20.0);
+    // Length and end conflict.
+    let both = run_in(
+        &base,
+        &work,
+        &[
+            "sprint",
+            "edit",
+            "SP-001",
+            "--length",
+            "5d",
+            "--end",
+            "2026-10-30",
+        ],
+    );
+    assert!(!both.status.success());
+    ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    let late = run_in(&base, &work, &["sprint", "edit", "SP-001", "--name", "x"]);
+    assert!(!late.status.success());
+    assert!(String::from_utf8_lossy(&late.stderr).contains("has started"));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// FTR-022 R-10: an empty planned release is removed; one holding an item is not.
+#[test]
+fn release_remove_deletes_an_empty_release() {
+    let (base, work) = togaf_scratch("ftr22-release-rm");
+    git_model_board(&base, &work, false, true);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(&base, &work, &["release", "add", "v0.1.0"]));
+    ok(run_in(&base, &work, &["release", "add", "v0.2.0"]));
+    let said = ok(run_in(&base, &work, &["release", "remove", "v0.1.0"]));
+    assert!(said.contains("removed v0.1.0"), "{said}");
+    let listed = ok(run_in(&base, &work, &["release", "list"]));
+    assert!(
+        !listed.contains("v0.1.0") && listed.contains("v0.2.0"),
+        "{listed}"
+    );
+    let gone = run_in(&base, &work, &["release", "remove", "v0.1.0"]);
+    assert!(!gone.status.success());
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -6291,7 +6511,27 @@ impl ScopeFx {
             fx.ok(&fx.work, &["task", "add", code, "TL-001", "--text", "two"]);
         }
         fx.ok(&fx.work, &["git", "install-hooks"]);
+        fx.register_claude_hooks();
         fx
+    }
+
+    /// The three hooks that tell an agent from the coordinator, in the project's settings.
+    fn register_claude_hooks(&self) {
+        let dir = self.work.join(".claude");
+        std::fs::create_dir_all(&dir).unwrap();
+        let hook = |matcher: &str, command: &str| serde_json::json!([{ "matcher": matcher, "hooks": [{ "type": "command", "command": command }] }]);
+        let settings = serde_json::json!({ "hooks": {
+            "PreToolUse": [
+                hook("Bash", "kanbanr git guard")[0].clone(),
+                hook("Write|Edit", "kanbanr claude guard")[0].clone(),
+            ],
+            "PostToolUse": hook("Bash", "kanbanr capture"),
+        }});
+        std::fs::write(dir.join("settings.json"), settings.to_string()).unwrap();
+    }
+
+    fn unregister_claude_hooks(&self) {
+        let _ = std::fs::remove_file(self.work.join(".claude").join("settings.json"));
     }
 
     /// The test build first on PATH, so the git hooks run it.
@@ -6308,6 +6548,8 @@ impl ScopeFx {
             .env("PATH", self.path())
             .env("KANBANR_DATA_DIR", &self.board)
             .env("KANBANR_PROJECT", "shop")
+            // These tests run as a Claude Code session does; a person's terminal has no CLAUDECODE.
+            .env("CLAUDECODE", "1")
             .env_remove("KANBANR_BOARD_FENCE")
             .env_remove("KANBANR_PUSH")
             .env_remove("CLAUDE_CONFIG_DIR")
@@ -6383,7 +6625,13 @@ impl ScopeFx {
         v["status"].as_str().unwrap_or_default().to_string()
     }
 
+    /// The Bash guard, called as a sub-agent (the payload carries an `agent_id`).
     fn guard(&self, cwd: &Path, command: &str) -> String {
+        self.guard_as(cwd, command, true)
+    }
+
+    /// The Bash guard, called as a sub-agent or, without `agent_id`, as the coordinator.
+    fn guard_as(&self, cwd: &Path, command: &str, agent: bool) -> String {
         let mut c = Command::new(cli());
         c.args(["git", "guard"]).current_dir(cwd);
         self.env(&mut c);
@@ -6396,9 +6644,15 @@ impl ScopeFx {
             .take()
             .unwrap()
             .write_all(
-                serde_json::json!({"tool_input": {"command": command}, "cwd": cwd})
-                    .to_string()
-                    .as_bytes(),
+                {
+                    let mut p = serde_json::json!({"tool_input": {"command": command}, "cwd": cwd});
+                    if agent {
+                        p["agent_id"] = serde_json::json!("a1b2c3");
+                    }
+                    p
+                }
+                .to_string()
+                .as_bytes(),
             )
             .unwrap();
         String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
@@ -6544,6 +6798,29 @@ fn scope_claim_binds_a_worktree() {
         again.contains("already bound to .claude/worktrees/agent-t1"),
         "{again}"
     );
+}
+
+/// DEF-023 R-1: a scope issued with `--worktree` is bound at once, so its brief has no claim step,
+/// `scope brief` says the same, and the agent's own claim is still refused.
+#[test]
+fn scope_issued_with_a_worktree_prints_no_claim_step() {
+    let fx = ScopeFx::new("boundbrief");
+    let wt = fx.worktree("agent-t1");
+    let wt_arg = wt.to_string_lossy().to_string();
+    let out = fx.ok(
+        &fx.work,
+        &["scope", "issue", "build", "FEAT-001", "--worktree", &wt_arg],
+    );
+    for text in [out.clone(), fx.ok(&fx.work, &["scope", "brief", "SC-001"])] {
+        assert!(
+            !text.contains("First, in your worktree: `kanbanr scope claim"),
+            "{text}"
+        );
+        assert!(text.contains("already bound"), "{text}");
+        assert!(text.contains("nothing needs claiming"), "{text}");
+    }
+    let err = fx.refused(&wt, &["scope", "claim", "SC-001"]);
+    assert!(err.contains("scope.claim"), "{err}");
 }
 
 /// FEAT-214 R-3: an agent under a build scope records its own item's task and test states; a move,
@@ -6906,8 +7183,9 @@ fn scoped_writes_are_attributed() {
     );
 }
 
-/// FEAT-214 R-8: once a scope is revoked, or its expiry passes, every further write and commit
-/// under it is refused.
+/// FEAT-214 R-8, reshaped by DEF-027 R-3: once a scope is revoked, or its expiry passes, every
+/// further call of its agent is refused through the hooks (the agent's payload carries an
+/// `agent_id`).
 #[test]
 fn revoked_and_expired_scopes_refuse() {
     let fx = ScopeFx::new("ended");
@@ -6915,15 +7193,11 @@ fn revoked_and_expired_scopes_refuse() {
     std::fs::write(wt.join("cart.rs"), "\n").unwrap();
     fx.ok_git(&wt, &["add", "cart.rs"]);
     fx.ok(&fx.work, &["scope", "revoke", "SC-001", "--reason", "done"]);
-    let err = fx.refused(
-        &wt,
-        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
-    );
-    assert!(err.contains("agent scope SC-001 was revoked by A"), "{err}");
-    assert!(err.contains("(done)"), "{err}");
-    let commit = fx.git(&wt, &["commit", "-q", "-m", "x\n\nRefs: kanbanr:FEAT-001"]);
-    assert!(!commit.status.success());
-    assert!(String::from_utf8_lossy(&commit.stderr).contains("was revoked"));
+    for command in ["ls", "kanbanr task state FEAT-001 TL-001 T1 InProgress"] {
+        let err = fx.guard(&wt, command);
+        assert!(err.contains("agent scope SC-001 was revoked by A"), "{err}");
+        assert!(err.contains("(done)"), "{err}");
+    }
 
     // The coordinator takes the first agent's worktree away, and issues a second scope.
     fx.ok_git(
@@ -6941,15 +7215,90 @@ fn revoked_and_expired_scopes_refuse() {
     );
     std::fs::write(&file, ended).unwrap();
     fx.ok_git(&fx.board, &["commit", "-q", "-am", "the clock passes"]);
-    let err = fx.refused(
-        &wt2,
-        &["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"],
-    );
+    let err = fx.guard(&wt2, "ls");
     assert!(
         err.contains("agent scope SC-002 expired at 2020-01-01 00:00 UTC"),
         "{err}"
     );
     assert!(err.contains("kanbanr scope renew SC-002 --for 4h"), "{err}");
+}
+
+/// DEF-027 R-3: revoking frees a shell standing in the worktree at once. A session there is
+/// governed while the scope lives; after the revoke the coordinator's hook call is let through, and
+/// so is the same command run from that folder.
+#[test]
+fn revoking_a_scope_frees_a_shell_standing_in_its_worktree() {
+    let fx = ScopeFx::new("freed");
+    let wt = fx.claimed("agent-t1");
+    let state = ["task", "state", "FEAT-001", "TL-001", "T1", "InProgress"];
+    // Alive: the session in the worktree is held to the scope (FEAT-002 is not its item).
+    let err = fx.refused(
+        &wt,
+        &["task", "state", "FEAT-002", "TL-001", "T1", "InProgress"],
+    );
+    assert!(err.contains("SC-001"), "{err}");
+    let out = fx.ok(&fx.work, &["scope", "revoke", "SC-001", "--reason", "done"]);
+    assert!(
+        out.contains("the agent's next tool call is refused"),
+        "{out}"
+    );
+    // Revoked: the agent is stopped, the coordinator is not, wherever its shell stands.
+    assert!(fx.guard(&wt, "ls").contains("was revoked by A"));
+    assert_eq!(fx.guard_as(&wt, "ls", false), "");
+    fx.ok(&wt, &state);
+    fx.ok(
+        &wt,
+        &["task", "state", "FEAT-002", "TL-001", "T1", "InProgress"],
+    );
+}
+
+/// DEF-027 R-1: a person at their own terminal (no CLAUDECODE) is never scoped, even standing in an
+/// agent's worktree, so they can install the hooks from there.
+#[test]
+fn a_person_in_an_agent_worktree_can_install_hooks() {
+    let fx = ScopeFx::new("person");
+    let wt = fx.claimed("agent-t1");
+    let run = |session: bool| {
+        let mut c = Command::new(cli());
+        c.args(["identity", "--name", "P", "--email", "p@x"])
+            .current_dir(&wt);
+        fx.env(&mut c);
+        if !session {
+            c.env_remove("CLAUDECODE");
+        }
+        c.output().unwrap()
+    };
+    let session = run(true);
+    assert!(!session.status.success(), "a session there stays governed");
+    let person = run(false);
+    assert!(
+        person.status.success(),
+        "{}",
+        String::from_utf8_lossy(&person.stderr)
+    );
+    let mut c = Command::new(cli());
+    c.args(["hooks", "install"]).current_dir(&wt);
+    fx.env(&mut c);
+    c.env_remove("CLAUDECODE");
+    let o = c.output().unwrap();
+    assert!(
+        !String::from_utf8_lossy(&o.stderr).contains("refused by agent scope"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+}
+
+/// DEF-027 R-8: a scope is issued only where the Claude Code hooks that identify the caller are
+/// registered, and the refusal names `kanbanr hooks install`.
+#[test]
+fn scope_issue_needs_the_claude_code_hooks() {
+    let fx = ScopeFx::new("needhooks");
+    fx.unregister_claude_hooks();
+    let err = fx.refused(&fx.work, &["scope", "issue", "build", "FEAT-001"]);
+    assert!(err.contains("kanbanr hooks install"), "{err}");
+    assert!(err.contains("Claude Code's hooks"), "{err}");
+    fx.register_claude_hooks();
+    fx.ok(&fx.work, &["scope", "issue", "build", "FEAT-001"]);
 }
 
 /// FEAT-214 R-9: a build scope's commits made after its item's tasks last changed are named by
@@ -7033,6 +7382,80 @@ fn main_session_unchanged_with_scopes_on_board() {
         fx.ok(&fx.work, &["scope", "here"])
             .contains("no agent scope applies here")
     );
+}
+
+/// DEF-015 R-1: an agent under a scope walks a process through on a temporary board: the guard
+/// lets the commands that name it through, they run in the claimed worktree, and the real board is
+/// left byte for byte as it was.
+#[test]
+fn an_agent_walks_a_process_through_on_a_temporary_board() {
+    let fx = ScopeFx::new("tempboard");
+    let wt = fx.claimed("agent-walk");
+    let before = snapshot(&fx.board);
+    let walk = std::env::temp_dir().join(format!("kanbanr-walk-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&walk);
+    let at = walk.to_string_lossy().into_owned();
+    for command in [
+        format!("kanbanr --data-dir {at} init walk --no-hooks"),
+        format!("kanbanr --data-dir {at} milestone add --name First"),
+        format!("kanbanr --data-dir {at} feature add --title Walked --milestone MS-001"),
+        format!("KANBANR_DATA_DIR={at} KANBANR_PROJECT=walk kanbanr board"),
+    ] {
+        let out = fx.guard(&wt, &command);
+        assert!(out.trim().is_empty(), "{command} was refused: {out}");
+    }
+    // A real board stays refused beside it.
+    let out = fx.guard(
+        &wt,
+        &format!("kanbanr --data-dir {} board", fx.board.display()),
+    );
+    assert!(out.contains("never another"), "{out}");
+    fx.ok(
+        &wt,
+        &[
+            "--data-dir",
+            &at,
+            "init",
+            "walk",
+            "--no-hooks",
+            "--author",
+            "T",
+            "--email",
+            "t@x",
+        ],
+    );
+    fx.ok(
+        &wt,
+        &[
+            "--data-dir",
+            &at,
+            "--project",
+            "walk",
+            "milestone",
+            "add",
+            "--name",
+            "First",
+        ],
+    );
+    fx.ok(
+        &wt,
+        &[
+            "--data-dir",
+            &at,
+            "--project",
+            "walk",
+            "feature",
+            "add",
+            "--title",
+            "Walked",
+            "--milestone",
+            "MS-001",
+        ],
+    );
+    let board = fx.ok(&wt, &["--data-dir", &at, "--project", "walk", "board"]);
+    assert!(board.contains("Walked"), "{board}");
+    assert!(snapshot(&fx.board) == before, "the real board is untouched");
+    let _ = std::fs::remove_dir_all(&walk);
 }
 
 /// FEAT-214 R-13: in an agent worktree, the commands that change kanbanr itself or write outside the
@@ -9102,6 +9525,107 @@ gates:
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// Implementation once it says why it exists and how it is verified, and is refused a stage off its
+/// path, with the path in the message.
+#[test]
+fn a_chore_moves_straight_from_vision_to_implementation() {
+    let (base, work) = togaf_scratch("chore-path");
+    togaf_board(&base, &work);
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let process = base.join("paths.yaml");
+    std::fs::write(
+        &process,
+        r#"statuses: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+default_state: Vision
+displayed_states: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+terminal_states: [Operations]
+transitions:
+  Vision: [Business Arch]
+  Business Arch: [System Design, Vision]
+  System Design: [Implementation, Business Arch]
+  Implementation: [Migration, System Design]
+  Migration: [Operations, Implementation]
+  Operations: [Migration]
+gates:
+  Implementation:
+    requires: [approved]
+paths:
+  chore:
+    stages: [Vision, Implementation, Migration, Operations]
+    requires: [statement, goals, requirements]
+"#,
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "workflow",
+            "--from-file",
+            process.to_str().unwrap(),
+        ],
+    ));
+    for title in ["Pin the CI image", "Bump the lint"] {
+        ok(run_in(
+            &base,
+            &work,
+            &[
+                "feature",
+                "add",
+                "--title",
+                title,
+                "--milestone",
+                "MS-001",
+                "--kind",
+                "chore",
+            ],
+        ));
+    }
+    // Asked why it exists and how it is verified before its first move.
+    let bare = run_in(&base, &work, &["move", "FEAT-002", "Implementation"]);
+    assert!(!bare.status.success());
+    let why = String::from_utf8_lossy(&bare.stderr);
+    assert!(why.contains("definition"), "{why}");
+
+    let def = base.join("chore.yaml");
+    std::fs::write(
+        &def,
+        "statement: Pin the CI image\ngoals: [G-1]\nrequirements:\n  - kind: functional\n    \
+         text: \"THE SYSTEM SHALL pin the image.\"\n    tests:\n      - name: ci::pinned\n        \
+         state: planned\n",
+    )
+    .unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "define",
+            "FEAT-002",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    ok(run_in(&base, &work, &["approve", "FEAT-002"]));
+    ok(run_in(
+        &base,
+        &work,
+        &["move", "FEAT-002", "Implementation"],
+    ));
+
+    // The other chore may not enter a stage off its path.
+    let off = run_in(&base, &work, &["move", "FEAT-003", "Business Arch"]);
+    assert!(!off.status.success());
+    let why = String::from_utf8_lossy(&off.stderr);
+    assert!(why.contains("its path is Vision"), "{why}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 
 /// DEF-028 R-4: the CLI names the origin of a verdict itself: `terminal` outside a Claude Code
 /// session, `conversation` inside one (`CLAUDECODE` set).

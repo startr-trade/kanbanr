@@ -140,38 +140,21 @@ record the failed result and run `kanbanr release add <NEW VERSION> --patch-of <
 notes, plans it and the release's items into a patch branched from the tag, and marks the failed
 release as superseded. The tag stays in git.
 
-### Decide when an item is done for its sprint
+### Closing a sprint before its release
 
-Under the TOGAF preset only **Operations** counts as done, and items reach Operations when their release is cut.
-A `release` sign-off or a last task leaves a planned item where it is.
-So if you close a sprint before its release is cut, an item that is merged and sitting in Migration
-is carried over, to the backlog by default:
+Under the TOGAF preset Migration counts as done for a sprint, and Operations is when a release ships
+the item. So closing a sprint before its release is cut carries over only work that has not merged,
+to the backlog by default. An item still at Implementation is carried:
 
 ```text
 closed SP-001; carried FEAT-001 → backlog
 ```
 
-If your sprints end before your releases do, mark Migration as done. Export the workflow, add one
-line, and load it back:
-
-```text
-kanbanr config workflow --export > workflow.yaml
-```
-
-```yaml
-gates:
-  Migration:
-    done: true
-```
-
-```text
-kanbanr config workflow --from-file workflow.yaml
-```
-
-The same close then says `nothing carried over`, and the release still takes the item to Operations
-when it is cut. If you always cut the release before closing the sprint, you can leave this alone.
-
 ## Planning a sprint
+
+Setup creates no sprint or release; make them when you are ready. A sprint can be changed until it
+starts (`kanbanr sprint edit SP-001 --goal "…" --start 2026-11-10`), and an empty sprint or release
+made by mistake is removed with `kanbanr sprint remove SP-001` or `kanbanr release remove v1.0.0`.
 
 ```text
 kanbanr sprint add --start 2026-11-03 --length 2w --goal "Carts survive a return"
@@ -259,6 +242,22 @@ v1.0.0 cannot go to main yet — nothing was changed:
   - items_finished (main): FEAT-001 would carry over — FEAT-001 carries over: … no sign-off 'release' — `kanbanr signoff FEAT-001 release`.
 ```
 
+### Chores
+
+A process can give a kind its own path. The built-in `togaf` process gives `chore` the path
+Vision → Implementation → Migration → Operations, skipping Business Arch and System Design. `kanbanr process show togaf` lists each kind's path under
+"Lighter paths".
+
+```bash
+kanbanr feature add --title "Pin the CI image" --milestone MS-001 --kind chore
+```
+
+A chore's first move off Vision asks the path's own conditions (`statement`, `goals`,
+`requirements`, and `ears` where the path lists it) as well as the entered stage's gate, so it still
+records why it exists and how it is verified. A move to a phase off the path is refused, and the
+message names the path. `approved` and the `release` sign-off stay in force; the `design` and `design-review` parts do not apply. An item whose kind is changed to `chore` while it's at a
+phase off the path keeps the ordinary transitions, so it is never stranded.
+
 ## Handing work to sub-agents
 
 A scope limits what an agent working in its own worktree may do, and kanbanr enforces it. Issue one
@@ -279,6 +278,11 @@ refused by agent scope SC-001: agents never push. The coordinator reviews the br
 
 When the agent finishes its tasks, the item stays where it is until you review the branch and move
 it. See [Sub-agents and agent scopes](../using/with-claude.md#sub-agents-and-agent-scopes).
+
+Stay in the project folder. Never `cd` into an agent's worktree: look inside with `git -C <path>`,
+`make -C <path>`, `npm --prefix <path>` or a subshell `(cd <path> && …)`. If your shell is already
+there, `cd` back to the project folder. Revoking a scope (`kanbanr scope revoke SC-…`) stops the
+agent on its next tool call and never restricts you.
 
 ## Releasing
 

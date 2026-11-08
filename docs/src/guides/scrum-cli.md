@@ -130,6 +130,10 @@ branch, or promoting to candidate is refused.
 
 ## Planning a sprint
 
+Setup creates no sprint or release; make them when you are ready. A sprint can be changed until it
+starts (`kanbanr sprint edit SP-001 --goal "…" --start 2026-11-10`), and an empty sprint or release
+made by mistake is removed with `kanbanr sprint remove SP-001` or `kanbanr release remove v1.0.0`.
+
 ```text
 kanbanr milestone add --name "Carts"
 kanbanr sprint add --start 2026-11-03 --length 2w --goal "Carts survive a return"
@@ -265,11 +269,32 @@ The item now counts as done for the sprint. `kanbanr check FEAT-001` says it is 
 which only the cut does. Your checkout stays on the item's branch, so switch back when you want the
 line.
 
+### Chores
+
+A process can give a kind its own path. The built-in `scrum` process gives `chore` the path
+Backlog → Ready → In Progress → Testing → Done → Released, skipping Review. `kanbanr process show scrum` lists each kind's path under
+"Lighter paths".
+
+```bash
+kanbanr feature add --title "Pin the CI image" --milestone MS-001 --kind chore
+```
+
+A chore's first move off Backlog asks the path's own conditions (`statement`, `goals`,
+`requirements`, and `ears` where the path lists it) as well as the entered stage's gate, so it still
+records why it exists and how it is verified. A move to a stage off the path is refused, and the
+message names the path. Ready still asks for the statement, goals, requirements and a size, and In Progress still asks for `approved` and the current sprint; the `design` and `design-review` parts do not apply. An item whose kind is changed to `chore` while it's at a
+stage off the path keeps the ordinary transitions, so it is never stranded.
+
 ## Handing work to sub-agents
 
 A scope limits what an agent working in its own worktree may do, and kanbanr enforces it. The agent
 may record its own item's tasks and tests and commit on its item's branch. It can't move items,
 approve or push. See [Sub-agents and agent scopes](../using/with-claude.md#sub-agents-and-agent-scopes).
+
+Stay in the project folder. Never `cd` into an agent's worktree: look inside with `git -C <path>`,
+`make -C <path>`, `npm --prefix <path>` or a subshell `(cd <path> && …)`. If your shell is already
+there, `cd` back to the project folder. Revoking a scope (`kanbanr scope revoke SC-…`) stops the
+agent on its next tool call and never restricts you.
 
 ## Releasing
 

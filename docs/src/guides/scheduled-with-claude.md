@@ -90,6 +90,10 @@ Claude gives each agent a scope, which kanbanr enforces. An agent can record its
 results and commit on its branch. It can't move items, approve anything or push. See
 [Sub-agents and agent scopes](../using/with-claude.md#sub-agents-and-agent-scopes).
 
+Claude stays in the project folder while an agent works, and looks inside the agent's worktree
+without moving into it (`git -C`), so a scope never gets in your way or Claude's. Revoking an agent's
+scope stops that agent on its next tool call and never restricts you.
+
 ## Pushing
 
 When items have merged and you're happy, push from your terminal:

@@ -206,6 +206,50 @@ mod tests {
         d
     }
 
+    /// DEF-027 R-9: the skill tells the coordinator to stay in the project folder and look inside an
+    /// agent's worktree with `git -C`.
+    #[test]
+    fn skill_keeps_the_coordinator_out_of_agent_worktrees() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        let section = skill
+            .split("**Issue a scope before each sub-agent.**")
+            .nth(1)
+            .expect("the skill has the sub-agent scope section")
+            .split("\n## ")
+            .next()
+            .unwrap();
+        for want in [
+            "git -C",
+            "never `cd` into an agent",
+            "project folder",
+            "never restricts you",
+        ] {
+            assert!(
+                section.contains(want),
+                "the sub-agent section says {want:?}"
+            );
+        }
+    }
+
+    /// DEF-015 R-4: the skill tells the coordinator what a temporary board is and the form an agent
+    /// uses to name one.
+    #[test]
+    fn skill_names_the_temporary_board_form() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        for want in ["temporary board", "$TMPDIR", "--data-dir"] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+        assert!(!skill.contains("temporary boards only"));
+    }
+
     /// FEAT-200 R-18: the skill tells Claude how to write diagrams that draw — quote flowchart
     /// labels, plain words in sequence messages, never `end` as an id, `kanbanr doctor` after — and
     /// what a `diagrams_valid` gate asks of it.
@@ -249,6 +293,20 @@ mod tests {
         assert!(
             skill.contains("**A design-review covers the whole spec as it was when given.**"),
             "the skill says a design-review covers the whole spec"
+        );
+    }
+
+    /// DEF-023: the skill says a `--worktree` scope is bound at once and its brief has no claim step.
+    #[test]
+    fn skill_says_a_worktree_flag_binds_the_scope() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        assert!(
+            skill.contains("--worktree") && skill.contains("no claim step"),
+            "the skill says --worktree binds the scope and the brief has no claim step"
         );
     }
 

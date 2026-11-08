@@ -179,6 +179,18 @@ export const api = {
       `kanbanr release add ${version}`,
     ),
   /**
+   * Remove a release that holds nothing (FTR-022), as `kanbanr release remove` does; the daemon
+   * refuses any other and says why.
+   */
+  removeRelease: (id: string, version: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}`,
+      undefined,
+      "remove a release",
+      `kanbanr release remove ${version}`,
+      "DELETE",
+    ),
+  /**
    * Move a release to its next stage, or the named one (FEAT-183, FEAT-185): the same core
    * promotion as `kanbanr release promote`, recorded as `by`. The last stage is the cut.
    */

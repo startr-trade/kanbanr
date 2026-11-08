@@ -55,10 +55,9 @@ Expose it beyond localhost only behind a reverse proxy you control.
 window onto your own files. To reach it from another machine, **don't change the bind**; instead put
 a **reverse proxy** in front that terminates **TLS** and adds **authentication**, proxying to the
 unchanged `127.0.0.1:8080`. (kanbanr deliberately ships none of this — sharing is otherwise the git
-remote's job; see [the architecture overview](../architecture/overview.md).) Behind such a proxy the
-monitor is for reading: name the proxy's host in `KANBANR_ALLOWED_HOSTS`, and take decisions on the
-monitor on your own machine, because it accepts a write only from its own `http://` page. Two minimal
-working examples:
+remote's job; see [the architecture overview](../architecture/overview.md).) Name the proxy's host in
+`KANBANR_ALLOWED_HOSTS`. To take decisions through the proxy as well, name the origin the browser
+sees in `KANBANR_ALLOWED_ORIGINS`; see below. Two minimal working examples:
 
 **Caddy** (automatic HTTPS + basic auth) — `Caddyfile`:
 
@@ -98,18 +97,44 @@ server {
 ```
 
 The proxy enforces who gets in and encrypts the connection. The monitor answers only for the
-loopback names (`localhost`, `127.0.0.1`, `[::1]`), the address it is bound to and the hosts named in
+loopback names (`localhost`, `127.0.0.1`, `[::1]`, on any port, so a port published by Docker works), the address it is bound to and the hosts named in
 the `KANBANR_ALLOWED_HOSTS` variable, so name the proxy's host there, as a comma-separated list of
 `name[:port]` (for example `KANBANR_ALLOWED_HOSTS=board.example.com kanbanr serve`). A request for any
 other host gets a 403 that says so. A monitor started without `--allow-writes` stays read-only, so an
 authenticated viewer can't mutate your board through it.
 
 A monitor started with `--allow-writes`, or through `kanbanr review --ui`, takes writes only from its
-own page. At each start it makes a new random token and puts it in the page it serves; a write needs
+own page, or from an origin you name (below). At each start it makes a new random token and puts it in the page it serves; a write needs
 that token, and when the browser sends an `Origin` it must be the monitor's own. It sends no
 cross-origin headers, so no other page open in your browser can read the board through it or record a
 decision. A script that posted to a write route without the token is refused, with a message that
 says why.
+
+**Writes on an address other machines can reach.** A monitor with writes on refuses to start when its
+bind is not `127.0.0.1`, `[::1]` or `localhost`, because it gives its token to any page it serves, so
+anyone who can open the page can record an approval, a sign-off or a release. The message names the
+address and the two ways to accept it: pass `--allow-remote-writes` to `kanbanr serve`, or set
+`KANBANR_ALLOW_REMOTE_WRITES=1`. `kanbanr review --ui` has no flag, so it needs the variable if
+`KANBANR_BIND` is reachable. A monitor without `--allow-writes` starts on any address, as before.
+
+**Writes through a TLS proxy.** Bind the monitor to loopback, proxy to it, and name where the
+browser's writes come from. The monitor accepts a write when its Origin is its own `http://` host or
+one named in `KANBANR_ALLOWED_ORIGINS` (comma-separated, scheme and host and optional port, such as
+`https://board.example.com`); it never infers an origin from `X-Forwarded-Proto` or any other header.
+Naming a host in `KANBANR_ALLOWED_HOSTS` does not name an origin:
+
+```bash
+KANBANR_ALLOWED_HOSTS=board.example.com \
+KANBANR_ALLOWED_ORIGINS=https://board.example.com \
+  kanbanr serve --allow-writes
+```
+
+The proxy goes to the loopback bind, so no `--allow-remote-writes` is needed. nginx's default
+`proxy_pass` sends `Host: 127.0.0.1:8080`, which the monitor already answers for; Caddy's
+`reverse_proxy` passes the original host, which needs `KANBANR_ALLOWED_HOSTS`. The proxy must
+authenticate, because the token proves a write came from the monitor's page, not who the person is.
+In a container, pass the same settings with `-e KANBANR_ALLOWED_ORIGINS=https://board.example.com`
+(or `environment:` in compose).
 
 ### Hosting the monitor elsewhere
 
