@@ -135,6 +135,54 @@ fn shown_spec_rev(store: &Store, p: &str, code: &str, name: &str, b: &Value) -> 
     Ok(())
 }
 
+/// What the person settled when giving `docs-folded` (FTR-013). With a code repository the flags are
+/// recomputed: the sign-off is refused while a flagged text is missing from `checked` (or is
+/// corrected without a code), and entries for texts no longer flagged are dropped. Without one,
+/// `checked` is kept as sent. Any other sign-off records nothing.
+fn signoff_checked(
+    store: &Store,
+    p: &str,
+    code: &str,
+    name: &str,
+    body: &Value,
+    repo: Option<&std::path::Path>,
+) -> Result<Vec<crate::models::Checked>> {
+    use crate::models::{Checked, Outcome};
+    if name != crate::method::DOCS_FOLDED {
+        return Ok(Vec::new());
+    }
+    let sent: Vec<Checked> = match body.get("checked") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|e| CoreError::Unsupported(format!("checked: {e}")))?,
+    };
+    let Some(repo) = repo else {
+        return Ok(sent);
+    };
+    let flags = crate::docdrift::flags_for_item(store, p, code, repo)?;
+    let mut kept = Vec::new();
+    let mut missing = Vec::new();
+    for flag in &flags {
+        let key = flag.target.key();
+        match sent.iter().find(|c| c.target == key) {
+            Some(c) if c.outcome == Outcome::Corrected && c.correction.trim().is_empty() => {
+                missing.push(format!("{key} (a correction needs its code)"));
+            }
+            Some(c) => kept.push(c.clone()),
+            None => missing.push(key),
+        }
+    }
+    if !missing.is_empty() {
+        return Err(CoreError::Unsupported(format!(
+            "docs-folded waits on {} flagged text(s) that name what {code} changed: {}. Read each, \
+             then confirm it is still right or file a correction",
+            missing.len(),
+            missing.join(", ")
+        )));
+    }
+    Ok(kept)
+}
+
 fn str_field(body: &Value, k: &str) -> Option<String> {
     body.get(k).and_then(|v| v.as_str()).map(String::from)
 }
@@ -713,6 +761,28 @@ fn dispatch_routes(
             }
             ser(&report)
         }
+        // The docs and items that name what work changed and have not changed since (FTR-013).
+        ("GET", ["projects", p, "drift"]) => {
+            let since = query_param(query, "since").filter(|s| !s.is_empty());
+            let item = query_param(query, "item").filter(|s| !s.is_empty());
+            ser(&crate::docdrift::report(
+                store,
+                p,
+                since.as_deref(),
+                item.as_deref(),
+                repo,
+            )?)
+        }
+        ("GET", ["projects", p, "features", code, "drift"]) => {
+            let since = query_param(query, "since").filter(|s| !s.is_empty());
+            ser(&crate::docdrift::report(
+                store,
+                p,
+                since.as_deref(),
+                Some(code),
+                repo,
+            )?)
+        }
         // Drift between the board and the branches (FEAT-191), on demand.
         ("GET", ["projects", p, "git", "doctor"]) => {
             let repo = repo.ok_or_else(|| {
@@ -971,6 +1041,9 @@ fn dispatch_routes(
             if let Some(note) = &moved.note {
                 out["note"] = json!(note);
             }
+            if !moved.drift.is_empty() {
+                out["drift"] = json!(moved.drift);
+            }
             ser(&out)
         }
         ("PUT", ["projects", p, "features", code, "tests", requirement, test]) => {
@@ -1051,7 +1124,8 @@ fn dispatch_routes(
                     return Err(CoreError::Unsupported(why));
                 }
             }
-            let (feature, held) = store.signoff_feature_reported_as(
+            let checked = signoff_checked(store, p, code, &name, b, repo)?;
+            let (feature, held) = store.signoff_feature_checked_as(
                 p,
                 code,
                 &name,
@@ -1059,6 +1133,7 @@ fn dispatch_routes(
                 &note,
                 &doc,
                 &crate::origin::from_body(b),
+                &checked,
             )?;
             let mut out = serde_json::to_value(&feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;

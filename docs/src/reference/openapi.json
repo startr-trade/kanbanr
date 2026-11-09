@@ -704,6 +704,27 @@
           }
         ]
       },
+      "Checked": {
+        "description": "One flagged text and how it was settled.",
+        "properties": {
+          "correction": {
+            "description": "The code of the filed correction, when the outcome is `corrected`.",
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/Outcome"
+          },
+          "target": {
+            "description": "`doc:<path>`, `adr:<id>` or `item:<CODE>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "outcome"
+        ],
+        "type": "object"
+      },
       "CodesConfig": {
         "additionalProperties": true,
         "description": "Which prefix an item's code gets from its kind (FEAT-217). Absent: every item is `FEAT-`, as\nbefore, and absent stays absent on disk. Kinds sharing a prefix share its counter.",
@@ -735,6 +756,34 @@
         "required": [
           "sha",
           "subject"
+        ],
+        "type": "object"
+      },
+      "CommitRef": {
+        "description": "A commit that changed a flagged name.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "names": {
+            "description": "The names this commit changed that the text holds.",
+            "items": {
+              "$ref": "#/components/schemas/Name"
+            },
+            "type": "array"
+          },
+          "sha": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha",
+          "at",
+          "item",
+          "names"
         ],
         "type": "object"
       },
@@ -1620,6 +1669,44 @@
         ],
         "type": "object"
       },
+      "Flag": {
+        "description": "A linked text that names something changed after it last changed. A flag says which text names\nwhich changed name, never that the text is wrong.",
+        "properties": {
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/CommitRef"
+            },
+            "type": "array"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/Hit"
+            },
+            "type": "array"
+          },
+          "target": {
+            "$ref": "#/components/schemas/Target"
+          },
+          "target_changed_at": {
+            "description": "When the text last changed, RFC 3339.",
+            "type": "string"
+          },
+          "via": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "target",
+          "via",
+          "hits",
+          "commits",
+          "target_changed_at"
+        ],
+        "type": "object"
+      },
       "Gap": {
         "description": "One thing an item is missing.",
         "properties": {
@@ -1794,6 +1881,27 @@
         },
         "required": [
           "status"
+        ],
+        "type": "object"
+      },
+      "Hit": {
+        "description": "A name a text holds, with the lines it is on (1-based).",
+        "properties": {
+          "lines": {
+            "items": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          }
+        },
+        "required": [
+          "name",
+          "lines"
         ],
         "type": "object"
       },
@@ -2186,6 +2294,35 @@
         ],
         "type": "object"
       },
+      "Name": {
+        "description": "Something a change put in the code that a text may describe.",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/NameKind"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ],
+        "type": "object"
+      },
+      "NameKind": {
+        "description": "What kind of thing a [`Name`] is; it decides how a text must hold it to match (see [`scan`]).",
+        "enum": [
+          "flag",
+          "command",
+          "env",
+          "route",
+          "config_key",
+          "name",
+          "file"
+        ],
+        "type": "string"
+      },
       "NextGate": {
         "description": "What moving an item on to one next status would ask, and what it still lacks (FEAT-117).",
         "properties": {
@@ -2333,6 +2470,21 @@
           "fetched"
         ],
         "type": "object"
+      },
+      "Outcome": {
+        "description": "How a flagged text was settled at the sign-off (FTR-013).",
+        "oneOf": [
+          {
+            "const": "confirmed",
+            "description": "The person read it and it is still right.",
+            "type": "string"
+          },
+          {
+            "const": "corrected",
+            "description": "The person filed a correction (its code is on the record).",
+            "type": "string"
+          }
+        ]
       },
       "Part": {
         "description": "One part of the method.",
@@ -3426,6 +3578,10 @@
           "definition": {
             "$ref": "#/components/schemas/FeatureDefinition"
           },
+          "drift_skipped": {
+            "description": "Why the drift check did not run: no code repository is attached. The sign-off is offered\nall the same, and this is never read as \"no drift\" (FTR-013).",
+            "type": "string"
+          },
           "finished": {
             "description": "The item is finished work (DEF-013): listed only because its approval lapsed.",
             "type": "boolean"
@@ -3468,6 +3624,13 @@
           },
           "title": {
             "type": "string"
+          },
+          "to_check": {
+            "description": "`docs-folded` is among them: the texts that name something the item changed since they\nlast changed, for the person to confirm or correct (FTR-013). `None` when the check was\nskipped (see `drift_skipped`) or the sign-off is not asked.",
+            "items": {
+              "$ref": "#/components/schemas/Flag"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -3516,6 +3679,13 @@
           },
           "by": {
             "type": "string"
+          },
+          "checked": {
+            "description": "What the person checked when giving `docs-folded` (FTR-013): each text flagged as naming\nsomething the item changed, with whether they confirmed it is still right or filed a\ncorrection. Absent on a record without flags, or one an older kanbanr wrote.",
+            "items": {
+              "$ref": "#/components/schemas/Checked"
+            },
+            "type": "array"
           },
           "doc": {
             "description": "A board doc holding the record — minutes, a checklist.",
@@ -3900,6 +4070,40 @@
           "state"
         ],
         "type": "object"
+      },
+      "Target": {
+        "description": "A text linked to an item.",
+        "properties": {
+          "id": {
+            "description": "The doc path, the ADR id or the item code.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/TargetKind"
+          },
+          "path": {
+            "description": "The doc path under the board's `docs/`, for a doc or an ADR; empty for an item.",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "title"
+        ],
+        "type": "object"
+      },
+      "TargetKind": {
+        "description": "What kind of text a flag points at.",
+        "enum": [
+          "doc",
+          "adr",
+          "item"
+        ],
+        "type": "string"
       },
       "Task": {
         "additionalProperties": true,

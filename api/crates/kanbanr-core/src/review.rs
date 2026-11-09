@@ -117,6 +117,10 @@ pub fn line_diff(old: &str, new: &str) -> Vec<DiffLine> {
     out
 }
 
+/// What the Review entry says when no code repository is attached (FTR-013 R-9).
+pub const DRIFT_SKIPPED: &str =
+    "the drift check needs the code repository: start the monitor from the project folder";
+
 /// One item waiting for agreement.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -132,6 +136,15 @@ pub struct ReviewEntry {
     /// changes none (DEF-033).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub changes_no_documents: bool,
+    /// `docs-folded` is among them: the texts that name something the item changed since they
+    /// last changed, for the person to confirm or correct (FTR-013). `None` when the check was
+    /// skipped (see `drift_skipped`) or the sign-off is not asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_check: Option<Vec<crate::docdrift::Flag>>,
+    /// Why the drift check did not run: no code repository is attached. The sign-off is offered
+    /// all the same, and this is never read as "no drift" (FTR-013).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drift_skipped: Option<String>,
     pub started_unapproved: String,
     pub definition: FeatureDefinition,
     /// What a verdict given from this brief is pinned to (FEAT-159).
@@ -368,7 +381,23 @@ pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result
             )
             .then(|| definition.part_changes())
             .flatten();
+            let (to_check, drift_skipped) = if signoffs_needed
+                .iter()
+                .any(|s| s == crate::method::DOCS_FOLDED)
+            {
+                match ctx.code_repo.as_deref() {
+                    None => (None, Some(DRIFT_SKIPPED.to_string())),
+                    Some(repo) => match crate::docdrift::flags_for_item(store, p, &f.code, repo) {
+                        Ok(flags) => (Some(flags), None),
+                        Err(e) => (None, Some(format!("the drift check failed: {e}"))),
+                    },
+                }
+            } else {
+                (None, None)
+            };
             Some(ReviewEntry {
+                to_check,
+                drift_skipped,
                 changes,
                 code: f.code.clone(),
                 title: f.title.clone(),

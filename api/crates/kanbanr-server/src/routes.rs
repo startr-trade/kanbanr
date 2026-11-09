@@ -251,7 +251,7 @@ fn repo_for<'a>(st: &'a AppState, dispatch_path: &str) -> Option<&'a std::path::
 
 /// The reads that answer from the code repository (FEAT-213): `…/git/model`, `…/git/doctor`,
 /// `…/guards`, `…/releases/<V>/plan` (FEAT-212) and `…/releases/<V>/notes` (FEAT-216), and the readiness and review reads that judge the repository
-/// docs of an item (DEF-033), query
+/// docs of an item (DEF-033), and the drift reads (FTR-013), query
 /// string aside.
 fn reads_code_repo(dispatch_path: &str) -> bool {
     let path = dispatch_path.split('?').next().unwrap_or(dispatch_path);
@@ -266,6 +266,8 @@ fn reads_code_repo(dispatch_path: &str) -> bool {
             | ["projects", _, "review"]
             | ["projects", _, "readiness"]
             | ["projects", _, "features", _, "readiness"]
+            | ["projects", _, "drift"]
+            | ["projects", _, "features", _, "drift"]
     )
 }
 

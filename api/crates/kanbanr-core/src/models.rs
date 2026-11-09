@@ -336,6 +336,11 @@ pub struct Signoff {
     /// kanbanr's value survives.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub origin: String,
+    /// What the person checked when giving `docs-folded` (FTR-013): each text flagged as naming
+    /// something the item changed, with whether they confirmed it is still right or filed a
+    /// correction. Absent on a record without flags, or one an older kanbanr wrote.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checked: Vec<Checked>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -345,6 +350,29 @@ pub struct Signoff {
     )]
     #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
+}
+
+/// How a flagged text was settled at the sign-off (FTR-013).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    /// The person read it and it is still right.
+    Confirmed,
+    /// The person filed a correction (its code is on the record).
+    Corrected,
+}
+
+/// One flagged text and how it was settled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Checked {
+    /// `doc:<path>`, `adr:<id>` or `item:<CODE>`.
+    pub target: String,
+    pub outcome: Outcome,
+    /// The code of the filed correction, when the outcome is `corrected`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub correction: String,
 }
 
 impl Signoff {
@@ -1439,6 +1467,47 @@ mod tests {
             parts: d.part_revs(),
             ..Default::default()
         });
+    }
+
+    /// FTR-013 R-6: a sign-off records each flagged text and how it was settled, nothing when none
+    /// was flagged, reads a record without the field as before, and keeps a key it does not know.
+    #[test]
+    fn a_signoff_records_what_was_checked_and_reads_without_it() {
+        let plain = Signoff {
+            id: "docs-folded".into(),
+            by: "Ada".into(),
+            at: "2026-11-08T10:00:00Z".into(),
+            ..Default::default()
+        };
+        let text = crate::yaml::to_string(&plain).unwrap();
+        assert!(!text.contains("checked"), "{text}");
+        let back: Signoff = crate::yaml::from_str(&text).unwrap();
+        assert!(back.checked.is_empty());
+        assert_eq!(back, plain);
+
+        let checked = Signoff {
+            checked: vec![
+                Checked {
+                    target: "doc:design/data.md".into(),
+                    outcome: Outcome::Confirmed,
+                    correction: String::new(),
+                },
+                Checked {
+                    target: "item:FEAT-2".into(),
+                    outcome: Outcome::Corrected,
+                    correction: "DEF-040".into(),
+                },
+            ],
+            ..plain
+        };
+        let text = crate::yaml::to_string(&checked).unwrap();
+        assert!(text.contains("outcome: corrected"), "{text}");
+        assert_eq!(crate::yaml::from_str::<Signoff>(&text).unwrap(), checked);
+
+        let future = format!("{text}newer_key: 7\n");
+        let kept: Signoff = crate::yaml::from_str(&future).unwrap();
+        assert_eq!(kept.checked.len(), 2);
+        assert!(crate::yaml::to_string(&kept).unwrap().contains("newer_key"));
     }
 
     /// FTR-018 R-1: a part for every piece of a definition, blank answers excepted.

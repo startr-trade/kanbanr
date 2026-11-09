@@ -25,6 +25,7 @@ pub mod coverage;
 pub mod daylog;
 pub mod diagrams;
 pub mod dispatch;
+pub mod docdrift;
 pub mod docs;
 pub mod docsbuilt;
 pub mod doctor;
@@ -2362,6 +2363,194 @@ requirements:
         );
         complete_first_task(&store, &code, &list);
         sign().unwrap();
+    }
+
+    /// FTR-013: a `docs-folded` board whose work is done, with a doc that names `--since` (listed
+    /// by its front matter), and a code repository where the item changed `--since` after the doc
+    /// was last written. Returns the board, its folder, the item's code and the code repository.
+    fn drift_board() -> (Store, tempdir::TempDirLike, String, std::path::PathBuf) {
+        use crate::docdrift::testkit::{code_commit, git_env, scratch};
+        let (store, d, code, list) = docs_folded_board();
+        crate::git::ensure_repo_as(&d.path, Some(("Ada", "ada@example.com")));
+        store
+            .write_doc(
+                "demo",
+                "design/data.md",
+                &format!("---\nitems: [{code}]\n---\n\n# Data\n\nRun with --since.\n"),
+            )
+            .unwrap();
+        assert!(crate::git::commit(
+            &d.path,
+            "Ada",
+            "ada@example.com",
+            "board"
+        ));
+        complete_first_task(&store, &code, &list);
+        let repo = scratch("lib-code");
+        git_env(&repo, &["init", "-q", "-b", "main"], None);
+        code_commit(
+            &repo,
+            "src/a.rs",
+            "let a = \"--since\";\n",
+            &format!("add\n\nRefs: kanbanr:{code}"),
+            "2099-01-01T00:00:00+00:00",
+        );
+        (store, d, code, repo)
+    }
+
+    fn sign_docs_folded(
+        store: &Store,
+        code: &str,
+        repo: &std::path::Path,
+        checked: serde_json::Value,
+    ) -> crate::Result<String> {
+        crate::dispatch::dispatch_in(
+            store,
+            "POST",
+            &format!("/projects/demo/features/{code}/signoff/docs-folded"),
+            Some(&serde_json::json!({"by": "Ada L", "checked": checked})),
+            Some(repo),
+        )
+    }
+
+    /// FTR-013 R-5: `docs-folded` is accepted only when the request records, for each flagged
+    /// text, that it was confirmed or a correction was filed.
+    #[test]
+    fn signing_off_docs_folded_needs_each_flagged_text_confirmed_or_corrected() {
+        use serde_json::json;
+        let (store, _d, code, repo) = drift_board();
+        let current = || {
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&code)
+                .unwrap()
+                .signoff_current("docs-folded")
+                .cloned()
+        };
+        let err = sign_docs_folded(&store, &code, &repo, json!([]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("doc:design/data.md"), "{err}");
+        assert!(current().is_none());
+
+        let err = sign_docs_folded(
+            &store,
+            &code,
+            &repo,
+            json!([{"target": "doc:design/data.md", "outcome": "corrected"}]),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("needs its code"), "{err}");
+
+        sign_docs_folded(
+            &store,
+            &code,
+            &repo,
+            json!([
+                {"target": "doc:design/data.md", "outcome": "corrected", "correction": "DEF-040"},
+                {"target": "doc:design/gone.md", "outcome": "confirmed"}
+            ]),
+        )
+        .unwrap();
+        let recorded = current().unwrap();
+        assert_eq!(
+            recorded.checked.len(),
+            1,
+            "a text no longer flagged is dropped"
+        );
+        assert_eq!(recorded.checked[0].correction, "DEF-040");
+    }
+
+    fn entry_for<'a>(q: &'a [serde_json::Value], code: &str) -> &'a serde_json::Value {
+        q.iter().find(|e| e["code"] == code).unwrap()
+    }
+
+    /// FTR-013 R-5: the Review entry for an offered `docs-folded` lists the texts to check, with
+    /// the names found and the lines; an entry for a quiet board lists none.
+    #[test]
+    fn the_review_entry_lists_the_texts_to_check_when_docs_folded_is_offered() {
+        let (store, _d, code, repo) = drift_board();
+        let out =
+            crate::dispatch::dispatch_in(&store, "GET", "/projects/demo/review", None, Some(&repo))
+                .unwrap();
+        let q: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        let e = entry_for(&q, &code);
+        let flags = e["to_check"].as_array().expect("to_check");
+        assert_eq!(flags.len(), 1, "{e}");
+        assert_eq!(flags[0]["target"]["id"], "design/data.md");
+        assert_eq!(flags[0]["hits"][0]["name"]["text"], "--since");
+        assert_eq!(flags[0]["hits"][0]["lines"], serde_json::json!([7]));
+        assert!(e.get("drift_skipped").is_none());
+    }
+
+    /// FTR-013 R-9: with no code repository the entry says the check was skipped and why, offers
+    /// the sign-off as before, and does not say there is nothing to check.
+    #[test]
+    fn the_review_entry_says_the_drift_check_was_skipped_without_a_repository() {
+        let (store, _d, code, _repo) = drift_board();
+        let q = review_queue(&store);
+        let e = entry_for(&q, &code);
+        assert_eq!(e["signoffs_needed"], serde_json::json!(["docs-folded"]));
+        assert!(e.get("to_check").is_none(), "{e}");
+        assert!(
+            e["drift_skipped"]
+                .as_str()
+                .unwrap()
+                .contains("code repository"),
+            "{e}"
+        );
+        // Offered as before: the sign-off is accepted with no `checked` at all.
+        crate::dispatch::dispatch(
+            &store,
+            "POST",
+            &format!("/projects/demo/features/{code}/signoff/docs-folded"),
+            Some(&serde_json::json!({"by": "Ada L"})),
+        )
+        .unwrap();
+    }
+
+    /// FTR-013 R-8: the drift routes answer with the flags the command prints, grouped by text,
+    /// stamped with when they were generated; without a code repository they say so.
+    #[test]
+    fn the_drift_route_answers_with_the_same_flags_as_the_command() {
+        let (store, _d, code, repo) = drift_board();
+        let get = |path: &str, repo: Option<&std::path::Path>| {
+            crate::dispatch::dispatch_in(&store, "GET", path, None, repo)
+        };
+        let report = crate::docdrift::report(&store, "demo", None, None, Some(&repo)).unwrap();
+        assert_eq!(report.flags.len(), 1, "{report:?}");
+        assert_eq!(report.flags[0].target.id, "design/data.md");
+        assert!(!report.generated_at.is_empty() && !report.since.is_empty());
+
+        let routed: crate::docdrift::Report =
+            serde_json::from_str(&get("/projects/demo/drift", Some(&repo)).unwrap()).unwrap();
+        assert_eq!(routed.flags, report.flags);
+        let for_item: crate::docdrift::Report = serde_json::from_str(
+            &get(
+                &format!("/projects/demo/features/{code}/drift"),
+                Some(&repo),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(for_item.flags, report.flags);
+        assert_eq!(for_item.since, "", "an item's own history is read whole");
+        let narrow: crate::docdrift::Report = serde_json::from_str(
+            &get("/projects/demo/drift?since=2099-06-01", Some(&repo)).unwrap(),
+        )
+        .unwrap();
+        assert!(narrow.flags.is_empty(), "{narrow:?}");
+        assert_eq!(narrow.since, "2099-06-01");
+        let other: crate::docdrift::Report =
+            serde_json::from_str(&get("/projects/demo/drift?item=FEAT-999", Some(&repo)).unwrap())
+                .unwrap();
+        assert!(other.flags.is_empty());
+
+        let err = get("/projects/demo/drift", None).unwrap_err().to_string();
+        assert!(err.contains("code repository"), "{err}");
+        assert!(get("/projects/demo/drift?since=--bad", Some(&repo)).is_err());
     }
 
     /// DEF-033 R-6: a `docs-folded` sign-off given before the check existed stays recorded and
