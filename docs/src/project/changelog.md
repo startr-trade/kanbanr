@@ -29,6 +29,15 @@ All notable changes to kanbanr are documented here. The format follows
   offered it once its tasks are all done, with the line "changes no documents". `kanbanr check`
   prints `Documents not built yet:` and the sign-off request is refused naming them. A sign-off
   given earlier stays recorded.
+- **The local release gate is no longer fooled by a cached image layer or by a build agent's
+  capture records (MNT-006).** `make ci` built the release image from Docker's cache, so an old
+  `apt-get upgrade` layer kept a package with a fixable HIGH finding; it now builds with `--pull` and
+  a build argument, `KANBANR_APT_REFRESH`, that changes every run and is declared just before that
+  layer (`make docker-build` does the same). The test-capture hook now takes the scope from the
+  directory the tests ran in, not the one the hook started in, so a build agent's recorded results
+  carry its `Agent-Scope` trailer, only for its own item, and the board check accepts them; an
+  unmarked record still fails. A new check, `scripts/check-tracked-files.sh`, refuses a tracked
+  `*.orig` or `*.rej` file, and the stray `local_mode.rs.orig` is removed.
 
 - **A batch refuses a field its operation does not take, instead of ignoring it and reporting
   success (DEF-018).** `{"op":"feature.edit","code":"FEAT-001","sprint":""}` used to print

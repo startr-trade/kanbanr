@@ -297,7 +297,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       - name: shellcheck the installer and its verifier
-        run: shellcheck --shell=sh --severity=warning scripts/install.sh scripts/verify-install.sh
+        run: shellcheck --shell=sh --severity=warning scripts/install.sh scripts/verify-install.sh scripts/check-tracked-files.sh
 
       # pwsh is preinstalled on GitHub's ubuntu runners. Parsing is not running, but it catches
       # the unbalanced-quote and bad-cmdlet mistakes that would otherwise only surface on a
@@ -418,6 +418,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      # A merge tool's backup file is not source (MNT-006).
+      - name: No tracked merge leftovers (*.orig, *.rej)
+        run: |
+          set -eu
+          python3 -m unittest -q scripts/tests/test_check_tracked_files.py
+          sh scripts/check-tracked-files.sh
 
       # The guides cover designing a pipeline and describe a product by what a person does (DOC-007).
       - name: The guides cover the pipeline and a product people use

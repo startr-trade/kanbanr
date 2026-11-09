@@ -1012,6 +1012,16 @@ pub fn resolve(store: &Store, cwd: &Path, caller: Caller) -> ProcessScope {
     )
 }
 
+/// The directory a test-capture hook's evidence belongs to (MNT-006): the `cwd` its payload names
+/// when that is an absolute path to an existing directory, else the directory this process runs in.
+/// The hook is started by the session that owns it, while the tool ran in the agent's worktree.
+pub fn capture_dir(payload_cwd: Option<&str>, process_cwd: &Path) -> PathBuf {
+    match payload_cwd.map(Path::new) {
+        Some(p) if p.is_absolute() && p.is_dir() => p.to_path_buf(),
+        _ => process_cwd.to_path_buf(),
+    }
+}
+
 /// Why the agent in `cwd` must stop: its worktree's pointer names a scope that is revoked or
 /// expired. `None` for a live scope, for no scope and for a board that holds none. A hook asks it
 /// for every call of an agent, so a revoke takes effect at once (DEF-027).
@@ -2262,6 +2272,19 @@ mod tests {
                 "{why}"
             );
         }
+    }
+
+    /// MNT-006 R-2: capture work belongs to the directory its payload names, when that exists.
+    #[test]
+    fn capture_runs_in_the_directory_the_payload_names() {
+        let process = Path::new("/process/dir");
+        let here = std::env::temp_dir();
+        let named = here.to_str().unwrap();
+        assert_eq!(capture_dir(Some(named), process), here);
+        assert_eq!(capture_dir(None, process), process);
+        assert_eq!(capture_dir(Some("relative/dir"), process), process);
+        assert_eq!(capture_dir(Some("/no/such/dir/anywhere"), process), process);
+        assert_eq!(capture_dir(Some(""), process), process);
     }
 
     /// DEF-027: which paths are an agent's worktree, without touching the disk.

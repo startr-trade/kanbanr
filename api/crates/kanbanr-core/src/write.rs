@@ -91,10 +91,72 @@ pub fn apply(
     sender: &dyn eventing::WebhookSender,
     origin: Origin,
 ) -> Result<Applied, WriteError> {
-    let scope = match std::env::current_dir() {
-        Ok(cwd) => agentscope::resolve(store, &cwd, agentscope::Caller::of_process()),
-        Err(_) => ProcessScope::Unscoped,
-    };
+    match std::env::current_dir() {
+        Ok(cwd) => apply_from(
+            store, data_dir, policy, method, path, body, repo, sender, origin, &cwd,
+        ),
+        Err(_) => apply_as(
+            store,
+            data_dir,
+            policy,
+            method,
+            path,
+            body,
+            repo,
+            sender,
+            &ProcessScope::Unscoped,
+            origin,
+        ),
+    }
+}
+
+/// [`apply`] for a write whose evidence was made in `dir`, not in this process's directory: the
+/// scope is resolved from `dir` (MNT-006). A test-capture hook runs in the session that owns the
+/// hook, while the tool ran in a build agent's worktree; the write belongs to that worktree's scope.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_from(
+    store: &Store,
+    data_dir: &Path,
+    policy: PushPolicy,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    repo: Option<&Path>,
+    sender: &dyn eventing::WebhookSender,
+    origin: Origin,
+    dir: &Path,
+) -> Result<Applied, WriteError> {
+    apply_from_as(
+        store,
+        data_dir,
+        policy,
+        method,
+        path,
+        body,
+        repo,
+        sender,
+        origin,
+        dir,
+        agentscope::Caller::of_process(),
+    )
+}
+
+/// [`apply_from`] for a given caller (the process's own is read from the environment).
+#[allow(clippy::too_many_arguments)]
+fn apply_from_as(
+    store: &Store,
+    data_dir: &Path,
+    policy: PushPolicy,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    repo: Option<&Path>,
+    sender: &dyn eventing::WebhookSender,
+    origin: Origin,
+    dir: &Path,
+    caller: agentscope::Caller,
+) -> Result<Applied, WriteError> {
+    let scope = agentscope::resolve(store, dir, caller);
     apply_as(
         store, data_dir, policy, method, path, body, repo, sender, &scope, origin,
     )
@@ -498,6 +560,156 @@ mod tests {
             Some(&by)
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MNT-006 R-2: a write made for evidence from another directory is held to that directory's
+    /// scope: this process stands in an unscoped folder, `dir` is a claimed agent worktree, and the
+    /// commit carries the worktree's trailer; from the unscoped folder it carries none.
+    #[test]
+    fn a_write_applied_from_a_directory_is_recorded_under_that_directory_scope() {
+        let base = std::env::temp_dir().join(format!("kanbanr-write-from-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (dir, code) = (base.join("board"), base.join("code"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&code).unwrap();
+        git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = Store::new(dir.clone());
+        let write = |scope: &ProcessScope, m: &str, p: &str, b: Value| {
+            apply_as(
+                &store,
+                &dir,
+                PushPolicy::Auto,
+                m,
+                p,
+                Some(&b),
+                None,
+                &eventing::NullSender,
+                scope,
+                Origin::Terminal,
+            )
+            .unwrap()
+        };
+        let none = ProcessScope::Unscoped;
+        write(&none, "POST", "/projects", json!({"name": "demo"}));
+        write(
+            &none,
+            "POST",
+            "/projects/demo/milestones",
+            json!({"name": "M", "code": "M"}),
+        );
+        write(
+            &none,
+            "POST",
+            "/projects/demo/features",
+            json!({"title": "T", "milestone": "M"}),
+        );
+        write(
+            &none,
+            "POST",
+            "/projects/demo/features/FEAT-001/move",
+            json!({"to": "In Progress"}),
+        );
+        write(
+            &none,
+            "POST",
+            "/projects/demo/features/FEAT-001/todos",
+            json!({"description": "w"}),
+        );
+        for text in ["one", "two"] {
+            write(
+                &none,
+                "POST",
+                "/projects/demo/features/FEAT-001/todos/TL-001/tasks",
+                json!({"text": text}),
+            );
+        }
+
+        // A code repository with an agent's worktree, and a scope bound to it on the board.
+        let g = |args: &[&str]| crate::coderepo::git(&code, args).unwrap();
+        g(&["init", "-q", "-b", "main"]);
+        g(&[
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@x",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ]);
+        g(&[
+            "worktree",
+            "add",
+            "-q",
+            ".claude/worktrees/agent-1",
+            "-b",
+            "agent-1",
+        ]);
+        let agent_dir = code.join(".claude/worktrees/agent-1");
+        let scope = agentscope::Scope {
+            id: "SC-001".into(),
+            project: "demo".into(),
+            role: agentscope::Role::Build,
+            item: "FEAT-001".into(),
+            operations: agentscope::Role::Build.operations(),
+            branch: Some("agent-1".into()),
+            base: None,
+            issued_by: "Ada".into(),
+            issued_at: crate::now_rfc3339(),
+            expires_at: "2999-01-01T00:00:00Z".into(),
+            note: String::new(),
+            worktree: Some(".claude/worktrees/agent-1".into()),
+            claimed_at: Some(crate::now_rfc3339()),
+            revoked_at: None,
+            revoked_by: None,
+            revoked_reason: None,
+            extra: Default::default(),
+        };
+        std::fs::write(
+            dir.join("projects")
+                .join("demo")
+                .join(agentscope::SCOPES_FILE),
+            crate::yaml::to_string(&vec![scope]).unwrap(),
+        )
+        .unwrap();
+        assert!(git::commit_local(&dir, "bind a scope"));
+        let facts = crate::coderepo::worktree_facts(&agent_dir).unwrap();
+        agentscope::write_pointer(
+            &facts.git_dir,
+            &agentscope::PointerFile {
+                scope: "SC-001".into(),
+                project: "demo".into(),
+            },
+        )
+        .unwrap();
+
+        let task = |dir_of_evidence: &Path, state: &str| {
+            apply_from_as(
+                &store,
+                &dir,
+                PushPolicy::Auto,
+                "PUT",
+                "/projects/demo/features/FEAT-001/todos/TL-001/tasks/T1",
+                Some(&json!({"state": state})),
+                None,
+                &eventing::NullSender,
+                Origin::Terminal,
+                dir_of_evidence,
+                agentscope::Caller::Session,
+            )
+            .unwrap()
+        };
+        task(&code, "InProgress");
+        let log = crate::coderepo::git(&dir, &["log", "-1", "--format=%B"]).unwrap();
+        assert!(!log.contains("Agent-Scope:"), "unscoped folder: {log}");
+        task(&agent_dir, "Completed");
+        let log = crate::coderepo::git(&dir, &["log", "-1", "--format=%B"]).unwrap();
+        assert!(
+            log.contains("Agent-Scope: SC-001 (build, by the agent for FEAT-001)"),
+            "{log}"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

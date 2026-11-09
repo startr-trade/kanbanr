@@ -152,6 +152,23 @@ class ScopedWrites(Board):
             ],
         )
 
+    def capture_record(self, body: str) -> list[str] | None:
+        self.write("projects/p/scopes.yaml", SCOPES)
+        self.commit("issue agent scope SC-1 (build, FEAT-1)", at="2026-10-22T01:00:00Z")
+        base = self.head()
+        self.write("projects/p/features/Planned/FEAT-1.yaml", "code: FEAT-1\nrun: yes\n")
+        self.write("projects/p/events/2026-10.yaml", "- run\n")
+        self.commit("record 6 test result(s) from a run", body, "2026-10-22T02:15:00Z")
+        return ci_local.allowed_during_run(self.board, base, self.head())
+
+    def test_a_capture_record_with_the_trailer_passes(self) -> None:
+        allowed = self.capture_record(TRAILER)
+        self.assertIsNotNone(allowed)
+        self.assertIn("SC-1: record 6 test result(s) from a run", allowed or [])
+
+    def test_an_unmarked_capture_record_still_fails(self) -> None:
+        self.assertIsNone(self.capture_record(""))
+
     def assert_fails(self, why: str) -> None:
         self.assertIsNone(ci_local.allowed_during_run(self.board, self.base, self.head()), why)
         git(self.board, "reset", "-q", "--hard", self.base)
@@ -199,6 +216,39 @@ class ScopedWrites(Board):
         self.write("projects/p/config.yaml", "name: p\nx: 1\n")
         self.commit("issue agent scope SC-3 (build, FEAT-1)", at="2026-10-22T01:40:00Z")
         self.assert_fails("a scope act that touches the config")
+
+
+class ImageBuild(unittest.TestCase):
+    """The release image's package layer is never taken from the cache (MNT-006)."""
+
+    def dockerfile(self) -> str:
+        return (ci_local.ROOT / "docker/Dockerfile").read_text()
+
+    def test_the_gate_pulls_and_refreshes_the_package_layer(self) -> None:
+        command = ci_local.image_build_command("abc", "2026-11-08", "tok")
+        self.assertIn("--pull", command)
+        self.assertIn("KANBANR_APT_REFRESH=tok", command)
+        self.assertEqual(command[:2], ["docker", "build"])
+
+    def test_each_run_refreshes_with_a_new_value(self) -> None:
+        self.assertNotEqual(ci_local.refresh_token(), ci_local.refresh_token())
+
+    def test_the_dockerfile_declares_the_refresh_before_its_package_layer(self) -> None:
+        text = self.dockerfile()
+        self.assertIsNone(ci_local.dockerfile_refreshes_packages(text))
+        declaration = 'ARG KANBANR_APT_REFRESH=""\n'
+        self.assertIn(declaration, text)
+        missing = text.replace(declaration, "")
+        self.assertIn("does not declare", ci_local.dockerfile_refreshes_packages(missing) or "")
+        run = text.index("RUN echo \"package refresh")
+        after = text.replace(declaration, "")
+        end = after.rindex("rm -rf /var/lib/apt/lists/*\n") + len("rm -rf /var/lib/apt/lists/*\n")
+        after = after[:end] + declaration + after[end:]
+        self.assertIn("after the apt-get upgrade", ci_local.dockerfile_refreshes_packages(after) or "")
+        unused = text.replace('RUN echo "package refresh: ${KANBANR_APT_REFRESH:-none}"', "RUN true")
+        self.assertNotEqual(unused, text)
+        self.assertIn("does not use", ci_local.dockerfile_refreshes_packages(unused) or "")
+        self.assertGreater(run, 0)
 
 
 class RecordsItsVerdict(unittest.TestCase):

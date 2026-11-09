@@ -222,6 +222,38 @@ impl Backend {
         Ok(out)
     }
 
+    /// A data-route write whose evidence was made in `dir`, held to the agent scope of `dir`
+    /// rather than of this process's directory (MNT-006: the test-capture hook).
+    pub fn write_from(
+        &self,
+        dir: &std::path::Path,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<String> {
+        let dry_run = dispatch::is_dry_run(body.as_ref());
+        let applied = kanbanr_core::write::apply_from(
+            &self.store,
+            &self.data_dir,
+            self.push,
+            method_str(method),
+            path,
+            body.as_ref(),
+            None,
+            &UreqSender,
+            kanbanr_core::Origin::of_cli(),
+            dir,
+        )
+        .map_err(|e| anyhow!(e.to_string()))?;
+        for w in &applied.push_failures {
+            eprintln!("kanbanr: {w}");
+        }
+        if let (false, Some(project)) = (dry_run, project_of(path)) {
+            self.auto_mirror(&project);
+        }
+        Ok(applied.body)
+    }
+
     /// Turn the automatic issue mirror off for this backend (tests must never reach GitHub).
     #[cfg(test)]
     pub fn disable_auto_mirror(&self) {

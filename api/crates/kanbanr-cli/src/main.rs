@@ -5499,11 +5499,12 @@ fn project_head_rev() -> Option<String> {
 fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     let payload: Value = serde_json::from_str(&hook_stdin()).unwrap_or(Value::Null);
     let caller = kanbanr_core::agentscope::Caller::of_hook(&payload);
-    let cwd = payload["cwd"]
-        .as_str()
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_default();
+    // The tool ran in the payload's folder; the hook's own process may stand in another session's
+    // (MNT-006). Where it ran decides which scope its evidence belongs to.
+    let cwd = kanbanr_core::agentscope::capture_dir(
+        payload["cwd"].as_str(),
+        &std::env::current_dir().unwrap_or_default(),
+    );
     let text = capture_text(&payload);
     if kanbanr_core::evidence::parse_results(&text).is_empty() {
         return Ok(()); // not a test run, or nothing recognizable: stay quiet
@@ -5524,7 +5525,7 @@ fn run_capture(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     if caller == kanbanr_core::agentscope::Caller::Coordinator {
         client.as_unscoped(|| client.write(Method::Post, &path, Some(batch)))?;
     } else {
-        client.write(Method::Post, &path, Some(batch))?;
+        client.write_from(&cwd, Method::Post, &path, Some(batch))?;
     }
     eprintln!("kanbanr: recorded {n} test result(s) from this run");
     Ok(())
