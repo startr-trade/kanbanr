@@ -191,7 +191,7 @@ Each move is refused until its gate is met, and the refusal says what's missing.
 | **Business Arch** | Statement, goal, who, what, why, requirements, approval | `kanbanr feature define`, `kanbanr approve` |
 | **System Design** | How, where, approval | `kanbanr feature define`, `kanbanr approve` |
 | **Implementation** | A test named for every requirement, approval, a `## Design` section in the spec, the `design-review` sign-off | `kanbanr feature edit`, `kanbanr signoff`, `kanbanr start` |
-| **Migration** | Requirements proven by green tests, docs updated, the `docs-folded` sign-off | `kanbanr test`, `kanbanr signoff`, `kanbanr move` |
+| **Migration** | Requirements proven by green tests, docs updated, the `docs-folded` sign-off (offered once the item's documents are built; `kanbanr check` names any that are not) | `kanbanr test`, `kanbanr signoff`, `kanbanr move` |
 | **Operations** | Green tests, the `release` sign-off | `kanbanr signoff` records the sign-off; the cut makes the move |
 
 **Adding keeps your approval; changing lapses it.** Text added to the definition is reviewed at the

@@ -8,6 +8,15 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **A docs-folded sign-off is offered only once the work it confirms is done (DEF-033).** The
+  Review page offered **Sign off docs-folded** on items still being built, because they named no
+  board docs and the check had nothing to wait for. Now the sign-off waits until every board doc the
+  item names has changed, every repository doc its Design lists under `Affects docs` has changed on
+  its branch, and every task that writes docs is complete. An item that names no documents is
+  offered it once its tasks are all done, with the line "changes no documents". `kanbanr check`
+  prints `Documents not built yet:` and the sign-off request is refused naming them. A sign-off
+  given earlier stays recorded.
+
 - **A batch refuses a field its operation does not take, instead of ignoring it and reporting
   success (DEF-018).** `{"op":"feature.edit","code":"FEAT-001","sprint":""}` used to print
   `applied 1 operation(s)` and change nothing. Every operation now refuses an unknown field, naming
