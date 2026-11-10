@@ -342,6 +342,9 @@ kanbanr release notes v1.1.0
 kanbanr release notes v1.1.0 --edit
 ```
 
+They are read from the path they were written to, so changing `kanbanr config release-prepare
+--notes` later leaves earlier releases' notes readable.
+
 If you save notes after main has moved to the release, main moves with them, and you must push it
 again:
 

@@ -610,6 +610,12 @@ kanbanr release notes v0.3.0 --edit          # $VISUAL / $EDITOR on a copy; comm
 kanbanr release notes v0.3.0 --file notes.md # or `-` for stdin
 ```
 
+The notes are read from the path they were first written to, which the release records, so
+changing `kanbanr config release-prepare --notes` later does not lose earlier releases' notes. A
+shipped release's notes are read at its tag. A release recorded before this was kept is found at
+any path the setting has named in the board's history, and a miss names every path and ref looked
+at.
+
 A save is one commit onto `release/<V>`, made the way the preparation commit is: nothing checked
 out, `[no-ref] release notes, written by kanbanr` and a `Kanbanr-Release:` trailer. The same text
 makes no commit. Each save also applies the notes listings again, so a listing added to the config

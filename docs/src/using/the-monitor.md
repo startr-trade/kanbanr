@@ -385,6 +385,9 @@ same whichever you use. A read-only monitor shows the command instead.
   **Save** commits it onto the branch, nothing checked out, and shows the new commit; **Cancel**
   discards it. This is `kanbanr release notes <VERSION> --edit`. The notes are read from the
   repository the monitor was started in; a read-only monitor shows them with the command instead.
+  They are read from the path they were written to, so changing the notes path later leaves earlier
+  releases' notes in place; a shipped release's are read at its tag. When none are found, the
+  message lists every path and ref looked at.
 
 Across several projects ([Portfolio](portfolio.md)):
 
