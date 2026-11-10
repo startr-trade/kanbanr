@@ -174,8 +174,9 @@ decide:
   sign-off is accepted only once every text is settled, and it records how.
 - When an item is merged, the flagged texts are listed on stderr.
 - `kanbanr drift` lists them for the board, grouped by text, for the items with commits since
-  `--since` (default: the latest shipped release's tag date, else 60 days back). `--json` adds when
-  it was generated, so two runs can be compared.
+  `--since` (default: the latest shipped release's tag date, else 60 days back). A date means from
+  the start of that day, UTC, so the result does not depend on the hour you run it. `--json` adds
+  when it was generated, so two runs can be compared.
 
 Without the code repository the check is skipped, the Review page says so, and the sign-off is
 offered as before. A skipped check is never read as "no drift".

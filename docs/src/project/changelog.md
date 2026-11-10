@@ -21,6 +21,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **`kanbanr drift --since DATE` starts at the beginning of that day (UTC)**, so its result no
+  longer depends on the time it is run (DEF-037).
 - **A release's notes are still found after the notes path is changed, and a missing notes file
   names every place looked (DEF-036).** The path is recorded on the release when its notes are
   first written; a shipped release is read at its tag; an older release is found at any path the

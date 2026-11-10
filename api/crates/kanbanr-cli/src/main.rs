@@ -549,8 +549,9 @@ enum Command {
     /// route, setting, stage or file name it changed. It flags what to read and never judges it;
     /// it exits 0 whatever it finds. Run it from the project folder.
     Drift {
-        /// Look at commits since this date (YYYY-MM-DD). Default: the latest shipped release's tag
-        /// date, else 60 days back; with --item, all of that item's history.
+        /// Look at commits since this date (YYYY-MM-DD, from the start of that day, UTC) or date and
+        /// time. Default: the latest shipped release's tag date, else 60 days back; with --item, all
+        /// of that item's history.
         #[arg(long)]
         since: Option<String>,
         /// Only this item's commits.

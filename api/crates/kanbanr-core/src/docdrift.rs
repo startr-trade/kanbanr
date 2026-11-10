@@ -456,6 +456,26 @@ pub fn valid_since(since: &str) -> bool {
         && since.chars().next().is_some_and(|c| c.is_ascii_digit())
 }
 
+/// The `--since` argument for git (DEF-037). git reads a bare date as that date at the current
+/// time of day, so a bare `YYYY-MM-DD` is given the start of that day, UTC; a value with a time is
+/// passed as given.
+fn git_since(since: &str) -> String {
+    let b = since.as_bytes();
+    let bare = b.len() == 10
+        && b.iter().enumerate().all(|(i, c)| {
+            if i == 4 || i == 7 {
+                *c == b'-'
+            } else {
+                c.is_ascii_digit()
+            }
+        });
+    if bare {
+        format!("--since={since}T00:00:00Z")
+    } else {
+        format!("--since={since}")
+    }
+}
+
 fn parse_log(out: &str, item: Option<&str>) -> Vec<Change> {
     let mut changes = Vec::new();
     for part in out
@@ -509,7 +529,7 @@ pub fn item_changes(repo: &Path, code: &str, since: Option<&str>) -> Result<Vec<
                 "{since:?} is not a date (try 2026-11-01)"
             )));
         }
-        since_arg = format!("--since={since}");
+        since_arg = git_since(since);
         args.push(&since_arg);
     }
     let out = coderepo::git(repo, &args)?;
@@ -1107,7 +1127,7 @@ fn board_changes(repo: &Path, since: &str) -> Result<BTreeMap<String, Vec<Change
             "{since:?} is not a date (try 2026-11-01)"
         )));
     }
-    let since_arg = format!("--since={since}");
+    let since_arg = git_since(since);
     let out = coderepo::git(
         repo,
         &[
@@ -1611,6 +1631,31 @@ mod tests {
         assert_eq!(lines("drift"), vec![8]);
     }
 
+    /// DEF-037 R-1: a bare date means the start of that day (UTC), whatever the hour it runs.
+    #[test]
+    fn a_bare_since_date_starts_at_the_start_of_that_day() {
+        assert_eq!(git_since("2026-11-04"), "--since=2026-11-04T00:00:00Z");
+        assert_eq!(git_since("2026-11-04 10:00"), "--since=2026-11-04 10:00");
+        assert_eq!(
+            git_since("2026-11-04T10:00:00+05:30"),
+            "--since=2026-11-04T10:00:00+05:30"
+        );
+        let dir = scratch("day-start");
+        git_env(&dir, &["init", "-q", "-b", "main"], None);
+        for (file, date) in [
+            ("src/a.rs", "2026-11-03T23:30:00+00:00"),
+            ("src/b.rs", "2026-11-04T00:30:00+00:00"),
+            ("src/c.rs", "2026-11-04T23:30:00+00:00"),
+        ] {
+            code_commit(&dir, file, "let x = 1;\n", "c\n\nRefs: kanbanr:FTR-1", date);
+        }
+        let changes = item_changes(&dir, "FTR-1", Some("2026-11-04")).unwrap();
+        let mut at: Vec<&str> = changes.iter().map(|c| &c.at[..10]).collect();
+        at.sort();
+        assert_eq!(at, vec!["2026-11-04", "2026-11-04"], "{changes:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// FTR-013 R-1: only the non-merge commits whose Refs trailer names the item.
     #[test]
     fn item_changes_come_from_commits_that_reference_the_item() {
@@ -1696,8 +1741,9 @@ mod tests {
                 .all(|c| c.item == "FTR-1" && c.at.starts_with("2026-11-0"))
         );
 
+        // From the start of 4 November (UTC): the commits of the 4th and the 5th (DEF-037).
         let recent = item_changes(&dir, "FTR-1", Some("2026-11-04")).unwrap();
-        assert_eq!(recent.len(), 1);
+        assert_eq!(recent.len(), 2, "{recent:?}");
         assert!(item_changes(&dir, "FTR-1; rm", None).is_err());
         assert!(item_changes(&dir, "FTR-1", Some("--output=x")).is_err());
         assert!(valid_since("2026-11-01"));
