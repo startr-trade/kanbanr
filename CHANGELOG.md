@@ -21,6 +21,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **The docs gate no longer passes an item when two board commits share a second (DEF-035).**
+  The history walk now orders commits of the same second child first, so the newest one is the
+  baseline a declared doc is compared against.
+
 - **A docs-folded sign-off is offered only once the work it confirms is done (DEF-033).** The
   Review page offered **Sign off docs-folded** on items still being built, because they named no
   board docs and the check had nothing to wait for. Now the sign-off waits until every board doc the

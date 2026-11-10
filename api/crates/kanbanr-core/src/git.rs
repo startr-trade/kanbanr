@@ -753,7 +753,7 @@ enum Opened {
     Repo {
         repo: Repository,
         workdir: std::path::PathBuf,
-        /// `(commit time, tree)` in the order a `Sort::TIME` walk from HEAD visits; empty when the
+        /// `(commit time, tree)` in the order a `Sort::TIME | Sort::TOPOLOGICAL` walk from HEAD visits; empty when the
         /// repository has no commits.
         commits: Vec<(i64, git2::Oid)>,
     },
@@ -856,12 +856,17 @@ impl DocHistory {
     }
 }
 
-/// The history from HEAD as `(commit time, tree)`, newest first by commit time.
+/// The history from HEAD as `(commit time, tree)`, newest first by commit time. Of commits made in
+/// the same second a child comes before its parent (DEF-035).
 fn walk_commits(repo: &Repository) -> Vec<(i64, git2::Oid)> {
     let Ok(mut walk) = repo.revwalk() else {
         return Vec::new();
     };
-    if walk.push_head().is_err() || walk.set_sorting(git2::Sort::TIME).is_err() {
+    if walk.push_head().is_err()
+        || walk
+            .set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)
+            .is_err()
+    {
         return Vec::new();
     }
     walk.flatten()
@@ -890,7 +895,8 @@ pub(crate) fn doc_changed_since_single_walk(path: &Path, t: &str) -> Option<bool
         // No commits at all: anything on disk is new.
         return Some(full.exists());
     }
-    walk.set_sorting(git2::Sort::TIME).ok()?;
+    walk.set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)
+        .ok()?;
     let baseline = walk
         .flatten()
         .filter_map(|oid| repo.find_commit(oid).ok())
@@ -954,6 +960,45 @@ mod tests {
         let parents: Vec<&git2::Commit> = parent.iter().collect();
         repo.commit(Some("HEAD"), &sig, &sig, "c", &tree, &parents)
             .unwrap();
+    }
+
+    /// Three commits: an empty initial one and one adding `doc.md`, both made at `T0`, then a
+    /// later one at `T0 + 5` that leaves the doc alone. Returns the repository folder, the doc and
+    /// the RFC 3339 form of `T0`.
+    fn same_second_board(name: &str) -> (PathBuf, PathBuf, String) {
+        let dir = temp(name);
+        let repo = Repository::init(&dir).unwrap();
+        commit_at(&repo, &[], &[], T0);
+        let doc = dir.join("doc.md");
+        std::fs::write(&doc, "v1").unwrap();
+        commit_at(&repo, &["doc.md"], &[], T0);
+        std::fs::write(dir.join("other.md"), "x").unwrap();
+        commit_at(&repo, &["other.md"], &[], T0 + 5);
+        let t = time::OffsetDateTime::from_unix_timestamp(T0)
+            .unwrap()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        (dir, doc, t)
+    }
+
+    /// DEF-035: of commits made in the same second the newest, by ancestry, is the baseline.
+    #[test]
+    fn the_baseline_is_the_newest_of_commits_made_in_the_same_second() {
+        let (dir, doc, t) = same_second_board("samesecond");
+        assert_eq!(DocHistory::default().changed_since(&doc, &t), Some(false));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-035: the shared history and the single-walk reference judge alike.
+    #[test]
+    fn doc_history_agrees_with_the_single_walk_on_same_second_commits() {
+        let (dir, doc, t) = same_second_board("samesecondagree");
+        assert_eq!(
+            DocHistory::default().changed_since(&doc, &t),
+            doc_changed_since_single_walk(&doc, &t)
+        );
+        assert_eq!(doc_changed_since_single_walk(&doc, &t), Some(false));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A repository of 60 commits, two of them dated before their parents, and the docs it holds.
