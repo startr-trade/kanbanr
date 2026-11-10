@@ -875,6 +875,46 @@ fn walk_commits(repo: &Repository) -> Vec<(i64, git2::Oid)> {
         .collect()
 }
 
+/// Each distinct content `rel` has had in the board repository's history from HEAD, newest first,
+/// deduplicated by blob (DEF-036). An unreadable repository or path gives an empty list.
+pub fn file_versions(dir: &Path, rel: &str) -> Vec<String> {
+    let Ok(repo) = Repository::discover(dir) else {
+        return Vec::new();
+    };
+    let Ok(mut walk) = repo.revwalk() else {
+        return Vec::new();
+    };
+    if walk.push_head().is_err()
+        || walk
+            .set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)
+            .is_err()
+    {
+        return Vec::new();
+    }
+    let mut seen: Vec<git2::Oid> = Vec::new();
+    let mut out = Vec::new();
+    for oid in walk.flatten() {
+        let Some(entry) = repo
+            .find_commit(oid)
+            .ok()
+            .and_then(|c| c.tree().ok())
+            .and_then(|t| t.get_path(Path::new(rel)).ok())
+        else {
+            continue;
+        };
+        if seen.contains(&entry.id()) {
+            continue;
+        }
+        seen.push(entry.id());
+        if let Ok(blob) = repo.find_blob(entry.id())
+            && let Ok(text) = std::str::from_utf8(blob.content())
+        {
+            out.push(text.to_string());
+        }
+    }
+    out
+}
+
 /// The one-doc walk `DocHistory` replaced, kept as the reference its answers are checked against
 /// (DEF-022).
 #[cfg(test)]
@@ -979,6 +1019,22 @@ mod tests {
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap();
         (dir, doc, t)
+    }
+
+    /// DEF-036: each distinct content of a file in the history, newest first; a content that came
+    /// back is listed once, where it was last; a missing path or repository gives nothing.
+    #[test]
+    fn file_versions_lists_each_distinct_content_newest_first() {
+        let dir = temp("fileversions");
+        let repo = Repository::init(&dir).unwrap();
+        for (i, text) in ["a", "b", "b", "a", "c"].iter().enumerate() {
+            std::fs::write(dir.join("f.txt"), text).unwrap();
+            commit_at(&repo, &["f.txt"], &[], T0 + i as i64);
+        }
+        assert_eq!(file_versions(&dir, "f.txt"), ["c", "a", "b"]);
+        assert!(file_versions(&dir, "nope.txt").is_empty());
+        assert!(file_versions(&temp("fileversions-none"), "f.txt").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// DEF-035: of commits made in the same second the newest, by ancestry, is the baseline.

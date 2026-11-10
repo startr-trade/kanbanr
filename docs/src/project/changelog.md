@@ -21,6 +21,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **A release's notes are still found after the notes path is changed, and a missing notes file
+  names every place looked (DEF-036).** The path is recorded on the release when its notes are
+  first written; a shipped release is read at its tag; an older release is found at any path the
+  setting has named. The error no longer says nothing has written the notes.
+
 - **The docs gate no longer passes an item when two board commits share a second (DEF-035).**
   The history walk now orders commits of the same second child first, so the newest one is the
   baseline a declared doc is compared against.

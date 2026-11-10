@@ -8511,6 +8511,70 @@ fn cli_release_redate() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-036 R-1: a release's notes are still shown, from where they were written, after
+/// `config release-prepare --notes` names another path.
+#[test]
+fn release_notes_survive_a_notes_path_change() {
+    let (base, work) = release_scratch("release-notes-moved");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let board = std::fs::canonicalize(ok(run_in(&base, &work, &["where"])).trim()).unwrap();
+    assert!(
+        board.starts_with(std::fs::canonicalize(&base).unwrap()),
+        "the test's own board: {}",
+        board.display()
+    );
+    for args in [
+        &[
+            "config",
+            "release-stage",
+            "candidate",
+            "--on-enter",
+            "branch,prepare",
+        ][..],
+        &[
+            "config",
+            "release-prepare",
+            "--notes",
+            "docs/releases/{version}.md",
+        ],
+    ] {
+        ok(run_in(&base, &work, args));
+    }
+    ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    let draft = base.join("notes.md");
+    std::fs::write(&draft, "# v1.0.0\n\nWritten before the move.\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "notes",
+            "v1.0.0",
+            "--file",
+            draft.to_str().unwrap(),
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "release-prepare",
+            "--notes",
+            "docs/src/releases/{version}.md",
+        ],
+    ));
+    let shown = ok(run_in(&base, &work, &["release", "notes", "v1.0.0"]));
+    assert!(
+        shown.contains("docs/releases/v1.0.0.md\n") && shown.contains("Written before the move."),
+        "{shown}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-216 R-3: `release notes <V>` shows the notes on release/<V> and where they are, `--json`
 /// carries them, and `--file` (or `--edit`) commits new text onto the branch with nothing checked
 /// out.

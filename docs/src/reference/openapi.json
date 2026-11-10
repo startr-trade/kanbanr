@@ -3397,6 +3397,10 @@
             "description": "The board doc holding its release notes.",
             "type": "string"
           },
+          "notes_path": {
+            "description": "The repository path the release's notes were first written to, already expanded (DEF-036).\nSet once; empty on a release whose notes were written before it was recorded.",
+            "type": "string"
+          },
           "parent": {
             "description": "The cut release this patches (FEAT-184); empty for an ordinary release.",
             "type": "string"
