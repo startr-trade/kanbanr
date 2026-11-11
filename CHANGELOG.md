@@ -18,6 +18,8 @@ All notable changes to kanbanr are documented here. The format follows
   [--json]` lists them for the whole board, grouped by text, back to the latest release's tag
   date (else 60 days). It flags what to read and never judges prose. Without a code repository the
   check is skipped, and says so.
+- **The board's Sprint filter offers Unscheduled**, the items in no sprint, for planning the next
+  sprint (FTR-032).
 
 ### Fixed
 

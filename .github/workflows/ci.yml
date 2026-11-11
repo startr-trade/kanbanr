@@ -223,6 +223,9 @@ jobs:
       # (FTR-001).
       - name: An item says which release it shipped in
         run: npm run check:release-line
+      # The board's Sprint filter can show only the items in no sprint (FTR-032).
+      - name: The board can show the items in no sprint
+        run: npm run check:sprint-filter
       # The Workflow page shows the cadence, the git model and every guard rail, each with the
       # command that changes it, and changes nothing itself (FEAT-213).
       - name: The Workflow page shows the cadence, the git model and the guard rails
