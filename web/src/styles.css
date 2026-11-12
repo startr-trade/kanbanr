@@ -632,3 +632,17 @@ input:focus-visible,
 }
 .warn-box strong { color: var(--warn); }
 .warn-box ul { margin: 6px 0; padding-left: 18px; }
+/* What Claude prepared for a decision, filled in beside its one button (FTR-034). */
+.prepared-panel {
+  border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius);
+  background: var(--panel-2); padding: 8px 12px; margin: 8px 0;
+}
+.prepared-panel dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 6px 0; }
+.prepared-panel dl > div { display: contents; }
+.prepared-panel dt { color: var(--muted); }
+.prepared-panel dd { margin: 0; white-space: pre-wrap; }
+.prepared-panel input {
+  padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--text); font: inherit; min-width: 220px;
+}
+.prepared-sources { margin: 4px 0; padding-left: 18px; }
