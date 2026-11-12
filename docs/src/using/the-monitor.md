@@ -311,7 +311,8 @@ it.
 | **Docs** — a folder tree per project | Embedded images | Live **Mermaid** diagrams |
 
 With sprints and releases switched on ([Processes](processes.md#sprints-and-releases)), the board
-opens on the running sprint, and Releases and the Gantt show the cadence:
+opens on the running sprint, and Releases and the Gantt show the cadence. Its **Sprint** filter also
+offers **All items** and **Unscheduled**, the items not yet in any sprint:
 
 | | | |
 |---|---|---|

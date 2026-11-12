@@ -5,6 +5,7 @@ import { byAgentText } from "../agentScopes";
 import { useAsync, useLiveTick } from "../live";
 import { displayedStates, featuresNewestFirst } from "../types";
 import type { Feature, SprintReport } from "../types";
+import { ALL, UNSCHEDULED, inSprintFilter } from "../sprintFilter";
 import { ErrorBox, FeatureCard, Loading, LiveDot } from "../components/bits";
 import Burndown from "../components/Burndown";
 
@@ -33,9 +34,11 @@ export default function BoardPage() {
   );
   const active = (sprints.data ?? []).find((s) => s.state === "active");
   const [chosen, setChosen] = useState<string | null>(null);
-  const sprintCode = chosen ?? active?.code ?? "all";
+  const sprintCode = chosen ?? active?.code ?? ALL;
+  // A real sprint has a report; All items and Unscheduled (FTR-032) don't.
+  const isSprint = sprintCode !== ALL && sprintCode !== UNSCHEDULED;
   const sprint = useAsync(
-    () => (usesSprints && sprintCode !== "all" ? api.getSprint(project, sprintCode) : Promise.resolve(null)),
+    () => (usesSprints && isSprint ? api.getSprint(project, sprintCode) : Promise.resolve(null)),
     [project, tick, usesSprints, sprintCode],
   );
   const [q, setQ] = useState("");
@@ -63,7 +66,7 @@ export default function BoardPage() {
 
   // Filter/search across code, title, kind, priority, labels.
   const needle = q.trim().toLowerCase();
-  const inSprint = (f: Feature) => !usesSprints || sprintCode === "all" || f.sprint === sprintCode;
+  const inSprint = (f: Feature) => inSprintFilter(f, usesSprints, sprintCode);
   const matches = (f: Feature) =>
     inSprint(f) &&
     (!needle ||
@@ -84,7 +87,8 @@ export default function BoardPage() {
           <label className="per-page">
             Sprint
             <select value={sprintCode} onChange={(e) => setChosen(e.target.value)}>
-              <option value="all">All items</option>
+              <option value={ALL}>All items</option>
+              <option value={UNSCHEDULED}>Unscheduled</option>
               {(sprints.data ?? []).map((s) => (
                 <option key={s.code} value={s.code}>
                   {s.code}
