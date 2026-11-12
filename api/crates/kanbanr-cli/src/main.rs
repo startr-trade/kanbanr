@@ -257,6 +257,12 @@ enum Command {
     /// `gate_passed` reads what was recorded here.
     #[command(subcommand)]
     Gate(GateCmd),
+    /// Prepare the evidence for a decision that waits on the person (FTR-034): a sign-off's note, a
+    /// promotion's what-you-checked, a CI result with its run link, a ratification's reason. The
+    /// monitor shows it filled in beside the decision's button; the person confirms, edits or
+    /// rejects it there. Preparing is not the decision, and there is no confirm command.
+    #[command(subcommand)]
+    Prepare(PrepareCmd),
     /// Record that an item was sliced out of another, so a wave's growth can be accounted for.
     SplitFrom {
         code: String,
@@ -1273,6 +1279,84 @@ enum GateCmd {
 }
 
 #[derive(Subcommand)]
+enum PrepareCmd {
+    /// Prepare a sign-off: the note and the doc the person confirms with one click.
+    Signoff {
+        code: String,
+        /// The sign-off's name, as the workflow's gate asks for it.
+        name: String,
+        /// What was agreed, or where it was agreed.
+        #[arg(long)]
+        note: Option<String>,
+        /// A board doc holding the record (minutes, a checklist).
+        #[arg(long)]
+        doc: Option<String>,
+        /// Where the evidence came from: `LABEL=URL`, a link, `doc:<path>`, `item:<CODE>`,
+        /// `commit:<sha>`, or a bare label such as what the person said. At least one.
+        #[arg(long = "source", value_name = "S", required = true)]
+        sources: Vec<String>,
+    },
+    /// Prepare a promotion after the tag: what was checked, for the person to confirm.
+    Promotion {
+        version: String,
+        /// The stage it confirms (default: the plan's next one).
+        #[arg(long)]
+        stage: Option<String>,
+        /// What was checked before the stage is confirmed.
+        #[arg(long)]
+        checked: String,
+        /// Where the evidence came from (see `prepare signoff --help`). At least one.
+        #[arg(long = "source", value_name = "S", required = true)]
+        sources: Vec<String>,
+    },
+    /// Prepare a gate result: what the run said, read from the CI, for the person to confirm.
+    Gate {
+        /// The gate: `ci`, `local`, `security`... (lowercase letters, digits, - and _).
+        name: String,
+        /// The run passed.
+        #[arg(long, conflicts_with = "failed", required_unless_present = "failed")]
+        passed: bool,
+        /// The run failed.
+        #[arg(long)]
+        failed: bool,
+        /// The commit the result is about (default: HEAD of this repository).
+        #[arg(long, value_name = "REV")]
+        commit: Option<String>,
+        /// A link to the run, http or https. It counts as a source.
+        #[arg(long)]
+        url: Option<String>,
+        /// A note, such as what failed.
+        #[arg(long)]
+        note: Option<String>,
+        /// Where else the evidence came from (see `prepare signoff --help`).
+        #[arg(long = "source", value_name = "S")]
+        sources: Vec<String>,
+    },
+    /// Prepare a ratification: why the work went ahead, for the person to confirm.
+    Ratify {
+        code: String,
+        /// Why agreeing after the fact is right.
+        #[arg(long)]
+        reason: String,
+        /// Where the evidence came from (see `prepare signoff --help`). At least one.
+        #[arg(long = "source", value_name = "S", required = true)]
+        sources: Vec<String>,
+    },
+    /// The prepared records waiting for the person, newest first.
+    List {
+        /// Every record: confirmed, rejected, superseded and stale ones too.
+        #[arg(long)]
+        all: bool,
+        /// Only records about this item.
+        #[arg(long)]
+        item: Option<String>,
+        /// Only records about this release.
+        #[arg(long)]
+        release: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum ReleaseCmd {
     /// Add a planned release.
     Add {
@@ -1951,6 +2035,7 @@ fn command_access(cmd: &Command) -> Access {
         | Command::Sprint(_)
         | Command::Release(_)
         | Command::Gate(_)
+        | Command::Prepare(_)
         | Command::Commit { .. }
         | Command::Tests { .. }
         | Command::Sources { .. }
@@ -6920,6 +7005,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Sprint(cmd) => run_sprint(cli, &client, cmd),
         Command::Release(cmd) => run_release(cli, &client, cmd),
         Command::Gate(cmd) => run_gate(cli, &client, cmd),
+        Command::Prepare(cmd) => run_prepare(cli, &client, cmd),
         Command::Todo(cmd) => run_todo(cli, &client, cmd),
         Command::Task(cmd) => run_task(cli, &client, cmd),
         Command::Milestone(cmd) => run_milestone(cli, &client, cmd),
@@ -9613,6 +9699,175 @@ fn merge_version_files(current: &Value, flags: &[String], clear: bool) -> Vec<Va
     files
 }
 
+/// The full commit a gate result is about: `commit`, or HEAD of the code repository at `root`.
+/// A pass with no commit named is refused on a dirty tree, which would make it untrue of HEAD.
+fn gate_commit(
+    root: Option<&std::path::Path>,
+    commit: Option<&str>,
+    passed: bool,
+) -> anyhow::Result<String> {
+    let root = root.ok_or_else(|| {
+        anyhow::anyhow!("this is not inside a code repository, so there is no commit to record")
+    })?;
+    if passed && commit.is_none() && !coderepo::is_clean(root) {
+        anyhow::bail!(
+            "the working tree has uncommitted changes, so a pass would not be about HEAD: \
+             commit them, or name the commit with --commit"
+        );
+    }
+    let rev = commit.unwrap_or("HEAD");
+    coderepo::rev_parse(root, rev).map_err(|e| anyhow::anyhow!("'{rev}' is not a commit here: {e}"))
+}
+
+/// `kanbanr prepare …` (FTR-034): write a prepared record, and say where it waits for the person.
+fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let sources = |given: &[String]| -> anyhow::Result<Vec<Value>> {
+        given
+            .iter()
+            .map(|s| {
+                let s = kanbanr_core::prepared::parse_source(s)?;
+                Ok(json!({"label": s.label, "url": s.url}))
+            })
+            .collect()
+    };
+    let (body, what) = match cmd {
+        PrepareCmd::List { all, item, release } => {
+            let mut q = vec![format!("state={}", if *all { "all" } else { "open" })];
+            if let Some(i) = item {
+                q.push(format!("item={}", urlencode_segment(i)));
+            }
+            if let Some(r) = release {
+                q.push(format!("release={}", urlencode_segment(r)));
+            }
+            let resp = client.get(&format!("/projects/{p}/prepared?{}", q.join("&")))?;
+            // A file that cannot be read is skipped by the listing; name it here.
+            let store =
+                kanbanr_core::Store::new(project::resolve_data_dir(cli.data_dir.as_deref()));
+            if let Ok((_, bad)) = kanbanr_core::prepared::read_all(&store, &p) {
+                for b in bad {
+                    eprintln!("warning: {b} could not be read, so it is not listed");
+                }
+            }
+            let rows: Vec<Value> = serde_json::from_str(&resp)?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else if rows.is_empty() {
+                println!(
+                    "no prepared records{}",
+                    if *all { "" } else { " wait for the person" }
+                );
+            } else {
+                for r in &rows {
+                    let state = r["state"].as_str().unwrap_or("");
+                    let why = r["stale_why"].as_str().unwrap_or("");
+                    println!(
+                        "{}  {}  {}  by {}{}",
+                        r["id"].as_str().unwrap_or(""),
+                        r["kind"].as_str().unwrap_or(""),
+                        state,
+                        r["by"].as_str().unwrap_or(""),
+                        if why.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({why})")
+                        }
+                    );
+                }
+            }
+            return Ok(());
+        }
+        PrepareCmd::Signoff {
+            code,
+            name,
+            note,
+            doc,
+            sources: s,
+        } => (
+            json!({
+                "kind": "signoff",
+                "subject": {"item": code, "signoff": name},
+                "fields": {"note": note.clone().unwrap_or_default(), "doc": doc.clone().unwrap_or_default()},
+                "sources": sources(s)?,
+            }),
+            format!("sign-off {name} of {code}"),
+        ),
+        PrepareCmd::Promotion {
+            version,
+            stage,
+            checked,
+            sources: s,
+        } => (
+            json!({
+                "kind": "promotion",
+                "subject": {"release": version, "stage": stage.clone().unwrap_or_default()},
+                "fields": {"checked": checked},
+                "sources": sources(s)?,
+            }),
+            format!("promotion of {version}"),
+        ),
+        PrepareCmd::Gate {
+            name,
+            passed,
+            failed: _,
+            commit,
+            url,
+            note,
+            sources: s,
+        } => {
+            let sha = gate_commit(code_repo().as_deref(), commit.as_deref(), *passed)?;
+            let mut fields = json!({"passed": *passed});
+            if let Some(u) = url {
+                fields["url"] = json!(u);
+            }
+            if let Some(n) = note {
+                fields["note"] = json!(n);
+            }
+            (
+                json!({
+                    "kind": "gate-result",
+                    "subject": {"gate": name, "commit": sha},
+                    "fields": fields,
+                    "sources": sources(s)?,
+                }),
+                format!(
+                    "gate {name} {} on {}",
+                    if *passed { "passed" } else { "failed" },
+                    &sha[..7]
+                ),
+            )
+        }
+        PrepareCmd::Ratify {
+            code,
+            reason,
+            sources: s,
+        } => (
+            json!({
+                "kind": "ratification",
+                "subject": {"item": code},
+                "fields": {"reason": reason},
+                "sources": sources(s)?,
+            }),
+            format!("ratification of {code}"),
+        ),
+    };
+    let mut body = body;
+    body["by"] = json!(verdict_author(cli, None)?);
+    let resp = client.write(Method::Post, &format!("/projects/{p}/prepared"), Some(body))?;
+    if cli.json {
+        println!("{}", pretty(&resp));
+        return Ok(());
+    }
+    let v: Value = serde_json::from_str(&resp)?;
+    let page = kanbanr_core::prepared::page_of(v["kind"].as_str().unwrap_or(""));
+    println!(
+        "prepared {what} ({}): waiting for the person on {}/p/{p}/{page}",
+        v["id"].as_str().unwrap_or(""),
+        monitor_url()
+    );
+    Ok(())
+}
+
 fn run_gate(cli: &Cli, client: &Backend, cmd: &GateCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     match cmd {
@@ -9626,22 +9881,7 @@ fn run_gate(cli: &Cli, client: &Backend, cmd: &GateCmd) -> anyhow::Result<()> {
             by,
             source,
         } => {
-            let repo = code_repo();
-            let root = repo.as_deref().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "this is not inside a code repository, so there is no commit to record"
-                )
-            })?;
-            // A pass with no commit named is about HEAD, which a dirty tree makes untrue.
-            if *passed && commit.is_none() && !coderepo::is_clean(root) {
-                anyhow::bail!(
-                    "the working tree has uncommitted changes, so a pass would not be about HEAD: \
-                     commit them, or name the commit with --commit"
-                );
-            }
-            let rev = commit.as_deref().unwrap_or("HEAD");
-            let sha = coderepo::rev_parse(root, rev)
-                .map_err(|e| anyhow::anyhow!("'{rev}' is not a commit here: {e}"))?;
+            let sha = gate_commit(code_repo().as_deref(), commit.as_deref(), *passed)?;
             let by = verdict_author(cli, by.as_ref())?;
             let resp = client.write(
                 Method::Post,
