@@ -2196,6 +2196,109 @@
         ],
         "type": "string"
       },
+      "ManualResult": {
+        "additionalProperties": true,
+        "description": "One kept result.",
+        "properties": {
+          "at": {
+            "description": "RFC 3339, UTC.",
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "checked_rev": {
+            "description": "The code commit it was checked at, when known.",
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "origin": {
+            "description": "`monitor` or `terminal`.",
+            "type": "string"
+          },
+          "prepared": {
+            "description": "The prepared record's id, when confirmed from one.",
+            "type": "string"
+          },
+          "requirement": {
+            "type": "string"
+          },
+          "state": {
+            "description": "`green` or `red`.",
+            "type": "string"
+          },
+          "test": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "requirement",
+          "test",
+          "state",
+          "by",
+          "at"
+        ],
+        "type": "object"
+      },
+      "ManualWaiting": {
+        "description": "A manual test that is not green, with what a person needs to make the check.",
+        "properties": {
+          "checked_rev": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "last": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ManualResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The newest kept result for this test, so a failed check shows who failed it."
+          },
+          "requirement": {
+            "type": "string"
+          },
+          "requirement_text": {
+            "type": "string"
+          },
+          "state": {
+            "description": "`planned` or `red`.",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "test": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "title",
+          "status",
+          "requirement",
+          "requirement_text",
+          "test",
+          "state",
+          "checked_rev",
+          "last"
+        ],
+        "type": "object"
+      },
       "Meta": {
         "description": "What this daemon can do: `GET /api/meta`. The monitor asks before offering an action.",
         "properties": {
@@ -5245,6 +5348,50 @@
           }
         },
         "summary": "The lessons worth showing, most believed first"
+      }
+    },
+    "/api/projects/{project}/manual-tests": {
+      "get": {
+        "operationId": "getProjectsManualTests",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ManualWaiting"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The manual tests waiting for a person: each one not yet green, with its requirement and the check to make, live work first, then finished work"
       }
     },
     "/api/projects/{project}/process": {

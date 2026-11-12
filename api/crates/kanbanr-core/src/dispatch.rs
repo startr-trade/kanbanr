@@ -9,7 +9,7 @@
 use crate::config::ProjectConfig;
 use crate::error::{CoreError, Result};
 use crate::graph::DependencyView;
-use crate::models::TaskState;
+use crate::models::{TaskState, TestState};
 use crate::{Store, export};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -181,6 +181,27 @@ fn signoff_checked(
         )));
     }
     Ok(kept)
+}
+
+/// Is this a manual test of the item's definition? A test that is not there is not, and the
+/// store's own "has no test" message follows.
+fn is_manual_test(store: &Store, p: &str, code: &str, requirement: &str, test: &str) -> bool {
+    store
+        .load_meta(p)
+        .ok()
+        .and_then(|pr| {
+            pr.feature(code).ok().and_then(|f| {
+                f.definition.as_ref().map(|d| {
+                    d.requirements.iter().any(|r| {
+                        r.id == requirement
+                            && r.tests
+                                .iter()
+                                .any(|t| t.name == test && t.kind.eq_ignore_ascii_case("manual"))
+                    })
+                })
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn str_field(body: &Value, k: &str) -> Option<String> {
@@ -1054,15 +1075,59 @@ fn dispatch_routes(
                 .ok_or_else(|| {
                     CoreError::Unsupported("state must be planned, red or green".into())
                 })?;
-            ser(&store.set_test_state(
+            let mut checked_rev = str_field(b, "checked_rev").filter(|r| !r.trim().is_empty());
+            // A manual result says a person checked something: keep who, when and from where
+            // beside the test's state (DEF-040). The kept result goes first, so a failed write
+            // leaves the state alone; if the state then fails, the kept result is taken back.
+            let kept = if matches!(state, TestState::Green | TestState::Red)
+                && is_manual_test(store, p, code, requirement, test)
+            {
+                if checked_rev.is_none() {
+                    checked_rev = repo.and_then(|r| crate::coderepo::rev_parse(r, "HEAD").ok());
+                }
+                Some(crate::manual::record(
+                    store,
+                    p,
+                    &crate::manual::ManualResult {
+                        code: code.to_string(),
+                        requirement: requirement.to_string(),
+                        test: test.to_string(),
+                        state: if state == TestState::Green {
+                            "green"
+                        } else {
+                            "red"
+                        }
+                        .into(),
+                        by: approver(b)?,
+                        at: crate::now_rfc3339(),
+                        origin: crate::origin::from_body(b),
+                        checked_rev: checked_rev.clone().unwrap_or_default(),
+                        note: str_field(b, "note").unwrap_or_default(),
+                        prepared: str_field(b, "prepared").unwrap_or_default(),
+                        ..Default::default()
+                    },
+                )?)
+            } else {
+                None
+            };
+            match store.set_test_state(
                 p,
                 code,
                 requirement.as_str(),
                 test.as_str(),
                 state,
-                str_field(b, "checked_rev").as_deref(),
-            )?)
+                checked_rev.as_deref(),
+            ) {
+                Ok(f) => ser(&f),
+                Err(e) => {
+                    if let Some(path) = kept {
+                        let _ = std::fs::remove_file(path);
+                    }
+                    Err(e)
+                }
+            }
         }
+        ("GET", ["projects", p, "manual-tests"]) => ser(&crate::manual::waiting(store, p)?),
         ("POST", ["projects", p, "features", code, "unapprove"]) => ser(&store
             .unapprove_feature_as(
                 p,

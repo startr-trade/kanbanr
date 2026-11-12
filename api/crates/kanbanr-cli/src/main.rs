@@ -187,6 +187,9 @@ enum Command {
         /// The project revision the result was observed at; a green older than HEAD is stale.
         #[arg(long)]
         rev: Option<String>,
+        /// A note kept with a manual test's result.
+        #[arg(long)]
+        note: Option<String>,
     },
     /// What hangs off a goal, an item, a requirement or a doc — and what is missing from it.
     /// (FEAT-057, FEAT-181)
@@ -6329,11 +6332,20 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             test,
             state,
             rev,
+            note,
         } => {
             let p = require_project(cli)?;
             let mut body = json!({ "state": state });
+            // `by` names the person for a manual test's kept result (DEF-040); any other test
+            // ignores it, so a missing identity only matters when a manual result is recorded.
+            if let Ok(by) = verdict_author(cli, None) {
+                body["by"] = json!(by);
+            }
             if let Some(rev) = rev {
                 body["checked_rev"] = json!(rev);
+            }
+            if let Some(note) = note {
+                body["note"] = json!(note);
             }
             let resp = client.write(
                 Method::Put,
