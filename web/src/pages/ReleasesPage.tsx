@@ -7,7 +7,9 @@ import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import { releaseAction } from "../releaseAction";
 import { notesSection } from "../releaseNotes";
 import Markdown from "../components/Markdown";
-import type { Release, TagResult } from "../types";
+import type { PreparedView, Release, TagResult } from "../types";
+import { PreparedPanel } from "../components/PreparedPanel";
+import { openFor } from "../prepared";
 
 /** The stages a release moves through when the project names none (FEAT-183). */
 const DEFAULT_STAGES = ["candidate", "test", "staging", "production"];
@@ -23,6 +25,8 @@ export default function ReleasesPage() {
   const board = useAsync(() => api.getProject(project), [project, tick]);
   const releases = useAsync(() => api.getReleases(project), [project, tick]);
   const meta = useAsync(() => api.getMeta(), []);
+  // What Claude prepared for these decisions (FTR-034): CI results and confirmations after the tag.
+  const prepared = useAsync(() => api.getPrepared(project), [project, tick]);
   // Promote (FEAT-185): which release is being promoted, and what came of it.
   const [busy, setBusy] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Record<string, string>>({});
@@ -183,6 +187,7 @@ export default function ReleasesPage() {
                     busy={busy}
                     onPromote={promote}
                     outcome={outcome[r.version]}
+                    prepared={prepared.data ?? []}
                   />
                 ) : null}
                 {r.branch && config.cadence?.release_prepare?.notes ? (
@@ -225,6 +230,7 @@ function ReleaseButton({
   outcome,
   gates,
   who,
+  prepared,
 }: {
   project: string;
   release: Release;
@@ -235,6 +241,7 @@ function ReleaseButton({
   busy: string | null;
   onPromote: (r: Release, to: string, expect: string, note?: string) => void;
   outcome?: string;
+  prepared: PreparedView[];
 }) {
   // A confirmation after the tag asks what the user checked before it goes (FTR-026).
   const [asking, setAsking] = useState(false);
@@ -246,6 +253,7 @@ function ReleaseButton({
   // again it may no longer hold, so it is put away until the next promotion.
   const [hideOutcome, setHideOutcome] = useState(false);
   useEffect(() => setHideOutcome(false), [outcome]);
+  const [preparedSaid, setPreparedSaid] = useState<string | null>(null);
   const plan = useAsync(() => api.getReleasePlan(project, release.version), [project, release.version, tick, again]);
   if (plan.error) return <ErrorBox error={plan.error} />;
   if (!plan.data) return <Loading />;
@@ -261,6 +269,32 @@ function ReleaseButton({
     setHideOutcome(true);
     setAgain((n) => n + 1);
   };
+  // A confirmation after the tag that Claude prepared (FTR-034): what was checked, filled in, beside
+  // the one button, pinned to the release tip this plan showed.
+  const preparedPromotion = action.confirm
+    ? openFor(prepared, "promotion", { release: release.version, stage: plan.data.to })
+    : undefined;
+  const tip = plan.data.release_tip;
+  const confirmPromotion = async (view: PreparedView, edits: Record<string, unknown>) => {
+    if (!who) return;
+    try {
+      await api.confirmPrepared(project, view, who, edits, { expect: tip });
+      setPreparedSaid(`${action.label}: done`);
+    } catch (e) {
+      setPreparedSaid(e instanceof Error ? e.message : String(e));
+    }
+    recheck();
+  };
+  const rejectPromotion = async (view: PreparedView, reason: string) => {
+    if (!who) return;
+    try {
+      await api.rejectPrepared(project, view.id ?? "", who, reason);
+      setPreparedSaid("rejected what Claude prepared");
+    } catch (e) {
+      setPreparedSaid(e instanceof Error ? e.message : String(e));
+    }
+    recheck();
+  };
   return (
     <div className="release-action">
       {plan.data.tag ? (
@@ -273,6 +307,7 @@ function ReleaseButton({
           who={who}
           secondary={action.secondary}
           onChanged={recheck}
+          prepared={prepared}
         />
       ) : null}
       {plan.data.warnings?.length ? (
@@ -299,8 +334,24 @@ function ReleaseButton({
           </ol>
         </div>
       ) : null}
+      {preparedPromotion && action.button ? (
+        <PreparedPanel
+          project={project}
+          view={preparedPromotion}
+          writable={writable}
+          busy={busy != null}
+          label={action.label}
+          onConfirm={(edits) => confirmPromotion(preparedPromotion, edits)}
+          onReject={(reason) => rejectPromotion(preparedPromotion, reason)}
+        />
+      ) : null}
+      {preparedSaid ? (
+        <p className="small">
+          <span className="chip">{preparedSaid}</span>
+        </p>
+      ) : null}
       <div className="review-actions">
-        {action.button ? (
+        {preparedPromotion && action.button ? null : action.button ? (
           <button
             className="btn btn-primary"
             onClick={() =>
@@ -387,6 +438,7 @@ function ReleaseButton({
               writable={writable}
               who={who}
               command={action.gate.record}
+              prepared={prepared}
               onRecorded={() => {
                 setHideOutcome(true);
                 setAgain((n) => n + 1);
@@ -423,6 +475,7 @@ function TagPanel({
   who,
   secondary,
   onChanged,
+  prepared,
 }: {
   project: string;
   release: Release;
@@ -432,6 +485,7 @@ function TagPanel({
   who: string | null;
   secondary: ("runAgain" | "startPatch")[];
   onChanged: () => void;
+  prepared: PreparedView[];
 }) {
   const sha = tag.commit.slice(0, 7);
   const r = tag.result;
@@ -487,6 +541,7 @@ function TagPanel({
             writable={writable}
             who={who}
             command={`kanbanr gate record ${tag.gate} --passed --commit ${tag.commit}`}
+            prepared={prepared}
             onRecorded={onChanged}
           />
         </>
@@ -572,6 +627,7 @@ function RecordResult({
   who,
   command,
   onRecorded,
+  prepared,
 }: {
   project: string;
   commit: string;
@@ -580,11 +636,51 @@ function RecordResult({
   who: string | null;
   command: string;
   onRecorded: () => void;
+  prepared: PreparedView[];
 }) {
   const [gate, setGate] = useState(gates[0] ?? "ci");
   const [url, setUrl] = useState("");
   const [note, setNote] = useState("");
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
+  // A result Claude read from the CI and prepared (FTR-034): shown filled in, confirmed with one
+  // click; Edit offers the same fields as the form.
+  const view = (gates.length ? gates : ["ci"])
+    .map((g) => openFor(prepared, "gate-result", { gate: g, commit }))
+    .find((v) => v != null);
+  if (view) {
+    const passed = view.fields?.passed === true;
+    const answer = async (go: () => Promise<unknown>, text: string) => {
+      try {
+        await go();
+        setSaid({ ok: true, text });
+        onRecorded();
+      } catch (e) {
+        setSaid({ ok: false, text: e instanceof Error ? e.message : String(e) });
+      }
+    };
+    return (
+      <div className="small">
+        <PreparedPanel
+          project={project}
+          view={view}
+          writable={writable && who != null}
+          busy={false}
+          label={`Record ${view.subject.gate} ${passed ? "passed" : "failed"}`}
+          onConfirm={(edits) =>
+            who &&
+            answer(
+              () => api.confirmPrepared(project, view, who, edits),
+              `${view.subject.gate} recorded on ${commit.slice(0, 7)}`,
+            )
+          }
+          onReject={(reason) =>
+            who && answer(() => api.rejectPrepared(project, view.id ?? "", who, reason), "rejected what Claude prepared")
+          }
+        />
+        {said ? <span className={`chip ${said.ok ? "done" : "warn"}`}>{said.text}</span> : null}
+      </div>
+    );
+  }
   if (!writable || !who) {
     return (
       <p className="small">
