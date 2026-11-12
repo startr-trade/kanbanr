@@ -1398,6 +1398,9 @@ fn dispatch_routes(
             crate::gates::record(store, p, &result)?;
             ser(&result)
         }
+        // FTR-034: `{kind, subject, fields, sources, by?}`: the evidence for a decision, prepared for
+        // the person to confirm. Not a verdict: nothing a gate reads changes.
+        ("POST", ["projects", p, "prepared"]) => ser(&crate::prepared::prepare(store, p, b, repo)?),
         // `{gates: [name…]}`: the gates `gate_passed` requires; empty clears them (FTR-002).
         ("PUT", ["projects", p, "config", "commit-gates"]) => {
             let names: Vec<String> = vec_field(b, "gates")
@@ -2306,6 +2309,12 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
                 f("commit").chars().take(7).collect::<String>()
             )
         }
+        ["projects", _p, "prepared"] => format!(
+            "prepare a {} for the person to confirm",
+            body.and_then(|b| str_field(b, "kind"))
+                .unwrap_or_else(|| "record".into())
+        ),
+        ["projects", _p, "prepared", id, "reject"] => format!("reject prepared record {id}"),
         ["projects", _p, "config", "commit-gates"] => "set the commit gates".into(),
         ["projects", _p, "config", "tag-gate"] => "set the tag gate".into(),
         ["projects", _p, "config", "gate-docs"] => "set the documentation paths".into(),

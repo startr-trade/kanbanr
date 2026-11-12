@@ -541,6 +541,284 @@ pub fn resolve(store: &Store, p: &str, r: &Resolution) -> Result<()> {
     Ok(())
 }
 
+// ---- preparing -----------------------------------------------------------------------------
+
+fn text_of(v: &Value) -> Option<&str> {
+    v.as_str()
+}
+
+/// Is `v` a value field `f` may hold? Returns why not.
+fn check_field(kind: &str, f: &FieldSpec, v: &Value) -> Result<()> {
+    let ok = match f.ty {
+        FieldType::Text => text_of(v).is_some_and(|t| t.chars().count() <= MAX_TEXT),
+        FieldType::Bool => v.is_boolean(),
+        FieldType::State => {
+            text_of(v).is_some_and(|t| crate::models::TestState::parse(t).is_some())
+        }
+    };
+    if ok {
+        return Ok(());
+    }
+    let what = match f.ty {
+        FieldType::Text => format!("text of at most {MAX_TEXT} characters"),
+        FieldType::Bool => "true or false".to_string(),
+        FieldType::State => "planned, red or green".to_string(),
+    };
+    Err(unsupported(format!(
+        "a prepared {kind}'s '{}' is {what}",
+        f.name
+    )))
+}
+
+fn is_full_sha(s: &str) -> bool {
+    s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Record the evidence for a decision, as `POST /projects/{p}/prepared` takes it:
+/// `{kind, subject: {…}, fields: {…}, sources: [{label, url}], by?}`, with `origin` stamped by the
+/// front end. The kind must be known, its subject's keys present, its fields known and typed, and
+/// at least one source named (a gate result's `url` counts as one). The decision must be one that
+/// waits: the item and its definition exist; the release exists, is not shipped and its next move
+/// is a confirmation after the tag; the gate's name and the full commit are well formed; a
+/// ratification has a bypass to reconcile. `by` is `Claude` when the origin is the conversation.
+/// Nothing a gate reads changes.
+pub fn prepare(
+    store: &Store,
+    p: &str,
+    body: &Value,
+    repo: Option<&std::path::Path>,
+) -> Result<Prepared> {
+    let kind_name = body
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let spec = kind(&kind_name).ok_or_else(|| {
+        unsupported(format!(
+            "'{kind_name}' is not a kind of prepared record: it is one of {}",
+            KINDS.iter().map(|k| k.kind).collect::<Vec<_>>().join(", ")
+        ))
+    })?;
+    // The subject: only the keys the kind has, trimmed.
+    let mut subject = Subject::default();
+    if let Some(given) = body.get("subject") {
+        let Some(given) = given.as_object() else {
+            return Err(unsupported(
+                "a prepared record's subject is an object".into(),
+            ));
+        };
+        for (k, v) in given {
+            if !spec.subject.contains(&k.as_str()) {
+                return Err(unsupported(format!(
+                    "a prepared {kind_name} has no subject '{k}': it names {}",
+                    spec.subject.join(", ")
+                )));
+            }
+            let v = v.as_str().unwrap_or_default().trim().to_string();
+            subject.set(k, v);
+        }
+    }
+    // A promotion with no stage is the plan's next one.
+    let project = store.load(p)?;
+    let mut plan = None;
+    if kind_name == "promotion" && !subject.release.is_empty() {
+        let releases = crate::releases::load(store, p)?;
+        let release = releases
+            .iter()
+            .find(|r| r.version == subject.release)
+            .ok_or_else(|| unsupported(format!("there is no release {}", subject.release)))?;
+        if release.state == crate::releases::ReleaseState::Shipped {
+            return Err(unsupported(format!(
+                "{} has shipped: there is no promotion left to prepare",
+                release.version
+            )));
+        }
+        let to = (!subject.stage.is_empty()).then_some(subject.stage.as_str());
+        let worked = crate::releases::plan_promotion(
+            store,
+            p,
+            &subject.release,
+            to,
+            "",
+            repo,
+            crate::releases::Fetch::No,
+        )?;
+        if subject.stage.is_empty() {
+            subject.stage = worked.to.clone();
+        }
+        plan = Some(worked);
+    }
+    let missing: Vec<&str> = spec
+        .subject
+        .iter()
+        .copied()
+        .filter(|k| subject.get(k).is_empty())
+        .collect();
+    if !missing.is_empty() {
+        return Err(unsupported(format!(
+            "a prepared {kind_name} names its {}",
+            missing.join(" and ")
+        )));
+    }
+    // The fields: known, typed, the required ones present.
+    let mut fields = Map::new();
+    if let Some(given) = body.get("fields") {
+        let Some(given) = given.as_object() else {
+            return Err(unsupported(
+                "a prepared record's fields are an object".into(),
+            ));
+        };
+        for (k, v) in given {
+            let f = spec.fields.iter().find(|f| f.name == k).ok_or_else(|| {
+                unsupported(format!(
+                    "a prepared {kind_name} has no field '{k}': it carries {}",
+                    spec.fields
+                        .iter()
+                        .map(|f| f.name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            })?;
+            let v = match v {
+                Value::String(t) => Value::String(t.trim().to_string()),
+                other => other.clone(),
+            };
+            check_field(&kind_name, f, &v)?;
+            if v.as_str().is_some_and(str::is_empty) {
+                continue;
+            }
+            fields.insert(k.clone(), v);
+        }
+    }
+    for f in spec.fields.iter().filter(|f| f.required) {
+        if !fields.contains_key(f.name) {
+            return Err(unsupported(format!(
+                "a prepared {kind_name} needs '{}'",
+                f.name
+            )));
+        }
+    }
+    // The sources: at least one, each a link or a board reference.
+    let mut sources: Vec<Source> = match body.get("sources") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(v) => {
+            serde_json::from_value(v.clone()).map_err(|e| unsupported(format!("sources: {e}")))?
+        }
+    };
+    for s in &mut sources {
+        s.label = s.label.trim().to_string();
+        s.url = s.url.trim().to_string();
+        check_source(s)?;
+    }
+    if kind_name == "gate-result"
+        && let Some(url) = fields.get("url").and_then(Value::as_str)
+    {
+        if !is_web(url) {
+            return Err(unsupported(format!(
+                "the link to the run must start with http:// or https://: '{url}'"
+            )));
+        }
+        check_url(url).map_err(unsupported)?;
+        if !sources.iter().any(|s| s.url == url) {
+            sources.push(Source {
+                label: "the run".into(),
+                url: url.to_string(),
+                ..Default::default()
+            });
+        }
+    }
+    if sources.is_empty() {
+        return Err(unsupported(format!(
+            "a prepared {kind_name} names at least one source: the run's link, the commit, the \
+             doc or what the person said"
+        )));
+    }
+    if sources.len() > MAX_SOURCES {
+        return Err(unsupported(format!(
+            "a prepared record names at most {MAX_SOURCES} sources"
+        )));
+    }
+    // The decision must be one that waits, and the record is pinned to what it was prepared on.
+    let definition = |code: &str| -> Result<crate::models::FeatureDefinition> {
+        project.feature(code)?.definition.clone().ok_or_else(|| {
+            unsupported(format!(
+                "{code} has no definition: there is no decision to prepare"
+            ))
+        })
+    };
+    let rev = match kind_name.as_str() {
+        "signoff" => definition(&subject.item)?.content_rev(),
+        "ratification" => {
+            let def = definition(&subject.item)?;
+            if def.started_unapproved.trim().is_empty() || def.approval_state().is_agreed() {
+                return Err(unsupported(format!(
+                    "{} has no unreconciled bypass: there is nothing to ratify",
+                    subject.item
+                )));
+            }
+            def.content_rev()
+        }
+        "gate-result" => {
+            crate::gates::check_name(&subject.gate).map_err(unsupported)?;
+            if !is_full_sha(&subject.commit) {
+                return Err(unsupported(format!(
+                    "'{}' is not a full commit: a gate result names the 40-digit hash",
+                    subject.commit
+                )));
+            }
+            subject.commit.clone()
+        }
+        "promotion" => {
+            let plan = plan
+                .as_ref()
+                .expect("a promotion's plan is worked out above");
+            if !plan.confirm {
+                return Err(unsupported(format!(
+                    "promoting {} to {} is not a confirmation after the tag: it has one button \
+                     and nothing to fill in, so there is nothing to prepare",
+                    subject.release, subject.stage
+                )));
+            }
+            plan.release_tip.clone()
+        }
+        _ => String::new(),
+    };
+    let origin = crate::origin::from_body(body);
+    let by = if origin == crate::origin::Origin::Conversation.as_str() {
+        "Claude".to_string()
+    } else {
+        body.get("by")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    if by.is_empty() {
+        return Err(unsupported(
+            "a prepared record names who prepared it: pass `by`".into(),
+        ));
+    }
+    let record = Prepared {
+        id: String::new(),
+        kind: kind_name,
+        subject,
+        fields,
+        sources,
+        by,
+        origin,
+        at: crate::now_rfc3339(),
+        rev,
+        extra: Default::default(),
+    };
+    let path = write_record(store, p, &record)?;
+    let id = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    Ok(Prepared { id, ..record })
+}
+
 /// Where a record stands (pure): answered; a kind this version does not know; replaced by a newer
 /// open record for the same decision; no longer waiting (`waiting` says why); or open. The second
 /// value says why when it is not open or answered.
@@ -620,6 +898,183 @@ mod tests {
             rev: SHA.into(),
             ..Default::default()
         }
+    }
+
+    fn apply(
+        store: &Store,
+        dir: &std::path::Path,
+        method: &str,
+        path: &str,
+        body: Value,
+        origin: crate::origin::Origin,
+    ) -> std::result::Result<Value, crate::write::WriteError> {
+        crate::write::apply_as(
+            store,
+            dir,
+            crate::git::PushPolicy::Off,
+            method,
+            path,
+            Some(&body),
+            None,
+            &crate::eventing::NullSender,
+            &crate::agentscope::ProcessScope::Unscoped,
+            origin,
+        )
+        .map(|a| serde_json::from_str(&a.body).unwrap())
+    }
+
+    /// A board under git with an author, and an item with a definition (with `bypass`, a recorded
+    /// unapproved start).
+    pub(crate) fn board_with_item(bypass: bool) -> (Store, PathBuf, String) {
+        let (store, dir) = scratch();
+        crate::git::ensure_repo_as(&dir, Some(("Ada L", "ada@example.com")));
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let f = store
+            .add_feature("demo", "Cart", "spec", "M", None)
+            .unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &f.code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Keep a cart for 7 days".into(),
+                    started_unapproved: if bypass {
+                        "urgent".into()
+                    } else {
+                        String::new()
+                    },
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        (store, dir, f.code)
+    }
+
+    /// FTR-034 R-1: Claude records a prepared CI result with its run link, commit and conclusion;
+    /// the file says it is Claude's, from the conversation, and names the run as a source.
+    #[test]
+    fn claude_records_a_prepared_ci_result_with_its_run_link_commit_and_conclusion() {
+        let (store, dir, _) = board_with_item(false);
+        let out = apply(
+            &store,
+            &dir,
+            "POST",
+            "/projects/demo/prepared",
+            serde_json::json!({
+                "kind": "gate-result",
+                "subject": {"gate": "ci", "commit": SHA},
+                "fields": {"passed": true, "url": "https://ci.example/run/4512",
+                           "note": "all 412 tests passed"},
+                "by": "Ada L",
+                "origin": "monitor",
+            }),
+            crate::origin::Origin::Conversation,
+        )
+        .unwrap();
+        let id = out["id"].as_str().unwrap().to_string();
+        assert!(id.ends_with("-gate-result"), "{id}");
+        let file = store
+            .project_dir("demo")
+            .join(format!("prepared/{id}.yaml"));
+        let kept: Prepared =
+            crate::yaml::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(kept.by, "Claude");
+        assert_eq!(kept.origin, "conversation");
+        assert_eq!(kept.subject.commit, SHA);
+        assert_eq!(kept.rev, SHA);
+        assert_eq!(kept.fields["passed"], Value::Bool(true));
+        assert!(
+            kept.sources
+                .iter()
+                .any(|s| s.url == "https://ci.example/run/4512"),
+            "{:?}",
+            kept.sources
+        );
+        // Preparing is not a verdict: no gate result was recorded.
+        assert!(
+            crate::gates::results(&store, "demo", None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// FTR-034 R-1: a prepared record needs a source, a known kind, its subject and only the
+    /// fields its kind carries, each of its type.
+    #[test]
+    fn a_prepared_record_needs_a_source_and_known_fields() {
+        let (store, _dir, code) = board_with_item(true);
+        let go = |body: Value| {
+            let mut b = body;
+            b["origin"] = Value::String("conversation".into());
+            prepare(&store, "demo", &b, None)
+        };
+        let src = serde_json::json!([{"label": "the conversation"}]);
+        let refused = |body: Value, words: &str| {
+            let e = go(body).unwrap_err().to_string();
+            assert!(e.contains(words), "{e}");
+        };
+        refused(
+            serde_json::json!({"kind": "signoff", "subject": {"item": code, "signoff": "design-review"}}),
+            "at least one source",
+        );
+        refused(
+            serde_json::json!({"kind": "verdict", "subject": {}, "sources": src}),
+            "not a kind",
+        );
+        refused(
+            serde_json::json!({"kind": "signoff", "subject": {"item": code}, "sources": src}),
+            "names its signoff",
+        );
+        refused(
+            serde_json::json!({"kind": "signoff", "subject": {"item": code, "signoff": "x"},
+                               "fields": {"passed": true}, "sources": src}),
+            "no field 'passed'",
+        );
+        refused(
+            serde_json::json!({"kind": "gate-result", "subject": {"gate": "ci", "commit": SHA},
+                               "fields": {"passed": "yes"}, "sources": src}),
+            "true or false",
+        );
+        refused(
+            serde_json::json!({"kind": "gate-result", "subject": {"gate": "ci", "commit": "9f078bd"},
+                               "fields": {"passed": true}, "sources": src}),
+            "full commit",
+        );
+        refused(
+            serde_json::json!({"kind": "ratification", "subject": {"item": code}, "sources": src}),
+            "needs 'reason'",
+        );
+        refused(
+            serde_json::json!({"kind": "signoff", "subject": {"item": code, "signoff": "x"},
+                               "fields": {"note": "x".repeat(MAX_TEXT + 1)}, "sources": src}),
+            "at most",
+        );
+        refused(
+            serde_json::json!({"kind": "signoff", "subject": {"item": code, "signoff": "x"},
+                               "sources": [{"label": "run", "url": "javascript:alert(1)"}]}),
+            "not a source",
+        );
+        // A good one is kept, pinned to the definition it was prepared on.
+        let r = go(
+            serde_json::json!({"kind": "ratification", "subject": {"item": code},
+                                      "fields": {"reason": "built under the outage"},
+                                      "sources": src}),
+        )
+        .unwrap();
+        let def = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        assert_eq!(r.rev, def.content_rev());
+        assert_eq!(r.by, "Claude");
+        // Preparing changed nothing the gates read.
+        assert!(!def.approval_state().is_agreed());
     }
 
     /// FTR-034 R-1: a source is a link with no user info or a board reference, and nothing else.
