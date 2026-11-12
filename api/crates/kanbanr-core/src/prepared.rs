@@ -855,6 +855,533 @@ pub fn state_of(
     }
 }
 
+// ---- listing -------------------------------------------------------------------------------
+
+/// A prepared record as the monitor lists it: the record, where it stands, the answer if any, and
+/// what the person would type in their own terminal instead.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PreparedView {
+    #[serde(flatten)]
+    pub record: Prepared,
+    pub state: State,
+    pub resolution: Option<Resolution>,
+    /// Why it no longer waits, when stale, superseded or of an unknown kind.
+    pub stale_why: String,
+    /// The monitor page its decision is taken on: `review` or `releases`.
+    pub page: String,
+    /// The equivalent verdict command, for a person's own terminal.
+    pub command: String,
+}
+
+/// Which records [`list`] answers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListQuery {
+    /// Every record, not only the open ones.
+    pub all: bool,
+    /// Only records about this item.
+    pub item: Option<String>,
+    /// Only records about this release.
+    pub release: Option<String>,
+}
+
+/// The monitor page a kind's decision is taken on.
+pub fn page_of(kind: &str) -> &'static str {
+    match kind {
+        "promotion" | "gate-result" => "releases",
+        _ => "review",
+    }
+}
+
+/// `s` as one shell word.
+fn quote(s: &str) -> String {
+    let plain = !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._/:@=+-,".contains(c));
+    if plain {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+fn field_text<'a>(r: &'a Prepared, name: &str) -> &'a str {
+    r.fields.get(name).and_then(Value::as_str).unwrap_or("")
+}
+
+/// The verdict command a person would run in their own terminal to take the decision `r`
+/// prepares, with what it prepared. Empty for a kind with no command.
+pub fn equivalent_command(r: &Prepared) -> String {
+    let mut words: Vec<String> = vec!["kanbanr".into()];
+    let flag = |words: &mut Vec<String>, name: &str, value: &str| {
+        if !value.is_empty() {
+            words.push(format!("--{name}"));
+            words.push(quote(value));
+        }
+    };
+    match r.kind.as_str() {
+        "signoff" => {
+            words.extend([
+                "signoff".into(),
+                quote(&r.subject.item),
+                quote(&r.subject.signoff),
+            ]);
+            flag(&mut words, "note", field_text(r, "note"));
+            flag(&mut words, "doc", field_text(r, "doc"));
+            flag(&mut words, "rev", &r.rev);
+        }
+        "ratification" => {
+            words.extend(["ratify".into(), quote(&r.subject.item)]);
+            flag(&mut words, "reason", field_text(r, "reason"));
+            flag(&mut words, "rev", &r.rev);
+        }
+        "gate-result" => {
+            let passed = r
+                .fields
+                .get("passed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            words.extend([
+                "gate".into(),
+                "record".into(),
+                quote(&r.subject.gate),
+                if passed { "--passed" } else { "--failed" }.into(),
+            ]);
+            flag(&mut words, "commit", &r.subject.commit);
+            flag(&mut words, "url", field_text(r, "url"));
+            flag(&mut words, "note", field_text(r, "note"));
+        }
+        "promotion" => {
+            words.extend([
+                "release".into(),
+                "promote".into(),
+                quote(&r.subject.release),
+                quote(&r.subject.stage),
+            ]);
+            flag(&mut words, "note", field_text(r, "checked"));
+        }
+        _ => return String::new(),
+    }
+    words.join(" ")
+}
+
+/// Does the decision `r` prepares still wait, as prepared? `Err` says why not. `project` is the
+/// project loaded once for the request, with its specs.
+pub fn still_waiting(
+    store: &Store,
+    p: &str,
+    project: &crate::store::Project,
+    r: &Prepared,
+    repo: Option<&std::path::Path>,
+) -> std::result::Result<(), String> {
+    let changed = "the definition changed after it was prepared";
+    match r.kind.as_str() {
+        "signoff" => {
+            let item = project
+                .feature(&r.subject.item)
+                .map_err(|_| format!("{} no longer exists", r.subject.item))?;
+            if let Some(s) = item.signoff_current(&r.subject.signoff) {
+                return Err(format!(
+                    "{} was signed off by {} on {}",
+                    r.subject.signoff,
+                    s.by,
+                    s.at.chars().take(10).collect::<String>()
+                ));
+            }
+            let now = item.definition.as_ref().map(|d| d.content_rev());
+            if now.as_deref() != Some(r.rev.as_str()) {
+                return Err(changed.into());
+            }
+            Ok(())
+        }
+        "ratification" => {
+            let item = project
+                .feature(&r.subject.item)
+                .map_err(|_| format!("{} no longer exists", r.subject.item))?;
+            let Some(def) = item.definition.as_ref() else {
+                return Err(changed.into());
+            };
+            if def.started_unapproved.trim().is_empty() || def.approval_state().is_agreed() {
+                return Err(format!("{} has no bypass left to ratify", r.subject.item));
+            }
+            if def.content_rev() != r.rev {
+                return Err(changed.into());
+            }
+            Ok(())
+        }
+        "gate-result" => {
+            let results = crate::gates::results(store, p, Some(&r.subject.gate))
+                .map_err(|e| e.to_string())?;
+            let since = results.iter().find(|g| {
+                g.commit == r.subject.commit
+                    && crate::cmp_instants(&g.at, &r.at) == std::cmp::Ordering::Greater
+            });
+            match since {
+                Some(g) => Err(format!(
+                    "{} {} was recorded for {} by {} since",
+                    g.name,
+                    if g.passed { "passed" } else { "failed" },
+                    g.commit.chars().take(7).collect::<String>(),
+                    g.by
+                )),
+                None => Ok(()),
+            }
+        }
+        "promotion" => {
+            let releases = crate::releases::load(store, p).map_err(|e| e.to_string())?;
+            let Some(release) = releases.iter().find(|x| x.version == r.subject.release) else {
+                return Err(format!("{} no longer exists", r.subject.release));
+            };
+            if release.state == crate::releases::ReleaseState::Shipped {
+                return Err(format!("{} has shipped", release.version));
+            }
+            let stages = project.config.cadence.stages();
+            let at = stages.iter().position(|s| *s == release.stage);
+            let to = stages.iter().position(|s| *s == r.subject.stage);
+            if let (Some(at), Some(to)) = (at, to)
+                && at >= to
+            {
+                return Err(format!(
+                    "{} is already at {}",
+                    release.version, release.stage
+                ));
+            }
+            if let Some(repo) = repo
+                && !r.rev.is_empty()
+            {
+                let branch = if release.branch.is_empty() {
+                    format!("release/{}", release.version)
+                } else {
+                    release.branch.clone()
+                };
+                let tip = crate::coderepo::rev_parse(repo, &branch).unwrap_or_default();
+                if tip != r.rev {
+                    return Err("the release branch moved after it was prepared".into());
+                }
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Every record with where it stands, oldest first.
+fn standing(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result<Vec<PreparedView>> {
+    let (all, _) = read_all(store, p)?;
+    let project = store.load(p)?;
+    let mut out = Vec::with_capacity(all.len());
+    for (i, (r, answer)) in all.iter().enumerate() {
+        let newer_open = all[i + 1..]
+            .iter()
+            .any(|(n, a)| a.is_none() && n.kind == r.kind && n.subject == r.subject);
+        // Only an unanswered record of a known kind needs the decision looked up.
+        let waiting = if answer.is_none() && !newer_open && kind(&r.kind).is_some() {
+            still_waiting(store, p, &project, r, repo)
+        } else {
+            Ok(())
+        };
+        let (state, stale_why) = state_of(r, answer.as_ref(), newer_open, waiting);
+        out.push(PreparedView {
+            record: r.clone(),
+            state,
+            resolution: answer.clone(),
+            stale_why,
+            page: page_of(&r.kind).to_string(),
+            command: equivalent_command(r),
+        });
+    }
+    Ok(out)
+}
+
+/// The prepared records `query` asks for, newest first (`GET /projects/{p}/prepared`).
+pub fn list(
+    store: &Store,
+    p: &str,
+    query: &ListQuery,
+    repo: Option<&std::path::Path>,
+) -> Result<Vec<PreparedView>> {
+    let mut views = standing(store, p, repo)?;
+    views.retain(|v| {
+        (query.all || v.state == State::Open)
+            && query
+                .item
+                .as_ref()
+                .is_none_or(|i| &v.record.subject.item == i)
+            && query
+                .release
+                .as_ref()
+                .is_none_or(|x| &v.record.subject.release == x)
+    });
+    views.reverse();
+    Ok(views)
+}
+
+// ---- confirming and rejecting -----------------------------------------------------------------
+
+/// `(project, id, "confirm" | "reject")` for a route that answers a prepared record.
+pub fn answer_route(method: &str, path: &str) -> Option<(String, String, String)> {
+    if !method.eq_ignore_ascii_case("POST") {
+        return None;
+    }
+    let seg: Vec<&str> = path
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    match seg.as_slice() {
+        [
+            "projects",
+            p,
+            "prepared",
+            id,
+            action @ ("confirm" | "reject"),
+        ] => Some((p.to_string(), id.to_string(), action.to_string())),
+        _ => None,
+    }
+}
+
+/// The verdict a confirmation makes, and the answer to keep once it is made.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expanded {
+    pub method: String,
+    pub path: String,
+    pub body: Value,
+    pub resolution: Resolution,
+}
+
+/// The open record `id`, or why it cannot be answered.
+fn open_record(
+    store: &Store,
+    p: &str,
+    id: &str,
+    repo: Option<&std::path::Path>,
+) -> Result<Prepared> {
+    let views = standing(store, p, repo)?;
+    let Some(v) = views.into_iter().find(|v| v.record.id == id) else {
+        return Err(unsupported(format!("there is no prepared record {id}")));
+    };
+    match v.state {
+        State::Open => Ok(v.record),
+        State::Confirmed | State::Rejected => {
+            let a = v.resolution.unwrap_or_else(|| unreachable!("answered"));
+            Err(unsupported(format!(
+                "{id} was already {} by {} on {}",
+                if a.verdict == Answer::Confirmed {
+                    "confirmed"
+                } else {
+                    "rejected"
+                },
+                a.by,
+                a.at.chars().take(19).collect::<String>().replace('T', " ")
+            )))
+        }
+        _ => Err(unsupported(format!(
+            "{id} no longer waits: {}. Ask Claude to prepare it again",
+            v.stale_why
+        ))),
+    }
+}
+
+/// What a confirmation makes (FTR-034): the guard first, then the record must be open and of a
+/// kind confirmed alone; `edits` may change only the kind's editable fields, each to a value of its
+/// type, and each change is kept; the verdict body is built from the record, with `by` and the
+/// pins (`rev`, `spec_rev`, `expect`) from the confirmation. Called by the write path before the
+/// origin is stamped, so the verdict then goes through its own route exactly as a direct one does.
+pub fn expand(
+    store: &Store,
+    p: &str,
+    id: &str,
+    body: &Value,
+    origin: crate::origin::Origin,
+) -> Result<Expanded> {
+    use crate::origin::{Taker, Verdict, verdict_refusal};
+    if let Some(why) = verdict_refusal(Verdict::ConfirmPrepared, Taker::of_origin(origin)) {
+        return Err(CoreError::Refused(why));
+    }
+    let record = open_record(store, p, id, None)?;
+    if record.kind == "text-check" {
+        return Err(unsupported(
+            "a text check is confirmed by the docs-folded sign-off".into(),
+        ));
+    }
+    let spec = kind(&record.kind)
+        .ok_or_else(|| unsupported(format!("{id} is a kind this version does not know")))?;
+    let by = body
+        .get("by")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .ok_or_else(|| {
+            unsupported(
+                "a confirmation must name who gave it: pass `by` (the monitor sends the board's \
+                 commit identity)"
+                    .into(),
+            )
+        })?
+        .to_string();
+    let mut fields = record.fields.clone();
+    let mut changed = Vec::new();
+    if let Some(edits) = body.get("edits").filter(|e| !e.is_null()) {
+        let Some(edits) = edits.as_object() else {
+            return Err(unsupported("edits are an object of field: value".into()));
+        };
+        for (k, v) in edits {
+            let f = spec
+                .fields
+                .iter()
+                .find(|f| f.name == k && f.editable)
+                .ok_or_else(|| {
+                    unsupported(format!(
+                        "'{k}' is not a field the person can change on a prepared {}: they are {}",
+                        record.kind,
+                        spec.fields
+                            .iter()
+                            .filter(|f| f.editable)
+                            .map(|f| f.name)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                })?;
+            let v = match v {
+                Value::String(t) => Value::String(t.trim().to_string()),
+                other => other.clone(),
+            };
+            check_field(&record.kind, f, &v)?;
+            let before = fields.get(k.as_str()).cloned().unwrap_or(Value::Null);
+            let same = before == v || (before.is_null() && v.as_str() == Some(""));
+            if same {
+                continue;
+            }
+            if f.required && v.as_str() == Some("") {
+                return Err(unsupported(format!(
+                    "a {}'s '{k}' cannot be emptied",
+                    record.kind
+                )));
+            }
+            changed.push(FieldChange {
+                field: k.clone(),
+                prepared: before,
+                confirmed: v.clone(),
+                extra: Default::default(),
+            });
+            fields.insert(k.clone(), v);
+        }
+    }
+    let text = |k: &str| {
+        fields
+            .get(k)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let pin = |k: &str| {
+        body.get(k)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+    };
+    let s = &record.subject;
+    let (path, mut verdict) = match record.kind.as_str() {
+        "signoff" => (
+            format!("/projects/{p}/features/{}/signoff/{}", s.item, s.signoff),
+            serde_json::json!({"by": by, "note": text("note"), "doc": text("doc")}),
+        ),
+        "ratification" => (
+            format!("/projects/{p}/features/{}/ratify", s.item),
+            serde_json::json!({"by": by, "reason": text("reason")}),
+        ),
+        "gate-result" => {
+            let mut v = serde_json::json!({
+                "name": s.gate, "commit": s.commit,
+                "passed": fields.get("passed").and_then(Value::as_bool).unwrap_or(false),
+                "by": by,
+            });
+            for k in ["url", "note"] {
+                if !text(k).is_empty() {
+                    v[k] = Value::String(text(k));
+                }
+            }
+            (format!("/projects/{p}/gate-results"), v)
+        }
+        "promotion" => (
+            format!("/projects/{p}/releases/{}/promote", s.release),
+            serde_json::json!({"by": by, "stage": s.stage, "reason": text("checked")}),
+        ),
+        other => {
+            return Err(unsupported(format!(
+                "a prepared {other} is not confirmed on its own"
+            )));
+        }
+    };
+    for k in ["rev", "spec_rev", "expect"] {
+        if let Some(v) = pin(k) {
+            verdict[k] = Value::String(v.to_string());
+        }
+    }
+    let resolution = Resolution {
+        id: id.to_string(),
+        verdict: Answer::Confirmed,
+        by,
+        origin: origin.as_str().to_string(),
+        at: crate::now_rfc3339(),
+        changed,
+        reason: String::new(),
+        made: format!("POST {path}"),
+        extra: Default::default(),
+    };
+    Ok(Expanded {
+        method: "POST".into(),
+        path,
+        body: verdict,
+        resolution,
+    })
+}
+
+/// Reject an open record (`POST /projects/{p}/prepared/{id}/reject`, `{by, reason?}`): the guard,
+/// then the record must be open; the answer is kept and nothing else changes. `body` carries the
+/// origin the front end stamped; a body with none is not taken as the person's.
+pub fn reject(store: &Store, p: &str, id: &str, body: &Value) -> Result<Resolution> {
+    use crate::origin::{Origin, Taker, Verdict, verdict_refusal};
+    let origin = Origin::parse(&crate::origin::from_body(body));
+    let taker = origin.map(Taker::of_origin).unwrap_or(Taker::Claude);
+    if let Some(why) = verdict_refusal(Verdict::RejectPrepared, taker) {
+        return Err(CoreError::Refused(why));
+    }
+    let by = body
+        .get("by")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .ok_or_else(|| unsupported("a rejection must name who gave it: pass `by`".into()))?
+        .to_string();
+    let reason = body
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if reason.chars().count() > MAX_TEXT {
+        return Err(unsupported(format!(
+            "a rejection's reason is at most {MAX_TEXT} characters"
+        )));
+    }
+    open_record(store, p, id, None)?;
+    let resolution = Resolution {
+        id: id.to_string(),
+        verdict: Answer::Rejected,
+        by,
+        origin: origin.map(|o| o.as_str().to_string()).unwrap_or_default(),
+        at: crate::now_rfc3339(),
+        changed: Vec::new(),
+        reason,
+        made: String::new(),
+        extra: Default::default(),
+    };
+    resolve(store, p, &resolution)?;
+    Ok(resolution)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1077,6 +1604,83 @@ mod tests {
         assert!(!def.approval_state().is_agreed());
     }
 
+    /// A prepared CI result for `SHA`, written as Claude would; its id.
+    fn prepared_gate(store: &Store, dir: &std::path::Path) -> String {
+        let out = apply(
+            store,
+            dir,
+            "POST",
+            "/projects/demo/prepared",
+            serde_json::json!({
+                "kind": "gate-result",
+                "subject": {"gate": "ci", "commit": SHA},
+                "fields": {"passed": true, "url": "https://ci.example/run/4512",
+                           "note": "all 412 tests passed"},
+            }),
+            crate::origin::Origin::Conversation,
+        )
+        .unwrap();
+        out["id"].as_str().unwrap().to_string()
+    }
+
+    /// Every file under `dir`, with its bytes.
+    fn files(dir: &std::path::Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.file_name().is_some_and(|n| n == ".git") {
+                    continue;
+                }
+                if p.is_dir() {
+                    stack.push(p);
+                } else if !p.to_string_lossy().contains(".lock") {
+                    out.push((p.clone(), std::fs::read(&p).unwrap()));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// FTR-034 R-4: Claude can neither confirm nor reject a prepared record; nothing is written.
+    #[test]
+    fn claudes_confirmation_of_a_prepared_record_is_refused() {
+        let (store, dir, _) = board_with_item(false);
+        let id = prepared_gate(&store, &dir);
+        let before = files(&dir);
+        for (action, body) in [
+            ("confirm", serde_json::json!({"by": "Ada L"})),
+            ("reject", serde_json::json!({"by": "Ada L", "reason": "no"})),
+        ] {
+            let path = format!("/projects/demo/prepared/{id}/{action}");
+            match apply(
+                &store,
+                &dir,
+                "POST",
+                &path,
+                body,
+                crate::origin::Origin::Conversation,
+            ) {
+                Err(crate::write::WriteError::Refused(why)) => {
+                    assert!(why.contains("never by Claude"), "{why}")
+                }
+                other => panic!("{action} was not refused: {other:?}"),
+            }
+        }
+        assert_eq!(
+            files(&dir),
+            before,
+            "a refused confirmation wrote something"
+        );
+        assert!(
+            crate::gates::results(&store, "demo", None)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     /// FTR-034 R-1: a source is a link with no user info or a board reference, and nothing else.
     #[test]
     fn sources_are_links_or_board_references_only() {
@@ -1173,5 +1777,410 @@ mod tests {
         .unwrap();
         let (all, bad) = read_all(&store, "demo").unwrap();
         assert_eq!((all.len(), bad.len()), (2, 1));
+
+        // Listed against the board: a decision taken some other way leaves the record stale.
+        let (store, dir, code) = board_with_item(true);
+        let gate = prepared_gate(&store, &dir);
+        let signoff = prepare_as_claude(
+            &store,
+            serde_json::json!({"kind": "signoff", "subject": {"item": code, "signoff": "design-review"},
+                               "fields": {"note": "held on Tuesday"},
+                               "sources": [{"label": "minutes", "url": "doc:minutes/tuesday.md"}]}),
+        );
+        let ratify = prepare_as_claude(
+            &store,
+            serde_json::json!({"kind": "ratification", "subject": {"item": code},
+                               "fields": {"reason": "built in the outage"},
+                               "sources": [{"label": "what the person said"}]}),
+        );
+        let open = list(&store, "demo", &ListQuery::default(), None).unwrap();
+        assert_eq!(open.len(), 3, "{open:#?}");
+        // Newest first, each naming its page and its command.
+        assert_eq!(open[0].record.id, ratify);
+        assert_eq!(open[2].page, "releases");
+        assert!(
+            open[2]
+                .command
+                .starts_with(&format!("kanbanr gate record ci --passed --commit {SHA}")),
+            "{}",
+            open[2].command
+        );
+        // The person records the result in their own terminal; the sign-off is given; the
+        // definition changes, so the ratification was prepared on other text.
+        let mut r = crate::gates::GateResult {
+            name: "ci".into(),
+            commit: SHA.into(),
+            passed: true,
+            by: "Ada L".into(),
+            at: "2999-01-01T00:00:00Z".into(),
+            source: "person".into(),
+            ..Default::default()
+        };
+        crate::gates::record(&store, "demo", &r).unwrap();
+        r.at = String::new();
+        store
+            .signoff_feature_checked_as(
+                "demo",
+                &code,
+                "design-review",
+                "Ada L",
+                "",
+                "",
+                "terminal",
+                &[],
+            )
+            .unwrap();
+        let stale = |id: &str| {
+            let all = list(
+                &store,
+                "demo",
+                &ListQuery {
+                    all: true,
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+            let v = all.iter().find(|v| v.record.id == id).unwrap().clone();
+            assert_eq!(v.state, State::Stale, "{v:#?}");
+            v.stale_why
+        };
+        assert!(stale(&gate).contains("recorded"), "{}", stale(&gate));
+        assert!(
+            stale(&signoff).contains("signed off by Ada L"),
+            "{}",
+            stale(&signoff)
+        );
+        let mut def = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        def.statement = "Keep a cart for 30 days".into();
+        store
+            .set_feature_definition("demo", &code, Some(def))
+            .unwrap();
+        assert!(
+            list(&store, "demo", &ListQuery::default(), None)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            stale(&ratify).contains("definition changed"),
+            "{}",
+            stale(&ratify)
+        );
+        // Filters.
+        let q = ListQuery {
+            all: true,
+            item: Some(code.clone()),
+            release: None,
+        };
+        assert_eq!(list(&store, "demo", &q, None).unwrap().len(), 2);
+    }
+
+    /// Prepare `body` as Claude would, through the route; the record's id.
+    fn prepare_as_claude(store: &Store, mut body: Value) -> String {
+        body["origin"] = Value::String("conversation".into());
+        prepare(store, "demo", &body, None).unwrap().id
+    }
+
+    fn confirm(
+        store: &Store,
+        dir: &std::path::Path,
+        id: &str,
+        body: Value,
+    ) -> std::result::Result<Value, crate::write::WriteError> {
+        apply(
+            store,
+            dir,
+            "POST",
+            &format!("/projects/demo/prepared/{id}/confirm"),
+            body,
+            crate::origin::Origin::Monitor,
+        )
+    }
+
+    fn resolution_of(store: &Store, id: &str) -> Resolution {
+        let path = store
+            .project_dir("demo")
+            .join(format!("prepared/{id}.resolved.yaml"));
+        crate::yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// FTR-034 R-3: confirming a prepared sign-off, ratification and gate result makes the same
+    /// record its verdict route makes, as the person, from the monitor.
+    #[test]
+    fn confirming_each_kind_makes_the_same_record_as_its_verdict_route() {
+        let (store, dir, code) = board_with_item(true);
+        let signoff = prepare_as_claude(
+            &store,
+            serde_json::json!({"kind": "signoff", "subject": {"item": code, "signoff": "design-review"},
+                               "fields": {"note": "held on Tuesday", "doc": "minutes/tuesday.md"},
+                               "sources": [{"label": "minutes", "url": "doc:minutes/tuesday.md"}]}),
+        );
+        let ratify = prepare_as_claude(
+            &store,
+            serde_json::json!({"kind": "ratification", "subject": {"item": code},
+                               "fields": {"reason": "built in the outage"},
+                               "sources": [{"label": "what the person said"}]}),
+        );
+        let gate = prepared_gate(&store, &dir);
+        let rev = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap()
+            .content_rev();
+
+        let out = confirm(
+            &store,
+            &dir,
+            &signoff,
+            serde_json::json!({"by": "Ada L", "rev": rev}),
+        )
+        .unwrap();
+        assert_eq!(out["prepared"], Value::String(signoff.clone()));
+        let item = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        let s = item.signoff_current("design-review").unwrap();
+        assert_eq!(
+            (
+                s.by.as_str(),
+                s.note.as_str(),
+                s.doc.as_str(),
+                s.origin.as_str()
+            ),
+            ("Ada L", "held on Tuesday", "minutes/tuesday.md", "monitor")
+        );
+        let a = resolution_of(&store, &signoff);
+        assert_eq!(
+            (a.verdict, a.made.as_str()),
+            (
+                Answer::Confirmed,
+                format!("POST /projects/demo/features/{code}/signoff/design-review").as_str()
+            )
+        );
+
+        confirm(
+            &store,
+            &dir,
+            &ratify,
+            serde_json::json!({"by": "Ada L", "rev": rev}),
+        )
+        .unwrap();
+        let def = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        let last = def.approvals.last().unwrap();
+        assert_eq!(
+            (
+                last.verdict.as_str(),
+                last.by.as_str(),
+                last.origin.as_str()
+            ),
+            ("ratified", "Ada L", "monitor")
+        );
+
+        confirm(&store, &dir, &gate, serde_json::json!({"by": "Ada L"})).unwrap();
+        let results = crate::gates::results(&store, "demo", None).unwrap();
+        assert_eq!(results.len(), 1);
+        let g = &results[0];
+        assert_eq!(
+            (
+                g.name.as_str(),
+                g.commit.as_str(),
+                g.passed,
+                g.by.as_str(),
+                g.url.as_str(),
+                g.origin.as_str()
+            ),
+            (
+                "ci",
+                SHA,
+                true,
+                "Ada L",
+                "https://ci.example/run/4512",
+                "monitor"
+            )
+        );
+        assert_eq!(g.note, "all 412 tests passed");
+        // Each is answered now, and asked for no more.
+        assert!(
+            list(&store, "demo", &ListQuery::default(), None)
+                .unwrap()
+                .is_empty()
+        );
+        let again = confirm(&store, &dir, &gate, serde_json::json!({"by": "Ada L"})).unwrap_err();
+        assert!(
+            again.to_string().contains("already confirmed by Ada L"),
+            "{again}"
+        );
+        // A pin the verdict route checks still holds: a stale `rev` is that route's refusal.
+        let (store, dir, code) = board_with_item(false);
+        let s2 = prepare_as_claude(
+            &store,
+            serde_json::json!({"kind": "signoff", "subject": {"item": code, "signoff": "design-review"},
+                               "sources": [{"label": "the conversation"}]}),
+        );
+        let e = confirm(
+            &store,
+            &dir,
+            &s2,
+            serde_json::json!({"by": "Ada L", "rev": "not-it"}),
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("changed after it was shown"), "{e}");
+        assert!(
+            !store
+                .project_dir("demo")
+                .join(format!("prepared/{s2}.resolved.yaml"))
+                .exists()
+        );
+    }
+
+    /// FTR-034 R-3: only the kind's editable fields can be changed, each to a value of its type,
+    /// and each change is kept beside what was prepared; the prepared file is never rewritten.
+    #[test]
+    fn only_a_kinds_editable_fields_can_be_changed_and_each_change_is_kept() {
+        let (store, dir, _) = board_with_item(false);
+        let id = prepared_gate(&store, &dir);
+        let file = store
+            .project_dir("demo")
+            .join(format!("prepared/{id}.yaml"));
+        let before = std::fs::read(&file).unwrap();
+        for (edits, words) in [
+            (
+                serde_json::json!({"commit": SHA}),
+                "'commit' is not a field",
+            ),
+            (
+                serde_json::json!({"gate": "smoke"}),
+                "'gate' is not a field",
+            ),
+            (serde_json::json!({"passed": "no"}), "true or false"),
+        ] {
+            let e = confirm(
+                &store,
+                &dir,
+                &id,
+                serde_json::json!({"by": "Ada L", "edits": edits}),
+            )
+            .unwrap_err();
+            assert!(e.to_string().contains(words), "{e}");
+        }
+        assert!(
+            crate::gates::results(&store, "demo", None)
+                .unwrap()
+                .is_empty()
+        );
+        confirm(
+            &store,
+            &dir,
+            &id,
+            serde_json::json!({"by": "Ada L", "edits": {
+                "note": "all 412 tests passed; checked the smoke run too",
+                "url": "https://ci.example/run/4512",
+            }}),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            before,
+            "the prepared file was rewritten"
+        );
+        let a = resolution_of(&store, &id);
+        assert_eq!(a.changed.len(), 1, "{:?}", a.changed);
+        assert_eq!(a.changed[0].field, "note");
+        assert_eq!(
+            a.changed[0].prepared,
+            Value::String("all 412 tests passed".into())
+        );
+        assert_eq!(
+            a.changed[0].confirmed,
+            Value::String("all 412 tests passed; checked the smoke run too".into())
+        );
+        let g = &crate::gates::results(&store, "demo", None).unwrap()[0];
+        assert_eq!(g.note, "all 412 tests passed; checked the smoke run too");
+    }
+
+    /// FTR-034 R-3: rejecting keeps the record and the reason, and makes no verdict.
+    #[test]
+    fn rejecting_keeps_the_record_and_makes_no_verdict() {
+        let (store, dir, _) = board_with_item(false);
+        let id = prepared_gate(&store, &dir);
+        let out = apply(
+            &store,
+            &dir,
+            "POST",
+            &format!("/projects/demo/prepared/{id}/reject"),
+            serde_json::json!({"by": "Ada L", "reason": "that run was on another branch"}),
+            crate::origin::Origin::Monitor,
+        )
+        .unwrap();
+        assert_eq!(out["verdict"], "rejected");
+        let a = resolution_of(&store, &id);
+        assert_eq!(
+            (
+                a.by.as_str(),
+                a.origin.as_str(),
+                a.reason.as_str(),
+                a.made.as_str()
+            ),
+            ("Ada L", "monitor", "that run was on another branch", "")
+        );
+        assert!(
+            store
+                .project_dir("demo")
+                .join(format!("prepared/{id}.yaml"))
+                .exists()
+        );
+        assert!(
+            crate::gates::results(&store, "demo", None)
+                .unwrap()
+                .is_empty()
+        );
+        let all = list(
+            &store,
+            "demo",
+            &ListQuery {
+                all: true,
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(all[0].state, State::Rejected);
+        // A reason is optional; an answered record is not answered twice.
+        let e = apply(
+            &store,
+            &dir,
+            "POST",
+            &format!("/projects/demo/prepared/{id}/reject"),
+            serde_json::json!({"by": "Ada L"}),
+            crate::origin::Origin::Monitor,
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("already rejected"), "{e}");
+        let id2 = prepared_gate(&store, &dir);
+        apply(
+            &store,
+            &dir,
+            "POST",
+            &format!("/projects/demo/prepared/{id2}/reject"),
+            serde_json::json!({"by": "Ada L"}),
+            crate::origin::Origin::Terminal,
+        )
+        .unwrap();
     }
 }

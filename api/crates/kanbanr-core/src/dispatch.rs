@@ -1401,6 +1401,32 @@ fn dispatch_routes(
         // FTR-034: `{kind, subject, fields, sources, by?}`: the evidence for a decision, prepared for
         // the person to confirm. Not a verdict: nothing a gate reads changes.
         ("POST", ["projects", p, "prepared"]) => ser(&crate::prepared::prepare(store, p, b, repo)?),
+        // `?state=open|all&item=CODE&release=V`: the prepared records, newest first (FTR-034).
+        ("GET", ["projects", p, "prepared"]) => {
+            let state = query_param(query, "state").unwrap_or_else(|| "open".into());
+            if state != "open" && state != "all" {
+                return Err(CoreError::Unsupported(format!(
+                    "state is open or all, not '{state}'"
+                )));
+            }
+            let q = crate::prepared::ListQuery {
+                all: state == "all",
+                item: query_param(query, "item").filter(|v| !v.is_empty()),
+                release: query_param(query, "release").filter(|v| !v.is_empty()),
+            };
+            ser(&crate::prepared::list(store, p, &q, repo)?)
+        }
+        // `{by, reason?}`: the person turns a prepared record down; nothing else changes (FTR-034).
+        ("POST", ["projects", p, "prepared", id, "reject"]) => {
+            ser(&crate::prepared::reject(store, p, id, b)?)
+        }
+        // A confirmation makes the person's verdict, so only the write path takes it: it expands
+        // into the verdict's own route (FTR-034).
+        ("POST", ["projects", _p, "prepared", _id, "confirm"]) => Err(CoreError::Unsupported(
+            "a prepared record is confirmed through the write path, which records the verdict \
+             as the person"
+                .into(),
+        )),
         // `{gates: [name…]}`: the gates `gate_passed` requires; empty clears them (FTR-002).
         ("PUT", ["projects", p, "config", "commit-gates"]) => {
             let names: Vec<String> = vec_field(b, "gates")
