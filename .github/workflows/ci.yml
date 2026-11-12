@@ -226,6 +226,10 @@ jobs:
       # The board's Sprint filter can show only the items in no sprint (FTR-032).
       - name: The board can show the items in no sprint
         run: npm run check:sprint-filter
+      # What Claude prepared for a decision shows filled in beside its button, with its sources as
+      # links, and is edited or rejected only on request (FTR-034).
+      - name: A prepared record shows filled in beside its button
+        run: npm run check:prepared
       # The Workflow page shows the cadence, the git model and every guard rail, each with the
       # command that changes it, and changes nothing itself (FEAT-213).
       - name: The Workflow page shows the cadence, the git model and the guard rails
