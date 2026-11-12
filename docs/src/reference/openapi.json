@@ -207,6 +207,10 @@
           "by": {
             "type": "string"
           },
+          "delegation": {
+            "description": "The delegation a record was taken under, such as `DLG-001`, when `origin` is `delegated`\n(FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.",
+            "type": "string"
+          },
           "origin": {
             "description": "Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a\nrecord written before origin existed, which reads as unknown; kept as a string so a newer\nkanbanr's value survives.",
             "type": "string"
@@ -237,6 +241,10 @@
             "type": "string"
           },
           "by": {
+            "type": "string"
+          },
+          "delegation": {
+            "description": "The delegation a record was taken under, such as `DLG-001`, when `origin` is `delegated`\n(FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.",
             "type": "string"
           },
           "origin": {
@@ -3690,6 +3698,10 @@
               "$ref": "#/components/schemas/Checked"
             },
             "type": "array"
+          },
+          "delegation": {
+            "description": "The delegation a record was taken under, such as `DLG-001`, when `origin` is `delegated`\n(FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.",
+            "type": "string"
           },
           "doc": {
             "description": "A board doc holding the record — minutes, a checklist.",

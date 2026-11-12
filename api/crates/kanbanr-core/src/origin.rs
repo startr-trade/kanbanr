@@ -68,6 +68,7 @@ pub fn via(stored: &str) -> String {
     match stored {
         "" => " — origin unknown".to_string(),
         "monitor" | "conversation" | "terminal" => format!(" via the {stored}"),
+        "delegated" => " under a delegation".to_string(),
         other => format!(" via {other}"),
     }
 }
@@ -128,6 +129,14 @@ pub fn from_body(body: &Value) -> String {
         .unwrap_or_default()
 }
 
+/// The delegation a verdict body names (`DLG-001`), trimmed; "" when it names none.
+pub fn delegation_from_body(b: &Value) -> String {
+    b.get("delegation")
+        .and_then(|v| v.as_str())
+        .map(|d| d.trim().to_string())
+        .unwrap_or_default()
+}
+
 /// The record a repeat verdict collides with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Earlier {
@@ -149,6 +158,7 @@ impl Earlier {
         let from = match self.origin.as_str() {
             "" => "from an unknown origin".to_string(),
             o @ ("monitor" | "conversation" | "terminal") => format!("from the {o}"),
+            "delegated" => "from a delegation".to_string(),
             o => format!("from {o}"),
         };
         format!("{} by {} on {} {}", self.what, self.by, at, from)
@@ -334,7 +344,7 @@ mod tests {
         let (store, dir) = board();
         let code = item(&store, true);
         store
-            .approve_feature_as("demo", &code, "Ada", "monitor")
+            .approve_feature_as("demo", &code, "Ada", "monitor", "")
             .unwrap();
         let d = def(&store, &code);
         assert_eq!(d.approval.as_ref().unwrap().origin, "monitor");
@@ -348,7 +358,7 @@ mod tests {
         assert_eq!(d.approvals.last().unwrap().origin, "terminal");
 
         store
-            .ratify_feature_as("demo", &code, "Ada", "built first", "conversation")
+            .ratify_feature_as("demo", &code, "Ada", "built first", "conversation", "")
             .unwrap();
         let d = def(&store, &code);
         assert_eq!(d.approval.as_ref().unwrap().origin, "conversation");
@@ -629,7 +639,7 @@ mod tests {
         // An approval withdrawn twice, and a sign-off withdrawn twice.
         let code = item(&store, false);
         store
-            .approve_feature_as("demo", &code, "Ada", "monitor")
+            .approve_feature_as("demo", &code, "Ada", "monitor", "")
             .unwrap();
         store
             .unapprove_feature_as("demo", &code, "Ada", "no", "conversation")
@@ -864,5 +874,26 @@ mod tests {
         );
         assert_eq!(activity::read(&dir, "demo", 1)[0].origin, "");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-028 R-3: a record taken under a delegation reads as such, where the origin shows.
+    #[test]
+    fn delegated_reads_as_under_a_delegation() {
+        assert_eq!(via("delegated"), " under a delegation");
+        let e = Earlier {
+            what: "signed off design-review".into(),
+            by: "Claude".into(),
+            at: "2026-11-12T10:00:00+00:00".into(),
+            origin: "delegated".into(),
+        };
+        assert!(
+            e.sentence().ends_with("from a delegation"),
+            "{}",
+            e.sentence()
+        );
+        let b = json!({"delegation": " DLG-001 "});
+        assert_eq!(delegation_from_body(&b), "DLG-001");
+        assert_eq!(delegation_from_body(&json!({})), "");
+        assert_eq!(delegation_from_body(&json!({"delegation": 3})), "");
     }
 }

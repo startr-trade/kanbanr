@@ -1082,6 +1082,7 @@ fn dispatch_routes(
                 &approver(b)?,
                 &str_field(b, "reason").unwrap_or_default(),
                 &crate::origin::from_body(b),
+                &crate::origin::delegation_from_body(b),
             )?)
         }
         ("POST", ["projects", p, "features", code, "approve"]) => {
@@ -1089,7 +1090,13 @@ fn dispatch_routes(
             if let Some(earlier) = repeat_approval(store, p, code, "approved")? {
                 return ser_already(store, p, code, &earlier);
             }
-            ser(&store.approve_feature_as(p, code, &approver(b)?, &crate::origin::from_body(b))?)
+            ser(&store.approve_feature_as(
+                p,
+                code,
+                &approver(b)?,
+                &crate::origin::from_body(b),
+                &crate::origin::delegation_from_body(b),
+            )?)
         }
         // Withdraw a sign-off given in error (FEAT-182). Matched before the sign-off route.
         ("POST", ["projects", p, "features", code, "signoff", name, "withdraw"]) => ser(&store
@@ -1133,6 +1140,7 @@ fn dispatch_routes(
                 &note,
                 &doc,
                 &crate::origin::from_body(b),
+                &crate::origin::delegation_from_body(b),
                 &checked,
             )?;
             let mut out = serde_json::to_value(&feature)

@@ -165,6 +165,8 @@ export interface ApprovalEvent {
   rev?: string;
   /** Where it was taken: monitor, conversation, terminal or delegated (DEF-028). Absent means unknown. */
   origin?: string;
+  /** The delegation it was taken under, such as DLG-001, when origin is delegated (FTR-028). */
+  delegation?: string;
 }
 
 export interface FeatureDefinition {
@@ -206,6 +208,8 @@ export interface Signoff {
   reason?: string;
   /** Where it was taken (DEF-028). Absent means unknown. */
   origin?: string;
+  /** The delegation it was taken under, such as DLG-001, when origin is delegated (FTR-028). */
+  delegation?: string;
 }
 
 /** The six completeness dimensions, one line each. */
@@ -226,6 +230,8 @@ export interface Approval {
   parts?: Record<string, string>;
   /** Where it was taken (DEF-028). Absent means unknown. */
   origin?: string;
+  /** The delegation it was taken under, such as DLG-001, when origin is delegated (FTR-028). */
+  delegation?: string;
 }
 
 export interface Requirement {
