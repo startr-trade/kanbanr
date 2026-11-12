@@ -1393,6 +1393,7 @@ fn dispatch_routes(
                     .unwrap_or_else(|| "person".into()),
                 url: str_field(b, "url").unwrap_or_default().trim().to_string(),
                 note: str_field(b, "note").unwrap_or_default().trim().to_string(),
+                origin: crate::origin::from_body(b),
             };
             crate::gates::record(store, p, &result)?;
             ser(&result)

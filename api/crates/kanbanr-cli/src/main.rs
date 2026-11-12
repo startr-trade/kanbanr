@@ -4033,33 +4033,26 @@ fn verdict_refusal(command: &str, review_url: &str) -> Option<String> {
             }
         }
         let rest = &words[1..];
-        let (verdict, releases) = match path.as_slice() {
-            ["approve" | "ratify" | "unapprove" | "signoff"] => (true, false),
-            ["adr", "accept" | "reject"] => (true, false),
-            ["release", "promote"] => (!rest.iter().any(|w| w == "--plan"), true),
-            ["release", "cut"] => (true, true),
-            // Starting a patch from a red tag is the person's decision (FTR-026). `promote` to a
-            // stage after the tag is covered above; `config tag-gate` is configuration, not a verdict.
-            ["release", "add"] => (rest.iter().any(|w| w == "--from-failed-tag"), true),
-            // A gate result recorded by hand is a verdict on the release (FTR-002).
-            ["gate", "record"] => (true, true),
-            _ => (false, false),
+        let Some(verdict) = kanbanr_core::origin::verdict_of_command(&path, rest) else {
+            continue;
         };
-        if verdict {
-            let page = if releases {
-                match review_url.strip_suffix("/review") {
-                    Some(base) => format!("{base}/releases"),
-                    None => review_url.to_string(),
-                }
-            } else {
-                review_url.to_string()
-            };
-            return Some(format!(
-                "refused: a verdict is the person's own, recorded on the monitor, never by Claude \
-                 (FTR-024). Tell them what is waiting: {page}. If no monitor accepts writes, offer \
-                 `kanbanr review --ui`."
-            ));
-        }
+        let Some(why) =
+            kanbanr_core::origin::verdict_refusal(verdict, kanbanr_core::origin::Taker::Claude)
+        else {
+            continue;
+        };
+        let page = if verdict.on_releases_page() {
+            match review_url.strip_suffix("/review") {
+                Some(base) => format!("{base}/releases"),
+                None => review_url.to_string(),
+            }
+        } else {
+            review_url.to_string()
+        };
+        return Some(format!(
+            "refused: {why} It waits at: {page}. If no monitor accepts writes, offer \
+             `kanbanr review --ui`."
+        ));
     }
     None
 }
@@ -11126,6 +11119,8 @@ mod tests {
             "kanbanr release plan v1 FTR-1",
             "kanbanr signoff --help",
             "kanbanr adr list",
+            "kanbanr prepare gate ci --passed --url https://x",
+            "kanbanr prepare list",
             "echo \"kanbanr approve\"",
             "git commit -m \"kanbanr approve\"",
         ] {

@@ -1823,6 +1823,10 @@
           "note": {
             "type": "string"
           },
+          "origin": {
+            "description": "Where it was recorded (DEF-028, FTR-034): `monitor`, `conversation` or `terminal`; empty\nfor a result recorded before kanbanr stamped one.",
+            "type": "string"
+          },
           "passed": {
             "type": "boolean"
           },
