@@ -705,17 +705,46 @@
         ]
       },
       "Checked": {
+        "additionalProperties": true,
         "description": "One flagged text and how it was settled.",
         "properties": {
+          "at": {
+            "description": "When it was settled (RFC3339).",
+            "type": "string"
+          },
+          "by": {
+            "description": "Who settled it: `Claude` for a settlement, the signer for a check sent with the request (DEF-039).",
+            "type": "string"
+          },
           "correction": {
             "description": "The code of the filed correction, when the outcome is `corrected`.",
+            "type": "string"
+          },
+          "origin": {
+            "description": "Where it was settled.",
             "type": "string"
           },
           "outcome": {
             "$ref": "#/components/schemas/Outcome"
           },
+          "prepared": {
+            "description": "The id of the `text-check` prepared record it came from.",
+            "type": "string"
+          },
+          "rev": {
+            "description": "The newest commit of the change it was checked against.",
+            "type": "string"
+          },
           "target": {
             "description": "`doc:<path>`, `adr:<id>` or `item:<CODE>`.",
+            "type": "string"
+          },
+          "text_changed_at": {
+            "description": "The text's last change when it was checked.",
+            "type": "string"
+          },
+          "why": {
+            "description": "Why the text is still right, for `confirmed`.",
             "type": "string"
           }
         },
@@ -2476,12 +2505,12 @@
         "oneOf": [
           {
             "const": "confirmed",
-            "description": "The person read it and it is still right.",
+            "description": "Someone read it and it is still right.",
             "type": "string"
           },
           {
             "const": "corrected",
-            "description": "The person filed a correction (its code is on the record).",
+            "description": "A correction was filed (its code is on the record).",
             "type": "string"
           }
         ]
