@@ -11,6 +11,9 @@ any commands:
   Claude tells you what is waiting there and links to it. It never records a decision, and it
   doesn't ask for one in a plan or a question. What Claude already knows, such as a CI run's
   result or what a sign-off covered, arrives filled in beside the button: you check it and click.
+- **You can delegate the small decisions.** Tell Claude which ones it may take, such as the design
+  review of small defects, and until when. It proposes a delegation; you grant it on the
+  **Review** page. Whatever Claude decides under it comes back there for you to keep or undo.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [Scrum from the command line](scrum-cli.md). For the other
@@ -92,6 +95,10 @@ is a decision and not an oversight.
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
 
+**Claude's overrides come to you.** If Claude moves an item past a gate, it says why and the move
+waits on the Review page with that reason, even on an item you approved. **Ratify** it there; until
+you do, the item doesn't ship.
+
 **Each approval covers the text you saw.** Adding to the definition keeps the approval, and what was
 added is reviewed at the next decision. Changing or removing approved text lapses it, and the item
 returns to the Review page. Read what changed, then approve again.
@@ -146,7 +153,7 @@ see [Designing CI and the release workflow](delivery-pipeline.md).
 | 4 | Claude | Say "Run the full checks over the release" |
 | 5 | You | **Releases** page: **Promote to main**. This moves main to the release, without tagging |
 | 6 | You | Terminal: `git push origin main`, then wait for CI to go green |
-| 7 | You | **Releases** page: **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Released, unless your stages continue after the tag: then **Confirm** each later stage, and the last one moves the items |
+| 7 | You | **Releases** page: **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Released, unless your stages continue after the tag: then **Confirm** each later stage, and the last one moves the items. If some shipping requirements still have tests not run, the page lists them with one checkbox: tick it to ship them unverified, and the notes name them |
 | 8 | You | Terminal: `git push origin v1.0.0`, then wait for the release workflow |
 | 9 | Claude | Brings the release forward into the sprint and tells you; you push the sprint branch when you push |
 

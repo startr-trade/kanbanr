@@ -915,6 +915,62 @@ pub fn file_versions(dir: &Path, rel: &str) -> Vec<String> {
     out
 }
 
+/// One commit that changed a file, and the file as that commit left it (FTR-028).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileVersion {
+    pub sha: String,
+    pub message: String,
+    pub content: String,
+}
+
+/// Each commit from HEAD that changed `rel` (added it, or left it different from its first
+/// parent), newest first, with its message and the file's text. A commit that removed it is not
+/// listed. An unreadable repository or path gives an empty list.
+pub fn file_history(dir: &Path, rel: &str) -> Vec<FileVersion> {
+    let Ok(repo) = Repository::discover(dir) else {
+        return Vec::new();
+    };
+    let Ok(mut walk) = repo.revwalk() else {
+        return Vec::new();
+    };
+    if walk.push_head().is_err()
+        || walk
+            .set_sorting(git2::Sort::TIME | git2::Sort::TOPOLOGICAL)
+            .is_err()
+    {
+        return Vec::new();
+    }
+    let blob_in = |c: &git2::Commit| {
+        c.tree()
+            .ok()
+            .and_then(|t| t.get_path(Path::new(rel)).ok())
+            .map(|e| e.id())
+    };
+    let mut out = Vec::new();
+    for oid in walk.flatten() {
+        let Ok(commit) = repo.find_commit(oid) else {
+            continue;
+        };
+        let Some(id) = blob_in(&commit) else {
+            continue;
+        };
+        let before = commit.parent(0).ok().and_then(|p| blob_in(&p));
+        if before == Some(id) {
+            continue;
+        }
+        if let Ok(blob) = repo.find_blob(id)
+            && let Ok(text) = std::str::from_utf8(blob.content())
+        {
+            out.push(FileVersion {
+                sha: oid.to_string(),
+                message: commit.message().unwrap_or_default().to_string(),
+                content: text.to_string(),
+            });
+        }
+    }
+    out
+}
+
 /// The one-doc walk `DocHistory` replaced, kept as the reference its answers are checked against
 /// (DEF-022).
 #[cfg(test)]
@@ -1034,6 +1090,29 @@ mod tests {
         assert_eq!(file_versions(&dir, "f.txt"), ["c", "a", "b"]);
         assert!(file_versions(&dir, "nope.txt").is_empty());
         assert!(file_versions(&temp("fileversions-none"), "f.txt").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FTR-028 T9: each commit that changed a file, newest first, with its message and content.
+    #[test]
+    fn file_history_lists_each_commit_newest_first() {
+        let dir = temp("filehistory");
+        ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        for (text, msg) in [("a", "one"), ("b", "two"), ("c", "three")] {
+            std::fs::write(dir.join("f.txt"), text).unwrap();
+            assert!(commit(&dir, "Ada", "ada@example.com", msg));
+        }
+        // A commit that leaves the file alone is not part of its history.
+        std::fs::write(dir.join("g.txt"), "other").unwrap();
+        assert!(commit(&dir, "Ada", "ada@example.com", "other file"));
+        let h = file_history(&dir, "f.txt");
+        let got: Vec<(&str, &str)> = h
+            .iter()
+            .map(|v| (v.content.as_str(), v.message.trim()))
+            .collect();
+        assert_eq!(got, [("c", "three"), ("b", "two"), ("a", "one")]);
+        assert!(h.iter().all(|v| v.sha.len() == 40));
+        assert!(file_history(&dir, "nope.txt").is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

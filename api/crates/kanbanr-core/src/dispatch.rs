@@ -81,6 +81,23 @@ fn ser_already(
 /// caller can produce one by omission; the CLI resolves `--by` from the commit identity and the
 /// monitor from `/api/meta`, and a caller with neither is told to set one rather than quietly
 /// attributed to nobody.
+/// Who took a decisions action, when and from where (FTR-028): the origin the front end stamped;
+/// from the conversation it is Claude, else the `by` the front end sent.
+fn decision_stamp(b: &Value) -> Result<crate::decisions::Stamp> {
+    let origin = crate::origin::from_body(b);
+    let by = if origin == "conversation" {
+        "Claude".to_string()
+    } else {
+        approver(b)?
+    };
+    Ok(crate::decisions::Stamp {
+        by,
+        at: crate::now_rfc3339(),
+        origin,
+        ..Default::default()
+    })
+}
+
 fn approver(b: &Value) -> Result<String> {
     match str_field(b, "by") {
         Some(who) if !who.trim().is_empty() => Ok(who),
@@ -1089,6 +1106,7 @@ fn dispatch_routes(
                 reason.as_deref(),
                 repo,
                 &str_field(b, "by").unwrap_or_else(|| "kanbanr".to_string()),
+                &crate::origin::from_body(b),
             )?;
             let mut out = serde_json::to_value(&moved.feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
@@ -1201,6 +1219,7 @@ fn dispatch_routes(
                 &approver(b)?,
                 &str_field(b, "reason").unwrap_or_default(),
                 &crate::origin::from_body(b),
+                &crate::origin::delegation_from_body(b),
             )?)
         }
         ("POST", ["projects", p, "features", code, "approve"]) => {
@@ -1208,7 +1227,13 @@ fn dispatch_routes(
             if let Some(earlier) = repeat_approval(store, p, code, "approved")? {
                 return ser_already(store, p, code, &earlier);
             }
-            ser(&store.approve_feature_as(p, code, &approver(b)?, &crate::origin::from_body(b))?)
+            ser(&store.approve_feature_as(
+                p,
+                code,
+                &approver(b)?,
+                &crate::origin::from_body(b),
+                &crate::origin::delegation_from_body(b),
+            )?)
         }
         // Withdraw a sign-off given in error (FEAT-182). Matched before the sign-off route.
         ("POST", ["projects", p, "features", code, "signoff", name, "withdraw"]) => ser(&store
@@ -1263,7 +1288,16 @@ fn dispatch_routes(
             let (checked, settled) =
                 signoff_checked(store, p, code, &name, b, repo, (&signer, &origin))?;
             let (feature, held) = store.signoff_feature_pinned_as(
-                p, code, &name, &signer, &note, &doc, &origin, &checked, &heads,
+                p,
+                code,
+                &name,
+                &signer,
+                &note,
+                &doc,
+                &origin,
+                &crate::origin::delegation_from_body(b),
+                &checked,
+                &heads,
             )?;
             // The sign-off answers the settlements it took (DEF-039).
             for id in settled {
@@ -1407,12 +1441,14 @@ fn dispatch_routes(
             }
             ser(&body)
         }
+        // DEF-043: `accept_untested?` names the requirements the person accepts shipping untested.
         ("POST", ["projects", p, "releases", version, "cut"]) => ser(&crate::releases::cut_as(
             store,
             p,
             &percent_decode(version),
             &str_field(b, "by").unwrap_or_default(),
             &crate::origin::from_body(b),
+            &vec_field(b, "accept_untested").unwrap_or_default(),
         )?),
         // What cutting a release now would ship and carry over, by the cut's own rule, with nothing
         // written (FEAT-185): the monitor's production confirmation lists exactly this.
@@ -1423,6 +1459,8 @@ fn dispatch_routes(
         // is the release tip the caller's plan showed (FEAT-212): a branch moved since is refused.
         ("POST", ["projects", p, "releases", version, "promote"]) => {
             let expect = str_field(b, "expect");
+            // DEF-043: the untested requirements the person accepts shipping at the cut.
+            let accept = vec_field(b, "accept_untested").unwrap_or_default();
             ser(&crate::releases::promote_with(
                 store,
                 p,
@@ -1435,6 +1473,7 @@ fn dispatch_routes(
                     expect_tip: expect.as_deref(),
                     fetch: crate::releases::Fetch::Try,
                     origin: &crate::origin::from_body(b),
+                    accept_untested: &accept,
                 },
             )?)
         }
@@ -1542,6 +1581,100 @@ fn dispatch_routes(
             };
             crate::gates::record(store, p, &result)?;
             ser(&result)
+        }
+        // ---- where decisions are taken, and delegations (FTR-028) ----
+        ("GET", ["projects", p, "decisions"]) => ser(&crate::decisions::view(
+            store,
+            p,
+            repo,
+            None,
+            &crate::now_rfc3339(),
+        )?),
+        // `{mode, reason?}`: the person's alone; answers what waits where now.
+        ("PUT", ["projects", p, "decisions", "mode"]) => {
+            let given = str_field(b, "mode").unwrap_or_default();
+            let mode = crate::decisions::Mode::parse(given.trim()).ok_or_else(|| {
+                CoreError::Unsupported(format!(
+                    "the decision mode is monitor, delegated or conversation, not '{given}'"
+                ))
+            })?;
+            ser(&crate::decisions::set_mode(
+                store,
+                p,
+                mode,
+                &str_field(b, "reason").unwrap_or_default(),
+                decision_stamp(b)?,
+                None,
+            )?)
+        }
+        // `{verdicts, steps, items, kinds, milestone, all?, until, note}`: a proposal, inert until
+        // the person grants it.
+        ("POST", ["projects", p, "decisions", "delegations"]) => {
+            let new: crate::decisions::NewDelegation = serde_json::from_value(b.clone())
+                .map_err(|e| CoreError::Unsupported(format!("a delegation: {e}")))?;
+            ser(&crate::decisions::propose(
+                store,
+                p,
+                new,
+                decision_stamp(b)?,
+            )?)
+        }
+        // `{rev}`: the person grants the proposal as they saw it.
+        ("POST", ["projects", p, "decisions", "delegations", id, "grant"]) => {
+            ser(&crate::decisions::grant(
+                store,
+                p,
+                id,
+                &str_field(b, "rev").unwrap_or_default(),
+                decision_stamp(b)?,
+            )?)
+        }
+        // `{reason}`: anyone may revoke.
+        ("POST", ["projects", p, "decisions", "delegations", id, "revoke"]) => {
+            ser(&crate::decisions::revoke(
+                store,
+                p,
+                id,
+                &str_field(b, "reason").unwrap_or_default(),
+                decision_stamp(b)?,
+            )?)
+        }
+        // `{process?, dry_run?}`: propose the process's default delegations (R-5); with dry_run,
+        // only what they would be.
+        ("POST", ["projects", p, "decisions", "defaults"]) => {
+            let process = str_field(b, "process").filter(|x| !x.trim().is_empty());
+            match crate::decisions::propose_defaults(
+                store,
+                p,
+                process.as_deref(),
+                decision_stamp(b)?,
+                is_dry_run(Some(b)),
+            )? {
+                Ok(made) => ser(&made),
+                Err(preview) => ser(&preview),
+            }
+        }
+        // `{decision, verdict: keep|undo, reason?}`: the person keeps or undoes a delegated
+        // decision; an undo withdraws it, in the same commit.
+        ("POST", ["projects", p, "decisions", "reviews"]) => {
+            let keep = match str_field(b, "verdict").as_deref() {
+                Some("keep") => true,
+                Some("undo") => false,
+                other => {
+                    return Err(CoreError::Unsupported(format!(
+                        "a review's verdict is keep or undo, not '{}'",
+                        other.unwrap_or("")
+                    )));
+                }
+            };
+            ser(&crate::decisions::review(
+                store,
+                p,
+                &str_field(b, "decision").unwrap_or_default(),
+                keep,
+                &str_field(b, "reason").unwrap_or_default(),
+                decision_stamp(b)?,
+            )?)
         }
         // FTR-034: `{kind, subject, fields, sources, by?}`: the evidence for a decision, prepared for
         // the person to confirm. Not a verdict: nothing a gate reads changes.
@@ -2325,7 +2458,13 @@ fn dispatch_routes(
             let dry_run = b.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
             // Under an agent scope the write path holds every item where it is (FEAT-214).
             let hold = str_field(b, "hold_advance");
-            let results = store.apply_batch_held(p, ops, dry_run, hold.as_deref())?;
+            let results = store.apply_batch_held(
+                p,
+                ops,
+                dry_run,
+                hold.as_deref(),
+                &crate::origin::from_body(b),
+            )?;
             Ok(json!({ "results": results }).to_string())
         }
 
@@ -2385,6 +2524,13 @@ pub fn commit_message_after(
     let msg = commit_message(method, path, body);
     let bare = path.split('?').next().unwrap_or(path);
     let segs: Vec<&str> = bare.split('/').filter(|s| !s.is_empty()).collect();
+    if method.eq_ignore_ascii_case("POST")
+        && matches!(segs.as_slice(), ["projects", _, "decisions", "delegations"])
+        && let Ok(v) = serde_json::from_str::<Value>(response)
+        && let Some(id) = v["id"].as_str()
+    {
+        return format!("propose delegation {id}");
+    }
     if method.eq_ignore_ascii_case("POST")
         && matches!(segs.as_slice(), ["projects", _, "scopes"])
         && let Ok(v) = serde_json::from_str::<Value>(response)
@@ -2500,6 +2646,28 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
                 .unwrap_or_else(|| "record".into())
         ),
         ["projects", _p, "prepared", id, "reject"] => format!("reject prepared record {id}"),
+        ["projects", _p, "decisions", "mode"] => format!(
+            "set the decision mode to {}",
+            body.and_then(|b| str_field(b, "mode")).unwrap_or_default()
+        ),
+        ["projects", _p, "decisions", "delegations"] => "propose a delegation".into(),
+        ["projects", _p, "decisions", "defaults"] => "propose the default delegations".into(),
+        ["projects", _p, "decisions", "delegations", id, "grant"] => {
+            format!("grant delegation {id}")
+        }
+        ["projects", _p, "decisions", "delegations", id, "revoke"] => {
+            format!("revoke delegation {id}")
+        }
+        ["projects", _p, "decisions", "reviews"] => format!(
+            "{} delegated decision {}",
+            if body.and_then(|b| str_field(b, "verdict")).as_deref() == Some("undo") {
+                "undo"
+            } else {
+                "keep"
+            },
+            body.and_then(|b| str_field(b, "decision"))
+                .unwrap_or_default()
+        ),
         ["projects", _p, "config", "commit-gates"] => "set the commit gates".into(),
         ["projects", _p, "config", "tag-gate"] => "set the tag gate".into(),
         ["projects", _p, "config", "gate-docs"] => "set the documentation paths".into(),

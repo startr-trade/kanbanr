@@ -1138,6 +1138,32 @@ pub fn evaluate(
 
 /// As [`evaluate`], judging the project-dependent checks ([`Check::Estimated`],
 /// [`Check::InSprint`]) against `ctx`.
+/// Claude's overrides on `f` that no ratification after them answers (DEF-043): each history
+/// entry with an `override` reason and origin `conversation` or `delegated`, made after the
+/// newest approval event whose verdict is `ratified` (`crate::before`). Oldest first.
+///
+/// A move with no origin (every move before this version, and every move the person made) is
+/// never open, so old boards gain no queue.
+pub fn open_overrides(f: &FeatureItem) -> Vec<&crate::models::Transition> {
+    let since = f.definition.as_ref().and_then(|d| {
+        d.approvals
+            .iter()
+            .filter(|e| e.verdict == "ratified")
+            .map(|e| e.at.as_str())
+            .max_by(|a, b| crate::cmp_instants(a, b))
+    });
+    f.history
+        .iter()
+        .filter(|t| {
+            t.override_reason
+                .as_deref()
+                .is_some_and(|r| !r.trim().is_empty())
+                && matches!(t.origin.as_str(), "conversation" | "delegated")
+                && since.is_none_or(|s| crate::before(s, &t.at))
+        })
+        .collect()
+}
+
 pub fn evaluate_in(
     feature: &FeatureItem,
     goal_ids: Option<&std::collections::BTreeSet<String>>,
@@ -1179,6 +1205,30 @@ pub fn evaluate_in(
         && let Some(docs) = ctx.docs_dir.as_deref()
     {
         gaps.extend(docs_updated_gaps(feature, docs, &ctx.history));
+    }
+    // An override Claude made waits for the person to ratify it, even on an agreed item
+    // (DEF-043). Unagreed, the "started without approval" gap already asks.
+    if checks.contains(&Check::Bypass)
+        && feature
+            .definition
+            .as_ref()
+            .is_some_and(|d| d.approval_state().is_agreed())
+    {
+        for t in open_overrides(feature) {
+            gaps.push(gap(
+                Check::Bypass,
+                None,
+                "override not ratified",
+                format!(
+                    "moved {} → {} on {} past its gate by Claude: {} — the person ratifies it on \
+                     the Review page",
+                    t.from,
+                    t.to,
+                    t.at.get(..10).unwrap_or(&t.at),
+                    t.override_reason.as_deref().unwrap_or("").trim()
+                ),
+            ));
+        }
     }
     if checks.contains(&Check::DiagramsValid) && !exempt {
         gaps.extend(diagram_gaps(feature, ctx.docs_dir.as_deref()));
@@ -1645,7 +1695,12 @@ fn requirement_level(check: Check, r: &Requirement, gaps: &mut Vec<Gap>) {
             }
         }
         Check::TestsGreen => {
-            if !r.tests.is_empty() && !r.tests.iter().any(|t| t.state == TestState::Green) {
+            // A test checked later (DEF-043: after main is pushed, at the cut or at a release
+            // stage) holds that stage, not the item's gate.
+            if !r.tests.is_empty()
+                && !r.tests.iter().any(|t| t.state == TestState::Green)
+                && r.tests.iter().any(|t| t.at.trim().is_empty())
+            {
                 push(
                     "not proven",
                     format!("{id} has tests but none is green — not yet proven"),
@@ -1977,6 +2032,8 @@ mod tests {
     }
 
     /// A board in a temp git repository with one item declaring `architecture/data.md` (FEAT-180).
+    /// The doc is committed before the item is created: stage entry must not fall in an earlier
+    /// second than the commit that holds the doc (MNT-008).
     fn docs_board(tag: &str) -> (crate::Store, std::path::PathBuf, String) {
         let dir = std::env::temp_dir().join(format!("kanbanr-docs-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1989,6 +2046,10 @@ mod tests {
         store
             .add_milestone("demo", "M", "", vec![], Some("M".into()))
             .unwrap();
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv1\n")
+            .unwrap();
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "docs"));
         let item = store.add_feature("demo", "Cart", "", "M", None).unwrap();
         store
             .set_feature_definition(
@@ -2000,9 +2061,6 @@ mod tests {
                     ..Default::default()
                 }),
             )
-            .unwrap();
-        store
-            .write_doc("demo", "architecture/data.md", "# Data\n\nv1\n")
             .unwrap();
         assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "board"));
         (store, dir, item.code)
@@ -2029,7 +2087,6 @@ mod tests {
     #[test]
     fn next_gate_holds_docs_folded_and_names_the_unbuilt_documents() {
         let (store, dir, code) = docs_board("held");
-        next_second();
         let gate = crate::config::Gate {
             signoffs: vec!["design-review".into(), "docs-folded".into()],
             ..Default::default()
@@ -2793,6 +2850,111 @@ mod tests {
         f
     }
 
+    /// DEF-043 R-2: an override Claude makes on an approved item waits for the person to ratify
+    /// it, is a `Bypass` gap, is asked on the Review page and keeps the item from shipping; once
+    /// ratified it ships. The person's own override opens nothing.
+    #[test]
+    fn an_override_from_claude_waits_for_ratification_and_holds_the_cut() {
+        let (store, dir, repo) = crate::releases::tests::board_and_repo("def043-override");
+        let approved = |title: &str| {
+            let code = store
+                .add_feature("shop", title, "", "M", None)
+                .unwrap()
+                .code;
+            store
+                .set_feature_definition(
+                    "shop",
+                    &code,
+                    Some(FeatureDefinition {
+                        statement: "Run CI".into(),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+            store.approve_feature("shop", &code, "Ada").unwrap();
+            crate::releases::plan(&store, "shop", "v1", std::slice::from_ref(&code)).unwrap();
+            store
+                .move_feature_approved("shop", &code, "Scheduled", None)
+                .unwrap();
+            code
+        };
+        let code = approved("CI");
+        store
+            .move_feature_gated_as(
+                "shop",
+                &code,
+                "Completed",
+                Some("CI after push"),
+                "conversation",
+            )
+            .unwrap();
+        let f = store.load("shop").unwrap().feature(&code).unwrap().clone();
+        assert_eq!(open_overrides(&f).len(), 1);
+        let gaps = evaluate(&f, None, &[Check::Bypass]);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!(gaps[0].label, "override not ratified");
+        assert!(
+            gaps[0].message.contains("CI after push"),
+            "{}",
+            gaps[0].message
+        );
+        let queue = crate::review::pending(&store, "shop", None).unwrap();
+        let entry = queue.iter().find(|e| e.code == code).expect("asked");
+        assert_eq!(entry.approval, crate::review::ApprovalKind::Unratified);
+        assert_eq!(entry.overrides.len(), 1);
+        let preview = crate::releases::cut_preview(&store, "shop", "v1").unwrap();
+        let carried = preview.iter().find(|p| p.code == code).unwrap();
+        assert!(!carried.ships);
+        assert!(
+            carried.why.contains("waits for the person to ratify"),
+            "{}",
+            carried.why
+        );
+
+        store
+            .ratify_feature_as("shop", &code, "Ada", "agreed", "monitor", "")
+            .unwrap();
+        let f = store.load("shop").unwrap().feature(&code).unwrap().clone();
+        assert!(open_overrides(&f).is_empty());
+        let preview = crate::releases::cut_preview(&store, "shop", "v1").unwrap();
+        assert!(preview.iter().find(|p| p.code == code).unwrap().ships);
+        let queue = crate::review::pending(&store, "shop", None).unwrap();
+        assert!(!queue.iter().any(|e| e.code == code), "{queue:?}");
+
+        let mine = approved("Mine");
+        store
+            .move_feature_gated_as("shop", &mine, "Completed", Some("mine"), "terminal")
+            .unwrap();
+        let f = store.load("shop").unwrap().feature(&mine).unwrap().clone();
+        assert!(open_overrides(&f).is_empty());
+        crate::releases::tests::clean(&dir, &repo);
+    }
+
+    /// DEF-043 R-1: a requirement whose only not-green test is checked later passes the item's
+    /// `TestsGreen`; with one more plain planned test it does not.
+    #[test]
+    fn a_test_checked_later_does_not_hold_the_items_gate() {
+        let mut later = requirement("R-2", "ci", &[("ci::runs", TestState::Planned)]);
+        later.tests[0].at = "pushed".into();
+        let f = item(Some(FeatureDefinition {
+            requirements: vec![later.clone()],
+            ..Default::default()
+        }));
+        let gaps = evaluate(&f, None, &[Check::TestsGreen]);
+        assert!(gaps.is_empty(), "{gaps:?}");
+        later.tests.push(TestRef {
+            name: "plain".into(),
+            ..Default::default()
+        });
+        let f = item(Some(FeatureDefinition {
+            requirements: vec![later],
+            ..Default::default()
+        }));
+        let gaps = evaluate(&f, None, &[Check::TestsGreen]);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!(gaps[0].label, "not proven");
+    }
+
     /// DEF-003 R-1: a manual test not green is named with its requirement; a green one, or one of
     /// another kind, is not.
     #[test]
@@ -2900,6 +3062,7 @@ mod tests {
         };
         def.approval = Some(Approval {
             extra: Default::default(),
+            delegation: String::new(),
             by: "A".into(),
             at: "2026-09-29T00:00:00Z".into(),
             rev: def.content_rev(),

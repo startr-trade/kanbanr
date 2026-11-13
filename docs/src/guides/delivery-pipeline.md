@@ -43,6 +43,10 @@ it becomes an item on the board, so it has a definition, a test and an approval 
    passes every check on the machine that made it and fails everywhere else.
 7. **Check CI before you cut.** kanbanr can see that main was pushed. It can't see whether CI
    passed. Look at your CI service yourself before you press **Cut**.
+8. **Mark the checks that need a push.** A requirement that only CI can show (the job runs, a tag
+   publishes the notes) gets `at: pushed` on its test, or `at: cut`. The item's gate doesn't wait for
+   it, so Promote to main isn't held; Claude records the result once CI has run. Anything still not
+   run at the cut waits for you to accept shipping it unverified, and the notes name it.
 
 ## Where it fits
 

@@ -12,8 +12,8 @@
 
 use crate::agentscope::{self, ProcessScope};
 use crate::git::{self, PushPolicy};
-use crate::origin::{self, Origin, Taker, Verdict};
-use crate::{CoreError, Store, activity, dispatch, eventing, prepared};
+use crate::origin::{self, DecisionContext, Origin, Taker, Verdict};
+use crate::{CoreError, Store, activity, decisions, dispatch, eventing, prepared};
 use serde_json::Value;
 use std::path::Path;
 
@@ -256,44 +256,68 @@ pub fn apply_as(
             git::require_identity(data_dir).map_err(WriteError::Refused)?;
         }
         let body = held_body.as_ref().or(body);
-        // Answering a prepared record is the person's alone, refused to Claude by the one guard
-        // (FTR-034). A confirmation becomes the verdict it prepares, before the origin is stamped,
-        // so from here on it is exactly what a direct verdict is.
+        // Who may take a verdict is decided here, under the lock, by the one guard, against the
+        // project's decision mode and delegations (FTR-028): a revoke and a delegated verdict are
+        // ordered by the lock. Answering a prepared record is the person's alone (FTR-034).
+        let mut under = if records {
+            judge(store, method, path, body, origin)?
+        } else {
+            None
+        };
+        // A confirmation becomes the verdict it prepares, before the origin is stamped, so from
+        // here on it is exactly what a direct verdict is.
         let mut expanded: Option<(String, prepared::Expanded)> = None;
-        if let Some((project, id, action)) = prepared::answer_route(method, path) {
-            let what = if action == "confirm" {
-                Verdict::ConfirmPrepared
-            } else {
-                Verdict::RejectPrepared
-            };
-            if let Some(why) = origin::verdict_refusal(what, Taker::of_origin(origin)) {
-                return Err(WriteError::Refused(format!("refused: {why}")));
-            }
-            if action == "confirm" {
-                let e =
-                    prepared::expand(store, &project, &id, body.unwrap_or(&Value::Null), origin)
-                        .map_err(WriteError::Core)?;
-                expanded = Some((project, e));
-            }
+        if let Some((project, id, action)) = prepared::answer_route(method, path)
+            && action == "confirm"
+        {
+            let e = prepared::expand(store, &project, &id, body.unwrap_or(&Value::Null), origin)
+                .map_err(WriteError::Core)?;
+            expanded = Some((project, e));
         }
         // A manual test's result is a person's check (DEF-040): refused to Claude here, for the
         // tests route and for a batch alike, before anything is written.
         if let Some(v) = origin::guarded_verdict(store, method, path, body)
-            && let Some(why) = origin::verdict_refusal(v, Taker::of_origin(origin))
+            && let Some(why) = origin::verdict_refusal(
+                v,
+                Taker::of_origin(origin),
+                &DecisionContext {
+                    origin: Some(origin),
+                    ..DecisionContext::monitor_mode()
+                },
+            )
         {
-            return Err(WriteError::Refused(format!(
-                "refused: {why} A manual test's result says a person checked it, so the person \
-                 records it on the Review page (DEF-040). If they told you the result, prepare \
-                 it: `kanbanr prepare test <CODE> <R-n> \"<test>\" --passed --source \
-                 \"conversation: …\"`."
-            )));
+            return Err(WriteError::Refused(format!("refused: {why}")));
         }
         let (method, path, body) = match &expanded {
             Some((_, e)) => (e.method.as_str(), e.path.as_str(), Some(&e.body)),
             None => (method, path, body),
         };
-        // The front end names where a verdict was taken, never the request (DEF-028).
-        let stamped = origin::stamp(method, path, body, origin);
+        if expanded.is_some() {
+            under = judge(store, method, path, body, origin)?;
+        }
+        // The front end names where a verdict was taken, never the request (DEF-028). A verdict
+        // taken under a delegation is Claude's, recorded as delegated and naming its delegation,
+        // whatever the request said.
+        let mut stamped = origin::stamp(method, path, body, origin);
+        let origin = match &under {
+            Some(delegation) => {
+                let mut b = stamped.take().unwrap_or_else(|| {
+                    body.cloned()
+                        .unwrap_or_else(|| Value::Object(Default::default()))
+                });
+                if let Some(m) = b.as_object_mut() {
+                    m.insert(
+                        "origin".into(),
+                        Value::String(Origin::Delegated.as_str().into()),
+                    );
+                    m.insert("by".into(), Value::String("Claude".into()));
+                    m.insert("delegation".into(), Value::String(delegation.clone()));
+                }
+                stamped = Some(b);
+                Origin::Delegated
+            }
+            None => origin,
+        };
         let body = stamped.as_ref().or(body);
         let verdict = origin::is_verdict_route(method, path);
         let out =
@@ -368,6 +392,15 @@ pub fn apply_as(
                 ProcessScope::Unscoped => policy,
                 _ => PushPolicy::Off,
             };
+            // A verdict's commit says where it was taken, and under which delegation (FTR-028).
+            let mut trailers: Vec<(&str, &str)> = Vec::new();
+            if verdict {
+                trailers.push(("Kanbanr-Origin", origin));
+            }
+            if let Some(d) = &under {
+                trailers.push(("Kanbanr-Delegation", d.as_str()));
+            }
+            let msg = agentscope::with_trailers(&msg, &trailers);
             let msg = match scoped {
                 Some(s) => agentscope::with_trailer(&msg, s),
                 None => msg,
@@ -382,6 +415,101 @@ pub fn apply_as(
         Ok(applied)
     })
     .map_err(|e| WriteError::Refused(format!("write lock: {e}")))?
+}
+
+/// The one guard over a request (FTR-028): `Err` is its refusal; `Ok(Some(DLG-n))` says the
+/// verdict is Claude's under that delegation; `Ok(None)` records it as it stands. Only verdict and
+/// person-only routes, and a batch that approves, read the project's decisions. A decisions file
+/// that does not parse refuses every delegated verdict and person-only route with its error, and
+/// judges the rest as `monitor` mode.
+fn judge(
+    store: &Store,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    origin: Origin,
+) -> Result<Option<String>, WriteError> {
+    let Some(p) = project_of(path) else {
+        return Ok(None);
+    };
+    let batch = method == "POST"
+        && path.split('?').next().unwrap_or("").trim_end_matches('/')
+            == format!("/projects/{p}/batch");
+    let what = origin::verdict_of_route(method, path);
+    if what.is_none() && !batch {
+        return Ok(None);
+    }
+    let named = body.map(origin::delegation_from_body).unwrap_or_default();
+    let d = match decisions::load(store, &p) {
+        Ok(d) => d,
+        Err(e) if decisions::is_person_only(method, path) || !named.is_empty() => {
+            return Err(WriteError::Refused(format!(
+                "refused: {} could not be read, so no delegation or person-only decision can be \
+                 judged: {e}",
+                decisions::DECISIONS_FILE
+            )));
+        }
+        Err(_) => decisions::Decisions::default(),
+    };
+    let project = store.load_meta(&p).ok();
+    let now = crate::now_rfc3339();
+    let taker = Taker::of_origin(origin);
+    let refuse = |why: String| WriteError::Refused(format!("refused: {why}"));
+    if batch {
+        // A batch carries no delegation: each approval in it is judged as a direct one.
+        let ops = body.and_then(|b| {
+            if b.is_array() {
+                Some(b)
+            } else {
+                b.get("operations")
+            }
+        });
+        for op in crate::batch::parse(ops).unwrap_or_default() {
+            if let crate::batch::BatchOp::FeatureApprove { code, .. } = op {
+                let route = format!("/projects/{p}/features/{code}/approve");
+                let ctx = DecisionContext {
+                    decisions: Some(&d),
+                    project: project.as_ref(),
+                    method: "POST",
+                    path: &route,
+                    body: None,
+                    origin: Some(origin),
+                    now: now.clone(),
+                };
+                if let Some(why) = origin::verdict_refusal(Verdict::Approve, taker, &ctx) {
+                    return Err(refuse(why));
+                }
+            }
+        }
+        return Ok(None);
+    }
+    let Some(what) = what else {
+        return Ok(None);
+    };
+    let ctx = DecisionContext {
+        decisions: Some(&d),
+        project: project.as_ref(),
+        method,
+        path,
+        body,
+        origin: Some(origin),
+        now,
+    };
+    if let Some(why) = origin::verdict_refusal(what, taker, &ctx) {
+        return Err(refuse(why));
+    }
+    if taker != Taker::Claude || named.is_empty() {
+        return Ok(None);
+    }
+    // Provenance (T9): only a grant kanbanr wrote, in a committed file, is honoured.
+    if !decisions::granted_through_kanbanr(store, &p, &named) {
+        return Err(refuse(format!(
+            "{named} was not granted through kanbanr: {} was changed outside it, or the grant \
+             was written into the file by hand. The person grants it again on the Review page.",
+            decisions::DECISIONS_FILE
+        )));
+    }
+    Ok(Some(named))
 }
 
 /// The item a scope route's response is about, for tagging its activity (FEAT-214).

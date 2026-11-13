@@ -105,6 +105,12 @@ pub enum ReleaseCheck {
     /// Every item planned into the release whose code is merged can ship: the cut would not carry
     /// merged work away (DEF-029). Only a plan names it, so it is not in `ALL`.
     MergedItemsShip,
+    /// Every test of the release's items checked at this stage or before it is green (DEF-043).
+    /// Only a plan names it, so it is not in `ALL`.
+    LaterTestsGreen,
+    /// The person accepted shipping exactly the requirements whose tests were not run (DEF-043).
+    /// Only a plan names it, at the cut, so it is not in `ALL`.
+    UntestedAccepted,
 }
 
 impl ReleaseCheck {
@@ -129,6 +135,8 @@ impl ReleaseCheck {
             ReleaseCheck::ItemsMerged => "items_merged",
             ReleaseCheck::StagePassed => "stage_passed",
             ReleaseCheck::MergedItemsShip => "merged_items_ship",
+            ReleaseCheck::LaterTestsGreen => "later_tests_green",
+            ReleaseCheck::UntestedAccepted => "untested_accepted",
         }
     }
 
@@ -159,6 +167,13 @@ impl ReleaseCheck {
             ReleaseCheck::StagePassed => "the release has been promoted into the stage",
             ReleaseCheck::MergedItemsShip => {
                 "every item planned into the release whose code is merged can ship"
+            }
+            ReleaseCheck::LaterTestsGreen => {
+                "every test of the release's items checked at this stage or before it is green"
+            }
+            ReleaseCheck::UntestedAccepted => {
+                "every shipping requirement has a green test, or the person accepted shipping \
+                 those without one"
             }
         }
     }
@@ -443,6 +458,32 @@ impl Cadence {
             .unwrap_or(gates.len().saturating_sub(1))
     }
 
+    /// The release stage a test checked at `at` waits for (DEF-043): "" → None; "cut" → the
+    /// stage holding the tag (`cut_index`); "pushed" → the first stage whose gate requires
+    /// `pushed`, else the cut's; a stage of this project → that stage; anything else → the
+    /// cut's stage.
+    pub fn stage_for_check(&self, at: &str) -> Option<String> {
+        let at = at.trim();
+        if at.is_empty() {
+            return None;
+        }
+        let gates = self.effective_release_gates();
+        let cut = gates.get(self.cut_index()).map(|(name, _)| name.clone());
+        match at {
+            "cut" => cut,
+            "pushed" => gates
+                .iter()
+                .find(|(_, g)| g.requires.contains(&ReleaseCheck::Pushed))
+                .map(|(name, _)| name.clone())
+                .or(cut),
+            _ => gates
+                .iter()
+                .find(|(name, _)| name == at)
+                .map(|(name, _)| name.clone())
+                .or(cut),
+        }
+    }
+
     /// The gate whose result judges a release's tag: `tag_gate`, else the first commit gate.
     pub fn tag_gate_name(&self) -> Option<String> {
         self.tag_gate
@@ -698,6 +739,34 @@ mod tests {
             .into_iter()
             .map(|(s, g)| (s, g.on_enter.iter().map(|a| a.name()).collect()))
             .collect()
+    }
+
+    /// DEF-043 R-1: a test's `at` names the release stage it waits for.
+    #[test]
+    fn a_checked_at_value_names_its_stage() {
+        let c = cadence(
+            "releases: true\nrelease_stages: [candidate, main, production]\n\
+             release_gates:\n  candidate: { on_enter: [branch, prepare] }\n  \
+             main: { requires: [items_finished], on_enter: [move_main] }\n  \
+             production: { requires: [main_at_release, pushed], on_enter: [tag] }\n",
+        )
+        .unwrap();
+        assert_eq!(c.stage_for_check(""), None);
+        assert_eq!(c.stage_for_check("cut").as_deref(), Some("production"));
+        assert_eq!(c.stage_for_check("pushed").as_deref(), Some("production"));
+        assert_eq!(c.stage_for_check("main").as_deref(), Some("main"));
+        assert_eq!(c.stage_for_check("gone").as_deref(), Some("production"));
+        // `pushed` with no stage requiring it waits for the cut.
+        let c = cadence(
+            "releases: true\nrelease_stages: [candidate, main, production, confirmed]\n\
+             release_gates:\n  candidate: { on_enter: [branch, prepare] }\n  \
+             main: { requires: [items_finished], on_enter: [move_main] }\n  \
+             production: { requires: [main_at_release], on_enter: [tag] }\n  \
+             confirmed: { requires: [tag_passed] }\n",
+        )
+        .unwrap();
+        assert_eq!(c.stage_for_check("pushed").as_deref(), Some("production"));
+        assert_eq!(c.stage_for_check("confirmed").as_deref(), Some("confirmed"));
     }
 
     /// FEAT-212 R-1: the gates are read from `release_gates`, keyed by stage name, while

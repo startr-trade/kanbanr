@@ -266,6 +266,11 @@ enum Command {
     /// rejects it there. Preparing is not the decision, and there is no confirm command.
     #[command(subcommand)]
     Prepare(PrepareCmd),
+    /// Where this project's decisions are taken, and what Claude may decide under a delegation
+    /// (FTR-028). `show`, `propose`, `revoke` and `defaults` are anyone's; `mode`, `grant` and
+    /// `review` are the person's own, refused inside a Claude session.
+    #[command(subcommand)]
+    Decisions(DecisionsCmd),
     /// Record that an item was sliced out of another, so a wave's growth can be accounted for.
     SplitFrom {
         code: String,
@@ -349,6 +354,10 @@ enum Command {
         /// `rev`). Refused if the definition changed since — what Claude passes (FEAT-159).
         #[arg(long)]
         rev: Option<String>,
+        /// Take it under this delegation (`DLG-001`): Claude's, within a delegation the person
+        /// granted (FTR-028). A person needs none.
+        #[arg(long, value_name = "DLG")]
+        under: Option<String>,
     },
     /// Take back an approval (FEAT-069). The agreement goes; the record of having given it stays,
     /// and the item returns to what is awaiting review.
@@ -372,6 +381,10 @@ enum Command {
         /// `rev`). Refused if the definition changed since — what Claude passes (FEAT-159).
         #[arg(long)]
         rev: Option<String>,
+        /// Take it under this delegation (`DLG-001`): Claude's, within a delegation the person
+        /// granted (FTR-028). A person needs none.
+        #[arg(long, value_name = "DLG")]
+        under: Option<String>,
     },
     /// Record a named sign-off a stage can require — "design-review", "release" (FEAT-114). It covers
     /// the definition as it stands: change the definition and the sign-off lapses.
@@ -403,6 +416,10 @@ enum Command {
         /// Why the sign-off no longer stands (with --withdraw).
         #[arg(long, requires = "withdraw")]
         reason: Option<String>,
+        /// Take it under this delegation (`DLG-001`): Claude's, within a delegation the person
+        /// granted (FTR-028). A person needs none.
+        #[arg(long, value_name = "DLG", conflicts_with = "withdraw")]
+        under: Option<String>,
     },
     /// Manage a feature's persistent todo-lists (an epic can hold many).
     #[command(subcommand)]
@@ -1282,6 +1299,74 @@ enum GateCmd {
 }
 
 #[derive(Subcommand)]
+enum DecisionsCmd {
+    /// The mode, every delegation, the delegated decisions to review, and what waits where.
+    Show,
+    /// Set where decisions are taken: monitor or delegated. The person's own.
+    Mode {
+        /// monitor | delegated
+        mode: String,
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
+    /// Propose a delegation. It does nothing until the person grants it on the Review page.
+    Propose {
+        /// A verdict it covers: approve, ratify or signoff:<name>. Repeat for more.
+        #[arg(long = "verdict", required = true)]
+        verdict: Vec<String>,
+        /// A status the item is in when the verdict is taken; repeat for more. None: any.
+        #[arg(long)]
+        step: Vec<String>,
+        /// An item it covers; repeat for more.
+        #[arg(long)]
+        item: Vec<String>,
+        /// An item kind it covers (feature, defect, chore…); repeat for more.
+        #[arg(long)]
+        kind: Vec<String>,
+        /// The milestone it covers.
+        #[arg(long, default_value = "")]
+        milestone: String,
+        /// It covers every item, on purpose.
+        #[arg(long)]
+        all: bool,
+        /// When it ends: YYYY-MM-DD (end of that day) or RFC 3339. Default: 14 days from now.
+        #[arg(long, default_value = "")]
+        until: String,
+        #[arg(long, default_value = "")]
+        note: String,
+    },
+    /// Grant a proposed delegation as it stands now. The person's own.
+    Grant { id: String },
+    /// Revoke a delegation, or discard a proposal.
+    Revoke {
+        id: String,
+        #[arg(long)]
+        reason: String,
+    },
+    /// Propose the process's default delegations (setup). With `--process` and `--dry-run` it
+    /// needs no board: the proposal is worked out from the process alone.
+    Defaults {
+        /// The process to propose for (default: the project's own).
+        #[arg(long)]
+        process: Option<String>,
+        /// Say what would be proposed; record nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Keep or undo a decision Claude took under a delegation. The person's own.
+    Review {
+        /// The decision's reference, as `decisions show` lists it.
+        decision: String,
+        #[arg(long, conflicts_with = "undo", required_unless_present = "undo")]
+        keep: bool,
+        #[arg(long)]
+        undo: bool,
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum PrepareCmd {
     /// Prepare a sign-off: the note and the doc the person confirms with one click.
     Signoff {
@@ -1468,6 +1553,10 @@ enum ReleaseCmd {
         /// With --plan: fetch main from its remote first, so `pushed` reads what is there now.
         #[arg(long, requires = "plan")]
         fetch: bool,
+        /// At the cut: the requirements you accept shipping with tests not run, exactly as the
+        /// plan lists them (`FEAT-005/R-2,FEAT-005/R-3`). The notes name them (DEF-043).
+        #[arg(long, value_delimiter = ',', value_name = "CODE/R-n,…")]
+        accept_untested: Vec<String>,
     },
     /// Each release stage: what it requires, what entering it does, and whether that is the
     /// project's own gate or the default (FEAT-212).
@@ -1514,6 +1603,10 @@ enum ReleaseCmd {
         /// production` (its last stage), so main is fast-forwarded to the release too (FEAT-183).
         #[arg(long)]
         tag: bool,
+        /// The requirements you accept shipping with tests not run, exactly as the cut lists them
+        /// (`FEAT-005/R-2,FEAT-005/R-3`). The notes name them (DEF-043).
+        #[arg(long, value_delimiter = ',', value_name = "CODE/R-n,…")]
+        accept_untested: Vec<String>,
     },
 }
 
@@ -2091,6 +2184,7 @@ fn command_access(cmd: &Command) -> Access {
         | Command::Release(_)
         | Command::Gate(_)
         | Command::Prepare(_)
+        | Command::Decisions(_)
         | Command::Commit { .. }
         | Command::Tests { .. }
         | Command::Sources { .. }
@@ -3194,6 +3288,34 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
+    // The decision mode and the delegations are written by kanbanr only, whoever edits (FTR-028).
+    {
+        let target = project::normalize(&here.join(path));
+        let board = project::normalize(client.store().data_dir());
+        let in_projects = target
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .is_some_and(|n| n == "projects");
+        if target.starts_with(&board)
+            && in_projects
+            && target
+                .file_name()
+                .is_some_and(|n| n == kanbanr_core::decisions::DECISIONS_FILE)
+        {
+            println!(
+                "{}",
+                json!({"hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "refused: decisions.yaml is where the person chose \
+                        to take decisions and what they delegated, written only by kanbanr: the \
+                        mode, a grant and a review are theirs, on the Review page.",
+                }})
+            );
+            return Ok(());
+        }
+    }
     // A scope governs the agent it was issued to, never the coordinator (DEF-027).
     let caller = kanbanr_core::agentscope::Caller::of_hook(&payload);
     if caller == kanbanr_core::agentscope::Caller::Agent
@@ -4089,7 +4211,7 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
             monitor_url(),
             urlencode_segment(project.as_deref().unwrap_or("<project>"))
         );
-        if let Some(why) = verdict_refusal(command, &review_url) {
+        if let Some(why) = verdict_refusal(command, &review_url, caller) {
             deny(why);
             return Ok(());
         }
@@ -4151,8 +4273,63 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
 ///
 /// Reads the tokens of each kanbanr invocation, not substrings of the line. `--help` is never
 /// refused, and anything it can't parse passes (ADR-0004).
-fn verdict_refusal(command: &str, review_url: &str) -> Option<String> {
-    for (_, words) in simple_commands(command) {
+fn verdict_refusal(
+    command: &str,
+    review_url: &str,
+    caller: kanbanr_core::agentscope::Caller,
+) -> Option<String> {
+    let commands = simple_commands(command);
+    let refused = |why: &str| {
+        Some(format!(
+            "refused: {why} It waits at: {review_url}. If no monitor accepts writes, offer \
+             `kanbanr review --ui`."
+        ))
+    };
+    // The monitor's page token is what makes a click the person's: never Claude's to send
+    // (FTR-028).
+    if command.to_ascii_lowercase().contains("x-kanbanr-token") {
+        return refused(
+            "the monitor's buttons are the person's; its page token is not Claude's to use.",
+        );
+    }
+    // The decision mode and the delegations are written by kanbanr only: reading the file is
+    // fine, anything else is not (FTR-028).
+    let reader = |words: &[String]| {
+        let first = words.first().map(String::as_str).unwrap_or("");
+        let first = first.rsplit('/').next().unwrap_or(first);
+        match first {
+            "cat" | "head" | "tail" | "less" | "grep" | "rg" => true,
+            "git" => git_call(words)
+                .and_then(|c| c.sub)
+                .is_some_and(|s| matches!(s, "log" | "show" | "diff" | "blame")),
+            _ => false,
+        }
+    };
+    if commands.iter().any(|(env, words)| {
+        (env.iter()
+            .chain(words)
+            .any(|w| w.contains(kanbanr_core::decisions::DECISIONS_FILE)))
+            && !reader(words)
+    }) {
+        return refused(
+            "decisions.yaml is the person's choice of where decisions are taken, written only by \
+             kanbanr: read it, never change it.",
+        );
+    }
+    // Who is calling is how core tells the person's terminal from Claude: a kanbanr command that
+    // changes it is refused to the coordinator too (FTR-028).
+    let runs_kanbanr = commands.iter().any(|(_, words)| {
+        words
+            .iter()
+            .any(|w| w == "kanbanr" || w.ends_with("/kanbanr"))
+    });
+    if runs_kanbanr && names_the_caller(&commands) {
+        return refused(
+            "who is calling is Claude Code's to say: a verdict never runs with CLAUDECODE or \
+             KANBANR_CALLER set, cleared or exported.",
+        );
+    }
+    for (_, words) in commands {
         if !is_kanbanr(&words) || words.iter().any(|w| w == "--help" || w == "-h") {
             continue;
         }
@@ -4166,19 +4343,46 @@ fn verdict_refusal(command: &str, review_url: &str) -> Option<String> {
                 _ if w.starts_with('-') => {}
                 _ => {
                     path.push(w);
-                    if path.len() == 2 || !matches!(w, "adr" | "release" | "gate") {
+                    if path.len() == 2 || !matches!(w, "adr" | "release" | "gate" | "decisions") {
                         break;
                     }
                 }
             }
         }
         let rest = &words[1..];
+        if matches!(path.as_slice(), ["decisions", "mode" | "grant" | "review"]) {
+            return refused(
+                "the decision mode, granting a delegation and reviewing a delegated decision are \
+                 the person's own, on the Review page.",
+            );
+        }
         let Some(verdict) = kanbanr_core::origin::verdict_of_command(&path, rest) else {
             continue;
         };
-        let Some(why) =
-            kanbanr_core::origin::verdict_refusal(verdict, kanbanr_core::origin::Taker::Claude)
-        else {
+        // Under a delegation, core decides; only the coordinator acts under one (FTR-028).
+        if rest
+            .iter()
+            .any(|w| w == "--under" || w.starts_with("--under="))
+            && matches!(
+                verdict,
+                kanbanr_core::origin::Verdict::Approve
+                    | kanbanr_core::origin::Verdict::Ratify
+                    | kanbanr_core::origin::Verdict::Signoff
+            )
+        {
+            if caller == kanbanr_core::agentscope::Caller::Agent {
+                return refused(
+                    "only the coordinator acts under a delegation, never a sub-agent: report it \
+                     to the coordinator.",
+                );
+            }
+            continue;
+        }
+        let Some(why) = kanbanr_core::origin::verdict_refusal(
+            verdict,
+            kanbanr_core::origin::Taker::Claude,
+            &kanbanr_core::origin::DecisionContext::monitor_mode(),
+        ) else {
             continue;
         };
         let page = if verdict.on_releases_page() {
@@ -6312,6 +6516,11 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         Command::Process(ProcessCmd::List) => return run_process_list(cli),
         Command::Process(ProcessCmd::Show { name }) => return run_process_show(cli, name),
+        // Setup asks before any board exists (FTR-028 R-5).
+        Command::Decisions(DecisionsCmd::Defaults {
+            process: Some(name),
+            dry_run: true,
+        }) => return run_defaults_preview(cli, name),
         Command::Process(ProcessCmd::Save {
             name,
             from_file,
@@ -6870,6 +7079,20 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 );
                 return Ok(());
             }
+            // Where decisions are taken, and what Claude decided under a delegation (FTR-028).
+            if *pending && code.is_none() {
+                let (mode, review) = decisions_summary(&client, &p);
+                if let Some(line) = mode {
+                    println!("{line}");
+                }
+                if !review.is_empty() {
+                    println!("delegated decisions to keep or undo on the Review page:");
+                    for line in &review {
+                        println!("  {line}");
+                    }
+                    println!();
+                }
+            }
             if features.is_empty() {
                 println!("nothing is waiting for agreement");
                 return Ok(());
@@ -7009,13 +7232,14 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             reason,
             by,
             rev,
+            under,
         } => {
             let p = require_project(cli)?;
             let who = verdict_author(cli, by.as_ref())?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/features/{code}/ratify"),
-                Some(json!({ "by": who, "reason": reason, "rev": rev })),
+                Some(json!({ "by": who, "reason": reason, "rev": rev, "delegation": under })),
             )?;
             print_write(
                 cli,
@@ -7026,14 +7250,20 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Command::Approve { code, by, rev } => {
+        Command::Approve {
+            code,
+            by,
+            rev,
+            under,
+        } => {
             let p = require_project(cli)?;
             let who = verdict_author(cli, by.as_ref())?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/features/{code}/approve"),
-                Some(json!({ "by": who, "rev": rev })),
+                Some(json!({ "by": who, "rev": rev, "delegation": under })),
             )?;
+            let who = recorded_by(&resp, &who);
             print_write(cli, &resp, format!("{code} approved by {who}"));
             Ok(())
         }
@@ -7047,6 +7277,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             spec_rev,
             withdraw,
             reason,
+            under,
         } => {
             let p = require_project(cli)?;
             let who = verdict_author(cli, by.as_ref())?;
@@ -7073,9 +7304,11 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     urlencode_segment(name)
                 ),
                 Some(json!({
-                    "by": who, "note": note, "doc": doc, "rev": rev, "spec_rev": spec_rev
+                    "by": who, "note": note, "doc": doc, "rev": rev, "spec_rev": spec_rev,
+                    "delegation": under
                 })),
             )?;
+            let who = recorded_by(&resp, &who);
             print_write(
                 cli,
                 &resp,
@@ -7094,6 +7327,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Release(cmd) => run_release(cli, &client, cmd),
         Command::Gate(cmd) => run_gate(cli, &client, cmd),
         Command::Prepare(cmd) => run_prepare(cli, &client, cmd),
+        Command::Decisions(cmd) => run_decisions(cli, &client, cmd),
         Command::Todo(cmd) => run_todo(cli, &client, cmd),
         Command::Task(cmd) => run_task(cli, &client, cmd),
         Command::Milestone(cmd) => run_milestone(cli, &client, cmd),
@@ -7186,6 +7420,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&board_json(&project))?);
             } else {
                 print_board(&project);
+                if let (Some(line), _) = decisions_summary(&client, &p) {
+                    println!("{line}");
+                }
             }
             Ok(())
         }
@@ -7474,6 +7711,21 @@ fn git_call(words: &[String]) -> Option<GitCall<'_>> {
     Some(call)
 }
 
+/// Does any of `commands` set, clear or export `CLAUDECODE` or `KANBANR_CALLER`, by which kanbanr
+/// tells who is calling (DEF-027, FTR-028)?
+fn names_the_caller(commands: &[(Vec<String>, Vec<String>)]) -> bool {
+    let names_caller = |w: &String| w.contains("CLAUDECODE") || w.contains("KANBANR_CALLER");
+    commands.iter().any(|(env, words)| {
+        env.iter().any(names_caller)
+            || (words.first().is_some_and(|f| {
+                ["export", "unset", "declare", "typeset", "readonly", "-u"].contains(&f.as_str())
+            }) && words.iter().any(names_caller))
+            || words
+                .windows(2)
+                .any(|w| w[0] == "-u" && names_caller(&w[1]))
+    })
+}
+
 fn is_kanbanr(words: &[String]) -> bool {
     words
         .first()
@@ -7602,16 +7854,7 @@ fn scoped_command_refusal(
     let commands = simple_commands(command);
     // The caller is told apart by CLAUDECODE and the hook payload: an agent never sets, clears or
     // exports either, nor the coordinator's stamp (DEF-027).
-    let names_caller = |w: &String| w.contains("CLAUDECODE") || w.contains("KANBANR_CALLER");
-    if commands.iter().any(|(env, words)| {
-        env.iter().any(names_caller)
-            || (words.first().is_some_and(|f| {
-                ["export", "unset", "declare", "typeset", "readonly", "-u"].contains(&f.as_str())
-            }) && words.iter().any(names_caller))
-            || words
-                .windows(2)
-                .any(|w| w[0] == "-u" && names_caller(&w[1]))
-    }) {
+    if names_the_caller(&commands) {
         return refuse("who is calling is Claude Code's to say, never set or cleared by an agent");
     }
     // `$TMPDIR` is where this guard reads the temporary directory from: an agent that reassigns it
@@ -9816,6 +10059,382 @@ fn gate_commit(
 }
 
 /// `kanbanr prepare …` (FTR-034): write a prepared record, and say where it waits for the person.
+/// Who a verdict was recorded as given by: under a delegation it is Claude, whatever was asked
+/// (FTR-028).
+fn recorded_by(resp: &str, asked: &str) -> String {
+    let v: Value = serde_json::from_str(resp).unwrap_or(Value::Null);
+    let under = |r: &Value| -> Option<String> {
+        let d = r["delegation"].as_str().filter(|d| !d.is_empty())?;
+        Some(format!(
+            "{} under {d}",
+            r["by"].as_str().unwrap_or("Claude")
+        ))
+    };
+    // The answer is the record, or the item with the record last in its list.
+    under(&v)
+        .or_else(|| {
+            let def = &v["definition"];
+            def["signoffs"]
+                .as_array()
+                .and_then(|a| a.last())
+                .and_then(under)
+                .or_else(|| {
+                    def["approval"]
+                        .as_object()
+                        .and_then(|_| under(&def["approval"]))
+                })
+        })
+        .unwrap_or_else(|| asked.to_string())
+}
+
+/// What `board` and `review --pending` say about decisions (FTR-028): the mode with the
+/// delegations in force (`None` in plain monitor mode), and one line per delegated decision
+/// waiting to be kept or undone. Nothing when the decisions cannot be read.
+fn decisions_summary(client: &Backend, p: &str) -> (Option<String>, Vec<String>) {
+    let Ok(v) = client
+        .get(&format!("/projects/{p}/decisions"))
+        .and_then(|r| Ok(serde_json::from_str::<Value>(&r)?))
+    else {
+        return (None, Vec::new());
+    };
+    let mode = v["mode"].as_str().unwrap_or("monitor");
+    let month = |m: &str| {
+        [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ]
+        .get(m.parse::<usize>().unwrap_or(0).wrapping_sub(1))
+        .copied()
+        .unwrap_or("")
+    };
+    let in_force: Vec<String> = v["delegations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|g| g["in_force"] == true)
+        .map(|g| {
+            let words = |k: &str| {
+                g[k].as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            };
+            let mut what = words("verdicts");
+            what.extend(words("kinds"));
+            what.extend(words("items"));
+            if let Some(m) = g["milestone"].as_str().filter(|m| !m.is_empty()) {
+                what.push(m.to_string());
+            }
+            if g["all"] == true {
+                what.push("every item".into());
+            }
+            let until = g["until"].as_str().unwrap_or("");
+            let day = match (until.get(8..10), until.get(5..7)) {
+                (Some(d), Some(m)) => format!("{} {}", d.trim_start_matches('0'), month(m)),
+                _ => until.to_string(),
+            };
+            format!(
+                "{} ({}, until {day})",
+                g["id"].as_str().unwrap_or(""),
+                what.join(", ")
+            )
+        })
+        .collect();
+    let line = if mode == "monitor" && in_force.is_empty() {
+        None
+    } else if in_force.is_empty() {
+        Some(format!("Decisions: {mode}"))
+    } else {
+        Some(format!("Decisions: {mode} — {}", in_force.join("; ")))
+    };
+    let review = v["to_review"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| {
+            format!(
+                "{}  {}{}  under {}  ({})",
+                r["code"].as_str().unwrap_or(""),
+                r["verdict"].as_str().unwrap_or(""),
+                r["signoff"]
+                    .as_str()
+                    .map(|s| format!(" {s}"))
+                    .unwrap_or_default(),
+                r["delegation"].as_str().unwrap_or(""),
+                r["decision"].as_str().unwrap_or("")
+            )
+        })
+        .collect();
+    (line, review)
+}
+
+/// One line per delegation: what it covers and where it stands.
+fn delegation_line(g: &Value) -> String {
+    let list = |k: &str| {
+        g[k].as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
+    };
+    let mut scope: Vec<String> = Vec::new();
+    for (k, label) in [("steps", "at"), ("items", "items"), ("kinds", "kinds")] {
+        let l = list(k);
+        if !l.is_empty() {
+            scope.push(format!("{label} {l}"));
+        }
+    }
+    if let Some(m) = g["milestone"].as_str().filter(|m| !m.is_empty()) {
+        scope.push(format!("milestone {m}"));
+    }
+    if g["all"].as_bool() == Some(true) {
+        scope.push("every item".into());
+    }
+    format!(
+        "{}  {}  {} ({}) until {}{}",
+        g["id"].as_str().unwrap_or(""),
+        g["state"].as_str().unwrap_or(""),
+        list("verdicts"),
+        scope.join("; "),
+        g["until"].as_str().unwrap_or(""),
+        g["note"]
+            .as_str()
+            .filter(|n| !n.is_empty())
+            .map(|n| format!(" — {n}"))
+            .unwrap_or_default()
+    )
+}
+
+fn print_waiting(waiting: &Value) {
+    for w in waiting.as_array().into_iter().flatten() {
+        let place = w["place"].as_str().unwrap_or("");
+        let at = match (place, w["delegation"].as_str(), w["url"].as_str()) {
+            ("delegated", Some(d), _) => format!("for Claude under {d}"),
+            (_, _, Some(u)) => format!("on the {place} ({u})"),
+            _ => format!("on the {place}"),
+        };
+        println!(
+            "  {}  {}  {at}",
+            w["code"].as_str().unwrap_or(""),
+            w["what"].as_str().unwrap_or("")
+        );
+    }
+}
+
+/// Print a proposal of default delegations (FTR-028 R-5): the mode and each delegation.
+fn print_defaults(cli: &Cli, v: &Value) -> anyhow::Result<()> {
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(v)?);
+        return Ok(());
+    }
+    println!(
+        "Decisions: {} mode, proposed",
+        v["mode"].as_str().unwrap_or("monitor")
+    );
+    let list = v["delegations"].as_array().cloned().unwrap_or_default();
+    if list.is_empty() {
+        println!("  no delegations: every decision stays the person's");
+    }
+    for g in &list {
+        println!("  {}", delegation_line(g).trim_start());
+    }
+    if !list.is_empty() {
+        println!("they wait on the Review page for the person to grant");
+    }
+    Ok(())
+}
+
+/// `kanbanr decisions defaults --process <name> --dry-run`: needs no board (FTR-028 R-5).
+fn run_defaults_preview(cli: &Cli, name: &str) -> anyhow::Result<()> {
+    let (file, _) = resolve_process(cli, name)?;
+    let config = file.into_config(name);
+    let (mode, delegations) = kanbanr_core::decisions::proposed_defaults(
+        &config,
+        Some(name),
+        &kanbanr_core::now_rfc3339(),
+    );
+    print_defaults(cli, &json!({"mode": mode, "delegations": delegations}))
+}
+
+fn run_decisions(cli: &Cli, client: &Backend, cmd: &DecisionsCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let base = format!("/projects/{p}/decisions");
+    let show = |resp: &str, human: &dyn Fn(&Value)| -> anyhow::Result<()> {
+        if cli.json {
+            println!("{}", pretty(resp));
+        } else {
+            human(&serde_json::from_str::<Value>(resp)?);
+        }
+        Ok(())
+    };
+    match cmd {
+        DecisionsCmd::Show => {
+            let resp = client.get(&base)?;
+            show(&resp, &|v| {
+                println!("Decisions: {}", v["mode"].as_str().unwrap_or("monitor"));
+                let gs = v["delegations"].as_array().cloned().unwrap_or_default();
+                if gs.is_empty() {
+                    println!("no delegations");
+                }
+                for g in &gs {
+                    println!("  {}", delegation_line(g));
+                }
+                let review = v["to_review"].as_array().cloned().unwrap_or_default();
+                if !review.is_empty() {
+                    println!("delegated decisions to review on the Review page:");
+                    for r in &review {
+                        println!(
+                            "  {}  {} {}  under {}",
+                            r["decision"].as_str().unwrap_or(""),
+                            r["verdict"].as_str().unwrap_or(""),
+                            r["signoff"].as_str().unwrap_or(""),
+                            r["delegation"].as_str().unwrap_or("")
+                        );
+                    }
+                }
+                let waiting = &v["waiting"];
+                if waiting.as_array().is_some_and(|a| !a.is_empty()) {
+                    println!("waiting for a decision:");
+                    print_waiting(waiting);
+                }
+            })
+        }
+        DecisionsCmd::Mode { mode, reason } => {
+            let who = verdict_author(cli, None)?;
+            let resp = client.write(
+                Method::Put,
+                &format!("{base}/mode"),
+                Some(json!({"mode": mode, "reason": reason, "by": who})),
+            )?;
+            show(&resp, &|v| {
+                if v["already_recorded"].as_bool() == Some(true) {
+                    println!("decisions are already taken in {mode} mode; nothing recorded");
+                } else {
+                    println!("decisions: {mode} mode, set by {who}");
+                }
+                if v["waiting"].as_array().is_some_and(|a| !a.is_empty()) {
+                    println!("waiting for a decision, in its place now:");
+                    print_waiting(&v["waiting"]);
+                }
+            })
+        }
+        DecisionsCmd::Propose {
+            verdict,
+            step,
+            item,
+            kind,
+            milestone,
+            all,
+            until,
+            note,
+        } => {
+            let until = kanbanr_core::decisions::until_of(until, &kanbanr_core::now_rfc3339())?;
+            let who = verdict_author(cli, None).unwrap_or_else(|_| "Claude".into());
+            let resp = client.write(
+                Method::Post,
+                &format!("{base}/delegations"),
+                Some(json!({
+                    "verdicts": verdict, "steps": step, "items": item, "kinds": kind,
+                    "milestone": milestone, "all": all, "until": until, "note": note, "by": who
+                })),
+            )?;
+            show(&resp, &|g| {
+                println!(
+                    "{} proposed: the person grants it on the Review page before it covers \
+                     anything",
+                    g["id"].as_str().unwrap_or("")
+                );
+            })
+        }
+        DecisionsCmd::Grant { id } => {
+            // Granted as it stands now: the rev read here is the one the grant is pinned to.
+            let view: Value = serde_json::from_str(&client.get(&base)?)?;
+            let rev = view["delegations"]
+                .as_array()
+                .and_then(|a| a.iter().find(|g| g["id"] == id.as_str()))
+                .and_then(|g| g["rev"].as_str().map(String::from))
+                .ok_or_else(|| anyhow::anyhow!("there is no delegation {id}"))?;
+            let who = verdict_author(cli, None)?;
+            let resp = client.write(
+                Method::Post,
+                &format!("{base}/delegations/{}/grant", urlencode_segment(id)),
+                Some(json!({"rev": rev, "by": who})),
+            )?;
+            show(&resp, &|g| {
+                println!("{} granted by {who}", delegation_line(g))
+            })
+        }
+        DecisionsCmd::Revoke { id, reason } => {
+            let who = verdict_author(cli, None).unwrap_or_else(|_| "Claude".into());
+            let resp = client.write(
+                Method::Post,
+                &format!("{base}/delegations/{}/revoke", urlencode_segment(id)),
+                Some(json!({"reason": reason, "by": who})),
+            )?;
+            show(&resp, &|_| println!("{id} revoked"))
+        }
+        DecisionsCmd::Defaults { process, dry_run } => {
+            let who = verdict_author(cli, None).unwrap_or_else(|_| "Claude".into());
+            let resp = client.write(
+                Method::Post,
+                &format!("{base}/defaults"),
+                Some(json!({"process": process, "dry_run": dry_run, "by": who})),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            if *dry_run {
+                return print_defaults(cli, &v);
+            }
+            if cli.json {
+                println!("{}", pretty(&resp));
+            } else {
+                let made = v.as_array().cloned().unwrap_or_default();
+                if made.is_empty() {
+                    println!(
+                        "no default delegations for this process: every decision stays the person's"
+                    );
+                }
+                for g in &made {
+                    println!(
+                        "{} proposed: {}",
+                        g["id"].as_str().unwrap_or(""),
+                        delegation_line(g)
+                    );
+                }
+                if !made.is_empty() {
+                    println!("they wait on the Review page for the person to grant");
+                }
+            }
+            Ok(())
+        }
+        DecisionsCmd::Review {
+            decision,
+            keep,
+            undo: _,
+            reason,
+        } => {
+            let who = verdict_author(cli, None)?;
+            let verdict = if *keep { "keep" } else { "undo" };
+            let resp = client.write(
+                Method::Post,
+                &format!("{base}/reviews"),
+                Some(
+                    json!({"decision": decision, "verdict": verdict, "reason": reason, "by": who}),
+                ),
+            )?;
+            show(&resp, &|_| {
+                println!(
+                    "{decision}: {} by {who}",
+                    if *keep { "kept" } else { "undone" }
+                )
+            })
+        }
+    }
+}
+
 fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     let sources = |given: &[String]| -> anyhow::Result<Vec<Value>> {
@@ -10244,6 +10863,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             note,
             by,
             plan: false,
+            accept_untested,
             ..
         } => {
             promote_release(
@@ -10254,6 +10874,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 stage.as_deref(),
                 reason.as_deref().or(note.as_deref()),
                 by.as_ref(),
+                accept_untested,
             )?;
         }
         ReleaseCmd::List => {
@@ -10320,20 +10941,40 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
         }
         // `cut --tag` is promotion to the last stage (FEAT-183): the tag comes with the main branch
         // fast-forwarded to the release, through the same preflight and rollback.
-        ReleaseCmd::Cut { version, tag: true } => {
+        ReleaseCmd::Cut {
+            version,
+            tag: true,
+            accept_untested,
+        } => {
             let project = get_project(client, &p)?;
             let last = project.config.cadence.stages().last().cloned();
-            promote_release(cli, client, &p, version, last.as_deref(), None, None)?;
+            promote_release(
+                cli,
+                client,
+                &p,
+                version,
+                last.as_deref(),
+                None,
+                None,
+                accept_untested,
+            )?;
         }
         ReleaseCmd::Cut {
             version,
             tag: false,
+            accept_untested,
         } => {
             let by = verdict_author(cli, None)?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/releases/{}/cut", urlencode_segment(version)),
-                Some(json!({ "by": by })),
+                Some(obj(vec![
+                    ("by", Some(json!(by))),
+                    (
+                        "accept_untested",
+                        (!accept_untested.is_empty()).then(|| json!(accept_untested)),
+                    ),
+                ])),
             )?;
             let v: Value = serde_json::from_str(&resp)?;
             let release = &v["release"];
@@ -10559,6 +11200,7 @@ fn promote_release(
     stage: Option<&str>,
     reason: Option<&str>,
     by: Option<&String>,
+    accept_untested: &[String],
 ) -> anyhow::Result<()> {
     let by = verdict_author(cli, by)?;
     let stage = match stage {
@@ -10576,6 +11218,10 @@ fn promote_release(
             ("stage", Some(json!(stage))),
             ("by", Some(json!(by))),
             ("reason", reason.map(|r| json!(r))),
+            (
+                "accept_untested",
+                (!accept_untested.is_empty()).then(|| json!(accept_untested)),
+            ),
         ])),
         repo.as_deref(),
     )?;
@@ -10791,6 +11437,13 @@ fn print_release_plan(
                     .map(|f| format!(" — {f}"))
                     .unwrap_or_default()
             );
+            // What the cut asks you to accept, one per line, as --accept-untested takes them
+            // (DEF-043).
+            if c["check"] == "untested_accepted" {
+                for r in c["refs"].as_array().into_iter().flatten() {
+                    println!("        {}", r.as_str().unwrap_or_default());
+                }
+            }
         }
     }
     if let Some(o) = plan["origin"].as_object() {
@@ -11528,18 +12181,27 @@ mod tests {
             "kanbanr release add v1.0.1 --patch-of v1.0.0 --from-failed-tag",
             "kanbanr gate record v1 smoke --result pass",
         ] {
-            let why = verdict_refusal(refused, url).unwrap_or_else(|| panic!("passed: {refused}"));
+            let why = verdict_refusal(refused, url, kanbanr_core::agentscope::Caller::Coordinator)
+                .unwrap_or_else(|| panic!("passed: {refused}"));
             assert!(why.contains("http://h:1/p/p/"), "{why}");
         }
         assert!(
-            verdict_refusal("kanbanr release cut v1", url)
-                .unwrap()
-                .contains("/p/p/releases")
+            verdict_refusal(
+                "kanbanr release cut v1",
+                url,
+                kanbanr_core::agentscope::Caller::Coordinator
+            )
+            .unwrap()
+            .contains("/p/p/releases")
         );
         assert!(
-            verdict_refusal("kanbanr gate record v1 smoke", url)
-                .unwrap()
-                .contains("/p/p/releases")
+            verdict_refusal(
+                "kanbanr gate record v1 smoke",
+                url,
+                kanbanr_core::agentscope::Caller::Coordinator
+            )
+            .unwrap()
+            .contains("/p/p/releases")
         );
         for allowed in [
             "kanbanr review --pending",
@@ -11556,12 +12218,68 @@ mod tests {
             "git commit -m \"kanbanr approve\"",
         ] {
             assert!(
-                verdict_refusal(allowed, url).is_none(),
+                verdict_refusal(allowed, url, kanbanr_core::agentscope::Caller::Coordinator)
+                    .is_none(),
                 "refused: {allowed}"
             );
         }
         let heredoc = without_heredoc_bodies("cat <<EOF\nkanbanr approve X\nEOF\n");
-        assert!(verdict_refusal(&heredoc, url).is_none());
+        assert!(
+            verdict_refusal(&heredoc, url, kanbanr_core::agentscope::Caller::Coordinator).is_none()
+        );
+    }
+
+    /// FTR-028 R-2: the hook refuses Claude the decisions that are the person's own (the mode, a
+    /// grant, a review), changing who is calling, the monitor's page token and any write to
+    /// decisions.yaml; it lets the coordinator propose, revoke, read and act `--under` a
+    /// delegation (core decides), and refuses `--under` to a sub-agent.
+    #[test]
+    fn the_guard_refuses_claude_managing_decisions() {
+        use kanbanr_core::agentscope::Caller;
+        let url = "http://h:1/p/p/review";
+        let c = Caller::Coordinator;
+        for refused in [
+            "kanbanr decisions grant DLG-001",
+            "kanbanr decisions mode delegated",
+            "kanbanr --project p decisions review FTR-1/signoff/x/t --keep",
+            "env -u CLAUDECODE kanbanr approve FTR-1",
+            "CLAUDECODE= kanbanr approve FTR-1 --under DLG-001",
+            "unset CLAUDECODE; kanbanr signoff FTR-1 design-review",
+            "curl -X POST -H 'X-Kanbanr-Token: abc' http://h:1/api/projects/p/features/F/approve",
+            "curl -H 'x-kanbanr-token: abc' http://h:1/api/projects/p/decisions/mode",
+            "sed -i s/monitor/delegated/ ../board/projects/p/decisions.yaml",
+            "echo mode > projects/p/decisions.yaml",
+            "kanbanr approve FTR-1",
+        ] {
+            assert!(
+                verdict_refusal(refused, url, c).is_some(),
+                "passed: {refused}"
+            );
+        }
+        for allowed in [
+            "kanbanr decisions show",
+            "kanbanr decisions propose --verdict signoff:design-review --kind defect",
+            "kanbanr decisions revoke DLG-001 --reason done",
+            "kanbanr decisions --help",
+            "cat ../board/projects/p/decisions.yaml",
+            "git log -p -- projects/p/decisions.yaml",
+            "kanbanr approve FTR-1 --under DLG-001",
+            "kanbanr signoff FTR-1 design-review --under DLG-001",
+        ] {
+            assert!(
+                verdict_refusal(allowed, url, c).is_none(),
+                "refused: {allowed}"
+            );
+        }
+        let why = verdict_refusal(
+            "kanbanr signoff FTR-1 design-review --under DLG-001",
+            url,
+            Caller::Agent,
+        )
+        .unwrap();
+        assert!(why.contains("only the coordinator"), "{why}");
+        // A delegation never covers a release verdict, so `--under` does not let it through.
+        assert!(verdict_refusal("kanbanr release cut v1 --under DLG-001", url, c).is_some());
     }
 
     /// FTR-024 R-3: the monitor's status reads `writes` from its meta, and names the pages only

@@ -290,6 +290,10 @@ through; `kanbanr doctor` lists the same ones. A requirement link lands on that 
 
 ![An item's page](../images/feature.png)
 
+An override Claude made past a gate waits on the **Review** page to be ratified, even on an item
+you approved: the entry shows each one as "Moved Test → Review on 2026-11-12 by Claude, past its
+gate: …" above **Ratify**. Until you ratify it, the item does not ship.
+
 The **Review** page also lists a finished item whose approval lapsed or that gained text since
 you approved it, labelled with its status, after all the live decisions. The work is done, but the
 definition changed after you approved it: approving again covers what it says now.
@@ -387,6 +391,12 @@ same whichever you use. A read-only monitor shows the command instead.
   on the code repository, and the monitor uses the repository it was started in. Started anywhere
   else, it says "the monitor was not started in the project folder" and names the CLI command. A
   read-only monitor shows the command and the plan, never the button.
+- **Shipping untested work.** When the cut's one missing condition is that some shipping
+  requirements have tests not run, the release card lists them (`FEAT-005/R-2`, …) with one
+  checkbox, "Ship these unverified; the notes will name them". Ticking it enables **Cut**, which
+  sends exactly that list; if the list changed since the page read it, the cut is refused and you
+  look again. The notes on the board gain a "Not verified in this release" section. This is
+  `kanbanr release promote <VERSION> --accept-untested …`.
 - **Release notes.** A release with a branch has a **Release notes** section, collapsed until
   opened, showing the notes as they are on `release/<V>` — headed "draft on release/v0.3.0 @
   8f995e1", or "as shipped on …" after the cut. Until the cut, **Edit notes** opens the text;
@@ -434,6 +444,24 @@ decision was taken some other way, or whose item or release moved on, shows why 
 a newer one for the same decision replaces it. A read-only monitor shows the record and the
 command that takes the same decision in your own terminal. Claude can prepare a record but can
 never confirm or reject one.
+
+### Decisions here
+
+The top of the Review page says where this project's decisions are taken (FTR-028):
+
+- **The mode**, `monitor` or `delegated`, with **Change**. After a change the panel lists what is
+  waiting and where it is taken now: here, or by Claude under a delegation that covers it.
+- **Delegations.** A proposal from Claude is shown like a prepared record, with what it covers and
+  until when: **Grant** grants it exactly as shown (if it changed since the page loaded, the grant
+  is refused), **Reject** discards it. A granted one shows its end and **Revoke**, which needs a
+  reason. A delegation whose grant kanbanr did not write (the file was edited by hand, or changed
+  outside a commit) is marked "not granted through kanbanr", and nothing is taken under it.
+- **Delegated decisions to review**: what Claude decided under a delegation, on which item, under
+  which delegation and when, with **Keep** and **Undo** and an optional reason. Undo withdraws the
+  approval or sign-off.
+
+A read-only monitor shows the same panel with the command that does each thing in your own
+terminal instead of the buttons.
 
 Across several projects ([Portfolio](portfolio.md)):
 

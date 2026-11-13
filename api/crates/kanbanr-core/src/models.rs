@@ -336,6 +336,10 @@ pub struct Signoff {
     /// kanbanr's value survives.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub origin: String,
+    /// The delegation a record was taken under, such as `DLG-001`, when `origin` is `delegated`
+    /// (FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub delegation: String,
     /// What the person checked when giving `docs-folded` (FTR-013): each text flagged as naming
     /// something the item changed, with whether they confirmed it is still right or filed a
     /// correction. Absent on a record without flags, or one an older kanbanr wrote.
@@ -469,6 +473,10 @@ pub struct ApprovalEvent {
     /// kanbanr's value survives.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub origin: String,
+    /// The delegation a record was taken under, such as `DLG-001`, when `origin` is `delegated`
+    /// (FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub delegation: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -496,6 +504,10 @@ pub struct Approval {
     /// kanbanr's value survives.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub origin: String,
+    /// The delegation a record was taken under, such as `DLG-001`, when `origin` is `delegated`
+    /// (FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub delegation: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -886,6 +898,12 @@ pub struct TestRef {
     /// stale rather than trustworthy.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub checked_rev: String,
+    /// When it can be checked (DEF-043): empty at the item's gates, `pushed` after main is pushed,
+    /// `cut` at the cut, or a release stage's name. The item's gate doesn't wait for a test with
+    /// an `at`; the release stage it names does. Part of the definition, so changing it lapses an
+    /// approval.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub at: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -936,6 +954,11 @@ pub struct Transition {
     /// Why a gate was passed over, when it was (FEAT-113). Absent on an ordinary move.
     #[serde(default, rename = "override", skip_serializing_if = "Option::is_none")]
     pub override_reason: Option<String>,
+    /// Where a move with an override was made: `monitor`, `conversation`, `terminal` or
+    /// `delegated` (DEF-043). Set only on a transition with an override; empty on every move
+    /// before this version.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -1821,5 +1844,99 @@ mod tests {
         assert_eq!(d.approval_state(), ApprovalState::Lapsed);
         sign_off(&mut d, "2026-11-06T11:00:00Z");
         assert_eq!(d.approval_state(), ApprovalState::Lapsed);
+    }
+
+    /// FTR-028 R-3: a record names its delegation; an older reader, whose struct lacks the field,
+    /// keeps it in `extra` and writes it back; a record without it writes nothing.
+    #[test]
+    fn a_delegation_field_survives_an_older_reader() {
+        let yaml = "id: design-review\nby: Claude\nat: 2026-11-12T10:00:00Z\nrev: abc\n\
+                    origin: delegated\ndelegation: DLG-001\n";
+        let s: Signoff = crate::yaml::from_str(yaml).unwrap();
+        assert_eq!(s.delegation, "DLG-001");
+        assert!(
+            crate::yaml::to_string(&s)
+                .unwrap()
+                .contains("delegation: DLG-001")
+        );
+        let plain = Signoff {
+            id: "design-review".into(),
+            ..Default::default()
+        };
+        assert!(
+            !crate::yaml::to_string(&plain)
+                .unwrap()
+                .contains("delegation")
+        );
+
+        #[derive(Serialize, Deserialize)]
+        struct Older {
+            id: String,
+            #[serde(flatten, default)]
+            extra: Extra,
+        }
+        let o: Older = crate::yaml::from_str(yaml).unwrap();
+        assert_eq!(o.extra["delegation"], serde_json::json!("DLG-001"));
+        assert!(
+            crate::yaml::to_string(&o)
+                .unwrap()
+                .contains("delegation: DLG-001")
+        );
+    }
+
+    /// DEF-043 compat: a test's `at`, a transition's `origin` and a stage change's
+    /// `accepted_untested` round-trip, and nothing is written when they are empty.
+    #[test]
+    fn new_fields_are_kept_and_omitted_when_empty() {
+        let test: TestRef = crate::yaml::from_str(
+            "name: release::tag_publishes_notes\nkind: e2e\nstate: planned\nat: pushed\n",
+        )
+        .unwrap();
+        assert_eq!(test.at, "pushed");
+        let back: TestRef = crate::yaml::from_str(&crate::yaml::to_string(&test).unwrap()).unwrap();
+        assert_eq!(back, test);
+        let plain = TestRef {
+            name: "t".into(),
+            ..Default::default()
+        };
+        assert!(!crate::yaml::to_string(&plain).unwrap().contains("at:"));
+
+        let moved: Transition = crate::yaml::from_str(
+            "at: 2026-11-12T09:40:00Z\nfrom: Test\nto: Review\noverride: CI after push\norigin: conversation\n",
+        )
+        .unwrap();
+        assert_eq!(moved.origin, "conversation");
+        let back: Transition =
+            crate::yaml::from_str(&crate::yaml::to_string(&moved).unwrap()).unwrap();
+        assert_eq!(back, moved);
+        let ordinary = Transition {
+            at: "2026-11-12T09:40:00Z".into(),
+            from: "Test".into(),
+            to: "Review".into(),
+            ..Default::default()
+        };
+        assert!(
+            !crate::yaml::to_string(&ordinary)
+                .unwrap()
+                .contains("origin")
+        );
+
+        let change: crate::releases::StageChange = crate::yaml::from_str(
+            "stage: production\nby: Venkatraman B\nat: x\norigin: monitor\naccepted_untested:\n- FEAT-005/R-2\n- FEAT-005/R-3\n",
+        )
+        .unwrap();
+        assert_eq!(change.accepted_untested, ["FEAT-005/R-2", "FEAT-005/R-3"]);
+        let back: crate::releases::StageChange =
+            crate::yaml::from_str(&crate::yaml::to_string(&change).unwrap()).unwrap();
+        assert_eq!(back, change);
+        let plain = crate::releases::StageChange {
+            stage: "production".into(),
+            ..Default::default()
+        };
+        assert!(
+            !crate::yaml::to_string(&plain)
+                .unwrap()
+                .contains("accepted_untested")
+        );
     }
 }

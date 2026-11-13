@@ -1775,6 +1775,8 @@ fn cli_trace_and_why_follow_the_chain_in_both_directions() {
             .env_remove("CLAUDE_CONFIG_DIR")
             .env_remove("KANBANR_DATA_DIR")
             .env_remove("KANBANR_PROJECT")
+            // The person's terminal, not a Claude session, whatever runs the tests (FTR-028).
+            .env_remove("CLAUDECODE")
             .stdin(std::process::Stdio::null())
             .output()
             .expect("run kanbanr CLI")
@@ -7380,7 +7382,8 @@ impl ScopeFx {
                 &fx.work,
                 &["feature", "define", code, "--file", def.to_str().unwrap()],
             );
-            fx.ok(&fx.work, &["approve", code]);
+            // A verdict is the person's: core refuses one from a Claude session (FTR-028).
+            fx.person_ok(&fx.work, &["approve", code]);
             fx.ok(&fx.work, &["move", code, "In Progress"]);
             fx.ok(&fx.work, &["todo", "add", code, "--description", "work"]);
             fx.ok(&fx.work, &["task", "add", code, "TL-001", "--text", "one"]);
@@ -7442,6 +7445,21 @@ impl ScopeFx {
         c.args(args).current_dir(dir);
         self.env(&mut c);
         c.output().expect("run kanbanr CLI")
+    }
+
+    /// A command from the person's own terminal: no CLAUDECODE (FTR-028).
+    fn person_ok(&self, dir: &Path, args: &[&str]) -> String {
+        let mut c = Command::new(cli());
+        c.args(args).current_dir(dir);
+        self.env(&mut c);
+        c.env_remove("CLAUDECODE");
+        let o = c.output().expect("run kanbanr CLI");
+        assert!(
+            o.status.success(),
+            "{args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8(o.stdout).unwrap()
     }
 
     fn ok(&self, dir: &Path, args: &[&str]) -> String {
@@ -10852,7 +10870,7 @@ paths:
 fn a_verdict_from_a_terminal_and_one_inside_a_claude_session_differ_in_origin() {
     let (base, work) = togaf_scratch("def028-origin");
     togaf_board(&base, &work);
-    let signoff = |name: &str, claudecode: Option<&str>| {
+    let signoff = |name: &str, claudecode: Option<&str>| -> Output {
         let mut c = Command::new(cli());
         c.args(["signoff", "FEAT-001", name])
             .current_dir(&work)
@@ -10866,13 +10884,19 @@ fn a_verdict_from_a_terminal_and_one_inside_a_claude_session_differ_in_origin() 
         if let Some(v) = claudecode {
             c.env("CLAUDECODE", v);
         }
-        let o = c.output().unwrap();
-        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        c.output().unwrap()
     };
-    signoff("from-terminal", None);
-    signoff("from-session", Some("1"));
+    let ok = |o: Output| assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    ok(signoff("from-terminal", None));
+    // Inside a Claude session the verdict is refused by core itself now, hook or none (FTR-028
+    // T3): this case used to expect it recorded with origin `conversation`.
+    let refused = signoff("from-session", Some("1"));
+    assert!(
+        !refused.status.success(),
+        "a session's sign-off was recorded"
+    );
     // An empty variable is not a session.
-    signoff("from-empty", Some(""));
+    ok(signoff("from-empty", Some("")));
     let shown = run_in(&base, &work, &["feature", "show", "FEAT-001", "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
     let def = &v["definition"];
@@ -10886,17 +10910,102 @@ fn a_verdict_from_a_terminal_and_one_inside_a_claude_session_differ_in_origin() 
             .unwrap()
     };
     assert_eq!(origin_of("from-terminal"), "terminal");
-    assert_eq!(origin_of("from-session"), "conversation");
     assert_eq!(origin_of("from-empty"), "terminal");
+    assert!(
+        def["signoffs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["id"] != "from-session"),
+        "{def}"
+    );
     // The approval the board was set up with came from a command here: a terminal.
     assert_eq!(def["approvals"][0]["origin"], "terminal");
     // And the text view says so.
     let text = run_in(&base, &work, &["feature", "show", "FEAT-001"]);
     let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("via the terminal"), "{text}");
+}
+
+/// FTR-028 R-1: a verdict command run inside a Claude session, with no hook installed, is refused
+/// by kanbanr itself and leaves nothing on the board: core's write recipe decides, not the hook.
+#[test]
+fn a_verdict_from_a_claude_session_is_refused_by_core() {
+    let (base, work) = togaf_scratch("ftr028-core-refuses");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    togaf_board(&base, &work);
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "add",
+            "--title",
+            "Wishlist",
+            "--milestone",
+            "MS-001",
+        ],
+    ));
+    let def = base.join("def2.yaml");
+    std::fs::write(&def, "statement: Keep a wishlist\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "define",
+            "FEAT-002",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    let data = base.join("code").join("shop.kanbanr");
+    let head = || {
+        let out = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&data)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let in_session = |args: &[&str]| {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", base.join("home"))
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_PROCESSES_DIR")
+            .env("CLAUDECODE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let before = head();
+    for args in [
+        &["approve", "FEAT-002"][..],
+        &["signoff", "FEAT-001", "from-session"][..],
+    ] {
+        let o = in_session(args);
+        assert!(!o.status.success(), "{args:?} was recorded");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.contains("the person's"), "{args:?}: {err}");
+    }
+    assert_eq!(head(), before, "a refused verdict made a commit");
+    let shown = run_in(&base, &work, &["feature", "show", "FEAT-002", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
     assert!(
-        text.contains("via the conversation") && text.contains("via the terminal"),
-        "{text}"
+        v["definition"]["approvals"]
+            .as_array()
+            .is_none_or(|a| a.is_empty()),
+        "{v}"
     );
+    // The same command from the person's terminal is recorded.
+    ok(run_in(&base, &work, &["approve", "FEAT-002"]));
+    assert_ne!(head(), before);
 }
 
 /// DEF-028 R-7: a click on the monitor and then the same verdict as a command records one approval,
@@ -11133,4 +11242,234 @@ fn prepare_gate_records_a_prepared_result_and_list_shows_it() {
     ]);
     assert!(!bad.status.success());
     let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A TOGAF board whose System Design gate also asks for `design-review` (FTR-028), and a runner
+/// for commands inside a Claude session (`CLAUDECODE=1`).
+fn delegation_board(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (base, work) = togaf_scratch(tag);
+    togaf_board(&base, &work);
+    let process = base.join("process-review.yaml");
+    std::fs::write(
+        &process,
+        r#"statuses: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+default_state: Vision
+displayed_states: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+terminal_states: [Operations]
+transitions:
+  Vision: [Business Arch]
+  Business Arch: [System Design, Vision]
+  System Design: [Implementation, Business Arch]
+  Implementation: [Migration, System Design]
+  Migration: [Operations, Implementation]
+  Operations: [Migration]
+gates:
+  Business Arch:
+    requires: [definition, approved]
+  System Design:
+    requires: [approved]
+    signoffs: [design-review]
+  Implementation:
+    requires: [approved]
+    on_enter: [branch]
+  Migration:
+    requires: [approved]
+"#,
+    )
+    .unwrap();
+    let o = run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "workflow",
+            "--from-file",
+            process.to_str().unwrap(),
+        ],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    (base, work)
+}
+
+fn in_session(base: &std::path::Path, work: &std::path::Path, args: &[&str]) -> Output {
+    Command::new(cli())
+        .args(args)
+        .current_dir(work)
+        .env("HOME", base.join("home"))
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .env_remove("KANBANR_PROCESSES_DIR")
+        .env("CLAUDECODE", "1")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run kanbanr CLI")
+}
+
+/// FTR-028 R-2: inside a Claude session a delegation can be proposed but not granted, and the mode
+/// cannot be changed; from the person's terminal both are recorded.
+#[test]
+fn a_session_cannot_grant_a_delegation() {
+    let (base, work) = delegation_board("ftr028-grant");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(in_session(
+        &base,
+        &work,
+        &[
+            "decisions",
+            "propose",
+            "--verdict",
+            "signoff:design-review",
+            "--item",
+            "FEAT-001",
+            "--note",
+            "design reviews of the cart",
+        ],
+    ));
+    for args in [
+        &["decisions", "grant", "DLG-001"][..],
+        &["decisions", "mode", "delegated"][..],
+    ] {
+        let o = in_session(&base, &work, args);
+        assert!(!o.status.success(), "{args:?} was recorded in a session");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.contains("the person's own"), "{args:?}: {err}");
+    }
+    let shown = ok(run_in(&base, &work, &["decisions", "show", "--json"]));
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(v["mode"], "monitor");
+    assert_eq!(v["delegations"][0]["state"], "proposed", "{v}");
+    assert_eq!(v["delegations"][0]["proposed"]["origin"], "conversation");
+    ok(run_in(&base, &work, &["decisions", "grant", "DLG-001"]));
+    ok(run_in(&base, &work, &["decisions", "mode", "delegated"]));
+    let shown = ok(run_in(&base, &work, &["decisions", "show", "--json"]));
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(v["mode"], "delegated");
+    assert_eq!(v["delegations"][0]["state"], "granted", "{v}");
+    assert_eq!(v["delegations"][0]["granted"]["origin"], "terminal");
+}
+
+/// FTR-028 R-2, R-3: Claude proposes, the person grants and sets delegated mode, then Claude takes
+/// the covered sign-off with `--under`; it is recorded as delegated, by Claude, naming DLG-001, and
+/// listed to review. Without `--under`, or for a sign-off it does not cover, it is refused.
+#[test]
+fn decisions_propose_grant_and_take_under() {
+    let (base, work) = delegation_board("ftr028-under");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(in_session(
+        &base,
+        &work,
+        &[
+            "decisions",
+            "propose",
+            "--verdict",
+            "signoff:design-review",
+            "--item",
+            "FEAT-001",
+        ],
+    ));
+    ok(run_in(&base, &work, &["decisions", "grant", "DLG-001"]));
+    ok(run_in(&base, &work, &["decisions", "mode", "delegated"]));
+    let refused = in_session(&base, &work, &["signoff", "FEAT-001", "design-review"]);
+    assert!(!refused.status.success(), "taken without --under");
+    let err = String::from_utf8_lossy(&refused.stderr);
+    assert!(err.contains("--under DLG-001"), "{err}");
+    let other = in_session(
+        &base,
+        &work,
+        &[
+            "signoff",
+            "FEAT-001",
+            "security-review",
+            "--under",
+            "DLG-001",
+        ],
+    );
+    assert!(!other.status.success(), "a sign-off DLG-001 does not cover");
+    let taken = ok(in_session(
+        &base,
+        &work,
+        &["signoff", "FEAT-001", "design-review", "--under", "DLG-001"],
+    ));
+    let said = String::from_utf8_lossy(&taken.stdout);
+    assert!(said.contains("under DLG-001"), "{said}");
+    let shown = ok(run_in(
+        &base,
+        &work,
+        &["feature", "show", "FEAT-001", "--json"],
+    ));
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    let s = v["definition"]["signoffs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "design-review")
+        .unwrap()
+        .clone();
+    assert_eq!(s["origin"], "delegated");
+    assert_eq!(s["by"], "Claude");
+    assert_eq!(s["delegation"], "DLG-001");
+    let shown = ok(run_in(&base, &work, &["decisions", "show", "--json"]));
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    let list = v["to_review"].as_array().unwrap();
+    assert_eq!(list.len(), 1, "{v}");
+    assert_eq!(list[0]["code"], "FEAT-001");
+    assert_eq!(list[0]["delegation"], "DLG-001");
+}
+
+/// DEF-043 R-2: a move with an override records where it was made: `conversation` inside a
+/// Claude Code session, `terminal` outside one.
+#[test]
+fn an_override_inside_a_claude_session_records_its_origin() {
+    let moved = |tag: &str, claudecode: bool| {
+        let (base, work) = togaf_scratch(tag);
+        togaf_board(&base, &work);
+        let mut c = Command::new(cli());
+        c.args(["move", "FEAT-001", "Business Arch", "--override", "why"])
+            .current_dir(&work)
+            .env("HOME", base.join("home"))
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_PROCESSES_DIR")
+            .env_remove("CLAUDECODE")
+            .stdin(std::process::Stdio::null());
+        if claudecode {
+            c.env("CLAUDECODE", "1");
+        }
+        let o = c.output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let shown = run_in(&base, &work, &["feature", "show", "FEAT-001", "--json"]);
+        let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+        let last = v["history"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(last["override"], "why", "{last}");
+        let review = run_in(&base, &work, &["--json", "review", "--pending"]);
+        assert!(
+            review.status.success(),
+            "{}",
+            String::from_utf8_lossy(&review.stderr)
+        );
+        let pending: serde_json::Value = serde_json::from_slice(&review.stdout).unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+        (last["origin"].as_str().unwrap_or("").to_string(), pending)
+    };
+    let listed = |pending: &serde_json::Value| {
+        pending
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["code"] == "FEAT-001" && e["approval"] == "unratified")
+    };
+    let (origin, pending) = moved("def043-session", true);
+    assert_eq!(origin, "conversation");
+    assert!(listed(&pending), "{pending}");
+    let (origin, pending) = moved("def043-terminal", false);
+    assert_eq!(origin, "terminal");
+    assert!(!listed(&pending), "{pending}");
 }

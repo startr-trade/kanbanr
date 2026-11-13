@@ -1,5 +1,5 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, ManualWaiting } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -202,14 +202,31 @@ export const api = {
    * Move a release to its next stage, or the named one (FEAT-183, FEAT-185): the same core
    * promotion as `kanbanr release promote`, recorded as `by`. The last stage is the cut.
    */
-  promoteRelease: (id: string, version: string, by: string, stage?: string, expect?: string, reason?: string) =>
+  promoteRelease: (
+    id: string,
+    version: string,
+    by: string,
+    stage?: string,
+    expect?: string,
+    reason?: string,
+    acceptUntested?: string[],
+  ) =>
     writePost(
       `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/promote`,
       // `expect`: the release tip the plan showed (FEAT-212) — refused if the branch moved since.
       // `reason`: for a stage after the tag, what the user checked (FTR-026).
-      { by, ...(stage ? { stage } : {}), ...(expect ? { expect } : {}), ...(reason ? { reason } : {}) },
+      // `accept_untested`: at the cut, what the person accepts shipping unverified (DEF-043).
+      {
+        by,
+        ...(stage ? { stage } : {}),
+        ...(expect ? { expect } : {}),
+        ...(reason ? { reason } : {}),
+        ...(acceptUntested?.length ? { accept_untested: acceptUntested } : {}),
+      },
       "promote a release",
-      `kanbanr release promote ${version}${stage ? ` ${stage}` : ""}${reason ? ` --note "${reason}"` : ""}`,
+      `kanbanr release promote ${version}${stage ? ` ${stage}` : ""}${reason ? ` --note "${reason}"` : ""}${
+        acceptUntested?.length ? ` --accept-untested ${acceptUntested.join(",")}` : ""
+      }`,
     ),
   /**
    * Start a patch release from a release whose tag's recorded result is failed (FTR-026): a defect
@@ -290,6 +307,44 @@ export const api = {
       "reject what Claude prepared",
       "kanbanr prepare list",
     ) as Promise<Resolution>,
+  /**
+   * Where this project's decisions are taken (FTR-028): the mode, the delegations, the decisions
+   * Claude took under one for the person to keep or undo, and what waits where.
+   */
+  getDecisions: (id: string) => getJson<DecisionsView>(apiUrl(`/projects/${encodeURIComponent(id)}/decisions`)),
+  /** The person sets the decision mode; the answer lists what waits where now. */
+  setDecisionMode: (id: string, mode: string, by: string, reason = "") =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/decisions/mode`,
+      { mode, by, ...(reason ? { reason } : {}) },
+      "change where decisions are taken",
+      `kanbanr decisions mode ${mode}`,
+      "PUT",
+    ) as Promise<ModeChanged>,
+  /** The person grants a proposed delegation, pinned to the `rev` the page showed. */
+  grantDelegation: (id: string, delegation: string, rev: string, by: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/decisions/delegations/${encodeURIComponent(delegation)}/grant`,
+      { rev, by },
+      "grant a delegation",
+      `kanbanr decisions grant ${delegation}`,
+    ) as Promise<Delegation>,
+  /** Revoke a delegation, or discard a proposal; a reason is required. */
+  revokeDelegation: (id: string, delegation: string, by: string, reason: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/decisions/delegations/${encodeURIComponent(delegation)}/revoke`,
+      { reason, by },
+      "revoke a delegation",
+      `kanbanr decisions revoke ${delegation} --reason "…"`,
+    ) as Promise<Delegation>,
+  /** The person keeps or undoes a decision Claude took under a delegation. */
+  reviewDelegated: (id: string, decision: string, verdict: "keep" | "undo", by: string, reason = "") =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/decisions/reviews`,
+      { decision, verdict, by, ...(reason ? { reason } : {}) },
+      `${verdict} a delegated decision`,
+      `kanbanr decisions review ${decision} --${verdict}`,
+    ),
   /** Every architecture decision on the board, newest first (FEAT-057). */
   getAdrs: (id: string) => getJson<Adr[]>(apiUrl(`/projects/${encodeURIComponent(id)}/adrs`)),
   /** The user's verdict on a proposed decision (FEAT-153), through the route `kanbanr adr accept`

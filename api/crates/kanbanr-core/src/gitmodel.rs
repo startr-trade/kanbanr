@@ -598,6 +598,7 @@ pub struct Moved {
 /// past it — merges its branch into its line first, refusing before anything changes if the merge
 /// would conflict (R-1, R-2). Preflight, then git, then the board, putting the line back if the
 /// board step fails.
+#[allow(clippy::too_many_arguments)]
 pub fn move_item(
     store: &Store,
     id: &str,
@@ -606,6 +607,7 @@ pub fn move_item(
     reason: Option<&str>,
     repo: Option<&Path>,
     by: &str,
+    origin: &str,
 ) -> Result<Moved> {
     let project = store.load_meta(id)?;
     let config = &project.config;
@@ -615,7 +617,8 @@ pub fn move_item(
         && !is_integrated(config, &feature.status)
         && is_integrated(config, to);
     let plain = |note: Option<String>| -> Result<Moved> {
-        let (feature, warnings) = store.move_feature_gated_in(id, code, to, reason, repo)?;
+        let (feature, warnings) =
+            store.move_feature_gated_in_as(id, code, to, reason, repo, origin)?;
         Ok(Moved {
             feature,
             warnings,
@@ -1354,7 +1357,7 @@ mod tests {
         );
         crate::coderepo::tests::commit_file(&repo, "a.rs", "v2\n", "after the sign-off");
 
-        let err = move_item(&store, "demo", &code, "Completed", None, Some(&repo), "Ada")
+        let err = move_item(&store, "demo", &code, "Completed", None, Some(&repo), "Ada", "")
             .unwrap_err()
             .to_string();
         assert!(err.contains("sign-off 'docs-folded' lapsed"), "{err}");
@@ -1366,7 +1369,7 @@ mod tests {
 
         sign();
         let moved =
-            move_item(&store, "demo", &code, "Completed", None, Some(&repo), "Ada").unwrap();
+            move_item(&store, "demo", &code, "Completed", None, Some(&repo), "Ada", "").unwrap();
         assert_eq!(moved.feature.status, "Completed");
         assert!(moved.merged.is_some());
         let _ = std::fs::remove_dir_all(&dir);
