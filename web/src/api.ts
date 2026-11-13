@@ -1,5 +1,5 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -233,6 +233,48 @@ export const api = {
       "record a gate result",
       `kanbanr gate record ${name} ${passed ? "--passed" : "--failed"} --commit ${commit}`,
     ),
+  /**
+   * The records Claude prepared for the person to confirm (FTR-034), newest first: the open ones,
+   * or with `all` every one. Each says where it stands and the equivalent verdict command.
+   */
+  getPrepared: (id: string, opts: { all?: boolean; item?: string; release?: string } = {}) => {
+    const q = [`state=${opts.all ? "all" : "open"}`];
+    if (opts.item) q.push(`item=${encodeURIComponent(opts.item)}`);
+    if (opts.release) q.push(`release=${encodeURIComponent(opts.release)}`);
+    return getJson<PreparedView[]>(apiUrl(`/projects/${encodeURIComponent(id)}/prepared?${q.join("&")}`));
+  },
+  /**
+   * Confirm a prepared record (FTR-034): the server makes the decision's own verdict as `by`, with
+   * `edits` to the editable fields and the pins the page showed. A read-only monitor names the
+   * equivalent command for the person's own terminal.
+   */
+  confirmPrepared: (
+    id: string,
+    view: PreparedView,
+    by: string,
+    edits: Record<string, unknown>,
+    pins: { rev?: string; spec_rev?: string; expect?: string } = {},
+  ) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/prepared/${encodeURIComponent(view.id ?? "")}/confirm`,
+      {
+        by,
+        ...(Object.keys(edits).length ? { edits } : {}),
+        ...(pins.rev ? { rev: pins.rev } : {}),
+        ...(pins.spec_rev ? { spec_rev: pins.spec_rev } : {}),
+        ...(pins.expect ? { expect: pins.expect } : {}),
+      },
+      "confirm what Claude prepared",
+      view.command || "kanbanr prepare list",
+    ),
+  /** Turn a prepared record down (FTR-034); the reason is optional. Nothing else changes. */
+  rejectPrepared: (id: string, prepared: string, by: string, reason = "") =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/prepared/${encodeURIComponent(prepared)}/reject`,
+      { by, ...(reason ? { reason } : {}) },
+      "reject what Claude prepared",
+      "kanbanr prepare list",
+    ) as Promise<Resolution>,
   /** Every architecture decision on the board, newest first (FEAT-057). */
   getAdrs: (id: string) => getJson<Adr[]>(apiUrl(`/projects/${encodeURIComponent(id)}/adrs`)),
   /** The user's verdict on a proposed decision (FEAT-153), through the route `kanbanr adr accept`

@@ -12,8 +12,8 @@
 
 use crate::agentscope::{self, ProcessScope};
 use crate::git::{self, PushPolicy};
-use crate::origin::{self, Origin};
-use crate::{CoreError, Store, activity, dispatch, eventing};
+use crate::origin::{self, Origin, Taker, Verdict};
+use crate::{CoreError, Store, activity, dispatch, eventing, prepared};
 use serde_json::Value;
 use std::path::Path;
 
@@ -256,6 +256,30 @@ pub fn apply_as(
             git::require_identity(data_dir).map_err(WriteError::Refused)?;
         }
         let body = held_body.as_ref().or(body);
+        // Answering a prepared record is the person's alone, refused to Claude by the one guard
+        // (FTR-034). A confirmation becomes the verdict it prepares, before the origin is stamped,
+        // so from here on it is exactly what a direct verdict is.
+        let mut expanded: Option<(String, prepared::Expanded)> = None;
+        if let Some((project, id, action)) = prepared::answer_route(method, path) {
+            let what = if action == "confirm" {
+                Verdict::ConfirmPrepared
+            } else {
+                Verdict::RejectPrepared
+            };
+            if let Some(why) = origin::verdict_refusal(what, Taker::of_origin(origin)) {
+                return Err(WriteError::Refused(format!("refused: {why}")));
+            }
+            if action == "confirm" {
+                let e =
+                    prepared::expand(store, &project, &id, body.unwrap_or(&Value::Null), origin)
+                        .map_err(WriteError::Core)?;
+                expanded = Some((project, e));
+            }
+        }
+        let (method, path, body) = match &expanded {
+            Some((_, e)) => (e.method.as_str(), e.path.as_str(), Some(&e.body)),
+            None => (method, path, body),
+        };
         // The front end names where a verdict was taken, never the request (DEF-028).
         let stamped = origin::stamp(method, path, body, origin);
         let body = stamped.as_ref().or(body);
@@ -274,6 +298,28 @@ pub fn apply_as(
             if said {
                 return Ok(applied);
             }
+        }
+        // The verdict stands; now keep the person's answer beside what Claude prepared, in the
+        // same commit. If that fails the verdict is still theirs, and the record reads stale.
+        if let Some((project, e)) = &expanded {
+            let mut v: Value = serde_json::from_str(&applied.body)
+                .unwrap_or_else(|_| Value::Object(Default::default()));
+            if let Value::Object(m) = &mut v {
+                m.insert("prepared".into(), Value::String(e.resolution.id.clone()));
+                if let Err(err) = prepared::resolve(store, project, &e.resolution) {
+                    let warning = Value::String(format!(
+                        "{} could not be marked confirmed: {err}",
+                        e.resolution.id
+                    ));
+                    match m.get_mut("warnings") {
+                        Some(Value::Array(w)) => w.push(warning),
+                        _ => {
+                            m.insert("warnings".into(), Value::Array(vec![warning]));
+                        }
+                    }
+                }
+            }
+            applied.body = v.to_string();
         }
         let origin = if verdict { origin.as_str() } else { "" };
         if records {

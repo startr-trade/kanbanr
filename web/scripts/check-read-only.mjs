@@ -46,6 +46,14 @@ const writes = {
   unapprove: () => api.unapprove("demo", "FEAT-1", "Reviewer", "changed"),
   signoff: () => api.signoff("demo", "FEAT-1", "design-review", "Reviewer"),
   decideAdr: () => api.decideAdr("demo", "ADR-0001", "accept", "Reviewer"),
+  confirmPrepared: () =>
+    api.confirmPrepared(
+      "demo",
+      { id: "x", kind: "gate-result", subject: {}, state: "open", resolution: null, stale_why: "", page: "releases", command: "kanbanr gate record ci --passed" },
+      "Reviewer",
+      {},
+    ),
+  rejectPrepared: () => api.rejectPrepared("demo", "x", "Reviewer"),
 };
 for (const [name, call] of Object.entries(writes)) {
   sent.length = 0;

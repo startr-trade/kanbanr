@@ -7,7 +7,8 @@ Scheduled, Completed. It has no sprints and no releases. You don't need to learn
   here are only examples.
 - **You decide on the monitor:** approvals and sign-offs on the **Review** page.
   Claude tells you what is waiting there and links to it. It never records a decision, and it
-  doesn't ask for one in a plan or a question.
+  doesn't ask for one in a plan or a question. What Claude already knows, such as a CI run's
+  result or what a sign-off covered, arrives filled in beside the button: you check it and click.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [Scheduled from the command line](scheduled-cli.md). To

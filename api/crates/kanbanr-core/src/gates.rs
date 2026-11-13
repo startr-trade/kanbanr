@@ -31,6 +31,10 @@ pub struct GateResult {
     pub url: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// Where it was recorded (DEF-028, FTR-034): `monitor`, `conversation` or `terminal`; empty
+    /// for a result recorded before kanbanr stamped one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin: String,
 }
 
 fn unsupported(msg: String) -> CoreError {
