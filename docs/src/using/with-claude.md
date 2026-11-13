@@ -104,6 +104,33 @@ Claude may run `kanbanr release promote <V> --plan`, `kanbanr sprint close` and
 `kanbanr release plan`, which record no verdict. If a verdict was ever recorded that you did not
 give, Claude says so at once and asks you to withdraw it on the item's page.
 
+## Where decisions are taken, and delegating them
+
+Each project chooses where its decisions are taken. In **monitor** mode, the default, every
+decision is yours, on the Review and Releases pages, as above. In **delegated** mode you still
+decide there, and Claude may also take the decisions you have delegated to it, for a time.
+
+To delegate, tell Claude what it may decide, for example: "you can sign off the design review of
+small defects for the next two weeks". Claude proposes a delegation: which verdicts (approve,
+ratify, or a named sign-off), for which items, kinds of item, milestone or stages, and until when
+(two weeks unless you say otherwise, three months at most). A proposal does nothing until you
+grant it: it waits in the **Decisions here** panel at the top of the Review page, where you grant
+it or discard it, and where you switch the project to delegated mode. Only you can grant one,
+change the mode, or review what was decided; kanbanr refuses Claude all three.
+
+When Claude takes a decision under a delegation, it tells you which one and under which delegation,
+and the decision is recorded as delegated, by Claude, naming the delegation. It comes back on the
+Review page under **Delegated decisions to review**: **Keep** it, or **Undo** it, which withdraws
+it with a reason that names the delegation. A delegation can't cover a release, a withdrawal, a
+design decision (ADR) or the decisions settings themselves, and only the Claude you are talking to
+acts under one, never a sub-agent it briefs. Revoke a delegation on the same panel at any time;
+switching back to monitor mode suspends them all.
+
+Outside a delegation nothing changes: a verdict run inside a Claude session is refused by kanbanr
+itself, not only by its hook. This keeps Claude to what you delegated through kanbanr's own
+commands and hooks, and makes any departure visible; it is not a security boundary against a
+program running as you.
+
 ## Plan mode
 
 Claude uses plan mode for the setup interview and for designing or changing your process. It never

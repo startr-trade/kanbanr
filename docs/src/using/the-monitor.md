@@ -414,6 +414,24 @@ a newer one for the same decision replaces it. A read-only monitor shows the rec
 command that takes the same decision in your own terminal. Claude can prepare a record but can
 never confirm or reject one.
 
+### Decisions here
+
+The top of the Review page says where this project's decisions are taken (FTR-028):
+
+- **The mode**, `monitor` or `delegated`, with **Change**. After a change the panel lists what is
+  waiting and where it is taken now: here, or by Claude under a delegation that covers it.
+- **Delegations.** A proposal from Claude is shown like a prepared record, with what it covers and
+  until when: **Grant** grants it exactly as shown (if it changed since the page loaded, the grant
+  is refused), **Reject** discards it. A granted one shows its end and **Revoke**, which needs a
+  reason. A delegation whose grant kanbanr did not write (the file was edited by hand, or changed
+  outside a commit) is marked "not granted through kanbanr", and nothing is taken under it.
+- **Delegated decisions to review**: what Claude decided under a delegation, on which item, under
+  which delegation and when, with **Keep** and **Undo** and an optional reason. Undo withdraws the
+  approval or sign-off.
+
+A read-only monitor shows the same panel with the command that does each thing in your own
+terminal instead of the buttons.
+
 Across several projects ([Portfolio](portfolio.md)):
 
 ![The portfolio: rollups and cross-project lanes](../images/portfolio.png)

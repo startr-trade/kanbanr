@@ -24,6 +24,15 @@ All notable changes to kanbanr are documented here. The format follows
   what-you-checked, a CI result with its run link, a ratification's reason); the monitor shows it
   filled in beside one button, and the person confirms, edits or rejects it. Both are kept
   (FTR-034).
+- **A project chooses where decisions are taken, and can delegate chosen verdicts to Claude for a
+  time; every delegated decision comes back on the Review page to keep or undo (FTR-028).**
+  `kanbanr decisions show|mode|propose|grant|revoke|review` and `--under DLG-n` on `approve`,
+  `ratify` and `signoff`; the mode, granting and reviewing are the person's own.
+
+### Changed
+
+- **A verdict command run inside a Claude session is refused by kanbanr itself, not only by the
+  hook** (FTR-028).
 
 ### Fixed
 
