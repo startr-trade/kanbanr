@@ -8493,4 +8493,53 @@ requirements:
         let next = crate::readiness::next_gates(&project, Some(&charter), f, &ctx);
         assert!(next.iter().any(|g| g.status == "Migration"));
     }
+
+    /// DEF-041 R-1: on a project with sprints, the first move into work waits for a sprint that has
+    /// started, in a process (TOGAF) that never asked for one.
+    #[test]
+    fn a_first_move_waits_for_a_started_sprint() {
+        use serde_json::json;
+        let (store, _d) = temp_store();
+        crate::dispatch::dispatch(
+            &store,
+            "POST",
+            "/projects",
+            Some(&json!({"name": "shop", "workflow": "togaf"})),
+        )
+        .unwrap();
+        crate::dispatch::dispatch(
+            &store,
+            "PUT",
+            "/projects/shop/config/cadence",
+            Some(&json!({"sprints": true})),
+        )
+        .unwrap();
+        without_method(&store, "shop");
+        adopt_charter(&store, "shop");
+        store
+            .add_milestone("shop", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let f = store.add_feature("shop", "Basket", "", "M", None).unwrap();
+        store
+            .set_feature_definition("shop", &f.code, Some(full_definition("Keep a basket")))
+            .unwrap();
+        store.approve_feature("shop", &f.code, "Ada L").unwrap();
+        let go = || {
+            store
+                .move_feature_approved("shop", &f.code, "Business Arch", None)
+                .map_err(|e| e.to_string())
+        };
+        let err = go().unwrap_err();
+        assert!(err.contains("no sprint is active"), "{err}");
+        let sp = crate::sprints::add(&store, "shop", "2099-01-05", None, "", None, "").unwrap();
+        crate::sprints::plan(&store, "shop", &sp.code, std::slice::from_ref(&f.code)).unwrap();
+        let err = go().unwrap_err();
+        assert!(err.contains("has not started"), "{err}");
+        let started = crate::sprints::start(&store, "shop", &sp.code).unwrap();
+        assert_eq!(
+            started.start,
+            crate::gantt::fmt_date(crate::sprints::today())
+        );
+        go().expect("the sprint has started, so the item moves");
+    }
 }
