@@ -1909,6 +1909,8 @@ mod tests {
     }
 
     /// A board in a temp git repository with one item declaring `architecture/data.md` (FEAT-180).
+    /// The doc is committed before the item is created: stage entry must not fall in an earlier
+    /// second than the commit that holds the doc (MNT-008).
     fn docs_board(tag: &str) -> (crate::Store, std::path::PathBuf, String) {
         let dir = std::env::temp_dir().join(format!("kanbanr-docs-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1921,6 +1923,10 @@ mod tests {
         store
             .add_milestone("demo", "M", "", vec![], Some("M".into()))
             .unwrap();
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv1\n")
+            .unwrap();
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "docs"));
         let item = store.add_feature("demo", "Cart", "", "M", None).unwrap();
         store
             .set_feature_definition(
@@ -1932,9 +1938,6 @@ mod tests {
                     ..Default::default()
                 }),
             )
-            .unwrap();
-        store
-            .write_doc("demo", "architecture/data.md", "# Data\n\nv1\n")
             .unwrap();
         assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "board"));
         (store, dir, item.code)
@@ -1961,7 +1964,6 @@ mod tests {
     #[test]
     fn next_gate_holds_docs_folded_and_names_the_unbuilt_documents() {
         let (store, dir, code) = docs_board("held");
-        next_second();
         let gate = crate::config::Gate {
             signoffs: vec!["design-review".into(), "docs-folded".into()],
             ..Default::default()
