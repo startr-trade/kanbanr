@@ -25,6 +25,13 @@ All notable changes to kanbanr are documented here. The format follows
   filled in beside one button, and the person confirms, edits or rejects it. Both are kept
   (FTR-034).
 
+### Changed
+
+- **The process guides and the skill ask about a screen's look before it is built (DOC-008)**, give
+  one order for a release (promote to main, push main, CI, record the result, cut, push the tag)
+  with the Record result form shown where the Cut needs it, and design a staged pipeline whose
+  stages rerun alone, with caches for the project's stack.
+
 ### Fixed
 
 - **The docs-folded sign-off no longer asks you to tick each text to check or type a defect
