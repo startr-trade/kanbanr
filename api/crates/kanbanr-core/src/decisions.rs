@@ -670,6 +670,38 @@ pub fn propose(store: &Store, p: &str, new: NewDelegation, stamp: Stamp) -> Resu
     Ok(delegation)
 }
 
+/// Was delegation `id` granted through kanbanr (T9)? Only when `decisions.yaml` has no change
+/// outside a commit, and the first commit in its history that shows `id` granted carries
+/// `Kanbanr-Origin: monitor` or `terminal`, the trailer kanbanr's write recipe adds to a grant.
+/// A grant written into the file by hand, or one not committed, is not honoured.
+pub fn granted_through_kanbanr(store: &Store, p: &str, id: &str) -> bool {
+    let rel = format!("projects/{p}/{DECISIONS_FILE}");
+    let dir = store.data_dir();
+    if let Err(dirty) = crate::git::is_clean(dir)
+        && dirty.iter().any(|f| f == &rel)
+    {
+        return false;
+    }
+    let history = crate::git::file_history(dir, &rel);
+    let Some(first) = history.iter().rev().find(|v| {
+        crate::yaml::from_str::<Decisions>(&v.content)
+            .ok()
+            .is_some_and(|d| {
+                d.delegations
+                    .iter()
+                    .any(|g| g.id == id && g.granted.is_some())
+            })
+    }) else {
+        return false;
+    };
+    first.message.lines().any(|l| {
+        matches!(
+            l.trim(),
+            "Kanbanr-Origin: monitor" | "Kanbanr-Origin: terminal"
+        )
+    })
+}
+
 /// A delegation's end as a person gives it: `YYYY-MM-DD` is the end of that day (UTC), RFC 3339
 /// is taken as it is, and nothing is [`DEFAULT_DELEGATION_DAYS`] from `now`, at the end of that
 /// day.
@@ -1001,6 +1033,10 @@ pub struct DelegationView {
     pub in_force: bool,
     /// What a grant is pinned to: [`Delegation::rev`], sent back with the grant.
     pub rev: String,
+    /// Granted, but not through kanbanr (T9): written into the file by hand, or not committed.
+    /// Claude's verdicts under it are refused.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub not_granted_through_kanbanr: bool,
 }
 
 /// `GET /projects/{p}/decisions`: the mode and its history, every delegation, the delegated
@@ -1038,6 +1074,8 @@ pub fn view(
                     state,
                     in_force: state == DelegationState::Granted,
                     rev: g.rev(),
+                    not_granted_through_kanbanr: g.granted.is_some()
+                        && !granted_through_kanbanr(store, p, &g.id),
                 }
             })
             .collect(),
@@ -1690,9 +1728,20 @@ mod tests {
             at_now("conversation"),
         )
         .unwrap();
-        let rev = g.rev();
-        grant(&store, "demo", &g.id, &rev, at_now("monitor")).unwrap();
-        crate::git::commit_local(&dir, "delegation granted");
+        // Granted through the write recipe, as the monitor and the terminal grant (T9).
+        apply_as(
+            &store,
+            &dir,
+            PushPolicy::Off,
+            "POST",
+            &format!("/projects/demo/decisions/delegations/{}/grant", g.id),
+            Some(&json!({"rev": g.rev(), "by": "Ada"})),
+            None,
+            &crate::eventing::NullSender,
+            &ProcessScope::Unscoped,
+            Origin::Monitor,
+        )
+        .unwrap();
         let take = |code: &str, body: Value| {
             apply_as(
                 &store,
@@ -1936,6 +1985,110 @@ mod tests {
         );
         assert!(to_review(&project, &load(&store, "demo").unwrap()).is_empty());
         assert!(review(&store, "demo", &approval.decision, true, "", who("monitor")).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// T9: a delegation is honoured only when kanbanr wrote its grant: written by hand into the
+    /// file (and committed with no origin trailer), or left uncommitted, it is refused.
+    #[test]
+    fn a_grant_written_by_hand_is_not_honoured() {
+        use crate::agentscope::ProcessScope;
+        use crate::git::PushPolicy;
+        use crate::write::{WriteError, apply_as};
+        let (store, dir, defect, _) = board();
+        store
+            .set_feature_definition(
+                "demo",
+                &defect,
+                Some(FeatureDefinition {
+                    statement: "Fix the bug".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        crate::git::commit_local(&dir, "the board");
+        let now = crate::now_rfc3339();
+        let until = until_of("", &now).unwrap();
+        let write = |method: &str, path: &str, body: Value, origin: Origin| {
+            apply_as(
+                &store,
+                &dir,
+                PushPolicy::Off,
+                method,
+                path,
+                Some(&body),
+                None,
+                &crate::eventing::NullSender,
+                &ProcessScope::Unscoped,
+                origin,
+            )
+        };
+        write(
+            "PUT",
+            "/projects/demo/decisions/mode",
+            json!({"mode": "delegated", "by": "Ada"}),
+            Origin::Terminal,
+        )
+        .unwrap();
+        for _ in 0..2 {
+            write(
+                "POST",
+                "/projects/demo/decisions/delegations",
+                json!({"verdicts": ["signoff:design-review"], "kinds": ["defect"], "until": until}),
+                Origin::Conversation,
+            )
+            .unwrap();
+        }
+        // DLG-001 is granted by hand: the file edited and committed without kanbanr.
+        let mut d = load(&store, "demo").unwrap();
+        let g = d
+            .delegations
+            .iter_mut()
+            .find(|g| g.id == "DLG-001")
+            .unwrap();
+        g.granted = Some(Stamp {
+            by: "Ada".into(),
+            at: now.clone(),
+            origin: "monitor".into(),
+            rev: g.rev(),
+            ..Default::default()
+        });
+        save(&store, "demo", &d).unwrap();
+        crate::git::commit_local(&dir, "grant it");
+        assert!(!granted_through_kanbanr(&store, "demo", "DLG-001"));
+        let take = |id: &str| {
+            write(
+                "POST",
+                &route(&defect, "signoff/design-review"),
+                json!({"delegation": id}),
+                Origin::Conversation,
+            )
+        };
+        match take("DLG-001") {
+            Err(WriteError::Refused(why)) => {
+                assert!(why.contains("not granted through kanbanr"), "{why}")
+            }
+            other => panic!("not refused: {:?}", other.map(|a| a.body)),
+        }
+        // DLG-002 is granted through kanbanr, but the file then changes outside it.
+        let rev = load(&store, "demo").unwrap().delegations[1].rev();
+        write(
+            "POST",
+            "/projects/demo/decisions/delegations/DLG-002/grant",
+            json!({"rev": rev, "by": "Ada"}),
+            Origin::Terminal,
+        )
+        .unwrap();
+        assert!(granted_through_kanbanr(&store, "demo", "DLG-002"));
+        let file = dir.join("projects/demo").join(DECISIONS_FILE);
+        let text = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(&file, format!("{text}\n")).unwrap();
+        assert!(!granted_through_kanbanr(&store, "demo", "DLG-002"));
+        assert!(matches!(take("DLG-002"), Err(WriteError::Refused(_))));
+        // Put back, it is honoured.
+        std::fs::write(&file, text).unwrap();
+        take("DLG-002").unwrap();
         let _ = std::fs::remove_dir_all(dir);
     }
 }

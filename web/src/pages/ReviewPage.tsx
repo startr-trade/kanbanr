@@ -462,6 +462,12 @@ function DecisionsHere({
             {g.milestone ? ` · ${g.milestone}` : ""}
             {g.all ? " · every item" : ""}
             {g.steps?.length ? ` · at ${g.steps.join(", ")}` : ""} · until {g.until.slice(0, 10)}
+            {g.not_granted_through_kanbanr ? (
+              <>
+                {" "}
+                · <strong>not granted through kanbanr</strong>: nothing is taken under it
+              </>
+            ) : null}
           </p>
           {said[g.id] ? (
             <p>{said[g.id]}</p>

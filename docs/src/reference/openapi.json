@@ -1134,6 +1134,10 @@
             "description": "A milestone code; empty is any.",
             "type": "string"
           },
+          "not_granted_through_kanbanr": {
+            "description": "Granted, but not through kanbanr (T9): written into the file by hand, or not committed.\nClaude's verdicts under it are refused.",
+            "type": "boolean"
+          },
           "note": {
             "type": "string"
           },

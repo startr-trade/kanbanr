@@ -484,7 +484,18 @@ fn judge(
     if let Some(why) = origin::verdict_refusal(what, taker, &ctx) {
         return Err(refuse(why));
     }
-    Ok((taker == Taker::Claude && !named.is_empty()).then_some(named))
+    if taker != Taker::Claude || named.is_empty() {
+        return Ok(None);
+    }
+    // Provenance (T9): only a grant kanbanr wrote, in a committed file, is honoured.
+    if !decisions::granted_through_kanbanr(store, &p, &named) {
+        return Err(refuse(format!(
+            "{named} was not granted through kanbanr: {} was changed outside it, or the grant \
+             was written into the file by hand. The person grants it again on the Review page.",
+            decisions::DECISIONS_FILE
+        )));
+    }
+    Ok(Some(named))
 }
 
 /// The item a scope route's response is about, for tagging its activity (FEAT-214).

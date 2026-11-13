@@ -1040,6 +1040,8 @@ export interface DelegationView extends Delegation {
   in_force: boolean;
   /** What a grant is pinned to; sent back with it. */
   rev: string;
+  /** Granted, but not through kanbanr: Claude's verdicts under it are refused. */
+  not_granted_through_kanbanr?: boolean;
 }
 
 /** A decision Claude took under a delegation, waiting for the person to keep or undo it. */
