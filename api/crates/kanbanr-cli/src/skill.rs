@@ -206,6 +206,22 @@ mod tests {
         d
     }
 
+    /// DEF-045 R-1: the skill has Claude bring a release fix forward itself and report the merge.
+    #[test]
+    fn skill_has_claude_bring_a_release_fix_forward() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        let flat = skill.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains("run `kanbanr git forward <V>` yourself"),
+            "the skill does not have Claude run the forward"
+        );
+        assert!(!flat.contains("it is never done for you"));
+    }
+
     /// DEF-027 R-9: the skill tells the coordinator to stay in the project folder and look inside an
     /// agent's worktree with `git -C`.
     #[test]

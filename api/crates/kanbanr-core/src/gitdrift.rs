@@ -280,10 +280,11 @@ pub fn check(
             Severity::Warning,
             None,
             format!(
-                "{branch} has {} commit{} {line} lacks (newest {}): `kanbanr git forward {version}`",
+                "{branch} has {} commit{} {line} lacks (newest {}): {}",
                 commits.len(),
                 if commits.len() == 1 { "" } else { "s" },
-                short(&newest.sha)
+                short(&newest.sha),
+                gitmodel::forward_step(version, &line)
             ),
         ));
     }
@@ -542,7 +543,7 @@ mod tests {
             "feat/FEAT-999-x names FEAT-999, which is not on the board",
             "sprint/SP-099 names no sprint",
             "release/v9 names no release",
-            "release/v1 has 1 commit main lacks (newest fffffff): `kanbanr git forward v1`",
+            "release/v1 has 1 commit main lacks (newest fffffff): next, for Claude: bring release/v1 into main with `kanbanr git forward v1` — a local merge, nothing is pushed; a conflict stops it with nothing changed",
         ] {
             assert!(m.iter().any(|x| x == want), "missing {want:?} in {m:?}");
         }

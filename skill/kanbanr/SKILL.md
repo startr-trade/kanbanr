@@ -815,8 +815,11 @@ branches; fix it before going on.
   say what the plan names and where it waits. **Never run `kanbanr gate record` yourself**, and
   never prepare a verdict you did not see.
 - A patch is `kanbanr release add <V> --patch-of <P>`: `release/<V>` is made from `<P>`'s tag. A fix
-  integrated into a release branch reaches the line through `kanbanr git forward <V>`, which the
-  move says is needed; it is never done for you.
+  integrated into a release branch reaches the line through `kanbanr git forward <V>`. When a move
+  or a promotion says it is needed (`next, for Claude: …`), run `kanbanr git forward <V>` yourself
+  at once, and tell the user what merged: from, into, the commit. It is a local merge; the user
+  still pushes. If it reports a conflict, nothing changed: say which files conflict and ask how
+  to resolve them. Never hand the user the command.
 - In the sprints-only model, `kanbanr sprint close <SP>` is the cut: main fast-forwards to
   `sprint/<SP>`, tagged with the sprint's code.
 - **Designing CI or a release workflow.** When the user asks for a pipeline, design it as
@@ -1253,7 +1256,7 @@ kanbanr finish [FEAT-001]         # gated: tasks complete, requirements proven
 kanbanr git install-hooks [--force] | uninstall-hooks | status
 kanbanr git model [--json]                       # main, the line, item branches, protected lines, what kanbanr merges
 kanbanr git model --sprints on|off --releases on|off   # preview a cadence's model; needs no board
-kanbanr git forward <VERSION>                    # merge a release's fixes forward into the line
+kanbanr git forward <VERSION>                    # merge a release's fixes forward into the line (yours, never the user's)
 kanbanr git doctor [--json]                      # board vs branches; read-only, exits 1 on an error
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
 kanbanr approve FEAT-001 --rev <rev>   # the user's, on the monitor; refused when Claude runs it (so are ratify, unapprove)

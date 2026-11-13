@@ -41,6 +41,10 @@ All notable changes to kanbanr are documented here. The format follows
   their integrate stage, so it merges before the release is cut; re-apply the process to take the new
   path. `process check` and `config workflow` warn of a path that skips the integrate stage
   (DEF-042).
+- **After a fix merges into a release branch, kanbanr names `kanbanr git forward` as Claude's next
+  step, and the skill has Claude run it and report the merge; the person is no longer handed the
+  command (DEF-045).** The cut, `git doctor` and the move say it the same way, and a forward that
+  would conflict says that nothing was changed. Pushing stays yours.
 - **`kanbanr drift --since DATE` starts at the beginning of that day (UTC)**, so its result no
   longer depends on the time it is run (DEF-037).
 - **A release's notes are still found after the notes path is changed, and a missing notes file

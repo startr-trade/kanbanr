@@ -208,7 +208,7 @@ Follow this order and you won't have to go back:
 | 7 | You | Terminal: `git push origin main`, then wait for CI to go green |
 | 8 | You | **Releases** page: **Check again**, then, with CI green, **Cut v0.1.0**. This tags main. If your stages continue after the tag, the page shows the result you recorded for it; when it is green, **Confirm** each later stage with a note of what you checked. Confirming the last one moves any item not already there to Operations |
 | 9 | You | Terminal: `git push origin v0.1.0`, then wait for the release workflow |
-| 10 | Claude | Say "The release is out. Bring it forward into the sprint" |
+| 10 | Claude | Brings the release forward into the sprint and tells you; you push the sprint branch when you push |
 
 **The release date is today's.** Moving main dates the notes and changelog with the day it happens.
 If the Releases page warns that they carry an earlier date, say "Date the release today", and push
@@ -251,6 +251,8 @@ Claude reports where the release is and confirms no stage; the buttons are yours
 doesn't send the release back. A release that is already tagged and waiting for its later stages
 takes no change: the merge is refused, and the change needs a patch release (**Start a patch
 release** on the page, or ask Claude).
+
+**A fix made during the release reaches the sprint the same way:** Claude brings it forward.
 
 ## Closing the sprint
 
