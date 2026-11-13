@@ -1671,7 +1671,10 @@ fn dispatch_routes(
             ser(&store.set_release_prepare(p, prep)?.cadence.release_prepare)
         }
         // ---- sprints (FEAT-119) ----
-        ("GET", ["projects", p, "sprints"]) => ser(&crate::sprints::load(store, p)?),
+        ("GET", ["projects", p, "sprints"]) => ser(&crate::sprints::as_of(
+            &crate::sprints::load(store, p)?,
+            crate::sprints::today(),
+        )),
         ("GET", ["projects", p, "sprints", code]) => {
             let code = match *code {
                 "active" => crate::sprints::active(&crate::sprints::load(store, p)?)
@@ -3294,5 +3297,39 @@ mod tests {
             assert_eq!(store.load("demo").unwrap().features.len(), before);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-041 R-2: a sprint stored active but dated ahead is listed as planned, and reading it
+    /// rewrites nothing.
+    #[test]
+    fn the_sprint_list_reports_a_future_sprint_as_planned() {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-dispatch-def041-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&serde_json::json!({"sprints": true})),
+        )
+        .unwrap();
+        let file = store.project_dir("demo").join("sprints.yaml");
+        std::fs::write(
+            &file,
+            "- code: SP-001\n  start: 2099-01-05\n  end: 2099-01-18\n  state: active\n",
+        )
+        .unwrap();
+        let before = std::fs::read(&file).unwrap();
+        let listed: serde_json::Value =
+            serde_json::from_str(&dispatch(&store, "GET", "/projects/demo/sprints", None).unwrap())
+                .unwrap();
+        assert_eq!(listed[0]["state"], "planned", "{listed}");
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

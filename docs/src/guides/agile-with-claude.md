@@ -64,6 +64,8 @@ release's version and target, when you first ask. Then it creates the sprint and
 Your checkout doesn't move. A sprint and a release don't have to line up: one release can take items
 from several sprints.
 
+Claude recommends starting today. Work past the first stage waits until the sprint has started; a sprint dated later reads as planned until its first day.
+
 ## One item, stage by stage
 
 > A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there. Take it to Design.

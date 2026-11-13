@@ -202,7 +202,7 @@ pub fn project_gantt(store: &Store, project_id: &str) -> Result<String> {
                 continue;
             };
             let length = (end - start).whole_days() + 1;
-            let tag = match s.state {
+            let tag = match s.state_on(crate::sprints::today()) {
                 crate::sprints::SprintState::Active => "active, ",
                 crate::sprints::SprintState::Closed => "done, ",
                 crate::sprints::SprintState::Planned => "",

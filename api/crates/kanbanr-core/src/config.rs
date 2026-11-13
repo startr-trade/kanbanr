@@ -1537,6 +1537,12 @@ pub fn working_agreement(project: &str, config: &ProjectConfig) -> String {
                 }
             ));
         }
+        if c.sprints && !config.asks_in_sprint() {
+            out.push_str(&format!(
+                "- Work starts inside a started sprint: the first move off {} asks for in sprint.\n",
+                config.default_state
+            ));
+        }
         out.push_str(&format!(
             "- Estimates in {}.\n",
             if config.estimate_unit == EstimateUnit::Points {
@@ -2014,11 +2020,11 @@ impl ProjectConfig {
         let build = declared.and_then(|r| r.status(Role::Build));
         let mut gates = BTreeMap::new();
         let mut first = true;
-        for status in self.displayed_states.iter().filter(|s| {
-            **s != self.default_state
-                && !crate::graph::is_terminal_status(self, s)
-                && !self.is_no_op(s)
-        }) {
+        for status in self
+            .displayed_states
+            .iter()
+            .filter(|s| self.is_working_stage(s))
+        {
             let branch = match build {
                 Some(b) => b == status,
                 None => first,
@@ -2037,6 +2043,50 @@ impl ProjectConfig {
             first = false;
         }
         gates
+    }
+
+    /// Is `status` a stage where work is in flight: displayed, not the starting stage, not
+    /// terminal and not a no-op?
+    pub fn is_working_stage(&self, status: &str) -> bool {
+        self.displayed_states.iter().any(|s| s == status)
+            && status != self.default_state
+            && !crate::graph::is_terminal_status(self, status)
+            && !self.is_no_op(status)
+    }
+
+    /// Does the workflow itself ask for `in_sprint` anywhere: in a gate, or in a kind path?
+    pub fn asks_in_sprint(&self) -> bool {
+        use crate::readiness::{Check, Condition};
+        let in_sprint = Condition::Check(Check::InSprint);
+        self.effective_gates()
+            .values()
+            .any(|g| g.requires.contains(&in_sprint) || g.warns.contains(&in_sprint))
+            || self.paths.values().any(|p| p.requires.contains(&in_sprint))
+    }
+
+    /// What the first move off the starting stage into `to` asks on top of `to`'s own gate
+    /// (DEF-041): the kind path's conditions when `to` is on it, and, on a project with sprints
+    /// whose workflow never asks for `in_sprint`, a sprint that has started. No duplicates.
+    pub fn first_move_requires(
+        &self,
+        kind: Option<&str>,
+        to: &str,
+    ) -> Vec<crate::readiness::Condition> {
+        use crate::readiness::{Check, Condition};
+        let mut out: Vec<Condition> = self
+            .path_for(kind)
+            .filter(|p| p.stages.iter().any(|s| s == to))
+            .map(|p| p.requires.clone())
+            .unwrap_or_default();
+        let in_sprint = Condition::Check(Check::InSprint);
+        if self.cadence.sprints
+            && self.is_working_stage(to)
+            && !self.asks_in_sprint()
+            && !out.contains(&in_sprint)
+        {
+            out.push(in_sprint);
+        }
+        out
     }
 
     /// The declared default status for new feature items (falls back to the first status).

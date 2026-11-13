@@ -1521,7 +1521,7 @@ enum ReleaseCmd {
 enum SprintCmd {
     /// Add a sprint.
     Add {
-        /// First day, YYYY-MM-DD.
+        /// First day, YYYY-MM-DD, or `today`.
         #[arg(long)]
         start: String,
         /// Length, e.g. `2w` or `10d` (default: the project's cadence, else two weeks).
@@ -1560,7 +1560,7 @@ enum SprintCmd {
         name: Option<String>,
         #[arg(long)]
         goal: Option<String>,
-        /// First day, YYYY-MM-DD; the sprint keeps its length unless one is given.
+        /// First day, YYYY-MM-DD, or `today`; the sprint keeps its length unless one is given.
         #[arg(long)]
         start: Option<String>,
         /// Length, e.g. `2w` or `10d`.
@@ -11165,7 +11165,19 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
                 (None, Some(name)) => format!("; {name} already exists"),
                 _ => String::new(),
             };
-            print_write(cli, &resp, format!("{code} is the active sprint{branch}"));
+            let moved = match v["moved_from"].as_str() {
+                Some(old) => format!(
+                    "; it was dated from {old} and now runs {} to {}",
+                    v["sprint"]["start"].as_str().unwrap_or_default(),
+                    v["sprint"]["end"].as_str().unwrap_or_default()
+                ),
+                None => String::new(),
+            };
+            print_write(
+                cli,
+                &resp,
+                format!("{code} is the active sprint{branch}{moved}"),
+            );
             if !cli.json {
                 print_catch_up(&v);
             }
