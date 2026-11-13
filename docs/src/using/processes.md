@@ -593,7 +593,7 @@ A result is a file of its own under the project's `gates/<name>/`, and none is r
 result of a gate for the commit decides, and a result for another commit says nothing. `--commit`
 defaults to HEAD; a pass with no commit named is refused while the working tree has uncommitted
 changes, because it would not be about HEAD. The Releases page offers the same as a **Record result**
-form where a promotion lacks a result, and shows the command on a read-only monitor.
+form where a promotion lacks a result (the Releases page's Record result form, just above the Cut), and shows the command on a read-only monitor.
 
 When Claude has read the run's result, it prepares it (`kanbanr prepare gate`) instead of asking you
 to type it. The Releases page then shows the result filled in where **Record result** would be:

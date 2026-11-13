@@ -47,11 +47,32 @@ class PipelineTests(unittest.TestCase):
         text = read(GUIDES / PAGE).lower()
         for topic in [
             "start small", "plan allows", "release description", "without a tag",
-            "once per commit", "the way a person will", "check ci before you cut",
+            "once per commit", "the way a person will", "record ci before you cut",
+            "its own job", "rerun", "artifact", "lock file", "saved only from main",
+            "timeout", "newer push", "cargo-chef", "sccache",
         ]:
             with self.subTest(topic=topic):
                 self.assertTrue(topic in text)
         self.assertRegex(text, r"(?m)^> ", "the page needs an example prompt")
+
+    def every_release_path_records_ci_before_the_cut(self) -> None:
+        for process in PROCESSES:
+            for kind, marker in (("with-claude", "Record ci passed"), ("cli", "gate record")):
+                name = f"{process}-{kind}.md"
+                with self.subTest(guide=name):
+                    text = section(read(GUIDES / name), "## Releasing")
+                    push = text.find("git push origin main")
+                    record = text.find(marker)
+                    cut = text.find("Cut", record)
+                    self.assertTrue(0 <= push < record < cut, f"push {push}, record {record}, cut {cut}")
+
+    def no_guide_prescribes_a_single_job(self) -> None:
+        paths = sorted(GUIDES.glob("*.md")) + [SKILL]
+        for path in paths:
+            text = read(path).lower()
+            for phrase in ("one job, one platform", "one job on one platform"):
+                with self.subTest(file=path.name, phrase=phrase):
+                    self.assertFalse(phrase in text)
 
     def the_index_and_summary_list_the_pipeline_page(self) -> None:
         self.assertTrue(PAGE in read(GUIDES / "index.md"))
@@ -88,9 +109,37 @@ class ExampleTests(unittest.TestCase):
                 self.assertTrue("Claude asks whether it has a user interface" in read(GUIDES / name))
 
 
+    def every_with_claude_guide_explains_the_style_question(self) -> None:
+        for process in WITH_CLAUDE:
+            name = f"{process}-with-claude.md"
+            with self.subTest(guide=name):
+                self.assertTrue("Claude also asks how the screens should look" in read(GUIDES / name))
+
+
 class SkillTests(unittest.TestCase):
+    def the_skill_asks_about_style_before_a_screen(self) -> None:
+        self.assertTrue("Ask how a screen should look before designing it" in read(SKILL))
+
     def the_skill_asks_the_interface_question(self) -> None:
         self.assertTrue("Ask whether the product has a user interface" in read(SKILL))
+
+    def the_skill_hands_no_write_command_for_a_decision(self) -> None:
+        text = read(SKILL)
+        self.assertTrue("Never hand the user a kanbanr command that writes" in text)
+        self.assertFalse("(or `kanbanr gate record" in text)
+        self.assertFalse(re.search(r"adr accept[^\n]*\n?[^\n]*in their own terminal", text))
+
+    def the_skill_keeps_remote_ci_on_the_release(self) -> None:
+        self.assertTrue("Remote CI belongs to the release" in read(SKILL))
+
+    def the_skill_proposes_a_staged_pipeline(self) -> None:
+        text = read(SKILL)
+        start = text.index("**Designing CI or a release workflow.**")
+        bullet = text[start:text.index("\n- ", start) if "\n- " in text[start:] else len(text)]
+        bullet = bullet[:bullet.index("\n\n")] if "\n\n" in bullet else bullet
+        for phrase in ("separate stages", "rerun alone", "lock files"):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(phrase in bullet)
 
     def the_skill_designs_a_pipeline_in_the_guides_order(self) -> None:
         text = read(SKILL)

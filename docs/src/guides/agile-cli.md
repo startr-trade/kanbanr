@@ -230,7 +230,7 @@ stage off the path keeps the ordinary transitions, so it is never stranded.
 
 **Before your first release, design the pipeline.** A release workflow can only be tested by running
 it, a tag can't be moved once it's pushed, and shipped notes can't be edited, so a mistake in the
-pipeline costs a whole version number. Settle the checks, the release description and a run without a tag first:
+pipeline costs a whole version number. Settle the stages, the checks, the release description and a run without a tag first:
 see [Designing CI and the release workflow](delivery-pipeline.md).
 
 `kanbanr release promote v1.0.0 --plan` shows what a promotion would do and changes nothing.
@@ -251,10 +251,11 @@ v1.0.0: Promote to candidate (— → candidate)
 | 2. Read the notes | `kanbanr release notes v1.0.0` | The draft only lists requirements. Rewrite it with `--edit` |
 | 3. Run your full checks | Your project's own | Over the release |
 | 4. Main | `kanbanr release promote v1.0.0 main` | Fast-forwards main to the release, without tagging |
-| 5. Push main, wait for CI | `git push origin main` | |
-| 6. Cut | `kanbanr release promote v1.0.0 tag` | Tags main, ships the items and moves them to Released |
-| 7. Push the tag | `git push origin v1.0.0` | |
-| 8. Merge forward | `kanbanr git forward v1.0.0` | Brings the release's commits into the sprint's branch |
+| 5. Push main | `git push origin main` | |
+| 6. Wait for CI, then record it | `kanbanr gate record ci --passed --url <link to the run>` | Once CI on main is green. The cut waits for it |
+| 7. Cut | `kanbanr release promote v1.0.0 tag` | Tags main, ships the items and moves them to Released |
+| 8. Push the tag | `git push origin v1.0.0` | |
+| 9. Merge forward | `kanbanr git forward v1.0.0` | Brings the release's commits into the sprint's branch |
 
 The candidate:
 

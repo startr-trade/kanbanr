@@ -80,7 +80,7 @@ missing, Claude drafts it or brings it to you.
 when the first item is designed), Claude asks whether the product has screens a person uses, or is
 a service, library or command-line tool. If it has screens, they become items of their own,
 designed and approved like the rest. If it has none, that goes into the design, so a missing screen
-is a decision and not an oversight.
+is a decision and not an oversight. If it has screens, Claude also asks how the screens should look, the styling approach and the feel you want, before it designs the first one, and the answer goes into the design.
 
 | Stage | What Claude does | What you do on the Review page |
 |---|---|---|
@@ -142,7 +142,7 @@ scope stops that agent on its next tool call and never restricts you.
 
 **Before your first release, design the pipeline.** A release workflow can only be tested by running
 it, a tag can't be moved once it's pushed, and shipped notes can't be edited, so a mistake in the
-pipeline costs a whole version number. Settle the checks, the release description and a run without a tag first:
+pipeline costs a whole version number. Settle the stages, the checks, the release description and a run without a tag first:
 see [Designing CI and the release workflow](delivery-pipeline.md).
 
 | Step | Who | Do this |
@@ -152,10 +152,16 @@ see [Designing CI and the release workflow](delivery-pipeline.md).
 | 3 | You | Open **Release notes** on the release, then **Edit notes** and **Save** for any changes |
 | 4 | Claude | Say "Run the full checks over the release" |
 | 5 | You | **Releases** page: **Promote to main**. This moves main to the release, without tagging |
-| 6 | You | Terminal: `git push origin main`, then wait for CI to go green |
-| 7 | You | **Releases** page: **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Released, unless your stages continue after the tag: then **Confirm** each later stage, and the last one moves the items. If some shipping requirements still have tests not run, the page lists them with one checkbox: tick it to ship them unverified, and the notes name them |
-| 8 | You | Terminal: `git push origin v1.0.0`, then wait for the release workflow |
-| 9 | Claude | Brings the release forward into the sprint and tells you; you push the sprint branch when you push |
+| 6 | You | Terminal: `git push origin main`. This is the first push the release needs |
+| 7 | You | Wait for CI on main to go green |
+| 8 | Claude, then you | Claude reads the run and prepares the result. **Releases** page: check the run's link and click **Record ci passed** |
+| 9 | You | **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Released, unless your stages continue after the tag: then **Confirm** each later stage, and the last one moves the items. The Cut stays greyed out until step 8 is done for the commit main is at. If some shipping requirements still have tests not run, the page lists them with one checkbox: tick it to ship them unverified, and the notes name them |
+| 10 | You | Terminal: `git push origin v1.0.0`, then wait for the release workflow |
+| 11 | Claude | Brings the release forward into the sprint and tells you; you push the sprint branch when you push |
+
+**When to push.** You push twice for a release: main after **Promote to main**, and the tag after the **Cut**. Nothing earlier is needed: every check before that runs on your machine. If you want to see the pipeline run sooner, you can push the sprint's branch; that run is a preview and records nothing for the release. Recording CI, promoting and the cut are never delegated: even when you have let Claude take some forward decisions, these stay your clicks. If an item has moved back to an earlier stage, Claude asks you before it acts on it, delegation or not.
+
+**Recording CI.** The Cut waits for a CI result recorded for the exact commit main is at. kanbanr never asks your CI service. Claude reads the CI result and prepares it with the link to the run. You check it and confirm it with one click; you can edit it or reject it instead. A failed run is recorded as failed, and the page then says what to fix.
 
 **Each button says what it will do**, and stays greyed out with the reason until it's ready.
 

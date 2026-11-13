@@ -366,7 +366,10 @@ for it; the release stage does. Say so when the person approves. Never override 
 the user's and is taken on the monitor: approve, ratify, sign off, withdraw, accept or reject a
 decision (Review page), promote or cut a release and confirm each stage after the tag (Releases
 page). **You never record a verdict, and never ask for one in a plan or a question.** kanbanr's
-guard refuses the commands if you try. Your part is one message saying what is waiting and where:
+guard refuses the commands if you try. **Never hand the user a kanbanr command that writes as the
+way to take a decision**: not `gate record`, `signoff`, `approve`, `ratify`, `adr accept`,
+`test … --manual` or `release promote`. Name the page and the button. If they ask for the terminal
+form, the page names it. Your part is one message saying what is waiting and where:
 `kanbanr open --check` gives the addresses. If no monitor accepts writes, offer to start one with
 `kanbanr review --ui` (run it in the background) or tell the user the command to run.
 
@@ -625,6 +628,14 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
   there are screens, ask for them as items of their own; when there are none, write "no user
   interface" in the design so that is a recorded decision. Write the first item as what a person
   does ("a shopper opens their basket and finds it kept"), not as a capability.
+- **Ask how a screen should look before designing it.** The first time a screen is designed (and
+  again for a screen unlike the ones before), ask, as one question with previews: the styling
+  approach the stack allows (hand-written CSS, a utility-class framework, a component library for
+  the UI framework in use, or the project's own design system); and the visual direction (the feel,
+  colours or brand, and a site it should resemble). Recommend what fits the charter's constraints,
+  and say why. Record the answer in the item's Design. Never decide the look yourself: "plain" is
+  an answer the user gives, not a default. (FTR-033 changes this: the answer goes into the
+  project's baseline, and later screens read it from there.)
 
 Leaving the design role, the build stage's gate asks for `spec_sections: [Design]` and the
 `design-review` sign-off. Say **design-review** is waiting on the Review page once the section exists; the user gives
@@ -844,8 +855,13 @@ branches; fix it before going on.
   the sign-off it lacks: send the person to the Review page; never record it.
 - Check with `kanbanr release promote <V> --plan` and tell the user what it still needs; the
   promotion itself, the cut included, is theirs, on the Releases page. **The user pushes main and
-  the tag**, by hand; a cut that requires
-  `pushed` waits until main is pushed (and CI has run on it).
+  the tag**, by hand, in this order: Promote to main, push main, CI, record the result, Cut, push
+  the tag. Give that order when asked about pushing, and say nothing needs pushing before Promote
+  to main. A cut that requires `pushed` waits until main is pushed (and CI has run on it).
+- **Remote CI belongs to the release, not to an item.** Never give an item a task or a test that
+  needs the remote CI service (such as "check CI on the remote"). It would block Promote to main,
+  which CI needs first. An item's tests run on this machine. The remote run is the release's `ci`
+  gate, recorded after main is pushed.
 - **Tests checked later.** After main is pushed and CI has run, read the run and record each later
   test's result (`kanbanr test <CODE> <R-n> <test> green --rev <sha>`). If the cut's plan lists
   untested requirements (`untested_accepted`), write a "Not verified in this release" section into
@@ -855,8 +871,9 @@ branches; fix it before going on.
   passed result for the release tip. kanbanr never asks a server. You may read the CI's result
   with your own tools; then `kanbanr prepare gate <gate> --passed|--failed --commit <sha> --url
   <the run>` puts it beside **Record result** on the Releases page, and the person confirms it
-  there with one click (or runs `kanbanr gate record` in their own terminal). When it is missing,
-  say what the plan names and where it waits. **Never run `kanbanr gate record` yourself**, and
+  there with one click. Say where: the **Record result** form above the Cut on the Releases page,
+  with the gate, the run's link, and Passed or Failed. When it is missing, say what the plan names
+  and where it waits. **Never run `kanbanr gate record` yourself**, and
   never prepare a verdict you did not see.
 - A patch is `kanbanr release add <V> --patch-of <P>`: `release/<V>` is made from `<P>`'s tag. A fix
   integrated into a release branch reaches the line through `kanbanr git forward <V>`. When a move
@@ -867,8 +884,13 @@ branches; fix it before going on.
 - In the sprints-only model, `kanbanr sprint close <SP>` is the cut: main fast-forwards to
   `sprint/<SP>`, tagged with the sprint's code.
 - **Designing CI or a release workflow.** When the user asks for a pipeline, design it as
-  `docs/src/guides/delivery-pipeline.md` says, and as an item with its own definition: start with
-  one job on one platform, tests first; ask the user which checks their plan and settings allow
+  `docs/src/guides/delivery-pipeline.md` says, and as an item with its own definition: propose
+  separate stages (lint, test, build, then scan and publish in the release workflow), each a job
+  that can be rerun alone, passing what it built to the next as an artifact; caches keyed on the
+  lock files and saved from main only; a timeout on every job; a superseded run cancelled; and the
+  speed-ups the page lists for the project's stack. Ask, as one multi-select question, which
+  stages to start with. Keep the first pipeline small by platforms and checks, never by merging
+  stages. Ask the user which checks their plan and settings allow
   (you cannot see their account) and leave out any they cannot run; make the release description the
   notes kanbanr drafted (`kanbanr release notes <V>`), never a list generated from commits; add a
   manual trigger that runs everything up to publishing and publishes nothing, and ask the user to
@@ -989,8 +1011,7 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
   Consequences and Compliance. Fill them in — `adr list` reports which are still unwritten, and
   doctor warns about a missing Decision or Consequences.
 - **A decision is the user's, never yours.** Draft it as `proposed` (the default — never pass
-  `--status accepted`), then say it is waiting. The user accepts or rejects it on the Review page or with
-  `kanbanr adr accept ADR-0007` / `adr reject ADR-0007 --reason "…"` in their own terminal,
+  `--status accepted`), then say it is waiting. The user accepts or rejects it on the Review page,
   exactly as they approve a definition. Accept is refused while a section is unanswered; the verdict, who gave it and when
   are recorded on the decision and in the activity log.
 - The links live **on the decision** (`affects`, `driven_by`); the item's view is derived, so it

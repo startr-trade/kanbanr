@@ -42,6 +42,13 @@ All notable changes to kanbanr are documented here. The format follows
 - **`kanbanr sprint start` on a sprint dated later starts it today and keeps its length**, and
   `--start today` is accepted wherever a sprint's first day is (DEF-041).
 
+### Changed
+
+- **The process guides and the skill ask about a screen's look before it is built (DOC-008)**, give
+  one order for a release (promote to main, push main, CI, record the result, cut, push the tag)
+  with the Record result form shown where the Cut needs it, and design a staged pipeline whose
+  stages rerun alone, with caches for the project's stack.
+
 ### Fixed
 
 - **An override Claude makes waits on the Review page for the person to ratify, and the item
