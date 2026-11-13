@@ -1417,16 +1417,28 @@ pub(crate) fn docs_updated_gaps(
     docs: &std::path::Path,
     history: &crate::git::DocHistory,
 ) -> Vec<Gap> {
-    let declared = feature
+    let keys: Vec<String> = feature
         .definition
         .as_ref()
-        .map(|d| d.affects_docs.as_slice())
-        .unwrap_or(&[]);
+        .map(|d| d.affects_docs.iter().map(|doc| affects_doc_key(doc)).collect())
+        .unwrap_or_default();
+    docs_unchanged_gaps(feature, &keys, docs, history, "declared in affects_docs")
+}
+
+/// One gap per board doc among `keys` that has not changed since `feature` entered its stage, or
+/// that is not on the board (DEF-046). `unknown` says where a missing doc was named, as the tail
+/// of "{key} is {unknown} but is not on the board".
+pub(crate) fn docs_unchanged_gaps(
+    feature: &FeatureItem,
+    keys: &[String],
+    docs: &std::path::Path,
+    history: &crate::git::DocHistory,
+    unknown: &str,
+) -> Vec<Gap> {
     let since = feature.entered_status_at();
     let mut gaps = Vec::new();
-    for doc in declared {
-        let key = affects_doc_key(doc);
-        let path = docs.join(&key);
+    for key in keys {
+        let path = docs.join(key);
         let changed = history.changed_since(&path, since);
         if !path.is_file() && changed != Some(true) {
             gaps.push(Gap {
@@ -1435,7 +1447,7 @@ pub(crate) fn docs_updated_gaps(
                     Check::DocsUpdated,
                     None,
                     &format!("unknown doc {key}"),
-                    format!("{key} is declared in affects_docs but is not on the board"),
+                    format!("{key} is {unknown} but is not on the board"),
                 )
             });
         } else if changed == Some(false) {
