@@ -778,7 +778,11 @@ branches; fix it before going on.
   checkout: `kanbanr release notes <V>` shows them and where they are; `--file F` (or `-`) or
   `--edit` commits new text there, nothing checked out, until the cut. When the user asks where
   the notes are or wants them changed, use this — never a fix item, never a checkout of
-  `release/<V>`. The Releases page shows them too, with Edit on a write-enabled monitor.
+  `release/<V>`. The Releases page shows them too, with Edit on a write-enabled monitor. Write the
+  notes and the changelog section together: `kanbanr release notes <V> --file notes.md --changelog
+  section.md`. Candidate fills the section from what ships (or says why it cannot); rewrite it for
+  readers with the notes. Never open a fix item to change the changelog or the notes of a release
+  under test.
 - **A merge sends a promoted release back.** When a move merges an item into a release that is past
   candidate, kanbanr sends the release back to candidate and says so. Tell the person, in one
   message, what the Releases page now offers: update the notes, run the gate again, promote to
@@ -1285,7 +1289,7 @@ kanbanr prepare promotion <V> [--stage S] --checked "…" --source S…   # what
 kanbanr prepare ratify <CODE> --reason "…" --source S…   # why the work went ahead, for the person to ratify
 kanbanr prepare list [--all] [--item CODE] [--release V]   # what waits for the person, and where; stale ones say why
 kanbanr release redate v0.1.0                     # date the notes and changelog today, before the cut
-kanbanr release notes v0.1.0 [--file F | --edit]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut
+kanbanr release notes v0.1.0 [--file F | --edit] [--changelog F]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut; --changelog commits the version's changelog section in the same commit
 kanbanr release stages                            # each stage: requires, on_enter, declared or default
 kanbanr config release-stage main --requires items_finished --on-enter move_main [--after ci] [--clear]
 kanbanr config release-prepare --version-file api/Cargo.toml --changelog CHANGELOG.md --notes 'docs/src/releases/{version}.md'
