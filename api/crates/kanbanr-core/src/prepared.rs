@@ -773,7 +773,10 @@ pub fn prepare(
         "signoff" => definition(&subject.item)?.content_rev(),
         "ratification" => {
             let def = definition(&subject.item)?;
-            if def.started_unapproved.trim().is_empty() || def.approval_state().is_agreed() {
+            // An open override Claude made on an agreed item is ratified too (DEF-043).
+            if def.started_unapproved.trim().is_empty()
+                || !crate::doctor::awaiting_ratification(project.feature(&subject.item)?)
+            {
                 return Err(unsupported(format!(
                     "{} has no unreconciled bypass: there is nothing to ratify",
                     subject.item
@@ -1065,7 +1068,11 @@ pub fn still_waiting(
             let Some(def) = item.definition.as_ref() else {
                 return Err(changed.into());
             };
-            if def.started_unapproved.trim().is_empty() || def.approval_state().is_agreed() {
+            // The doctor's and the review queue's predicate, so an open override Claude made on
+            // an agreed item can be ratified too (DEF-043).
+            if def.started_unapproved.trim().is_empty()
+                || !crate::doctor::awaiting_ratification(item)
+            {
                 return Err(format!("{} has no bypass left to ratify", r.subject.item));
             }
             if def.content_rev() != r.rev {

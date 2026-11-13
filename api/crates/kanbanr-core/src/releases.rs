@@ -628,6 +628,13 @@ pub(crate) fn ship_to(
 ) -> std::result::Result<Option<String>, String> {
     let config = &project.config;
     let is_end = |s: &str| crate::graph::is_terminal_status(config, s) && !config.is_no_op(s);
+    // An override Claude made ships only once the person ratifies it (DEF-043), finished or not.
+    if let Some(t) = crate::readiness::open_overrides(f).first() {
+        return Err(format!(
+            "its override waits for the person to ratify on the Review page: {}",
+            t.override_reason.as_deref().unwrap_or("").trim()
+        ));
+    }
     if is_end(&f.status) {
         return Ok(None); // already finished: it ships as it is
     }

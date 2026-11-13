@@ -276,7 +276,7 @@ fn scan_definitions(
         // "nothing needs attention" when it meant "the things that did, completed first".
         if !in_scope(project, charter, feature) {
             if let Some(def) = &feature.definition
-                && unreconciled_bypass(def)
+                && awaiting_ratification(feature)
                 && !crate::before(&feature.created_at, &charter.adopted_at)
                 && def.exempt.trim().is_empty()
             {
@@ -516,6 +516,14 @@ fn push(
 /// built, and the question is open again.
 pub(crate) fn unreconciled_bypass(def: &crate::models::FeatureDefinition) -> bool {
     !def.started_unapproved.trim().is_empty() && !def.approval_state().is_agreed()
+}
+
+/// Does `f` wait for a ratification? The old rule (`unreconciled_bypass` of its definition),
+/// or an open override (DEF-043). The one predicate the doctor, the review queue, the cut and
+/// FTR-034's `ratification` prepared record use.
+pub(crate) fn awaiting_ratification(f: &crate::FeatureItem) -> bool {
+    f.definition.as_ref().is_some_and(unreconciled_bypass)
+        || !crate::readiness::open_overrides(f).is_empty()
 }
 
 /// Live work under the method: not finished, on the board, and created since adoption. The first two

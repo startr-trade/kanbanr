@@ -10700,8 +10700,17 @@ fn an_override_inside_a_claude_session_records_its_origin() {
         let _ = std::fs::remove_dir_all(&base);
         (last["origin"].as_str().unwrap_or("").to_string(), pending)
     };
-    let (origin, _) = moved("def043-session", true);
+    let listed = |pending: &serde_json::Value| {
+        pending
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["code"] == "FEAT-001" && e["approval"] == "unratified")
+    };
+    let (origin, pending) = moved("def043-session", true);
     assert_eq!(origin, "conversation");
-    let (origin, _) = moved("def043-terminal", false);
+    assert!(listed(&pending), "{pending}");
+    let (origin, pending) = moved("def043-terminal", false);
     assert_eq!(origin, "terminal");
+    assert!(!listed(&pending), "{pending}");
 }

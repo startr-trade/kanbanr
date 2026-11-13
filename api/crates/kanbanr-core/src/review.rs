@@ -169,6 +169,20 @@ pub struct ReviewEntry {
     /// The spec the sign-off asked pins, with what changed since the last sign-off (FTR-023).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spec: Option<SpecBrief>,
+    /// Claude's overrides on the item that wait for the person to ratify (DEF-043), oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overrides: Vec<OverrideView>,
+}
+
+/// One override Claude made, as the Review page shows it (DEF-043).
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct OverrideView {
+    pub at: String,
+    pub from: String,
+    pub to: String,
+    pub reason: String,
+    pub origin: String,
 }
 
 /// The spec a sign-off `name` pins, for the brief: its current text, and the diff against the text
@@ -249,7 +263,10 @@ pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result
             // question for a person, however done it is — the one the doctor reports.
             // It is asked here too (FEAT-109), with the predicate the doctor uses, so the
             // two surfaces cannot disagree about which items need a ratification.
-            let unratified = !live && crate::doctor::unreconciled_bypass(definition);
+            // An override Claude made waits too, live or finished (DEF-043).
+            let open_overrides = crate::readiness::open_overrides(f);
+            let unratified = crate::doctor::awaiting_ratification(f)
+                && (!live || !open_overrides.is_empty());
             let finished_lapsed = !live
                 && !unratified
                 && crate::graph::is_finished_work(&project.config, &f.status)
@@ -416,6 +433,16 @@ pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result
                 release_choices: asks_release.then(|| release_choices.clone()),
                 spec_rev,
                 spec,
+                overrides: open_overrides
+                    .iter()
+                    .map(|t| OverrideView {
+                        at: t.at.clone(),
+                        from: t.from.clone(),
+                        to: t.to.clone(),
+                        reason: t.override_reason.clone().unwrap_or_default(),
+                        origin: t.origin.clone(),
+                    })
+                    .collect(),
             })
         })
         .collect();
