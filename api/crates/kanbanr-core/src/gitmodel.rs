@@ -1357,9 +1357,18 @@ mod tests {
         );
         crate::coderepo::tests::commit_file(&repo, "a.rs", "v2\n", "after the sign-off");
 
-        let err = move_item(&store, "demo", &code, "Completed", None, Some(&repo), "Ada", "")
-            .unwrap_err()
-            .to_string();
+        let err = move_item(
+            &store,
+            "demo",
+            &code,
+            "Completed",
+            None,
+            Some(&repo),
+            "Ada",
+            "",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("sign-off 'docs-folded' lapsed"), "{err}");
         assert!(err.contains(&branch), "{err}");
         assert_eq!(
@@ -1368,8 +1377,17 @@ mod tests {
         );
 
         sign();
-        let moved =
-            move_item(&store, "demo", &code, "Completed", None, Some(&repo), "Ada", "").unwrap();
+        let moved = move_item(
+            &store,
+            "demo",
+            &code,
+            "Completed",
+            None,
+            Some(&repo),
+            "Ada",
+            "",
+        )
+        .unwrap();
         assert_eq!(moved.feature.status, "Completed");
         assert!(moved.merged.is_some());
         let _ = std::fs::remove_dir_all(&dir);
