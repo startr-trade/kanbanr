@@ -30,6 +30,8 @@ All notable changes to kanbanr are documented here. The format follows
 - **The docs-folded sign-off no longer asks you to tick each text to check or type a defect
   code**: Claude settles each text, with why and the revision it checked, and the sign-off appears
   once none is left (DEF-039).
+- **`kanbanr doctor` no longer calls a project's `gates/` folder, where recorded CI results are
+  kept, a stray folder (DEF-038).** The `prepared/` and `manual/` folders are part of the layout too.
 - **Manual tests waiting for a person are listed on the Review page, recorded there with Passed or
   Failed, and refused when Claude tries to record one (DEF-040).** The board keeps who checked, when,
   from where and any note; `kanbanr test` still records one from the person's own terminal, and

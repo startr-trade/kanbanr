@@ -472,8 +472,11 @@ pub fn parse_source(s: &str) -> Result<Source> {
 
 // ---- storage -------------------------------------------------------------------------------
 
+/// The project folder that holds prepared evidence records.
+pub const FOLDER: &str = "prepared";
+
 fn dir(store: &Store, p: &str) -> PathBuf {
-    store.project_dir(p).join("prepared")
+    store.project_dir(p).join(FOLDER)
 }
 
 const RESOLVED: &str = ".resolved.yaml";

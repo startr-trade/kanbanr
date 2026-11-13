@@ -15,6 +15,14 @@ sibling cannot be.
         │   └── 2026-09-28.yaml          # {time, actor, message, item}, appended in order
         ├── events/                     # the notification event log, one file per day (FEAT-036, FEAT-066)
         │   └── 2026-09-28.yaml
+        ├── gates/                      # recorded gate results, a new file per run, never rewritten (FTR-002)
+        │   └── <name>/20261112T100000Z-<sha7>.yaml
+        ├── prepared/                   # evidence prepared for a decision, each file written once (FTR-034)
+        │   ├── <id>.yaml
+        │   └── <id>.resolved.yaml
+        ├── manual/                     # manual test results, one file per result, written once (DEF-040)
+        │   └── <time>-<CODE>-<R-n>.yaml
+        ├── pins/<CODE>/<rev>.md        # a spec as a design sign-off saw it, written once (FTR-023)
         ├── charter.yaml                # purpose, goals, non-goals, stakeholders, adopted_at (FEAT-046)
         ├── lessons.yaml                # what was learned, with decaying confidence (FEAT-055)
         ├── mirror.yaml                 # GitHub issue mirror config, when enabled (FEAT-043)

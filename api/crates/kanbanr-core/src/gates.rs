@@ -82,8 +82,11 @@ fn check(r: &GateResult) -> Result<()> {
     Ok(())
 }
 
+/// The project folder that holds recorded gate results.
+pub const FOLDER: &str = "gates";
+
 fn dir(store: &Store, id: &str) -> PathBuf {
-    store.project_dir(id).join("gates")
+    store.project_dir(id).join(FOLDER)
 }
 
 /// Keep a result as a new file beside the earlier ones. Written to a temporary file in the same
