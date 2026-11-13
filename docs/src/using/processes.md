@@ -684,8 +684,8 @@ since gone, and the patch starts at the first stage. It goes through the same st
 At production the patch is tagged. Main fast-forwards to it when it can; when main has moved on
 past the parent, main is left where it is. The patch's commits that the integration branch does
 not have yet are listed — in the output and in the notes, under "To merge forward" — so the next
-release keeps the fix. kanbanr does not merge them for you: `kanbanr git forward <VERSION>` does it
-when the git model is on, or merge them by hand.
+release keeps the fix. Claude merges them forward with `kanbanr git forward <VERSION>` as soon as
+kanbanr says so; you push.
 
 The integration branch and the main branch are both the repository's default branch unless the
 project names them: `kanbanr config cadence --integration-branch develop --main-branch main`.
@@ -744,7 +744,8 @@ With the model on, the board makes the merges:
   rebase. One that would conflict is reported with its files and left as it was.
 - **A fix to a release under test** integrates into `release/<VERSION>`, and the move says the line
   lacks it. `kanbanr git forward <VERSION>` merges the release forward into the line, naming every
-  item its commits name. It is never done for you.
+  item its commits name. Claude runs it as soon as the move says so, and tells you what merged;
+  you push.
 
 `kanbanr config workflow --write-agreement` writes the team's working agreement to the board,
 generated from the gates. Under Scrum that is the Definition of Ready and of Done. Because it is

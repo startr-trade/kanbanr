@@ -156,7 +156,7 @@ see [Designing CI and the release workflow](delivery-pipeline.md).
 | 6 | You | Terminal: `git push origin main`, then wait for CI to go green |
 | 7 | You | **Releases** page: **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Released, unless your stages continue after the tag: then **Confirm** each later stage, and the last one moves the items |
 | 8 | You | Terminal: `git push origin v1.0.0` |
-| 9 | Claude | Say "The release is out. Bring it forward into the sprint" |
+| 9 | Claude | Brings the release forward into the sprint and tells you; you push the sprint branch when you push |
 
 **Each button says what it will do**, and stays greyed out with the reason until it's ready.
 
@@ -168,6 +168,8 @@ change only the notes.
 **The date follows the release.** Promoting to main dates the notes and changelog today. If main moved
 earlier and the cut comes later, the page warns you: ask Claude to re-date them before you cut,
 because shipped notes can't be edited.
+
+**A fix made during the release reaches the sprint the same way:** Claude brings it forward.
 
 ## Closing the sprint
 
