@@ -136,7 +136,10 @@ project"** (or anything equivalent):
 
      After the answer, run `kanbanr git model --sprints on|off --releases on|off` with it. It needs
      no board. Show its output verbatim in the follow-up and in the plan: where items branch from
-     and merge into, what kanbanr merges, and that pushing is always the user's.
+     and merge into, what kanbanr merges, and that pushing is always the user's. With sprints or
+     releases on, setup turns the git model on: the preview says `automation: on`, and kanbanr
+     merges as it shows. Say so in the plan. Turning it off is the user's choice
+     (`kanbanr config cadence --git-model off`).
    - *Definitions*: every item carries the Zachman six-dimension definition, EARS requirements
      and tests. That is the method, not an option. Say so, so the user is not surprised by it.
      Say also, without asking, that design before build and the docs fold-in are on by default
@@ -192,7 +195,8 @@ project"** (or anything equivalent):
    Save the approved plan as the board doc named in it, so the reasons for the setup outlive the
    session. Finish by checking `kanbanr hooks status`, `kanbanr git model`, `kanbanr git status`
    and `kanbanr git doctor` (these two if the hooks were chosen) and `kanbanr doctor`, then show
-   the board. On a new board, doctor's only expected
+   the board. `kanbanr git model` must say `automation: on` when sprints or releases are on; if it
+   does not, that is a setup fault to fix now. On a new board, doctor's only expected
    warnings are the goals that no item links to yet. Anything else is a setup fault to fix now.
    Doctor warns only about what an item's current stage asks; what later stages will ask appears
    after the warnings as counts ("Later stages will ask"), which are not warnings and need no

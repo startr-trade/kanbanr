@@ -19,7 +19,7 @@ kanbanr git install-hooks
 
 ```text
 workflow updated
-sprints on, releases on, estimates in days
+sprints on, releases on, estimates in days, git model on
 installed commit-msg and pre-commit and pre-push in <tmp>/shop: a commit now has to say which item it serves
 ```
 
@@ -212,7 +212,7 @@ exceptions.
 ### Chores
 
 A process can give a kind its own path. The built-in `agile` process gives `chore` the path
-Plan → Develop → Test → Released, skipping Design and Review. `kanbanr process show agile` lists each kind's path under
+Plan → Develop → Test → Review → Released, skipping Design. A chore passes Review, where its branch merges, so it is in the line before a release is cut. `kanbanr process show agile` lists each kind's path under
 "Lighter paths".
 
 ```bash

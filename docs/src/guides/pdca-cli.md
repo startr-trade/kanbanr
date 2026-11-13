@@ -21,7 +21,7 @@ kanbanr git install-hooks
 
 ```text
 workflow updated
-sprints off, releases off, estimates in days
+sprints off, releases off, estimates in days, git model off
 installed commit-msg and pre-commit and pre-push in <tmp>/shop: a commit now has to say which item it serves
 ```
 

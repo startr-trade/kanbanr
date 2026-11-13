@@ -25,9 +25,9 @@ kanbanr project init shop --workflow pdca      # choose at creation
 | `scheduled` | Planned → Scheduled → Completed | the built-in rule, plus the method |
 | `togaf` | Vision → Business Arch → System Design → Implementation → Migration → Operations | the definition grows phase by phase; Migration finishes an item for the sprint views; chores skip Business Arch and System Design |
 | `pdca` | Plan → Do → Check → Act | agreement to start, evidence to check, a review sign-off to act |
-| `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs before verification and before release; chores skip Inputs, Review and Validation |
+| `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs before verification and before release; chores skip Inputs and Review |
 | `scrum` | Backlog → Ready → In Progress → Review → Testing → Done → Released | Definition of Ready and of Done; work starts in the sprint; sprints, releases and points on; chores skip Review |
-| `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on; chores skip Design and Review |
+| `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on; chores skip Design |
 
 Every built-in process also carries [the method](#the-method-on-by-default): a design before
 build, and the docs it changes kept current.
@@ -716,7 +716,8 @@ stage. main, the integration branch, `sprint/*` and `release/*` are **lines**: t
 only, and a merge into one must say which items it brings (`Refs: kanbanr:<CODE>`, or `[no-ref]
 <why>` on the record).
 
-The model is always shown; it drives the work only when you switch it on:
+The model is always shown. It is switched on when you first choose sprints or releases, and off with
+`kanbanr config cadence --git-model off`; a trunk project (neither) can switch it on itself:
 
 ```bash
 kanbanr config cadence --git-model on
