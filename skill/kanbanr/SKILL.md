@@ -352,6 +352,15 @@ guard refuses the commands if you try. Your part is one message saying what is w
 `kanbanr open --check` gives the addresses. If no monitor accepts writes, offer to start one with
 `kanbanr review --ui` (run it in the background) or tell the user the command to run.
 
+**Prepare the record before you say a decision waits** (FTR-034). When you have its evidence (the
+CI run's link and result, the commit, the doc that holds the minutes, what the person said), put
+it on the record with `kanbanr prepare signoff|promotion|gate|ratify …`, naming every source you
+read with `--source` (`LABEL=URL`, a link, `doc:<path>`, `item:<CODE>`, `commit:<sha>`, or a bare
+label such as "what the person said"). The page then shows it filled in beside the decision's one
+button; the person confirms it, edits a field first, or rejects it, and the verdict is theirs.
+Preparing is not deciding: nothing a gate reads changes until they click, and there is no confirm
+command. **Never type into the monitor, and never clear a check by editing the text it flags.**
+
 ### The workflow decides what you ask — never a preset name
 
 Do not reason from "this is TOGAF" or "this is Scrum". Ask the board what the next stage needs:
@@ -788,11 +797,13 @@ branches; fix it before going on.
   promotion itself, the cut included, is theirs, on the Releases page. **The user pushes main and
   the tag**, by hand; a cut that requires
   `pushed` waits until main is pushed (and CI has run on it).
-- **A CI result is the user's to record.** A stage that requires `gate_passed` needs a recorded
-  passed result for the release tip. kanbanr never asks a server; the user looks at their CI and
-  records the verdict on the Releases page (or `kanbanr gate record <gate> --passed`). When it is
-  missing, say what the plan names and where to record it. **Never run `kanbanr gate record`
-  yourself**, and never pass it a verdict you did not see.
+- **A CI result is the user's to confirm.** A stage that requires `gate_passed` needs a recorded
+  passed result for the release tip. kanbanr never asks a server. You may read the CI's result
+  with your own tools; then `kanbanr prepare gate <gate> --passed|--failed --commit <sha> --url
+  <the run>` puts it beside **Record result** on the Releases page, and the person confirms it
+  there with one click (or runs `kanbanr gate record` in their own terminal). When it is missing,
+  say what the plan names and where it waits. **Never run `kanbanr gate record` yourself**, and
+  never prepare a verdict you did not see.
 - A patch is `kanbanr release add <V> --patch-of <P>`: `release/<V>` is made from `<P>`'s tag. A fix
   integrated into a release branch reaches the line through `kanbanr git forward <V>`, which the
   move says is needed; it is never done for you.
@@ -1259,6 +1270,11 @@ kanbanr release cut v0.1.0 [--tag]                # the user's, on the monitor; 
 kanbanr release promote v0.1.0 [<stage>] [--reason "…"]   # the user's, on the monitor; refused when Claude runs it (so is each stage confirmed after the tag). Next or named stage, doing what its gates say (default candidate → main → tag: the first makes release/<V>, main fast-forwards main, the stage holding `tag` is the cut and tags); refused with every missing condition and its fix; back a stage needs --reason. Prints each step and next:. Run from the project folder; never pushes
 kanbanr release promote v0.1.0 [<stage>] --plan [--fetch]  # what it would do and still needs; changes nothing
 kanbanr gate list [--name ci] [--commit REV]   # recorded gate results, newest first (reading is yours; `gate record` is the user's)
+kanbanr prepare gate ci --passed --url <the run> [--commit REV] [--note …] [--source S…]   # a CI result you read, for the person to confirm on the Releases page
+kanbanr prepare signoff <CODE> <NAME> [--note …] [--doc PATH] --source S…   # a sign-off's note and doc, for the Review page
+kanbanr prepare promotion <V> [--stage S] --checked "…" --source S…   # what was checked, for a stage confirmed after the tag
+kanbanr prepare ratify <CODE> --reason "…" --source S…   # why the work went ahead, for the person to ratify
+kanbanr prepare list [--all] [--item CODE] [--release V]   # what waits for the person, and where; stale ones say why
 kanbanr release redate v0.1.0                     # date the notes and changelog today, before the cut
 kanbanr release notes v0.1.0 [--file F | --edit]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut
 kanbanr release stages                            # each stage: requires, on_enter, declared or default

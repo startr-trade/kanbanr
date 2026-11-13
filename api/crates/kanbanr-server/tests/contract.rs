@@ -154,6 +154,17 @@ fn fixture(data: &std::path::Path) {
     let png = data.join("projects/shop/docs/img");
     std::fs::create_dir_all(&png).unwrap();
     std::fs::write(png.join("dot.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+    // A prepared record for the person to confirm (FTR-034).
+    write(
+        &store,
+        "POST",
+        "/projects/shop/prepared",
+        json!({"kind": "gate-result",
+               "subject": {"gate": "ci", "commit": "9f078bd0c1e2aaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+               "fields": {"passed": true, "url": "https://ci.example/run/1", "note": "green"},
+               "sources": [{"label": "release tip", "url": "commit:9f078bd"}],
+               "by": "Ada L"}),
+    );
     kanbanr_core::activity::append(data, "shop", "Ada L", "approve FEAT-001", Some("FEAT-001"));
     kanbanr_core::activity::append(data, "shop", "Ada L", "add milestone", None);
     write(
@@ -275,6 +286,10 @@ fn requests(path: &str, sprint: &str) -> Vec<String> {
                 path.replace("{project}", "shop")
                     .replace("{sprint}", "active"),
             );
+        }
+        "/api/projects/{project}/prepared" => {
+            out.push(base.clone());
+            out.push(format!("{base}?state=all&release=1.0"));
         }
         "/api/projects/{project}/features/{code}/readiness" => {
             out.push(base.clone());

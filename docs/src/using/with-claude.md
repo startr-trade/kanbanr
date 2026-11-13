@@ -15,6 +15,9 @@ Three things are worth knowing up front:
   page's address, and never records one for you: kanbanr refuses if it tries, and never asks for
   one in a plan or a question. If no monitor accepts writes, Claude offers to start one with
   `kanbanr review --ui`.
+- **Decisions arrive filled in.** What Claude already knows, such as a CI run's link and result or
+  what a sign-off covered, is prepared beside the button with where it came from. You check it and
+  click, or change it first ([Prepared by Claude](the-monitor.md#prepared-by-claude)).
 - **A verdict records where it was taken.** The monitor, a command in your terminal and an answer
   recorded in a Claude Code session are told apart, and the item shows which beside each approval
   and sign-off. Deciding the same thing twice records nothing the second time.

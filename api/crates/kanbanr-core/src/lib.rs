@@ -58,6 +58,7 @@ pub mod models;
 pub mod openapi;
 pub mod origin;
 pub mod portfolio;
+pub mod prepared;
 pub mod project;
 pub mod query;
 pub mod readiness;

@@ -299,6 +299,37 @@ pub fn public_routes() -> Vec<RouteDoc> {
             response: Response::Json(schema_of::<Vec<crate::gates::GateResult>>),
         },
         RouteDoc {
+            path: "/api/projects/{project}/prepared",
+            summary: "The records Claude prepared for the person to confirm (FTR-034), newest \
+                      first: each with its sources, where it stands, the person's answer and the \
+                      equivalent verdict command",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "state",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "open (the default): only those waiting; all: every record.",
+                },
+                Param {
+                    name: "item",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only records about this item.",
+                },
+                Param {
+                    name: "release",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "Only records about this release.",
+                },
+            ],
+            response: Response::Json(schema_of::<Vec<crate::prepared::PreparedView>>),
+        },
+        RouteDoc {
             path: "/api/projects/{project}/releases/{version}/plan",
             summary: "What promoting a release would do, with nothing changed: the button, each \
                       step and condition, what is missing and, for the cut, what ships. The \

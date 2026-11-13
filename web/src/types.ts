@@ -597,6 +597,76 @@ export interface GateResult {
   source: "person" | "local";
   url?: string;
   note?: string;
+  /** Where it was recorded (FTR-034): monitor, conversation or terminal; absent on older results. */
+  origin?: string;
+}
+
+/** Where a piece of a prepared record's evidence came from (FTR-034): an http(s) link or a board
+ * reference (`doc:<path>`, `item:<CODE>`, `commit:<sha>`), or no link at all. */
+export interface PreparedSource {
+  label?: string;
+  url?: string;
+}
+
+/** What a prepared record's decision is about; which keys a kind uses is the server's. */
+export interface PreparedSubject {
+  item?: string;
+  signoff?: string;
+  requirement?: string;
+  test?: string;
+  release?: string;
+  stage?: string;
+  gate?: string;
+  commit?: string;
+  target?: string;
+}
+
+/** The evidence for one decision, prepared by Claude for the person to confirm (FTR-034). */
+export interface Prepared {
+  id?: string;
+  /** signoff, promotion, gate-result, ratification, … */
+  kind?: string;
+  subject: PreparedSubject;
+  /** What the verdict will carry. */
+  fields?: Record<string, unknown>;
+  sources?: PreparedSource[];
+  by?: string;
+  origin?: string;
+  at?: string;
+  rev?: string;
+}
+
+/** One field the person changed before confirming. */
+export interface FieldChange {
+  field: string;
+  prepared: unknown;
+  confirmed: unknown;
+}
+
+/** The person's answer to a prepared record. */
+export interface Resolution {
+  id?: string;
+  verdict: "confirmed" | "rejected";
+  by?: string;
+  origin?: string;
+  at?: string;
+  changed?: FieldChange[];
+  reason?: string;
+  made?: string;
+}
+
+export type PreparedState = "open" | "confirmed" | "rejected" | "superseded" | "stale" | "unknown_kind";
+
+/** A prepared record as the monitor lists it: where it stands, the answer, the equivalent command. */
+export interface PreparedView extends Prepared {
+  state: PreparedState;
+  resolution: Resolution | null;
+  /** Why it no longer waits, when it doesn't. */
+  stale_why: string;
+  /** The page its decision is taken on. */
+  page: string;
+  /** The verdict command a person would run in their own terminal instead. */
+  command: string;
 }
 
 /** One condition of a release stage a promotion enters, and whether it holds (FEAT-212). */

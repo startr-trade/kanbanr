@@ -103,13 +103,136 @@ pub fn is_verdict_route(method: &str, path: &str) -> bool {
                 _,
                 "promote" | "cut" | "patch-from-tag"
             ]
+            | ["projects", _, "gate-results"]
+            | ["projects", _, "prepared", _, "confirm" | "reject"]
     )
 }
 
+/// Routes whose body the front end stamps with its origin: every verdict route, and
+/// `POST /projects/{p}/prepared`, so a prepared record says who prepared it (FTR-034).
+pub fn stamps_origin(method: &str, path: &str) -> bool {
+    if is_verdict_route(method, path) {
+        return true;
+    }
+    if method != "POST" {
+        return false;
+    }
+    let seg: Vec<&str> = path
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    matches!(seg.as_slice(), ["projects", _, "prepared"])
+}
+
+/// A decision that is the person's own (FTR-024, FTR-034).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    Approve,
+    Ratify,
+    Unapprove,
+    Signoff,
+    WithdrawSignoff,
+    AcceptAdr,
+    RejectAdr,
+    Promote,
+    Cut,
+    PatchFromTag,
+    GateResult,
+    ManualTest,
+    ConfirmPrepared,
+    RejectPrepared,
+}
+
+impl Verdict {
+    /// Every verdict, for a check that must cover them all.
+    pub const ALL: [Verdict; 14] = [
+        Verdict::Approve,
+        Verdict::Ratify,
+        Verdict::Unapprove,
+        Verdict::Signoff,
+        Verdict::WithdrawSignoff,
+        Verdict::AcceptAdr,
+        Verdict::RejectAdr,
+        Verdict::Promote,
+        Verdict::Cut,
+        Verdict::PatchFromTag,
+        Verdict::GateResult,
+        Verdict::ManualTest,
+        Verdict::ConfirmPrepared,
+        Verdict::RejectPrepared,
+    ];
+
+    /// Is this verdict taken on the Releases page (rather than the Review page)?
+    pub fn on_releases_page(self) -> bool {
+        matches!(
+            self,
+            Verdict::Promote | Verdict::Cut | Verdict::PatchFromTag | Verdict::GateResult
+        )
+    }
+}
+
+/// Who would take a verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Taker {
+    Person,
+    Claude,
+}
+
+impl Taker {
+    /// The conversation, and a delegation until FTR-028 decides what one allows, are Claude; the
+    /// monitor and the person's own terminal are the person.
+    pub fn of_origin(o: Origin) -> Taker {
+        match o {
+            Origin::Conversation | Origin::Delegated => Taker::Claude,
+            Origin::Monitor | Origin::Terminal => Taker::Person,
+        }
+    }
+}
+
+/// Whether `taker` may take `verdict`: the reason it may not, or `None`. The only place this is
+/// decided (FTR-034): the hook and the write path both ask here.
+pub fn verdict_refusal(verdict: Verdict, taker: Taker) -> Option<String> {
+    let _ = verdict;
+    match taker {
+        Taker::Person => None,
+        Taker::Claude => Some(
+            "a verdict is the person's own, recorded on the monitor, never by Claude (FTR-024). \
+             Prepare its record instead (`kanbanr prepare …`) and tell the person where it waits."
+                .to_string(),
+        ),
+    }
+}
+
+/// The verdict a kanbanr command line records, from its subcommand path (`["release", "cut"]`)
+/// and its words after `kanbanr`; `None` for a command that records no verdict.
+pub fn verdict_of_command(path: &[&str], rest: &[String]) -> Option<Verdict> {
+    let has = |flag: &str| rest.iter().any(|w| w == flag);
+    match path {
+        ["approve"] => Some(Verdict::Approve),
+        ["ratify"] => Some(Verdict::Ratify),
+        ["unapprove"] => Some(Verdict::Unapprove),
+        ["signoff"] if has("--withdraw") => Some(Verdict::WithdrawSignoff),
+        ["signoff"] => Some(Verdict::Signoff),
+        ["adr", "accept"] => Some(Verdict::AcceptAdr),
+        ["adr", "reject"] => Some(Verdict::RejectAdr),
+        ["release", "promote"] if !has("--plan") => Some(Verdict::Promote),
+        ["release", "cut"] => Some(Verdict::Cut),
+        // Starting a patch from a red tag is the person's decision (FTR-026). `promote` to a
+        // stage after the tag is covered above; `config tag-gate` is configuration, not a verdict.
+        ["release", "add"] if has("--from-failed-tag") => Some(Verdict::PatchFromTag),
+        // A gate result recorded by hand is a verdict on the release (FTR-002).
+        ["gate", "record"] => Some(Verdict::GateResult),
+        _ => None,
+    }
+}
+
 /// The request body with `origin` set to `origin`, overwriting whatever the client sent, for a
-/// verdict route; `None` for any other route, so no other body is touched.
+/// route [`stamps_origin`] names; `None` for any other route, so no other body is touched.
 pub fn stamp(method: &str, path: &str, body: Option<&Value>, origin: Origin) -> Option<Value> {
-    if !is_verdict_route(method, path) {
+    if !stamps_origin(method, path) {
         return None;
     }
     let mut v = match body {
@@ -279,6 +402,42 @@ mod tests {
         assert_eq!(Origin::parse("Monitor"), None);
         assert_eq!(label(""), "unknown");
         assert_eq!(label("scheduled"), "scheduled");
+    }
+
+    /// FTR-034 R-4: the one guard refuses Claude every verdict and a person none.
+    #[test]
+    fn claude_is_refused_every_verdict_and_a_person_none() {
+        for v in Verdict::ALL {
+            assert_eq!(verdict_refusal(v, Taker::Person), None, "{v:?}");
+            let why = verdict_refusal(v, Taker::Claude).unwrap_or_else(|| panic!("{v:?}"));
+            assert!(why.contains("kanbanr prepare"), "{why}");
+        }
+        assert_eq!(Taker::of_origin(Origin::Conversation), Taker::Claude);
+        assert_eq!(Taker::of_origin(Origin::Delegated), Taker::Claude);
+        assert_eq!(Taker::of_origin(Origin::Monitor), Taker::Person);
+        assert_eq!(Taker::of_origin(Origin::Terminal), Taker::Person);
+        let w = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            verdict_of_command(&["signoff"], &w(&["signoff", "F", "x", "--withdraw"])),
+            Some(Verdict::WithdrawSignoff)
+        );
+        assert_eq!(
+            verdict_of_command(&["release", "promote"], &w(&["--plan"])),
+            None
+        );
+        assert_eq!(verdict_of_command(&["prepare"], &w(&["gate"])), None);
+        // The prepared confirm and reject routes and a gate result are verdict routes; preparing
+        // is not, but its body is stamped.
+        for p in [
+            "/projects/p/prepared/x/confirm",
+            "/projects/p/prepared/x/reject",
+            "/projects/p/gate-results",
+        ] {
+            assert!(is_verdict_route("POST", p), "{p}");
+        }
+        assert!(!is_verdict_route("POST", "/projects/p/prepared"));
+        assert!(stamps_origin("POST", "/projects/p/prepared"));
+        assert!(!stamps_origin("GET", "/projects/p/prepared"));
     }
 
     // ---- a scratch board -----------------------------------------------------------------
