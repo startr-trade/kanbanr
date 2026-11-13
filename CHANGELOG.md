@@ -234,7 +234,7 @@ All notable changes to kanbanr are documented here. The format follows
   first item now describes what a person does, not a capability, and the guides say Claude asks whether
   the product has a user interface when the technology is chosen. The skill has both rules.
 
-## [0.5.1] - 2026-11-08
+## [0.5.1] - 2026-11-11
 
 ### Fixed
 
