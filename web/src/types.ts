@@ -289,6 +289,9 @@ export interface PendingReview {
   signoffs_needed?: string[];
   /** The item lists no documents, so signing off docs-folded confirms that it changes none (DEF-033). */
   changes_no_documents?: boolean;
+  /** The item's branch got a commit after its earlier docs-folded sign-off, which therefore lapsed:
+   * why, naming the branch (DEF-046). */
+  signoff_lapsed?: string;
   /** Texts that name something the item changed since they last changed, for the person to
    * confirm or correct before docs-folded (FTR-013). Absent when the check was skipped. */
   to_check?: DriftFlag[];
