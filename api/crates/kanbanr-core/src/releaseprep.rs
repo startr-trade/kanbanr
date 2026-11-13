@@ -445,9 +445,148 @@ pub fn add_listing(text: &str, after: &str, entry: &str) -> Result<Option<String
     Ok(Some(out))
 }
 
+/// The text of `## [{number}]`'s section: from the line after its heading to the next line
+/// starting `## `, or to the first link reference definition (`[label]: url`) after it, or the
+/// end. None when there is no such heading.
+pub fn section_body<'a>(text: &'a str, number: &str) -> Option<&'a str> {
+    let (start, end) = section_span(text, number)?;
+    Some(&text[start..end])
+}
+
+/// Whether `line` is a link reference definition, `[label]: url`.
+fn is_link_ref(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with('[') && t.find("]:").is_some_and(|i| i > 1)
+}
+
+/// Byte span of the section's body (after its heading line, up to its bound).
+fn section_span(text: &str, number: &str) -> Option<(usize, usize)> {
+    let want = format!("## [{number}]");
+    let mut pos = 0;
+    let mut start = None;
+    for line in text.split_inclusive('\n') {
+        let next = pos + line.len();
+        match start {
+            None => {
+                if line.trim_start().starts_with(&want) {
+                    start = Some(next);
+                }
+            }
+            Some(_) => {
+                if line.starts_with("## ") || is_link_ref(line) {
+                    return Some((start?, pos));
+                }
+            }
+        }
+        pos = next;
+    }
+    start.map(|s| (s, text.len()))
+}
+
+/// `text` with the section of `## [{number}]` replaced by `body`: one blank line, `body` trimmed
+/// at the end, one blank line. A refusal when the heading is not there.
+pub fn fill_section(text: &str, number: &str, body: &str) -> Result<String, String> {
+    let Some((start, end)) = section_span(text, number) else {
+        return Err(format!("there is no ## [{number}] heading to fill"));
+    };
+    let mut filled = format!("\n{}\n", body.trim_end());
+    if end < text.len() {
+        filled.push('\n');
+    }
+    let mut out = String::with_capacity(text.len() + filled.len());
+    out.push_str(&text[..start]);
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&filled);
+    out.push_str(&text[end..]);
+    Ok(out)
+}
+
+/// One shipping item, for the changelog.
+pub struct ChangelogItem {
+    pub kind: String,
+    pub code: String,
+    pub title: String,
+}
+
+/// The section's entries: `### Added`, `### Changed`, `### Fixed`, in that order, each present
+/// only when it has an entry; one `- {title} ({code})` per item, in code order. `defect` and
+/// `bug` go under Fixed, `chore` under Changed, anything else (no kind included) under Added.
+/// Empty string for no items.
+pub fn changelog_entries(items: &[ChangelogItem]) -> String {
+    let mut sorted: Vec<&ChangelogItem> = items.iter().collect();
+    sorted.sort_by(|a, b| a.code.cmp(&b.code));
+    let mut out = String::new();
+    for heading in ["Added", "Changed", "Fixed"] {
+        let group: Vec<&&ChangelogItem> = sorted
+            .iter()
+            .filter(|i| {
+                let h = match i.kind.trim().to_ascii_lowercase().as_str() {
+                    "defect" | "bug" => "Fixed",
+                    "chore" => "Changed",
+                    _ => "Added",
+                };
+                h == heading
+            })
+            .collect();
+        if group.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!("### {heading}\n\n"));
+        for i in group {
+            out.push_str(&format!("- {} ({})\n", i.title, i.code));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DEF-044 R-1: a section is found and bounded by the next heading or the link references;
+    /// filling replaces only that span; entries are grouped and ordered.
+    #[test]
+    fn a_changelog_section_is_found_filled_and_bounded() {
+        let text = "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-11-12\n\n## [0.0.1] - 2026-01-01\n- old\n\n[Unreleased]: https://x/compare/v0.1.0...HEAD\n[0.0.1]: https://x/tag/v0.0.1\n";
+        assert_eq!(section_body(text, "0.1.0"), Some("\n"));
+        assert_eq!(section_body(text, "0.0.1"), Some("- old\n\n"));
+        assert_eq!(section_body(text, "9.9.9"), None);
+        let last = "## [1.0.0]\n- a\n\n[1.0.0]: u\n";
+        assert_eq!(section_body(last, "1.0.0"), Some("- a\n\n"));
+        assert_eq!(section_body("## [2.0.0]\ntail", "2.0.0"), Some("tail"));
+
+        let filled = fill_section(text, "0.1.0", "### Added\n\n- thing (FEAT-1)\n\n").unwrap();
+        assert_eq!(
+            filled,
+            "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-11-12\n\n### Added\n\n- thing (FEAT-1)\n\n## [0.0.1] - 2026-01-01\n- old\n\n[Unreleased]: https://x/compare/v0.1.0...HEAD\n[0.0.1]: https://x/tag/v0.0.1\n"
+        );
+        assert!(section_body(&filled, "0.1.0").is_some_and(|b| !b.trim().is_empty()));
+        assert!(fill_section(text, "9.9.9", "x").is_err());
+
+        let item = |kind: &str, code: &str, title: &str| ChangelogItem {
+            kind: kind.into(),
+            code: code.into(),
+            title: title.into(),
+        };
+        assert_eq!(changelog_entries(&[]), "");
+        assert_eq!(
+            changelog_entries(&[
+                item("defect", "DEF-2", "Fix b"),
+                item("", "FTR-2", "Add b"),
+                item("chore", "CHR-1", "Tidy"),
+                item("feature", "FTR-1", "Add a"),
+                item("bug", "DEF-1", "Fix a"),
+            ]),
+            "### Added\n\n- Add a (FTR-1)\n- Add b (FTR-2)\n\n### Changed\n\n- Tidy (CHR-1)\n\n### Fixed\n\n- Fix a (DEF-1)\n- Fix b (DEF-2)\n"
+        );
+        let only = changelog_entries(&[item("defect", "DEF-1", "x")]);
+        assert!(only.starts_with("### Fixed") && !only.contains("Added"));
+    }
 
     fn p(version: &str) -> Placeholders {
         Placeholders::new(version, "Gates", "2026-10-21").unwrap()

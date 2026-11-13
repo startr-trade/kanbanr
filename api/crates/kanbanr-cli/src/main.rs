@@ -1489,6 +1489,10 @@ enum ReleaseCmd {
         /// Open `$VISUAL` (or `$EDITOR`) on a copy of the notes, and commit it if it changed.
         #[arg(long)]
         edit: bool,
+        /// Commit this file's text as the version's section of the changelog, in the same commit
+        /// as the notes (or alone); `-` for stdin, for one of the two only (DEF-044).
+        #[arg(long, value_name = "FILE")]
+        changelog: Option<String>,
         /// Who edited them (default: the board's commit identity).
         #[arg(long)]
         by: Option<String>,
@@ -10218,6 +10222,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             file,
             edit,
+            changelog,
             by,
         } => release_notes(
             cli,
@@ -10226,6 +10231,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             file.as_deref(),
             *edit,
+            changelog.as_deref(),
             by.as_ref(),
         )?,
         ReleaseCmd::Redate { version, by } => {
@@ -10413,8 +10419,12 @@ fn release_notes(
     version: &str,
     file: Option<&str>,
     edit: bool,
+    changelog: Option<&str>,
     by: Option<&String>,
 ) -> anyhow::Result<()> {
+    if file == Some("-") && changelog == Some("-") {
+        anyhow::bail!("only one of --file and --changelog can read stdin (`-`)");
+    }
     let route = format!(
         "/projects/{p}/releases/{}/notes",
         urlencode_segment(version)
@@ -10425,7 +10435,19 @@ fn release_notes(
             &client.get_in(&route, repo.as_deref())?,
         )?)
     };
+    let read_arg = |f: &str| -> anyhow::Result<String> {
+        if f == "-" {
+            use std::io::Read;
+            let mut s = String::new();
+            std::io::stdin().read_to_string(&mut s)?;
+            Ok(s)
+        } else {
+            std::fs::read_to_string(f).map_err(|e| anyhow::anyhow!("could not read {f}: {e}"))
+        }
+    };
+    let section = changelog.map(read_arg).transpose()?;
     let text = match (file, edit) {
+        (None, false) if section.is_some() => None,
         (None, false) => {
             let notes = current()?;
             if cli.json {
@@ -10449,15 +10471,7 @@ fn release_notes(
             }
             return Ok(());
         }
-        (Some("-"), _) => {
-            use std::io::Read;
-            let mut s = String::new();
-            std::io::stdin().read_to_string(&mut s)?;
-            s
-        }
-        (Some(f), _) => {
-            std::fs::read_to_string(f).map_err(|e| anyhow::anyhow!("could not read {f}: {e}"))?
-        }
+        (Some(f), _) => Some(read_arg(f)?),
         (None, true) => {
             let notes = current()?;
             if !notes["editable"].as_bool().unwrap_or(false) {
@@ -10465,18 +10479,18 @@ fn release_notes(
             }
             let before = notes["text"].as_str().unwrap_or_default().to_string();
             let after = edit_in_editor(version, &before)?;
-            if after == before {
+            if after == before && section.is_none() {
                 println!("unchanged: nothing committed to {}", notes_where(&notes));
                 return Ok(());
             }
-            after
+            (after != before).then_some(after)
         }
     };
     let by = verdict_author(cli, by)?;
     let resp = client.write_in(
         Method::Put,
         &route,
-        Some(json!({ "text": text, "by": by })),
+        Some(json!({ "text": text, "changelog": section, "by": by })),
         repo.as_deref(),
     )?;
     let v: Value = serde_json::from_str(&resp)?;
@@ -10486,6 +10500,15 @@ fn release_notes(
         sha.get(..7).unwrap_or(sha),
         notes_where(&v["notes"])
     );
+    if section.is_some() {
+        let file = v["notes"]["changelog_path"]
+            .as_str()
+            .unwrap_or("the changelog");
+        said.push_str(&format!(
+            "\nchangelog: ## [{}] in {file} updated",
+            version.trim_start_matches('v')
+        ));
+    }
     if let Some(moved) = v["main_moved"].as_str().filter(|m| !m.is_empty()) {
         said.push_str(&format!("\n{moved}"));
     }

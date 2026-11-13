@@ -200,7 +200,7 @@ Follow this order and you won't have to go back:
 | Step | Who | Do this |
 |---|---|---|
 | 1 | You | **Releases** page: **Promote to candidate**. This makes the release branch and drafts the version, changelog and notes |
-| 2 | Claude | Say "Write the release notes for readers", because the draft only lists requirements |
+| 2 | Claude | Say "Write the release notes and the changelog for readers", because the draft only lists requirements |
 | 3 | You | Open **Release notes** on the release, then **Edit notes** and **Save** for any changes |
 | 4 | Claude | Say "Run the full checks over the release" |
 | 5 | You | **Review** page: **Sign off release** on each item, if you haven't already |

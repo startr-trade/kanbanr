@@ -455,7 +455,7 @@ cadence:
 | condition | holds when | fix shown |
 |---|---|---|
 | `items_finished` | the cut would carry nothing over | finish the item, or plan it into another release |
-| `prepared` | the release tip carries the version, the changelog heading and the notes | promote to the stage that prepares |
+| `prepared` | the release tip carries the version, a changelog section with something in it, and the notes | promote to the stage that prepares |
 | `main_at_release` | main is at the release tip | promote to the stage with `move_main` |
 | `pushed` | the release tip is on main's remote-tracking branch (`origin/main`) | push main (`git push origin main`), then wait for CI |
 | `gate_passed` | every gate named in `commit_gates` has a passed result recorded for the release tip | look at your CI, then record its verdict (see below) |
@@ -596,7 +596,11 @@ kanbanr config release-prepare                     # shows it
   refuses the promotion.
 - **Changelog.** `## [{number}] - {date}` goes below the first `## [Unreleased]`, so what was
   unreleased belongs to the release; an `[Unreleased]: …compare/<prev>...HEAD` link moves on and
-  `[{number}]` gets its own. Each copy gets the same text.
+  `[{number}]` gets its own. When that leaves the section empty, it is filled from the items the
+  release ships, under `### Added`, `### Changed` and `### Fixed` (a defect or bug is Fixed, a
+  chore Changed, anything else Added), and `[Unreleased]` stays as an empty heading. When nothing
+  ships and nothing is unreleased, the plan says so, the changelog is left as it is, and
+  `kanbanr release notes <V> --changelog <file>` writes the section. Each copy gets the same text.
 - **Notes.** A draft from the items the cut would ship, written only if the file is not there yet,
   and listed below the line named in each listing.
 
@@ -614,7 +618,14 @@ release itself — no branch switch, no separate item:
 kanbanr release notes v0.3.0                 # release/v0.3.0 @ 8f995e1: docs/src/releases/v0.3.0.md, then the text
 kanbanr release notes v0.3.0 --edit          # $VISUAL / $EDITOR on a copy; committed if it changed
 kanbanr release notes v0.3.0 --file notes.md # or `-` for stdin
+kanbanr release notes v0.3.0 --file notes.md --changelog section.md  # the notes and the changelog section, one commit
+kanbanr release notes v0.3.0 --changelog section.md                  # the changelog section alone
 ```
+
+`--changelog` takes the text of the version's section (the part under its `## [<number>]`
+heading), writes it to the changelog and each of its copies in the same commit as the notes, and
+refuses an empty file. Use it instead of a fix item when the section needs changing on a release
+under test.
 
 The notes are read from the path they were first written to, which the release records, so
 changing `kanbanr config release-prepare --notes` later does not lose earlier releases' notes. A

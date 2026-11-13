@@ -17,7 +17,15 @@ export interface NotesSection {
   command: string;
   /** "Not mentioned yet: DEF-030, FTR-002" when the notes leave out planned items, else empty (DEF-031). */
   unmentioned: string;
+  /** "Changelog section (CHANGELOG.md)" when a changelog is configured, else empty (DEF-044). */
+  changelogHeading: string;
+  /** The section's text, shown read-only under the notes; empty when there is none. */
+  changelogText: string;
+  /** What to show in place of an empty section, else empty. */
+  changelogEmpty: string;
 }
+
+export const CHANGELOG_EMPTY = "The changelog has no section for this release yet: ask Claude to write it.";
 
 export function notesSection(
   release: Release,
@@ -33,5 +41,9 @@ export function notesSection(
   const command = `kanbanr release notes ${release.version}${shipped ? "" : " --edit"}`;
   const missing = shipped ? [] : (notes?.unmentioned ?? []);
   const unmentioned = missing.length ? `Not mentioned yet: ${missing.join(", ")}` : "";
-  return { show, heading, edit, command, unmentioned };
+  const changelogPath = notes?.changelog_path ?? "";
+  const changelogHeading = changelogPath ? `Changelog section (${changelogPath})` : "";
+  const changelogText = changelogPath ? (notes?.changelog_section ?? "") : "";
+  const changelogEmpty = changelogPath && !changelogText ? CHANGELOG_EMPTY : "";
+  return { show, heading, edit, command, unmentioned, changelogHeading, changelogText, changelogEmpty };
 }

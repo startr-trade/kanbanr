@@ -2625,10 +2625,17 @@ fn prepared_at(
             lacking.push(f.path.clone());
         }
     }
-    if let Some(c) = &cfg.changelog
-        && !read(c).is_some_and(|t| crate::releaseprep::has_heading(&t, &ph.number))
-    {
-        lacking.push(format!("{c} (## [{}])", ph.number));
+    if let Some(c) = &cfg.changelog {
+        match read(c) {
+            Some(t) if crate::releaseprep::has_heading(&t, &ph.number) => {
+                if crate::releaseprep::section_body(&t, &ph.number)
+                    .is_some_and(|b| b.trim().is_empty())
+                {
+                    lacking.push(format!("{c} (## [{}] is empty)", ph.number));
+                }
+            }
+            _ => lacking.push(format!("{c} (## [{}])", ph.number)),
+        }
     }
     if let Some(n) = &cfg.notes {
         let path = crate::releaseprep::expand(n, &ph);
@@ -2706,19 +2713,75 @@ fn work_prepare(
                 .to_string(),
         );
     }
+    // What ships, once: the changelog section and the draft notes are both written from it.
+    let mut shipping: Vec<FeatureItem> = Vec::new();
+    if cfg.changelog.is_some() || cfg.notes.is_some() {
+        let shipping_codes: Vec<String> = cut_preview(store, id, &release.version)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .filter(|p| p.ships)
+            .map(|p| p.code)
+            .collect();
+        shipping = project
+            .features
+            .iter()
+            .filter(|f| shipping_codes.contains(&f.code))
+            .cloned()
+            .collect();
+        shipping.sort_by(|a, b| a.code.cmp(&b.code));
+    }
     if let Some(c) = &cfg.changelog {
         let text = read(&files, c)?;
+        let is_empty =
+            |t: &str| prep::section_body(t, &ph.number).is_some_and(|b| b.trim().is_empty());
+        // The section's text from what ships, when it can be filled.
+        let fill = |t: &str| -> std::result::Result<String, String> {
+            let items: Vec<prep::ChangelogItem> = shipping
+                .iter()
+                .map(|f| prep::ChangelogItem {
+                    kind: f.kind.clone().unwrap_or_default(),
+                    code: f.code.clone(),
+                    title: f.title.clone(),
+                })
+                .collect();
+            prep::fill_section(t, &ph.number, &prep::changelog_entries(&items))
+                .map_err(|e| format!("{c}: {e}"))
+        };
+        let from = shipping
+            .iter()
+            .map(|f| f.code.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let write = |files: &mut Vec<(String, String)>, new: String| {
+            for copy in &cfg.changelog_copies {
+                prep::check_repo_path(copy)?;
+                put(files, copy, new.clone());
+            }
+            put(files, c, new);
+            Ok::<(), String>(())
+        };
         match prep::date_changelog(&text, &ph)? {
-            Some(dated) => {
-                for copy in &cfg.changelog_copies {
-                    prep::check_repo_path(copy)?;
-                    put(&mut files, copy, dated.clone());
-                }
-                put(&mut files, c, dated);
+            Some(dated) if !is_empty(&dated) => {
+                write(&mut files, dated)?;
                 parts.push("the changelog heading".to_string());
             }
+            Some(dated) if !shipping.is_empty() => {
+                write(&mut files, fill(&dated)?)?;
+                parts.push(format!("the changelog section (from {from})"));
+            }
+            Some(_) => notes_said.push(format!(
+                "{c}: nothing to put under ## [{}] yet ([Unreleased] is empty and nothing planned \
+                 has finished), so it is left as it is; write the section with \
+                 `kanbanr release notes {} --changelog <file>`",
+                ph.number, release.version
+            )),
             None if prep::has_heading(&text, &ph.number) => {
-                notes_said.push(format!("{c} already has ## [{}]", ph.number));
+                if is_empty(&text) && !shipping.is_empty() {
+                    write(&mut files, fill(&text)?)?;
+                    parts.push(format!("the changelog section (from {from})"));
+                } else {
+                    notes_said.push(format!("{c} already has ## [{}]", ph.number));
+                }
             }
             None => notes_said.push(format!(
                 "{c} has no ## [Unreleased] heading, so it is left as it is"
@@ -2743,19 +2806,6 @@ fn work_prepare(
         if there {
             notes_said.push(format!("{path} is already written, so it is kept"));
         } else {
-            let shipping_codes: Vec<String> = cut_preview(store, id, &release.version)
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .filter(|p| p.ships)
-                .map(|p| p.code)
-                .collect();
-            let mut shipping: Vec<FeatureItem> = project
-                .features
-                .iter()
-                .filter(|f| shipping_codes.contains(&f.code))
-                .cloned()
-                .collect();
-            shipping.sort_by(|a, b| a.code.cmp(&b.code));
             drafted_from = shipping.iter().map(|f| f.code.clone()).collect();
             let parent = releases
                 .iter()
@@ -3417,6 +3467,12 @@ pub struct ReleaseNotes {
     /// The items planned into the release whose code the notes do not mention (DEF-031).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unmentioned: Vec<String>,
+    /// The changelog file, when one is configured (DEF-044). Derived, never stored.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub changelog_path: String,
+    /// The text of this version's section in it, at the same tip; empty when there is none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub changelog_section: String,
 }
 
 /// The release and the placeholders its notes path is expanded with, or why its notes cannot be
@@ -3634,10 +3690,31 @@ fn branch_tip(repo: &Path, release: &Release) -> Result<String> {
 fn notes_at(
     project: &Project,
     release: &Release,
+    repo: &Path,
     path: &str,
     text: String,
     tip: &str,
 ) -> ReleaseNotes {
+    let changelog_path = project
+        .config
+        .cadence
+        .release_prepare
+        .changelog
+        .clone()
+        .unwrap_or_default();
+    let changelog_section = if changelog_path.is_empty() {
+        String::new()
+    } else {
+        crate::releaseprep::number_of(&release.version)
+            .ok()
+            .and_then(|n| {
+                let (_, t) = coderepo::read_blob(repo, tip, &changelog_path)
+                    .ok()
+                    .flatten()?;
+                crate::releaseprep::section_body(&t, &n).map(|b| b.trim().to_string())
+            })
+            .unwrap_or_default()
+    };
     let shipped = release.state == ReleaseState::Shipped;
     let unmentioned = if shipped {
         Vec::new()
@@ -3660,6 +3737,8 @@ fn notes_at(
             String::new()
         },
         unmentioned,
+        changelog_path,
+        changelog_section,
     }
 }
 
@@ -3708,7 +3787,9 @@ pub fn release_notes(
             src.tried.join("; ")
         )));
     };
-    Ok(notes_at(&project, &release, &src.path, text, &src.rev))
+    Ok(notes_at(
+        &project, &release, repo, &src.path, text, &src.rev,
+    ))
 }
 
 /// The dates before `today` on the lines of a release's notes and changelog that carry one, at
@@ -3920,7 +4001,7 @@ pub fn redate_release(
             .flatten()
             .map(|(_, t)| t)
             .unwrap_or_default();
-        notes_at(&project, &release, &path, text, at)
+        notes_at(&project, &release, repo, &path, text, at)
     };
     let files = redate_files(&project, &release, repo, &tip, &ymd)?;
     if files.is_empty() {
@@ -3967,19 +4048,23 @@ pub struct NotesSaved {
 }
 
 /// Commit `text` as a release's notes onto `release/<V>`, without checking it out (FEAT-216), and
-/// re-apply the configured notes listings. Nothing to change (the same text, every listing there)
-/// is no commit: the sha is then the tip as it was. Refused once the release has shipped, and when
-/// the branch is checked out in a worktree.
+/// re-apply the configured notes listings. `changelog` is the text of the version's changelog
+/// section (DEF-044), committed in the same change (and to each changelog copy); `None` leaves the
+/// changelog alone, and `text: None` keeps the notes as they are. Nothing to change (the same
+/// text, every listing there) is no commit: the sha is then the tip as it was. Refused once the
+/// release has shipped, and when the branch is checked out in a worktree.
 ///
 /// When main already holds the release (the stage that moves main has run), main is moved with
 /// the notes, so the commit to be tagged has them, and `main_moved` says to push it again; were
 /// main past the release, the save is refused before anything is committed.
+#[allow(clippy::too_many_arguments)]
 pub fn set_release_notes(
     store: &Store,
     id: &str,
     version: &str,
     repo: Option<&Path>,
-    text: &str,
+    text: Option<&str>,
+    changelog: Option<&str>,
     by: &str,
 ) -> Result<NotesSaved> {
     use crate::releaseprep as prep;
@@ -3988,6 +4073,26 @@ pub fn set_release_notes(
         return Err(CoreError::Unsupported(format!(
             "{version} has shipped: its notes are as they shipped, and are not edited on its branch"
         )));
+    }
+    if text.is_none() && changelog.is_none() {
+        return Err(CoreError::Unsupported(
+            "nothing to save: give the notes, the changelog section, or both".to_string(),
+        ));
+    }
+    let cfg = &project.config.cadence.release_prepare;
+    if let Some(body) = changelog {
+        if body.trim().is_empty() {
+            return Err(CoreError::Unsupported(
+                "a changelog section needs text; leave --changelog out to keep the section as it is"
+                    .to_string(),
+            ));
+        }
+        if cfg.changelog.is_none() {
+            return Err(CoreError::Unsupported(
+                "no changelog is configured: `kanbanr config release-prepare --changelog <path>`"
+                    .to_string(),
+            ));
+        }
     }
     let repo = repo.ok_or_else(|| notes_need_repo(version))?;
     let branch = release.branch.clone();
@@ -4006,10 +4111,17 @@ pub fn set_release_notes(
     // Main at the tip holds the release and moves with the notes; main past it cannot.
     let moves_main = main_follows(repo, &main, &branch, &tip, "notes")?;
     let mut files: Vec<(String, String)> = Vec::new();
-    if read(&path)?.as_deref() != Some(text) {
+    let mut notes_changed = false;
+    if let Some(text) = text
+        && read(&path)?.as_deref() != Some(text)
+    {
+        notes_changed = true;
         files.push((path.clone(), text.to_string()));
     }
-    for l in &project.config.cadence.release_prepare.notes_listings {
+    for l in &cfg.notes_listings {
+        if text.is_none() {
+            break;
+        }
         let listing = prep::expand(&l.path, &ph);
         prep::check_repo_path(&listing).map_err(CoreError::Unsupported)?;
         let current = match files.iter().find(|(p, _)| *p == listing) {
@@ -4025,17 +4137,49 @@ pub fn set_release_notes(
         )
         .map_err(|e| CoreError::Unsupported(format!("{listing} {e}")))?
         {
+            notes_changed = true;
             match files.iter_mut().find(|(p, _)| *p == listing) {
                 Some(f) => f.1 = new,
                 None => files.push((listing, new)),
             }
         }
     }
+    let mut changelog_changed = false;
+    if let (Some(body), Some(c)) = (changelog, &cfg.changelog) {
+        prep::check_repo_path(c).map_err(CoreError::Unsupported)?;
+        let current = read(c)?
+            .ok_or_else(|| CoreError::Unsupported(format!("{c} does not exist on {branch}")))?;
+        let base = if prep::has_heading(&current, &ph.number) {
+            current.clone()
+        } else {
+            prep::date_changelog(&current, &ph)
+                .map_err(CoreError::Unsupported)?
+                .ok_or_else(|| {
+                    CoreError::Unsupported(format!(
+                        "{c} has no ## [{}] or ## [Unreleased] heading to put the section under",
+                        ph.number
+                    ))
+                })?
+        };
+        let filled = prep::fill_section(&base, &ph.number, body)
+            .map_err(|e| CoreError::Unsupported(format!("{c}: {e}")))?;
+        for target in std::iter::once(c).chain(cfg.changelog_copies.iter()) {
+            prep::check_repo_path(target).map_err(CoreError::Unsupported)?;
+            if read(target)?.as_deref() != Some(filled.as_str()) {
+                changelog_changed = true;
+                files.push((target.clone(), filled.clone()));
+            }
+        }
+    }
+    let shown = match text {
+        Some(t) => t.to_string(),
+        None => read(&path)?.unwrap_or_default(),
+    };
     if files.is_empty() {
         record_notes_path(store, id, version, &path)?;
         return Ok(NotesSaved {
             sha: tip.clone(),
-            notes: notes_at(&project, &release, &path, text.to_string(), &tip),
+            notes: notes_at(&project, &release, repo, &path, shown, &tip),
             main_moved: String::new(),
         });
     }
@@ -4044,17 +4188,24 @@ pub fn set_release_notes(
     } else {
         by.trim()
     };
+    let what = match (notes_changed, changelog_changed) {
+        (true, true) => "notes and changelog",
+        (false, true) => "changelog",
+        _ => "notes",
+    };
     let message = format!(
-        "Release {version}: notes\n\nEdited through kanbanr release notes by {by}.\n\n\
-         [no-ref] release notes, written by kanbanr\nKanbanr-Release: {version}\n"
+        "Release {version}: {what}\n\nEdited through kanbanr release notes by {by}.\n\n\
+         [no-ref] release {what}, written by kanbanr\nKanbanr-Release: {version}\n"
     );
     let (new, main_moved) = commit_and_follow(
-        repo, &main, &branch, version, &tip, moves_main, &files, &message, "notes",
+        repo, &main, &branch, version, &tip, moves_main, &files, &message, what,
     )?;
-    record_notes_path(store, id, version, &path)?;
+    if text.is_some() {
+        record_notes_path(store, id, version, &path)?;
+    }
     Ok(NotesSaved {
         sha: new.clone(),
-        notes: notes_at(&project, &release, &path, text.to_string(), &new),
+        notes: notes_at(&project, &release, repo, &path, shown, &new),
         main_moved,
     })
 }
@@ -4996,6 +5147,151 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    /// A board and repo with a changelog configured and `changelog` committed on main; a finished
+    /// feature and a finished defect planned into v0.1.0 when `ship` is set.
+    fn changelog_fixture(tag: &str, changelog: &str, ship: bool) -> (Store, PathBuf, PathBuf) {
+        let (store, dir, repo) = board_and_repo(tag);
+        std::fs::write(repo.join("CHANGELOG.md"), changelog).unwrap();
+        coderepo::git(&repo, &["add", "-A"]).unwrap();
+        coderepo::git(&repo, &["commit", "-q", "-m", "changelog"]).unwrap();
+        super::add(&store, "shop", "v0.1.0", "", "").unwrap();
+        if ship {
+            let feature = plan_done(&store, "v0.1.0");
+            let defect = store
+                .add_feature_of_kind("shop", "Mend it", "", "M", None, Some("defect"))
+                .unwrap()
+                .code;
+            for status in ["Scheduled", "Completed"] {
+                store
+                    .move_feature_approved("shop", &defect, status, None)
+                    .unwrap();
+            }
+            super::plan(&store, "shop", "v0.1.0", &[feature, defect]).unwrap();
+        } else {
+            let code = store
+                .add_feature("shop", "Not done", "", "M", None)
+                .unwrap()
+                .code;
+            super::plan(&store, "shop", "v0.1.0", &[code]).unwrap();
+        }
+        configure(
+            &store,
+            &format!("{THREE}release_prepare:\n  changelog: CHANGELOG.md\n"),
+        );
+        (store, dir, repo)
+    }
+
+    fn promote_candidate(store: &Store, repo: &Path) -> super::Promoted {
+        super::promote(store, "shop", "v0.1.0", None, "Ada", "", Some(repo)).unwrap()
+    }
+
+    /// DEF-044 R-1: candidate fills the version's changelog section from what ships, grouped,
+    /// leaving an empty Unreleased heading; entries already under Unreleased are kept as they are.
+    #[test]
+    fn candidate_fills_the_changelog_section() {
+        let (store, dir, repo) = changelog_fixture(
+            "cl-fill",
+            "# Changelog\n\n## [Unreleased]\n\n## [0.0.1] - 2026-01-01\n- old\n",
+            true,
+        );
+        promote_candidate(&store, &repo);
+        let tip = coderepo::rev_parse(&repo, "release/v0.1.0").unwrap();
+        let text = coderepo::read_blob(&repo, &tip, "CHANGELOG.md")
+            .unwrap()
+            .unwrap()
+            .1;
+        let want_head = format!(
+            "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - {}\n\n### Added\n\n- Ships in v0.1.0 (",
+            super::today_ymd()
+        );
+        assert!(text.starts_with(&want_head), "{text}");
+        assert!(text.contains("\n\n### Fixed\n\n- Mend it ("), "{text}");
+        assert!(
+            text.ends_with(")\n\n## [0.0.1] - 2026-01-01\n- old\n"),
+            "{text}"
+        );
+        let project = store.load_meta("shop").unwrap();
+        let (ok, said) = super::prepared_at(&repo, &tip, &project, "v0.1.0", "release/v0.1.0");
+        assert!(ok, "{said}");
+        clean(&dir, &repo);
+
+        // Entries already under Unreleased are the section, and nothing is added.
+        let (store, dir, repo) = changelog_fixture(
+            "cl-keep",
+            "# Changelog\n\n## [Unreleased]\n\n- something\n\n## [0.0.1] - 2026-01-01\n- old\n",
+            true,
+        );
+        promote_candidate(&store, &repo);
+        let tip = coderepo::rev_parse(&repo, "release/v0.1.0").unwrap();
+        let text = coderepo::read_blob(&repo, &tip, "CHANGELOG.md")
+            .unwrap()
+            .unwrap()
+            .1;
+        assert_eq!(
+            text,
+            format!(
+                "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - {}\n\n- something\n\n## [0.0.1] - 2026-01-01\n- old\n",
+                super::today_ymd()
+            )
+        );
+        clean(&dir, &repo);
+    }
+
+    /// DEF-044 R-2: with nothing to put in the section the plan says so, the changelog is left
+    /// alone, and `prepared` fails on it; an empty heading already on a branch reads as empty.
+    #[test]
+    fn candidate_reports_an_empty_changelog_section() {
+        let original = "# Changelog\n\n## [Unreleased]\n\n## [0.0.1] - 2026-01-01\n- old\n";
+        let (store, dir, repo) = changelog_fixture("cl-empty", original, false);
+        let plan = super::plan_promotion(
+            &store,
+            "shop",
+            "v0.1.0",
+            None,
+            "",
+            Some(&repo),
+            super::Fetch::No,
+        )
+        .unwrap();
+        let prep = plan
+            .steps
+            .iter()
+            .find(|s| s.action.name() == "prepare")
+            .unwrap();
+        assert!(
+            prep.does.contains("nothing to put under ## [0.1.0]"),
+            "{}",
+            prep.does
+        );
+        promote_candidate(&store, &repo);
+        let tip = coderepo::rev_parse(&repo, "release/v0.1.0").unwrap();
+        let text = coderepo::read_blob(&repo, &tip, "CHANGELOG.md")
+            .unwrap()
+            .unwrap()
+            .1;
+        assert_eq!(text, original, "no empty section is written");
+        let project = store.load_meta("shop").unwrap();
+        let (ok, said) = super::prepared_at(&repo, &tip, &project, "v0.1.0", "release/v0.1.0");
+        assert!(!ok && said.contains("CHANGELOG.md (## [0.1.0])"), "{said}");
+
+        // An empty heading on the branch is not prepared either.
+        coderepo::commit_files(
+            &repo,
+            "release/v0.1.0",
+            &[(
+                "CHANGELOG.md".to_string(),
+                "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-11-12\n\n## [0.0.1] - 2026-01-01\n"
+                    .to_string(),
+            )],
+            "empty",
+        )
+        .unwrap();
+        let tip = coderepo::rev_parse(&repo, "release/v0.1.0").unwrap();
+        let (ok, said) = super::prepared_at(&repo, &tip, &project, "v0.1.0", "release/v0.1.0");
+        assert!(!ok && said.contains("is empty"), "{said}");
+        clean(&dir, &repo);
+    }
+
     /// DEF-005 R-1: the cut writes the notes file at the tagged commit to the board's release
     /// document; the generated text is only for a release with no such file.
     #[test]
@@ -5472,8 +5768,16 @@ pub(crate) mod tests {
         assert_eq!(v2(&store).notes_path, "docs/releases/v0.2.0.md");
         // An edit lands where the notes are, not at the new path.
         let text = "# v0.2.0 — Gates\n\nEdited after the move.\n";
-        let saved =
-            super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada").unwrap();
+        let saved = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some(text),
+            None,
+            "Ada",
+        )
+        .unwrap();
         assert_eq!(saved.notes.path, "docs/releases/v0.2.0.md");
         let tip = coderepo::rev_parse(&repo, "release/v0.2.0").unwrap();
         assert!(
@@ -5589,8 +5893,16 @@ pub(crate) mod tests {
         let main_before = coderepo::rev_parse(&repo, "main").unwrap();
         let tip = coderepo::rev_parse(&repo, "release/v0.2.0").unwrap();
         let text = "# v0.2.0 — Gates\n\nRewritten by hand.\n";
-        let saved =
-            super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada").unwrap();
+        let saved = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some(text),
+            None,
+            "Ada",
+        )
+        .unwrap();
         let (sha, notes) = (saved.sha, saved.notes);
         assert!(
             saved.main_moved.is_empty(),
@@ -5622,9 +5934,17 @@ pub(crate) mod tests {
         assert!(coderepo::is_clean(&repo));
 
         // The same text: no commit.
-        let again = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada")
-            .unwrap()
-            .sha;
+        let again = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some(text),
+            None,
+            "Ada",
+        )
+        .unwrap()
+        .sha;
         assert_eq!(again, sha, "nothing to change");
         assert_eq!(coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(), sha);
 
@@ -5639,9 +5959,17 @@ pub(crate) mod tests {
                 ..Default::default()
             });
         store.set_cadence("shop", None, c).unwrap();
-        let listed = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada")
-            .unwrap()
-            .sha;
+        let listed = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some(text),
+            None,
+            "Ada",
+        )
+        .unwrap()
+        .sha;
         assert_ne!(listed, sha);
         let summary = coderepo::read_blob(&repo, &listed, "docs/SUMMARY.md")
             .unwrap()
@@ -5671,9 +5999,17 @@ pub(crate) mod tests {
             ],
         )
         .unwrap();
-        let busy = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), "x\n", "Ada")
-            .unwrap_err()
-            .to_string();
+        let busy = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some("x\n"),
+            None,
+            "Ada",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(busy.contains("is checked out in"), "{busy}");
         coderepo::git(
             &repo,
@@ -5685,9 +6021,17 @@ pub(crate) mod tests {
         let mut rs = super::load(&store, "shop").unwrap();
         rs.iter_mut().find(|r| r.version == "v0.2.0").unwrap().state = super::ReleaseState::Shipped;
         super::save(&store, "shop", &rs).unwrap();
-        let shipped = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), "y\n", "Ada")
-            .unwrap_err()
-            .to_string();
+        let shipped = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some("y\n"),
+            None,
+            "Ada",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(shipped.contains("has shipped"), "{shipped}");
         assert_eq!(
             coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(),
@@ -5711,7 +6055,8 @@ pub(crate) mod tests {
             "shop",
             "v0.2.0",
             Some(&repo),
-            "# v0.2.0\n\nAfter main moved.\n",
+            Some("# v0.2.0\n\nAfter main moved.\n"),
+            None,
             "Ada",
         )
         .unwrap();
@@ -5731,9 +6076,17 @@ pub(crate) mod tests {
         // Main past the release: refused, and neither branch moves.
         coderepo::git(&repo, &["commit", "-q", "--allow-empty", "-m", "on main"]).unwrap();
         let main_now = coderepo::rev_parse(&repo, "main").unwrap();
-        let past = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), "z\n", "Ada")
-            .unwrap_err()
-            .to_string();
+        let past = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some("z\n"),
+            None,
+            "Ada",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(
             past.contains("past release/v0.2.0") && past.contains("nothing was saved"),
             "{past}"
@@ -5764,7 +6117,8 @@ pub(crate) mod tests {
             "shop",
             "v0.2.0",
             Some(&repo),
-            "# v0.2.0\n\nMore.\n",
+            Some("# v0.2.0\n\nMore.\n"),
+            None,
             "Ada",
         )
         .unwrap();
@@ -6530,14 +6884,22 @@ pub(crate) mod tests {
             "shop",
             "v0.2.0",
             Some(&repo),
-            "# v0.2.0\n\nNothing.\n",
+            Some("# v0.2.0\n\nNothing.\n"),
+            None,
             "Ada",
         )
         .unwrap();
         assert_eq!(saved.notes.unmentioned, planned);
-        let saved =
-            super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), &mention, "Ada")
-                .unwrap();
+        let saved = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some(&mention),
+            None,
+            "Ada",
+        )
+        .unwrap();
         assert!(saved.notes.unmentioned.is_empty());
         let read = super::release_notes(&store, "shop", "v0.2.0", Some(&repo)).unwrap();
         assert!(read.unmentioned.is_empty());
