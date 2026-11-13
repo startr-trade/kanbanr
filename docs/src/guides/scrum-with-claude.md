@@ -75,7 +75,7 @@ missing, Claude drafts it or brings it to you.
 when the first item is designed), Claude asks whether the product has screens a person uses, or is
 a service, library or command-line tool. If it has screens, they become items of their own,
 designed and approved like the rest. If it has none, that goes into the design, so a missing screen
-is a decision and not an oversight.
+is a decision and not an oversight. If it has screens, Claude also asks how the screens should look, the styling approach and the feel you want, before it designs the first one, and the answer goes into the design.
 
 | Stage | What Claude does | What you do on the Review page |
 |---|---|---|

@@ -589,6 +589,14 @@ The item's spec gains its build-ready `## Design` (the next subsection). Also:
   there are screens, ask for them as items of their own; when there are none, write "no user
   interface" in the design so that is a recorded decision. Write the first item as what a person
   does ("a shopper opens their basket and finds it kept"), not as a capability.
+- **Ask how a screen should look before designing it.** The first time a screen is designed (and
+  again for a screen unlike the ones before), ask, as one question with previews: the styling
+  approach the stack allows (hand-written CSS, a utility-class framework, a component library for
+  the UI framework in use, or the project's own design system); and the visual direction (the feel,
+  colours or brand, and a site it should resemble). Recommend what fits the charter's constraints,
+  and say why. Record the answer in the item's Design. Never decide the look yourself: "plain" is
+  an answer the user gives, not a default. (FTR-033 changes this: the answer goes into the
+  project's baseline, and later screens read it from there.)
 
 Leaving the design role, the build stage's gate asks for `spec_sections: [Design]` and the
 `design-review` sign-off. Say **design-review** is waiting on the Review page once the section exists; the user gives

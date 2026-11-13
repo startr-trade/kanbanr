@@ -88,7 +88,17 @@ class ExampleTests(unittest.TestCase):
                 self.assertTrue("Claude asks whether it has a user interface" in read(GUIDES / name))
 
 
+    def every_with_claude_guide_explains_the_style_question(self) -> None:
+        for process in WITH_CLAUDE:
+            name = f"{process}-with-claude.md"
+            with self.subTest(guide=name):
+                self.assertTrue("Claude also asks how the screens should look" in read(GUIDES / name))
+
+
 class SkillTests(unittest.TestCase):
+    def the_skill_asks_about_style_before_a_screen(self) -> None:
+        self.assertTrue("Ask how a screen should look before designing it" in read(SKILL))
+
     def the_skill_asks_the_interface_question(self) -> None:
         self.assertTrue("Ask whether the product has a user interface" in read(SKILL))
 
