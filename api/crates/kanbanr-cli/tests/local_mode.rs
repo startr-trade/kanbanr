@@ -3792,6 +3792,211 @@ fn setup_asks_cadence_and_shows_git_model() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-042 R-1: setup with sprints or releases on leaves the git model on, the preview says so,
+/// the person's `off` is kept, and a project that already had one of them is not changed.
+#[test]
+fn setup_with_sprints_and_releases_on_leaves_the_git_model_on() {
+    let (base, work) = togaf_scratch("setup-git-model");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ],
+    ));
+    let json = |args: &[&str]| -> serde_json::Value {
+        serde_json::from_slice(&ok(run_in(&base, &work, args)).stdout).unwrap()
+    };
+
+    // (a) The preview, before any board, says what setup will do.
+    let on = json(&[
+        "git",
+        "model",
+        "--sprints",
+        "on",
+        "--releases",
+        "on",
+        "--json",
+    ]);
+    assert_eq!(on["automated"], true, "{on}");
+    let off = json(&[
+        "git",
+        "model",
+        "--sprints",
+        "off",
+        "--releases",
+        "off",
+        "--json",
+    ]);
+    assert_eq!(off["automated"], false, "{off}");
+
+    // (b) The setup plan's commands leave it on.
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "workflow", "--preset", "agile"],
+    ));
+    let out = ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--sprints", "on", "--releases", "on"],
+    ));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("git model on"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(json(&["git", "model", "--json"])["automated"], true);
+
+    // (c) The person's `off` survives applying the process again.
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--git-model", "off"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "workflow", "--preset", "agile"],
+    ));
+    assert_eq!(json(&["git", "model", "--json"])["automated"], false);
+    let _ = std::fs::remove_dir_all(&base);
+
+    // (d) A project that already had sprints is not changed by turning releases on.
+    let (base, work) = togaf_scratch("setup-git-model-d");
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--sprints", "on", "--git-model", "off"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--releases", "on"],
+    ));
+    let json = |args: &[&str]| -> serde_json::Value {
+        serde_json::from_slice(&ok(run_in(&base, &work, args)).stdout).unwrap()
+    };
+    assert_eq!(json(&["git", "model", "--json"])["automated"], false);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-042: `process check` warns, without refusing, of a path that skips the integrate stage.
+#[test]
+fn process_check_warns_of_a_path_that_skips_the_integrate_stage() {
+    let (base, work) = togaf_scratch("process-check-integrate");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "workflow", "--preset", "agile"],
+    ));
+    let export = ok(run_in(&base, &work, &["config", "workflow", "--export"])).stdout;
+    let text = String::from_utf8(export).unwrap();
+    // The built-in process is clean.
+    let file = base.join("agile.yaml");
+    std::fs::write(&file, &text).unwrap();
+    let out = ok(run_in(
+        &base,
+        &work,
+        &["process", "check", file.to_str().unwrap()],
+    ));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("warning:"));
+    // A chore path without Review is a warning, and the check still passes.
+    let skipping = text.replace(
+        "    - Test\n    - Review\n    - Released",
+        "    - Test\n    - Released",
+    );
+    assert_ne!(skipping, text, "the chore path was not found in the export");
+    std::fs::write(&file, skipping).unwrap();
+    let out = ok(run_in(
+        &base,
+        &work,
+        &["process", "check", file.to_str().unwrap()],
+    ));
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        said.contains("warning:") && said.contains("chore path never enters Review"),
+        "{said}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-182: a sign-off can be withdrawn from the CLI with a reason, never without one, and the
 /// brief then says it was withdrawn and why.
 #[test]

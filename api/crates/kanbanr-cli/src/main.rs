@@ -9391,7 +9391,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 cli,
                 &resp,
                 format!(
-                    "sprints {}, releases {}, estimates in {}",
+                    "sprints {}, releases {}, estimates in {}, git model {}",
                     if c["sprints"].as_bool().unwrap_or(false) {
                         "on"
                     } else {
@@ -9402,7 +9402,12 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                     } else {
                         "off"
                     },
-                    v["estimate_unit"].as_str().unwrap_or("days")
+                    v["estimate_unit"].as_str().unwrap_or("days"),
+                    if c["git_model"].as_bool().unwrap_or(false) {
+                        "on"
+                    } else {
+                        "off"
+                    }
                 ),
             );
             print_release_warnings(cli, &v["warnings"]);
