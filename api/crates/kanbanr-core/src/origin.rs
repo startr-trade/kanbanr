@@ -980,7 +980,8 @@ mod tests {
 
         // A cut by `release cut` names who cut it and from where.
         let (store, dir, repo) = board_and_repo("def028-cut");
-        let cut = crate::releases::cut_as(&store, "shop", "v1", "Grace", "conversation", &[]).unwrap();
+        let cut =
+            crate::releases::cut_as(&store, "shop", "v1", "Grace", "conversation", &[]).unwrap();
         assert_eq!(
             (
                 cut.release.shipped_by.as_str(),

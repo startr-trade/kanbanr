@@ -265,8 +265,8 @@ pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result
             // two surfaces cannot disagree about which items need a ratification.
             // An override Claude made waits too, live or finished (DEF-043).
             let open_overrides = crate::readiness::open_overrides(f);
-            let unratified = crate::doctor::awaiting_ratification(f)
-                && (!live || !open_overrides.is_empty());
+            let unratified =
+                crate::doctor::awaiting_ratification(f) && (!live || !open_overrides.is_empty());
             let finished_lapsed = !live
                 && !unratified
                 && crate::graph::is_finished_work(&project.config, &f.status)

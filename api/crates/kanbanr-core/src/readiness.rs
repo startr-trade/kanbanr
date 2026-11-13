@@ -2492,7 +2492,10 @@ mod tests {
     fn an_override_from_claude_waits_for_ratification_and_holds_the_cut() {
         let (store, dir, repo) = crate::releases::tests::board_and_repo("def043-override");
         let approved = |title: &str| {
-            let code = store.add_feature("shop", title, "", "M", None).unwrap().code;
+            let code = store
+                .add_feature("shop", title, "", "M", None)
+                .unwrap()
+                .code;
             store
                 .set_feature_definition(
                     "shop",
@@ -2525,7 +2528,11 @@ mod tests {
         let gaps = evaluate(&f, None, &[Check::Bypass]);
         assert_eq!(gaps.len(), 1, "{gaps:?}");
         assert_eq!(gaps[0].label, "override not ratified");
-        assert!(gaps[0].message.contains("CI after push"), "{}", gaps[0].message);
+        assert!(
+            gaps[0].message.contains("CI after push"),
+            "{}",
+            gaps[0].message
+        );
         let queue = crate::review::pending(&store, "shop", None).unwrap();
         let entry = queue.iter().find(|e| e.code == code).expect("asked");
         assert_eq!(entry.approval, crate::review::ApprovalKind::Unratified);

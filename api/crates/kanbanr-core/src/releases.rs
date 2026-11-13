@@ -6322,10 +6322,7 @@ pub(crate) mod tests {
 
     /// A finished item planned into v1 with R-1 proven and R-2's one test planned, checked `at`.
     fn later_item(store: &Store, at: &str) -> String {
-        let code = store
-            .add_feature("shop", "CI", "", "M", None)
-            .unwrap()
-            .code;
+        let code = store.add_feature("shop", "CI", "", "M", None).unwrap().code;
         let test = |name: &str, state: crate::models::TestState, at: &str| crate::models::TestRef {
             name: name.into(),
             state,
@@ -6412,7 +6409,9 @@ pub(crate) mod tests {
         assert_eq!(c.stage, "main");
         assert_eq!(c.refs, [format!("{code}/R-2")]);
         assert!(
-            c.detail.contains(&format!("{code} R-2 (ci::runs) is checked at main and is not green")),
+            c.detail.contains(&format!(
+                "{code} R-2 (ci::runs) is checked at main and is not green"
+            )),
             "{}",
             c.detail
         );

@@ -1749,7 +1749,11 @@ mod tests {
             to: "Review".into(),
             ..Default::default()
         };
-        assert!(!crate::yaml::to_string(&ordinary).unwrap().contains("origin"));
+        assert!(
+            !crate::yaml::to_string(&ordinary)
+                .unwrap()
+                .contains("origin")
+        );
 
         let change: crate::releases::StageChange = crate::yaml::from_str(
             "stage: production\nby: Venkatraman B\nat: x\norigin: monitor\naccepted_untested:\n- FEAT-005/R-2\n- FEAT-005/R-3\n",
@@ -1763,8 +1767,10 @@ mod tests {
             stage: "production".into(),
             ..Default::default()
         };
-        assert!(!crate::yaml::to_string(&plain)
-            .unwrap()
-            .contains("accepted_untested"));
+        assert!(
+            !crate::yaml::to_string(&plain)
+                .unwrap()
+                .contains("accepted_untested")
+        );
     }
 }
