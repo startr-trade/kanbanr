@@ -241,6 +241,10 @@ flowchart TD
   Migration and one of them is yours (a sign-off or approval); the rest are Claude's. "Waiting on
   you: docs-folded" appears only when nothing but your part remains. The card says nothing about
   stages the item could skip to.
+- **Review: texts to check.** Under an item's docs-folded sign-off, the page lists the docs and
+  items that name something the item changed and have not changed since, and says Claude settles
+  them. You fill in nothing: the sign-off appears once none is left, and "Checked by Claude" lists
+  what Claude confirmed or corrected, with why.
 - **Status page**: features in one status, grouped by feature, each showing only its **open**
   todo-lists (those not fully completed), newest first, with their tasks.
 - **Feature page** (an *epic*): the **Specification** (rendered markdown) and a **tile per
@@ -282,6 +286,10 @@ differently from a link out of the board. One that points at nothing the board h
 through; `kanbanr doctor` lists the same ones. A requirement link lands on that requirement.
 
 ![An item's page](../images/feature.png)
+
+An override Claude made past a gate waits on the **Review** page to be ratified, even on an item
+you approved: the entry shows each one as "Moved Test → Review on 2026-11-12 by Claude, past its
+gate: …" above **Ratify**. Until you ratify it, the item does not ship.
 
 The **Review** page also lists a finished item whose approval lapsed or that gained text since
 you approved it, labelled with its status, after all the live decisions. The work is done, but the
@@ -380,12 +388,21 @@ same whichever you use. A read-only monitor shows the command instead.
   on the code repository, and the monitor uses the repository it was started in. Started anywhere
   else, it says "the monitor was not started in the project folder" and names the CLI command. A
   read-only monitor shows the command and the plan, never the button.
+- **Shipping untested work.** When the cut's one missing condition is that some shipping
+  requirements have tests not run, the release card lists them (`FEAT-005/R-2`, …) with one
+  checkbox, "Ship these unverified; the notes will name them". Ticking it enables **Cut**, which
+  sends exactly that list; if the list changed since the page read it, the cut is refused and you
+  look again. The notes on the board gain a "Not verified in this release" section. This is
+  `kanbanr release promote <VERSION> --accept-untested …`.
 - **Release notes.** A release with a branch has a **Release notes** section, collapsed until
   opened, showing the notes as they are on `release/<V>` — headed "draft on release/v0.3.0 @
   8f995e1", or "as shipped on …" after the cut. Until the cut, **Edit notes** opens the text;
   **Save** commits it onto the branch, nothing checked out, and shows the new commit; **Cancel**
   discards it. This is `kanbanr release notes <VERSION> --edit`. The notes are read from the
   repository the monitor was started in; a read-only monitor shows them with the command instead.
+  Under the notes the panel shows the version's section of the changelog ("Changelog section
+  (CHANGELOG.md)"), read-only; when there is none it says so. Ask Claude to change it
+  (`kanbanr release notes <VERSION> --changelog FILE`).
   They are read from the path they were written to, so changing the notes path later leaves earlier
   releases' notes in place; a shipped release's are read at its tag. When none are found, the
   message lists every path and ref looked at.

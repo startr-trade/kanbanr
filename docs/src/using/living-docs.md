@@ -169,9 +169,14 @@ or status name counts only inside a code span, and a command only on a line that
 A flag says which text names which changed name. It never says the text is wrong, so read it and
 decide:
 
-- On the Review page, `docs-folded` lists each flagged text with the names found and their lines.
-  For each, say it is still right, or ask Claude to file a correction and enter its code. The
-  sign-off is accepted only once every text is settled, and it records how.
+- Claude settles each flagged text before `docs-folded` is offered: it reads the text against the
+  change, then records that it is still right, with why, or that a correction is filed
+  (`kanbanr prepare text`). The record names who settled it and the revision it checked. A new
+  commit that names the text again, or an edit to the text, puts it back among those left. The
+  Review page lists the texts left, with the names found and their lines, and says Claude settles
+  them; the sign-off appears once none is left, and the page shows what Claude checked under
+  "Checked by Claude". The sign-off keeps those records. `kanbanr check` lists the texts left under
+  "Texts to settle".
 - When an item is merged, the flagged texts are listed on stderr.
 - `kanbanr drift` lists them for the board, grouped by text, for the items with commits since
   `--since` (default: the latest shipped release's tag date, else 60 days back). A date means from

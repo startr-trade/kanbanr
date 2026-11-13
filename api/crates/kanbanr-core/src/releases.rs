@@ -15,7 +15,7 @@
 use crate::coderepo;
 use crate::config::Cadence;
 use crate::error::{CoreError, Result};
-use crate::models::{Extra, FeatureItem};
+use crate::models::{Extra, FeatureItem, TestState};
 use crate::releasegates::{ReleaseAction, ReleaseCheck};
 use crate::store::{Capability, Project, Store};
 use serde::{Deserialize, Serialize};
@@ -128,6 +128,10 @@ pub struct StageChange {
     /// record written before origin existed.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub origin: String,
+    /// The requirements the person accepted shipping untested at the cut, as `CODE/R-n`
+    /// (DEF-043). Empty on every other change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accepted_untested: Vec<String>,
     /// Keys this version does not know, kept and written back unchanged (FEAT-151).
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
     #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
@@ -624,6 +628,13 @@ pub(crate) fn ship_to(
 ) -> std::result::Result<Option<String>, String> {
     let config = &project.config;
     let is_end = |s: &str| crate::graph::is_terminal_status(config, s) && !config.is_no_op(s);
+    // An override Claude made ships only once the person ratifies it (DEF-043), finished or not.
+    if let Some(t) = crate::readiness::open_overrides(f).first() {
+        return Err(format!(
+            "its override waits for the person to ratify on the Review page: {}",
+            t.override_reason.as_deref().unwrap_or("").trim()
+        ));
+    }
     if is_end(&f.status) {
         return Ok(None); // already finished: it ships as it is
     }
@@ -716,12 +727,74 @@ pub struct Cut {
 /// gate), release notes are written from their definitions, and the rest is carried to the next
 /// planned release — or back to unplanned — with the reason it did not make it.
 pub fn cut(store: &Store, id: &str, version: &str) -> Result<Cut> {
-    cut_as(store, id, version, "", "")
+    cut_as(store, id, version, "", "", &[])
 }
 
-/// As [`cut`], recording who cut the release and from where (DEF-028).
-pub fn cut_as(store: &Store, id: &str, version: &str, by: &str, origin: &str) -> Result<Cut> {
-    ship_release(store, id, version, None, by, origin)
+/// As [`cut`], recording who cut the release and from where (DEF-028). A requirement that ships
+/// with tests not run is refused unless `accept_untested` names exactly those (DEF-043); the
+/// acceptance is recorded on the stage change and the notes name them.
+pub fn cut_as(
+    store: &Store,
+    id: &str,
+    version: &str,
+    by: &str,
+    origin: &str,
+    accept_untested: &[String],
+) -> Result<Cut> {
+    let project = cadence_on(store, id)?;
+    let shipping: Vec<String> = cut_preview(store, id, version)?
+        .into_iter()
+        .filter(|p| p.ships)
+        .map(|p| p.code)
+        .collect();
+    let last = project.config.cadence.stages().len().saturating_sub(1);
+    let mut refs: Vec<String> = untested(&project, &shipping, last)
+        .iter()
+        .map(Untested::reference)
+        .collect();
+    refs.sort();
+    if refs.is_empty() {
+        return ship_release(store, id, version, None, by, origin);
+    }
+    let mut given: Vec<String> = accept_untested
+        .iter()
+        .map(|a| a.trim().to_string())
+        .collect();
+    given.sort();
+    given.dedup();
+    if given.is_empty() {
+        return Err(CoreError::Unsupported(format!(
+            "{version} would ship {} with tests not run: run them and record the results, or \
+             accept shipping them unverified (--accept-untested {}; the notes will name them)",
+            refs.join(", "),
+            refs.join(",")
+        )));
+    }
+    if given != refs {
+        return Err(CoreError::Unsupported(format!(
+            "the untested requirements changed since the page showed them: now {}",
+            refs.join(", ")
+        )));
+    }
+    let change = StageChange {
+        stage: project
+            .config
+            .cadence
+            .stages()
+            .last()
+            .cloned()
+            .unwrap_or_default(),
+        by: by.trim().to_string(),
+        at: crate::now_rfc3339(),
+        origin: origin.to_string(),
+        accepted_untested: refs,
+        ..Default::default()
+    };
+    let mut cut = ship_release(store, id, version, Some(change), by, origin)?;
+    let unverified = not_verified_section(&store.load_meta(id)?, &cut.release);
+    cut.notes.push_str(&unverified);
+    store.write_doc(id, &cut.release.notes_doc, &cut.notes)?;
+    Ok(cut)
 }
 
 /// Record that the stage holding the tag action was entered (FTR-026): `tagged_at`, the commit the
@@ -1089,6 +1162,10 @@ pub struct Promoted {
     pub forward_merge: Vec<CommitLine>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub forward_into: String,
+    /// What comes next when `forward_merge` is not empty: Claude's step, as
+    /// [`crate::gitmodel::forward_step`] words it (DEF-045).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub forward_next: String,
     /// The steps this promotion took, in the order it took them (FEAT-212).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<PlanStep>,
@@ -1157,6 +1234,10 @@ pub struct PlanCondition {
     /// What to do about it, when it does not hold.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fix: String,
+    /// The requirements it names, as `CODE/R-n` (DEF-043): for `untested_accepted`, exactly what
+    /// the person accepts; for `later_tests_green`, what is not green yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refs: Vec<String>,
 }
 
 /// One step a promotion takes, and what it will do (FEAT-212).
@@ -1526,9 +1607,10 @@ pub fn plan_promotion(
     repo: Option<&Path>,
     fetch: Fetch,
 ) -> Result<ReleasePlan> {
-    work_out(store, id, version, to, reason, repo, fetch).map(|w| w.plan)
+    work_out(store, id, version, to, reason, repo, fetch, &[]).map(|w| w.plan)
 }
 
+/// `accept` is the untested requirements the person accepts shipping, as `CODE/R-n` (DEF-043).
 #[allow(clippy::too_many_arguments)]
 fn work_out(
     store: &Store,
@@ -1538,6 +1620,7 @@ fn work_out(
     reason: &str,
     repo: Option<&Path>,
     fetch: Fetch,
+    accept: &[String],
 ) -> Result<Worked> {
     let project = cadence_on(store, id)?;
     let cadence = &project.config.cadence;
@@ -1779,6 +1862,7 @@ fn work_out(
                     holds,
                     detail,
                     fix,
+                    refs: Vec::new(),
                 });
             }
         }
@@ -2248,8 +2332,10 @@ fn work_out(
                     ReleaseCheck::StagePassed => {
                         (true, "judged through after".to_string(), String::new())
                     }
-                    // Only a plan names it; it is worked out after the checks.
-                    ReleaseCheck::MergedItemsShip => {
+                    // Only a plan names them; they are worked out after the checks.
+                    ReleaseCheck::MergedItemsShip
+                    | ReleaseCheck::LaterTestsGreen
+                    | ReleaseCheck::UntestedAccepted => {
                         (true, "judged by the plan".to_string(), String::new())
                     }
                     ReleaseCheck::GatePassed => gate_passed(
@@ -2270,6 +2356,7 @@ fn work_out(
                     holds,
                     detail,
                     fix: if holds { String::new() } else { fix },
+                    refs: Vec::new(),
                 });
             }
         }
@@ -2303,8 +2390,142 @@ fn work_out(
                 holds,
                 detail,
                 fix,
+                refs: Vec::new(),
             });
         }
+    }
+
+    // Tests checked later (DEF-043): a stage the promotion enters, other than the cut, waits for
+    // the tests of the release's items checked at it or before it (after the cut: at a stage after
+    // the cut, since the cut's own are accepted there). The cut is R-3's.
+    if direction == Direction::Forward && !empty {
+        let index_of = |at: &str| {
+            cadence
+                .stage_for_check(at)
+                .and_then(|n| stages.iter().position(|s| *s == n))
+        };
+        for &s in entered.iter().filter(|&&s| s != cut_stage) {
+            let mut found: Vec<(String, String)> = Vec::new();
+            for f in project.features.iter().filter(|f| {
+                f.release.as_deref() == Some(version) && !project.config.is_no_op(&f.status)
+            }) {
+                let Some(def) = f.definition.as_ref() else {
+                    continue;
+                };
+                for r in &def.requirements {
+                    if r.tests.iter().any(|t| t.state == TestState::Green) {
+                        continue;
+                    }
+                    for t in &r.tests {
+                        let Some(i) = index_of(&t.at) else { continue };
+                        let due = if s < cut_stage {
+                            i <= s
+                        } else {
+                            i > cut_stage && i <= s
+                        };
+                        if !due {
+                            continue;
+                        }
+                        let named = if stages.iter().any(|x| x == t.at.trim())
+                            || matches!(t.at.trim(), "pushed" | "cut")
+                        {
+                            stages[i].clone()
+                        } else {
+                            format!("{}, which is not a stage now: at the cut", t.at.trim())
+                        };
+                        found.push((
+                            format!("{}/{}", f.code, r.id),
+                            format!(
+                                "{} {} ({}) is checked at {named} and is not green",
+                                f.code, r.id, t.name
+                            ),
+                        ));
+                    }
+                }
+            }
+            if found.is_empty() {
+                continue;
+            }
+            let mut refs: Vec<String> = found.iter().map(|(r, _)| r.clone()).collect();
+            refs.sort();
+            refs.dedup();
+            conditions.push(PlanCondition {
+                check: ReleaseCheck::LaterTestsGreen,
+                stage: stages[s].clone(),
+                holds: false,
+                detail: found
+                    .iter()
+                    .map(|(_, d)| d.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                fix: "check them and record each result (kanbanr test <CODE> <R-n> <test> green \
+                      --rev <sha>), then check again"
+                    .to_string(),
+                refs,
+            });
+        }
+    }
+    // The cut names what ships untested, and waits for the person to accept exactly that
+    // (DEF-043 R-3).
+    if direction == Direction::Forward && cut && !empty {
+        let shipping: Vec<String> = preview
+            .iter()
+            .filter(|p| p.ships)
+            .map(|p| p.code.clone())
+            .collect();
+        let u = untested(&project, &shipping, cut_stage);
+        let condition = if u.is_empty() {
+            PlanCondition {
+                check: ReleaseCheck::UntestedAccepted,
+                stage: stages[cut_stage].clone(),
+                holds: true,
+                detail: "every shipping requirement has a green test".to_string(),
+                fix: String::new(),
+                refs: Vec::new(),
+            }
+        } else {
+            let mut refs: Vec<String> = u.iter().map(Untested::reference).collect();
+            refs.sort();
+            let mut accepted: Vec<String> = accept.iter().map(|a| a.trim().to_string()).collect();
+            accepted.sort();
+            accepted.dedup();
+            let mut by_code: Vec<(String, Vec<String>)> = Vec::new();
+            for x in &u {
+                match by_code.iter_mut().find(|(c, _)| *c == x.code) {
+                    Some((_, ids)) => ids.push(x.requirement.clone()),
+                    None => by_code.push((x.code.clone(), vec![x.requirement.clone()])),
+                }
+            }
+            let detail = by_code
+                .iter()
+                .map(|(c, ids)| {
+                    format!(
+                        "{c} {} {} tests not run: the cut ships {} unverified only if you accept \
+                         that",
+                        ids.join(", "),
+                        if ids.len() == 1 { "has" } else { "have" },
+                        if ids.len() == 1 { "it" } else { "them" }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            let holds = accepted == refs;
+            PlanCondition {
+                check: ReleaseCheck::UntestedAccepted,
+                stage: stages[cut_stage].clone(),
+                holds,
+                detail,
+                fix: if holds {
+                    String::new()
+                } else {
+                    "run them and record the results, or accept shipping them unverified on the \
+                     Releases page (the notes will name them)"
+                        .to_string()
+                },
+                refs,
+            }
+        };
+        conditions.push(condition);
     }
 
     // A promotion that tags or ships never carries merged work away (DEF-029): the code is in the
@@ -2347,6 +2568,7 @@ fn work_out(
             holds,
             detail,
             fix,
+            refs: Vec::new(),
         });
     }
 
@@ -2498,6 +2720,107 @@ fn work_out(
         empty,
         patch,
     })
+}
+
+/// A shipping requirement whose tests have none green (DEF-043): what the cut asks the person to
+/// accept, and what the notes name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Untested {
+    pub code: String,
+    pub requirement: String,
+    pub text: String,
+    /// Its tests, none of them green.
+    pub tests: Vec<String>,
+}
+
+impl Untested {
+    /// `FEAT-005/R-2`.
+    pub fn reference(&self) -> String {
+        format!("{}/{}", self.code, self.requirement)
+    }
+}
+
+/// The requirements of `codes` (in `project`) that have tests and none green, except those whose
+/// not-green tests all wait for a stage after `cut_stage`. Sorted by code, then requirement id.
+pub fn untested(project: &Project, codes: &[String], cut_stage: usize) -> Vec<Untested> {
+    let cadence = &project.config.cadence;
+    let stages = cadence.stages();
+    let after_cut = |at: &str| {
+        cadence
+            .stage_for_check(at)
+            .and_then(|n| stages.iter().position(|s| *s == n))
+            .is_some_and(|i| i > cut_stage)
+    };
+    let mut found: Vec<Untested> = Vec::new();
+    for f in project.features.iter().filter(|f| codes.contains(&f.code)) {
+        let Some(def) = f.definition.as_ref() else {
+            continue;
+        };
+        for r in &def.requirements {
+            if r.tests.is_empty()
+                || r.tests.iter().any(|t| t.state == TestState::Green)
+                || r.tests.iter().all(|t| after_cut(&t.at))
+            {
+                continue;
+            }
+            found.push(Untested {
+                code: f.code.clone(),
+                requirement: r.id.clone(),
+                text: r.text.trim().to_string(),
+                tests: r.tests.iter().map(|t| t.name.clone()).collect(),
+            });
+        }
+    }
+    // R-2 before R-10.
+    let number = |id: &str| {
+        id.trim_start_matches("R-")
+            .parse::<u64>()
+            .map_or((1, 0, id.to_string()), |n| (0, n, String::new()))
+    };
+    found.sort_by(|a, b| {
+        a.code
+            .cmp(&b.code)
+            .then_with(|| number(&a.requirement).cmp(&number(&b.requirement)))
+    });
+    found
+}
+
+/// The "Not verified in this release" section of the notes (DEF-043): each requirement the person
+/// accepted shipping untested at the cut, with its text and its tests not run. Empty when none was.
+fn not_verified_section(project: &Project, release: &Release) -> String {
+    let accepted: Vec<&String> = release
+        .stages
+        .iter()
+        .flat_map(|c| &c.accepted_untested)
+        .collect();
+    if accepted.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n## Not verified in this release\n\n");
+    for reference in accepted {
+        let (code, id) = reference.split_once('/').unwrap_or((reference, ""));
+        let r = project
+            .features
+            .iter()
+            .find(|f| f.code == code)
+            .and_then(|f| f.definition.as_ref())
+            .and_then(|d| d.requirements.iter().find(|r| r.id == id));
+        let (text, tests) = match r {
+            Some(r) => (
+                r.text.trim().to_string(),
+                r.tests
+                    .iter()
+                    .filter(|t| t.state != TestState::Green)
+                    .map(|t| t.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            None => (String::new(), String::new()),
+        };
+        out.push_str(&format!("- {code} {id}: {text} (not run: {tests})\n"));
+    }
+    out
 }
 
 /// Why a release with nothing planned into it cannot be promoted, and how to plan into it.
@@ -2652,10 +2975,17 @@ fn prepared_at(
             lacking.push(f.path.clone());
         }
     }
-    if let Some(c) = &cfg.changelog
-        && !read(c).is_some_and(|t| crate::releaseprep::has_heading(&t, &ph.number))
-    {
-        lacking.push(format!("{c} (## [{}])", ph.number));
+    if let Some(c) = &cfg.changelog {
+        match read(c) {
+            Some(t) if crate::releaseprep::has_heading(&t, &ph.number) => {
+                if crate::releaseprep::section_body(&t, &ph.number)
+                    .is_some_and(|b| b.trim().is_empty())
+                {
+                    lacking.push(format!("{c} (## [{}] is empty)", ph.number));
+                }
+            }
+            _ => lacking.push(format!("{c} (## [{}])", ph.number)),
+        }
     }
     if let Some(n) = &cfg.notes {
         let path = crate::releaseprep::expand(n, &ph);
@@ -2733,19 +3063,75 @@ fn work_prepare(
                 .to_string(),
         );
     }
+    // What ships, once: the changelog section and the draft notes are both written from it.
+    let mut shipping: Vec<FeatureItem> = Vec::new();
+    if cfg.changelog.is_some() || cfg.notes.is_some() {
+        let shipping_codes: Vec<String> = cut_preview(store, id, &release.version)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .filter(|p| p.ships)
+            .map(|p| p.code)
+            .collect();
+        shipping = project
+            .features
+            .iter()
+            .filter(|f| shipping_codes.contains(&f.code))
+            .cloned()
+            .collect();
+        shipping.sort_by(|a, b| a.code.cmp(&b.code));
+    }
     if let Some(c) = &cfg.changelog {
         let text = read(&files, c)?;
+        let is_empty =
+            |t: &str| prep::section_body(t, &ph.number).is_some_and(|b| b.trim().is_empty());
+        // The section's text from what ships, when it can be filled.
+        let fill = |t: &str| -> std::result::Result<String, String> {
+            let items: Vec<prep::ChangelogItem> = shipping
+                .iter()
+                .map(|f| prep::ChangelogItem {
+                    kind: f.kind.clone().unwrap_or_default(),
+                    code: f.code.clone(),
+                    title: f.title.clone(),
+                })
+                .collect();
+            prep::fill_section(t, &ph.number, &prep::changelog_entries(&items))
+                .map_err(|e| format!("{c}: {e}"))
+        };
+        let from = shipping
+            .iter()
+            .map(|f| f.code.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let write = |files: &mut Vec<(String, String)>, new: String| {
+            for copy in &cfg.changelog_copies {
+                prep::check_repo_path(copy)?;
+                put(files, copy, new.clone());
+            }
+            put(files, c, new);
+            Ok::<(), String>(())
+        };
         match prep::date_changelog(&text, &ph)? {
-            Some(dated) => {
-                for copy in &cfg.changelog_copies {
-                    prep::check_repo_path(copy)?;
-                    put(&mut files, copy, dated.clone());
-                }
-                put(&mut files, c, dated);
+            Some(dated) if !is_empty(&dated) => {
+                write(&mut files, dated)?;
                 parts.push("the changelog heading".to_string());
             }
+            Some(dated) if !shipping.is_empty() => {
+                write(&mut files, fill(&dated)?)?;
+                parts.push(format!("the changelog section (from {from})"));
+            }
+            Some(_) => notes_said.push(format!(
+                "{c}: nothing to put under ## [{}] yet ([Unreleased] is empty and nothing planned \
+                 has finished), so it is left as it is; write the section with \
+                 `kanbanr release notes {} --changelog <file>`",
+                ph.number, release.version
+            )),
             None if prep::has_heading(&text, &ph.number) => {
-                notes_said.push(format!("{c} already has ## [{}]", ph.number));
+                if is_empty(&text) && !shipping.is_empty() {
+                    write(&mut files, fill(&text)?)?;
+                    parts.push(format!("the changelog section (from {from})"));
+                } else {
+                    notes_said.push(format!("{c} already has ## [{}]", ph.number));
+                }
             }
             None => notes_said.push(format!(
                 "{c} has no ## [Unreleased] heading, so it is left as it is"
@@ -2770,19 +3156,6 @@ fn work_prepare(
         if there {
             notes_said.push(format!("{path} is already written, so it is kept"));
         } else {
-            let shipping_codes: Vec<String> = cut_preview(store, id, &release.version)
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .filter(|p| p.ships)
-                .map(|p| p.code)
-                .collect();
-            let mut shipping: Vec<FeatureItem> = project
-                .features
-                .iter()
-                .filter(|f| shipping_codes.contains(&f.code))
-                .cloned()
-                .collect();
-            shipping.sort_by(|a, b| a.code.cmp(&b.code));
             drafted_from = shipping.iter().map(|f| f.code.clone()).collect();
             let parent = releases
                 .iter()
@@ -2862,6 +3235,9 @@ pub struct PromoteOptions<'a> {
     pub fetch: Fetch,
     /// Where the promotion was asked for (DEF-028), recorded on the stage change.
     pub origin: &'a str,
+    /// The untested requirements the person accepts shipping at the cut, as `CODE/R-n`
+    /// (DEF-043). Empty: none accepted.
+    pub accept_untested: &'a [String],
 }
 
 /// A git step taken, and how to take it back.
@@ -2929,6 +3305,7 @@ pub fn promote(
             expect_tip: None,
             fetch: Fetch::Try,
             origin: "",
+            accept_untested: &[],
         },
     )
 }
@@ -2966,7 +3343,40 @@ pub fn promote_with(
                 .into(),
         ));
     }
-    let w = work_out(store, id, version, to, reason, repo, opts.fetch)?;
+    let w = work_out(
+        store,
+        id,
+        version,
+        to,
+        reason,
+        repo,
+        opts.fetch,
+        opts.accept_untested,
+    )?;
+    // An acceptance is of exactly what the page showed (DEF-043): if the list moved since, the
+    // person looks again. An acceptance given when nothing is untested is ignored.
+    let untested_refs: Vec<String> = w
+        .plan
+        .conditions
+        .iter()
+        .find(|c| c.check == ReleaseCheck::UntestedAccepted && !c.refs.is_empty())
+        .map(|c| c.refs.clone())
+        .unwrap_or_default();
+    if !opts.accept_untested.is_empty() && !untested_refs.is_empty() {
+        let mut given: Vec<String> = opts
+            .accept_untested
+            .iter()
+            .map(|a| a.trim().to_string())
+            .collect();
+        given.sort();
+        given.dedup();
+        if given != untested_refs {
+            return Err(CoreError::Unsupported(format!(
+                "the untested requirements changed since the page showed them: now {}",
+                untested_refs.join(", ")
+            )));
+        }
+    }
     if !w.plan.ready {
         return Err(refusal(&w));
     }
@@ -2990,6 +3400,7 @@ pub fn promote_with(
         by: by.to_string(),
         at: crate::now_rfc3339(),
         origin: opts.origin.to_string(),
+        accepted_untested: untested_refs,
         extra: Default::default(),
         reason: if w.direction == Direction::Again {
             let names: Vec<&str> = taken.iter().map(|s| s.action.name()).collect();
@@ -3018,6 +3429,7 @@ pub fn promote_with(
         notes: None,
         forward_merge: Vec::new(),
         forward_into: String::new(),
+        forward_next: String::new(),
         steps: Vec::new(),
         prepared: None,
         main_moved: None,
@@ -3169,6 +3581,7 @@ pub fn promote_with(
             }
         }
         if !w.plan.ships {
+            done.forward_next = forward_next(version, &forward, &integration);
             done.forward_merge = forward;
             done.forward_into = integration;
             done.next = next_hint(store, id, version, repo, &done, &w.main);
@@ -3195,7 +3608,10 @@ pub fn promote_with(
                         ));
                     }
                 }
-                if wrote || (w.patch && !forward.is_empty()) {
+                // What shipped unverified, as the person accepted at the cut (DEF-043).
+                let unverified = not_verified_section(&store.load_meta(id)?, &cut.release);
+                notes.push_str(&unverified);
+                if wrote || (w.patch && !forward.is_empty()) || !unverified.is_empty() {
                     store.write_doc(id, &cut.release.notes_doc, &notes)?;
                 }
                 done.release = cut.release;
@@ -3219,6 +3635,7 @@ pub fn promote_with(
             return Err(undo_all(repo, undo, e));
         }
     }
+    done.forward_next = forward_next(version, &forward, &integration);
     done.forward_merge = forward;
     done.forward_into = integration;
     done.next = next_hint(store, id, version, repo, &done, &w.main);
@@ -3297,6 +3714,15 @@ fn refusal(w: &Worked) -> CoreError {
         out.push_str(&format!("\n  - {b}"));
     }
     CoreError::Unsupported(out)
+}
+
+/// Claude's next step when a promotion leaves commits the line lacks (DEF-045): empty when none.
+fn forward_next(version: &str, forward: &[CommitLine], into: &str) -> String {
+    if forward.is_empty() {
+        String::new()
+    } else {
+        crate::gitmodel::forward_step(version, into)
+    }
 }
 
 /// What to do after a promotion, in a sentence.
@@ -3432,6 +3858,12 @@ pub struct ReleaseNotes {
     /// The items planned into the release whose code the notes do not mention (DEF-031).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unmentioned: Vec<String>,
+    /// The changelog file, when one is configured (DEF-044). Derived, never stored.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub changelog_path: String,
+    /// The text of this version's section in it, at the same tip; empty when there is none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub changelog_section: String,
 }
 
 /// The release and the placeholders its notes path is expanded with, or why its notes cannot be
@@ -3649,10 +4081,31 @@ fn branch_tip(repo: &Path, release: &Release) -> Result<String> {
 fn notes_at(
     project: &Project,
     release: &Release,
+    repo: &Path,
     path: &str,
     text: String,
     tip: &str,
 ) -> ReleaseNotes {
+    let changelog_path = project
+        .config
+        .cadence
+        .release_prepare
+        .changelog
+        .clone()
+        .unwrap_or_default();
+    let changelog_section = if changelog_path.is_empty() {
+        String::new()
+    } else {
+        crate::releaseprep::number_of(&release.version)
+            .ok()
+            .and_then(|n| {
+                let (_, t) = coderepo::read_blob(repo, tip, &changelog_path)
+                    .ok()
+                    .flatten()?;
+                crate::releaseprep::section_body(&t, &n).map(|b| b.trim().to_string())
+            })
+            .unwrap_or_default()
+    };
     let shipped = release.state == ReleaseState::Shipped;
     let unmentioned = if shipped {
         Vec::new()
@@ -3675,6 +4128,8 @@ fn notes_at(
             String::new()
         },
         unmentioned,
+        changelog_path,
+        changelog_section,
     }
 }
 
@@ -3723,7 +4178,9 @@ pub fn release_notes(
             src.tried.join("; ")
         )));
     };
-    Ok(notes_at(&project, &release, &src.path, text, &src.rev))
+    Ok(notes_at(
+        &project, &release, repo, &src.path, text, &src.rev,
+    ))
 }
 
 /// The dates before `today` on the lines of a release's notes and changelog that carry one, at
@@ -3935,7 +4392,7 @@ pub fn redate_release(
             .flatten()
             .map(|(_, t)| t)
             .unwrap_or_default();
-        notes_at(&project, &release, &path, text, at)
+        notes_at(&project, &release, repo, &path, text, at)
     };
     let files = redate_files(&project, &release, repo, &tip, &ymd)?;
     if files.is_empty() {
@@ -3982,19 +4439,23 @@ pub struct NotesSaved {
 }
 
 /// Commit `text` as a release's notes onto `release/<V>`, without checking it out (FEAT-216), and
-/// re-apply the configured notes listings. Nothing to change (the same text, every listing there)
-/// is no commit: the sha is then the tip as it was. Refused once the release has shipped, and when
-/// the branch is checked out in a worktree.
+/// re-apply the configured notes listings. `changelog` is the text of the version's changelog
+/// section (DEF-044), committed in the same change (and to each changelog copy); `None` leaves the
+/// changelog alone, and `text: None` keeps the notes as they are. Nothing to change (the same
+/// text, every listing there) is no commit: the sha is then the tip as it was. Refused once the
+/// release has shipped, and when the branch is checked out in a worktree.
 ///
 /// When main already holds the release (the stage that moves main has run), main is moved with
 /// the notes, so the commit to be tagged has them, and `main_moved` says to push it again; were
 /// main past the release, the save is refused before anything is committed.
+#[allow(clippy::too_many_arguments)]
 pub fn set_release_notes(
     store: &Store,
     id: &str,
     version: &str,
     repo: Option<&Path>,
-    text: &str,
+    text: Option<&str>,
+    changelog: Option<&str>,
     by: &str,
 ) -> Result<NotesSaved> {
     use crate::releaseprep as prep;
@@ -4003,6 +4464,26 @@ pub fn set_release_notes(
         return Err(CoreError::Unsupported(format!(
             "{version} has shipped: its notes are as they shipped, and are not edited on its branch"
         )));
+    }
+    if text.is_none() && changelog.is_none() {
+        return Err(CoreError::Unsupported(
+            "nothing to save: give the notes, the changelog section, or both".to_string(),
+        ));
+    }
+    let cfg = &project.config.cadence.release_prepare;
+    if let Some(body) = changelog {
+        if body.trim().is_empty() {
+            return Err(CoreError::Unsupported(
+                "a changelog section needs text; leave --changelog out to keep the section as it is"
+                    .to_string(),
+            ));
+        }
+        if cfg.changelog.is_none() {
+            return Err(CoreError::Unsupported(
+                "no changelog is configured: `kanbanr config release-prepare --changelog <path>`"
+                    .to_string(),
+            ));
+        }
     }
     let repo = repo.ok_or_else(|| notes_need_repo(version))?;
     let branch = release.branch.clone();
@@ -4021,10 +4502,17 @@ pub fn set_release_notes(
     // Main at the tip holds the release and moves with the notes; main past it cannot.
     let moves_main = main_follows(repo, &main, &branch, &tip, "notes")?;
     let mut files: Vec<(String, String)> = Vec::new();
-    if read(&path)?.as_deref() != Some(text) {
+    let mut notes_changed = false;
+    if let Some(text) = text
+        && read(&path)?.as_deref() != Some(text)
+    {
+        notes_changed = true;
         files.push((path.clone(), text.to_string()));
     }
-    for l in &project.config.cadence.release_prepare.notes_listings {
+    for l in &cfg.notes_listings {
+        if text.is_none() {
+            break;
+        }
         let listing = prep::expand(&l.path, &ph);
         prep::check_repo_path(&listing).map_err(CoreError::Unsupported)?;
         let current = match files.iter().find(|(p, _)| *p == listing) {
@@ -4040,17 +4528,49 @@ pub fn set_release_notes(
         )
         .map_err(|e| CoreError::Unsupported(format!("{listing} {e}")))?
         {
+            notes_changed = true;
             match files.iter_mut().find(|(p, _)| *p == listing) {
                 Some(f) => f.1 = new,
                 None => files.push((listing, new)),
             }
         }
     }
+    let mut changelog_changed = false;
+    if let (Some(body), Some(c)) = (changelog, &cfg.changelog) {
+        prep::check_repo_path(c).map_err(CoreError::Unsupported)?;
+        let current = read(c)?
+            .ok_or_else(|| CoreError::Unsupported(format!("{c} does not exist on {branch}")))?;
+        let base = if prep::has_heading(&current, &ph.number) {
+            current.clone()
+        } else {
+            prep::date_changelog(&current, &ph)
+                .map_err(CoreError::Unsupported)?
+                .ok_or_else(|| {
+                    CoreError::Unsupported(format!(
+                        "{c} has no ## [{}] or ## [Unreleased] heading to put the section under",
+                        ph.number
+                    ))
+                })?
+        };
+        let filled = prep::fill_section(&base, &ph.number, body)
+            .map_err(|e| CoreError::Unsupported(format!("{c}: {e}")))?;
+        for target in std::iter::once(c).chain(cfg.changelog_copies.iter()) {
+            prep::check_repo_path(target).map_err(CoreError::Unsupported)?;
+            if read(target)?.as_deref() != Some(filled.as_str()) {
+                changelog_changed = true;
+                files.push((target.clone(), filled.clone()));
+            }
+        }
+    }
+    let shown = match text {
+        Some(t) => t.to_string(),
+        None => read(&path)?.unwrap_or_default(),
+    };
     if files.is_empty() {
         record_notes_path(store, id, version, &path)?;
         return Ok(NotesSaved {
             sha: tip.clone(),
-            notes: notes_at(&project, &release, &path, text.to_string(), &tip),
+            notes: notes_at(&project, &release, repo, &path, shown, &tip),
             main_moved: String::new(),
         });
     }
@@ -4059,17 +4579,24 @@ pub fn set_release_notes(
     } else {
         by.trim()
     };
+    let what = match (notes_changed, changelog_changed) {
+        (true, true) => "notes and changelog",
+        (false, true) => "changelog",
+        _ => "notes",
+    };
     let message = format!(
-        "Release {version}: notes\n\nEdited through kanbanr release notes by {by}.\n\n\
-         [no-ref] release notes, written by kanbanr\nKanbanr-Release: {version}\n"
+        "Release {version}: {what}\n\nEdited through kanbanr release notes by {by}.\n\n\
+         [no-ref] release {what}, written by kanbanr\nKanbanr-Release: {version}\n"
     );
     let (new, main_moved) = commit_and_follow(
-        repo, &main, &branch, version, &tip, moves_main, &files, &message, "notes",
+        repo, &main, &branch, version, &tip, moves_main, &files, &message, what,
     )?;
-    record_notes_path(store, id, version, &path)?;
+    if text.is_some() {
+        record_notes_path(store, id, version, &path)?;
+    }
     Ok(NotesSaved {
         sha: new.clone(),
-        notes: notes_at(&project, &release, &path, text.to_string(), &new),
+        notes: notes_at(&project, &release, repo, &path, shown, &new),
         main_moved,
     })
 }
@@ -5011,6 +5538,151 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    /// A board and repo with a changelog configured and `changelog` committed on main; a finished
+    /// feature and a finished defect planned into v0.1.0 when `ship` is set.
+    fn changelog_fixture(tag: &str, changelog: &str, ship: bool) -> (Store, PathBuf, PathBuf) {
+        let (store, dir, repo) = board_and_repo(tag);
+        std::fs::write(repo.join("CHANGELOG.md"), changelog).unwrap();
+        coderepo::git(&repo, &["add", "-A"]).unwrap();
+        coderepo::git(&repo, &["commit", "-q", "-m", "changelog"]).unwrap();
+        super::add(&store, "shop", "v0.1.0", "", "").unwrap();
+        if ship {
+            let feature = plan_done(&store, "v0.1.0");
+            let defect = store
+                .add_feature_of_kind("shop", "Mend it", "", "M", None, Some("defect"))
+                .unwrap()
+                .code;
+            for status in ["Scheduled", "Completed"] {
+                store
+                    .move_feature_approved("shop", &defect, status, None)
+                    .unwrap();
+            }
+            super::plan(&store, "shop", "v0.1.0", &[feature, defect]).unwrap();
+        } else {
+            let code = store
+                .add_feature("shop", "Not done", "", "M", None)
+                .unwrap()
+                .code;
+            super::plan(&store, "shop", "v0.1.0", &[code]).unwrap();
+        }
+        configure(
+            &store,
+            &format!("{THREE}release_prepare:\n  changelog: CHANGELOG.md\n"),
+        );
+        (store, dir, repo)
+    }
+
+    fn promote_candidate(store: &Store, repo: &Path) -> super::Promoted {
+        super::promote(store, "shop", "v0.1.0", None, "Ada", "", Some(repo)).unwrap()
+    }
+
+    /// DEF-044 R-1: candidate fills the version's changelog section from what ships, grouped,
+    /// leaving an empty Unreleased heading; entries already under Unreleased are kept as they are.
+    #[test]
+    fn candidate_fills_the_changelog_section() {
+        let (store, dir, repo) = changelog_fixture(
+            "cl-fill",
+            "# Changelog\n\n## [Unreleased]\n\n## [0.0.1] - 2026-01-01\n- old\n",
+            true,
+        );
+        promote_candidate(&store, &repo);
+        let tip = coderepo::rev_parse(&repo, "release/v0.1.0").unwrap();
+        let text = coderepo::read_blob(&repo, &tip, "CHANGELOG.md")
+            .unwrap()
+            .unwrap()
+            .1;
+        let want_head = format!(
+            "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - {}\n\n### Added\n\n- Ships in v0.1.0 (",
+            super::today_ymd()
+        );
+        assert!(text.starts_with(&want_head), "{text}");
+        assert!(text.contains("\n\n### Fixed\n\n- Mend it ("), "{text}");
+        assert!(
+            text.ends_with(")\n\n## [0.0.1] - 2026-01-01\n- old\n"),
+            "{text}"
+        );
+        let project = store.load_meta("shop").unwrap();
+        let (ok, said) = super::prepared_at(&repo, &tip, &project, "v0.1.0", "release/v0.1.0");
+        assert!(ok, "{said}");
+        clean(&dir, &repo);
+
+        // Entries already under Unreleased are the section, and nothing is added.
+        let (store, dir, repo) = changelog_fixture(
+            "cl-keep",
+            "# Changelog\n\n## [Unreleased]\n\n- something\n\n## [0.0.1] - 2026-01-01\n- old\n",
+            true,
+        );
+        promote_candidate(&store, &repo);
+        let tip = coderepo::rev_parse(&repo, "release/v0.1.0").unwrap();
+        let text = coderepo::read_blob(&repo, &tip, "CHANGELOG.md")
+            .unwrap()
+            .unwrap()
+            .1;
+        assert_eq!(
+            text,
+            format!(
+                "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - {}\n\n- something\n\n## [0.0.1] - 2026-01-01\n- old\n",
+                super::today_ymd()
+            )
+        );
+        clean(&dir, &repo);
+    }
+
+    /// DEF-044 R-2: with nothing to put in the section the plan says so, the changelog is left
+    /// alone, and `prepared` fails on it; an empty heading already on a branch reads as empty.
+    #[test]
+    fn candidate_reports_an_empty_changelog_section() {
+        let original = "# Changelog\n\n## [Unreleased]\n\n## [0.0.1] - 2026-01-01\n- old\n";
+        let (store, dir, repo) = changelog_fixture("cl-empty", original, false);
+        let plan = super::plan_promotion(
+            &store,
+            "shop",
+            "v0.1.0",
+            None,
+            "",
+            Some(&repo),
+            super::Fetch::No,
+        )
+        .unwrap();
+        let prep = plan
+            .steps
+            .iter()
+            .find(|s| s.action.name() == "prepare")
+            .unwrap();
+        assert!(
+            prep.does.contains("nothing to put under ## [0.1.0]"),
+            "{}",
+            prep.does
+        );
+        promote_candidate(&store, &repo);
+        let tip = coderepo::rev_parse(&repo, "release/v0.1.0").unwrap();
+        let text = coderepo::read_blob(&repo, &tip, "CHANGELOG.md")
+            .unwrap()
+            .unwrap()
+            .1;
+        assert_eq!(text, original, "no empty section is written");
+        let project = store.load_meta("shop").unwrap();
+        let (ok, said) = super::prepared_at(&repo, &tip, &project, "v0.1.0", "release/v0.1.0");
+        assert!(!ok && said.contains("CHANGELOG.md (## [0.1.0])"), "{said}");
+
+        // An empty heading on the branch is not prepared either.
+        coderepo::commit_files(
+            &repo,
+            "release/v0.1.0",
+            &[(
+                "CHANGELOG.md".to_string(),
+                "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-11-12\n\n## [0.0.1] - 2026-01-01\n"
+                    .to_string(),
+            )],
+            "empty",
+        )
+        .unwrap();
+        let tip = coderepo::rev_parse(&repo, "release/v0.1.0").unwrap();
+        let (ok, said) = super::prepared_at(&repo, &tip, &project, "v0.1.0", "release/v0.1.0");
+        assert!(!ok && said.contains("is empty"), "{said}");
+        clean(&dir, &repo);
+    }
+
     /// DEF-005 R-1: the cut writes the notes file at the tagged commit to the board's release
     /// document; the generated text is only for a release with no such file.
     #[test]
@@ -5264,6 +5936,7 @@ pub(crate) mod tests {
             expect_tip: Some(&plan.release_tip),
             fetch: super::Fetch::No,
             origin: "",
+            accept_untested: &[],
         };
         let err = super::promote_with(
             &store,
@@ -5289,6 +5962,7 @@ pub(crate) mod tests {
             expect_tip: Some(&now),
             fetch: super::Fetch::No,
             origin: "",
+            accept_untested: &[],
         };
         super::promote_with(
             &store,
@@ -5487,8 +6161,16 @@ pub(crate) mod tests {
         assert_eq!(v2(&store).notes_path, "docs/releases/v0.2.0.md");
         // An edit lands where the notes are, not at the new path.
         let text = "# v0.2.0 — Gates\n\nEdited after the move.\n";
-        let saved =
-            super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada").unwrap();
+        let saved = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some(text),
+            None,
+            "Ada",
+        )
+        .unwrap();
         assert_eq!(saved.notes.path, "docs/releases/v0.2.0.md");
         let tip = coderepo::rev_parse(&repo, "release/v0.2.0").unwrap();
         assert!(
@@ -5604,8 +6286,16 @@ pub(crate) mod tests {
         let main_before = coderepo::rev_parse(&repo, "main").unwrap();
         let tip = coderepo::rev_parse(&repo, "release/v0.2.0").unwrap();
         let text = "# v0.2.0 — Gates\n\nRewritten by hand.\n";
-        let saved =
-            super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada").unwrap();
+        let saved = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some(text),
+            None,
+            "Ada",
+        )
+        .unwrap();
         let (sha, notes) = (saved.sha, saved.notes);
         assert!(
             saved.main_moved.is_empty(),
@@ -5637,9 +6327,17 @@ pub(crate) mod tests {
         assert!(coderepo::is_clean(&repo));
 
         // The same text: no commit.
-        let again = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada")
-            .unwrap()
-            .sha;
+        let again = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some(text),
+            None,
+            "Ada",
+        )
+        .unwrap()
+        .sha;
         assert_eq!(again, sha, "nothing to change");
         assert_eq!(coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(), sha);
 
@@ -5654,9 +6352,17 @@ pub(crate) mod tests {
                 ..Default::default()
             });
         store.set_cadence("shop", None, c).unwrap();
-        let listed = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), text, "Ada")
-            .unwrap()
-            .sha;
+        let listed = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some(text),
+            None,
+            "Ada",
+        )
+        .unwrap()
+        .sha;
         assert_ne!(listed, sha);
         let summary = coderepo::read_blob(&repo, &listed, "docs/SUMMARY.md")
             .unwrap()
@@ -5686,9 +6392,17 @@ pub(crate) mod tests {
             ],
         )
         .unwrap();
-        let busy = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), "x\n", "Ada")
-            .unwrap_err()
-            .to_string();
+        let busy = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some("x\n"),
+            None,
+            "Ada",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(busy.contains("is checked out in"), "{busy}");
         coderepo::git(
             &repo,
@@ -5700,9 +6414,17 @@ pub(crate) mod tests {
         let mut rs = super::load(&store, "shop").unwrap();
         rs.iter_mut().find(|r| r.version == "v0.2.0").unwrap().state = super::ReleaseState::Shipped;
         super::save(&store, "shop", &rs).unwrap();
-        let shipped = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), "y\n", "Ada")
-            .unwrap_err()
-            .to_string();
+        let shipped = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some("y\n"),
+            None,
+            "Ada",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(shipped.contains("has shipped"), "{shipped}");
         assert_eq!(
             coderepo::rev_parse(&repo, "release/v0.2.0").unwrap(),
@@ -5726,7 +6448,8 @@ pub(crate) mod tests {
             "shop",
             "v0.2.0",
             Some(&repo),
-            "# v0.2.0\n\nAfter main moved.\n",
+            Some("# v0.2.0\n\nAfter main moved.\n"),
+            None,
             "Ada",
         )
         .unwrap();
@@ -5746,9 +6469,17 @@ pub(crate) mod tests {
         // Main past the release: refused, and neither branch moves.
         coderepo::git(&repo, &["commit", "-q", "--allow-empty", "-m", "on main"]).unwrap();
         let main_now = coderepo::rev_parse(&repo, "main").unwrap();
-        let past = super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), "z\n", "Ada")
-            .unwrap_err()
-            .to_string();
+        let past = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some("z\n"),
+            None,
+            "Ada",
+        )
+        .unwrap_err()
+        .to_string();
         assert!(
             past.contains("past release/v0.2.0") && past.contains("nothing was saved"),
             "{past}"
@@ -5779,7 +6510,8 @@ pub(crate) mod tests {
             "shop",
             "v0.2.0",
             Some(&repo),
-            "# v0.2.0\n\nMore.\n",
+            Some("# v0.2.0\n\nMore.\n"),
+            None,
             "Ada",
         )
         .unwrap();
@@ -6070,6 +6802,164 @@ pub(crate) mod tests {
     pub(crate) fn clean(dir: &Path, repo: &Path) {
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(repo);
+    }
+
+    // ---- DEF-043: tests checked later, and the cut's acceptance ----
+
+    /// A finished item planned into v1 with R-1 proven and R-2's one test planned, checked `at`.
+    fn later_item(store: &Store, at: &str) -> String {
+        let code = store.add_feature("shop", "CI", "", "M", None).unwrap().code;
+        let test = |name: &str, state: crate::models::TestState, at: &str| crate::models::TestRef {
+            name: name.into(),
+            state,
+            at: at.into(),
+            ..Default::default()
+        };
+        store
+            .set_feature_definition(
+                "shop",
+                &code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Run CI".into(),
+                    requirements: vec![
+                        crate::models::Requirement {
+                            text: "THE SYSTEM SHALL build".into(),
+                            tests: vec![test("ci::builds", crate::models::TestState::Green, "")],
+                            ..Default::default()
+                        },
+                        crate::models::Requirement {
+                            text: "WHEN main is pushed, THE SYSTEM SHALL run CI".into(),
+                            tests: vec![test("ci::runs", crate::models::TestState::Planned, at)],
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        for status in ["Scheduled", "Completed"] {
+            store
+                .move_feature_approved("shop", &code, status, None)
+                .unwrap();
+        }
+        super::plan(store, "shop", "v1", std::slice::from_ref(&code)).unwrap();
+        code
+    }
+
+    fn condition(
+        plan: &super::ReleasePlan,
+        check: crate::releasegates::ReleaseCheck,
+    ) -> Option<super::PlanCondition> {
+        plan.conditions.iter().find(|c| c.check == check).cloned()
+    }
+
+    fn green(store: &Store, code: &str) {
+        store
+            .set_test_state(
+                "shop",
+                code,
+                "R-2",
+                "ci::runs",
+                crate::models::TestState::Green,
+                None,
+            )
+            .unwrap();
+    }
+
+    /// DEF-043 R-1: a test checked after main is pushed holds neither candidate nor main, and the
+    /// cut names it until it is green; a test checked at main holds main until it is green.
+    #[test]
+    fn a_test_checked_after_push_does_not_hold_main_but_holds_the_cut() {
+        use crate::releasegates::ReleaseCheck::{LaterTestsGreen, UntestedAccepted};
+        let (store, dir, repo) = staged("def043-pushed", THREE);
+        let code = later_item(&store, "pushed");
+        go(&store, &repo, "candidate");
+        on_release(&repo, "release/v1", "fix", "fixed\n");
+        go(&store, &repo, "main");
+        let plan = plan_to(&store, &repo, "production");
+        let c = condition(&plan, UntestedAccepted).expect("the cut asks");
+        assert!(!c.holds, "{c:?}");
+        assert_eq!(c.refs, [format!("{code}/R-2")]);
+        green(&store, &code);
+        let plan = plan_to(&store, &repo, "production");
+        let c = condition(&plan, UntestedAccepted).unwrap();
+        assert!(c.holds, "{c:?}");
+        assert!(c.refs.is_empty());
+        clean(&dir, &repo);
+
+        let (store, dir, repo) = staged("def043-at-main", THREE);
+        let code = later_item(&store, "main");
+        let plan = plan_to(&store, &repo, "main");
+        let c = condition(&plan, LaterTestsGreen).expect("main waits for it");
+        assert!(!c.holds);
+        assert_eq!(c.stage, "main");
+        assert_eq!(c.refs, [format!("{code}/R-2")]);
+        assert!(
+            c.detail.contains(&format!(
+                "{code} R-2 (ci::runs) is checked at main and is not green"
+            )),
+            "{}",
+            c.detail
+        );
+        assert!(!plan.ready);
+        green(&store, &code);
+        let plan = plan_to(&store, &repo, "main");
+        assert!(condition(&plan, LaterTestsGreen).is_none());
+        clean(&dir, &repo);
+    }
+
+    /// DEF-043 R-3: the cut of an item whose test was never run is refused unless the person
+    /// accepts exactly what is untested; the acceptance is recorded and the notes name it.
+    #[test]
+    fn the_cut_is_refused_for_an_item_with_an_unrun_test_unless_the_person_accepts_it() {
+        use crate::releasegates::ReleaseCheck::UntestedAccepted;
+        let (store, dir, repo) = staged("def043-cut", THREE);
+        let bare = with_remote(&repo);
+        let code = later_item(&store, "");
+        go(&store, &repo, "candidate");
+        on_release(&repo, "release/v1", "fix", "fixed\n");
+        go(&store, &repo, "main");
+        plain_git(&repo, &["push", "-q", &bare.to_string_lossy(), "main:main"]);
+        plain_git(&repo, &["fetch", "-q", "origin"]);
+        let plan = plan_to(&store, &repo, "production");
+        let c = condition(&plan, UntestedAccepted).unwrap();
+        assert!(!c.holds);
+        let refs = vec![format!("{code}/R-2")];
+        assert_eq!(c.refs, refs);
+        let cut = |accept: &[String]| {
+            super::promote_with(
+                &store,
+                "shop",
+                "v1",
+                Some("production"),
+                "Ada",
+                "",
+                Some(&repo),
+                super::PromoteOptions {
+                    expect_tip: None,
+                    fetch: super::Fetch::Try,
+                    origin: "monitor",
+                    accept_untested: accept,
+                },
+            )
+        };
+        let why = cut(&[]).unwrap_err().to_string();
+        assert!(why.contains("accept shipping them unverified"), "{why}");
+        assert!(v1(&store).tagged_at.is_empty(), "nothing tagged");
+        let why = cut(&["FEAT-9/R-1".to_string()]).unwrap_err().to_string();
+        assert!(why.contains("changed since the page showed them"), "{why}");
+        assert!(v1(&store).tagged_at.is_empty(), "nothing tagged");
+        let done = cut(&refs).unwrap();
+        assert_eq!(done.tagged, "v1");
+        let release = v1(&store);
+        let change = release.stages.last().unwrap();
+        assert_eq!(change.stage, "production");
+        assert_eq!(change.accepted_untested, refs);
+        let notes = store.read_doc("shop", &release.notes_doc).unwrap();
+        assert!(notes.contains("## Not verified in this release"), "{notes}");
+        assert!(notes.contains(&format!("{code} R-2")), "{notes}");
+        clean(&dir, &repo);
+        let _ = std::fs::remove_dir_all(&bare);
     }
 
     // ---- DEF-029: merged work is never carried away ----
@@ -6630,14 +7520,22 @@ pub(crate) mod tests {
             "shop",
             "v0.2.0",
             Some(&repo),
-            "# v0.2.0\n\nNothing.\n",
+            Some("# v0.2.0\n\nNothing.\n"),
+            None,
             "Ada",
         )
         .unwrap();
         assert_eq!(saved.notes.unmentioned, planned);
-        let saved =
-            super::set_release_notes(&store, "shop", "v0.2.0", Some(&repo), &mention, "Ada")
-                .unwrap();
+        let saved = super::set_release_notes(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some(&repo),
+            Some(&mention),
+            None,
+            "Ada",
+        )
+        .unwrap();
         assert!(saved.notes.unmentioned.is_empty());
         let read = super::release_notes(&store, "shop", "v0.2.0", Some(&repo)).unwrap();
         assert!(read.unmentioned.is_empty());

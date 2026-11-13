@@ -31,6 +31,13 @@ export interface ReleaseAction {
   confirm: boolean;
   /** A failed result for the tag: look again after a rerun, or start a patch release (FTR-026). */
   secondary: ("runAgain" | "startPatch")[];
+  /**
+   * The cut waits only for the person to accept shipping these requirements unverified, as
+   * CODE/R-n (DEF-043). The button stays disabled until the page has the acceptance.
+   */
+  accept?: string[];
+  /** What the cut said of them, beside the list. */
+  acceptDetail?: string;
 }
 
 /** When the daemon was not started in the project folder, it cannot read the code repository. */
@@ -114,7 +121,18 @@ export function releaseAction(plan: ReleasePlan, writable: boolean): ReleaseActi
     unmetGate && plan.release_tip && !plan.ready
       ? { commit: plan.release_tip, record: `kanbanr gate record <gate> --passed --commit ${plan.release_tip}` }
       : undefined;
+  // The cut asks only for the person's acceptance of what ships untested (DEF-043): offered when
+  // that is the one unmet condition and nothing else stands in the way.
+  const unmet = plan.conditions.filter((c) => !c.holds);
+  const untested = unmet.find((c) => c.check === "untested_accepted");
+  const acceptOnly =
+    untested != null &&
+    unmet.every((c) => c.check === "untested_accepted") &&
+    plan.repo &&
+    !plan.steps.some((s) => s.blocked) &&
+    (untested.refs ?? []).length > 0;
   return {
+    ...(acceptOnly ? { accept: untested.refs ?? [], acceptDetail: untested.detail } : {}),
     gate,
     returned: plan.returned,
     button: writable,

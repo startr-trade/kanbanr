@@ -357,18 +357,19 @@ pub struct Signoff {
 }
 
 /// How a flagged text was settled at the sign-off (FTR-013).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
-    /// The person read it and it is still right.
+    /// Someone read it and it is still right.
+    #[default]
     Confirmed,
-    /// The person filed a correction (its code is on the record).
+    /// A correction was filed (its code is on the record).
     Corrected,
 }
 
 /// One flagged text and how it was settled.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Checked {
     /// `doc:<path>`, `adr:<id>` or `item:<CODE>`.
@@ -377,6 +378,35 @@ pub struct Checked {
     /// The code of the filed correction, when the outcome is `corrected`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub correction: String,
+    /// Who settled it: `Claude` for a settlement, the signer for a check sent with the request (DEF-039).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub by: String,
+    /// Where it was settled.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin: String,
+    /// When it was settled (RFC3339).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub at: String,
+    /// The newest commit of the change it was checked against.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rev: String,
+    /// The text's last change when it was checked.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text_changed_at: String,
+    /// Why the text is still right, for `confirmed`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub why: String,
+    /// The id of the `text-check` prepared record it came from.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prepared: String,
+    /// Keys this version does not know, kept and written back unchanged (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
+    pub extra: crate::models::Extra,
 }
 
 impl Signoff {
@@ -863,6 +893,12 @@ pub struct TestRef {
     /// stale rather than trustworthy.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub checked_rev: String,
+    /// When it can be checked (DEF-043): empty at the item's gates, `pushed` after main is pushed,
+    /// `cut` at the cut, or a release stage's name. The item's gate doesn't wait for a test with
+    /// an `at`; the release stage it names does. Part of the definition, so changing it lapses an
+    /// approval.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub at: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -913,6 +949,11 @@ pub struct Transition {
     /// Why a gate was passed over, when it was (FEAT-113). Absent on an ordinary move.
     #[serde(default, rename = "override", skip_serializing_if = "Option::is_none")]
     pub override_reason: Option<String>,
+    /// Where a move with an override was made: `monitor`, `conversation`, `terminal` or
+    /// `delegated` (DEF-043). Set only on a transition with an override; empty on every move
+    /// before this version.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -1503,11 +1544,13 @@ mod tests {
                     target: "doc:design/data.md".into(),
                     outcome: Outcome::Confirmed,
                     correction: String::new(),
+                    ..Default::default()
                 },
                 Checked {
                     target: "item:FEAT-2".into(),
                     outcome: Outcome::Corrected,
                     correction: "DEF-040".into(),
+                    ..Default::default()
                 },
             ],
             ..plain
@@ -1519,6 +1562,53 @@ mod tests {
         let future = format!("{text}newer_key: 7\n");
         let kept: Signoff = crate::yaml::from_str(&future).unwrap();
         assert_eq!(kept.checked.len(), 2);
+        assert!(crate::yaml::to_string(&kept).unwrap().contains("newer_key"));
+    }
+
+    /// DEF-039 R-2: a checked text records who settled it, where, when and at which revision, and
+    /// reads as before without those fields, keeping a key it does not know.
+    #[test]
+    fn a_checked_text_records_who_settled_it_and_at_which_revision() {
+        let bare = Checked {
+            target: "doc:design/data.md".into(),
+            outcome: Outcome::Confirmed,
+            ..Default::default()
+        };
+        let text = crate::yaml::to_string(&bare).unwrap();
+        for key in [
+            "by:",
+            "origin:",
+            "at:",
+            "rev:",
+            "text_changed_at:",
+            "why:",
+            "prepared:",
+        ] {
+            assert!(
+                !text.contains(key),
+                "{key} written for a bare check: {text}"
+            );
+        }
+        assert_eq!(crate::yaml::from_str::<Checked>(&text).unwrap(), bare);
+
+        let full = Checked {
+            target: "doc:design/data.md".into(),
+            outcome: Outcome::Confirmed,
+            by: "Claude".into(),
+            origin: "conversation".into(),
+            at: "2026-11-12T09:40:00Z".into(),
+            rev: "def5678".into(),
+            text_changed_at: "2026-11-02T08:10:00Z".into(),
+            why: "the gates/ row still matches gates.rs".into(),
+            prepared: "20261112T094000Z-text-check".into(),
+            ..Default::default()
+        };
+        let text = crate::yaml::to_string(&full).unwrap();
+        assert!(text.contains("by: Claude"), "{text}");
+        assert!(text.contains("rev: def5678"), "{text}");
+        assert_eq!(crate::yaml::from_str::<Checked>(&text).unwrap(), full);
+
+        let kept: Checked = crate::yaml::from_str(&format!("{text}newer_key: 7\n")).unwrap();
         assert!(crate::yaml::to_string(&kept).unwrap().contains("newer_key"));
     }
 
@@ -1718,6 +1808,7 @@ mod tests {
         sign_off(&mut d, "2026-11-06T11:00:00Z");
         assert_eq!(d.approval_state(), ApprovalState::Lapsed);
     }
+
     /// FTR-028 R-3: a record names its delegation; an older reader, whose struct lacks the field,
     /// keeps it in `extra` and writes it back; a record without it writes nothing.
     #[test]
@@ -1753,6 +1844,62 @@ mod tests {
             crate::yaml::to_string(&o)
                 .unwrap()
                 .contains("delegation: DLG-001")
+        );
+    }
+
+    /// DEF-043 compat: a test's `at`, a transition's `origin` and a stage change's
+    /// `accepted_untested` round-trip, and nothing is written when they are empty.
+    #[test]
+    fn new_fields_are_kept_and_omitted_when_empty() {
+        let test: TestRef = crate::yaml::from_str(
+            "name: release::tag_publishes_notes\nkind: e2e\nstate: planned\nat: pushed\n",
+        )
+        .unwrap();
+        assert_eq!(test.at, "pushed");
+        let back: TestRef = crate::yaml::from_str(&crate::yaml::to_string(&test).unwrap()).unwrap();
+        assert_eq!(back, test);
+        let plain = TestRef {
+            name: "t".into(),
+            ..Default::default()
+        };
+        assert!(!crate::yaml::to_string(&plain).unwrap().contains("at:"));
+
+        let moved: Transition = crate::yaml::from_str(
+            "at: 2026-11-12T09:40:00Z\nfrom: Test\nto: Review\noverride: CI after push\norigin: conversation\n",
+        )
+        .unwrap();
+        assert_eq!(moved.origin, "conversation");
+        let back: Transition =
+            crate::yaml::from_str(&crate::yaml::to_string(&moved).unwrap()).unwrap();
+        assert_eq!(back, moved);
+        let ordinary = Transition {
+            at: "2026-11-12T09:40:00Z".into(),
+            from: "Test".into(),
+            to: "Review".into(),
+            ..Default::default()
+        };
+        assert!(
+            !crate::yaml::to_string(&ordinary)
+                .unwrap()
+                .contains("origin")
+        );
+
+        let change: crate::releases::StageChange = crate::yaml::from_str(
+            "stage: production\nby: Venkatraman B\nat: x\norigin: monitor\naccepted_untested:\n- FEAT-005/R-2\n- FEAT-005/R-3\n",
+        )
+        .unwrap();
+        assert_eq!(change.accepted_untested, ["FEAT-005/R-2", "FEAT-005/R-3"]);
+        let back: crate::releases::StageChange =
+            crate::yaml::from_str(&crate::yaml::to_string(&change).unwrap()).unwrap();
+        assert_eq!(back, change);
+        let plain = crate::releases::StageChange {
+            stage: "production".into(),
+            ..Default::default()
+        };
+        assert!(
+            !crate::yaml::to_string(&plain)
+                .unwrap()
+                .contains("accepted_untested")
         );
     }
 }

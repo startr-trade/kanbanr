@@ -25,9 +25,9 @@ kanbanr project init shop --workflow pdca      # choose at creation
 | `scheduled` | Planned → Scheduled → Completed | the built-in rule, plus the method |
 | `togaf` | Vision → Business Arch → System Design → Implementation → Migration → Operations | the definition grows phase by phase; Migration finishes an item for the sprint views; chores skip Business Arch and System Design |
 | `pdca` | Plan → Do → Check → Act | agreement to start, evidence to check, a review sign-off to act |
-| `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs before verification and before release; chores skip Inputs, Review and Validation |
+| `design-control` | Planning → Inputs → Design → Review → Verification → Validation → Released | sign-offs before verification and before release; chores skip Inputs and Review |
 | `scrum` | Backlog → Ready → In Progress → Review → Testing → Done → Released | Definition of Ready and of Done; work starts in the sprint; sprints, releases and points on; chores skip Review |
-| `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on; chores skip Design and Review |
+| `agile` | Plan → Design → Develop → Test → Review → Released | agreement before build, evidence before review; sprints and releases on; chores skip Design |
 
 Every built-in process also carries [the method](#the-method-on-by-default): a design before
 build, and the docs it changes kept current.
@@ -99,7 +99,7 @@ board.
 | `goals_known` | every linked goal exists in the charter |
 | `small` | not estimated above three days |
 | `estimated` | estimated in the project's unit: story points or days (`kanbanr config cadence --unit points`) |
-| `in_sprint` | planned into the active sprint (projects with sprints switched on) |
+| `in_sprint` | planned into the active sprint, one that has started (asked only when sprints are on) |
 | `in_release` | planned into a release (projects with releases switched on) |
 | `spec_sections` | the spec has each named section, with content; plain `spec_sections` asks for `Design` |
 | `docs_updated` | every board doc the item names in `affects_docs` has changed since it entered its current stage |
@@ -136,6 +136,11 @@ A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (sem
 - **`--override "<reason>"`** gets past a blocking gate, and the reason is kept in the item's
   history. It also records the item as started without agreement, so it shows on the Review page
   until someone ratifies it. `--unapproved` is the older name.
+- **An override Claude makes** (inside a Claude Code session, or by a delegated agent) records
+  where it was made, and waits on the Review page for you to ratify it even when the item was
+  approved before. Until you do, `kanbanr check` shows it as `override not ratified` and the item
+  does not ship: Promote to main and the cut carry it, saying why. Your own overrides, from your
+  terminal or the monitor, are your decision already and wait for nothing.
 - **Finishing the last task** moves the item to its end status only if that status's gate is
   met — and, on a workflow with no gates, only if every requirement has a green test. Otherwise
   it stays, and `kanbanr task state` says why. A batch is judged after its last operation, so one
@@ -351,6 +356,7 @@ and `agile` presets do this, and any other project can too:
 ```bash
 kanbanr config cadence --sprints on --releases on --unit points --sprint-length 14
 kanbanr sprint add --start 2026-10-05 --goal "Shoppers can pay" --capacity 20
+# or start today: kanbanr sprint add --start today --goal "…"   # or a date
 kanbanr sprint plan SP-001 FEAT-001 FEAT-002    # warns when it goes over capacity
 kanbanr sprint unplan FEAT-001                  # back to no sprint
 kanbanr sprint start SP-001
@@ -370,6 +376,14 @@ kanbanr release promote v0.1.0 production       # the cut: ship, notes, fast-for
 kanbanr release stages                          # what each stage requires and does
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a release
 ```
+
+Work waits for a started sprint. On a project with sprints, the first move off the starting stage
+into a working stage (Business Arch in `togaf`, Design in `agile`, In Progress in `default`)
+asks for `in_sprint`: the item must be planned into a sprint whose first day is today or earlier.
+Processes that already ask for it, such as `scrum`, are left as they are. A sprint dated later
+reads as planned, not active, until its first day. `kanbanr sprint start` on one starts it today,
+moves its dates and keeps its length, and says so. `kanbanr doctor` names a sprint that an older
+version started early.
 
 The burndown and velocity are derived from the moves items record; nothing is stored for them. An
 item counts as finished from the day it first reaches a stage marked `done` — Done, in `scrum` — or
@@ -455,13 +469,49 @@ cadence:
 | condition | holds when | fix shown |
 |---|---|---|
 | `items_finished` | the cut would carry nothing over | finish the item, or plan it into another release |
-| `prepared` | the release tip carries the version, the changelog heading and the notes | promote to the stage that prepares |
+| `prepared` | the release tip carries the version, a changelog section with something in it, and the notes | promote to the stage that prepares |
 | `main_at_release` | main is at the release tip | promote to the stage with `move_main` |
 | `pushed` | the release tip is on main's remote-tracking branch (`origin/main`) | push main (`git push origin main`), then wait for CI |
 | `gate_passed` | every gate named in `commit_gates` has a passed result recorded for the release tip | look at your CI, then record its verdict (see below) |
 | `tag_passed` | the newest result of the tag gate for the tag commit, recorded since the tag was made, is passed; only a stage after the tag can require it | run your CI on the tag and record its verdict, or start a patch release if it failed |
 | `merged_items_ship` | every item planned into the release whose code is merged can ship; a plan to the stage that tags, or the last stage, adds it when no `items_finished` is required, and holds the promotion | give what the item lacks (`kanbanr check <CODE>`), or plan it into another release |
 | `items_merged` | every item planned into the release (other than one in a no-op status) is at the integrate stage or later; read from the board, so it needs no repository | move the item to the integrate stage, which merges its branch, or plan it into another release |
+
+Two more conditions are the plan's own, never configured:
+
+| condition | holds when | fix shown |
+|---|---|---|
+| `later_tests_green` | every test of the release's items checked at this stage or before it is green (see [Tests checked later](#tests-checked-later)) | check them and record each result |
+| `untested_accepted` | at the cut: every shipping requirement has a green test, or you accepted shipping exactly those without one | run them and record the results, or accept shipping them unverified on the Releases page |
+
+#### Tests checked later
+
+Some checks can only be seen after main is pushed: a CI job runs, a tag publishes the notes. A test
+says when it is checked with `at` in its definition:
+
+| `at` | the item's gate | the release |
+|---|---|---|
+| empty | waits for it | — |
+| `pushed` | doesn't wait | the first stage that requires `pushed`, else the cut |
+| `cut` | doesn't wait | the cut |
+| a release stage | doesn't wait | that stage |
+
+```yaml
+tests:
+  - name: release::tag_publishes_notes
+    kind: e2e
+    state: planned
+    at: pushed
+```
+
+`at` must be `pushed`, `cut` or one of the project's release stages, and only a project with
+releases can use it. It is part of what was agreed, so adding or changing it lapses the approval.
+A stage before the cut that a test waits for holds the promotion (`later_tests_green`) until the
+test is green. At the cut, every shipping requirement whose tests have none green is listed
+(`untested_accepted`): the cut waits until you accept exactly that list, on the Releases page or
+with `--accept-untested FEAT-005/R-2,FEAT-005/R-3`. The acceptance is kept on the stage change, and
+the release notes on the board gain a "Not verified in this release" section naming each one. A
+test that waits for a stage after the cut holds that stage instead, and needs no acceptance.
 
 A stage can also list earlier stages in `after` (`kanbanr config release-stage tag --after ci`). The
 release must have been promoted forward into each of them before it enters this one, so a named
@@ -596,7 +646,11 @@ kanbanr config release-prepare                     # shows it
   refuses the promotion.
 - **Changelog.** `## [{number}] - {date}` goes below the first `## [Unreleased]`, so what was
   unreleased belongs to the release; an `[Unreleased]: …compare/<prev>...HEAD` link moves on and
-  `[{number}]` gets its own. Each copy gets the same text.
+  `[{number}]` gets its own. When that leaves the section empty, it is filled from the items the
+  release ships, under `### Added`, `### Changed` and `### Fixed` (a defect or bug is Fixed, a
+  chore Changed, anything else Added), and `[Unreleased]` stays as an empty heading. When nothing
+  ships and nothing is unreleased, the plan says so, the changelog is left as it is, and
+  `kanbanr release notes <V> --changelog <file>` writes the section. Each copy gets the same text.
 - **Notes.** A draft from the items the cut would ship, written only if the file is not there yet,
   and listed below the line named in each listing.
 
@@ -614,7 +668,14 @@ release itself — no branch switch, no separate item:
 kanbanr release notes v0.3.0                 # release/v0.3.0 @ 8f995e1: docs/src/releases/v0.3.0.md, then the text
 kanbanr release notes v0.3.0 --edit          # $VISUAL / $EDITOR on a copy; committed if it changed
 kanbanr release notes v0.3.0 --file notes.md # or `-` for stdin
+kanbanr release notes v0.3.0 --file notes.md --changelog section.md  # the notes and the changelog section, one commit
+kanbanr release notes v0.3.0 --changelog section.md                  # the changelog section alone
 ```
+
+`--changelog` takes the text of the version's section (the part under its `## [<number>]`
+heading), writes it to the changelog and each of its copies in the same commit as the notes, and
+refuses an empty file. Use it instead of a fix item when the section needs changing on a release
+under test.
 
 The notes are read from the path they were first written to, which the release records, so
 changing `kanbanr config release-prepare --notes` later does not lose earlier releases' notes. A
@@ -684,8 +745,8 @@ since gone, and the patch starts at the first stage. It goes through the same st
 At production the patch is tagged. Main fast-forwards to it when it can; when main has moved on
 past the parent, main is left where it is. The patch's commits that the integration branch does
 not have yet are listed — in the output and in the notes, under "To merge forward" — so the next
-release keeps the fix. kanbanr does not merge them for you: `kanbanr git forward <VERSION>` does it
-when the git model is on, or merge them by hand.
+release keeps the fix. Claude merges them forward with `kanbanr git forward <VERSION>` as soon as
+kanbanr says so; you push.
 
 The integration branch and the main branch are both the repository's default branch unless the
 project names them: `kanbanr config cadence --integration-branch develop --main-branch main`.
@@ -716,7 +777,8 @@ stage. main, the integration branch, `sprint/*` and `release/*` are **lines**: t
 only, and a merge into one must say which items it brings (`Refs: kanbanr:<CODE>`, or `[no-ref]
 <why>` on the record).
 
-The model is always shown; it drives the work only when you switch it on:
+The model is always shown. It is switched on when you first choose sprints or releases, and off with
+`kanbanr config cadence --git-model off`; a trunk project (neither) can switch it on itself:
 
 ```bash
 kanbanr config cadence --git-model on
@@ -744,7 +806,8 @@ With the model on, the board makes the merges:
   rebase. One that would conflict is reported with its files and left as it was.
 - **A fix to a release under test** integrates into `release/<VERSION>`, and the move says the line
   lacks it. `kanbanr git forward <VERSION>` merges the release forward into the line, naming every
-  item its commits name. It is never done for you.
+  item its commits name. Claude runs it as soon as the move says so, and tells you what merged;
+  you push.
 
 `kanbanr config workflow --write-agreement` writes the team's working agreement to the board,
 generated from the gates. Under Scrum that is the Definition of Ready and of Done. Because it is

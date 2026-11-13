@@ -721,17 +721,46 @@
         ]
       },
       "Checked": {
+        "additionalProperties": true,
         "description": "One flagged text and how it was settled.",
         "properties": {
+          "at": {
+            "description": "When it was settled (RFC3339).",
+            "type": "string"
+          },
+          "by": {
+            "description": "Who settled it: `Claude` for a settlement, the signer for a check sent with the request (DEF-039).",
+            "type": "string"
+          },
           "correction": {
             "description": "The code of the filed correction, when the outcome is `corrected`.",
+            "type": "string"
+          },
+          "origin": {
+            "description": "Where it was settled.",
             "type": "string"
           },
           "outcome": {
             "$ref": "#/components/schemas/Outcome"
           },
+          "prepared": {
+            "description": "The id of the `text-check` prepared record it came from.",
+            "type": "string"
+          },
+          "rev": {
+            "description": "The newest commit of the change it was checked against.",
+            "type": "string"
+          },
           "target": {
             "description": "`doc:<path>`, `adr:<id>` or `item:<CODE>`.",
+            "type": "string"
+          },
+          "text_changed_at": {
+            "description": "The text's last change when it was checked.",
+            "type": "string"
+          },
+          "why": {
+            "description": "Why the text is still right, for `confirmed`.",
             "type": "string"
           }
         },
@@ -2844,15 +2873,43 @@
         "oneOf": [
           {
             "const": "confirmed",
-            "description": "The person read it and it is still right.",
+            "description": "Someone read it and it is still right.",
             "type": "string"
           },
           {
             "const": "corrected",
-            "description": "The person filed a correction (its code is on the record).",
+            "description": "A correction was filed (its code is on the record).",
             "type": "string"
           }
         ]
+      },
+      "OverrideView": {
+        "description": "One override Claude made, as the Review page shows it (DEF-043).",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "from",
+          "to",
+          "reason",
+          "origin"
+        ],
+        "type": "object"
       },
       "Part": {
         "description": "One part of the method.",
@@ -2938,6 +2995,13 @@
           },
           "holds": {
             "type": "boolean"
+          },
+          "refs": {
+            "description": "The requirements it names, as `CODE/R-n` (DEF-043): for `untested_accepted`, exactly what\nthe person accepts; for `later_tests_green`, what is not green yet.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "stage": {
             "description": "The stage that requires it.",
@@ -3705,6 +3769,16 @@
             "const": "merged_items_ship",
             "description": "Every item planned into the release whose code is merged can ship: the cut would not carry\nmerged work away (DEF-029). Only a plan names it, so it is not in `ALL`.",
             "type": "string"
+          },
+          {
+            "const": "later_tests_green",
+            "description": "Every test of the release's items checked at this stage or before it is green (DEF-043).\nOnly a plan names it, so it is not in `ALL`.",
+            "type": "string"
+          },
+          {
+            "const": "untested_accepted",
+            "description": "The person accepted shipping exactly the requirements whose tests were not run (DEF-043).\nOnly a plan names it, at the cut, so it is not in `ALL`.",
+            "type": "string"
           }
         ]
       },
@@ -4140,7 +4214,6 @@
         "type": "object"
       },
       "ReviewEntry": {
-        "description": "One item waiting for agreement.",
         "properties": {
           "approval": {
             "$ref": "#/components/schemas/ApprovalKind",
@@ -4172,6 +4245,13 @@
             "description": "What the ordering keys on, and useful to a client besides.",
             "type": "boolean"
           },
+          "overrides": {
+            "description": "Claude's overrides on the item that wait for the person to ratify (DEF-043), oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/OverrideView"
+            },
+            "type": "array"
+          },
           "release_choices": {
             "description": "The planned releases it could ship in, in file order (FEAT-185). Present whenever the\nrelease question is due, so a surface asking another question first can ask this one too.\nEmpty: only a new release to choose.",
             "items": {
@@ -4182,6 +4262,13 @@
           "rev": {
             "description": "What a verdict given from this brief is pinned to (FEAT-159).",
             "type": "string"
+          },
+          "settled": {
+            "description": "The flagged texts Claude settled, with what it recorded, for the page to show (DEF-039).",
+            "items": {
+              "$ref": "#/components/schemas/SettledText"
+            },
+            "type": "array"
           },
           "signoffs_needed": {
             "description": "The sign-offs the next stage still needs, by name; empty unless `approval` is `signoff`.",
@@ -4208,7 +4295,7 @@
             "type": "string"
           },
           "to_check": {
-            "description": "`docs-folded` is among them: the texts that name something the item changed since they\nlast changed, for the person to confirm or correct (FTR-013). `None` when the check was\nskipped (see `drift_skipped`) or the sign-off is not asked.",
+            "description": "`docs-folded` is among them: the texts that name something the item changed since they\nlast changed and that Claude has not yet settled (FTR-013, DEF-039). The sign-off is not\noffered while any is left. `None` when the check was skipped (see `drift_skipped`) or the\nsign-off is not asked.",
             "items": {
               "$ref": "#/components/schemas/Flag"
             },
@@ -4249,6 +4336,21 @@
           "portfolio",
           "counts",
           "programs"
+        ],
+        "type": "object"
+      },
+      "SettledText": {
+        "properties": {
+          "check": {
+            "$ref": "#/components/schemas/Checked"
+          },
+          "flag": {
+            "$ref": "#/components/schemas/Flag"
+          }
+        },
+        "required": [
+          "flag",
+          "check"
         ],
         "type": "object"
       },
@@ -4584,6 +4686,13 @@
         "additionalProperties": true,
         "description": "One move of a release between stages: where to, who moved it, and when (FEAT-183). A move back\ncarries the reason it was made.",
         "properties": {
+          "accepted_untested": {
+            "description": "The requirements the person accepted shipping untested at the cut, as `CODE/R-n`\n(DEF-043). Empty on every other change.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "at": {
             "type": "string"
           },
@@ -4756,6 +4865,10 @@
         "additionalProperties": true,
         "description": "A test that verifies a requirement, and where it currently stands.",
         "properties": {
+          "at": {
+            "description": "When it can be checked (DEF-043): empty at the item's gates, `pushed` after main is pushed,\n`cut` at the cut, or a release stage's name. The item's gate doesn't wait for a test with\nan `at`; the release stage it names does. Part of the definition, so changing it lapses an\napproval.",
+            "type": "string"
+          },
           "checked_rev": {
             "description": "The project revision at which this was last observed green. A green older than HEAD is\nstale rather than trustworthy.",
             "type": "string"
@@ -4843,6 +4956,10 @@
             "type": "string"
           },
           "from": {
+            "type": "string"
+          },
+          "origin": {
+            "description": "Where a move with an override was made: `monitor`, `conversation`, `terminal` or\n`delegated` (DEF-043). Set only on a transition with an override; empty on every move\nbefore this version.",
             "type": "string"
           },
           "override": {

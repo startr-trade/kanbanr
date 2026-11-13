@@ -7,6 +7,7 @@
 // offers none at all. The same function the page renders with is checked here, case by case.
 //
 // Usage: npm run check:release-action
+import { readFileSync } from "node:fs";
 import { releaseAction, NO_REPO } from "../src/releaseAction.ts";
 
 const base = {
@@ -242,6 +243,39 @@ expect(
   a.button && a.enabled && a.label === "Promote to main" && !a.missing.some((m) => m.text.includes("DLG-001")),
   a,
 );
+
+// DEF-043 R-3 (web::release_action untested): a cut whose one unmet condition is the person's
+// acceptance of what ships untested offers that list, disabled until accepted; any other unmet
+// condition beside it offers none.
+const untested = {
+  check: "untested_accepted",
+  stage: "production",
+  holds: false,
+  detail: "FEAT-5 R-2, R-3 have tests not run: the cut ships them unverified only if you accept that",
+  fix: "run them and record the results, or accept shipping them unverified on the Releases page (the notes will name them)",
+  refs: ["FEAT-5/R-2", "FEAT-5/R-3"],
+};
+a = releaseAction({ ...cut, ready: false, conditions: [...cut.conditions, untested], missing: [untested.fix] }, true);
+expect(
+  "web::release_action untested: the acceptance is offered with the plan's refs",
+  a.accept?.join("|") === "FEAT-5/R-2|FEAT-5/R-3" && a.acceptDetail === untested.detail,
+  a,
+);
+expect("web::release_action untested: the button waits for the acceptance", a.button && !a.enabled, a);
+a = releaseAction({ ...unpushed, conditions: [...unpushed.conditions, untested] }, true);
+expect("web::release_action untested: another unmet condition offers no acceptance", a.accept === undefined, a);
+a = releaseAction(cut, true);
+expect("web::release_action untested: nothing untested, nothing to accept", a.accept === undefined && a.enabled, a);
+{
+  const page = readFileSync(new URL("../src/pages/ReleasesPage.tsx", import.meta.url), "utf8");
+  const box = page.indexOf('type="checkbox"');
+  const guard = page.lastIndexOf("action.accept ?", box);
+  expect(
+    "web::release_action untested: the page renders the checkbox only under action.accept",
+    box > 0 && guard > 0 && page.slice(guard, box).includes("Ship") === false && page.includes("Ship these unverified; the notes will name them"),
+    { box, guard },
+  );
+}
 
 if (problems.length) {
   for (const p of problems) console.error(`web::release_button_says_what_it_does — ${p}`);

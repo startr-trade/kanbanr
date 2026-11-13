@@ -132,7 +132,9 @@ impl Check {
                 "estimated in the project's unit: story points or days \
                  (`kanbanr config cadence --unit points`)"
             }
-            Check::InSprint => "planned into the active sprint (projects with sprints switched on)",
+            Check::InSprint => {
+                "planned into the active sprint, one that has started (asked only when sprints are on)"
+            }
             Check::InRelease => "planned into a release (projects with releases switched on)",
             Check::Signoff => "a named sign-off is recorded; a gate names it under `signoffs`",
             Check::SpecSections => {
@@ -336,6 +338,10 @@ pub struct Context {
     pub unit: crate::config::EstimateUnit,
     /// The sprint currently active, if the project uses sprints and one is.
     pub active_sprint: Option<String>,
+    /// The project has no sprints switched on, so `in_sprint` asks nothing (DEF-041).
+    pub sprints_off: bool,
+    /// The code and first day of each sprint that is neither closed nor running as of today.
+    pub sprint_starts: std::collections::BTreeMap<String, String>,
     /// The project's doc folder, for [`Check::DocsUpdated`] (FEAT-180). Its history is read only
     /// when that check is evaluated, and only for items that declare docs.
     pub docs_dir: Option<std::path::PathBuf>,
@@ -401,7 +407,19 @@ impl Context {
         repo: Option<&std::path::Path>,
     ) -> Context {
         let line_inputs = repo.is_some() && config.cadence.git_model;
+        let today = crate::sprints::today();
+        let all_sprints = if config.cadence.sprints {
+            crate::sprints::load(store, id).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         Context {
+            sprints_off: !config.cadence.sprints,
+            sprint_starts: all_sprints
+                .iter()
+                .filter(|s| s.state_on(today) == crate::sprints::SprintState::Planned)
+                .map(|s| (s.code.clone(), s.start.clone()))
+                .collect(),
             code_repo: repo.map(std::path::Path::to_path_buf),
             main_branch: config
                 .cadence
@@ -420,13 +438,7 @@ impl Context {
             },
             branches: Default::default(),
             unit: config.estimate_unit,
-            active_sprint: if config.cadence.sprints {
-                crate::sprints::load(store, id)
-                    .ok()
-                    .and_then(|s| crate::sprints::active(&s).map(|a| a.code.clone()))
-            } else {
-                None
-            },
+            active_sprint: crate::sprints::active_on(&all_sprints, today).map(|a| a.code.clone()),
             docs_dir: Some(store.project_dir(id).join("docs")),
             coverage: Self::coverage(store, id, config),
             build_onward: config.role_status(crate::config::Role::Build).map(|build| {
@@ -838,6 +850,11 @@ pub fn next_gates(
             _ => false,
         })
         .filter_map(|to| {
+            let first_requires = if first_move {
+                config.first_move_requires(kind, to)
+            } else {
+                Vec::new()
+            };
             let mut gate = gates
                 .get(to)
                 .filter(|g| g.applies_to(kind))
@@ -845,18 +862,16 @@ pub fn next_gates(
                 .unwrap_or_default();
             if let Some(path) = path {
                 crate::method::strip_gate(&mut gate, &path.method_off);
-                if first_move {
-                    for c in &path.requires {
-                        if !gate.requires.contains(c) {
-                            gate.requires.push(c.clone());
-                        }
+            }
+            if first_move {
+                for c in &first_requires {
+                    if !gate.requires.contains(c) {
+                        gate.requires.push(c.clone());
                     }
                 }
             }
             // A stage with nothing to say about this kind is not listed, as before.
-            if gates.get(to).filter(|g| g.applies_to(kind)).is_none()
-                && !(first_move && path.is_some_and(|p| !p.requires.is_empty()))
-            {
+            if gates.get(to).filter(|g| g.applies_to(kind)).is_none() && first_requires.is_empty() {
                 return None;
             }
             let mut requires_gaps =
@@ -1072,6 +1087,32 @@ pub fn evaluate(
 
 /// As [`evaluate`], judging the project-dependent checks ([`Check::Estimated`],
 /// [`Check::InSprint`]) against `ctx`.
+/// Claude's overrides on `f` that no ratification after them answers (DEF-043): each history
+/// entry with an `override` reason and origin `conversation` or `delegated`, made after the
+/// newest approval event whose verdict is `ratified` (`crate::before`). Oldest first.
+///
+/// A move with no origin (every move before this version, and every move the person made) is
+/// never open, so old boards gain no queue.
+pub fn open_overrides(f: &FeatureItem) -> Vec<&crate::models::Transition> {
+    let since = f.definition.as_ref().and_then(|d| {
+        d.approvals
+            .iter()
+            .filter(|e| e.verdict == "ratified")
+            .map(|e| e.at.as_str())
+            .max_by(|a, b| crate::cmp_instants(a, b))
+    });
+    f.history
+        .iter()
+        .filter(|t| {
+            t.override_reason
+                .as_deref()
+                .is_some_and(|r| !r.trim().is_empty())
+                && matches!(t.origin.as_str(), "conversation" | "delegated")
+                && since.is_none_or(|s| crate::before(s, &t.at))
+        })
+        .collect()
+}
+
 pub fn evaluate_in(
     feature: &FeatureItem,
     goal_ids: Option<&std::collections::BTreeSet<String>>,
@@ -1114,6 +1155,30 @@ pub fn evaluate_in(
     {
         gaps.extend(docs_updated_gaps(feature, docs, &ctx.history));
     }
+    // An override Claude made waits for the person to ratify it, even on an agreed item
+    // (DEF-043). Unagreed, the "started without approval" gap already asks.
+    if checks.contains(&Check::Bypass)
+        && feature
+            .definition
+            .as_ref()
+            .is_some_and(|d| d.approval_state().is_agreed())
+    {
+        for t in open_overrides(feature) {
+            gaps.push(gap(
+                Check::Bypass,
+                None,
+                "override not ratified",
+                format!(
+                    "moved {} → {} on {} past its gate by Claude: {} — the person ratifies it on \
+                     the Review page",
+                    t.from,
+                    t.to,
+                    t.at.get(..10).unwrap_or(&t.at),
+                    t.override_reason.as_deref().unwrap_or("").trim()
+                ),
+            ));
+        }
+    }
     if checks.contains(&Check::DiagramsValid) && !exempt {
         gaps.extend(diagram_gaps(feature, ctx.docs_dir.as_deref()));
     }
@@ -1128,24 +1193,44 @@ pub fn evaluate_in(
             ),
         ));
     }
-    if checks.contains(&Check::InSprint) && !exempt {
-        match ctx.active_sprint.as_deref() {
-            Some(active) if feature.sprint.as_deref() == Some(active) => {}
-            Some(active) => gaps.push(gap(
+    if checks.contains(&Check::InSprint) && !exempt && !ctx.sprints_off {
+        let in_active = ctx
+            .active_sprint
+            .as_deref()
+            .is_some_and(|a| feature.sprint.as_deref() == Some(a));
+        let waiting = feature
+            .sprint
+            .as_deref()
+            .and_then(|sp| ctx.sprint_starts.get(sp).map(|start| (sp, start)));
+        if in_active {
+            // Planned into the sprint that is running: nothing to say.
+        } else if let Some((sp, start)) = waiting {
+            gaps.push(gap(
                 Check::InSprint,
                 None,
-                "not in the sprint",
+                "sprint not started",
                 format!(
-                    "not in the active sprint {active} — `kanbanr sprint plan {active} {}`",
-                    feature.code
+                    "planned into {sp}, which has not started (its first day is {start}) — start it with `kanbanr sprint start {sp}`, which starts it today"
                 ),
-            )),
-            None => gaps.push(gap(
-                Check::InSprint,
-                None,
-                "no active sprint",
-                "no sprint is active — `kanbanr sprint start <SP-…>`".to_string(),
-            )),
+            ));
+        } else {
+            match ctx.active_sprint.as_deref() {
+                Some(active) => gaps.push(gap(
+                    Check::InSprint,
+                    None,
+                    "not in the sprint",
+                    format!(
+                        "not in the active sprint {active} — `kanbanr sprint plan {active} {}`",
+                        feature.code
+                    ),
+                )),
+                None => gaps.push(gap(
+                    Check::InSprint,
+                    None,
+                    "no active sprint",
+                    "no sprint is active — `kanbanr sprint start <SP-…>`".to_string(),
+                )),
+            }
         }
     }
     gaps
@@ -1542,7 +1627,12 @@ fn requirement_level(check: Check, r: &Requirement, gaps: &mut Vec<Gap>) {
             }
         }
         Check::TestsGreen => {
-            if !r.tests.is_empty() && !r.tests.iter().any(|t| t.state == TestState::Green) {
+            // A test checked later (DEF-043: after main is pushed, at the cut or at a release
+            // stage) holds that stage, not the item's gate.
+            if !r.tests.is_empty()
+                && !r.tests.iter().any(|t| t.state == TestState::Green)
+                && r.tests.iter().any(|t| t.at.trim().is_empty())
+            {
                 push(
                     "not proven",
                     format!("{id} has tests but none is green — not yet proven"),
@@ -1628,6 +1718,10 @@ pub struct ItemCheck {
     /// The documents still unbuilt while the next stage holds `docs-folded` (DEF-033).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub docs_unbuilt: Vec<crate::docsbuilt::Unbuilt>,
+    /// The flagged texts Claude has not settled, as `doc:<path>`, `adr:<id>` or `item:<CODE>`,
+    /// while the next stage holds `docs-folded` and a code repository is attached (DEF-039).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts_to_settle: Vec<String>,
 }
 
 /// The manual tests of an item that are not green, as `R-4: <name>` (DEF-003): a check nobody
@@ -1700,8 +1794,32 @@ pub fn check_board(
                 .and_then(|n| n.docs_built.as_ref())
                 .map(|d| d.unbuilt.clone())
                 .unwrap_or_default();
+            let at_docs_folded = view
+                .as_ref()
+                .and_then(|v| {
+                    let first = immediate_status(&project, &v.next)?;
+                    v.next.iter().find(|n| n.status == first)
+                })
+                .is_some_and(|n| {
+                    !n.signoffs_held.is_empty()
+                        || n.signoffs_needed
+                            .iter()
+                            .any(|s| s == crate::method::DOCS_FOLDED)
+                });
+            let texts_to_settle = match repo {
+                Some(repo) if at_docs_folded => {
+                    crate::docdrift::flags_for_item(store, p, &f.code, repo)
+                        .map(|flags| crate::review::split_settled(store, p, &f.code, flags).0)
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|fl| fl.target.key())
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
             ItemCheck {
                 docs_unbuilt,
+                texts_to_settle,
                 code: f.code.clone(),
                 title: f.title.clone(),
                 status: f.status.clone(),
@@ -1846,6 +1964,8 @@ mod tests {
     }
 
     /// A board in a temp git repository with one item declaring `architecture/data.md` (FEAT-180).
+    /// The doc is committed before the item is created: stage entry must not fall in an earlier
+    /// second than the commit that holds the doc (MNT-008).
     fn docs_board(tag: &str) -> (crate::Store, std::path::PathBuf, String) {
         let dir = std::env::temp_dir().join(format!("kanbanr-docs-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1858,6 +1978,10 @@ mod tests {
         store
             .add_milestone("demo", "M", "", vec![], Some("M".into()))
             .unwrap();
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv1\n")
+            .unwrap();
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "docs"));
         let item = store.add_feature("demo", "Cart", "", "M", None).unwrap();
         store
             .set_feature_definition(
@@ -1869,9 +1993,6 @@ mod tests {
                     ..Default::default()
                 }),
             )
-            .unwrap();
-        store
-            .write_doc("demo", "architecture/data.md", "# Data\n\nv1\n")
             .unwrap();
         assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "board"));
         (store, dir, item.code)
@@ -1898,7 +2019,6 @@ mod tests {
     #[test]
     fn next_gate_holds_docs_folded_and_names_the_unbuilt_documents() {
         let (store, dir, code) = docs_board("held");
-        next_second();
         let gate = crate::config::Gate {
             signoffs: vec!["design-review".into(), "docs-folded".into()],
             ..Default::default()
@@ -2428,6 +2548,111 @@ mod tests {
         .expect("a minimal item");
         f.definition = def;
         f
+    }
+
+    /// DEF-043 R-2: an override Claude makes on an approved item waits for the person to ratify
+    /// it, is a `Bypass` gap, is asked on the Review page and keeps the item from shipping; once
+    /// ratified it ships. The person's own override opens nothing.
+    #[test]
+    fn an_override_from_claude_waits_for_ratification_and_holds_the_cut() {
+        let (store, dir, repo) = crate::releases::tests::board_and_repo("def043-override");
+        let approved = |title: &str| {
+            let code = store
+                .add_feature("shop", title, "", "M", None)
+                .unwrap()
+                .code;
+            store
+                .set_feature_definition(
+                    "shop",
+                    &code,
+                    Some(FeatureDefinition {
+                        statement: "Run CI".into(),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+            store.approve_feature("shop", &code, "Ada").unwrap();
+            crate::releases::plan(&store, "shop", "v1", std::slice::from_ref(&code)).unwrap();
+            store
+                .move_feature_approved("shop", &code, "Scheduled", None)
+                .unwrap();
+            code
+        };
+        let code = approved("CI");
+        store
+            .move_feature_gated_as(
+                "shop",
+                &code,
+                "Completed",
+                Some("CI after push"),
+                "conversation",
+            )
+            .unwrap();
+        let f = store.load("shop").unwrap().feature(&code).unwrap().clone();
+        assert_eq!(open_overrides(&f).len(), 1);
+        let gaps = evaluate(&f, None, &[Check::Bypass]);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!(gaps[0].label, "override not ratified");
+        assert!(
+            gaps[0].message.contains("CI after push"),
+            "{}",
+            gaps[0].message
+        );
+        let queue = crate::review::pending(&store, "shop", None).unwrap();
+        let entry = queue.iter().find(|e| e.code == code).expect("asked");
+        assert_eq!(entry.approval, crate::review::ApprovalKind::Unratified);
+        assert_eq!(entry.overrides.len(), 1);
+        let preview = crate::releases::cut_preview(&store, "shop", "v1").unwrap();
+        let carried = preview.iter().find(|p| p.code == code).unwrap();
+        assert!(!carried.ships);
+        assert!(
+            carried.why.contains("waits for the person to ratify"),
+            "{}",
+            carried.why
+        );
+
+        store
+            .ratify_feature_as("shop", &code, "Ada", "agreed", "monitor")
+            .unwrap();
+        let f = store.load("shop").unwrap().feature(&code).unwrap().clone();
+        assert!(open_overrides(&f).is_empty());
+        let preview = crate::releases::cut_preview(&store, "shop", "v1").unwrap();
+        assert!(preview.iter().find(|p| p.code == code).unwrap().ships);
+        let queue = crate::review::pending(&store, "shop", None).unwrap();
+        assert!(!queue.iter().any(|e| e.code == code), "{queue:?}");
+
+        let mine = approved("Mine");
+        store
+            .move_feature_gated_as("shop", &mine, "Completed", Some("mine"), "terminal")
+            .unwrap();
+        let f = store.load("shop").unwrap().feature(&mine).unwrap().clone();
+        assert!(open_overrides(&f).is_empty());
+        crate::releases::tests::clean(&dir, &repo);
+    }
+
+    /// DEF-043 R-1: a requirement whose only not-green test is checked later passes the item's
+    /// `TestsGreen`; with one more plain planned test it does not.
+    #[test]
+    fn a_test_checked_later_does_not_hold_the_items_gate() {
+        let mut later = requirement("R-2", "ci", &[("ci::runs", TestState::Planned)]);
+        later.tests[0].at = "pushed".into();
+        let f = item(Some(FeatureDefinition {
+            requirements: vec![later.clone()],
+            ..Default::default()
+        }));
+        let gaps = evaluate(&f, None, &[Check::TestsGreen]);
+        assert!(gaps.is_empty(), "{gaps:?}");
+        later.tests.push(TestRef {
+            name: "plain".into(),
+            ..Default::default()
+        });
+        let f = item(Some(FeatureDefinition {
+            requirements: vec![later],
+            ..Default::default()
+        }));
+        let gaps = evaluate(&f, None, &[Check::TestsGreen]);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!(gaps[0].label, "not proven");
     }
 
     /// DEF-003 R-1: a manual test not green is named with its requirement; a green one, or one of
@@ -3137,5 +3362,73 @@ mod tests {
         let stages: Vec<String> = next(&feature.code).into_iter().map(|g| g.status).collect();
         assert_eq!(stages, ["Business Arch"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-041 R-1: the first move into a working stage asks for a sprint that has started.
+    #[test]
+    fn a_working_stage_waits_for_the_sprint_to_start() {
+        let in_sprint = Condition::Check(Check::InSprint);
+        let config_of = |name: &str, sprints: bool| {
+            let mut c = crate::config::preset_bare(name).unwrap().into_config("p");
+            c.cadence.sprints = sprints;
+            c
+        };
+        let togaf = config_of("togaf", true);
+        assert!(
+            togaf
+                .first_move_requires(None, "Business Arch")
+                .contains(&in_sprint)
+        );
+        assert!(
+            !togaf
+                .first_move_requires(None, "Operations")
+                .contains(&in_sprint)
+        );
+        let mut with_chore = togaf.clone();
+        with_chore.paths.insert(
+            "chore".into(),
+            crate::config::KindPath {
+                stages: ["Vision", "Implementation", "Migration", "Operations"]
+                    .map(String::from)
+                    .to_vec(),
+                requires: vec![Condition::Check(Check::Statement)],
+                method_off: vec![],
+            },
+        );
+        let chore = with_chore.first_move_requires(Some("chore"), "Implementation");
+        assert!(chore.contains(&Condition::Check(Check::Statement)) && chore.contains(&in_sprint));
+        // Scrum asks for it at In Progress already; Ready stays refinement before the sprint.
+        let scrum = config_of("scrum", true);
+        assert!(
+            !scrum
+                .first_move_requires(None, "Ready")
+                .contains(&in_sprint)
+        );
+        assert!(
+            config_of("togaf", false)
+                .first_move_requires(None, "Business Arch")
+                .is_empty()
+        );
+
+        let item = pinned_item("", "");
+        let mut item = item;
+        item.sprint = Some("SP-001".into());
+        let conditions = [Check::InSprint];
+        let mut ctx = Context {
+            sprint_starts: [("SP-001".to_string(), "2026-11-16".to_string())].into(),
+            ..Context::default()
+        };
+        let gaps = evaluate_in(&item, None, &conditions, &ctx);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!(gaps[0].label, "sprint not started");
+        assert!(gaps[0].message.contains("2026-11-16") && gaps[0].message.contains("SP-001"));
+        ctx.active_sprint = Some("SP-001".into());
+        ctx.sprint_starts.clear();
+        assert!(evaluate_in(&item, None, &conditions, &ctx).is_empty());
+        let off = Context {
+            sprints_off: true,
+            ..Context::default()
+        };
+        assert!(evaluate_in(&item, None, &conditions, &off).is_empty());
     }
 }

@@ -474,6 +474,17 @@ pub const DEFAULT_RELEASE_STAGES: [&str; 4] = ["candidate", "test", "staging", "
 pub const RECOMMENDED_RELEASE_STAGES: [&str; 3] = ["candidate", "main", "tag"];
 
 impl Cadence {
+    /// The git model a cadence change leaves (DEF-042): `named` when the request set it; else on
+    /// when `self` (the cadence before) had neither sprints nor releases and `next` has one of
+    /// them; else `next.git_model`.
+    pub fn git_model_after(&self, next: &Cadence, named: Option<bool>) -> bool {
+        match named {
+            Some(v) => v,
+            None if !self.sprints && !self.releases && (next.sprints || next.releases) => true,
+            None => next.git_model,
+        }
+    }
+
     pub fn is_off(&self) -> bool {
         *self == Cadence::default()
     }
@@ -939,6 +950,17 @@ pub fn preset_bare(name: &str) -> crate::Result<WorkflowFile> {
 }
 
 impl WorkflowFile {
+    /// Kinds whose path never enters the stage holding the integrate role, when the workflow has
+    /// one (DEF-042). Sorted; empty when every path passes through it.
+    pub fn paths_skipping_integrate(&self) -> Vec<String> {
+        self.clone()
+            .into_config("p")
+            .paths_skipping_integrate()
+            .into_iter()
+            .map(|(kind, _)| kind)
+            .collect()
+    }
+
     /// This workflow as a project's config.
     pub fn into_config(self, name: &str) -> ProjectConfig {
         let mut config = ProjectConfig {
@@ -1515,6 +1537,12 @@ pub fn working_agreement(project: &str, config: &ProjectConfig) -> String {
                 }
             ));
         }
+        if c.sprints && !config.asks_in_sprint() {
+            out.push_str(&format!(
+                "- Work starts inside a started sprint: the first move off {} asks for in sprint.\n",
+                config.default_state
+            ));
+        }
         out.push_str(&format!(
             "- Estimates in {}.\n",
             if config.estimate_unit == EstimateUnit::Points {
@@ -1535,7 +1563,28 @@ pub fn togaf_preset(name: &str) -> ProjectConfig {
         .into_config(name)
 }
 
+/// The warning for a kind whose path never enters the integrate stage (DEF-042).
+pub fn skipped_integrate_warning(kind: &str, stage: &str) -> String {
+    format!(
+        "the {kind} path never enters {stage}, where items merge into their line: with releases on, a {kind} merges only at the cut"
+    )
+}
+
 impl ProjectConfig {
+    /// Kinds whose path never enters the stage holding the integrate role, when the workflow has
+    /// one (DEF-042), with that stage. Sorted by kind; empty when every path passes through it.
+    pub fn paths_skipping_integrate(&self) -> Vec<(String, String)> {
+        let roles = self.roles();
+        let Some(stage) = roles.status(Role::Integrate) else {
+            return Vec::new();
+        };
+        self.paths
+            .iter()
+            .filter(|(_, path)| !path.stages.iter().any(|s| s == stage))
+            .map(|(kind, _)| (kind.clone(), stage.to_string()))
+            .collect()
+    }
+
     /// The `scheduled` preset — kanbanr's original default (Planned → Scheduled → Completed). What
     /// the tests build on; a new project gets [`ProjectConfig::for_new_project`] instead.
     pub fn default_for(name: &str) -> ProjectConfig {
@@ -1971,11 +2020,11 @@ impl ProjectConfig {
         let build = declared.and_then(|r| r.status(Role::Build));
         let mut gates = BTreeMap::new();
         let mut first = true;
-        for status in self.displayed_states.iter().filter(|s| {
-            **s != self.default_state
-                && !crate::graph::is_terminal_status(self, s)
-                && !self.is_no_op(s)
-        }) {
+        for status in self
+            .displayed_states
+            .iter()
+            .filter(|s| self.is_working_stage(s))
+        {
             let branch = match build {
                 Some(b) => b == status,
                 None => first,
@@ -1994,6 +2043,50 @@ impl ProjectConfig {
             first = false;
         }
         gates
+    }
+
+    /// Is `status` a stage where work is in flight: displayed, not the starting stage, not
+    /// terminal and not a no-op?
+    pub fn is_working_stage(&self, status: &str) -> bool {
+        self.displayed_states.iter().any(|s| s == status)
+            && status != self.default_state
+            && !crate::graph::is_terminal_status(self, status)
+            && !self.is_no_op(status)
+    }
+
+    /// Does the workflow itself ask for `in_sprint` anywhere: in a gate, or in a kind path?
+    pub fn asks_in_sprint(&self) -> bool {
+        use crate::readiness::{Check, Condition};
+        let in_sprint = Condition::Check(Check::InSprint);
+        self.effective_gates()
+            .values()
+            .any(|g| g.requires.contains(&in_sprint) || g.warns.contains(&in_sprint))
+            || self.paths.values().any(|p| p.requires.contains(&in_sprint))
+    }
+
+    /// What the first move off the starting stage into `to` asks on top of `to`'s own gate
+    /// (DEF-041): the kind path's conditions when `to` is on it, and, on a project with sprints
+    /// whose workflow never asks for `in_sprint`, a sprint that has started. No duplicates.
+    pub fn first_move_requires(
+        &self,
+        kind: Option<&str>,
+        to: &str,
+    ) -> Vec<crate::readiness::Condition> {
+        use crate::readiness::{Check, Condition};
+        let mut out: Vec<Condition> = self
+            .path_for(kind)
+            .filter(|p| p.stages.iter().any(|s| s == to))
+            .map(|p| p.requires.clone())
+            .unwrap_or_default();
+        let in_sprint = Condition::Check(Check::InSprint);
+        if self.cadence.sprints
+            && self.is_working_stage(to)
+            && !self.asks_in_sprint()
+            && !out.contains(&in_sprint)
+        {
+            out.push(in_sprint);
+        }
+        out
     }
 
     /// The declared default status for new feature items (falls back to the first status).
@@ -2350,6 +2443,46 @@ mod tests {
             chore_path(&["Vision", "Implementation", "Migration", "Operations"]),
         );
         config
+    }
+
+    /// DEF-042 R-1: the first choice of sprints or releases turns the git model on; a named value
+    /// wins; a project that already has one of them is not changed.
+    #[test]
+    fn the_first_cadence_choice_turns_the_git_model_on() {
+        let none = Cadence::default();
+        let sprints = Cadence {
+            sprints: true,
+            ..Default::default()
+        };
+        let both = Cadence {
+            sprints: true,
+            releases: true,
+            ..Default::default()
+        };
+        assert!(none.git_model_after(&both, Some(true)));
+        assert!(!none.git_model_after(&both, Some(false)));
+        assert!(none.git_model_after(&sprints, None));
+        assert!(!sprints.git_model_after(&both, None));
+        assert!(!none.git_model_after(&none, None));
+    }
+
+    /// DEF-042 R-2: every path of every built-in process enters the integrate stage, so an item
+    /// of any kind merges before a release is cut.
+    #[test]
+    fn every_built_in_path_reaches_the_integrate_stage() {
+        for (name, _) in presets() {
+            let file = preset(name).unwrap();
+            assert_eq!(
+                file.paths_skipping_integrate(),
+                Vec::<String>::new(),
+                "the {name} process has a path that skips the integrate stage"
+            );
+        }
+        // A hand-written file whose chore path skips it is listed.
+        let mut file = preset("agile").unwrap();
+        let path = file.paths.get_mut("chore").unwrap();
+        path.stages.retain(|s| s != "Review");
+        assert_eq!(file.paths_skipping_integrate(), vec!["chore".to_string()]);
     }
 
     #[test]

@@ -1430,6 +1430,31 @@ enum PrepareCmd {
         #[arg(long = "source", value_name = "S", required = true)]
         sources: Vec<String>,
     },
+    /// Settle one text to check under an item's docs-folded sign-off: Claude read it against the
+    /// change and it is still right, or a correction is filed. Run it from the project folder.
+    Text {
+        code: String,
+        /// The flagged text: `doc:<path>`, `adr:<id>` or `item:<CODE>`, as `kanbanr check` lists it.
+        target: String,
+        /// The text is still right as the code reads it. Needs --why.
+        #[arg(
+            long,
+            requires = "why",
+            conflicts_with = "correction",
+            required_unless_present = "correction"
+        )]
+        still_right: bool,
+        /// What was compared, for --still-right.
+        #[arg(long)]
+        why: Option<String>,
+        /// The item that files the correction (any status).
+        #[arg(long, value_name = "CODE")]
+        correction: Option<String>,
+        /// Where else the evidence came from (see `prepare signoff --help`). The text and the
+        /// newest commit of the change are named already.
+        #[arg(long = "source", value_name = "S")]
+        sources: Vec<String>,
+    },
     /// Prepare a manual test's result the person stated, for them to confirm on the Review page.
     Test {
         code: String,
@@ -1528,6 +1553,10 @@ enum ReleaseCmd {
         /// With --plan: fetch main from its remote first, so `pushed` reads what is there now.
         #[arg(long, requires = "plan")]
         fetch: bool,
+        /// At the cut: the requirements you accept shipping with tests not run, exactly as the
+        /// plan lists them (`FEAT-005/R-2,FEAT-005/R-3`). The notes name them (DEF-043).
+        #[arg(long, value_delimiter = ',', value_name = "CODE/R-n,…")]
+        accept_untested: Vec<String>,
     },
     /// Each release stage: what it requires, what entering it does, and whether that is the
     /// project's own gate or the default (FEAT-212).
@@ -1549,6 +1578,10 @@ enum ReleaseCmd {
         /// Open `$VISUAL` (or `$EDITOR`) on a copy of the notes, and commit it if it changed.
         #[arg(long)]
         edit: bool,
+        /// Commit this file's text as the version's section of the changelog, in the same commit
+        /// as the notes (or alone); `-` for stdin, for one of the two only (DEF-044).
+        #[arg(long, value_name = "FILE")]
+        changelog: Option<String>,
         /// Who edited them (default: the board's commit identity).
         #[arg(long)]
         by: Option<String>,
@@ -1570,6 +1603,10 @@ enum ReleaseCmd {
         /// production` (its last stage), so main is fast-forwarded to the release too (FEAT-183).
         #[arg(long)]
         tag: bool,
+        /// The requirements you accept shipping with tests not run, exactly as the cut lists them
+        /// (`FEAT-005/R-2,FEAT-005/R-3`). The notes name them (DEF-043).
+        #[arg(long, value_delimiter = ',', value_name = "CODE/R-n,…")]
+        accept_untested: Vec<String>,
     },
 }
 
@@ -1577,7 +1614,7 @@ enum ReleaseCmd {
 enum SprintCmd {
     /// Add a sprint.
     Add {
-        /// First day, YYYY-MM-DD.
+        /// First day, YYYY-MM-DD, or `today`.
         #[arg(long)]
         start: String,
         /// Length, e.g. `2w` or `10d` (default: the project's cadence, else two weeks).
@@ -1616,7 +1653,7 @@ enum SprintCmd {
         name: Option<String>,
         #[arg(long)]
         goal: Option<String>,
-        /// First day, YYYY-MM-DD; the sprint keeps its length unless one is given.
+        /// First day, YYYY-MM-DD, or `today`; the sprint keeps its length unless one is given.
         #[arg(long)]
         start: Option<String>,
         /// Length, e.g. `2w` or `10d`.
@@ -4944,7 +4981,9 @@ fn print_merge(cli: &Cli, resp: &str) {
             steps.join(", then ")
         );
     }
-    if let Some(version) = v["forward_needed"].as_str() {
+    if let Some(next) = v["forward_next"].as_str() {
+        println!("{next}");
+    } else if let Some(version) = v["forward_needed"].as_str() {
         println!("release/{version} has a fix the line lacks: kanbanr git forward {version}");
     }
     print_drift(&v["drift"]);
@@ -6007,6 +6046,12 @@ fn run_process_check(cli: &Cli, source: &str) -> anyhow::Result<()> {
         against = Some(p);
     }
     let preview = file.clone().into_config(&label);
+    // DEF-042: a path that never enters the integrate stage is a warning, not a refusal.
+    let warnings: Vec<String> = preview
+        .paths_skipping_integrate()
+        .iter()
+        .map(|(kind, stage)| config::skipped_integrate_warning(kind, stage))
+        .collect();
     let agreement = config::working_agreement(&label, &preview);
     let diagram = kanbanr_core::mermaid::to_state_diagram(&preview);
     if cli.json {
@@ -6016,6 +6061,7 @@ fn run_process_check(cli: &Cli, source: &str) -> anyhow::Result<()> {
                 "source": label,
                 "ok": problems.is_empty(),
                 "problems": problems,
+                "warnings": warnings,
                 "checked_against": against,
                 "agreement": agreement,
                 "mermaid": diagram,
@@ -6023,6 +6069,9 @@ fn run_process_check(cli: &Cli, source: &str) -> anyhow::Result<()> {
         );
     } else if problems.is_empty() {
         println!("{label}: no problems");
+        for w in &warnings {
+            println!("warning: {w}");
+        }
         if let Some(p) = &against {
             println!("(also checked against project {p})");
         }
@@ -6407,6 +6456,7 @@ fn run_process_drift(cli: &Cli, client: &Backend, cmd: &ProcessCmd) -> anyhow::R
                 v => format!(" v{v}"),
             };
             print_write(cli, &resp, format!("{p} now has {}{version}", source.name));
+            print_release_warnings(cli, &serde_json::from_str::<Value>(&resp)?["warnings"]);
             Ok(())
         }
         _ => unreachable!("handled before the board is opened"),
@@ -6916,6 +6966,17 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                             format!(" {path}")
                         };
                         println!("        {kind}{at}: {}", u["why"].as_str().unwrap_or(""));
+                    }
+                }
+                // The texts Claude settles before `docs-folded` is offered (DEF-039).
+                let to_settle = r["texts_to_settle"].as_array().cloned().unwrap_or_default();
+                if !to_settle.is_empty() {
+                    println!(
+                        "    Texts to settle before docs-folded (kanbanr prepare text {} <TARGET> …):",
+                        r["code"].as_str().unwrap_or("")
+                    );
+                    for t in &to_settle {
+                        println!("        {}", t.as_str().unwrap_or(""));
                     }
                 }
                 // A manual test nobody ran: a note, not a gap (DEF-003).
@@ -9650,7 +9711,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 cli,
                 &resp,
                 format!(
-                    "sprints {}, releases {}, estimates in {}",
+                    "sprints {}, releases {}, estimates in {}, git model {}",
                     if c["sprints"].as_bool().unwrap_or(false) {
                         "on"
                     } else {
@@ -9661,7 +9722,12 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                     } else {
                         "off"
                     },
-                    v["estimate_unit"].as_str().unwrap_or("days")
+                    v["estimate_unit"].as_str().unwrap_or("days"),
+                    if c["git_model"].as_bool().unwrap_or(false) {
+                        "on"
+                    } else {
+                        "off"
+                    }
                 ),
             );
             print_release_warnings(cli, &v["warnings"]);
@@ -9819,6 +9885,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                     Some(file.to_request(None)),
                 )?;
                 print_write(cli, &resp, format!("workflow loaded from {src}"));
+                print_release_warnings(cli, &serde_json::from_str::<Value>(&resp)?["warnings"]);
                 return Ok(());
             }
             // Export: print the workflow as a Mermaid state diagram (a read).
@@ -9895,6 +9962,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                     &resp,
                     format!("workflow set from your process '{name}'"),
                 );
+                print_release_warnings(cli, &serde_json::from_str::<Value>(&resp)?["warnings"]);
                 return Ok(());
             }
             let body = obj(vec![
@@ -9917,6 +9985,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 Some(body),
             )?;
             print_write(cli, &resp, "workflow updated".to_string());
+            print_release_warnings(cli, &serde_json::from_str::<Value>(&resp)?["warnings"]);
             Ok(())
         }
     }
@@ -10483,6 +10552,29 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
                 ),
             )
         }
+        PrepareCmd::Text {
+            code,
+            target,
+            still_right,
+            why,
+            correction,
+            sources: s,
+        } => {
+            let fields = if *still_right {
+                json!({"outcome": "confirmed", "why": why.clone().unwrap_or_default()})
+            } else {
+                json!({"outcome": "corrected", "correction": correction.clone().unwrap_or_default()})
+            };
+            (
+                json!({
+                    "kind": "text-check",
+                    "subject": {"item": code, "target": target},
+                    "fields": fields,
+                    "sources": sources(s)?,
+                }),
+                format!("check of {target} for {code}"),
+            )
+        }
         PrepareCmd::Test {
             code,
             requirement,
@@ -10532,6 +10624,13 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
         return Ok(());
     }
     let v: Value = serde_json::from_str(&resp)?;
+    if v["kind"] == "text-check" {
+        println!(
+            "recorded {what} ({}): the docs-folded sign-off takes it",
+            v["id"].as_str().unwrap_or("")
+        );
+        return Ok(());
+    }
     let page = kanbanr_core::prepared::page_of(v["kind"].as_str().unwrap_or(""));
     println!(
         "prepared {what} ({}): waiting for the person on {}/p/{p}/{page}",
@@ -10742,6 +10841,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             file,
             edit,
+            changelog,
             by,
         } => release_notes(
             cli,
@@ -10750,6 +10850,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             version,
             file.as_deref(),
             *edit,
+            changelog.as_deref(),
             by.as_ref(),
         )?,
         ReleaseCmd::Redate { version, by } => {
@@ -10762,6 +10863,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             note,
             by,
             plan: false,
+            accept_untested,
             ..
         } => {
             promote_release(
@@ -10772,6 +10874,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 stage.as_deref(),
                 reason.as_deref().or(note.as_deref()),
                 by.as_ref(),
+                accept_untested,
             )?;
         }
         ReleaseCmd::List => {
@@ -10838,20 +10941,40 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
         }
         // `cut --tag` is promotion to the last stage (FEAT-183): the tag comes with the main branch
         // fast-forwarded to the release, through the same preflight and rollback.
-        ReleaseCmd::Cut { version, tag: true } => {
+        ReleaseCmd::Cut {
+            version,
+            tag: true,
+            accept_untested,
+        } => {
             let project = get_project(client, &p)?;
             let last = project.config.cadence.stages().last().cloned();
-            promote_release(cli, client, &p, version, last.as_deref(), None, None)?;
+            promote_release(
+                cli,
+                client,
+                &p,
+                version,
+                last.as_deref(),
+                None,
+                None,
+                accept_untested,
+            )?;
         }
         ReleaseCmd::Cut {
             version,
             tag: false,
+            accept_untested,
         } => {
             let by = verdict_author(cli, None)?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/releases/{}/cut", urlencode_segment(version)),
-                Some(json!({ "by": by })),
+                Some(obj(vec![
+                    ("by", Some(json!(by))),
+                    (
+                        "accept_untested",
+                        (!accept_untested.is_empty()).then(|| json!(accept_untested)),
+                    ),
+                ])),
             )?;
             let v: Value = serde_json::from_str(&resp)?;
             let release = &v["release"];
@@ -10937,8 +11060,12 @@ fn release_notes(
     version: &str,
     file: Option<&str>,
     edit: bool,
+    changelog: Option<&str>,
     by: Option<&String>,
 ) -> anyhow::Result<()> {
+    if file == Some("-") && changelog == Some("-") {
+        anyhow::bail!("only one of --file and --changelog can read stdin (`-`)");
+    }
     let route = format!(
         "/projects/{p}/releases/{}/notes",
         urlencode_segment(version)
@@ -10949,7 +11076,19 @@ fn release_notes(
             &client.get_in(&route, repo.as_deref())?,
         )?)
     };
+    let read_arg = |f: &str| -> anyhow::Result<String> {
+        if f == "-" {
+            use std::io::Read;
+            let mut s = String::new();
+            std::io::stdin().read_to_string(&mut s)?;
+            Ok(s)
+        } else {
+            std::fs::read_to_string(f).map_err(|e| anyhow::anyhow!("could not read {f}: {e}"))
+        }
+    };
+    let section = changelog.map(read_arg).transpose()?;
     let text = match (file, edit) {
+        (None, false) if section.is_some() => None,
         (None, false) => {
             let notes = current()?;
             if cli.json {
@@ -10973,15 +11112,7 @@ fn release_notes(
             }
             return Ok(());
         }
-        (Some("-"), _) => {
-            use std::io::Read;
-            let mut s = String::new();
-            std::io::stdin().read_to_string(&mut s)?;
-            s
-        }
-        (Some(f), _) => {
-            std::fs::read_to_string(f).map_err(|e| anyhow::anyhow!("could not read {f}: {e}"))?
-        }
+        (Some(f), _) => Some(read_arg(f)?),
         (None, true) => {
             let notes = current()?;
             if !notes["editable"].as_bool().unwrap_or(false) {
@@ -10989,18 +11120,18 @@ fn release_notes(
             }
             let before = notes["text"].as_str().unwrap_or_default().to_string();
             let after = edit_in_editor(version, &before)?;
-            if after == before {
+            if after == before && section.is_none() {
                 println!("unchanged: nothing committed to {}", notes_where(&notes));
                 return Ok(());
             }
-            after
+            (after != before).then_some(after)
         }
     };
     let by = verdict_author(cli, by)?;
     let resp = client.write_in(
         Method::Put,
         &route,
-        Some(json!({ "text": text, "by": by })),
+        Some(json!({ "text": text, "changelog": section, "by": by })),
         repo.as_deref(),
     )?;
     let v: Value = serde_json::from_str(&resp)?;
@@ -11010,6 +11141,15 @@ fn release_notes(
         sha.get(..7).unwrap_or(sha),
         notes_where(&v["notes"])
     );
+    if section.is_some() {
+        let file = v["notes"]["changelog_path"]
+            .as_str()
+            .unwrap_or("the changelog");
+        said.push_str(&format!(
+            "\nchangelog: ## [{}] in {file} updated",
+            version.trim_start_matches('v')
+        ));
+    }
     if let Some(moved) = v["main_moved"].as_str().filter(|m| !m.is_empty()) {
         said.push_str(&format!("\n{moved}"));
     }
@@ -11060,6 +11200,7 @@ fn promote_release(
     stage: Option<&str>,
     reason: Option<&str>,
     by: Option<&String>,
+    accept_untested: &[String],
 ) -> anyhow::Result<()> {
     let by = verdict_author(cli, by)?;
     let stage = match stage {
@@ -11077,6 +11218,10 @@ fn promote_release(
             ("stage", Some(json!(stage))),
             ("by", Some(json!(by))),
             ("reason", reason.map(|r| json!(r))),
+            (
+                "accept_untested",
+                (!accept_untested.is_empty()).then(|| json!(accept_untested)),
+            ),
         ])),
         repo.as_deref(),
     )?;
@@ -11139,11 +11284,18 @@ fn promote_release(
         .collect();
     if !forward.is_empty() {
         println!(
-            "  merge these forward into {} (`kanbanr git forward {version}` with the git model \
-             on, or by hand):",
-            v["forward_into"]
+            "  {}",
+            v["forward_next"]
                 .as_str()
-                .unwrap_or("the integration branch")
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    kanbanr_core::gitmodel::forward_step(
+                        version,
+                        v["forward_into"]
+                            .as_str()
+                            .unwrap_or("the integration branch"),
+                    )
+                })
         );
         for c in forward {
             let sha = c["sha"].as_str().unwrap_or_default();
@@ -11285,6 +11437,13 @@ fn print_release_plan(
                     .map(|f| format!(" — {f}"))
                     .unwrap_or_default()
             );
+            // What the cut asks you to accept, one per line, as --accept-untested takes them
+            // (DEF-043).
+            if c["check"] == "untested_accepted" {
+                for r in c["refs"].as_array().into_iter().flatten() {
+                    println!("        {}", r.as_str().unwrap_or_default());
+                }
+            }
         }
     }
     if let Some(o) = plan["origin"].as_object() {
@@ -11659,7 +11818,19 @@ fn run_sprint(cli: &Cli, client: &Backend, cmd: &SprintCmd) -> anyhow::Result<()
                 (None, Some(name)) => format!("; {name} already exists"),
                 _ => String::new(),
             };
-            print_write(cli, &resp, format!("{code} is the active sprint{branch}"));
+            let moved = match v["moved_from"].as_str() {
+                Some(old) => format!(
+                    "; it was dated from {old} and now runs {} to {}",
+                    v["sprint"]["start"].as_str().unwrap_or_default(),
+                    v["sprint"]["end"].as_str().unwrap_or_default()
+                ),
+                None => String::new(),
+            };
+            print_write(
+                cli,
+                &resp,
+                format!("{code} is the active sprint{branch}{moved}"),
+            );
             if !cli.json {
                 print_catch_up(&v);
             }

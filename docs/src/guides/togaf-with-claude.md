@@ -101,6 +101,8 @@ for them.
 
 A sprint and a release don't have to line up. One release can take items from several sprints.
 
+Claude recommends starting today. Work past the first stage waits until the sprint has started; a sprint dated later reads as planned until its first day.
+
 ## One item, phase by phase
 
 Ask for the work in your own words, and Claude asks only what it can't work out. Each phase has a
@@ -120,7 +122,7 @@ is a decision and not an oversight.
 | **Business Arch** | Drafts who, what, why and the requirements | **Approve** |
 | **System Design** | Proposes how and where, and checks that against the requirements | Nothing: the approval stands while the definition grows |
 | **Implementation** | Writes the design and its task list, and names a test for each requirement | **Sign off design-review**, which also reviews what was added |
-| **Migration** | Builds on the item's branch, runs the tests and updates the docs | **Sign off docs-folded**, which appears once the docs are built; until then the Review page does not offer it. It lists any doc or item that names something the item changed and has not changed since: for each, say it is still right, or ask Claude to file a correction |
+| **Migration** | Builds on the item's branch, runs the tests and updates the docs | **Sign off docs-folded**, which appears once the docs are built; until then the Review page does not offer it. Claude first checks any doc or item that names something the item changed and has not changed since, confirming it is still right or filing a correction; the Review page shows what is left and what Claude checked, and you fill in nothing |
 | **Operations** | Nothing: the cut moves it here | **Sign off release** |
 
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
@@ -153,7 +155,9 @@ tells you what has shipped.
 > Move the saved basket on to System Design.
 
 If something's missing, Claude tells you what and either fixes it or asks you. Nothing moves past a
-gate unless you say why, and that reason stays on the item.
+gate unless you say why, and that reason stays on the item. If Claude moves it past a gate, the move
+waits on the Review page for you to **Ratify**, even on an item you approved, and the item doesn't
+ship until you do.
 
 **Moving to Migration is the merge.** kanbanr merges the item's branch into the sprint's branch. It
 isn't released yet.
@@ -203,15 +207,15 @@ Follow this order and you won't have to go back:
 | Step | Who | Do this |
 |---|---|---|
 | 1 | You | **Releases** page: **Promote to candidate**. This makes the release branch and drafts the version, changelog and notes |
-| 2 | Claude | Say "Write the release notes for readers", because the draft only lists requirements |
+| 2 | Claude | Say "Write the release notes and the changelog for readers", because the draft only lists requirements |
 | 3 | You | Open **Release notes** on the release, then **Edit notes** and **Save** for any changes |
 | 4 | Claude | Say "Run the full checks over the release" |
 | 5 | You | **Review** page: **Sign off release** on each item, if you haven't already |
 | 6 | You | **Releases** page: **Promote to main**. This moves main to the release, without tagging |
 | 7 | You | Terminal: `git push origin main`, then wait for CI to go green |
-| 8 | You | **Releases** page: **Check again**, then, with CI green, **Cut v0.1.0**. This tags main. If your stages continue after the tag, the page shows the result you recorded for it; when it is green, **Confirm** each later stage with a note of what you checked. Confirming the last one moves any item not already there to Operations |
+| 8 | You | **Releases** page: **Check again**, then, with CI green, **Cut v0.1.0**. This tags main. If your stages continue after the tag, the page shows the result you recorded for it; when it is green, **Confirm** each later stage with a note of what you checked. Confirming the last one moves any item not already there to Operations. If some shipping requirements still have tests not run, the page lists them with one checkbox: tick it to ship them unverified, and the notes name them |
 | 9 | You | Terminal: `git push origin v0.1.0`, then wait for the release workflow |
-| 10 | Claude | Say "The release is out. Bring it forward into the sprint" |
+| 10 | Claude | Brings the release forward into the sprint and tells you; you push the sprint branch when you push |
 
 **The release date is today's.** Moving main dates the notes and changelog with the day it happens.
 If the Releases page warns that they carry an earlier date, say "Date the release today", and push
@@ -254,6 +258,8 @@ Claude reports where the release is and confirms no stage; the buttons are yours
 doesn't send the release back. A release that is already tagged and waiting for its later stages
 takes no change: the merge is refused, and the change needs a patch release (**Start a patch
 release** on the page, or ask Claude).
+
+**A fix made during the release reaches the sprint the same way:** Claude brings it forward.
 
 ## Closing the sprint
 

@@ -49,7 +49,10 @@ kanbanr merges (once the model is on):
   - sprint/<SP> into main when the sprint closes (a fast-forward, tagged with the sprint's code)
   - sprint/<SP> into each item branch carried into that sprint (a catch-up merge; a conflict is reported for that item)
 pushing:    never automatic — you review and push
+automation: on
 ```
+
+Choosing sprints or releases turns the git model on.
 
 The plan quotes that output under *Branching*, lists which stage holds each role (design, build,
 integrate, release) under *Process*, and says that the method's gates are on. Approving the plan
@@ -99,6 +102,11 @@ If you ask it to explain one, it does, and sends you back to the page.
 | Withdraw an approval or a sign-off | the item's page |
 | Promote or cut a release, and confirm each stage after the tag | **Releases** page |
 | Change it | tell Claude what to change: it revises the definition, and the item comes back to the queue |
+
+Checks that need a push are marked to be checked after it; Claude records them once CI has run;
+anything still unchecked at the cut waits for you to accept it, and the notes say so. An override
+Claude makes past a gate waits on the Review page for you to ratify, and the item doesn't ship
+until you do.
 
 Claude may run `kanbanr release promote <V> --plan`, `kanbanr sprint close` and
 `kanbanr release plan`, which record no verdict. If a verdict was ever recorded that you did not
@@ -260,7 +268,7 @@ same in every workflow:
 | `bypass` | your ratification on the Review page |
 | `signoff` | a "Sign off *name*" question |
 | `estimated` | a question: how big, in your project's unit (points or days) |
-| `in_sprint` | a question: plan it into the active sprint? |
+| `in_sprint` | a question: plan it into the running sprint, or start its sprint today? |
 | `in_release` | a question: which planned release? |
 | `tests_green` | **never a question**: evidence decides; Claude reports what isn't green yet and makes it green |
 

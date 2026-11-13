@@ -257,6 +257,8 @@ export interface TestRef {
   kind?: string;
   state: "planned" | "red" | "green";
   checked_rev?: string;
+  /** When it can be checked (DEF-043): "pushed", "cut" or a release stage; absent at the item's gates. */
+  at?: string;
 }
 
 /** The six dimensions in order, with blanks named — derived here exactly as the CLI derives it. */
@@ -298,6 +300,8 @@ export interface PendingReview {
   /** Texts that name something the item changed since they last changed, for the person to
    * confirm or correct before docs-folded (FTR-013). Absent when the check was skipped. */
   to_check?: DriftFlag[];
+  /** The flagged texts Claude settled, with what it recorded (DEF-039). */
+  settled?: SettledText[];
   /** Why the drift check did not run; never to be read as "no drift" (FTR-013). */
   drift_skipped?: string;
   /** Present when the item is ready for release and in none: the planned releases, in file order
@@ -311,6 +315,17 @@ export interface PendingReview {
   spec_rev?: string;
   /** The spec that sign-off pins, with what changed since the last one (FTR-023). */
   spec?: SpecBrief;
+  /** Claude's overrides on the item that wait for the person to ratify, oldest first (DEF-043). */
+  overrides?: OverrideView[];
+}
+
+/** One override Claude made past a gate, as the Review page shows it (DEF-043). */
+export interface OverrideView {
+  at: string;
+  from: string;
+  to: string;
+  reason: string;
+  origin: string;
 }
 
 export interface SpecBrief {
@@ -537,6 +552,8 @@ export interface Release {
     reason?: string;
     item?: string;
     origin?: string;
+    /** The requirements accepted shipping untested at the cut, as CODE/R-n (DEF-043). */
+    accepted_untested?: string[];
   }[];
   /** Who cut the release and from where (DEF-028). Absent means unknown. */
   shipped_by?: string;
@@ -568,6 +585,10 @@ export interface ReleaseNotes {
   why_not?: string;
   /** Items planned into the release whose code the notes do not mention (DEF-031). */
   unmentioned?: string[];
+  /** The changelog file, when one is configured (DEF-044). */
+  changelog_path?: string;
+  /** This version's section in it, at the same tip; absent when empty. */
+  changelog_section?: string;
 }
 
 /** A check a gate names, the Zachman check narrowed to some columns, the spec's named sections
@@ -701,11 +722,25 @@ export interface ManualWaiting {
 
 /** One condition of a release stage a promotion enters, and whether it holds (FEAT-212). */
 export interface PlanCondition {
-  check: "items_finished" | "prepared" | "main_at_release" | "pushed" | "gate_passed" | "tag_passed" | "items_merged" | "stage_passed" | "merged_items_ship";
+  check:
+    | "items_finished"
+    | "prepared"
+    | "main_at_release"
+    | "pushed"
+    | "gate_passed"
+    | "tag_passed"
+    | "items_merged"
+    | "stage_passed"
+    | "merged_items_ship"
+    | "later_tests_green"
+    | "untested_accepted";
   stage: string;
   holds: boolean;
   detail: string;
   fix?: string;
+  /** The requirements it names, as CODE/R-n (DEF-043): for untested_accepted, exactly what the
+   * person accepts shipping unverified. */
+  refs?: string[];
 }
 
 /** One step a promotion takes (FEAT-212). */
@@ -1024,6 +1059,22 @@ export interface DriftChecked {
   target: string;
   outcome: "confirmed" | "corrected";
   correction?: string;
+  /** Who settled it, where, when, and against which commit (DEF-039). */
+  by?: string;
+  origin?: string;
+  at?: string;
+  rev?: string;
+  text_changed_at?: string;
+  /** Why the text is still right, for `confirmed`. */
+  why?: string;
+  /** The `text-check` prepared record it came from. */
+  prepared?: string;
+}
+
+/** A flagged text and the check Claude recorded for it (DEF-039). */
+export interface SettledText {
+  flag: DriftFlag;
+  check: DriftChecked;
 }
 
 /** Where a project's decisions are taken (FTR-028). */
