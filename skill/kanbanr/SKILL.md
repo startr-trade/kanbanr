@@ -908,6 +908,15 @@ what it cannot yet show. `kanbanr tests` finds evidence that has rotted — a gr
 renamed or deleted — and `--write` returns it to `planned`. Mark a check a person performs as
 `kind: manual`; it is exempt from that sweep, so use it only when a person really did it.
 
+**A manual test's result is the person's, recorded on the monitor.** A manual test that is not
+green waits on the Review page, under **Manual checks**, with its requirement and the check to
+make; the person does the check and clicks Passed or Failed there. Tell them it is there. **Never
+give them a `kanbanr test` command to run**, and never record a manual result yourself: kanbanr
+refuses it. If they tell you the result in the conversation, prepare it with
+`kanbanr prepare test <CODE> <R-n> "<test>" --passed|--failed --source "conversation: <what they
+said>"` and tell them to confirm it on the Review page. A failed check is recorded red; ask the
+user whether to file a defect, and file one only when they say so.
+
 ## Every change points back at the reason for it
 
 `kanbanr trace <G-2 | FEAT-046 | FEAT-046/R-2 | doc.md>` goes **down** — requirements, tests, documents,
@@ -1212,7 +1221,7 @@ kanbanr feature define FEAT-001 --template --kind defect   # skeleton for that k
 kanbanr feature define FEAT-001 --file def.yaml | --clear  # write / clear the definition
 kanbanr review FEAT-001           # the one-screen decision brief — show this BEFORE building
 kanbanr check [FEAT-001]          # what this item has not said and cannot yet show
-kanbanr test FEAT-001 R-1 cart::retains green [--rev <sha>]   # normally the capture hook does this
+kanbanr test FEAT-001 R-1 cart::retains green [--rev <sha>] [--note T]   # normally the capture hook does this; a manual test is the person's, on the Review page
 kanbanr report [--since 14d]      # throughput, cycle time, rework, escape rate, coverage
 kanbanr tests [--write]           # tracked tests that no longer exist; --write un-proves them
 kanbanr retro [MS-006] [--since 14d] [--label x] [--write] | --due

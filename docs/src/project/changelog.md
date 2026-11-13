@@ -27,6 +27,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **Manual tests waiting for a person are listed on the Review page, recorded there with Passed or
+  Failed, and refused when Claude tries to record one (DEF-040).** The board keeps who checked, when,
+  from where and any note; `kanbanr test` still records one from the person's own terminal, and
+  `kanbanr prepare test` lets Claude prepare a result the person stated, to confirm on the page.
 - **`kanbanr drift --since DATE` starts at the beginning of that day (UTC)**, so its result no
   longer depends on the time it is run (DEF-037).
 - **A release's notes are still found after the notes path is changed, and a missing notes file
