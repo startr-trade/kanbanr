@@ -153,10 +153,18 @@ see [Designing CI and the release workflow](delivery-pipeline.md).
 | 3 | You | Open **Release notes** on the release, then **Edit notes** and **Save** for any changes |
 | 4 | Claude | Say "Run the full checks over the release" |
 | 5 | You | **Releases** page: **Promote to main**. This moves main to the release, without tagging |
-| 6 | You | Terminal: `git push origin main`, then wait for CI to go green |
-| 7 | You | **Releases** page: **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Released, unless your stages continue after the tag: then **Confirm** each later stage, and the last one moves the items |
-| 8 | You | Terminal: `git push origin v1.0.0` |
-| 9 | Claude | Say "The release is out. Bring it forward into the sprint" |
+| 6 | You | Terminal: `git push origin main`. This is the first push the release needs |
+| 7 | You | Wait for CI on main to go green |
+| 8 | You | **Releases** page, **Record result**, just above the Cut: choose gate `ci`, paste the link to the run, click **Passed** |
+| 9 | You | **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Released, unless your stages continue after the tag: then **Confirm** each later stage, and the last one moves the items. The Cut stays greyed out until step 8 is done for the commit main is at |
+| 10 | You | Terminal: `git push origin v1.0.0` |
+| 11 | Claude | Say "The release is out. Bring it forward into the sprint" |
+
+**When to push.** You push twice for a release: main after **Promote to main**, and the tag after the **Cut**. Nothing earlier is needed: every check before that runs on your machine. If you want to see the pipeline run sooner, you can push the sprint's branch; that run is a preview and records nothing for the release.
+
+<!-- FTR-034: step 8 changes to the prepared result -->
+
+**Recording CI.** The Cut waits for a CI result recorded for the exact commit main is at. kanbanr never asks your CI service; you look, and the **Record result** form is how you say what you saw. A failed run is recorded as **Failed**, and the page then says what to fix.
 
 **Each button says what it will do**, and stays greyed out with the reason until it's ready.
 

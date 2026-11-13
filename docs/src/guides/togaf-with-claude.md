@@ -205,10 +205,18 @@ Follow this order and you won't have to go back:
 | 4 | Claude | Say "Run the full checks over the release" |
 | 5 | You | **Review** page: **Sign off release** on each item, if you haven't already |
 | 6 | You | **Releases** page: **Promote to main**. This moves main to the release, without tagging |
-| 7 | You | Terminal: `git push origin main`, then wait for CI to go green |
-| 8 | You | **Releases** page: **Check again**, then, with CI green, **Cut v0.1.0**. This tags main. If your stages continue after the tag, the page shows the result you recorded for it; when it is green, **Confirm** each later stage with a note of what you checked. Confirming the last one moves any item not already there to Operations |
-| 9 | You | Terminal: `git push origin v0.1.0`, then wait for the release workflow |
-| 10 | Claude | Say "The release is out. Bring it forward into the sprint" |
+| 7 | You | Terminal: `git push origin main`. This is the first push the release needs |
+| 8 | You | Wait for CI on main to go green |
+| 9 | You | **Releases** page, **Record result**, just above the Cut: choose gate `ci`, paste the link to the run, click **Passed** |
+| 10 | You | **Check again**, then **Cut v0.1.0**. This tags main. The Cut stays greyed out until step 9 is done for the commit main is at. If your stages continue after the tag, the page shows the result you recorded for it; when it is green, **Confirm** each later stage with a note of what you checked. Confirming the last one moves any item not already there to Operations |
+| 11 | You | Terminal: `git push origin v0.1.0`, then wait for the release workflow |
+| 12 | Claude | Say "The release is out. Bring it forward into the sprint" |
+
+**When to push.** You push twice for a release: main after **Promote to main**, and the tag after the **Cut**. Nothing earlier is needed: every check before that runs on your machine. If you want to see the pipeline run sooner, you can push the sprint's branch; that run is a preview and records nothing for the release.
+
+<!-- FTR-034: step 9 changes to the prepared result -->
+
+**Recording CI.** The Cut waits for a CI result recorded for the exact commit main is at. kanbanr never asks your CI service; you look, and the **Record result** form is how you say what you saw. A failed run is recorded as **Failed**, and the page then says what to fix.
 
 **The release date is today's.** Moving main dates the notes and changelog with the day it happens.
 If the Releases page warns that they carry an earlier date, say "Date the release today", and push

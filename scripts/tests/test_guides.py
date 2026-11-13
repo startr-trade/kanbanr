@@ -53,6 +53,17 @@ class PipelineTests(unittest.TestCase):
                 self.assertTrue(topic in text)
         self.assertRegex(text, r"(?m)^> ", "the page needs an example prompt")
 
+    def every_release_path_records_ci_before_the_cut(self) -> None:
+        for process in PROCESSES:
+            for kind, marker in (("with-claude", "Record result"), ("cli", "gate record")):
+                name = f"{process}-{kind}.md"
+                with self.subTest(guide=name):
+                    text = section(read(GUIDES / name), "## Releasing")
+                    push = text.find("git push origin main")
+                    record = text.find(marker)
+                    cut = text.find("Cut", record)
+                    self.assertTrue(0 <= push < record < cut, f"push {push}, record {record}, cut {cut}")
+
     def the_index_and_summary_list_the_pipeline_page(self) -> None:
         self.assertTrue(PAGE in read(GUIDES / "index.md"))
         self.assertTrue(f"guides/{PAGE}" in read(ROOT / "docs/src/SUMMARY.md"))
