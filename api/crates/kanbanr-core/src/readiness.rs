@@ -132,7 +132,9 @@ impl Check {
                 "estimated in the project's unit: story points or days \
                  (`kanbanr config cadence --unit points`)"
             }
-            Check::InSprint => "planned into the active sprint (projects with sprints switched on)",
+            Check::InSprint => {
+                "planned into the active sprint, one that has started (asked only when sprints are on)"
+            }
             Check::InRelease => "planned into a release (projects with releases switched on)",
             Check::Signoff => "a named sign-off is recorded; a gate names it under `signoffs`",
             Check::SpecSections => {
@@ -336,6 +338,10 @@ pub struct Context {
     pub unit: crate::config::EstimateUnit,
     /// The sprint currently active, if the project uses sprints and one is.
     pub active_sprint: Option<String>,
+    /// The project has no sprints switched on, so `in_sprint` asks nothing (DEF-041).
+    pub sprints_off: bool,
+    /// The code and first day of each sprint that is neither closed nor running as of today.
+    pub sprint_starts: std::collections::BTreeMap<String, String>,
     /// The project's doc folder, for [`Check::DocsUpdated`] (FEAT-180). Its history is read only
     /// when that check is evaluated, and only for items that declare docs.
     pub docs_dir: Option<std::path::PathBuf>,
@@ -401,7 +407,19 @@ impl Context {
         repo: Option<&std::path::Path>,
     ) -> Context {
         let line_inputs = repo.is_some() && config.cadence.git_model;
+        let today = crate::sprints::today();
+        let all_sprints = if config.cadence.sprints {
+            crate::sprints::load(store, id).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         Context {
+            sprints_off: !config.cadence.sprints,
+            sprint_starts: all_sprints
+                .iter()
+                .filter(|s| s.state_on(today) == crate::sprints::SprintState::Planned)
+                .map(|s| (s.code.clone(), s.start.clone()))
+                .collect(),
             code_repo: repo.map(std::path::Path::to_path_buf),
             main_branch: config
                 .cadence
@@ -420,13 +438,7 @@ impl Context {
             },
             branches: Default::default(),
             unit: config.estimate_unit,
-            active_sprint: if config.cadence.sprints {
-                crate::sprints::load(store, id)
-                    .ok()
-                    .and_then(|s| crate::sprints::active(&s).map(|a| a.code.clone()))
-            } else {
-                None
-            },
+            active_sprint: crate::sprints::active_on(&all_sprints, today).map(|a| a.code.clone()),
             docs_dir: Some(store.project_dir(id).join("docs")),
             coverage: Self::coverage(store, id, config),
             build_onward: config.role_status(crate::config::Role::Build).map(|build| {
@@ -838,6 +850,11 @@ pub fn next_gates(
             _ => false,
         })
         .filter_map(|to| {
+            let first_requires = if first_move {
+                config.first_move_requires(kind, to)
+            } else {
+                Vec::new()
+            };
             let mut gate = gates
                 .get(to)
                 .filter(|g| g.applies_to(kind))
@@ -845,18 +862,16 @@ pub fn next_gates(
                 .unwrap_or_default();
             if let Some(path) = path {
                 crate::method::strip_gate(&mut gate, &path.method_off);
-                if first_move {
-                    for c in &path.requires {
-                        if !gate.requires.contains(c) {
-                            gate.requires.push(c.clone());
-                        }
+            }
+            if first_move {
+                for c in &first_requires {
+                    if !gate.requires.contains(c) {
+                        gate.requires.push(c.clone());
                     }
                 }
             }
             // A stage with nothing to say about this kind is not listed, as before.
-            if gates.get(to).filter(|g| g.applies_to(kind)).is_none()
-                && !(first_move && path.is_some_and(|p| !p.requires.is_empty()))
-            {
+            if gates.get(to).filter(|g| g.applies_to(kind)).is_none() && first_requires.is_empty() {
                 return None;
             }
             let mut requires_gaps =
@@ -1178,24 +1193,44 @@ pub fn evaluate_in(
             ),
         ));
     }
-    if checks.contains(&Check::InSprint) && !exempt {
-        match ctx.active_sprint.as_deref() {
-            Some(active) if feature.sprint.as_deref() == Some(active) => {}
-            Some(active) => gaps.push(gap(
+    if checks.contains(&Check::InSprint) && !exempt && !ctx.sprints_off {
+        let in_active = ctx
+            .active_sprint
+            .as_deref()
+            .is_some_and(|a| feature.sprint.as_deref() == Some(a));
+        let waiting = feature
+            .sprint
+            .as_deref()
+            .and_then(|sp| ctx.sprint_starts.get(sp).map(|start| (sp, start)));
+        if in_active {
+            // Planned into the sprint that is running: nothing to say.
+        } else if let Some((sp, start)) = waiting {
+            gaps.push(gap(
                 Check::InSprint,
                 None,
-                "not in the sprint",
+                "sprint not started",
                 format!(
-                    "not in the active sprint {active} — `kanbanr sprint plan {active} {}`",
-                    feature.code
+                    "planned into {sp}, which has not started (its first day is {start}) — start it with `kanbanr sprint start {sp}`, which starts it today"
                 ),
-            )),
-            None => gaps.push(gap(
-                Check::InSprint,
-                None,
-                "no active sprint",
-                "no sprint is active — `kanbanr sprint start <SP-…>`".to_string(),
-            )),
+            ));
+        } else {
+            match ctx.active_sprint.as_deref() {
+                Some(active) => gaps.push(gap(
+                    Check::InSprint,
+                    None,
+                    "not in the sprint",
+                    format!(
+                        "not in the active sprint {active} — `kanbanr sprint plan {active} {}`",
+                        feature.code
+                    ),
+                )),
+                None => gaps.push(gap(
+                    Check::InSprint,
+                    None,
+                    "no active sprint",
+                    "no sprint is active — `kanbanr sprint start <SP-…>`".to_string(),
+                )),
+            }
         }
     }
     gaps
@@ -1683,6 +1718,10 @@ pub struct ItemCheck {
     /// The documents still unbuilt while the next stage holds `docs-folded` (DEF-033).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub docs_unbuilt: Vec<crate::docsbuilt::Unbuilt>,
+    /// The flagged texts Claude has not settled, as `doc:<path>`, `adr:<id>` or `item:<CODE>`,
+    /// while the next stage holds `docs-folded` and a code repository is attached (DEF-039).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts_to_settle: Vec<String>,
 }
 
 /// The manual tests of an item that are not green, as `R-4: <name>` (DEF-003): a check nobody
@@ -1755,8 +1794,32 @@ pub fn check_board(
                 .and_then(|n| n.docs_built.as_ref())
                 .map(|d| d.unbuilt.clone())
                 .unwrap_or_default();
+            let at_docs_folded = view
+                .as_ref()
+                .and_then(|v| {
+                    let first = immediate_status(&project, &v.next)?;
+                    v.next.iter().find(|n| n.status == first)
+                })
+                .is_some_and(|n| {
+                    !n.signoffs_held.is_empty()
+                        || n.signoffs_needed
+                            .iter()
+                            .any(|s| s == crate::method::DOCS_FOLDED)
+                });
+            let texts_to_settle = match repo {
+                Some(repo) if at_docs_folded => {
+                    crate::docdrift::flags_for_item(store, p, &f.code, repo)
+                        .map(|flags| crate::review::split_settled(store, p, &f.code, flags).0)
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|fl| fl.target.key())
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
             ItemCheck {
                 docs_unbuilt,
+                texts_to_settle,
                 code: f.code.clone(),
                 title: f.title.clone(),
                 status: f.status.clone(),
@@ -3296,5 +3359,73 @@ mod tests {
         let stages: Vec<String> = next(&feature.code).into_iter().map(|g| g.status).collect();
         assert_eq!(stages, ["Business Arch"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-041 R-1: the first move into a working stage asks for a sprint that has started.
+    #[test]
+    fn a_working_stage_waits_for_the_sprint_to_start() {
+        let in_sprint = Condition::Check(Check::InSprint);
+        let config_of = |name: &str, sprints: bool| {
+            let mut c = crate::config::preset_bare(name).unwrap().into_config("p");
+            c.cadence.sprints = sprints;
+            c
+        };
+        let togaf = config_of("togaf", true);
+        assert!(
+            togaf
+                .first_move_requires(None, "Business Arch")
+                .contains(&in_sprint)
+        );
+        assert!(
+            !togaf
+                .first_move_requires(None, "Operations")
+                .contains(&in_sprint)
+        );
+        let mut with_chore = togaf.clone();
+        with_chore.paths.insert(
+            "chore".into(),
+            crate::config::KindPath {
+                stages: ["Vision", "Implementation", "Migration", "Operations"]
+                    .map(String::from)
+                    .to_vec(),
+                requires: vec![Condition::Check(Check::Statement)],
+                method_off: vec![],
+            },
+        );
+        let chore = with_chore.first_move_requires(Some("chore"), "Implementation");
+        assert!(chore.contains(&Condition::Check(Check::Statement)) && chore.contains(&in_sprint));
+        // Scrum asks for it at In Progress already; Ready stays refinement before the sprint.
+        let scrum = config_of("scrum", true);
+        assert!(
+            !scrum
+                .first_move_requires(None, "Ready")
+                .contains(&in_sprint)
+        );
+        assert!(
+            config_of("togaf", false)
+                .first_move_requires(None, "Business Arch")
+                .is_empty()
+        );
+
+        let item = pinned_item("", "");
+        let mut item = item;
+        item.sprint = Some("SP-001".into());
+        let conditions = [Check::InSprint];
+        let mut ctx = Context {
+            sprint_starts: [("SP-001".to_string(), "2026-11-16".to_string())].into(),
+            ..Context::default()
+        };
+        let gaps = evaluate_in(&item, None, &conditions, &ctx);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!(gaps[0].label, "sprint not started");
+        assert!(gaps[0].message.contains("2026-11-16") && gaps[0].message.contains("SP-001"));
+        ctx.active_sprint = Some("SP-001".into());
+        ctx.sprint_starts.clear();
+        assert!(evaluate_in(&item, None, &conditions, &ctx).is_empty());
+        let off = Context {
+            sprints_off: true,
+            ..Context::default()
+        };
+        assert!(evaluate_in(&item, None, &conditions, &off).is_empty());
     }
 }

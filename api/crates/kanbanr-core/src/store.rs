@@ -1888,11 +1888,16 @@ impl Store {
             crate::method::strip_gate(gate, &path.method_off);
         }
         let first_move = feature.status == project.config.default_state;
-        if let Some(path) = path.filter(|p| first_move && p.stages.iter().any(|s| s == to)) {
-            let gate = gate.get_or_insert_with(Default::default);
-            for c in &path.requires {
-                if !gate.requires.contains(c) {
-                    gate.requires.push(c.clone());
+        if first_move {
+            let extra = project
+                .config
+                .first_move_requires(feature.kind.as_deref(), to);
+            if !extra.is_empty() {
+                let gate = gate.get_or_insert_with(Default::default);
+                for c in extra {
+                    if !gate.requires.contains(&c) {
+                        gate.requires.push(c);
+                    }
                 }
             }
         }

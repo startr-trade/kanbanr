@@ -3792,6 +3792,211 @@ fn setup_asks_cadence_and_shows_git_model() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-042 R-1: setup with sprints or releases on leaves the git model on, the preview says so,
+/// the person's `off` is kept, and a project that already had one of them is not changed.
+#[test]
+fn setup_with_sprints_and_releases_on_leaves_the_git_model_on() {
+    let (base, work) = togaf_scratch("setup-git-model");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ],
+    ));
+    let json = |args: &[&str]| -> serde_json::Value {
+        serde_json::from_slice(&ok(run_in(&base, &work, args)).stdout).unwrap()
+    };
+
+    // (a) The preview, before any board, says what setup will do.
+    let on = json(&[
+        "git",
+        "model",
+        "--sprints",
+        "on",
+        "--releases",
+        "on",
+        "--json",
+    ]);
+    assert_eq!(on["automated"], true, "{on}");
+    let off = json(&[
+        "git",
+        "model",
+        "--sprints",
+        "off",
+        "--releases",
+        "off",
+        "--json",
+    ]);
+    assert_eq!(off["automated"], false, "{off}");
+
+    // (b) The setup plan's commands leave it on.
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "workflow", "--preset", "agile"],
+    ));
+    let out = ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--sprints", "on", "--releases", "on"],
+    ));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("git model on"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(json(&["git", "model", "--json"])["automated"], true);
+
+    // (c) The person's `off` survives applying the process again.
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--git-model", "off"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "workflow", "--preset", "agile"],
+    ));
+    assert_eq!(json(&["git", "model", "--json"])["automated"], false);
+    let _ = std::fs::remove_dir_all(&base);
+
+    // (d) A project that already had sprints is not changed by turning releases on.
+    let (base, work) = togaf_scratch("setup-git-model-d");
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--sprints", "on", "--git-model", "off"],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "cadence", "--releases", "on"],
+    ));
+    let json = |args: &[&str]| -> serde_json::Value {
+        serde_json::from_slice(&ok(run_in(&base, &work, args)).stdout).unwrap()
+    };
+    assert_eq!(json(&["git", "model", "--json"])["automated"], false);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-042: `process check` warns, without refusing, of a path that skips the integrate stage.
+#[test]
+fn process_check_warns_of_a_path_that_skips_the_integrate_stage() {
+    let (base, work) = togaf_scratch("process-check-integrate");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(git_in(&base, &work, &["init", "-q", "-b", "main"]));
+    ok(git_in(
+        &base,
+        &work,
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "[no-ref] initial commit",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "init",
+            "shop",
+            "--author",
+            "A",
+            "--email",
+            "a@x",
+            "--no-hooks",
+        ],
+    ));
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "workflow", "--preset", "agile"],
+    ));
+    let export = ok(run_in(&base, &work, &["config", "workflow", "--export"])).stdout;
+    let text = String::from_utf8(export).unwrap();
+    // The built-in process is clean.
+    let file = base.join("agile.yaml");
+    std::fs::write(&file, &text).unwrap();
+    let out = ok(run_in(
+        &base,
+        &work,
+        &["process", "check", file.to_str().unwrap()],
+    ));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("warning:"));
+    // A chore path without Review is a warning, and the check still passes.
+    let skipping = text.replace(
+        "    - Test\n    - Review\n    - Released",
+        "    - Test\n    - Released",
+    );
+    assert_ne!(skipping, text, "the chore path was not found in the export");
+    std::fs::write(&file, skipping).unwrap();
+    let out = ok(run_in(
+        &base,
+        &work,
+        &["process", "check", file.to_str().unwrap()],
+    ));
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        said.contains("warning:") && said.contains("chore path never enters Review"),
+        "{said}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-182: a sign-off can be withdrawn from the CLI with a reason, never without one, and the
 /// brief then says it was withdrawn and why.
 #[test]
@@ -5566,6 +5771,12 @@ fn integrate_merges_item_branch() {
         &["sprint", "add", "--start", "2026-10-05"],
     ));
     ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    // Work waits for a started sprint, and the item is in it (DEF-041).
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "plan", "SP-001", "FEAT-001"],
+    ));
     let main = tip(&base, &work, "main");
     ok(run_in(&base, &work, &["start", "FEAT-001"]));
     commit_file_in(
@@ -5825,6 +6036,101 @@ fn fixes_forward_merged() {
     assert!(message.contains("Refs: kanbanr:FEAT-002"), "{message}");
     let again = ok(run_in(&base, &work, &["git", "forward", "v1"]));
     assert!(again.contains("nothing to forward"), "{again}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// A release v1 with a fix integrated into release/v1 and not yet forwarded (DEF-045), as in
+/// `fixes_forward_merged`: returns what the move printed.
+fn release_fix_integrated(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, String) {
+    let (base, work) = togaf_scratch(tag);
+    git_model_board(&base, &work, false, true);
+    approved_item(&base, &work, "FEAT-002", "Cart loses items", Some("bug"));
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(&base, &work, &["release", "add", "v1"]));
+    ok(run_in(&base, &work, &["release", "plan", "v1", "FEAT-002"]));
+    ok(run_in(&base, &work, &["release", "promote", "v1"]));
+    ok(run_in(&base, &work, &["start", "FEAT-002"]));
+    commit_file_in(
+        &base,
+        &work,
+        "fix.txt",
+        "fixed\n",
+        "fix: cart\n\nRefs: kanbanr:FEAT-002",
+    );
+    let args = [
+        "move",
+        "FEAT-002",
+        "Completed",
+        "--override",
+        "fix integrated into the release under test",
+    ];
+    let said = ok(run_in(&base, &work, &args));
+    (base, work, said)
+}
+
+/// DEF-045 R-1: the move names `kanbanr git forward` as Claude's next step, a local merge with
+/// nothing pushed, and never as something the person runs; the forward then clears the doctor.
+#[test]
+fn the_moves_next_step_names_git_forward_for_claude_not_the_person() {
+    let (base, work, said) = release_fix_integrated("gm-forward-claude");
+    let line = said
+        .lines()
+        .find(|l| l.contains("next, for Claude:"))
+        .unwrap_or_else(|| panic!("no next step in: {said}"));
+    assert!(line.contains("kanbanr git forward v1"), "{line}");
+    assert!(line.contains("nothing is pushed"), "{line}");
+    assert!(!line.contains("you"), "{line}");
+    assert_eq!(
+        line.trim(),
+        kanbanr_core::gitmodel::forward_step("v1", "integration")
+    );
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let before = ok(run_in(&base, &work, &["git", "doctor"]));
+    assert!(before.contains("release/v1 has "), "{before}");
+    ok(run_in(&base, &work, &["git", "forward", "v1"]));
+    let after = ok(run_in(&base, &work, &["git", "doctor"]));
+    assert!(!after.contains("release/v1 has"), "{after}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-045 R-1: a forward that would conflict is refused before anything is written, says so, and
+/// leaves the line where it was.
+#[test]
+fn a_forward_that_conflicts_changes_nothing() {
+    let (base, work, _) = release_fix_integrated("gm-forward-conflict");
+    // A different change to the same file on the line.
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let current = String::from_utf8(ok(git_in(&base, &work, &["branch", "--show-current"])).stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+    ok(git_in(&base, &work, &["checkout", "-q", "integration"]));
+    commit_file_in(
+        &base,
+        &work,
+        "fix.txt",
+        "other\n",
+        "other: same file\n\n[no-ref] test",
+    );
+    let before = tip(&base, &work, "integration");
+    let out = run_in(&base, &work, &["git", "forward", "v1"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a conflicting forward must fail");
+    assert!(err.contains("fix.txt"), "{err}");
+    assert!(err.contains("nothing was changed"), "{err}");
+    assert_eq!(tip(&base, &work, "integration"), before);
+    if !current.is_empty() {
+        ok(git_in(&base, &work, &["checkout", "-q", &current]));
+    }
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -6100,7 +6406,10 @@ fn patch_release_reports_forward_merge() {
         &work,
         &["release", "promote", "v1.0.1", "production"],
     ));
-    assert!(said.contains("merge these forward into develop"), "{said}");
+    assert!(
+        said.contains("next, for Claude: bring release/v1.0.1 into develop"),
+        "{said}"
+    );
     assert!(said.contains("[no-ref] change"), "{said}");
     let notes = ok(run_in(&base, &work, &["doc", "show", "releases/v1.0.1.md"]));
     assert!(notes.contains("To merge forward into develop"), "{notes}");
@@ -6119,7 +6428,7 @@ fn patch_release_reports_forward_merge() {
         &work,
         &["release", "promote", "v1.0.1", "production"],
     ));
-    assert!(!said.contains("merge these forward"), "{said}");
+    assert!(!said.contains("next, for Claude"), "{said}");
     assert_eq!(
         rev(&base, &work, "main"),
         rev(&base, &work, "release/v1.0.1")
@@ -6246,6 +6555,12 @@ fn git_doctor_unfinished_commits_on_line() {
         &["sprint", "add", "--start", "2026-10-05"],
     ));
     ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    // Work waits for a started sprint, and the item is in it (DEF-041).
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "plan", "SP-001", "FEAT-001", "FEAT-002"],
+    ));
     // FEAT-001 is integrated (it has no branch, so nothing to merge).
     ok(run_in(&base, &work, &["move", "FEAT-001", "In Progress"]));
     ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
@@ -6324,6 +6639,12 @@ fn git_doctor_no_integrate_role_status_past_build_is_clean() {
         &["sprint", "add", "--start", "2026-10-05"],
     ));
     ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    // Work waits for a started sprint, and the item is in it (DEF-041).
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "plan", "SP-001", "FEAT-001"],
+    ));
     ok(run_in(&base, &work, &["move", "FEAT-001", "In Progress"]));
     ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
     ok(git_in(&base, &work, &["checkout", "-q", "sprint/SP-001"]));
@@ -6382,6 +6703,7 @@ fn git_doctor_orphans_and_forward_merges() {
         "sprint/SP-099 names no sprint",
         "release/v9 names no release",
         "release/v1 has 1 commit integration lacks",
+        "next, for Claude: bring release/v1 into integration with `kanbanr git forward v1`",
     ] {
         assert!(said.contains(want), "missing {want:?} in {said}");
     }
@@ -8572,6 +8894,155 @@ fn release_notes_survive_a_notes_path_change() {
         shown.contains("docs/releases/v1.0.0.md\n") && shown.contains("Written before the move."),
         "{shown}"
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-044 R-3: `release notes <V> --file F --changelog C` commits the notes and the version's
+/// changelog section in one commit on release/<V>; `--changelog` alone changes only the
+/// changelog; an empty section file is refused and nothing is committed; no item is opened.
+#[test]
+fn release_notes_and_the_changelog_section_are_updated_together() {
+    let (base, work) = release_scratch("release-notes-changelog");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let board = std::fs::canonicalize(ok(run_in(&base, &work, &["where"])).trim()).unwrap();
+    assert!(board.starts_with(std::fs::canonicalize(&base).unwrap()));
+    std::fs::write(
+        work.join("CHANGELOG.md"),
+        "# Changelog\n\n## [Unreleased]\n\n## [0.0.1] - 2026-01-01\n- old\n",
+    )
+    .unwrap();
+    ok(git_in(&base, &work, &["add", "CHANGELOG.md"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["commit", "-q", "-m", "[no-ref] changelog"],
+    ));
+    for args in [
+        &[
+            "config",
+            "release-stage",
+            "candidate",
+            "--on-enter",
+            "branch,prepare",
+        ][..],
+        &[
+            "config",
+            "release-prepare",
+            "--changelog",
+            "CHANGELOG.md",
+            "--notes",
+            "docs/releases/{version}.md",
+        ],
+    ] {
+        ok(run_in(&base, &work, args));
+    }
+    ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    let items_before = ok(run_in(&base, &work, &["--json", "board"]))
+        .matches("\"code\"")
+        .count();
+    let tip = rev(&base, &work, "release/v1.0.0");
+    let on_branch = |file: &str| {
+        ok(git_in(
+            &base,
+            &work,
+            &["show", &format!("release/v1.0.0:{file}")],
+        ))
+    };
+
+    let notes = base.join("notes.md");
+    let section = base.join("section.md");
+    std::fs::write(&notes, "# v1.0.0\n\nWritten by hand.\n").unwrap();
+    std::fs::write(&section, "### Added\n\n- Written for readers.\n").unwrap();
+    let said = ok(run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "notes",
+            "v1.0.0",
+            "--file",
+            notes.to_str().unwrap(),
+            "--changelog",
+            section.to_str().unwrap(),
+        ],
+    ));
+    assert!(
+        said.contains("changelog: ## [1.0.0] in CHANGELOG.md updated"),
+        "{said}"
+    );
+    let new = rev(&base, &work, "release/v1.0.0");
+    assert_eq!(
+        ok(git_in(&base, &work, &["rev-parse", &format!("{new}~1")])).trim(),
+        tip,
+        "one commit"
+    );
+    let names = ok(git_in(
+        &base,
+        &work,
+        &["show", "--name-only", "--format=", &new],
+    ));
+    let mut names: Vec<&str> = names.lines().collect();
+    names.sort();
+    assert_eq!(names, ["CHANGELOG.md", "docs/releases/v1.0.0.md"]);
+    let changelog = on_branch("CHANGELOG.md");
+    assert!(
+        changelog.contains("\n\n### Added\n\n- Written for readers.\n\n## [0.0.1]"),
+        "{changelog}"
+    );
+
+    // --changelog alone: only the changelog changes.
+    std::fs::write(&section, "### Fixed\n\n- Mended.\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "notes",
+            "v1.0.0",
+            "--changelog",
+            section.to_str().unwrap(),
+        ],
+    ));
+    let alone = rev(&base, &work, "release/v1.0.0");
+    let names = ok(git_in(
+        &base,
+        &work,
+        &["show", "--name-only", "--format=", &alone],
+    ));
+    assert_eq!(names.trim(), "CHANGELOG.md");
+    assert_eq!(
+        on_branch("docs/releases/v1.0.0.md"),
+        "# v1.0.0\n\nWritten by hand.\n"
+    );
+    assert!(on_branch("CHANGELOG.md").contains("- Mended."));
+
+    // An empty section file is refused, and nothing is committed.
+    std::fs::write(&section, "\n").unwrap();
+    let o = run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "notes",
+            "v1.0.0",
+            "--changelog",
+            section.to_str().unwrap(),
+        ],
+    );
+    assert!(!o.status.success());
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("needs text"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(rev(&base, &work, "release/v1.0.0"), alone);
+    let items_after = ok(run_in(&base, &work, &["--json", "board"]))
+        .matches("\"code\"")
+        .count();
+    assert_eq!(items_after, items_before, "no fix item was opened");
     let _ = std::fs::remove_dir_all(&base);
 }
 

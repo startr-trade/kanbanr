@@ -228,12 +228,15 @@ pub fn preview(
     sprints: &[Sprint],
     repo: Option<&Path>,
 ) -> GitModel {
+    let before = config.cadence.clone();
     if let Some(on) = sprints_on {
         config.cadence.sprints = on;
     }
     if let Some(on) = releases_on {
         config.cadence.releases = on;
     }
+    // DEF-042: the preview follows what setup will do, so it says `automation: on`.
+    config.cadence.git_model = before.git_model_after(&config.cadence, None);
     let main = config
         .cadence
         .main_branch
@@ -454,6 +457,9 @@ pub struct SprintStarted {
     /// Carried items brought up to date with the new sprint (FEAT-190).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub catch_up: Vec<CatchUp>,
+    /// The sprint's old first day, when starting it moved its dates to today (DEF-041).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub moved_from: Option<String>,
 }
 
 /// Start a sprint, with its branch when the model is automated: preflight, then the branch, then
@@ -465,9 +471,16 @@ pub fn sprint_start(
     repo: Option<&Path>,
 ) -> Result<SprintStarted> {
     let config = store.load_meta(id)?.config;
+    let first_day = crate::sprints::load(store, id)?
+        .into_iter()
+        .find(|s| s.code == code)
+        .map(|s| s.start);
+    let moved = |sprint: &Sprint| first_day.clone().filter(|old| *old != sprint.start);
     if !config.cadence.git_model {
+        let sprint = crate::sprints::start(store, id, code)?;
         return Ok(SprintStarted {
-            sprint: crate::sprints::start(store, id, code)?,
+            moved_from: moved(&sprint),
+            sprint,
             branch: None,
             reused: None,
             catch_up: Vec::new(),
@@ -501,6 +514,7 @@ pub fn sprint_start(
     if facts.branches.contains_key(&branch) {
         let sprint = crate::sprints::start(store, id, code)?;
         return Ok(SprintStarted {
+            moved_from: moved(&sprint),
             sprint,
             branch: None,
             reused: Some(branch),
@@ -511,6 +525,7 @@ pub fn sprint_start(
     crate::coderepo::create_branch_from(repo, &branch, &base)?;
     match crate::sprints::start(store, id, code) {
         Ok(sprint) => Ok(SprintStarted {
+            moved_from: moved(&sprint),
             sprint,
             branch: Some((branch, base)),
             reused: None,
@@ -562,6 +577,10 @@ pub struct Moved {
     /// forward <V>`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forward_needed: Option<String>,
+    /// What comes next when `forward_needed` is set: Claude's step, as [`forward_step`] words it
+    /// (DEF-045).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forward_next: Option<String>,
     /// The release the item was merged into was past its first stage, so it went back to it
     /// (DEF-031).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -604,6 +623,7 @@ pub fn move_item(
             warnings,
             merged: None,
             forward_needed: None,
+            forward_next: None,
             sent_back: None,
             note,
             drift: Vec::new(),
@@ -713,6 +733,12 @@ pub fn move_item(
         }
     };
     let forward_needed = line.strip_prefix(RELEASE_PREFIX).map(str::to_string);
+    let forward_next = forward_needed.as_deref().map(|version| {
+        forward_step(
+            version,
+            model.line.as_deref().unwrap_or("the line of integration"),
+        )
+    });
     // A real merge into a release past its first stage returns it there (DEF-031). The merge and
     // the move are done and consistent; if only the stage write fails, say how to finish it.
     let (mut sent_back, mut note) = (None, None);
@@ -742,6 +768,7 @@ pub fn move_item(
             already,
         }),
         forward_needed,
+        forward_next,
         sent_back,
         note,
     })
@@ -958,6 +985,15 @@ pub struct Forwarded {
     pub refs: Vec<String>,
 }
 
+/// What comes next when `line` lacks commits of `release/<version>` (DEF-045): Claude's step,
+/// named as such, and that it is a local merge with nothing pushed.
+pub fn forward_step(version: &str, line: &str) -> String {
+    format!(
+        "next, for Claude: bring release/{version} into {line} with `kanbanr git forward {version}` \
+         — a local merge, nothing is pushed; a conflict stops it with nothing changed"
+    )
+}
+
 /// Merge a release's fixes forward into the current line (R-4), naming in `Refs:` every item the
 /// release's own commits name. Asked for, never automatic (Q1).
 pub fn forward(store: &Store, id: &str, version: &str, repo: &Path) -> Result<Forwarded> {
@@ -988,8 +1024,8 @@ pub fn forward(store: &Store, id: &str, version: &str, repo: &Path) -> Result<Fo
     let preview = crate::coderepo::merge_preview(repo, &into, &from)?;
     if !preview.clean {
         return Err(CoreError::Unsupported(format!(
-            "merging {from} forward into {into} conflicts in: {}. Merge it by hand, with a Refs: \
-             trailer.",
+            "merging {from} forward into {into} conflicts in: {}; nothing was changed. Merge it by hand with a Refs: \
+             trailer naming the items, resolving those files",
             preview.conflicts.join(", ")
         )));
     }

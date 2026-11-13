@@ -64,6 +64,8 @@ release's version and target, when you first ask. Then it creates the sprint and
 Your checkout doesn't move. A sprint and a release don't have to line up: one release can take items
 from several sprints.
 
+Claude recommends starting today. Work past the first stage waits until the sprint has started; a sprint dated later reads as planned until its first day.
+
 ## One item, stage by stage
 
 > A shopper opens their basket on our shop's web page, leaves, and comes back the next day to find what they chose still there. Take it to Design.
@@ -153,14 +155,14 @@ see [Designing CI and the release workflow](delivery-pipeline.md).
 | Step | Who | Do this |
 |---|---|---|
 | 1 | You | **Releases** page: **Promote to candidate**. This makes the release branch and drafts the version, changelog and notes |
-| 2 | Claude | Say "Write the release notes for readers", because the draft only lists requirements |
+| 2 | Claude | Say "Write the release notes and the changelog for readers", because the draft only lists requirements |
 | 3 | You | Open **Release notes** on the release, then **Edit notes** and **Save** for any changes |
 | 4 | Claude | Say "Run the full checks over the release" |
 | 5 | You | **Releases** page: **Promote to main**. This moves main to the release, without tagging |
 | 6 | You | Terminal: `git push origin main`, then wait for CI to go green |
 | 7 | You | **Releases** page: **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Released, unless your stages continue after the tag: then **Confirm** each later stage, and the last one moves the items. If some shipping requirements still have tests not run, the page lists them with one checkbox: tick it to ship them unverified, and the notes name them |
 | 8 | You | Terminal: `git push origin v1.0.0` |
-| 9 | Claude | Say "The release is out. Bring it forward into the sprint" |
+| 9 | Claude | Brings the release forward into the sprint and tells you; you push the sprint branch when you push |
 
 **Each button says what it will do**, and stays greyed out with the reason until it's ready.
 
@@ -172,6 +174,8 @@ change only the notes.
 **The date follows the release.** Promoting to main dates the notes and changelog today. If main moved
 earlier and the cut comes later, the page warns you: ask Claude to re-date them before you cut,
 because shipped notes can't be edited.
+
+**A fix made during the release reaches the sprint the same way:** Claude brings it forward.
 
 ## Closing the sprint
 

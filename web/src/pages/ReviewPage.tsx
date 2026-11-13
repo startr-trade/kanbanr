@@ -7,7 +7,8 @@ import { useAsync, useLiveTick } from "../live";
 import { ErrorBox, Loading, LiveDot } from "../components/bits";
 import Markdown from "../components/Markdown";
 import { zachmanColumns } from "../types";
-import type { Adr, DriftChecked, DriftFlag, PendingReview, PlannedRelease, SpecBrief } from "../types";
+import type { Adr, DriftFlag, PendingReview, PlannedRelease, SettledText, SpecBrief } from "../types";
+import { docsFoldedOffer } from "../textsToCheck";
 import { approveBlocker, checkBlocks, type DiagramProblem } from "../diagramCheck";
 import { PreparedPanel } from "../components/PreparedPanel";
 import { openFor } from "../prepared";
@@ -109,12 +110,12 @@ export default function ReviewPage() {
   };
 
   // A named sign-off the item's next stage is waiting on (FEAT-117), recorded as the same identity.
-  const signoff = async (item: PendingReview, name: string, checked: DriftChecked[] = []) => {
+  const signoff = async (item: PendingReview, name: string) => {
     if (!who) return;
     const code = item.code;
     setBusy(code);
     try {
-      const answer = await api.signoff(project, code, name, who, item.rev ?? "", item.spec_rev ?? "", checked);
+      const answer = await api.signoff(project, code, name, who, item.rev ?? "", item.spec_rev ?? "");
       setDone((d) => ({ ...d, [code]: alreadyOr(answer, `signed off ${name}`) }));
     } catch (e) {
       setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
@@ -291,7 +292,7 @@ export default function ReviewPage() {
           // because a queue of twelve read as one unbroken column (FEAT-076).
           defaultOpen={i === 0}
           onApprove={() => agree(item)}
-          onSignoff={(name, checked) => signoff(item, name, checked)}
+          onSignoff={(name) => signoff(item, name)}
           prepared={prepared.data ?? []}
           onConfirmPrepared={(view, edits, done) => confirmPrepared(item, view, edits, done)}
           onRejectPrepared={(view, reason) => rejectPrepared(item, view, reason)}
@@ -716,7 +717,7 @@ function Brief({
   outcome?: string;
   defaultOpen: boolean;
   onApprove: () => void;
-  onSignoff: (name: string, checked?: DriftChecked[]) => void;
+  onSignoff: (name: string) => void;
   onRelease: (version: string) => void;
   onNewRelease: (version: string, target: string) => void;
   prepared: PreparedView[];
@@ -744,28 +745,18 @@ function Brief({
     (outcome ?? "").startsWith("signed off") ||
     (outcome ?? "").startsWith("planned into");
   const signoffs = item.signoffs_needed ?? [];
-  // The texts that name what this item changed (FTR-013): each is settled before docs-folded can
-  // be given, by "still right" or by the code of a correction Claude filed.
-  const flags: DriftFlag[] = signoffs.includes("docs-folded") ? (item.to_check ?? []) : [];
-  const [settled, setSettled] = useState<Record<string, { confirmed: boolean; correction: string }>>({});
-  const settledOf = (f: DriftFlag) => {
-    const s = settled[driftKey(f)];
-    return s?.confirmed ? "confirmed" : s?.correction.trim() ? "corrected" : null;
-  };
-  const unsettled = flags.some((f) => settledOf(f) === null);
-  const checkedFor = (): DriftChecked[] =>
-    flags.map((f) => {
-      const s = settled[driftKey(f)];
-      return s?.confirmed
-        ? { target: driftKey(f), outcome: "confirmed" }
-        : { target: driftKey(f), outcome: "corrected", correction: s?.correction.trim() ?? "" };
-    });
+  // The texts that name what this item changed (FTR-013): Claude settles each before docs-folded
+  // is offered (DEF-039). The person is shown what is left and what Claude checked, never a form.
+  const docsFolded = signoffs.includes("docs-folded")
+    ? docsFoldedOffer(item)
+    : { offer: true, left: [] as DriftFlag[], settled: [] as SettledText[] };
+  const flags = docsFolded.left;
   const diagrams = useDiagramCheck(project, item.code, tick);
   const blocker = approveBlocker(diagrams);
   // What Claude prepared (FTR-034): a sign-off's note and doc, a ratification's reason. A
-  // docs-folded with texts to settle keeps its form: what was checked travels with that button.
+  // docs-folded is not offered while texts are left, so nothing prepared for it shows either.
   const preparedSignoff = (name: string) =>
-    name === "docs-folded" && flags.length ? undefined : openFor(prepared, "signoff", { item: item.code, signoff: name });
+    name === "docs-folded" && !docsFolded.offer ? undefined : openFor(prepared, "signoff", { item: item.code, signoff: name });
   const preparedRatify = ratify ? openFor(prepared, "ratification", { item: item.code }) : undefined;
   const panels = [
     ...(preparedRatify ? [{ view: preparedRatify, label: `Ratify ${item.code}`, done: "ratified" }] : []),
@@ -931,63 +922,34 @@ function Brief({
       {item.changes_no_documents && signoffs.includes("docs-folded") ? (
         <p>This item changes no documents; signing off confirms that.</p>
       ) : null}
-      {flags.length && !writable ? (
-        <p>Give docs-folded on a monitor that takes decisions: it records what you checked beside each text.</p>
-      ) : null}
       {signoffs.includes("docs-folded") && item.drift_skipped ? (
         <p className="drift-skipped">Drift check skipped: {item.drift_skipped}.</p>
       ) : null}
       {flags.length ? (
         <div className="drift-flags">
-          <h4>Texts that name what this item changed</h4>
+          <h4>Left to check before docs-folded</h4>
           <p>
-            Each of these names something {item.code} changed and has not changed since. Read it, then say it is
-            still right, or ask Claude to file a correction and enter its code.
+            Claude reads each text against what {item.code} changed, then confirms it is still right or files a
+            correction. Ask Claude to settle them; docs-folded appears here once none is left.
           </p>
           <ul>
-            {flags.map((f) => {
-              const key = driftKey(f);
-              const s = settled[key] ?? { confirmed: false, correction: "" };
-              return (
-                <li key={key}>
-                  <Link to={driftHref(project, f)}>{f.target.title || f.target.id}</Link> names{" "}
-                  {f.hits.map((h, i) => (
-                    <span key={i}>
-                      {i ? "; " : ""}
-                      <code>{h.name.text}</code> (line {h.lines.join(", ")})
-                    </span>
-                  ))}
-                  {f.commits[0] ? (
-                    <span>
-                      {" "}
-                      — changed by {f.commits[0].item}, {f.commits[0].sha.slice(0, 7)}
-                    </span>
-                  ) : null}
-                  {writable ? (
-                    <div className="drift-choice">
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={s.confirmed}
-                          onChange={(e) => setSettled({ ...settled, [key]: { ...s, confirmed: e.target.checked } })}
-                        />{" "}
-                        Still right
-                      </label>
-                      <label>
-                        File a correction: ask Claude to file one, then enter its code{" "}
-                        <input
-                          type="text"
-                          value={s.correction}
-                          placeholder="DEF-…"
-                          disabled={s.confirmed}
-                          onChange={(e) => setSettled({ ...settled, [key]: { ...s, correction: e.target.value } })}
-                        />
-                      </label>
-                    </div>
-                  ) : null}
-                </li>
-              );
-            })}
+            {flags.map((f) => (
+              <li key={driftKey(f)}>
+                <Link to={driftHref(project, f)}>{f.target.title || f.target.id}</Link> names{" "}
+                {f.hits.map((h, i) => (
+                  <span key={i}>
+                    {i ? "; " : ""}
+                    <code>{h.name.text}</code> (line {h.lines.join(", ")})
+                  </span>
+                ))}
+                {f.commits[0] ? (
+                  <span>
+                    {" "}
+                    — changed by {f.commits[0].item}, {f.commits[0].sha.slice(0, 7)}
+                  </span>
+                ) : null}
+              </li>
+            ))}
           </ul>
         </div>
       ) : null}
@@ -999,6 +961,27 @@ function Brief({
             </li>
           ))}
         </ul>
+      ) : null}
+      {docsFolded.settled.length ? (
+        <details className="drift-settled">
+          <summary>Checked by Claude ({docsFolded.settled.length})</summary>
+          <ul>
+            {docsFolded.settled.map((t) => (
+              <li key={driftKey(t.flag)}>
+                <Link to={driftHref(project, t.flag)}>{t.flag.target.title || t.flag.target.id}</Link>:{" "}
+                {t.check.outcome === "corrected" ? (
+                  <>
+                    corrected by <Link to={`/p/${project}/feature/${t.check.correction}`}>{t.check.correction}</Link>
+                  </>
+                ) : (
+                  <>still right: {t.check.why}</>
+                )}{" "}
+                — {t.check.by}
+                {t.check.at ? `, ${t.check.at.slice(0, 10)}` : ""}
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : null}
       {!approved
         ? panels.map((p) => (
@@ -1029,13 +1012,12 @@ function Brief({
                 {busy ? "recording…" : `${verb} ${item.code}`}
               </button>
             )}
-            {signoffs.filter((name) => !preparedSignoff(name)).map((name) => (
+            {signoffs.filter((name) => !preparedSignoff(name) && (name !== "docs-folded" || docsFolded.offer)).map((name) => (
               <button
                 key={name}
                 className={`btn ${waitingOnSignoff || specChanged ? "btn-primary" : ""}`}
-                onClick={() => onSignoff(name, name === "docs-folded" && flags.length ? checkedFor() : undefined)}
-                disabled={busy || (name === "docs-folded" && unsettled)}
-                title={name === "docs-folded" && unsettled ? "Settle each text above first" : undefined}
+                onClick={() => onSignoff(name)}
+                disabled={busy}
               >
                 {busy ? "recording…" : `Sign off ${name}`}
               </button>

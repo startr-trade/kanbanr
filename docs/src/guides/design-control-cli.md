@@ -20,7 +20,7 @@ kanbanr git install-hooks
 
 ```text
 workflow updated
-sprints off, releases off, estimates in days
+sprints off, releases off, estimates in days, git model off
 installed commit-msg and pre-commit and pre-push in <tmp>/shop: a commit now has to say which item it serves
 ```
 
@@ -248,7 +248,7 @@ and no tag to cut.
 ### Chores
 
 A process can give a kind its own path. The built-in `design-control` process gives `chore` the path
-Planning → Design → Verification → Released, skipping Inputs, Review and Validation. `kanbanr process show design-control` lists each kind's path under
+Planning → Design → Verification → Validation → Released, skipping Inputs and Review. A chore passes Validation, where its branch merges. `kanbanr process show design-control` lists each kind's path under
 "Lighter paths".
 
 ```bash
@@ -258,7 +258,7 @@ kanbanr feature add --title "Pin the CI image" --milestone MS-001 --kind chore
 A chore's first move off Planning asks the path's own conditions (`statement`, `goals`,
 `requirements`, and `ears` where the path lists it) as well as the entered stage's gate, so it still
 records why it exists and how it is verified. A move to a stage off the path is refused, and the
-message names the path. The entered stage's gate still applies, `approved` and sign-offs included; the sign-offs at Review and Validation belong to stages a chore does not enter. The `design` and `design-review` parts do not apply. An item whose kind is changed to `chore` while it's at a
+message names the path. The entered stage's gate still applies, `approved` and sign-offs included; the sign-off at Review belongs to a stage a chore does not enter, while the one at Validation is still the person's. The `design` and `design-review` parts do not apply. An item whose kind is changed to `chore` while it's at a
 stage off the path keeps the ordinary transitions, so it is never stranded.
 
 ## Released (1)

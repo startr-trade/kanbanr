@@ -241,6 +241,10 @@ flowchart TD
   Migration and one of them is yours (a sign-off or approval); the rest are Claude's. "Waiting on
   you: docs-folded" appears only when nothing but your part remains. The card says nothing about
   stages the item could skip to.
+- **Review: texts to check.** Under an item's docs-folded sign-off, the page lists the docs and
+  items that name something the item changed and have not changed since, and says Claude settles
+  them. You fill in nothing: the sign-off appears once none is left, and "Checked by Claude" lists
+  what Claude confirmed or corrected, with why.
 - **Status page**: features in one status, grouped by feature, each showing only its **open**
   todo-lists (those not fully completed), newest first, with their tasks.
 - **Feature page** (an *epic*): the **Specification** (rendered markdown) and a **tile per
@@ -396,6 +400,9 @@ same whichever you use. A read-only monitor shows the command instead.
   **Save** commits it onto the branch, nothing checked out, and shows the new commit; **Cancel**
   discards it. This is `kanbanr release notes <VERSION> --edit`. The notes are read from the
   repository the monitor was started in; a read-only monitor shows them with the command instead.
+  Under the notes the panel shows the version's section of the changelog ("Changelog section
+  (CHANGELOG.md)"), read-only; when there is none it says so. Ask Claude to change it
+  (`kanbanr release notes <VERSION> --changelog FILE`).
   They are read from the path they were written to, so changing the notes path later leaves earlier
   releases' notes in place; a shipped release's are read at its tag. When none are found, the
   message lists every path and ref looked at.

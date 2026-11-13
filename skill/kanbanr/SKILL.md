@@ -136,7 +136,10 @@ project"** (or anything equivalent):
 
      After the answer, run `kanbanr git model --sprints on|off --releases on|off` with it. It needs
      no board. Show its output verbatim in the follow-up and in the plan: where items branch from
-     and merge into, what kanbanr merges, and that pushing is always the user's.
+     and merge into, what kanbanr merges, and that pushing is always the user's. With sprints or
+     releases on, setup turns the git model on: the preview says `automation: on`, and kanbanr
+     merges as it shows. Say so in the plan. Turning it off is the user's choice
+     (`kanbanr config cadence --git-model off`).
    - *Definitions*: every item carries the Zachman six-dimension definition, EARS requirements
      and tests. That is the method, not an option. Say so, so the user is not surprised by it.
      Say also, without asking, that design before build and the docs fold-in are on by default
@@ -192,7 +195,8 @@ project"** (or anything equivalent):
    Save the approved plan as the board doc named in it, so the reasons for the setup outlive the
    session. Finish by checking `kanbanr hooks status`, `kanbanr git model`, `kanbanr git status`
    and `kanbanr git doctor` (these two if the hooks were chosen) and `kanbanr doctor`, then show
-   the board. On a new board, doctor's only expected
+   the board. `kanbanr git model` must say `automation: on` when sprints or releases are on; if it
+   does not, that is a setup fault to fix now. On a new board, doctor's only expected
    warnings are the goals that no item links to yet. Anything else is a setup fault to fix now.
    Doctor warns only about what an item's current stage asks; what later stages will ask appears
    after the warnings as counts ("Later stages will ask"), which are not warnings and need no
@@ -214,7 +218,11 @@ Setup makes neither, so the first one is made when the user asks for it, with th
 known:
 
 - **A sprint.** When the user first asks to start or plan a sprint, ask its goal, its first day
-  (default next Monday) and its capacity (points under Scrum), then `kanbanr sprint add`. If a
+  (recommend today, `--start today`, unless the user names another day) and its capacity (points
+  under Scrum), then `kanbanr sprint add`. Work past the first stage waits for a started sprint.
+  If the user wants to begin before a sprint's first day, ask whether to start it today;
+  `kanbanr sprint start` then moves its dates to today and keeps its length. Never start a sprint
+  without asking. If a
   planned sprint with no items already exists, offer `kanbanr sprint edit <SP>` or reuse it. Never
   add a second sprint to change a date. A mistaken empty sprint is `kanbanr sprint remove <SP>`.
 - **A release.** When the user first plans an item into a release and none is suitable, ask the
@@ -382,7 +390,7 @@ organisation's own process file changes what you ask with nothing changed here:
 | `approved` | the user's approval **on the Review page**: say it is waiting, with the link |
 | `bypass` | a ratification **on the Review page**: say it is waiting |
 | `signoff` (a name in `signoffs_needed`, e.g. `design-review`, `docs-folded`) | a sign-off **on the Review page**: say it is waiting |
-| `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; the active sprint; planned releases) |
+| `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; plan it into the running sprint, or start its sprint today; planned releases) |
 | `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
 | `docs_updated` | **never a question** — fold the design into each doc in `affects_docs`, as built, and draft that fold-in into the definition, saying which docs change; if the item names none, ask whether it really changes no architecture doc |
 | `diagrams_valid` | **never a question** — fix each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then run `kanbanr doctor` to confirm none is left |
@@ -743,12 +751,18 @@ Before the move:
 - build every document the item names: the board docs, the repository docs its Design lists under
   `Affects docs` and each task that writes docs. Until then the Review page does not offer
   **docs-folded** and `kanbanr check` names what is unbuilt;
-- say **docs-folded** is waiting for the user's sign-off on the Review page, once it is offered.
-  The Review page may list **texts to check**: docs and items that name a flag, route, setting,
-  stage, status or file the item changed and have not changed since (`kanbanr drift` lists them for
-  the board; a merge prints them on stderr). A flag says what to read, never that the text is wrong.
-  For each, the user says it is still right, or asks you to file a correction. Fix a filed
-  correction as any defect, and never confirm a text on the user's behalf.
+- settle the **texts to check** before docs-folded is offered. They are the docs and items that name
+  a flag, route, setting, stage, status or file the item changed and have not changed since
+  (`kanbanr check` lists those left under "Texts to settle"; `kanbanr drift` lists them for the
+  board; a merge prints them on stderr). A flag says what to read, never that the text is wrong.
+  Read each against the change. If it is right, `kanbanr prepare text <CODE> <TARGET> --still-right
+  --why "what you compared"`. If it is wrong, correct the text as part of folding the design, or
+  file a correction and run `kanbanr prepare text <CODE> <TARGET> --correction <CODE>`. Edit a
+  flagged text only to correct what it says, never to make its flag go away. The record carries
+  who settled it and at which revision; a new commit that names the text again, or an edit to it,
+  puts it back among those left. The person never fills these in;
+- say **docs-folded** is waiting for the user's sign-off on the Review page only once it is offered,
+  which is once no text is left to settle.
 
 With the git model on, entering the integrate role (`kanbanr move <CODE> <status>`) merges the item
 branch into its line, `--no-ff`, with `Refs: kanbanr:<CODE>`. If the merge would conflict, the move
@@ -785,7 +799,11 @@ branches; fix it before going on.
   checkout: `kanbanr release notes <V>` shows them and where they are; `--file F` (or `-`) or
   `--edit` commits new text there, nothing checked out, until the cut. When the user asks where
   the notes are or wants them changed, use this — never a fix item, never a checkout of
-  `release/<V>`. The Releases page shows them too, with Edit on a write-enabled monitor.
+  `release/<V>`. The Releases page shows them too, with Edit on a write-enabled monitor. Write the
+  notes and the changelog section together: `kanbanr release notes <V> --file notes.md --changelog
+  section.md`. Candidate fills the section from what ships (or says why it cannot); rewrite it for
+  readers with the notes. Never open a fix item to change the changelog or the notes of a release
+  under test.
 - **A merge sends a promoted release back.** When a move merges an item into a release that is past
   candidate, kanbanr sends the release back to candidate and says so. Tell the person, in one
   message, what the Releases page now offers: update the notes, run the gate again, promote to
@@ -817,8 +835,11 @@ branches; fix it before going on.
   say what the plan names and where it waits. **Never run `kanbanr gate record` yourself**, and
   never prepare a verdict you did not see.
 - A patch is `kanbanr release add <V> --patch-of <P>`: `release/<V>` is made from `<P>`'s tag. A fix
-  integrated into a release branch reaches the line through `kanbanr git forward <V>`, which the
-  move says is needed; it is never done for you.
+  integrated into a release branch reaches the line through `kanbanr git forward <V>`. When a move
+  or a promotion says it is needed (`next, for Claude: …`), run `kanbanr git forward <V>` yourself
+  at once, and tell the user what merged: from, into, the commit. It is a local merge; the user
+  still pushes. If it reports a conflict, nothing changed: say which files conflict and ask how
+  to resolve them. Never hand the user the command.
 - In the sprints-only model, `kanbanr sprint close <SP>` is the cut: main fast-forwards to
   `sprint/<SP>`, tagged with the sprint's code.
 - **Designing CI or a release workflow.** When the user asks for a pipeline, design it as
@@ -1255,7 +1276,7 @@ kanbanr finish [FEAT-001]         # gated: tasks complete, requirements proven
 kanbanr git install-hooks [--force] | uninstall-hooks | status
 kanbanr git model [--json]                       # main, the line, item branches, protected lines, what kanbanr merges
 kanbanr git model --sprints on|off --releases on|off   # preview a cadence's model; needs no board
-kanbanr git forward <VERSION>                    # merge a release's fixes forward into the line
+kanbanr git forward <VERSION>                    # merge a release's fixes forward into the line (yours, never the user's)
 kanbanr git doctor [--json]                      # board vs branches; read-only, exits 1 on an error
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
 kanbanr approve FEAT-001 --rev <rev>   # the user's, on the monitor; refused when Claude runs it (so are ratify, unapprove)
@@ -1297,7 +1318,7 @@ kanbanr prepare promotion <V> [--stage S] --checked "…" --source S…   # what
 kanbanr prepare ratify <CODE> --reason "…" --source S…   # why the work went ahead, for the person to ratify
 kanbanr prepare list [--all] [--item CODE] [--release V]   # what waits for the person, and where; stale ones say why
 kanbanr release redate v0.1.0                     # date the notes and changelog today, before the cut
-kanbanr release notes v0.1.0 [--file F | --edit]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut
+kanbanr release notes v0.1.0 [--file F | --edit] [--changelog F]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut; --changelog commits the version's changelog section in the same commit
 kanbanr release stages                            # each stage: requires, on_enter, declared or default
 kanbanr config release-stage main --requires items_finished --on-enter move_main [--after ci] [--clear]
 kanbanr config release-prepare --version-file api/Cargo.toml --changelog CHANGELOG.md --notes 'docs/src/releases/{version}.md'

@@ -353,18 +353,19 @@ pub struct Signoff {
 }
 
 /// How a flagged text was settled at the sign-off (FTR-013).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
-    /// The person read it and it is still right.
+    /// Someone read it and it is still right.
+    #[default]
     Confirmed,
-    /// The person filed a correction (its code is on the record).
+    /// A correction was filed (its code is on the record).
     Corrected,
 }
 
 /// One flagged text and how it was settled.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Checked {
     /// `doc:<path>`, `adr:<id>` or `item:<CODE>`.
@@ -373,6 +374,35 @@ pub struct Checked {
     /// The code of the filed correction, when the outcome is `corrected`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub correction: String,
+    /// Who settled it: `Claude` for a settlement, the signer for a check sent with the request (DEF-039).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub by: String,
+    /// Where it was settled.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin: String,
+    /// When it was settled (RFC3339).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub at: String,
+    /// The newest commit of the change it was checked against.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rev: String,
+    /// The text's last change when it was checked.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text_changed_at: String,
+    /// Why the text is still right, for `confirmed`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub why: String,
+    /// The id of the `text-check` prepared record it came from.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prepared: String,
+    /// Keys this version does not know, kept and written back unchanged (FEAT-151).
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
+    pub extra: crate::models::Extra,
 }
 
 impl Signoff {
@@ -1502,11 +1532,13 @@ mod tests {
                     target: "doc:design/data.md".into(),
                     outcome: Outcome::Confirmed,
                     correction: String::new(),
+                    ..Default::default()
                 },
                 Checked {
                     target: "item:FEAT-2".into(),
                     outcome: Outcome::Corrected,
                     correction: "DEF-040".into(),
+                    ..Default::default()
                 },
             ],
             ..plain
@@ -1518,6 +1550,53 @@ mod tests {
         let future = format!("{text}newer_key: 7\n");
         let kept: Signoff = crate::yaml::from_str(&future).unwrap();
         assert_eq!(kept.checked.len(), 2);
+        assert!(crate::yaml::to_string(&kept).unwrap().contains("newer_key"));
+    }
+
+    /// DEF-039 R-2: a checked text records who settled it, where, when and at which revision, and
+    /// reads as before without those fields, keeping a key it does not know.
+    #[test]
+    fn a_checked_text_records_who_settled_it_and_at_which_revision() {
+        let bare = Checked {
+            target: "doc:design/data.md".into(),
+            outcome: Outcome::Confirmed,
+            ..Default::default()
+        };
+        let text = crate::yaml::to_string(&bare).unwrap();
+        for key in [
+            "by:",
+            "origin:",
+            "at:",
+            "rev:",
+            "text_changed_at:",
+            "why:",
+            "prepared:",
+        ] {
+            assert!(
+                !text.contains(key),
+                "{key} written for a bare check: {text}"
+            );
+        }
+        assert_eq!(crate::yaml::from_str::<Checked>(&text).unwrap(), bare);
+
+        let full = Checked {
+            target: "doc:design/data.md".into(),
+            outcome: Outcome::Confirmed,
+            by: "Claude".into(),
+            origin: "conversation".into(),
+            at: "2026-11-12T09:40:00Z".into(),
+            rev: "def5678".into(),
+            text_changed_at: "2026-11-02T08:10:00Z".into(),
+            why: "the gates/ row still matches gates.rs".into(),
+            prepared: "20261112T094000Z-text-check".into(),
+            ..Default::default()
+        };
+        let text = crate::yaml::to_string(&full).unwrap();
+        assert!(text.contains("by: Claude"), "{text}");
+        assert!(text.contains("rev: def5678"), "{text}");
+        assert_eq!(crate::yaml::from_str::<Checked>(&text).unwrap(), full);
+
+        let kept: Checked = crate::yaml::from_str(&format!("{text}newer_key: 7\n")).unwrap();
         assert!(crate::yaml::to_string(&kept).unwrap().contains("newer_key"));
     }
 

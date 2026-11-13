@@ -860,6 +860,12 @@ function ReleaseNotesSection({
                   <Inline text={section.unmentioned} />
                 </p>
               ) : null}
+              {section.changelogHeading ? (
+                <div className="release-changelog">
+                  <p className="muted">{section.changelogHeading}</p>
+                  {section.changelogText ? <Markdown source={section.changelogText} /> : <p>{section.changelogEmpty}</p>}
+                </div>
+              ) : null}
               <div className="review-actions">
                 {section.edit ? (
                   <button

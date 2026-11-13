@@ -136,6 +136,7 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_process_drift(store, project, &mut report);
         scan_shipped_release_items(store, project, &charter, &ctx, &mut report);
         scan_release_items_outside_sprint(store, project, &mut report);
+        scan_sprints_started_early(store, project, &mut report);
         if project.config.method.is_on(crate::method::Part::Links) {
             scan_references(store, project, &mut report);
         }
@@ -175,6 +176,7 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_process_drift(store, &project, &mut report);
     scan_shipped_release_items(store, &project, &charter, &ctx, &mut report);
     scan_release_items_outside_sprint(store, &project, &mut report);
+    scan_sprints_started_early(store, &project, &mut report);
     if project.config.method.is_on(crate::method::Part::Links) {
         scan_references(store, &project, &mut report);
     }
@@ -630,6 +632,30 @@ fn scan_release_items_outside_sprint(store: &Store, project: &Project, report: &
     }
 }
 
+/// A sprint stored active whose first day is still ahead (DEF-041): it reads as planned until
+/// then, and no item can move into work in it. Starting it again starts it today.
+fn scan_sprints_started_early(store: &Store, project: &Project, report: &mut Report) {
+    let Ok(sprints) = crate::sprints::load(store, &project.id) else {
+        return;
+    };
+    let today = crate::sprints::today();
+    for s in sprints.iter().filter(|s| {
+        s.state == crate::sprints::SprintState::Active
+            && s.state_on(today) == crate::sprints::SprintState::Planned
+    }) {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.id.clone(),
+            code: None,
+            message: format!(
+                "{code} was started before its first day ({start}): it reads as planned until then, and no item can move into work in it. Starting it again (`kanbanr sprint start {code}`) starts it today and keeps its length.",
+                code = s.code,
+                start = s.start
+            ),
+        });
+    }
+}
+
 /// References in specs and docs that point at nothing on this board (FEAT-181). A link someone
 /// wrote as a link is an error — it is meant to be followed; a code named in prose that has this
 /// board's shape is a warning, since prose may name an item that was never created. A design doc an
@@ -1040,13 +1066,18 @@ fn scan_leftover_writes(store: &Store, id: &str, report: &mut Report) {
 
 fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
     let known: BTreeSet<&str> = project.config.statuses.iter().map(String::as_str).collect();
-    const EXPECTED: [&str; 6] = [
+    // Every folder kanbanr writes at a project's root. A new one goes here too, or doctor calls it
+    // stray.
+    const EXPECTED: [&str; 9] = [
         "features",
         "milestones",
         "docs",
         "activity",
         "events",
         "pins",
+        crate::gates::FOLDER,
+        crate::prepared::FOLDER,
+        crate::manual::FOLDER,
     ];
     let Ok(entries) = std::fs::read_dir(store.project_dir(&project.id)) else {
         return;
@@ -1063,9 +1094,9 @@ fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
             .map(|d| d.flatten().count())
             .unwrap_or(0);
         let note = if known.contains(name.as_str()) {
-            "a status folder at the project root — it belongs under features/ and will move on the              next write"
+            "a status folder at the project root — it belongs under features/ and will move on the next write"
         } else if items == 0 {
-            "an empty folder matching no status and no part of the layout — most likely left by a              status rename"
+            "an empty folder matching no status and no part of the layout — most likely left by a status rename"
         } else {
             "a folder matching no status and no part of the layout, and it is not empty"
         };
@@ -1394,6 +1425,30 @@ mod tests {
         assert!(
             said(&store, "into no sprint").is_empty(),
             "planned in, so quiet"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-041 R-2: a sprint stored active but dated ahead is named, with the way out.
+    #[test]
+    fn a_sprint_started_before_its_first_day_is_reported() {
+        let (store, dir) = release_board();
+        std::fs::write(
+            store.project_dir("demo").join("sprints.yaml"),
+            "- code: SP-001\n  start: 2099-01-05\n  end: 2099-01-18\n  state: active\n",
+        )
+        .unwrap();
+        let found = said(&store, "started before its first day");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].contains("SP-001") && found[0].contains("2099-01-05"),
+            "{}",
+            found[0]
+        );
+        assert!(
+            found[0].contains("kanbanr sprint start SP-001"),
+            "{}",
+            found[0]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2061,6 +2116,53 @@ mod tests {
         // The portfolio-wide run says the same.
         let all = coverage(&run(&store).unwrap());
         assert_eq!(all.len(), found.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-038 R-1: the folders kanbanr writes at a project's root (recorded gate results,
+    /// prepared evidence, manual results) are part of the layout, not stray; others still are.
+    #[test]
+    fn a_recorded_gate_result_is_not_a_stray_folder() {
+        let (store, dir) = fixture();
+        crate::gates::record(
+            &store,
+            "demo",
+            &crate::gates::GateResult {
+                name: "ci".into(),
+                commit: "a".repeat(40),
+                passed: true,
+                by: "Tester".into(),
+                at: "2026-11-12T10:00:00Z".into(),
+                source: "person".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let root = store.project_dir("demo");
+        for folder in [crate::prepared::FOLDER, crate::manual::FOLDER] {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            std::fs::write(root.join(folder).join("x.yaml"), "a: 1\n").unwrap();
+        }
+        let report = run_project(&store, "demo").unwrap();
+        let strays: Vec<&str> = report
+            .issues
+            .iter()
+            .map(|i| i.message.as_str())
+            .filter(|m| m.contains("matching no status"))
+            .collect();
+        assert!(strays.is_empty(), "{strays:?}");
+        // The scan still runs.
+        std::fs::create_dir_all(root.join("stray")).unwrap();
+        std::fs::write(root.join("stray").join("x.txt"), "x").unwrap();
+        let report = run_project(&store, "demo").unwrap();
+        let strays: Vec<&str> = report
+            .issues
+            .iter()
+            .map(|i| i.message.as_str())
+            .filter(|m| m.contains("matching no status"))
+            .collect();
+        assert_eq!(strays.len(), 1, "{strays:?}");
+        assert!(strays[0].starts_with("stray/ is a folder matching no status"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -135,10 +135,12 @@ fn shown_spec_rev(store: &Store, p: &str, code: &str, name: &str, b: &Value) -> 
     Ok(())
 }
 
-/// What the person settled when giving `docs-folded` (FTR-013). With a code repository the flags are
-/// recomputed: the sign-off is refused while a flagged text is missing from `checked` (or is
-/// corrected without a code), and entries for texts no longer flagged are dropped. Without one,
-/// `checked` is kept as sent. Any other sign-off records nothing.
+/// What was settled when `docs-folded` is given (FTR-013, DEF-039). With a code repository the
+/// flags are recomputed. Each flag is covered by Claude's newest open settlement that still
+/// `settles` it, else by an entry in the request's `checked` (a person's terminal may send one);
+/// the sign-off is refused while any is neither, and entries for texts no longer flagged are
+/// dropped. Without a repository, `checked` is kept as sent. Returns what to record and the ids
+/// of the settlements used, which the sign-off then answers. Any other sign-off records nothing.
 fn signoff_checked(
     store: &Store,
     p: &str,
@@ -146,10 +148,11 @@ fn signoff_checked(
     name: &str,
     body: &Value,
     repo: Option<&std::path::Path>,
-) -> Result<Vec<crate::models::Checked>> {
+    (signer, origin): (&str, &str),
+) -> Result<(Vec<crate::models::Checked>, Vec<String>)> {
     use crate::models::{Checked, Outcome};
     if name != crate::method::DOCS_FOLDED {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let sent: Vec<Checked> = match body.get("checked") {
         None | Some(Value::Null) => Vec::new(),
@@ -157,30 +160,51 @@ fn signoff_checked(
             .map_err(|e| CoreError::Unsupported(format!("checked: {e}")))?,
     };
     let Some(repo) = repo else {
-        return Ok(sent);
+        return Ok((sent, Vec::new()));
     };
     let flags = crate::docdrift::flags_for_item(store, p, code, repo)?;
+    let settlements = if flags.is_empty() {
+        Vec::new()
+    } else {
+        crate::prepared::settlements(store, p, code)?
+    };
+    let now = crate::now_rfc3339();
     let mut kept = Vec::new();
+    let mut used = Vec::new();
     let mut missing = Vec::new();
     for flag in &flags {
         let key = flag.target.key();
+        if let Some(r) = settlements
+            .iter()
+            .find(|r| crate::prepared::settles(r, flag))
+        {
+            kept.push(crate::prepared::checked_of(r, flag));
+            used.push(r.id.clone());
+            continue;
+        }
         match sent.iter().find(|c| c.target == key) {
             Some(c) if c.outcome == Outcome::Corrected && c.correction.trim().is_empty() => {
                 missing.push(format!("{key} (a correction needs its code)"));
             }
-            Some(c) => kept.push(c.clone()),
+            Some(c) => kept.push(Checked {
+                by: signer.to_string(),
+                origin: origin.to_string(),
+                at: now.clone(),
+                text_changed_at: flag.target_changed_at.clone(),
+                ..c.clone()
+            }),
             None => missing.push(key),
         }
     }
     if !missing.is_empty() {
         return Err(CoreError::Unsupported(format!(
-            "docs-folded waits on {} flagged text(s) that name what {code} changed: {}. Read each, \
-             then confirm it is still right or file a correction",
+            "docs-folded waits on {} text(s) Claude has not settled: {}. Claude settles each with \
+             `kanbanr prepare text {code} <TARGET>`",
             missing.len(),
             missing.join(", ")
         )));
     }
-    Ok(kept)
+    Ok((kept, used))
 }
 
 /// Is this a manual test of the item's definition? A test that is not there is not, and the
@@ -678,13 +702,34 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
             if cadence.release_prepare.is_empty() {
                 cadence.release_prepare = config.cadence.release_prepare.clone();
             }
+            // DEF-042: the file's `true` wins, the first choice turns it on, and the project's own
+            // `true` is kept: a process never turns the git model off.
+            cadence.git_model = config
+                .cadence
+                .git_model_after(&cadence, cadence.git_model.then_some(true))
+                || config.cadence.git_model;
             store.set_cadence(p, unit, cadence)?
         }
     };
-    if config.process == source {
+    let config = if config.process == source {
+        config
+    } else {
+        store.set_process_source(p, source)?
+    };
+    // DEF-042: a path that never enters the integrate stage is a warning, not a refusal.
+    let skipping = config.paths_skipping_integrate();
+    if skipping.is_empty() {
         return ser(&config);
     }
-    ser(&store.set_process_source(p, source)?)
+    let mut out =
+        serde_json::to_value(&config).map_err(|e| CoreError::Unsupported(e.to_string()))?;
+    out["warnings"] = json!(
+        skipping
+            .iter()
+            .map(|(kind, stage)| crate::config::skipped_integrate_warning(kind, stage))
+            .collect::<Vec<_>>()
+    );
+    ser(&out)
 }
 
 /// `"process": {name, library, version, rev}` in a body: where the workflow it carries came from.
@@ -1063,6 +1108,9 @@ fn dispatch_routes(
             if let Some(v) = &moved.forward_needed {
                 out["forward_needed"] = json!(v);
             }
+            if let Some(next) = &moved.forward_next {
+                out["forward_next"] = json!(next);
+            }
             if let Some(sent) = &moved.sent_back {
                 out["release_sent_back"] = json!(sent);
             }
@@ -1196,17 +1244,31 @@ fn dispatch_routes(
                     return Err(CoreError::Unsupported(why));
                 }
             }
-            let checked = signoff_checked(store, p, code, &name, b, repo)?;
+            let signer = approver(b)?;
+            let origin = crate::origin::from_body(b);
+            let (checked, settled) =
+                signoff_checked(store, p, code, &name, b, repo, (&signer, &origin))?;
             let (feature, held) = store.signoff_feature_checked_as(
-                p,
-                code,
-                &name,
-                &approver(b)?,
-                &note,
-                &doc,
-                &crate::origin::from_body(b),
-                &checked,
+                p, code, &name, &signer, &note, &doc, &origin, &checked,
             )?;
+            // The sign-off answers the settlements it took (DEF-039).
+            for id in settled {
+                crate::prepared::resolve(
+                    store,
+                    p,
+                    &crate::prepared::Resolution {
+                        id,
+                        verdict: crate::prepared::Answer::Confirmed,
+                        by: signer.clone(),
+                        origin: origin.clone(),
+                        at: crate::now_rfc3339(),
+                        changed: Vec::new(),
+                        reason: String::new(),
+                        made: format!("POST /projects/{p}/features/{code}/signoff/{name}"),
+                        extra: Default::default(),
+                    },
+                )?;
+            }
             let mut out = serde_json::to_value(&feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
             if let Some(held) = held {
@@ -1404,19 +1466,16 @@ fn dispatch_routes(
         ("GET", ["projects", p, "releases", version, "notes"]) => ser(
             &crate::releases::release_notes(store, p, &percent_decode(version), repo)?,
         ),
-        // `{text, by}`: commit the notes onto release/<V>, nothing checked out (FEAT-216).
+        // `{text?, changelog?, by}`: commit the notes, the version's changelog section, or both
+        // onto release/<V>, nothing checked out (FEAT-216, DEF-044).
         ("PUT", ["projects", p, "releases", version, "notes"]) => {
-            let Some(text) = str_field(b, "text") else {
-                return Err(CoreError::Unsupported(
-                    "saving release notes needs their text".into(),
-                ));
-            };
             ser(&crate::releases::set_release_notes(
                 store,
                 p,
                 &percent_decode(version),
                 repo,
-                &text,
+                str_field(b, "text").as_deref(),
+                str_field(b, "changelog").as_deref(),
                 &str_field(b, "by").unwrap_or_default(),
             )?)
         }
@@ -1618,7 +1677,10 @@ fn dispatch_routes(
             ser(&store.set_release_prepare(p, prep)?.cadence.release_prepare)
         }
         // ---- sprints (FEAT-119) ----
-        ("GET", ["projects", p, "sprints"]) => ser(&crate::sprints::load(store, p)?),
+        ("GET", ["projects", p, "sprints"]) => ser(&crate::sprints::as_of(
+            &crate::sprints::load(store, p)?,
+            crate::sprints::today(),
+        )),
         ("GET", ["projects", p, "sprints", code]) => {
             let code = match *code {
                 "active" => crate::sprints::active(&crate::sprints::load(store, p)?)
@@ -1847,7 +1909,8 @@ fn dispatch_routes(
             let current = store.load_meta(p)?.config.cadence;
             let current_inert = current.inert_stages();
             let current_cadence = current.clone();
-            let cadence = crate::config::Cadence {
+            let named_git_model = bool_field(b, "git_model");
+            let mut cadence = crate::config::Cadence {
                 extra: current.extra.clone(),
                 // FEAT-212: the stages' gates and what `prepare` writes have routes of their own;
                 // a cadence write that does not name them keeps them.
@@ -1888,8 +1951,12 @@ fn dispatch_routes(
                     None => current.main_branch,
                 },
                 // FEAT-189: branching follows the git model only when switched on.
-                git_model: bool_field(b, "git_model").unwrap_or(current.git_model),
+                git_model: named_git_model.unwrap_or(current.git_model),
             };
+            // DEF-042: the first choice of sprints or releases turns the git model on.
+            cadence.git_model = current_cadence.git_model_after(&cadence, named_git_model);
+            let turned_on =
+                cadence.git_model && !current_cadence.git_model && named_git_model.is_none();
             let config = store.set_cadence(p, unit, cadence)?;
             // FTR-020: an inert stage that is newly there, and how to make the tag wait for CI.
             let was = current_inert;
@@ -1901,6 +1968,12 @@ fn dispatch_routes(
                 .map(|s| crate::config::Cadence::inert_warning(s))
                 .collect();
             warnings.extend(config.cadence.has_ci_note(&current_cadence));
+            if turned_on {
+                warnings.push(
+                    "the git model is on: kanbanr merges items into their line as `kanbanr git model` shows; `kanbanr config cadence --git-model off` turns it off"
+                        .to_string(),
+                );
+            }
             let mut body =
                 serde_json::to_value(&config).map_err(|e| CoreError::Unsupported(e.to_string()))?;
             if !warnings.is_empty() {
@@ -3159,6 +3232,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// DEF-042 R-1: applying a process never turns the git model off.
+    #[test]
+    fn applying_a_process_keeps_the_git_model_on() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-dispatch-gm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        let call = |method: &str, path: &str, body: Value| -> Value {
+            serde_json::from_str(&dispatch(&store, method, path, Some(&body)).unwrap()).unwrap()
+        };
+        let set = call(
+            "PUT",
+            "/projects/demo/config/cadence",
+            json!({ "sprints": true }),
+        );
+        assert_eq!(set["cadence"]["git_model"], true, "the first choice");
+        assert!(set["warnings"].to_string().contains("git model is on"));
+        let applied = call(
+            "PUT",
+            "/projects/demo/config/workflow",
+            json!({ "preset": "default" }),
+        );
+        assert_eq!(applied["cadence"]["git_model"], true);
+        // A later choice of releases leaves a person's `off` alone.
+        call(
+            "PUT",
+            "/projects/demo/config/cadence",
+            json!({ "git_model": false }),
+        );
+        let more = call(
+            "PUT",
+            "/projects/demo/config/cadence",
+            json!({ "releases": true }),
+        );
+        assert!(!more["cadence"]["git_model"].as_bool().unwrap_or(false));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// DEF-018 R-5: a batch with a field an operation does not take is refused whole, in a dry run
     /// as in a real one, and the operation before it is not written.
     #[test]
@@ -3195,5 +3309,39 @@ mod tests {
             assert_eq!(store.load("demo").unwrap().features.len(), before);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-041 R-2: a sprint stored active but dated ahead is listed as planned, and reading it
+    /// rewrites nothing.
+    #[test]
+    fn the_sprint_list_reports_a_future_sprint_as_planned() {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-dispatch-def041-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&serde_json::json!({"sprints": true})),
+        )
+        .unwrap();
+        let file = store.project_dir("demo").join("sprints.yaml");
+        std::fs::write(
+            &file,
+            "- code: SP-001\n  start: 2099-01-05\n  end: 2099-01-18\n  state: active\n",
+        )
+        .unwrap();
+        let before = std::fs::read(&file).unwrap();
+        let listed: serde_json::Value =
+            serde_json::from_str(&dispatch(&store, "GET", "/projects/demo/sprints", None).unwrap())
+                .unwrap();
+        assert_eq!(listed[0]["state"], "planned", "{listed}");
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
