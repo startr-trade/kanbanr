@@ -2353,8 +2353,8 @@ requirements:
             )
         };
         let err = sign().unwrap_err().to_string();
-        assert!(err.contains("documents are not built"), "{err}");
-        assert!(err.contains("tasks are not all done"), "{err}");
+        assert!(err.contains("not built and folded"), "{err}");
+        assert!(err.contains("task T1 is not complete"), "{err}");
         let project = store.load("demo").unwrap();
         assert!(
             project

@@ -1,10 +1,12 @@
 //! Whether the documents an item says it will write are built (DEF-033).
 //!
 //! `docs-folded` is a person's word that the documents are folded into the record. It is offered
-//! only once there is something to confirm: every board doc the item names has changed since it
-//! entered its stage, every repository doc its Design lists under `Affects docs` has changed on its
-//! branch, and every task that writes docs is complete. An item that lists no documents is offered
-//! the sign-off once its tasks are done, and the offer says it changes no documents.
+//! only once there is something to confirm: every board doc the item names in `affects_docs` or
+//! links under `Affects docs` has changed since it entered its stage, every repository doc its
+//! Design lists there has changed on its branch, and every task is complete (DEF-046). An item that
+//! lists no documents is offered the sign-off once its tasks are done, and the offer says it changes
+//! no documents. A sign-off given with the code repository pins the item's branch tips, and a
+//! commit on any of them after it lapses it ([`moved_on`]).
 //!
 //! The pure parts (what an item lists, what a task writes) come first; reading the board's history
 //! and the code repository comes last, and only when the item lists repository docs.
@@ -248,10 +250,25 @@ pub fn evaluate(
         .map(|d| crate::readiness::affects_doc_key(d))
         .collect();
 
-    // Board docs: the existing gate's answer, reused.
+    // Board docs: the existing gate's answer, reused, then the docs the Design links under
+    // `Affects docs` (DEF-046), judged the same way.
+    let linked: Vec<String> = linked_board_docs(&feature.specification, &project.id)
+        .into_iter()
+        .filter(|k| !board_keys.contains(k))
+        .collect();
     built.listed.extend(board_keys.iter().cloned());
+    built.listed.extend(linked.iter().cloned());
     if let Some(docs) = ctx.docs_dir.as_deref() {
-        for gap in crate::readiness::docs_updated_gaps(feature, docs, &ctx.history) {
+        let gaps = crate::readiness::docs_updated_gaps(feature, docs, &ctx.history)
+            .into_iter()
+            .chain(crate::readiness::docs_unchanged_gaps(
+                feature,
+                &linked,
+                docs,
+                &ctx.history,
+                "linked under Affects docs",
+            ));
+        for gap in gaps {
             built.unbuilt.push(Unbuilt {
                 kind: DocKind::Board,
                 path: gap.label.clone(),
@@ -261,7 +278,8 @@ pub fn evaluate(
     }
 
     // Repository docs.
-    let repo_docs = repository_docs(&feature.specification, &board_keys);
+    let board_named: BTreeSet<String> = board_keys.iter().chain(&linked).cloned().collect();
+    let repo_docs = repository_docs(&feature.specification, &board_named);
     built.listed.extend(repo_docs.iter().cloned());
     if !repo_docs.is_empty() {
         built
@@ -269,37 +287,37 @@ pub fn evaluate(
             .extend(repository_unbuilt(project, feature, ctx, &repo_docs));
     }
 
-    // Tasks that write docs.
+    // Every open task holds the sign-off (DEF-046); one that writes docs says so, and is listed.
     let listed_paths: Vec<String> = declared
         .iter()
         .cloned()
         .chain(built.listed.clone())
         .collect();
     for task in feature.all_tasks() {
-        if is_docs_task(&task.text, &listed_paths) {
+        let writes_docs = is_docs_task(&task.text, &listed_paths);
+        if writes_docs {
             built.listed.push(format!("{}: {}", task.key, task.text));
-            if task.state != TaskState::Completed {
-                built.unbuilt.push(Unbuilt {
-                    kind: DocKind::Task,
-                    path: task.key.clone(),
-                    why: format!("task {} writes docs and is not complete", task.key),
-                });
-            }
+        }
+        if task.state != TaskState::Completed {
+            built.unbuilt.push(Unbuilt {
+                kind: DocKind::Task,
+                path: task.key.clone(),
+                why: if writes_docs {
+                    format!("task {} writes docs and is not complete", task.key)
+                } else {
+                    format!("task {} is not complete", task.key)
+                },
+            });
         }
     }
 
     // Nothing listed: the sign-off confirms finished work and nothing else.
     built.changes_no_documents = built.listed.is_empty();
-    if built.changes_no_documents && !feature.all_tasks_completed() {
-        let why = if feature.all_tasks().next().is_none() {
-            "it has no tasks, so nothing shows any work was done"
-        } else {
-            "its tasks are not all done"
-        };
+    if built.changes_no_documents && feature.all_tasks().next().is_none() {
         built.unbuilt.push(Unbuilt {
             kind: DocKind::Task,
             path: String::new(),
-            why: why.to_string(),
+            why: "it has no tasks, so nothing shows any work was done".to_string(),
         });
     }
     built
@@ -533,6 +551,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    /// DEF-046 R-1: an item that lists a document is held by an open task that writes none.
+    #[test]
+    fn every_open_task_holds_the_signoff() {
+        let (store, dir, repo) = fixture("open-task");
+        let code = item(
+            &store,
+            "Open",
+            "## Design\n\n### Affects docs\nRepository docs: `docs/src/o.md`.\n",
+            &[],
+        );
+        task(&store, &code, "Build the parser", TaskState::InProgress);
+        let branch = branch_for(&store, &code);
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        std::fs::create_dir_all(repo.join("docs/src")).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "docs/src/o.md", "o\n", "docs");
+        let got = judge(&store, &code, Some(&repo));
+        assert!(!got.changes_no_documents);
+        assert_eq!(
+            got.unbuilt,
+            vec![Unbuilt {
+                kind: DocKind::Task,
+                path: "T1".into(),
+                why: "task T1 is not complete".into(),
+            }]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
     /// DEF-033 R-3: no documents at all means the tasks decide, and the answer says so.
     #[test]
     fn an_item_with_no_documents_is_offered_the_signoff_once_its_tasks_are_done() {
@@ -544,7 +591,7 @@ mod tests {
 
         task(&store, &code, "Build it", TaskState::InProgress);
         let got = judge(&store, &code, None);
-        assert!(got.unbuilt[0].why.contains("not all done"), "{got:?}");
+        assert!(got.unbuilt[0].why.contains("task T1 is not complete"), "{got:?}");
 
         let todo = store.add_todo_list("demo", &code, "u", None).unwrap();
         let t = store

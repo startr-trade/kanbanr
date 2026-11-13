@@ -942,7 +942,7 @@ pub fn signoff_hold(
         return None;
     }
     Some(format!(
-        "{} cannot be signed off '{name}' yet: its documents are not built ({})",
+        "{} cannot be signed off '{name}' yet: it is not built and folded ({})",
         feature.code,
         next.signoffs_held
             .iter()
@@ -2019,6 +2019,125 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A board in a temp git repository whose `Completed` gate asks for `docs-folded` and
+    /// `design-review`, with `architecture/data.md` committed before the item is made (MNT-008),
+    /// and one item at `Scheduled` that names no `affects_docs` but links the doc under its
+    /// Design's `Affects docs`, with one open code task (DEF-046).
+    fn linked_docs_board(tag: &str) -> (crate::Store, std::path::PathBuf, String, String) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-linked-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = crate::Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        // An adopted charter, so the gate holds the item where it is when its last task is done.
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::charter::Charter {
+                purpose: "p".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let gate = crate::config::Gate {
+            signoffs: vec!["design-review".into(), "docs-folded".into()],
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Completed".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv1\n")
+            .unwrap();
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "board"));
+        next_second();
+        let spec = "## Design\n\nParse it.\n\n### Affects docs\n\
+            - [data](/p/demo/docs/file/architecture/data.md): the parser.\n";
+        let item = store.add_feature("demo", "Parser", spec, "M", None).unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &item.code,
+                Some(FeatureDefinition {
+                    statement: "Parse it".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        store.approve_feature("demo", &item.code, "Ada").unwrap();
+        store.move_feature("demo", &item.code, "Scheduled").unwrap();
+        let list = store
+            .add_todo_list("demo", &item.code, "build", None)
+            .unwrap();
+        store
+            .add_task("demo", &item.code, &list.code, "Write the parser", None)
+            .unwrap();
+        (store, dir, item.code, list.code)
+    }
+
+    /// The `Completed` gate of `code`, with the docs-folded hold, judged with `repo`.
+    fn completed_gate(
+        store: &crate::Store,
+        code: &str,
+        repo: Option<&std::path::Path>,
+    ) -> (NextGate, Option<String>) {
+        let project = store.load_for_gates("demo").unwrap();
+        let ctx = Context::load_in(store, "demo", &project.config, repo);
+        let f = project.feature(code).unwrap();
+        let gate = next_gates(&project, None, f, &ctx)
+            .into_iter()
+            .find(|g| g.status == "Completed")
+            .expect("a Completed gate");
+        (gate, signoff_hold(&project, f, &ctx, "docs-folded"))
+    }
+
+    /// DEF-046 R-1: docs-folded is held while a task is open, then while a doc the Design links is
+    /// unchanged, and offered once both are done; the refusal names each.
+    #[test]
+    fn docs_folded_is_not_offered_while_tasks_are_open_or_docs_unchanged() {
+        let (store, dir, code, list) = linked_docs_board("open");
+        let (gate, hold) = completed_gate(&store, &code, None);
+        assert_eq!(gate.signoffs_needed, vec!["design-review".to_string()]);
+        let held: Vec<&str> = gate.signoffs_held.iter().map(|g| g.message.as_str()).collect();
+        assert!(held.contains(&"task T1 is not complete"), "{held:?}");
+        assert!(
+            held.iter().any(|m| m.contains("architecture/data.md")),
+            "{held:?}"
+        );
+        let hold = hold.expect("refused");
+        assert!(hold.contains("not built and folded"), "{hold}");
+        assert!(hold.contains("task T1 is not complete"), "{hold}");
+        assert!(hold.contains("architecture/data.md"), "{hold}");
+
+        // The task done, the doc still unchanged: still held, for the doc alone.
+        store
+            .set_task_state("demo", &code, &list, "T1", crate::models::TaskState::Completed)
+            .unwrap();
+        let (gate, hold) = completed_gate(&store, &code, None);
+        assert_eq!(gate.signoffs_held.len(), 1, "{:?}", gate.signoffs_held);
+        assert!(gate.signoffs_held[0].message.contains("architecture/data.md"));
+        assert!(hold.is_some());
+
+        // The doc folded: offered.
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv2\n")
+            .unwrap();
+        let (gate, hold) = completed_gate(&store, &code, None);
+        assert!(gate.signoffs_held.is_empty(), "{:?}", gate.signoffs_held);
+        assert_eq!(
+            gate.signoffs_needed,
+            vec!["design-review".to_string(), "docs-folded".to_string()]
+        );
+        assert!(hold.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// FEAT-205 R-1: a card's next stage names the sign-offs it still needs and the tasks still
     /// open, apart from its unmet conditions — so "ready" can only mean ready.
     #[test]
@@ -2026,7 +2145,8 @@ mod tests {
         let (store, dir, code) = docs_board("next-stage");
         let gate = crate::config::Gate {
             requires: vec![Condition::Check(Check::Definition)],
-            signoffs: vec!["docs-folded".into()],
+            // Not docs-folded, which waits for every task (DEF-046): this asks of the card only.
+            signoffs: vec!["design-review".into()],
             ..Default::default()
         };
         let mut gates = std::collections::BTreeMap::new();
@@ -2057,11 +2177,6 @@ mod tests {
                 .unwrap()
                 .1
         };
-        // The doc it declares is folded in, so `docs-folded` is offered (DEF-033).
-        next_second();
-        store
-            .write_doc("demo", "architecture/data.md", "# Data\n\nv2\n")
-            .unwrap();
         let next = &card(&store).next;
         assert_eq!(next.len(), 1, "{next:?}");
         assert_eq!(next[0].status, "Scheduled");
@@ -2069,11 +2184,11 @@ mod tests {
             next[0].missing, 1,
             "the definition is there; the sign-off is not"
         );
-        assert_eq!(next[0].signoffs, vec!["docs-folded".to_string()]);
+        assert_eq!(next[0].signoffs, vec!["design-review".to_string()]);
         assert_eq!(next[0].tasks_open, 1);
 
         store
-            .signoff_feature("demo", &code, "docs-folded", "Ada", "", "")
+            .signoff_feature("demo", &code, "design-review", "Ada", "", "")
             .unwrap();
         store
             .set_task_state(
