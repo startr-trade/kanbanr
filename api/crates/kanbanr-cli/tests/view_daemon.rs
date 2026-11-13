@@ -15,6 +15,16 @@ fn cli() -> PathBuf {
 /// same port. The second daemon then failed to bind, and its test talked to the first test's daemon
 /// (one serving a different UI) and saw a 404 for `/`. Ports now come from a per-process counter,
 /// starting at a base derived from the process id, skipping any already taken on the machine.
+/// The CLI as a person runs it: none of the Claude-session variables, so a verdict the test takes as
+/// the person's is not refused when the suite itself runs inside a Claude session (FTR-028).
+fn cli_cmd() -> Command {
+    let mut c = Command::new(cli());
+    c.env_remove("CLAUDECODE")
+        .env_remove("CLAUDE_CODE_ENTRYPOINT")
+        .env_remove("KANBANR_CALLER");
+    c
+}
+
 fn free_port() -> u16 {
     use std::sync::atomic::{AtomicU16, Ordering};
     static NEXT: AtomicU16 = AtomicU16::new(0);
@@ -62,7 +72,7 @@ fn view_daemon_serves_local_data_without_auth() {
     std::fs::create_dir_all(&data).unwrap();
 
     let run = |args: &[&str]| {
-        let o = Command::new(cli())
+        let o = cli_cmd()
             .args(args)
             .env("HOME", &home)
             .env("KANBANR_DATA_DIR", &data)
@@ -110,7 +120,7 @@ fn view_daemon_serves_local_data_without_auth() {
 
     // Run the daemon over the same folder (same single binary, `serve` mode).
     let port = free_port();
-    let child = Command::new(cli())
+    let child = cli_cmd()
         .args(["serve", "--bind", &format!("127.0.0.1:{port}")])
         .env("HOME", &home)
         .env("KANBANR_DATA_DIR", &data)
@@ -172,7 +182,7 @@ fn review_and_approve_through_the_daemon() {
     std::fs::create_dir_all(&data).unwrap();
 
     let run = |args: &[&str]| {
-        let o = Command::new(cli())
+        let o = cli_cmd()
             .args(args)
             .env("HOME", &home)
             .env("KANBANR_DATA_DIR", &data)
@@ -231,7 +241,7 @@ fn review_and_approve_through_the_daemon() {
         if allow_writes {
             args.push("--allow-writes".to_string());
         }
-        let child = Command::new(cli())
+        let child = cli_cmd()
             .args(&args)
             .env("HOME", &home)
             .env("KANBANR_DATA_DIR", &data)
@@ -334,7 +344,7 @@ fn review_and_approve_through_the_daemon() {
 
     // Gone from the queue, and the CLI agrees it is approved.
     assert_eq!(get(&format!("{url}/api/projects/demo/review")).trim(), "[]");
-    let check = Command::new(cli())
+    let check = cli_cmd()
         .args([&p[..], &["check", "FEAT-001"][..]].concat())
         .env("HOME", &home)
         .env("KANBANR_DATA_DIR", &data)
@@ -405,7 +415,7 @@ fn a_rebuilt_ui_is_served_without_restarting_the_daemon() {
     )
     .unwrap();
 
-    let out = Command::new(cli())
+    let out = cli_cmd()
         .args(["identity", "--name", "T", "--email", "t@x"])
         .env("HOME", &home)
         .env("KANBANR_DATA_DIR", &data)
@@ -414,7 +424,7 @@ fn a_rebuilt_ui_is_served_without_restarting_the_daemon() {
     assert!(out.status.success());
 
     let port = free_port();
-    let child = Command::new(cli())
+    let child = cli_cmd()
         .args([
             "serve",
             "--bind",
@@ -478,7 +488,7 @@ fn daemon_reports_the_schema_version_it_understands() {
     std::fs::create_dir_all(&data).unwrap();
 
     let port = free_port();
-    let child = Command::new(cli())
+    let child = cli_cmd()
         .args(["serve", "--bind", &format!("127.0.0.1:{port}")])
         .env("HOME", &home)
         .env("KANBANR_DATA_DIR", &data)
@@ -528,7 +538,7 @@ fn the_monitor_is_served_from_the_binary_with_no_ui_dir() {
     let home = base.join("home");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&data).unwrap();
-    Command::new(cli())
+    cli_cmd()
         .args(["--project", "demo", "project", "init", "demo"])
         .env("HOME", &home)
         .env("KANBANR_DATA_DIR", &data)
@@ -537,7 +547,7 @@ fn the_monitor_is_served_from_the_binary_with_no_ui_dir() {
 
     let serve = |ui: Option<&std::path::Path>| {
         let port = free_port();
-        let mut cmd = Command::new(cli());
+        let mut cmd = cli_cmd();
         cmd.args(["serve", "--bind", &format!("127.0.0.1:{port}")]);
         if let Some(dir) = ui {
             cmd.args(["--ui-dir", dir.to_str().unwrap()]);
@@ -634,7 +644,7 @@ fn scratch(name: &str) -> PathBuf {
 /// Start `kanbanr serve` over `base`'s data, with `--ui-dir` when given, and wait until it answers.
 fn serve_ui(base: &std::path::Path, ui: Option<&std::path::Path>) -> (Daemon, String) {
     let port = free_port();
-    let mut cmd = Command::new(cli());
+    let mut cmd = cli_cmd();
     cmd.args(["serve", "--bind", &format!("127.0.0.1:{port}")]);
     if let Some(dir) = ui {
         cmd.args(["--ui-dir", dir.to_str().unwrap()]);
@@ -824,7 +834,7 @@ fn promote_through_the_daemon_uses_the_repository_it_was_started_in() {
         String::from_utf8_lossy(&o.stdout).trim().to_string()
     };
     let kanbanr = |args: &[&str]| {
-        let o = Command::new(cli())
+        let o = cli_cmd()
             .args(args)
             .current_dir(&work)
             .env("HOME", &home)
@@ -884,7 +894,7 @@ fn promote_through_the_daemon_uses_the_repository_it_was_started_in() {
 
     let start = |dir: &std::path::Path| -> (Daemon, String) {
         let port = free_port();
-        let child = Command::new(cli())
+        let child = cli_cmd()
             .args([
                 "serve",
                 "--allow-writes",
@@ -1006,7 +1016,16 @@ fn release_scratch(base: &std::path::Path) -> (PathBuf, PathBuf, PathBuf) {
         "the scratch board must be the test's own, not {}",
         board.display()
     );
-    run(&["config", "cadence", "--releases", "on"]);
+    // The git model stays off: DEF-042 turns it on with the first releases choice, and these tests
+    // are about the plain release path (as DEF-048 found for local_mode.rs).
+    run(&[
+        "config",
+        "cadence",
+        "--releases",
+        "on",
+        "--git-model",
+        "off",
+    ]);
     // The four stages the expectations assume, not the recommended ones (FTR-020).
     run(&[
         "config",
@@ -1032,7 +1051,7 @@ fn release_scratch(base: &std::path::Path) -> (PathBuf, PathBuf, PathBuf) {
 }
 
 fn release_cli(home: &std::path::Path, work: &std::path::Path, args: &[&str]) -> String {
-    let o = Command::new(cli())
+    let o = cli_cmd()
         .args(args)
         .current_dir(work)
         .env("HOME", home)
@@ -1082,7 +1101,7 @@ fn monitor_promote_matches_cli() {
 
     // The monitor: the Promote button posts the next stage, as the board's identity.
     let port = free_port();
-    let child = Command::new(cli())
+    let child = cli_cmd()
         .args([
             "serve",
             "--allow-writes",
@@ -1152,7 +1171,7 @@ fn daemon_serves_git_model_with_its_repository() {
 
     let start = |dir: &std::path::Path| -> (Daemon, String) {
         let port = free_port();
-        let child = Command::new(cli())
+        let child = cli_cmd()
             .args(["serve", "--bind", &format!("127.0.0.1:{port}")])
             .current_dir(dir)
             .env("HOME", &home)
@@ -1228,7 +1247,7 @@ fn release_plan_route_matches_promote() {
     let (home, work, board) = release_scratch(&root);
     let start = |dir: &std::path::Path| -> (Daemon, String) {
         let port = free_port();
-        let child = Command::new(cli())
+        let child = cli_cmd()
             .args([
                 "serve",
                 "--allow-writes",
@@ -1350,7 +1369,7 @@ fn release_notes_route_reads_and_saves_with_the_daemons_repository() {
     ]);
     run(&["release", "promote", "v1.0.0"]);
     let port = free_port();
-    let child = Command::new(cli())
+    let child = cli_cmd()
         .args([
             "serve",
             "--allow-writes",
@@ -1419,7 +1438,7 @@ fn writes_from_the_page_record_a_signoff() {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&data).unwrap();
     let run = |args: &[&str]| {
-        let o = Command::new(cli())
+        let o = cli_cmd()
             .args(args)
             .env("HOME", &home)
             .env("KANBANR_DATA_DIR", &data)
@@ -1468,7 +1487,7 @@ fn writes_from_the_page_record_a_signoff() {
     .concat());
 
     let port = free_port();
-    let child = Command::new(cli())
+    let child = cli_cmd()
         .args([
             "serve",
             "--bind",
@@ -1530,7 +1549,7 @@ fn bind_board(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     let base = scratch(name);
     let (home, data) = (base.join("home"), base.join("data"));
     let run = |args: &[&str]| {
-        let o = Command::new(cli())
+        let o = cli_cmd()
             .args(args)
             .env("HOME", &home)
             .env("KANBANR_DATA_DIR", &data)
@@ -1568,7 +1587,7 @@ fn serve_writes(
     extra: &[&str],
     vars: &[(&str, &str)],
 ) -> Child {
-    let mut cmd = Command::new(cli());
+    let mut cmd = cli_cmd();
     cmd.args(["serve", "--allow-writes", "--bind", bind])
         .args(extra)
         .env("HOME", home)
@@ -1634,7 +1653,7 @@ fn an_accepted_non_local_bind_starts_and_says_so() {
 fn review_ui_on_a_non_local_bind_is_refused() {
     let (base, home, data) = bind_board("review-remote");
     let port = free_port();
-    let child = Command::new(cli())
+    let child = cli_cmd()
         .args(["--project", "demo", "review", "--ui"])
         .env("HOME", &home)
         .env("KANBANR_DATA_DIR", &data)
@@ -1755,7 +1774,7 @@ fn a_verdict_posted_to_the_monitor_is_recorded_as_monitor() {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&data).unwrap();
     let run = |args: &[&str]| {
-        let o = Command::new(cli())
+        let o = cli_cmd()
             .args(args)
             .env("HOME", &home)
             .env("KANBANR_DATA_DIR", &data)
@@ -1804,7 +1823,7 @@ fn a_verdict_posted_to_the_monitor_is_recorded_as_monitor() {
     ]);
 
     let port = free_port();
-    let child = Command::new(cli())
+    let child = cli_cmd()
         .args([
             "serve",
             "--bind",
