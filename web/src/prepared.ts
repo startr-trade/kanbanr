@@ -48,6 +48,7 @@ export const EDITABLE: Record<string, string[]> = {
   promotion: ["checked"],
   "gate-result": ["passed", "url", "note"],
   ratification: ["reason"],
+  "manual-test": ["state", "note"],
 };
 
 const LABELS: Record<string, string> = {
@@ -58,6 +59,9 @@ const LABELS: Record<string, string> = {
   "gate-result.url": "Link to the run",
   "gate-result.note": "Note",
   "ratification.reason": "Why agree after the fact",
+  "manual-test.state": "Result",
+  "manual-test.note": "Note",
+  "manual-test.checked_rev": "Checked at",
 };
 
 /** The label a kind's field is shown with. */

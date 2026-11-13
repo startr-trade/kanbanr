@@ -74,6 +74,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "A release's notes show and are edited from the Releases page": LOCAL,
             "An item says which release it shipped in": LOCAL,
             "A prepared record shows filled in beside its button": LOCAL,
+            "The Review page lists manual checks waiting for you": LOCAL,
             "The Workflow page shows the cadence, the git model and the guard rails": LOCAL,
             "The monitor shows agent scopes and who made each change": LOCAL,
             "The monitor's types match the published API": LOCAL,
