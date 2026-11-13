@@ -593,11 +593,13 @@ pub fn report(store: &Store, id: &str, code: &str, today: time::Date) -> Result<
     let project = store.load_meta(id)?;
     Store::require_cadence(&project, Capability::Sprints)?;
     let sprints = load(store, id)?;
-    let sprint = sprints
+    let mut sprint = sprints
         .iter()
         .find(|s| s.code == code)
         .cloned()
         .ok_or_else(|| CoreError::Unsupported(format!("no sprint {code}")))?;
+    // Read as of today, on the copy only: a sprint dated ahead is planned (DEF-041).
+    sprint.state = sprint.state_on(today);
     let carried_out: Vec<&str> = sprint.carried.iter().map(|c| c.code.as_str()).collect();
     let scope: Vec<&FeatureItem> = project
         .features

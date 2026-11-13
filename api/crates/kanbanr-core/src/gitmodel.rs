@@ -454,6 +454,9 @@ pub struct SprintStarted {
     /// Carried items brought up to date with the new sprint (FEAT-190).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub catch_up: Vec<CatchUp>,
+    /// The sprint's old first day, when starting it moved its dates to today (DEF-041).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub moved_from: Option<String>,
 }
 
 /// Start a sprint, with its branch when the model is automated: preflight, then the branch, then
@@ -465,9 +468,16 @@ pub fn sprint_start(
     repo: Option<&Path>,
 ) -> Result<SprintStarted> {
     let config = store.load_meta(id)?.config;
+    let first_day = crate::sprints::load(store, id)?
+        .into_iter()
+        .find(|s| s.code == code)
+        .map(|s| s.start);
+    let moved = |sprint: &Sprint| first_day.clone().filter(|old| *old != sprint.start);
     if !config.cadence.git_model {
+        let sprint = crate::sprints::start(store, id, code)?;
         return Ok(SprintStarted {
-            sprint: crate::sprints::start(store, id, code)?,
+            moved_from: moved(&sprint),
+            sprint,
             branch: None,
             reused: None,
             catch_up: Vec::new(),
@@ -501,6 +511,7 @@ pub fn sprint_start(
     if facts.branches.contains_key(&branch) {
         let sprint = crate::sprints::start(store, id, code)?;
         return Ok(SprintStarted {
+            moved_from: moved(&sprint),
             sprint,
             branch: None,
             reused: Some(branch),
@@ -511,6 +522,7 @@ pub fn sprint_start(
     crate::coderepo::create_branch_from(repo, &branch, &base)?;
     match crate::sprints::start(store, id, code) {
         Ok(sprint) => Ok(SprintStarted {
+            moved_from: moved(&sprint),
             sprint,
             branch: Some((branch, base)),
             reused: None,
