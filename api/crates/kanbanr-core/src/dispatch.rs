@@ -185,7 +185,13 @@ fn signoff_checked(
 
 /// Is this a manual test of the item's definition? A test that is not there is not, and the
 /// store's own "has no test" message follows.
-fn is_manual_test(store: &Store, p: &str, code: &str, requirement: &str, test: &str) -> bool {
+pub(crate) fn is_manual_test(
+    store: &Store,
+    p: &str,
+    code: &str,
+    requirement: &str,
+    test: &str,
+) -> bool {
     store
         .load_meta(p)
         .ok()
@@ -325,7 +331,7 @@ fn maybe_apply_attrs(store: &Store, p: &str, code: &str, b: &Value) -> Result<Op
     }
 }
 
-fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
