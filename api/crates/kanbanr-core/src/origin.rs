@@ -108,8 +108,9 @@ pub fn is_verdict_route(method: &str, path: &str) -> bool {
 }
 
 /// Routes whose body the front end stamps with its origin: every verdict route,
-/// `POST /projects/{p}/prepared`, so a prepared record says who prepared it (FTR-034), and the
-/// tests route, so a manual result says where it was recorded (DEF-040).
+/// `POST /projects/{p}/prepared`, so a prepared record says who prepared it (FTR-034), the
+/// tests route, so a manual result says where it was recorded (DEF-040), and the move and batch
+/// routes, so an override says where it was made (DEF-043).
 pub fn stamps_origin(method: &str, path: &str) -> bool {
     if is_verdict_route(method, path) {
         return true;
@@ -122,7 +123,13 @@ pub fn stamps_origin(method: &str, path: &str) -> bool {
         .filter(|s| !s.is_empty())
         .collect();
     match method {
-        "POST" => matches!(seg.as_slice(), ["projects", _, "prepared"]),
+        // A move, alone or in a batch, records where an override was made (DEF-043).
+        "POST" => matches!(
+            seg.as_slice(),
+            ["projects", _, "prepared"]
+                | ["projects", _, "features", _, "move"]
+                | ["projects", _, "batch"]
+        ),
         // A manual test's kept result says where it was recorded (DEF-040).
         "PUT" => matches!(
             seg.as_slice(),

@@ -1663,6 +1663,20 @@ impl Store {
         to: &str,
         reason: Option<&str>,
     ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
+        self.move_feature_gated_as(id, code, to, reason, "")
+    }
+
+    /// As [`Store::move_feature_gated`], recording `origin` (`monitor`, `conversation`,
+    /// `terminal`, `delegated`) on the transition an override marks (DEF-043), so an override
+    /// Claude made waits for the person to ratify it.
+    pub fn move_feature_gated_as(
+        &self,
+        id: &str,
+        code: &str,
+        to: &str,
+        reason: Option<&str>,
+        origin: &str,
+    ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let charter = crate::charter::load(self, id)?;
@@ -1676,6 +1690,7 @@ impl Store {
             to,
             reason,
             false,
+            origin,
         )?;
         self.flush(id, &project, &pending)?;
         Ok((f, warnings))
@@ -1702,6 +1717,7 @@ impl Store {
             to,
             None,
             true,
+            "",
         )?;
         self.flush(id, &project, &pending)?;
         Ok(f)
@@ -1753,6 +1769,7 @@ impl Store {
         to: &str,
         reason: Option<&str>,
         cut: bool,
+        origin: &str,
     ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
         let reason = reason.map(str::trim).filter(|r| !r.is_empty());
         // A person's own move to an end status of an item that waits for its release's cut needs
@@ -1792,6 +1809,7 @@ impl Store {
                     && let Some(last) = feature.history.last_mut().filter(|t| t.to == to)
                 {
                     last.override_reason = Some(reason.to_string());
+                    last.origin = origin.to_string();
                 }
                 warnings.extend(defaults.and_then(|d| d.err()));
                 feature.clone()
@@ -2462,17 +2480,19 @@ impl Store {
         ops: Vec<crate::batch::BatchOp>,
         dry_run: bool,
     ) -> Result<Vec<serde_json::Value>> {
-        self.apply_batch_held(id, ops, dry_run, None)
+        self.apply_batch_held(id, ops, dry_run, None, "")
     }
 
     /// [`Store::apply_batch_with`], with every touched item's auto-advance held when `hold` is
-    /// given (FEAT-214): the items stay where they are, and a finished one says why.
+    /// given (FEAT-214): the items stay where they are, and a finished one says why. `origin` is
+    /// recorded on each `feature.move` an override marks (DEF-043).
     pub fn apply_batch_held(
         &self,
         id: &str,
         ops: Vec<crate::batch::BatchOp>,
         dry_run: bool,
         hold: Option<&str>,
+        origin: &str,
     ) -> Result<Vec<serde_json::Value>> {
         use crate::batch::BatchOp::*;
         use std::collections::{HashMap, HashSet};
@@ -2752,6 +2772,7 @@ impl Store {
                         &to,
                         unapproved.as_deref(),
                         false,
+                        origin,
                     )?;
                     if !warnings.is_empty() {
                         return Ok(serde_json::json!({
@@ -4254,7 +4275,7 @@ mod tests {
         ]))
         .unwrap();
         let out = store
-            .apply_batch_held("demo", ops, false, Some(hold))
+            .apply_batch_held("demo", ops, false, Some(hold), "")
             .unwrap();
         assert_eq!(out[0]["status"], "Scheduled", "{out:?}");
         assert_eq!(out[0]["held"], hold);

@@ -587,6 +587,7 @@ pub fn move_item(
     reason: Option<&str>,
     repo: Option<&Path>,
     by: &str,
+    origin: &str,
 ) -> Result<Moved> {
     let project = store.load_meta(id)?;
     let config = &project.config;
@@ -596,7 +597,7 @@ pub fn move_item(
         && !is_integrated(config, &feature.status)
         && is_integrated(config, to);
     let plain = |note: Option<String>| -> Result<Moved> {
-        let (feature, warnings) = store.move_feature_gated(id, code, to, reason)?;
+        let (feature, warnings) = store.move_feature_gated_as(id, code, to, reason, origin)?;
         Ok(Moved {
             feature,
             warnings,

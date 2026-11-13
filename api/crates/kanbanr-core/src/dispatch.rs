@@ -1044,6 +1044,7 @@ fn dispatch_routes(
                 reason.as_deref(),
                 repo,
                 &str_field(b, "by").unwrap_or_else(|| "kanbanr".to_string()),
+                &crate::origin::from_body(b),
             )?;
             let mut out = serde_json::to_value(&moved.feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
@@ -2237,7 +2238,13 @@ fn dispatch_routes(
             let dry_run = b.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
             // Under an agent scope the write path holds every item where it is (FEAT-214).
             let hold = str_field(b, "hold_advance");
-            let results = store.apply_batch_held(p, ops, dry_run, hold.as_deref())?;
+            let results = store.apply_batch_held(
+                p,
+                ops,
+                dry_run,
+                hold.as_deref(),
+                &crate::origin::from_body(b),
+            )?;
             Ok(json!({ "results": results }).to_string())
         }
 
