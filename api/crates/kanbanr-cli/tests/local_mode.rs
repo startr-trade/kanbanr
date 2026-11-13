@@ -4225,7 +4225,14 @@ fn release_scratch_with(tag: &str, old_stages: bool) -> (std::path::PathBuf, std
     ok(run_in(
         &base,
         &work,
-        &["config", "cadence", "--releases", "on"],
+        &[
+            "config",
+            "cadence",
+            "--releases",
+            "on",
+            "--git-model",
+            "off",
+        ],
     ));
     if old_stages {
         ok(run_in(
@@ -4305,7 +4312,14 @@ fn signoff_release_says_the_item_waits_for_the_cut() {
     ok(run_in(
         &base,
         &work,
-        &["config", "cadence", "--releases", "on"],
+        &[
+            "config",
+            "cadence",
+            "--releases",
+            "on",
+            "--git-model",
+            "off",
+        ],
     ));
     ok(run_in(&base, &work, &["release", "add", "v0.1.0"]));
     ok(run_in(
@@ -4420,7 +4434,14 @@ fn togaf_release_board(
     ok(run_in(
         base,
         work,
-        &["config", "cadence", "--releases", "on"],
+        &[
+            "config",
+            "cadence",
+            "--releases",
+            "on",
+            "--git-model",
+            "off",
+        ],
     ));
     ok(run_in(
         base,
@@ -4541,7 +4562,14 @@ fn release_plan_says_which_items_are_in_no_sprint() {
     ok(run_in(
         &base,
         &work,
-        &["config", "cadence", "--releases", "on"],
+        &[
+            "config",
+            "cadence",
+            "--releases",
+            "on",
+            "--git-model",
+            "off",
+        ],
     ));
     ok(run_in(
         &base,
