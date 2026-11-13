@@ -27,6 +27,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **`kanbanr doctor` no longer calls a project's `gates/` folder, where recorded CI results are
+  kept, a stray folder (DEF-038).** The `prepared/` and `manual/` folders are part of the layout too.
 - **Manual tests waiting for a person are listed on the Review page, recorded there with Passed or
   Failed, and refused when Claude tries to record one (DEF-040).** The board keeps who checked, when,
   from where and any note; `kanbanr test` still records one from the person's own terminal, and
