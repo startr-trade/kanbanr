@@ -579,6 +579,7 @@ pub struct Moved {
 /// past it — merges its branch into its line first, refusing before anything changes if the merge
 /// would conflict (R-1, R-2). Preflight, then git, then the board, putting the line back if the
 /// board step fails.
+#[allow(clippy::too_many_arguments)]
 pub fn move_item(
     store: &Store,
     id: &str,
