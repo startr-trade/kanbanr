@@ -562,6 +562,10 @@ pub struct Moved {
     /// forward <V>`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forward_needed: Option<String>,
+    /// What comes next when `forward_needed` is set: Claude's step, as [`forward_step`] words it
+    /// (DEF-045).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forward_next: Option<String>,
     /// The release the item was merged into was past its first stage, so it went back to it
     /// (DEF-031).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -602,6 +606,7 @@ pub fn move_item(
             warnings,
             merged: None,
             forward_needed: None,
+            forward_next: None,
             sent_back: None,
             note,
             drift: Vec::new(),
@@ -711,6 +716,12 @@ pub fn move_item(
         }
     };
     let forward_needed = line.strip_prefix(RELEASE_PREFIX).map(str::to_string);
+    let forward_next = forward_needed.as_deref().map(|version| {
+        forward_step(
+            version,
+            model.line.as_deref().unwrap_or("the line of integration"),
+        )
+    });
     // A real merge into a release past its first stage returns it there (DEF-031). The merge and
     // the move are done and consistent; if only the stage write fails, say how to finish it.
     let (mut sent_back, mut note) = (None, None);
@@ -740,6 +751,7 @@ pub fn move_item(
             already,
         }),
         forward_needed,
+        forward_next,
         sent_back,
         note,
     })
@@ -956,6 +968,15 @@ pub struct Forwarded {
     pub refs: Vec<String>,
 }
 
+/// What comes next when `line` lacks commits of `release/<version>` (DEF-045): Claude's step,
+/// named as such, and that it is a local merge with nothing pushed.
+pub fn forward_step(version: &str, line: &str) -> String {
+    format!(
+        "next, for Claude: bring release/{version} into {line} with `kanbanr git forward {version}` \
+         — a local merge, nothing is pushed; a conflict stops it with nothing changed"
+    )
+}
+
 /// Merge a release's fixes forward into the current line (R-4), naming in `Refs:` every item the
 /// release's own commits name. Asked for, never automatic (Q1).
 pub fn forward(store: &Store, id: &str, version: &str, repo: &Path) -> Result<Forwarded> {
@@ -986,8 +1007,8 @@ pub fn forward(store: &Store, id: &str, version: &str, repo: &Path) -> Result<Fo
     let preview = crate::coderepo::merge_preview(repo, &into, &from)?;
     if !preview.clean {
         return Err(CoreError::Unsupported(format!(
-            "merging {from} forward into {into} conflicts in: {}. Merge it by hand, with a Refs: \
-             trailer.",
+            "merging {from} forward into {into} conflicts in: {}; nothing was changed. Merge it by hand with a Refs: \
+             trailer naming the items, resolving those files",
             preview.conflicts.join(", ")
         )));
     }

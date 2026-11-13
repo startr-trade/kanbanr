@@ -1089,6 +1089,10 @@ pub struct Promoted {
     pub forward_merge: Vec<CommitLine>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub forward_into: String,
+    /// What comes next when `forward_merge` is not empty: Claude's step, as
+    /// [`crate::gitmodel::forward_step`] words it (DEF-045).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub forward_next: String,
     /// The steps this promotion took, in the order it took them (FEAT-212).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<PlanStep>,
@@ -2987,6 +2991,7 @@ pub fn promote_with(
         notes: None,
         forward_merge: Vec::new(),
         forward_into: String::new(),
+        forward_next: String::new(),
         steps: Vec::new(),
         prepared: None,
         main_moved: None,
@@ -3138,6 +3143,7 @@ pub fn promote_with(
             }
         }
         if !w.plan.ships {
+            done.forward_next = forward_next(version, &forward, &integration);
             done.forward_merge = forward;
             done.forward_into = integration;
             done.next = next_hint(store, id, version, repo, &done, &w.main);
@@ -3188,6 +3194,7 @@ pub fn promote_with(
             return Err(undo_all(repo, undo, e));
         }
     }
+    done.forward_next = forward_next(version, &forward, &integration);
     done.forward_merge = forward;
     done.forward_into = integration;
     done.next = next_hint(store, id, version, repo, &done, &w.main);
@@ -3266,6 +3273,15 @@ fn refusal(w: &Worked) -> CoreError {
         out.push_str(&format!("\n  - {b}"));
     }
     CoreError::Unsupported(out)
+}
+
+/// Claude's next step when a promotion leaves commits the line lacks (DEF-045): empty when none.
+fn forward_next(version: &str, forward: &[CommitLine], into: &str) -> String {
+    if forward.is_empty() {
+        String::new()
+    } else {
+        crate::gitmodel::forward_step(version, into)
+    }
 }
 
 /// What to do after a promotion, in a sentence.

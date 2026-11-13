@@ -1035,6 +1035,9 @@ fn dispatch_routes(
             if let Some(v) = &moved.forward_needed {
                 out["forward_needed"] = json!(v);
             }
+            if let Some(next) = &moved.forward_next {
+                out["forward_next"] = json!(next);
+            }
             if let Some(sent) = &moved.sent_back {
                 out["release_sent_back"] = json!(sent);
             }
