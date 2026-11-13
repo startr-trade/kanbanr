@@ -292,6 +292,8 @@ export interface PendingReview {
   /** Texts that name something the item changed since they last changed, for the person to
    * confirm or correct before docs-folded (FTR-013). Absent when the check was skipped. */
   to_check?: DriftFlag[];
+  /** The flagged texts Claude settled, with what it recorded (DEF-039). */
+  settled?: SettledText[];
   /** Why the drift check did not run; never to be read as "no drift" (FTR-013). */
   drift_skipped?: string;
   /** Present when the item is ready for release and in none: the planned releases, in file order
@@ -988,4 +990,20 @@ export interface DriftChecked {
   target: string;
   outcome: "confirmed" | "corrected";
   correction?: string;
+  /** Who settled it, where, when, and against which commit (DEF-039). */
+  by?: string;
+  origin?: string;
+  at?: string;
+  rev?: string;
+  text_changed_at?: string;
+  /** Why the text is still right, for `confirmed`. */
+  why?: string;
+  /** The `text-check` prepared record it came from. */
+  prepared?: string;
+}
+
+/** A flagged text and the check Claude recorded for it (DEF-039). */
+export interface SettledText {
+  flag: DriftFlag;
+  check: DriftChecked;
 }

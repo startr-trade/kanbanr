@@ -230,6 +230,10 @@ jobs:
       # links, and is edited or rejected only on request (FTR-034).
       - name: A prepared record shows filled in beside its button
         run: npm run check:prepared
+      # Claude settles the texts to check; the Review page shows what is left and offers docs-folded
+      # only when none is, with no form for the person (DEF-039).
+      - name: The docs-folded sign-off asks for no form
+        run: npm run check:texts-to-check
       # The Workflow page shows the cadence, the git model and every guard rail, each with the
       # command that changes it, and changes nothing itself (FEAT-213).
       - name: The Workflow page shows the cadence, the git model and the guard rails
