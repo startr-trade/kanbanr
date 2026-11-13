@@ -875,8 +875,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
         // A cut twice.
         let (rstore, rdir, rrepo) = board_and_repo("def028-twice");
-        crate::releases::cut_as(&rstore, "shop", "v1", "Grace", "terminal").unwrap();
-        let why = crate::releases::cut_as(&rstore, "shop", "v1", "Bo", "monitor")
+        crate::releases::cut_as(&rstore, "shop", "v1", "Grace", "terminal", &[]).unwrap();
+        let why = crate::releases::cut_as(&rstore, "shop", "v1", "Bo", "monitor", &[])
             .unwrap_err()
             .to_string();
         assert!(
@@ -922,6 +922,7 @@ mod tests {
                 expect_tip: None,
                 fetch: crate::releases::Fetch::No,
                 origin,
+                accept_untested: &[],
             },
         )
     }
@@ -979,7 +980,7 @@ mod tests {
 
         // A cut by `release cut` names who cut it and from where.
         let (store, dir, repo) = board_and_repo("def028-cut");
-        let cut = crate::releases::cut_as(&store, "shop", "v1", "Grace", "conversation").unwrap();
+        let cut = crate::releases::cut_as(&store, "shop", "v1", "Grace", "conversation", &[]).unwrap();
         assert_eq!(
             (
                 cut.release.shipped_by.as_str(),

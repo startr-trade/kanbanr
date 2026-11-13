@@ -105,6 +105,12 @@ pub enum ReleaseCheck {
     /// Every item planned into the release whose code is merged can ship: the cut would not carry
     /// merged work away (DEF-029). Only a plan names it, so it is not in `ALL`.
     MergedItemsShip,
+    /// Every test of the release's items checked at this stage or before it is green (DEF-043).
+    /// Only a plan names it, so it is not in `ALL`.
+    LaterTestsGreen,
+    /// The person accepted shipping exactly the requirements whose tests were not run (DEF-043).
+    /// Only a plan names it, at the cut, so it is not in `ALL`.
+    UntestedAccepted,
 }
 
 impl ReleaseCheck {
@@ -129,6 +135,8 @@ impl ReleaseCheck {
             ReleaseCheck::ItemsMerged => "items_merged",
             ReleaseCheck::StagePassed => "stage_passed",
             ReleaseCheck::MergedItemsShip => "merged_items_ship",
+            ReleaseCheck::LaterTestsGreen => "later_tests_green",
+            ReleaseCheck::UntestedAccepted => "untested_accepted",
         }
     }
 
@@ -159,6 +167,13 @@ impl ReleaseCheck {
             ReleaseCheck::StagePassed => "the release has been promoted into the stage",
             ReleaseCheck::MergedItemsShip => {
                 "every item planned into the release whose code is merged can ship"
+            }
+            ReleaseCheck::LaterTestsGreen => {
+                "every test of the release's items checked at this stage or before it is green"
+            }
+            ReleaseCheck::UntestedAccepted => {
+                "every shipping requirement has a green test, or the person accepted shipping \
+                 those without one"
             }
         }
     }

@@ -15,7 +15,7 @@
 use crate::coderepo;
 use crate::config::Cadence;
 use crate::error::{CoreError, Result};
-use crate::models::{Extra, FeatureItem};
+use crate::models::{Extra, FeatureItem, TestState};
 use crate::releasegates::{ReleaseAction, ReleaseCheck};
 use crate::store::{Capability, Project, Store};
 use serde::{Deserialize, Serialize};
@@ -727,12 +727,74 @@ pub struct Cut {
 /// gate), release notes are written from their definitions, and the rest is carried to the next
 /// planned release — or back to unplanned — with the reason it did not make it.
 pub fn cut(store: &Store, id: &str, version: &str) -> Result<Cut> {
-    cut_as(store, id, version, "", "")
+    cut_as(store, id, version, "", "", &[])
 }
 
-/// As [`cut`], recording who cut the release and from where (DEF-028).
-pub fn cut_as(store: &Store, id: &str, version: &str, by: &str, origin: &str) -> Result<Cut> {
-    ship_release(store, id, version, None, by, origin)
+/// As [`cut`], recording who cut the release and from where (DEF-028). A requirement that ships
+/// with tests not run is refused unless `accept_untested` names exactly those (DEF-043); the
+/// acceptance is recorded on the stage change and the notes name them.
+pub fn cut_as(
+    store: &Store,
+    id: &str,
+    version: &str,
+    by: &str,
+    origin: &str,
+    accept_untested: &[String],
+) -> Result<Cut> {
+    let project = cadence_on(store, id)?;
+    let shipping: Vec<String> = cut_preview(store, id, version)?
+        .into_iter()
+        .filter(|p| p.ships)
+        .map(|p| p.code)
+        .collect();
+    let last = project.config.cadence.stages().len().saturating_sub(1);
+    let mut refs: Vec<String> = untested(&project, &shipping, last)
+        .iter()
+        .map(Untested::reference)
+        .collect();
+    refs.sort();
+    if refs.is_empty() {
+        return ship_release(store, id, version, None, by, origin);
+    }
+    let mut given: Vec<String> = accept_untested
+        .iter()
+        .map(|a| a.trim().to_string())
+        .collect();
+    given.sort();
+    given.dedup();
+    if given.is_empty() {
+        return Err(CoreError::Unsupported(format!(
+            "{version} would ship {} with tests not run: run them and record the results, or \
+             accept shipping them unverified (--accept-untested {}; the notes will name them)",
+            refs.join(", "),
+            refs.join(",")
+        )));
+    }
+    if given != refs {
+        return Err(CoreError::Unsupported(format!(
+            "the untested requirements changed since the page showed them: now {}",
+            refs.join(", ")
+        )));
+    }
+    let change = StageChange {
+        stage: project
+            .config
+            .cadence
+            .stages()
+            .last()
+            .cloned()
+            .unwrap_or_default(),
+        by: by.trim().to_string(),
+        at: crate::now_rfc3339(),
+        origin: origin.to_string(),
+        accepted_untested: refs,
+        ..Default::default()
+    };
+    let mut cut = ship_release(store, id, version, Some(change), by, origin)?;
+    let unverified = not_verified_section(&store.load_meta(id)?, &cut.release);
+    cut.notes.push_str(&unverified);
+    store.write_doc(id, &cut.release.notes_doc, &cut.notes)?;
+    Ok(cut)
 }
 
 /// Record that the stage holding the tag action was entered (FTR-026): `tagged_at`, the commit the
@@ -1168,6 +1230,10 @@ pub struct PlanCondition {
     /// What to do about it, when it does not hold.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub fix: String,
+    /// The requirements it names, as `CODE/R-n` (DEF-043): for `untested_accepted`, exactly what
+    /// the person accepts; for `later_tests_green`, what is not green yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refs: Vec<String>,
 }
 
 /// One step a promotion takes, and what it will do (FEAT-212).
@@ -1507,9 +1573,10 @@ pub fn plan_promotion(
     repo: Option<&Path>,
     fetch: Fetch,
 ) -> Result<ReleasePlan> {
-    work_out(store, id, version, to, reason, repo, fetch).map(|w| w.plan)
+    work_out(store, id, version, to, reason, repo, fetch, &[]).map(|w| w.plan)
 }
 
+/// `accept` is the untested requirements the person accepts shipping, as `CODE/R-n` (DEF-043).
 #[allow(clippy::too_many_arguments)]
 fn work_out(
     store: &Store,
@@ -1519,6 +1586,7 @@ fn work_out(
     reason: &str,
     repo: Option<&Path>,
     fetch: Fetch,
+    accept: &[String],
 ) -> Result<Worked> {
     let project = cadence_on(store, id)?;
     let cadence = &project.config.cadence;
@@ -1760,6 +1828,7 @@ fn work_out(
                     holds,
                     detail,
                     fix,
+                    refs: Vec::new(),
                 });
             }
         }
@@ -2229,8 +2298,10 @@ fn work_out(
                     ReleaseCheck::StagePassed => {
                         (true, "judged through after".to_string(), String::new())
                     }
-                    // Only a plan names it; it is worked out after the checks.
-                    ReleaseCheck::MergedItemsShip => {
+                    // Only a plan names them; they are worked out after the checks.
+                    ReleaseCheck::MergedItemsShip
+                    | ReleaseCheck::LaterTestsGreen
+                    | ReleaseCheck::UntestedAccepted => {
                         (true, "judged by the plan".to_string(), String::new())
                     }
                     ReleaseCheck::GatePassed => gate_passed(
@@ -2251,6 +2322,7 @@ fn work_out(
                     holds,
                     detail,
                     fix: if holds { String::new() } else { fix },
+                    refs: Vec::new(),
                 });
             }
         }
@@ -2284,8 +2356,142 @@ fn work_out(
                 holds,
                 detail,
                 fix,
+                refs: Vec::new(),
             });
         }
+    }
+
+    // Tests checked later (DEF-043): a stage the promotion enters, other than the cut, waits for
+    // the tests of the release's items checked at it or before it (after the cut: at a stage after
+    // the cut, since the cut's own are accepted there). The cut is R-3's.
+    if direction == Direction::Forward && !empty {
+        let index_of = |at: &str| {
+            cadence
+                .stage_for_check(at)
+                .and_then(|n| stages.iter().position(|s| *s == n))
+        };
+        for &s in entered.iter().filter(|&&s| s != cut_stage) {
+            let mut found: Vec<(String, String)> = Vec::new();
+            for f in project.features.iter().filter(|f| {
+                f.release.as_deref() == Some(version) && !project.config.is_no_op(&f.status)
+            }) {
+                let Some(def) = f.definition.as_ref() else {
+                    continue;
+                };
+                for r in &def.requirements {
+                    if r.tests.iter().any(|t| t.state == TestState::Green) {
+                        continue;
+                    }
+                    for t in &r.tests {
+                        let Some(i) = index_of(&t.at) else { continue };
+                        let due = if s < cut_stage {
+                            i <= s
+                        } else {
+                            i > cut_stage && i <= s
+                        };
+                        if !due {
+                            continue;
+                        }
+                        let named = if stages.iter().any(|x| x == t.at.trim())
+                            || matches!(t.at.trim(), "pushed" | "cut")
+                        {
+                            stages[i].clone()
+                        } else {
+                            format!("{}, which is not a stage now: at the cut", t.at.trim())
+                        };
+                        found.push((
+                            format!("{}/{}", f.code, r.id),
+                            format!(
+                                "{} {} ({}) is checked at {named} and is not green",
+                                f.code, r.id, t.name
+                            ),
+                        ));
+                    }
+                }
+            }
+            if found.is_empty() {
+                continue;
+            }
+            let mut refs: Vec<String> = found.iter().map(|(r, _)| r.clone()).collect();
+            refs.sort();
+            refs.dedup();
+            conditions.push(PlanCondition {
+                check: ReleaseCheck::LaterTestsGreen,
+                stage: stages[s].clone(),
+                holds: false,
+                detail: found
+                    .iter()
+                    .map(|(_, d)| d.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+                fix: "check them and record each result (kanbanr test <CODE> <R-n> <test> green \
+                      --rev <sha>), then check again"
+                    .to_string(),
+                refs,
+            });
+        }
+    }
+    // The cut names what ships untested, and waits for the person to accept exactly that
+    // (DEF-043 R-3).
+    if direction == Direction::Forward && cut && !empty {
+        let shipping: Vec<String> = preview
+            .iter()
+            .filter(|p| p.ships)
+            .map(|p| p.code.clone())
+            .collect();
+        let u = untested(&project, &shipping, cut_stage);
+        let condition = if u.is_empty() {
+            PlanCondition {
+                check: ReleaseCheck::UntestedAccepted,
+                stage: stages[cut_stage].clone(),
+                holds: true,
+                detail: "every shipping requirement has a green test".to_string(),
+                fix: String::new(),
+                refs: Vec::new(),
+            }
+        } else {
+            let mut refs: Vec<String> = u.iter().map(Untested::reference).collect();
+            refs.sort();
+            let mut accepted: Vec<String> = accept.iter().map(|a| a.trim().to_string()).collect();
+            accepted.sort();
+            accepted.dedup();
+            let mut by_code: Vec<(String, Vec<String>)> = Vec::new();
+            for x in &u {
+                match by_code.iter_mut().find(|(c, _)| *c == x.code) {
+                    Some((_, ids)) => ids.push(x.requirement.clone()),
+                    None => by_code.push((x.code.clone(), vec![x.requirement.clone()])),
+                }
+            }
+            let detail = by_code
+                .iter()
+                .map(|(c, ids)| {
+                    format!(
+                        "{c} {} {} tests not run: the cut ships {} unverified only if you accept \
+                         that",
+                        ids.join(", "),
+                        if ids.len() == 1 { "has" } else { "have" },
+                        if ids.len() == 1 { "it" } else { "them" }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            let holds = accepted == refs;
+            PlanCondition {
+                check: ReleaseCheck::UntestedAccepted,
+                stage: stages[cut_stage].clone(),
+                holds,
+                detail,
+                fix: if holds {
+                    String::new()
+                } else {
+                    "run them and record the results, or accept shipping them unverified on the \
+                     Releases page (the notes will name them)"
+                        .to_string()
+                },
+                refs,
+            }
+        };
+        conditions.push(condition);
     }
 
     // A promotion that tags or ships never carries merged work away (DEF-029): the code is in the
@@ -2328,6 +2534,7 @@ fn work_out(
             holds,
             detail,
             fix,
+            refs: Vec::new(),
         });
     }
 
@@ -2478,6 +2685,107 @@ fn work_out(
         empty,
         patch,
     })
+}
+
+/// A shipping requirement whose tests have none green (DEF-043): what the cut asks the person to
+/// accept, and what the notes name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Untested {
+    pub code: String,
+    pub requirement: String,
+    pub text: String,
+    /// Its tests, none of them green.
+    pub tests: Vec<String>,
+}
+
+impl Untested {
+    /// `FEAT-005/R-2`.
+    pub fn reference(&self) -> String {
+        format!("{}/{}", self.code, self.requirement)
+    }
+}
+
+/// The requirements of `codes` (in `project`) that have tests and none green, except those whose
+/// not-green tests all wait for a stage after `cut_stage`. Sorted by code, then requirement id.
+pub fn untested(project: &Project, codes: &[String], cut_stage: usize) -> Vec<Untested> {
+    let cadence = &project.config.cadence;
+    let stages = cadence.stages();
+    let after_cut = |at: &str| {
+        cadence
+            .stage_for_check(at)
+            .and_then(|n| stages.iter().position(|s| *s == n))
+            .is_some_and(|i| i > cut_stage)
+    };
+    let mut found: Vec<Untested> = Vec::new();
+    for f in project.features.iter().filter(|f| codes.contains(&f.code)) {
+        let Some(def) = f.definition.as_ref() else {
+            continue;
+        };
+        for r in &def.requirements {
+            if r.tests.is_empty()
+                || r.tests.iter().any(|t| t.state == TestState::Green)
+                || r.tests.iter().all(|t| after_cut(&t.at))
+            {
+                continue;
+            }
+            found.push(Untested {
+                code: f.code.clone(),
+                requirement: r.id.clone(),
+                text: r.text.trim().to_string(),
+                tests: r.tests.iter().map(|t| t.name.clone()).collect(),
+            });
+        }
+    }
+    // R-2 before R-10.
+    let number = |id: &str| {
+        id.trim_start_matches("R-")
+            .parse::<u64>()
+            .map_or((1, 0, id.to_string()), |n| (0, n, String::new()))
+    };
+    found.sort_by(|a, b| {
+        a.code
+            .cmp(&b.code)
+            .then_with(|| number(&a.requirement).cmp(&number(&b.requirement)))
+    });
+    found
+}
+
+/// The "Not verified in this release" section of the notes (DEF-043): each requirement the person
+/// accepted shipping untested at the cut, with its text and its tests not run. Empty when none was.
+fn not_verified_section(project: &Project, release: &Release) -> String {
+    let accepted: Vec<&String> = release
+        .stages
+        .iter()
+        .flat_map(|c| &c.accepted_untested)
+        .collect();
+    if accepted.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n## Not verified in this release\n\n");
+    for reference in accepted {
+        let (code, id) = reference.split_once('/').unwrap_or((reference, ""));
+        let r = project
+            .features
+            .iter()
+            .find(|f| f.code == code)
+            .and_then(|f| f.definition.as_ref())
+            .and_then(|d| d.requirements.iter().find(|r| r.id == id));
+        let (text, tests) = match r {
+            Some(r) => (
+                r.text.trim().to_string(),
+                r.tests
+                    .iter()
+                    .filter(|t| t.state != TestState::Green)
+                    .map(|t| t.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            None => (String::new(), String::new()),
+        };
+        out.push_str(&format!("- {code} {id}: {text} (not run: {tests})\n"));
+    }
+    out
 }
 
 /// Why a release with nothing planned into it cannot be promoted, and how to plan into it.
@@ -2842,6 +3150,9 @@ pub struct PromoteOptions<'a> {
     pub fetch: Fetch,
     /// Where the promotion was asked for (DEF-028), recorded on the stage change.
     pub origin: &'a str,
+    /// The untested requirements the person accepts shipping at the cut, as `CODE/R-n`
+    /// (DEF-043). Empty: none accepted.
+    pub accept_untested: &'a [String],
 }
 
 /// A git step taken, and how to take it back.
@@ -2909,6 +3220,7 @@ pub fn promote(
             expect_tip: None,
             fetch: Fetch::Try,
             origin: "",
+            accept_untested: &[],
         },
     )
 }
@@ -2946,7 +3258,40 @@ pub fn promote_with(
                 .into(),
         ));
     }
-    let w = work_out(store, id, version, to, reason, repo, opts.fetch)?;
+    let w = work_out(
+        store,
+        id,
+        version,
+        to,
+        reason,
+        repo,
+        opts.fetch,
+        opts.accept_untested,
+    )?;
+    // An acceptance is of exactly what the page showed (DEF-043): if the list moved since, the
+    // person looks again. An acceptance given when nothing is untested is ignored.
+    let untested_refs: Vec<String> = w
+        .plan
+        .conditions
+        .iter()
+        .find(|c| c.check == ReleaseCheck::UntestedAccepted && !c.refs.is_empty())
+        .map(|c| c.refs.clone())
+        .unwrap_or_default();
+    if !opts.accept_untested.is_empty() && !untested_refs.is_empty() {
+        let mut given: Vec<String> = opts
+            .accept_untested
+            .iter()
+            .map(|a| a.trim().to_string())
+            .collect();
+        given.sort();
+        given.dedup();
+        if given != untested_refs {
+            return Err(CoreError::Unsupported(format!(
+                "the untested requirements changed since the page showed them: now {}",
+                untested_refs.join(", ")
+            )));
+        }
+    }
     if !w.plan.ready {
         return Err(refusal(&w));
     }
@@ -2970,7 +3315,7 @@ pub fn promote_with(
         by: by.to_string(),
         at: crate::now_rfc3339(),
         origin: opts.origin.to_string(),
-        accepted_untested: Vec::new(),
+        accepted_untested: untested_refs,
         extra: Default::default(),
         reason: if w.direction == Direction::Again {
             let names: Vec<&str> = taken.iter().map(|s| s.action.name()).collect();
@@ -3176,7 +3521,10 @@ pub fn promote_with(
                         ));
                     }
                 }
-                if wrote || (w.patch && !forward.is_empty()) {
+                // What shipped unverified, as the person accepted at the cut (DEF-043).
+                let unverified = not_verified_section(&store.load_meta(id)?, &cut.release);
+                notes.push_str(&unverified);
+                if wrote || (w.patch && !forward.is_empty()) || !unverified.is_empty() {
                     store.write_doc(id, &cut.release.notes_doc, &notes)?;
                 }
                 done.release = cut.release;
@@ -5245,6 +5593,7 @@ pub(crate) mod tests {
             expect_tip: Some(&plan.release_tip),
             fetch: super::Fetch::No,
             origin: "",
+            accept_untested: &[],
         };
         let err = super::promote_with(
             &store,
@@ -5270,6 +5619,7 @@ pub(crate) mod tests {
             expect_tip: Some(&now),
             fetch: super::Fetch::No,
             origin: "",
+            accept_untested: &[],
         };
         super::promote_with(
             &store,
@@ -5966,6 +6316,165 @@ pub(crate) mod tests {
     pub(crate) fn clean(dir: &Path, repo: &Path) {
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(repo);
+    }
+
+    // ---- DEF-043: tests checked later, and the cut's acceptance ----
+
+    /// A finished item planned into v1 with R-1 proven and R-2's one test planned, checked `at`.
+    fn later_item(store: &Store, at: &str) -> String {
+        let code = store
+            .add_feature("shop", "CI", "", "M", None)
+            .unwrap()
+            .code;
+        let test = |name: &str, state: crate::models::TestState, at: &str| crate::models::TestRef {
+            name: name.into(),
+            state,
+            at: at.into(),
+            ..Default::default()
+        };
+        store
+            .set_feature_definition(
+                "shop",
+                &code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Run CI".into(),
+                    requirements: vec![
+                        crate::models::Requirement {
+                            text: "THE SYSTEM SHALL build".into(),
+                            tests: vec![test("ci::builds", crate::models::TestState::Green, "")],
+                            ..Default::default()
+                        },
+                        crate::models::Requirement {
+                            text: "WHEN main is pushed, THE SYSTEM SHALL run CI".into(),
+                            tests: vec![test("ci::runs", crate::models::TestState::Planned, at)],
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        for status in ["Scheduled", "Completed"] {
+            store
+                .move_feature_approved("shop", &code, status, None)
+                .unwrap();
+        }
+        super::plan(store, "shop", "v1", std::slice::from_ref(&code)).unwrap();
+        code
+    }
+
+    fn condition(
+        plan: &super::ReleasePlan,
+        check: crate::releasegates::ReleaseCheck,
+    ) -> Option<super::PlanCondition> {
+        plan.conditions.iter().find(|c| c.check == check).cloned()
+    }
+
+    fn green(store: &Store, code: &str) {
+        store
+            .set_test_state(
+                "shop",
+                code,
+                "R-2",
+                "ci::runs",
+                crate::models::TestState::Green,
+                None,
+            )
+            .unwrap();
+    }
+
+    /// DEF-043 R-1: a test checked after main is pushed holds neither candidate nor main, and the
+    /// cut names it until it is green; a test checked at main holds main until it is green.
+    #[test]
+    fn a_test_checked_after_push_does_not_hold_main_but_holds_the_cut() {
+        use crate::releasegates::ReleaseCheck::{LaterTestsGreen, UntestedAccepted};
+        let (store, dir, repo) = staged("def043-pushed", THREE);
+        let code = later_item(&store, "pushed");
+        go(&store, &repo, "candidate");
+        on_release(&repo, "release/v1", "fix", "fixed\n");
+        go(&store, &repo, "main");
+        let plan = plan_to(&store, &repo, "production");
+        let c = condition(&plan, UntestedAccepted).expect("the cut asks");
+        assert!(!c.holds, "{c:?}");
+        assert_eq!(c.refs, [format!("{code}/R-2")]);
+        green(&store, &code);
+        let plan = plan_to(&store, &repo, "production");
+        let c = condition(&plan, UntestedAccepted).unwrap();
+        assert!(c.holds, "{c:?}");
+        assert!(c.refs.is_empty());
+        clean(&dir, &repo);
+
+        let (store, dir, repo) = staged("def043-at-main", THREE);
+        let code = later_item(&store, "main");
+        let plan = plan_to(&store, &repo, "main");
+        let c = condition(&plan, LaterTestsGreen).expect("main waits for it");
+        assert!(!c.holds);
+        assert_eq!(c.stage, "main");
+        assert_eq!(c.refs, [format!("{code}/R-2")]);
+        assert!(
+            c.detail.contains(&format!("{code} R-2 (ci::runs) is checked at main and is not green")),
+            "{}",
+            c.detail
+        );
+        assert!(!plan.ready);
+        green(&store, &code);
+        let plan = plan_to(&store, &repo, "main");
+        assert!(condition(&plan, LaterTestsGreen).is_none());
+        clean(&dir, &repo);
+    }
+
+    /// DEF-043 R-3: the cut of an item whose test was never run is refused unless the person
+    /// accepts exactly what is untested; the acceptance is recorded and the notes name it.
+    #[test]
+    fn the_cut_is_refused_for_an_item_with_an_unrun_test_unless_the_person_accepts_it() {
+        use crate::releasegates::ReleaseCheck::UntestedAccepted;
+        let (store, dir, repo) = staged("def043-cut", THREE);
+        let bare = with_remote(&repo);
+        let code = later_item(&store, "");
+        go(&store, &repo, "candidate");
+        on_release(&repo, "release/v1", "fix", "fixed\n");
+        go(&store, &repo, "main");
+        plain_git(&repo, &["push", "-q", &bare.to_string_lossy(), "main:main"]);
+        plain_git(&repo, &["fetch", "-q", "origin"]);
+        let plan = plan_to(&store, &repo, "production");
+        let c = condition(&plan, UntestedAccepted).unwrap();
+        assert!(!c.holds);
+        let refs = vec![format!("{code}/R-2")];
+        assert_eq!(c.refs, refs);
+        let cut = |accept: &[String]| {
+            super::promote_with(
+                &store,
+                "shop",
+                "v1",
+                Some("production"),
+                "Ada",
+                "",
+                Some(&repo),
+                super::PromoteOptions {
+                    expect_tip: None,
+                    fetch: super::Fetch::Try,
+                    origin: "monitor",
+                    accept_untested: accept,
+                },
+            )
+        };
+        let why = cut(&[]).unwrap_err().to_string();
+        assert!(why.contains("accept shipping them unverified"), "{why}");
+        assert!(v1(&store).tagged_at.is_empty(), "nothing tagged");
+        let why = cut(&["FEAT-9/R-1".to_string()]).unwrap_err().to_string();
+        assert!(why.contains("changed since the page showed them"), "{why}");
+        assert!(v1(&store).tagged_at.is_empty(), "nothing tagged");
+        let done = cut(&refs).unwrap();
+        assert_eq!(done.tagged, "v1");
+        let release = v1(&store);
+        let change = release.stages.last().unwrap();
+        assert_eq!(change.stage, "production");
+        assert_eq!(change.accepted_untested, refs);
+        let notes = store.read_doc("shop", &release.notes_doc).unwrap();
+        assert!(notes.contains("## Not verified in this release"), "{notes}");
+        assert!(notes.contains(&format!("{code} R-2")), "{notes}");
+        clean(&dir, &repo);
+        let _ = std::fs::remove_dir_all(&bare);
     }
 
     // ---- DEF-029: merged work is never carried away ----
