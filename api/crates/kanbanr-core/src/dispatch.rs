@@ -660,10 +660,25 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
             store.set_cadence(p, unit, cadence)?
         }
     };
-    if config.process == source {
+    let config = if config.process == source {
+        config
+    } else {
+        store.set_process_source(p, source)?
+    };
+    // DEF-042: a path that never enters the integrate stage is a warning, not a refusal.
+    let skipping = config.paths_skipping_integrate();
+    if skipping.is_empty() {
         return ser(&config);
     }
-    ser(&store.set_process_source(p, source)?)
+    let mut out =
+        serde_json::to_value(&config).map_err(|e| CoreError::Unsupported(e.to_string()))?;
+    out["warnings"] = json!(
+        skipping
+            .iter()
+            .map(|(kind, stage)| crate::config::skipped_integrate_warning(kind, stage))
+            .collect::<Vec<_>>()
+    );
+    ser(&out)
 }
 
 /// `"process": {name, library, version, rev}` in a body: where the workflow it carries came from.

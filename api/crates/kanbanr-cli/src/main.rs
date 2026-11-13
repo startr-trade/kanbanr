@@ -5785,6 +5785,12 @@ fn run_process_check(cli: &Cli, source: &str) -> anyhow::Result<()> {
         against = Some(p);
     }
     let preview = file.clone().into_config(&label);
+    // DEF-042: a path that never enters the integrate stage is a warning, not a refusal.
+    let warnings: Vec<String> = preview
+        .paths_skipping_integrate()
+        .iter()
+        .map(|(kind, stage)| config::skipped_integrate_warning(kind, stage))
+        .collect();
     let agreement = config::working_agreement(&label, &preview);
     let diagram = kanbanr_core::mermaid::to_state_diagram(&preview);
     if cli.json {
@@ -5794,6 +5800,7 @@ fn run_process_check(cli: &Cli, source: &str) -> anyhow::Result<()> {
                 "source": label,
                 "ok": problems.is_empty(),
                 "problems": problems,
+                "warnings": warnings,
                 "checked_against": against,
                 "agreement": agreement,
                 "mermaid": diagram,
@@ -5801,6 +5808,9 @@ fn run_process_check(cli: &Cli, source: &str) -> anyhow::Result<()> {
         );
     } else if problems.is_empty() {
         println!("{label}: no problems");
+        for w in &warnings {
+            println!("warning: {w}");
+        }
         if let Some(p) = &against {
             println!("(also checked against project {p})");
         }
@@ -6185,6 +6195,7 @@ fn run_process_drift(cli: &Cli, client: &Backend, cmd: &ProcessCmd) -> anyhow::R
                 v => format!(" v{v}"),
             };
             print_write(cli, &resp, format!("{p} now has {}{version}", source.name));
+            print_release_warnings(cli, &serde_json::from_str::<Value>(&resp)?["warnings"]);
             Ok(())
         }
         _ => unreachable!("handled before the board is opened"),
@@ -9549,6 +9560,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                     Some(file.to_request(None)),
                 )?;
                 print_write(cli, &resp, format!("workflow loaded from {src}"));
+                print_release_warnings(cli, &serde_json::from_str::<Value>(&resp)?["warnings"]);
                 return Ok(());
             }
             // Export: print the workflow as a Mermaid state diagram (a read).
@@ -9625,6 +9637,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                     &resp,
                     format!("workflow set from your process '{name}'"),
                 );
+                print_release_warnings(cli, &serde_json::from_str::<Value>(&resp)?["warnings"]);
                 return Ok(());
             }
             let body = obj(vec![
@@ -9647,6 +9660,7 @@ fn run_config(cli: &Cli, client: &Backend, cmd: &ConfigCmd) -> anyhow::Result<()
                 Some(body),
             )?;
             print_write(cli, &resp, "workflow updated".to_string());
+            print_release_warnings(cli, &serde_json::from_str::<Value>(&resp)?["warnings"]);
             Ok(())
         }
     }
