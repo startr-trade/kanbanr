@@ -474,6 +474,17 @@ pub const DEFAULT_RELEASE_STAGES: [&str; 4] = ["candidate", "test", "staging", "
 pub const RECOMMENDED_RELEASE_STAGES: [&str; 3] = ["candidate", "main", "tag"];
 
 impl Cadence {
+    /// The git model a cadence change leaves (DEF-042): `named` when the request set it; else on
+    /// when `self` (the cadence before) had neither sprints nor releases and `next` has one of
+    /// them; else `next.git_model`.
+    pub fn git_model_after(&self, next: &Cadence, named: Option<bool>) -> bool {
+        match named {
+            Some(v) => v,
+            None if !self.sprints && !self.releases && (next.sprints || next.releases) => true,
+            None => next.git_model,
+        }
+    }
+
     pub fn is_off(&self) -> bool {
         *self == Cadence::default()
     }
@@ -2350,6 +2361,27 @@ mod tests {
             chore_path(&["Vision", "Implementation", "Migration", "Operations"]),
         );
         config
+    }
+
+    /// DEF-042 R-1: the first choice of sprints or releases turns the git model on; a named value
+    /// wins; a project that already has one of them is not changed.
+    #[test]
+    fn the_first_cadence_choice_turns_the_git_model_on() {
+        let none = Cadence::default();
+        let sprints = Cadence {
+            sprints: true,
+            ..Default::default()
+        };
+        let both = Cadence {
+            sprints: true,
+            releases: true,
+            ..Default::default()
+        };
+        assert!(none.git_model_after(&both, Some(true)));
+        assert!(!none.git_model_after(&both, Some(false)));
+        assert!(none.git_model_after(&sprints, None));
+        assert!(!sprints.git_model_after(&both, None));
+        assert!(!none.git_model_after(&none, None));
     }
 
     #[test]

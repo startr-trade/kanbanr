@@ -228,12 +228,15 @@ pub fn preview(
     sprints: &[Sprint],
     repo: Option<&Path>,
 ) -> GitModel {
+    let before = config.cadence.clone();
     if let Some(on) = sprints_on {
         config.cadence.sprints = on;
     }
     if let Some(on) = releases_on {
         config.cadence.releases = on;
     }
+    // DEF-042: the preview follows what setup will do, so it says `automation: on`.
+    config.cadence.git_model = before.git_model_after(&config.cadence, None);
     let main = config
         .cadence
         .main_branch
