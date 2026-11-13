@@ -1483,6 +1483,36 @@ fn integration_of(store: &Store, id: &str, project: &Project, repo: &Path, main:
     }
 }
 
+/// A warning for each decision Claude took under a delegation on an item planned into `version`
+/// that the person has not kept or undone yet (FTR-028, Decision 5). It warns and never blocks.
+/// Nothing when the decisions cannot be read.
+pub fn delegated_waiting(store: &Store, id: &str, version: &str) -> Vec<String> {
+    let (Ok(d), Ok(project)) = (crate::decisions::load(store, id), store.load(id)) else {
+        return Vec::new();
+    };
+    let planned = |code: &str| {
+        project
+            .features
+            .iter()
+            .any(|f| f.code == code && f.release.as_deref() == Some(version))
+    };
+    crate::decisions::to_review(&project, &d)
+        .into_iter()
+        .filter(|x| planned(&x.code))
+        .map(|x| {
+            let what = match x.signoff.as_str() {
+                "" => x.verdict.clone(),
+                name => format!("{name} sign-off"),
+            };
+            format!(
+                "{}: the {what} Claude took under {} is not kept or undone yet: review it on the \
+                 Review page",
+                x.code, x.delegation
+            )
+        })
+        .collect()
+}
+
 /// What promoting `version` to `to` (default: the next stage) would do, with nothing changed
 /// (FEAT-212): the stages it enters or passes, their conditions judged against the repository as
 /// it is (a condition counts as met when an action of the same promotion makes it true), the
@@ -2422,6 +2452,7 @@ fn work_out(
         }
         _ => None,
     };
+    warnings.extend(delegated_waiting(store, id, version));
     let plan = ReleasePlan {
         version: version.to_string(),
         from,
@@ -5832,6 +5863,91 @@ pub(crate) mod tests {
         assert!(crate::scm::escape_reason(&message).is_some(), "{message}");
         let project = store.load_meta("shop").unwrap();
         assert!(super::prepared_at(&repo, &tip, &project, "v0.2.0", "release/v0.2.0").0);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FTR-028 Decision 5: a delegated decision on a release's item that the person has not kept
+    /// or undone shows as a warning on the promotion's plan, which still goes ahead; once
+    /// reviewed, it is gone.
+    #[test]
+    fn a_promotion_plan_warns_of_delegated_decisions_not_reviewed() {
+        let (store, dir, repo) = board_and_repo("delegated-warn");
+        super::add(&store, "shop", "v0.2.0", "", "Gates").unwrap();
+        let code = plan_done(&store, "v0.2.0");
+        store
+            .set_feature_definition(
+                "shop",
+                &code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Ship it".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let plan = || {
+            super::plan_promotion(
+                &store,
+                "shop",
+                "v0.2.0",
+                None,
+                "",
+                Some(&repo),
+                super::Fetch::No,
+            )
+            .unwrap()
+        };
+        let before = plan();
+        assert!(
+            !before.warnings.iter().any(|w| w.contains("DLG-001")),
+            "{:?}",
+            before.warnings
+        );
+        store
+            .signoff_feature_checked_as(
+                "shop",
+                &code,
+                "design-review",
+                "Claude",
+                "",
+                "",
+                "delegated",
+                "DLG-001",
+                &[],
+            )
+            .unwrap();
+        let warned = plan();
+        let line = warned
+            .warnings
+            .iter()
+            .find(|w| w.contains("DLG-001"))
+            .unwrap_or_else(|| panic!("{:?}", warned.warnings));
+        assert!(
+            line.contains(&code) && line.contains("Review page"),
+            "{line}"
+        );
+        assert_eq!(warned.ready, before.ready, "a warning never blocks");
+        let decision = crate::decisions::to_review(
+            &store.load("shop").unwrap(),
+            &crate::decisions::load(&store, "shop").unwrap(),
+        )[0]
+        .decision
+        .clone();
+        crate::decisions::review(
+            &store,
+            "shop",
+            &decision,
+            true,
+            "",
+            crate::decisions::Stamp {
+                by: "Ada".into(),
+                at: crate::now_rfc3339(),
+                origin: "monitor".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!plan().warnings.iter().any(|w| w.contains("DLG-001")));
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }

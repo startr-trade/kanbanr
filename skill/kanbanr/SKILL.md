@@ -362,7 +362,10 @@ guard refuses the commands if you try. Your part is one message saying what is w
 mode. In `monitor` mode, every verdict is the user's, on the pages. In `delegated` mode, you may
 take a verdict a delegation in force covers, with `--under DLG-n`, and nothing else. Say in one
 message what you decided and under which delegation; it waits on the Review page for them to keep
-or undo. You never change the mode, grant a delegation or review a decision: kanbanr refuses it.
+or undo. **When an item has moved back to an earlier stage, ask the user before taking any
+decision or making any change for it, even if a delegation would cover it**: delegations are for
+forward moves. You never change the mode, grant a delegation or review a decision: kanbanr
+refuses it.
 You may propose a delegation (`kanbanr decisions propose …`); it covers nothing until the user
 grants it on the Review page.
 

@@ -123,13 +123,17 @@ setup plan shows them under **Decisions**: for most processes, the design review
 chores, and the docs fold-in of every item; for TOGAF, only the docs fold-in, so Business
 Architecture and System Design stay yours; for design control, none. Each covers the stage an item
 is in when that sign-off is asked: a sign-off named for a stage, such as the fold-in "at
-Migration", is the one for the move into it, so it is taken in the stage before. You grant them on
-the Review page after setup, or don't.
+Migration", is the one for the move into it, so it is taken in the stage before. Only forward
+moves are delegated: when an item has moved back to an earlier stage, Claude asks you before
+deciding or changing anything for it, even if a delegation would cover it. You grant them on the
+Review page after setup, or don't.
 
 When Claude takes a decision under a delegation, it tells you which one and under which delegation,
 and the decision is recorded as delegated, by Claude, naming the delegation. It comes back on the
 Review page under **Delegated decisions to review**: **Keep** it, or **Undo** it, which withdraws
-it with a reason that names the delegation. A delegation can't cover a release, a withdrawal, a
+it with a reason that names the delegation. Until you do, a release holding the item shows it as a
+warning beside its promote button and in `kanbanr release promote --plan`; it never blocks the
+release. A delegation can't cover a release, a withdrawal, a
 design decision (ADR) or the decisions settings themselves, and only the Claude you are talking to
 acts under one, never a sub-agent it briefs. Revoke a delegation on the same panel at any time;
 switching back to monitor mode suspends them all.

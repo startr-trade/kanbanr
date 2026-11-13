@@ -670,31 +670,35 @@ pub fn propose(store: &Store, p: &str, new: NewDelegation, stamp: Stamp) -> Resu
     Ok(delegation)
 }
 
-/// The statuses an item is in when `signoff` is offered: every status with a transition into a
-/// status whose gate asks for it. A delegation's `steps` are the statuses the item is in when the
-/// verdict is taken, so these are what make a default delegation cover anything.
+/// The statuses an item is in when `signoff` is offered on a forward move: every status with a
+/// transition into a later status (in the order `statuses` lists them) whose gate asks for it. A
+/// delegation's `steps` are the statuses the item is in when the verdict is taken, so these are
+/// what make a default delegation cover anything. A back-move into the gate is left out: "forward
+/// moves ok; for backward moves ask before making changes" (decided by the maintainer, 13 Nov
+/// 2026).
 fn offered_from(config: &crate::config::ProjectConfig, signoff: &str) -> Vec<String> {
     let gates = config.effective_gates();
-    let asks = |status: &String| {
-        gates
-            .get(status)
-            .is_some_and(|g| g.signoffs.iter().any(|x| x == signoff))
-    };
+    let at = |s: &str| config.statuses.iter().position(|x| x == s);
     config
         .statuses
         .iter()
         .filter(|s| {
-            config
-                .transitions
-                .get(*s)
-                .is_some_and(|to| to.iter().any(asks))
+            config.transitions.get(*s).is_some_and(|to| {
+                to.iter().any(|t| {
+                    at(t) > at(s)
+                        && gates
+                            .get(t)
+                            .is_some_and(|g| g.signoffs.iter().any(|x| x == signoff))
+                })
+            })
         })
         .cloned()
         .collect()
 }
 
 /// What setup proposes for a process (R-5): a mode and default delegations, worked out from stage
-/// roles so saved and custom processes get them too. The Defaults table names each sign-off by the
+/// roles so saved and custom processes get them too. Only forward moves are delegated (decided by
+/// the maintainer, 13 Nov 2026; see `offered_from`). The Defaults table names each sign-off by the
 /// stage whose move it guards ("at the integrate-role stage", "at Migration"): the delegation's
 /// steps are the stages that move leaves from, where the item is when it is signed. Approvals,
 /// ratifications, ADRs and release verdicts are never proposed; a sign-off the process does not
@@ -2236,17 +2240,21 @@ mod tests {
                 let signoff = d.verdicts[0].trim_start_matches("signoff:");
                 assert_eq!(d.until, until_of("", NOW).unwrap(), "{name}");
                 assert!(!d.steps.is_empty(), "{name} {signoff}: no steps");
+                // Every step is the source of a forward move into a gate that asks for the
+                // sign-off: back-moves are the person's to decide (13 Nov 2026).
+                let at = |s: &str| config.statuses.iter().position(|x| x == s);
                 for step in &d.steps {
-                    let leads_in = config.transitions.get(step).is_some_and(|to| {
+                    let forward = config.transitions.get(step).is_some_and(|to| {
                         to.iter().any(|t| {
-                            gates
-                                .get(t)
-                                .is_some_and(|g| g.signoffs.iter().any(|x| x == signoff))
+                            at(t) > at(step)
+                                && gates
+                                    .get(t)
+                                    .is_some_and(|g| g.signoffs.iter().any(|x| x == signoff))
                         })
                     });
                     assert!(
-                        leads_in,
-                        "{name}: {step} has no move into a gate asking {signoff}"
+                        forward,
+                        "{name}: {step} has no forward move into a gate asking {signoff}"
                     );
                 }
                 match signoff {

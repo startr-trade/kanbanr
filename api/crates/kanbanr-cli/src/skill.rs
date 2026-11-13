@@ -375,6 +375,8 @@ mod tests {
             "**Decisions**",
             "kanbanr decisions defaults --process <name> --dry-run --json",
             "Only you, the coordinator, act under a delegation",
+            // Back-moves are the person's (decided by the maintainer, 13 Nov 2026).
+            "When an item has moved back to an earlier stage, ask the user before taking any\ndecision or making any change for it, even if a delegation would cover it",
         ] {
             assert!(skill.contains(want), "the skill says {want:?}");
         }
