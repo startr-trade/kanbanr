@@ -528,6 +528,16 @@ pub(crate) fn authorize(
     let item = project
         .feature(&v.code)
         .map_err(|_| format!("there is no item {}", v.code))?;
+    // Ratifying an override Claude made is the person's answer to it (DEF-043): no delegation
+    // covers it. Claude prepares the ratification; the person confirms it.
+    if v.kind == VerdictKind::Ratify && !crate::readiness::open_overrides(item).is_empty() {
+        return Err(format!(
+            "{} has an override Claude made that waits for the person's ratification (DEF-043), \
+             so `ratify` on {} stays the person's: prepare it with `kanbanr prepare ratify {} \
+             --reason \"…\" --source S`",
+            v.code, v.code, v.code
+        ));
+    }
     match g.why_not(&v, item, now) {
         None => Ok(Authorized::Delegated {
             delegation: g.id.clone(),
@@ -1510,6 +1520,54 @@ mod tests {
         let why =
             set_mode(&store, "demo", Mode::Conversation, "", who("monitor"), None).unwrap_err();
         assert!(why.to_string().contains("not built yet"), "{why}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-043 under FTR-028: ratifying an override Claude made is the person's, whatever a
+    /// delegation covers; with no open override the delegated ratify stands.
+    #[test]
+    fn ratifying_claudes_override_is_never_delegated() {
+        let (store, dir, defect, _) = board();
+        let ratify = route(&defect, "ratify");
+        let under = json!({"delegation": "DLG-001"});
+        let take = || judge(&store, "POST", &ratify, Some(&under), Origin::Conversation);
+        propose(
+            &store,
+            "demo",
+            NewDelegation {
+                verdicts: vec!["ratify".into()],
+                ..defects()
+            },
+            who("conversation"),
+        )
+        .unwrap();
+        set_mode(&store, "demo", Mode::Delegated, "", who("monitor"), None).unwrap();
+        grant_it(&store, "DLG-001");
+        assert_eq!(
+            take(),
+            Ok(Authorized::Delegated {
+                delegation: "DLG-001".into()
+            })
+        );
+        store
+            .move_feature_gated_as(
+                "demo",
+                &defect,
+                "Scheduled",
+                Some("CI after push"),
+                "conversation",
+            )
+            .unwrap();
+        let why = take().unwrap_err();
+        assert!(
+            why.contains("DEF-043") && why.contains("prepare ratify"),
+            "{why}"
+        );
+        // The person still ratifies it.
+        assert_eq!(
+            judge(&store, "POST", &ratify, None, Origin::Monitor),
+            Ok(Authorized::AsIs)
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

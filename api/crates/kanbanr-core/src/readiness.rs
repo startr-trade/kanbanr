@@ -2612,7 +2612,7 @@ mod tests {
         );
 
         store
-            .ratify_feature_as("shop", &code, "Ada", "agreed", "monitor")
+            .ratify_feature_as("shop", &code, "Ada", "agreed", "monitor", "")
             .unwrap();
         let f = store.load("shop").unwrap().feature(&code).unwrap().clone();
         assert!(open_overrides(&f).is_empty());
