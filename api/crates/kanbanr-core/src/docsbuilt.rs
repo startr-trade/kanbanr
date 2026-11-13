@@ -14,7 +14,7 @@
 use crate::models::{FeatureItem, TaskState};
 use crate::readiness::{Check, Context, Gap, Level};
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The kind of document that is not built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -321,6 +321,48 @@ pub fn evaluate(
         });
     }
     built
+}
+
+/// The item's branches and their tips now (DEF-046), as a `docs-folded` sign-off records them.
+/// Empty without the code repository's branches, or when the item has no branch.
+pub fn branch_heads(
+    project: &crate::store::Project,
+    feature: &FeatureItem,
+    ctx: &Context,
+) -> BTreeMap<String, String> {
+    let Some(facts) = ctx.branch_facts() else {
+        return BTreeMap::new();
+    };
+    crate::gitmodel::item_branches(&project.config, facts, &feature.code)
+        .into_iter()
+        .filter_map(|b| facts.branches.get(&b).map(|tip| (b.clone(), tip.clone())))
+        .collect()
+}
+
+/// Why the item's current `docs-folded` sign-off no longer covers what was built (DEF-046): one
+/// of its branches has a tip other than the one recorded, or is new since. `None` when it is not
+/// signed, recorded no branches, or the branches cannot be read: the lapse cannot be shown, so the
+/// sign-off stands. A recorded branch since deleted is not a lapse. Tips are compared, never commit
+/// times, which are whole seconds and can run out of order (DEF-035).
+pub fn moved_on(
+    project: &crate::store::Project,
+    feature: &FeatureItem,
+    ctx: &Context,
+) -> Option<String> {
+    let signed = feature.signoff_current(crate::method::DOCS_FOLDED)?;
+    if signed.branch_heads.is_empty() {
+        return None;
+    }
+    let facts = ctx.branch_facts()?;
+    crate::gitmodel::item_branches(&project.config, facts, &feature.code)
+        .into_iter()
+        .find(|b| signed.branch_heads.get(b) != facts.branches.get(b))
+        .map(|b| {
+            format!(
+                "{b} has commits after sign-off '{}' was given",
+                crate::method::DOCS_FOLDED
+            )
+        })
 }
 
 /// The repository docs `paths` that have not changed on the item's branch against its line, or one
