@@ -6707,6 +6707,17 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                         println!("        {kind}{at}: {}", u["why"].as_str().unwrap_or(""));
                     }
                 }
+                // The texts Claude settles before `docs-folded` is offered (DEF-039).
+                let to_settle = r["texts_to_settle"].as_array().cloned().unwrap_or_default();
+                if !to_settle.is_empty() {
+                    println!(
+                        "    Texts to settle before docs-folded (kanbanr prepare text {} <TARGET> …):",
+                        r["code"].as_str().unwrap_or("")
+                    );
+                    for t in &to_settle {
+                        println!("        {}", t.as_str().unwrap_or(""));
+                    }
+                }
                 // A manual test nobody ran: a note, not a gap (DEF-003).
                 for open in r["open_manual"].as_array().into_iter().flatten() {
                     println!("    manual test not run: {}", open.as_str().unwrap_or(""));

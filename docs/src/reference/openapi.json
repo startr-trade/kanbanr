@@ -3821,7 +3821,6 @@
         "type": "object"
       },
       "ReviewEntry": {
-        "description": "One item waiting for agreement.",
         "properties": {
           "approval": {
             "$ref": "#/components/schemas/ApprovalKind",
@@ -3864,6 +3863,13 @@
             "description": "What a verdict given from this brief is pinned to (FEAT-159).",
             "type": "string"
           },
+          "settled": {
+            "description": "The flagged texts Claude settled, with what it recorded, for the page to show (DEF-039).",
+            "items": {
+              "$ref": "#/components/schemas/SettledText"
+            },
+            "type": "array"
+          },
           "signoffs_needed": {
             "description": "The sign-offs the next stage still needs, by name; empty unless `approval` is `signoff`.",
             "items": {
@@ -3889,7 +3895,7 @@
             "type": "string"
           },
           "to_check": {
-            "description": "`docs-folded` is among them: the texts that name something the item changed since they\nlast changed, for the person to confirm or correct (FTR-013). `None` when the check was\nskipped (see `drift_skipped`) or the sign-off is not asked.",
+            "description": "`docs-folded` is among them: the texts that name something the item changed since they\nlast changed and that Claude has not yet settled (FTR-013, DEF-039). The sign-off is not\noffered while any is left. `None` when the check was skipped (see `drift_skipped`) or the\nsign-off is not asked.",
             "items": {
               "$ref": "#/components/schemas/Flag"
             },
@@ -3930,6 +3936,21 @@
           "portfolio",
           "counts",
           "programs"
+        ],
+        "type": "object"
+      },
+      "SettledText": {
+        "properties": {
+          "check": {
+            "$ref": "#/components/schemas/Checked"
+          },
+          "flag": {
+            "$ref": "#/components/schemas/Flag"
+          }
+        },
+        "required": [
+          "flag",
+          "check"
         ],
         "type": "object"
       },
