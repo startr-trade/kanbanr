@@ -1971,6 +1971,7 @@ impl Store {
                 from: from.clone(),
                 to: to.to_string(),
                 override_reason: None,
+                origin: String::new(),
             });
         }
         feature.status = to.to_string();
@@ -2277,6 +2278,7 @@ impl Store {
                 from: f.status.clone(),
                 to: to.clone(),
                 override_reason: None,
+                origin: String::new(),
             });
             f.status = to;
         }

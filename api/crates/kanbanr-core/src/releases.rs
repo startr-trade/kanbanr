@@ -128,6 +128,10 @@ pub struct StageChange {
     /// record written before origin existed.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub origin: String,
+    /// The requirements the person accepted shipping untested at the cut, as `CODE/R-n`
+    /// (DEF-043). Empty on every other change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accepted_untested: Vec<String>,
     /// Keys this version does not know, kept and written back unchanged (FEAT-151).
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
     #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
@@ -2959,6 +2963,7 @@ pub fn promote_with(
         by: by.to_string(),
         at: crate::now_rfc3339(),
         origin: opts.origin.to_string(),
+        accepted_untested: Vec::new(),
         extra: Default::default(),
         reason: if w.direction == Direction::Again {
             let names: Vec<&str> = taken.iter().map(|s| s.action.name()).collect();

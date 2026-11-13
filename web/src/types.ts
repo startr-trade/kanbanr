@@ -251,6 +251,8 @@ export interface TestRef {
   kind?: string;
   state: "planned" | "red" | "green";
   checked_rev?: string;
+  /** When it can be checked (DEF-043): "pushed", "cut" or a release stage; absent at the item's gates. */
+  at?: string;
 }
 
 /** The six dimensions in order, with blanks named — derived here exactly as the CLI derives it. */
@@ -531,6 +533,8 @@ export interface Release {
     reason?: string;
     item?: string;
     origin?: string;
+    /** The requirements accepted shipping untested at the cut, as CODE/R-n (DEF-043). */
+    accepted_untested?: string[];
   }[];
   /** Who cut the release and from where (DEF-028). Absent means unknown. */
   shipped_by?: string;
