@@ -6212,6 +6212,92 @@ pub(crate) mod tests {
         clean(&dir, &repo);
     }
 
+    /// FTR-034 R-3: a prepared promotion after the tag, confirmed on the monitor, is the stage
+    /// change the person would make, carrying what was checked; the prepared record is kept.
+    #[test]
+    fn a_confirmed_prepared_promotion_records_what_was_checked() {
+        let (store, dir, repo, sha) = tagged(
+            "ftr034-promote",
+            "release_stages: [candidate, main, tag, test, staging]\n\
+             release_gates:\n  candidate: { on_enter: [branch] }\n  \
+             main: { on_enter: [move_main] }\n  tag: { on_enter: [tag] }\n",
+        );
+        now_result(&store, &sha, true);
+        crate::git::ensure_repo_as(&dir, Some(("Grace", "grace@example.com")));
+        // Claude prepares it with no stage: the plan's next one, the confirmation of `test`.
+        let prepared = crate::prepared::prepare(
+            &store,
+            "shop",
+            &serde_json::json!({
+                "kind": "promotion",
+                "subject": {"release": "v1"},
+                "fields": {"checked": "smoke test passed on the test site"},
+                "sources": [{"label": "smoke run", "url": "https://ci.example/smoke/7"}],
+                "origin": "conversation",
+            }),
+            Some(&repo),
+        )
+        .unwrap();
+        assert_eq!(prepared.subject.stage, "test");
+        assert_eq!(prepared.by, "Claude");
+        let plan = plan_to(&store, &repo, "test");
+        assert_eq!(prepared.rev, plan.release_tip);
+        let out = crate::write::apply_as(
+            &store,
+            &dir,
+            crate::git::PushPolicy::Off,
+            "POST",
+            &format!("/projects/shop/prepared/{}/confirm", prepared.id),
+            Some(&serde_json::json!({"by": "Grace", "expect": plan.release_tip})),
+            Some(&repo),
+            &crate::eventing::NullSender,
+            &crate::agentscope::ProcessScope::Unscoped,
+            crate::origin::Origin::Monitor,
+        )
+        .unwrap();
+        assert!(out.body.contains(&prepared.id), "{}", out.body);
+        let r = v1(&store);
+        let last = r.stages.last().unwrap();
+        assert_eq!(
+            (
+                last.stage.as_str(),
+                last.by.as_str(),
+                last.reason.as_str(),
+                last.origin.as_str()
+            ),
+            (
+                "test",
+                "Grace",
+                "smoke test passed on the test site",
+                "monitor"
+            )
+        );
+        let views = crate::prepared::list(
+            &store,
+            "shop",
+            &crate::prepared::ListQuery {
+                all: true,
+                ..Default::default()
+            },
+            Some(&repo),
+        )
+        .unwrap();
+        assert_eq!(views[0].state, crate::prepared::State::Confirmed);
+        // The next move, to staging, is a confirmation too; a release at `test` no longer waits
+        // for one to `test`.
+        let again = crate::prepared::prepare(
+            &store,
+            "shop",
+            &serde_json::json!({
+                "kind": "promotion", "subject": {"release": "v1", "stage": "test"},
+                "fields": {"checked": "x"}, "sources": [{"label": "x"}], "origin": "conversation",
+            }),
+            Some(&repo),
+        );
+        assert!(again.is_err(), "{again:?}");
+        clean(&dir, &repo);
+    }
+
     /// FTR-026 R-3: entering the last stage ships the release: items move, notes are written.
     #[test]
     fn the_last_stage_ships_the_release_and_moves_the_items() {

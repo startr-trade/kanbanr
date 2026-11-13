@@ -198,6 +198,14 @@
         ],
         "type": "object"
       },
+      "Answer": {
+        "description": "What the person answered.",
+        "enum": [
+          "confirmed",
+          "rejected"
+        ],
+        "type": "string"
+      },
       "Approval": {
         "additionalProperties": true,
         "properties": {
@@ -1698,6 +1706,23 @@
         ],
         "type": "object"
       },
+      "FieldChange": {
+        "additionalProperties": true,
+        "description": "One field the person changed before confirming: both values are kept.",
+        "properties": {
+          "confirmed": true,
+          "field": {
+            "type": "string"
+          },
+          "prepared": true
+        },
+        "required": [
+          "field",
+          "prepared",
+          "confirmed"
+        ],
+        "type": "object"
+      },
       "Flag": {
         "description": "A linked text that names something changed after it last changed. A flag says which text names\nwhich changed name, never that the text is wrong.",
         "properties": {
@@ -1850,6 +1875,10 @@
             "type": "string"
           },
           "note": {
+            "type": "string"
+          },
+          "origin": {
+            "description": "Where it was recorded (DEF-028, FTR-034): `monitor`, `conversation` or `terminal`; empty\nfor a result recorded before kanbanr stamped one.",
             "type": "string"
           },
           "passed": {
@@ -2655,6 +2684,167 @@
           "name",
           "description",
           "programs"
+        ],
+        "type": "object"
+      },
+      "PreparedSource": {
+        "additionalProperties": true,
+        "description": "Where a piece of evidence came from: a link or a board reference.",
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "description": "Empty, `http(s)://…` with no user info, `doc:<path>`, `item:<CODE>` or `commit:<sha>`.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PreparedState": {
+        "description": "Where a prepared record stands, derived when it is listed.",
+        "oneOf": [
+          {
+            "enum": [
+              "confirmed",
+              "rejected"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "open",
+            "description": "Waiting for the person.",
+            "type": "string"
+          },
+          {
+            "const": "superseded",
+            "description": "A newer record for the same decision replaces it.",
+            "type": "string"
+          },
+          {
+            "const": "stale",
+            "description": "The decision no longer waits, or moved on since it was prepared.",
+            "type": "string"
+          },
+          {
+            "const": "unknown_kind",
+            "description": "A kind this version of kanbanr does not know.",
+            "type": "string"
+          }
+        ]
+      },
+      "PreparedSubject": {
+        "additionalProperties": true,
+        "description": "What a decision is about. Which keys a kind needs is in [`KINDS`].",
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "gate": {
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "release": {
+            "type": "string"
+          },
+          "requirement": {
+            "type": "string"
+          },
+          "signoff": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "test": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PreparedView": {
+        "additionalProperties": true,
+        "description": "A prepared record as the monitor lists it: the record, where it stands, the answer if any, and\nwhat the person would type in their own terminal instead.",
+        "properties": {
+          "at": {
+            "description": "RFC 3339, UTC.",
+            "type": "string"
+          },
+          "by": {
+            "description": "`Claude` when prepared in the conversation; else the preparer's name.",
+            "type": "string"
+          },
+          "command": {
+            "description": "The equivalent verdict command, for a person's own terminal.",
+            "type": "string"
+          },
+          "fields": {
+            "additionalProperties": true,
+            "description": "What the verdict will carry; keys per kind.",
+            "type": "object"
+          },
+          "id": {
+            "description": "`<YYYYMMDDTHHMMSSZ>-<kind>`, with `-2`, `-3` … when taken.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "`signoff`, `promotion`, `gate-result`, `ratification`, … A string, so a kind a newer\nkanbanr adds is listed by an older one rather than failing to parse.",
+            "type": "string"
+          },
+          "origin": {
+            "description": "Stamped by the front end, never the request (DEF-028).",
+            "type": "string"
+          },
+          "page": {
+            "description": "The monitor page its decision is taken on: `review` or `releases`.",
+            "type": "string"
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Resolution"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rev": {
+            "description": "What it was prepared against: the definition's revision, the release tip or the commit.",
+            "type": "string"
+          },
+          "sources": {
+            "description": "Where the evidence came from: at least one.",
+            "items": {
+              "$ref": "#/components/schemas/PreparedSource"
+            },
+            "type": "array"
+          },
+          "stale_why": {
+            "description": "Why it no longer waits, when stale, superseded or of an unknown kind.",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PreparedState"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/PreparedSubject",
+            "default": {},
+            "description": "What the decision is about; keys per kind."
+          }
+        },
+        "required": [
+          "subject",
+          "state",
+          "resolution",
+          "stale_why",
+          "page",
+          "command"
         ],
         "type": "object"
       },
@@ -3555,6 +3745,46 @@
           "nfr"
         ],
         "type": "string"
+      },
+      "Resolution": {
+        "additionalProperties": true,
+        "description": "The person's answer to a prepared record.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "changed": {
+            "description": "Each field the person edited; empty when confirmed as prepared.",
+            "items": {
+              "$ref": "#/components/schemas/FieldChange"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "made": {
+            "description": "The verdict route it made, `POST /projects/…`; empty on a rejection.",
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "A rejection's reason, optional.",
+            "type": "string"
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/Answer"
+          }
+        },
+        "required": [
+          "verdict"
+        ],
+        "type": "object"
       },
       "Returned": {
         "description": "A release sent back by a merge that has not been cut yet, as the plan shows it (DEF-031).\nDerived, never stored.",
@@ -5274,6 +5504,77 @@
           }
         },
         "summary": "The lessons worth showing, most believed first"
+      }
+    },
+    "/api/projects/{project}/prepared": {
+      "get": {
+        "operationId": "getProjectsPrepared",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "open (the default): only those waiting; all: every record.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only records about this item.",
+            "in": "query",
+            "name": "item",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only records about this release.",
+            "in": "query",
+            "name": "release",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PreparedView"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "The records Claude prepared for the person to confirm (FTR-034), newest first: each with its sources, where it stands, the person's answer and the equivalent verdict command"
       }
     },
     "/api/projects/{project}/process": {

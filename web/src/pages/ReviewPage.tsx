@@ -9,6 +9,9 @@ import Markdown from "../components/Markdown";
 import { zachmanColumns } from "../types";
 import type { Adr, DriftChecked, DriftFlag, PendingReview, PlannedRelease, SpecBrief } from "../types";
 import { approveBlocker, checkBlocks, type DiagramProblem } from "../diagramCheck";
+import { PreparedPanel } from "../components/PreparedPanel";
+import { openFor } from "../prepared";
+import type { PreparedView } from "../types";
 
 /**
  * What to show once a verdict went through. A repeat of the latest verdict records nothing; the
@@ -46,6 +49,8 @@ export default function ReviewPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const meta = useAsync(() => api.getMeta(), []);
   const pending = useAsync(() => api.getPendingReviews(project), [project, tick]);
+  // What Claude prepared for these decisions (FTR-034), shown filled in beside their buttons.
+  const prepared = useAsync(() => api.getPrepared(project), [project, tick]);
   // Decisions waiting for their owner (FEAT-153): proposed, and nothing else.
   const adrs = useAsync(() => api.getAdrs(project), [project, tick]);
 
@@ -107,6 +112,35 @@ export default function ReviewPage() {
     try {
       const answer = await api.signoff(project, code, name, who, item.rev ?? "", item.spec_rev ?? "", checked);
       setDone((d) => ({ ...d, [code]: alreadyOr(answer, `signed off ${name}`) }));
+    } catch (e) {
+      setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // A record Claude prepared, confirmed as the same identity (FTR-034): the server makes the
+  // verdict it prepares, pinned to the definition and spec this page showed.
+  const confirmPrepared = async (item: PendingReview, view: PreparedView, edits: Record<string, unknown>, done: string) => {
+    if (!who) return;
+    const code = item.code;
+    setBusy(code);
+    try {
+      const answer = await api.confirmPrepared(project, view, who, edits, { rev: item.rev ?? "", spec_rev: item.spec_rev ?? "" });
+      setDone((d) => ({ ...d, [code]: alreadyOr(answer, done) }));
+    } catch (e) {
+      setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const rejectPrepared = async (item: PendingReview, view: PreparedView, reason: string) => {
+    if (!who) return;
+    const code = item.code;
+    setBusy(code);
+    try {
+      await api.rejectPrepared(project, view.id ?? "", who, reason);
+      setDone((d) => ({ ...d, [code]: "rejected what Claude prepared; ask Claude to prepare it again" }));
     } catch (e) {
       setDone((d) => ({ ...d, [code]: e instanceof Error ? e.message : String(e) }));
     } finally {
@@ -212,6 +246,9 @@ export default function ReviewPage() {
           defaultOpen={i === 0}
           onApprove={() => agree(item)}
           onSignoff={(name, checked) => signoff(item, name, checked)}
+          prepared={prepared.data ?? []}
+          onConfirmPrepared={(view, edits, done) => confirmPrepared(item, view, edits, done)}
+          onRejectPrepared={(view, reason) => rejectPrepared(item, view, reason)}
           onRelease={(version) => planRelease(item, version)}
           onNewRelease={(version, target) => newRelease(item, version, target)}
         />
@@ -463,6 +500,9 @@ function Brief({
   onSignoff,
   onRelease,
   onNewRelease,
+  prepared,
+  onConfirmPrepared,
+  onRejectPrepared,
 }: {
   project: string;
   item: PendingReview;
@@ -475,6 +515,9 @@ function Brief({
   onSignoff: (name: string, checked?: DriftChecked[]) => void;
   onRelease: (version: string) => void;
   onNewRelease: (version: string, target: string) => void;
+  prepared: PreparedView[];
+  onConfirmPrepared: (view: PreparedView, edits: Record<string, unknown>, done: string) => void;
+  onRejectPrepared: (view: PreparedView, reason: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
   const [version, setVersion] = useState("");
@@ -515,6 +558,18 @@ function Brief({
     });
   const diagrams = useDiagramCheck(project, item.code, tick);
   const blocker = approveBlocker(diagrams);
+  // What Claude prepared (FTR-034): a sign-off's note and doc, a ratification's reason. A
+  // docs-folded with texts to settle keeps its form: what was checked travels with that button.
+  const preparedSignoff = (name: string) =>
+    name === "docs-folded" && flags.length ? undefined : openFor(prepared, "signoff", { item: item.code, signoff: name });
+  const preparedRatify = ratify ? openFor(prepared, "ratification", { item: item.code }) : undefined;
+  const panels = [
+    ...(preparedRatify ? [{ view: preparedRatify, label: `Ratify ${item.code}`, done: "ratified" }] : []),
+    ...signoffs.flatMap((name) => {
+      const view = preparedSignoff(name);
+      return view ? [{ view, label: `Sign off ${name}`, done: `signed off ${name}` }] : [];
+    }),
+  ];
 
   // Parts added or changed since the last decision lead; the rest is collapsed (FTR-018).
   const changes =
@@ -732,12 +787,26 @@ function Brief({
           </ul>
         </div>
       ) : null}
+      {!approved
+        ? panels.map((p) => (
+            <PreparedPanel
+              key={p.view.id}
+              project={project}
+              view={p.view}
+              writable={writable}
+              busy={busy}
+              label={p.label}
+              onConfirm={(edits) => onConfirmPrepared(p.view, edits, p.done)}
+              onReject={(reason) => onRejectPrepared(p.view, reason)}
+            />
+          ))
+        : null}
       <div className="review-actions">
         {approved ? (
           <span className="chip done">{outcome} — it leaves this list on the next refresh</span>
         ) : writable ? (
           <>
-            {waitingOnSignoff || specChanged || whichRelease ? null : (
+            {waitingOnSignoff || specChanged || whichRelease || preparedRatify ? null : (
               <button
                 className="btn btn-primary"
                 onClick={onApprove}
@@ -747,7 +816,7 @@ function Brief({
                 {busy ? "recording…" : `${verb} ${item.code}`}
               </button>
             )}
-            {signoffs.map((name) => (
+            {signoffs.filter((name) => !preparedSignoff(name)).map((name) => (
               <button
                 key={name}
                 className={`btn ${waitingOnSignoff || specChanged ? "btn-primary" : ""}`}

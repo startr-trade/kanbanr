@@ -10576,3 +10576,90 @@ fn batch_feature_edit_with_a_sprint_is_refused_not_applied() {
     let shown = ok(run_in(&base, &work, &["sprint", "show", "SP-001"]));
     assert!(!shown.contains("FEAT-001"), "{shown}");
 }
+
+/// FTR-034 R-1: `kanbanr prepare gate` in a Claude Code session keeps a prepared result marked as
+/// Claude's, naming the run; `prepare list` shows it waiting; no gate result is recorded.
+#[test]
+fn prepare_gate_records_a_prepared_result_and_list_shows_it() {
+    let (base, work) = release_scratch("prepare-gate");
+    let head = String::from_utf8_lossy(&git_in(&base, &work, &["rev-parse", "HEAD"]).stdout)
+        .trim()
+        .to_string();
+    let as_claude = |args: &[&str]| {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", base.join("home"))
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_PROCESSES_DIR")
+            .env("CLAUDECODE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("run kanbanr CLI")
+    };
+    let o = as_claude(&[
+        "prepare",
+        "gate",
+        "ci",
+        "--passed",
+        "--url",
+        "https://ci.example/run/4512",
+        "--note",
+        "all 412 tests passed",
+        "--source",
+        &format!("release tip=commit:{head}"),
+    ]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let said = String::from_utf8_lossy(&o.stdout);
+    assert!(
+        said.contains("prepared gate ci passed on") && said.contains("/p/shop/releases"),
+        "{said}"
+    );
+    let list = as_claude(&["--json", "prepare", "list"]);
+    assert!(
+        list.status.success(),
+        "{}",
+        String::from_utf8_lossy(&list.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    let rows = v.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{v}");
+    let r = &rows[0];
+    assert_eq!(r["kind"], "gate-result", "{v}");
+    assert_eq!(r["state"], "open", "{v}");
+    assert_eq!(r["by"], "Claude", "{v}");
+    assert_eq!(r["origin"], "conversation", "{v}");
+    assert_eq!(r["subject"]["commit"], head, "{v}");
+    assert_eq!(r["fields"]["passed"], true, "{v}");
+    let urls: Vec<&str> = r["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s["url"].as_str())
+        .collect();
+    assert!(urls.contains(&"https://ci.example/run/4512"), "{v}");
+    assert!(
+        r["command"]
+            .as_str()
+            .unwrap()
+            .starts_with("kanbanr gate record ci --passed"),
+        "{v}"
+    );
+    // Preparing is not the verdict.
+    let gates = run_in(&base, &work, &["--json", "gate", "list"]);
+    let g: serde_json::Value = serde_json::from_slice(&gates.stdout).unwrap();
+    assert_eq!(g.as_array().unwrap().len(), 0, "{g}");
+    // A source that is not a link or a board reference is refused.
+    let bad = as_claude(&[
+        "prepare",
+        "gate",
+        "ci",
+        "--failed",
+        "--source",
+        "x=javascript:1",
+    ]);
+    assert!(!bad.status.success());
+    let _ = std::fs::remove_dir_all(&base);
+}
