@@ -5828,6 +5828,101 @@ fn fixes_forward_merged() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// A release v1 with a fix integrated into release/v1 and not yet forwarded (DEF-045), as in
+/// `fixes_forward_merged`: returns what the move printed.
+fn release_fix_integrated(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, String) {
+    let (base, work) = togaf_scratch(tag);
+    git_model_board(&base, &work, false, true);
+    approved_item(&base, &work, "FEAT-002", "Cart loses items", Some("bug"));
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    ok(run_in(&base, &work, &["release", "add", "v1"]));
+    ok(run_in(&base, &work, &["release", "plan", "v1", "FEAT-002"]));
+    ok(run_in(&base, &work, &["release", "promote", "v1"]));
+    ok(run_in(&base, &work, &["start", "FEAT-002"]));
+    commit_file_in(
+        &base,
+        &work,
+        "fix.txt",
+        "fixed\n",
+        "fix: cart\n\nRefs: kanbanr:FEAT-002",
+    );
+    let args = [
+        "move",
+        "FEAT-002",
+        "Completed",
+        "--override",
+        "fix integrated into the release under test",
+    ];
+    let said = ok(run_in(&base, &work, &args));
+    (base, work, said)
+}
+
+/// DEF-045 R-1: the move names `kanbanr git forward` as Claude's next step, a local merge with
+/// nothing pushed, and never as something the person runs; the forward then clears the doctor.
+#[test]
+fn the_moves_next_step_names_git_forward_for_claude_not_the_person() {
+    let (base, work, said) = release_fix_integrated("gm-forward-claude");
+    let line = said
+        .lines()
+        .find(|l| l.contains("next, for Claude:"))
+        .unwrap_or_else(|| panic!("no next step in: {said}"));
+    assert!(line.contains("kanbanr git forward v1"), "{line}");
+    assert!(line.contains("nothing is pushed"), "{line}");
+    assert!(!line.contains("you"), "{line}");
+    assert_eq!(
+        line.trim(),
+        kanbanr_core::gitmodel::forward_step("v1", "integration")
+    );
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let before = ok(run_in(&base, &work, &["git", "doctor"]));
+    assert!(before.contains("release/v1 has "), "{before}");
+    ok(run_in(&base, &work, &["git", "forward", "v1"]));
+    let after = ok(run_in(&base, &work, &["git", "doctor"]));
+    assert!(!after.contains("release/v1 has"), "{after}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-045 R-1: a forward that would conflict is refused before anything is written, says so, and
+/// leaves the line where it was.
+#[test]
+fn a_forward_that_conflicts_changes_nothing() {
+    let (base, work, _) = release_fix_integrated("gm-forward-conflict");
+    // A different change to the same file on the line.
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    let current = String::from_utf8(ok(git_in(&base, &work, &["branch", "--show-current"])).stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+    ok(git_in(&base, &work, &["checkout", "-q", "integration"]));
+    commit_file_in(
+        &base,
+        &work,
+        "fix.txt",
+        "other\n",
+        "other: same file\n\n[no-ref] test",
+    );
+    let before = tip(&base, &work, "integration");
+    let out = run_in(&base, &work, &["git", "forward", "v1"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "a conflicting forward must fail");
+    assert!(err.contains("fix.txt"), "{err}");
+    assert!(err.contains("nothing was changed"), "{err}");
+    assert_eq!(tip(&base, &work, "integration"), before);
+    if !current.is_empty() {
+        ok(git_in(&base, &work, &["checkout", "-q", &current]));
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// A fix on its own branch in a promoted release's line, ready to move (DEF-031): the release v1
 /// holds FEAT-002, a bug, which has a commit on its fix branch. Returns the releases file.
 fn release_with_a_fix(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
@@ -6100,7 +6195,10 @@ fn patch_release_reports_forward_merge() {
         &work,
         &["release", "promote", "v1.0.1", "production"],
     ));
-    assert!(said.contains("merge these forward into develop"), "{said}");
+    assert!(
+        said.contains("next, for Claude: bring release/v1.0.1 into develop"),
+        "{said}"
+    );
     assert!(said.contains("[no-ref] change"), "{said}");
     let notes = ok(run_in(&base, &work, &["doc", "show", "releases/v1.0.1.md"]));
     assert!(notes.contains("To merge forward into develop"), "{notes}");
@@ -6119,7 +6217,7 @@ fn patch_release_reports_forward_merge() {
         &work,
         &["release", "promote", "v1.0.1", "production"],
     ));
-    assert!(!said.contains("merge these forward"), "{said}");
+    assert!(!said.contains("next, for Claude"), "{said}");
     assert_eq!(
         rev(&base, &work, "main"),
         rev(&base, &work, "release/v1.0.1")
@@ -6382,6 +6480,7 @@ fn git_doctor_orphans_and_forward_merges() {
         "sprint/SP-099 names no sprint",
         "release/v9 names no release",
         "release/v1 has 1 commit integration lacks",
+        "next, for Claude: bring release/v1 into integration with `kanbanr git forward v1`",
     ] {
         assert!(said.contains(want), "missing {want:?} in {said}");
     }

@@ -4722,7 +4722,9 @@ fn print_merge(cli: &Cli, resp: &str) {
             steps.join(", then ")
         );
     }
-    if let Some(version) = v["forward_needed"].as_str() {
+    if let Some(next) = v["forward_next"].as_str() {
+        println!("{next}");
+    } else if let Some(version) = v["forward_needed"].as_str() {
         println!("release/{version} has a fix the line lacks: kanbanr git forward {version}");
     }
     print_drift(&v["drift"]);
@@ -10466,11 +10468,18 @@ fn promote_release(
         .collect();
     if !forward.is_empty() {
         println!(
-            "  merge these forward into {} (`kanbanr git forward {version}` with the git model \
-             on, or by hand):",
-            v["forward_into"]
+            "  {}",
+            v["forward_next"]
                 .as_str()
-                .unwrap_or("the integration branch")
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    kanbanr_core::gitmodel::forward_step(
+                        version,
+                        v["forward_into"]
+                            .as_str()
+                            .unwrap_or("the integration branch"),
+                    )
+                })
         );
         for c in forward {
             let sha = c["sha"].as_str().unwrap_or_default();
