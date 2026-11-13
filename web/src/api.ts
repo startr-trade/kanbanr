@@ -202,14 +202,31 @@ export const api = {
    * Move a release to its next stage, or the named one (FEAT-183, FEAT-185): the same core
    * promotion as `kanbanr release promote`, recorded as `by`. The last stage is the cut.
    */
-  promoteRelease: (id: string, version: string, by: string, stage?: string, expect?: string, reason?: string) =>
+  promoteRelease: (
+    id: string,
+    version: string,
+    by: string,
+    stage?: string,
+    expect?: string,
+    reason?: string,
+    acceptUntested?: string[],
+  ) =>
     writePost(
       `/projects/${encodeURIComponent(id)}/releases/${encodeURIComponent(version)}/promote`,
       // `expect`: the release tip the plan showed (FEAT-212) — refused if the branch moved since.
       // `reason`: for a stage after the tag, what the user checked (FTR-026).
-      { by, ...(stage ? { stage } : {}), ...(expect ? { expect } : {}), ...(reason ? { reason } : {}) },
+      // `accept_untested`: at the cut, what the person accepts shipping unverified (DEF-043).
+      {
+        by,
+        ...(stage ? { stage } : {}),
+        ...(expect ? { expect } : {}),
+        ...(reason ? { reason } : {}),
+        ...(acceptUntested?.length ? { accept_untested: acceptUntested } : {}),
+      },
       "promote a release",
-      `kanbanr release promote ${version}${stage ? ` ${stage}` : ""}${reason ? ` --note "${reason}"` : ""}`,
+      `kanbanr release promote ${version}${stage ? ` ${stage}` : ""}${reason ? ` --note "${reason}"` : ""}${
+        acceptUntested?.length ? ` --accept-untested ${acceptUntested.join(",")}` : ""
+      }`,
     ),
   /**
    * Start a patch release from a release whose tag's recorded result is failed (FTR-026): a defect

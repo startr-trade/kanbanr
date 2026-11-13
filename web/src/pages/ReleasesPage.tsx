@@ -65,11 +65,13 @@ export default function ReleasesPage() {
   };
   // The same core promotion as the CLI, through the daemon's promote route (FEAT-183), carrying
   // the release tip the plan showed (FEAT-212).
-  const promote = async (r: Release, to: string, expect: string, note = "") => {
+  const promote = async (r: Release, to: string, expect: string, note = "", acceptUntested?: string[]) => {
     if (!who) return;
     setBusy(r.version);
     try {
-      const done = (await api.promoteRelease(project, r.version, who, to, expect, note)) as { next?: string };
+      const done = (await api.promoteRelease(project, r.version, who, to, expect, note, acceptUntested)) as {
+        next?: string;
+      };
       setOutcome((o) => ({ ...o, [r.version]: `promoted to ${to}${done?.next ? ` — ${done.next}` : ""}` }));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -239,7 +241,7 @@ function ReleaseButton({
   gates: string[];
   who: string | null;
   busy: string | null;
-  onPromote: (r: Release, to: string, expect: string, note?: string) => void;
+  onPromote: (r: Release, to: string, expect: string, note?: string, acceptUntested?: string[]) => void;
   outcome?: string;
   prepared: PreparedView[];
 }) {
@@ -254,10 +256,14 @@ function ReleaseButton({
   const [hideOutcome, setHideOutcome] = useState(false);
   useEffect(() => setHideOutcome(false), [outcome]);
   const [preparedSaid, setPreparedSaid] = useState<string | null>(null);
+  // The person's acceptance of what the cut ships untested (DEF-043), for the list the plan showed.
+  const [accepted, setAccepted] = useState(false);
   const plan = useAsync(() => api.getReleasePlan(project, release.version), [project, release.version, tick, again]);
   if (plan.error) return <ErrorBox error={plan.error} />;
   if (!plan.data) return <Loading />;
   const action = releaseAction(plan.data, writable);
+  // Ticking the acceptance is the one thing the cut still waits for (DEF-043).
+  const enabled = action.enabled || (action.accept != null && action.button && accepted);
   if (action.note) {
     return (
       <p className="muted small">
@@ -355,10 +361,12 @@ function ReleaseButton({
           <button
             className="btn btn-primary"
             onClick={() =>
-              action.confirm ? setAsking(true) : onPromote(release, plan.data!.to, plan.data!.release_tip)
+              action.confirm
+                ? setAsking(true)
+                : onPromote(release, plan.data!.to, plan.data!.release_tip, "", accepted ? action.accept : undefined)
             }
-            disabled={!action.enabled || busy != null}
-            title={action.enabled ? action.does.join("; ") : "not ready: see what is missing"}
+            disabled={!enabled || busy != null}
+            title={enabled ? action.does.join("; ") : "not ready: see what is missing"}
           >
             {busy === release.version ? "promoting…" : action.label}
           </button>
@@ -412,6 +420,33 @@ function ReleaseButton({
         </ul>
       ) : null}
       {action.preview ? <CutPreviewList preview={action.preview} /> : null}
+      {action.accept ? (
+        <div className="small release-untested">
+          <p>
+            <strong>Not verified:</strong> <Inline text={action.acceptDetail ?? ""} />
+          </p>
+          <ul className="dep-list">
+            {action.accept.map((r) => (
+              <li key={r}>
+                <code>{r}</code>
+              </li>
+            ))}
+          </ul>
+          {action.button ? (
+            <p>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={accepted}
+                  onChange={(e) => setAccepted(e.target.checked)}
+                  aria-label="Ship these unverified; the notes will name them"
+                />{" "}
+                Ship these unverified; the notes will name them
+              </label>
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       {action.missing.length ? (
         <div className="small">
           <p>
