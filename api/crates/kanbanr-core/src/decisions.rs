@@ -28,6 +28,7 @@ pub const DEFAULT_DELEGATION_DAYS: i64 = 14;
 
 /// Where a project's decisions are taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     /// On the monitor, by the person: today's behaviour, and the default.
@@ -61,6 +62,7 @@ impl Mode {
 
 /// Who did something, when, and from where; a grant also pins the revision it granted.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Stamp {
     pub by: String,
     pub at: String,
@@ -70,11 +72,13 @@ pub struct Stamp {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: Extra,
 }
 
 /// One entry of the mode history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ModeChange {
     pub mode: Mode,
     pub by: String,
@@ -83,11 +87,13 @@ pub struct ModeChange {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: Extra,
 }
 
 /// What a delegation is in, at a moment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum DelegationState {
     Proposed,
@@ -110,6 +116,7 @@ impl DelegationState {
 /// A delegation: the verdicts Claude may take, on which items, until when. Never edited once
 /// proposed; a wider or longer one is a new proposal.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Delegation {
     pub id: String,
     /// `approve`, `ratify` or `signoff:<name>`.
@@ -139,11 +146,13 @@ pub struct Delegation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revoked: Option<Stamp>,
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: Extra,
 }
 
 /// A person's review of one delegated decision.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Review {
     /// `<CODE>/<approve|ratify|signoff>/<name or ->/<record at>`.
     pub decision: String,
@@ -155,10 +164,12 @@ pub struct Review {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: Extra,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ReviewVerdict {
     Kept,
@@ -167,6 +178,7 @@ pub enum ReviewVerdict {
 
 /// The whole `decisions.yaml`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Decisions {
     #[serde(default)]
     pub modes: Vec<ModeChange>,
@@ -175,6 +187,7 @@ pub struct Decisions {
     #[serde(default)]
     pub reviews: Vec<Review>,
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: Extra,
 }
 
@@ -529,6 +542,7 @@ pub(crate) fn authorize(
 
 /// What a new delegation asks for.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NewDelegation {
     #[serde(default)]
     pub verdicts: Vec<String>,
@@ -720,6 +734,7 @@ pub fn revoke(
 
 /// A decision waiting for someone, and where.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Place {
     Monitor,
@@ -728,6 +743,7 @@ pub enum Place {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Waiting {
     pub code: String,
     pub what: String,
@@ -740,33 +756,42 @@ pub struct Waiting {
 
 /// The answer to a mode change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ModeChanged {
     pub mode: Mode,
-    /// The mode already stood, so nothing was recorded.
+    /// The mode already stood, so nothing was recorded. Absent when it was recorded, so the write
+    /// recipe commits it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub already_recorded: bool,
     pub waiting: Vec<Waiting>,
 }
 
 /// Record a new mode, by the person. Recording `conversation` is refused until FTR-035 builds it.
-/// A repeat of the standing mode records nothing. `waiting` is filled in by a later task.
+/// A repeat of the standing mode records nothing. Either way the answer lists what waits for a
+/// decision, each in its place under the mode now standing.
 pub fn set_mode(
     store: &Store,
     p: &str,
     mode: Mode,
     reason: &str,
     stamp: Stamp,
-    _review_url: Option<&str>,
+    review_url: Option<&str>,
 ) -> Result<ModeChanged> {
     person_stamp(&stamp, "changing the decision mode")?;
     if mode == Mode::Conversation {
         return unsupported("conversation mode is not built yet (FTR-035)");
     }
     let mut d = load(store, p)?;
+    let now = if stamp.at.is_empty() {
+        crate::now_rfc3339()
+    } else {
+        stamp.at.clone()
+    };
     if d.mode() == mode {
         return Ok(ModeChanged {
             mode,
             already_recorded: true,
-            waiting: Vec::new(),
+            waiting: waiting(store, p, None, &d, review_url, &now)?,
         });
     }
     d.modes.push(ModeChange {
@@ -781,12 +806,222 @@ pub fn set_mode(
     Ok(ModeChanged {
         mode,
         already_recorded: false,
-        waiting: Vec::new(),
+        waiting: waiting(store, p, None, &d, review_url, &now)?,
+    })
+}
+
+/// Everything waiting for a decision, each in its place under `d`'s mode: the review queue, the
+/// proposed ADRs, the proposed delegations, the delegated decisions to review and, with the code
+/// repository, the releases ready to promote. An item verdict a delegation in force covers waits
+/// for Claude under it in `delegated` mode; in `conversation` mode everything waits there; the
+/// rest waits on the monitor, at `{review_url}#{code}` (the Releases page for a release).
+pub fn waiting(
+    store: &Store,
+    p: &str,
+    repo: Option<&std::path::Path>,
+    d: &Decisions,
+    review_url: Option<&str>,
+    now: &str,
+) -> Result<Vec<Waiting>> {
+    use crate::review::ApprovalKind as K;
+    let mode = d.mode();
+    let project = store.load(p)?;
+    let releases_url = review_url.map(|u| match u.strip_suffix("/review") {
+        Some(base) => format!("{base}/releases"),
+        None => u.to_string(),
+    });
+    let mut out: Vec<Waiting> = Vec::new();
+    let mut push = |code: &str, what: String, verdict: Option<Verdict>, person_only: bool| {
+        let covering = verdict.as_ref().and_then(|v| {
+            let item = project.feature(&v.code).ok()?;
+            d.delegations
+                .iter()
+                .find(|g| g.covers(v, item, now))
+                .map(|g| g.id.clone())
+        });
+        let (place, delegation, url) = match (mode, covering) {
+            (Mode::Conversation, _) if !person_only => (Place::Conversation, None, None),
+            (Mode::Delegated, Some(id)) => (Place::Delegated, Some(id), None),
+            _ => (
+                Place::Monitor,
+                None,
+                review_url.map(|u| format!("{u}#{code}")),
+            ),
+        };
+        out.push(Waiting {
+            code: code.to_string(),
+            what,
+            place,
+            delegation,
+            url,
+        });
+    };
+    for e in crate::review::pending(store, p, repo)? {
+        let of = |kind: VerdictKind, signoff: &str| Verdict {
+            kind,
+            code: e.code.clone(),
+            signoff: signoff.to_string(),
+        };
+        match e.approval {
+            K::Signoff | K::SpecChanged if !e.signoffs_needed.is_empty() => {
+                for name in &e.signoffs_needed {
+                    push(
+                        &e.code,
+                        format!("sign off {name}"),
+                        Some(of(VerdictKind::Signoff, name)),
+                        false,
+                    );
+                }
+            }
+            K::Unratified => push(
+                &e.code,
+                "ratify the work done under a bypass".into(),
+                Some(of(VerdictKind::Ratify, "")),
+                false,
+            ),
+            K::Missing | K::Lapsed | K::Added => push(
+                &e.code,
+                "approve its definition".into(),
+                Some(of(VerdictKind::Approve, "")),
+                false,
+            ),
+            K::Release => push(&e.code, "choose its release".into(), None, false),
+            _ => push(&e.code, "a decision on the Review page".into(), None, false),
+        }
+    }
+    for a in crate::adr::list(store, p)? {
+        if a.status == "proposed" {
+            push(
+                &a.id,
+                "accept or reject the proposed ADR".into(),
+                None,
+                false,
+            );
+        }
+    }
+    for g in &d.delegations {
+        if g.state(now) == DelegationState::Proposed {
+            push(
+                &g.id,
+                format!(
+                    "grant or discard the proposed delegation ({})",
+                    g.verdicts.join(", ")
+                ),
+                None,
+                true,
+            );
+        }
+    }
+    for x in to_review(&project, d) {
+        let what = match x.signoff.as_str() {
+            "" => format!(
+                "keep or undo the {} taken under {}",
+                x.verdict, x.delegation
+            ),
+            name => format!(
+                "keep or undo the sign-off {name} taken under {}",
+                x.delegation
+            ),
+        };
+        out.push(Waiting {
+            code: x.code.clone(),
+            what,
+            place: Place::Monitor,
+            delegation: Some(x.delegation.clone()),
+            url: review_url.map(|u| format!("{u}#{}", x.code)),
+        });
+    }
+    if let Some(repo) = repo
+        && project.config.cadence.releases
+    {
+        for r in crate::releases::load(store, p)? {
+            if r.state != crate::releases::ReleaseState::Planned {
+                continue;
+            }
+            let Ok(plan) = crate::releases::plan_promotion(
+                store,
+                p,
+                &r.version,
+                None,
+                "",
+                Some(repo),
+                crate::releases::Fetch::No,
+            ) else {
+                continue;
+            };
+            if plan.ready {
+                out.push(Waiting {
+                    code: r.version.clone(),
+                    what: plan.button.clone(),
+                    place: Place::Monitor,
+                    delegation: None,
+                    url: releases_url.clone(),
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// A delegation with where it stands now.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DelegationView {
+    #[serde(flatten)]
+    pub delegation: Delegation,
+    pub state: DelegationState,
+    /// Granted, not ended and not revoked: Claude may act under it.
+    pub in_force: bool,
+    /// What a grant is pinned to: [`Delegation::rev`], sent back with the grant.
+    pub rev: String,
+}
+
+/// `GET /projects/{p}/decisions`: the mode and its history, every delegation, the delegated
+/// decisions to review, and what waits for a decision where.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DecisionsView {
+    pub mode: Mode,
+    pub modes: Vec<ModeChange>,
+    pub delegations: Vec<DelegationView>,
+    pub to_review: Vec<DelegatedDecision>,
+    pub waiting: Vec<Waiting>,
+}
+
+/// The project's decisions as the Review page and `kanbanr decisions show` read them.
+pub fn view(
+    store: &Store,
+    p: &str,
+    repo: Option<&std::path::Path>,
+    review_url: Option<&str>,
+    now: &str,
+) -> Result<DecisionsView> {
+    let d = load(store, p)?;
+    let project = store.load(p)?;
+    Ok(DecisionsView {
+        mode: d.mode(),
+        modes: d.modes.clone(),
+        delegations: d
+            .delegations
+            .iter()
+            .map(|g| {
+                let state = g.state(now);
+                DelegationView {
+                    delegation: g.clone(),
+                    state,
+                    in_force: state == DelegationState::Granted,
+                    rev: g.rev(),
+                }
+            })
+            .collect(),
+        to_review: to_review(&project, &d),
+        waiting: waiting(store, p, repo, &d, review_url, now)?,
     })
 }
 
 /// A delegated decision waiting for the person to keep or undo it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DelegatedDecision {
     /// `<CODE>/<approve|ratify|signoff>/<name or ->/<record at>`.
     pub decision: String,
@@ -1482,6 +1717,198 @@ mod tests {
         let list = to_review(&project, &load(&store, "demo").unwrap());
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].code, defect);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A board for the waiting list: `Scheduled` asks for `design-review`; the defect is defined
+    /// and approved (its sign-off waits), the feature is defined and not approved, an ADR is
+    /// proposed, and the feature carries a sign-off taken under DLG-001. DLG-001 covers the
+    /// defects' design reviews and is granted.
+    fn waiting_board() -> (Store, std::path::PathBuf, String, String) {
+        let (store, dir, defect, feature) = board();
+        let mut config = store.load_meta("demo").unwrap().config;
+        config.gates.insert(
+            "Scheduled".into(),
+            Gate {
+                signoffs: vec!["design-review".into()],
+                ..Default::default()
+            },
+        );
+        store.save_config("demo", &config).unwrap();
+        for (code, statement) in [(&defect, "Fix the bug"), (&feature, "Keep a cart")] {
+            store
+                .set_feature_definition(
+                    "demo",
+                    code,
+                    Some(FeatureDefinition {
+                        statement: statement.into(),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+        }
+        store
+            .approve_feature_as("demo", &defect, "Ada", "terminal", "")
+            .unwrap();
+        crate::adr::create(&store, "demo", "Use one table", Default::default()).unwrap();
+        let g = propose(&store, "demo", defects(), who("conversation")).unwrap();
+        grant_it(&store, &g.id);
+        store
+            .signoff_feature_checked_as(
+                "demo",
+                &feature,
+                "design-review",
+                "Claude",
+                "",
+                "",
+                "delegated",
+                "DLG-001",
+                &[],
+            )
+            .unwrap();
+        (store, dir, defect, feature)
+    }
+
+    /// R-4: each waiting decision is listed in its place under the mode: the monitor in `monitor`
+    /// mode; for Claude under DLG-001 the sign-off it covers in `delegated` mode; everything in the
+    /// conversation in `conversation` mode; the delegated decision to review on the monitor always.
+    #[test]
+    fn switching_mode_lists_the_waiting_decisions_in_the_new_place() {
+        let (store, dir, defect, feature) = waiting_board();
+        let url = Some("http://h:1/p/demo/review");
+        let place = |list: &[Waiting], code: &str, what: &str| -> (Place, Option<String>) {
+            let w = list
+                .iter()
+                .find(|w| w.code == code && w.what.contains(what))
+                .unwrap_or_else(|| panic!("{code} {what} not waiting: {list:?}"));
+            (w.place, w.delegation.clone())
+        };
+        let d = load(&store, "demo").unwrap();
+        let before = waiting(&store, "demo", None, &d, url, NOW).unwrap();
+        assert_eq!(
+            place(&before, &defect, "sign off design-review"),
+            (Place::Monitor, None)
+        );
+        let at = before.iter().find(|w| w.code == defect).unwrap();
+        assert_eq!(
+            at.url.as_deref(),
+            Some(format!("http://h:1/p/demo/review#{defect}").as_str())
+        );
+        assert_eq!(place(&before, &feature, "approve"), (Place::Monitor, None));
+        assert_eq!(place(&before, "ADR-0001", "ADR"), (Place::Monitor, None));
+        assert_eq!(
+            place(&before, &feature, "keep or undo"),
+            (Place::Monitor, Some("DLG-001".into()))
+        );
+
+        let changed = set_mode(&store, "demo", Mode::Delegated, "", who("monitor"), url).unwrap();
+        assert!(!changed.already_recorded);
+        let after = &changed.waiting;
+        assert_eq!(
+            place(after, &defect, "sign off design-review"),
+            (Place::Delegated, Some("DLG-001".into()))
+        );
+        assert_eq!(place(after, &feature, "approve"), (Place::Monitor, None));
+        assert_eq!(place(after, "ADR-0001", "ADR"), (Place::Monitor, None));
+        // A repeat records nothing, and still says what waits where.
+        let again = set_mode(&store, "demo", Mode::Delegated, "", who("monitor"), url).unwrap();
+        assert!(again.already_recorded && !again.waiting.is_empty());
+
+        // Conversation mode is not built yet (FTR-035): setting it is refused. Judged as if it
+        // stood, everything waits in the conversation except the reviews, which are the person's.
+        assert!(set_mode(&store, "demo", Mode::Conversation, "", who("monitor"), url).is_err());
+        let mut d = load(&store, "demo").unwrap();
+        d.modes.push(ModeChange {
+            mode: Mode::Conversation,
+            by: "Ada".into(),
+            at: NOW.into(),
+            origin: "monitor".into(),
+            reason: String::new(),
+            extra: Extra::default(),
+        });
+        let talk = waiting(&store, "demo", None, &d, url, NOW).unwrap();
+        assert_eq!(
+            place(&talk, &defect, "sign off design-review"),
+            (Place::Conversation, None)
+        );
+        assert_eq!(place(&talk, "ADR-0001", "ADR"), (Place::Conversation, None));
+        assert_eq!(
+            place(&talk, &feature, "keep or undo"),
+            (Place::Monitor, Some("DLG-001".into()))
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// R-3: the person keeps one delegated decision and undoes another; an undo withdraws it, and
+    /// each is reviewed once.
+    #[test]
+    fn keep_and_undo_review_a_delegated_decision() {
+        let (store, dir, defect, feature) = waiting_board();
+        store
+            .approve_feature_as("demo", &feature, "Claude", "delegated", "DLG-001")
+            .unwrap();
+        let _ = defect;
+        let list = to_review(&store.load("demo").unwrap(), &load(&store, "demo").unwrap());
+        assert_eq!(list.len(), 2, "{list:?}");
+        let signoff = list
+            .iter()
+            .find(|x| x.verdict == "signoff")
+            .unwrap()
+            .clone();
+        let approval = list
+            .iter()
+            .find(|x| x.verdict == "approve")
+            .unwrap()
+            .clone();
+        assert!(
+            review(
+                &store,
+                "demo",
+                &signoff.decision,
+                true,
+                "",
+                who("conversation")
+            )
+            .is_err(),
+            "a review is the person's"
+        );
+        let kept = review(
+            &store,
+            "demo",
+            &signoff.decision,
+            true,
+            "fine",
+            who("monitor"),
+        )
+        .unwrap();
+        assert_eq!(kept.verdict, ReviewVerdict::Kept);
+        let undone = review(
+            &store,
+            "demo",
+            &approval.decision,
+            false,
+            "too early",
+            who("monitor"),
+        )
+        .unwrap();
+        assert_eq!(undone.verdict, ReviewVerdict::Undone);
+        let project = store.load("demo").unwrap();
+        let item = project.feature(&feature).unwrap();
+        assert!(
+            item.signoff_current("design-review").is_some(),
+            "the kept sign-off stands"
+        );
+        let def = item.definition.as_ref().unwrap();
+        assert!(def.approval.is_none(), "the undone approval is withdrawn");
+        assert!(
+            def.approvals.iter().any(|e| e
+                .reason
+                .contains("undone on review of a delegated decision (DLG-001)")),
+            "{:?}",
+            def.approvals
+        );
+        assert!(to_review(&project, &load(&store, "demo").unwrap()).is_empty());
+        assert!(review(&store, "demo", &approval.decision, true, "", who("monitor")).is_err());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -128,7 +128,13 @@ pub fn stamps_origin(method: &str, path: &str) -> bool {
         .split('/')
         .filter(|s| !s.is_empty())
         .collect();
-    matches!(seg.as_slice(), ["projects", _, "prepared"])
+    // A proposal, a revoke and the setup defaults say where they came from too (FTR-028).
+    matches!(
+        seg.as_slice(),
+        ["projects", _, "prepared"]
+            | ["projects", _, "decisions", "delegations" | "defaults"]
+            | ["projects", _, "decisions", "delegations", _, "revoke"]
+    )
 }
 
 /// A decision that is the person's own (FTR-024, FTR-034).

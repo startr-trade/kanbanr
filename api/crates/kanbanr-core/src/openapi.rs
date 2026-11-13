@@ -299,6 +299,15 @@ pub fn public_routes() -> Vec<RouteDoc> {
             response: Response::Json(schema_of::<Vec<crate::gates::GateResult>>),
         },
         RouteDoc {
+            path: "/api/projects/{project}/decisions",
+            summary: "Where the project's decisions are taken (FTR-028): the mode and its \
+                      history, every delegation with where it stands, the decisions Claude took \
+                      under one for the person to keep or undo, and what waits for a decision \
+                      where",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<crate::decisions::DecisionsView>),
+        },
+        RouteDoc {
             path: "/api/projects/{project}/prepared",
             summary: "The records Claude prepared for the person to confirm (FTR-034), newest \
                       first: each with its sources, where it stands, the person's answer and the \

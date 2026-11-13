@@ -81,6 +81,23 @@ fn ser_already(
 /// caller can produce one by omission; the CLI resolves `--by` from the commit identity and the
 /// monitor from `/api/meta`, and a caller with neither is told to set one rather than quietly
 /// attributed to nobody.
+/// Who took a decisions action, when and from where (FTR-028): the origin the front end stamped;
+/// from the conversation it is Claude, else the `by` the front end sent.
+fn decision_stamp(b: &Value) -> Result<crate::decisions::Stamp> {
+    let origin = crate::origin::from_body(b);
+    let by = if origin == "conversation" {
+        "Claude".to_string()
+    } else {
+        approver(b)?
+    };
+    Ok(crate::decisions::Stamp {
+        by,
+        at: crate::now_rfc3339(),
+        origin,
+        ..Default::default()
+    })
+}
+
 fn approver(b: &Value) -> Result<String> {
     match str_field(b, "by") {
         Some(who) if !who.trim().is_empty() => Ok(who),
@@ -1406,6 +1423,85 @@ fn dispatch_routes(
             crate::gates::record(store, p, &result)?;
             ser(&result)
         }
+        // ---- where decisions are taken, and delegations (FTR-028) ----
+        ("GET", ["projects", p, "decisions"]) => ser(&crate::decisions::view(
+            store,
+            p,
+            repo,
+            None,
+            &crate::now_rfc3339(),
+        )?),
+        // `{mode, reason?}`: the person's alone; answers what waits where now.
+        ("PUT", ["projects", p, "decisions", "mode"]) => {
+            let given = str_field(b, "mode").unwrap_or_default();
+            let mode = crate::decisions::Mode::parse(given.trim()).ok_or_else(|| {
+                CoreError::Unsupported(format!(
+                    "the decision mode is monitor, delegated or conversation, not '{given}'"
+                ))
+            })?;
+            ser(&crate::decisions::set_mode(
+                store,
+                p,
+                mode,
+                &str_field(b, "reason").unwrap_or_default(),
+                decision_stamp(b)?,
+                None,
+            )?)
+        }
+        // `{verdicts, steps, items, kinds, milestone, all?, until, note}`: a proposal, inert until
+        // the person grants it.
+        ("POST", ["projects", p, "decisions", "delegations"]) => {
+            let new: crate::decisions::NewDelegation = serde_json::from_value(b.clone())
+                .map_err(|e| CoreError::Unsupported(format!("a delegation: {e}")))?;
+            ser(&crate::decisions::propose(
+                store,
+                p,
+                new,
+                decision_stamp(b)?,
+            )?)
+        }
+        // `{rev}`: the person grants the proposal as they saw it.
+        ("POST", ["projects", p, "decisions", "delegations", id, "grant"]) => {
+            ser(&crate::decisions::grant(
+                store,
+                p,
+                id,
+                &str_field(b, "rev").unwrap_or_default(),
+                decision_stamp(b)?,
+            )?)
+        }
+        // `{reason}`: anyone may revoke.
+        ("POST", ["projects", p, "decisions", "delegations", id, "revoke"]) => {
+            ser(&crate::decisions::revoke(
+                store,
+                p,
+                id,
+                &str_field(b, "reason").unwrap_or_default(),
+                decision_stamp(b)?,
+            )?)
+        }
+        // `{decision, verdict: keep|undo, reason?}`: the person keeps or undoes a delegated
+        // decision; an undo withdraws it, in the same commit.
+        ("POST", ["projects", p, "decisions", "reviews"]) => {
+            let keep = match str_field(b, "verdict").as_deref() {
+                Some("keep") => true,
+                Some("undo") => false,
+                other => {
+                    return Err(CoreError::Unsupported(format!(
+                        "a review's verdict is keep or undo, not '{}'",
+                        other.unwrap_or("")
+                    )));
+                }
+            };
+            ser(&crate::decisions::review(
+                store,
+                p,
+                &str_field(b, "decision").unwrap_or_default(),
+                keep,
+                &str_field(b, "reason").unwrap_or_default(),
+                decision_stamp(b)?,
+            )?)
+        }
         // FTR-034: `{kind, subject, fields, sources, by?}`: the evidence for a decision, prepared for
         // the person to confirm. Not a verdict: nothing a gate reads changes.
         ("POST", ["projects", p, "prepared"]) => ser(&crate::prepared::prepare(store, p, b, repo)?),
@@ -2235,6 +2331,13 @@ pub fn commit_message_after(
     let bare = path.split('?').next().unwrap_or(path);
     let segs: Vec<&str> = bare.split('/').filter(|s| !s.is_empty()).collect();
     if method.eq_ignore_ascii_case("POST")
+        && matches!(segs.as_slice(), ["projects", _, "decisions", "delegations"])
+        && let Ok(v) = serde_json::from_str::<Value>(response)
+        && let Some(id) = v["id"].as_str()
+    {
+        return format!("propose delegation {id}");
+    }
+    if method.eq_ignore_ascii_case("POST")
         && matches!(segs.as_slice(), ["projects", _, "scopes"])
         && let Ok(v) = serde_json::from_str::<Value>(response)
         && let Some(id) = v["scope"]["id"].as_str()
@@ -2349,6 +2452,27 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
                 .unwrap_or_else(|| "record".into())
         ),
         ["projects", _p, "prepared", id, "reject"] => format!("reject prepared record {id}"),
+        ["projects", _p, "decisions", "mode"] => format!(
+            "set the decision mode to {}",
+            body.and_then(|b| str_field(b, "mode")).unwrap_or_default()
+        ),
+        ["projects", _p, "decisions", "delegations"] => "propose a delegation".into(),
+        ["projects", _p, "decisions", "delegations", id, "grant"] => {
+            format!("grant delegation {id}")
+        }
+        ["projects", _p, "decisions", "delegations", id, "revoke"] => {
+            format!("revoke delegation {id}")
+        }
+        ["projects", _p, "decisions", "reviews"] => format!(
+            "{} delegated decision {}",
+            if body.and_then(|b| str_field(b, "verdict")).as_deref() == Some("undo") {
+                "undo"
+            } else {
+                "keep"
+            },
+            body.and_then(|b| str_field(b, "decision"))
+                .unwrap_or_default()
+        ),
         ["projects", _p, "config", "commit-gates"] => "set the commit gates".into(),
         ["projects", _p, "config", "tag-gate"] => "set the tag gate".into(),
         ["projects", _p, "config", "gate-docs"] => "set the documentation paths".into(),
