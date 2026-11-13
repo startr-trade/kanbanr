@@ -833,8 +833,13 @@ branches; fix it before going on.
 - In the sprints-only model, `kanbanr sprint close <SP>` is the cut: main fast-forwards to
   `sprint/<SP>`, tagged with the sprint's code.
 - **Designing CI or a release workflow.** When the user asks for a pipeline, design it as
-  `docs/src/guides/delivery-pipeline.md` says, and as an item with its own definition: start with
-  one job on one platform, tests first; ask the user which checks their plan and settings allow
+  `docs/src/guides/delivery-pipeline.md` says, and as an item with its own definition: propose
+  separate stages (lint, test, build, then scan and publish in the release workflow), each a job
+  that can be rerun alone, passing what it built to the next as an artifact; caches keyed on the
+  lock files and saved from main only; a timeout on every job; a superseded run cancelled; and the
+  speed-ups the page lists for the project's stack. Ask, as one multi-select question, which
+  stages to start with. Keep the first pipeline small by platforms and checks, never by merging
+  stages. Ask the user which checks their plan and settings allow
   (you cannot see their account) and leave out any they cannot run; make the release description the
   notes kanbanr drafted (`kanbanr release notes <V>`), never a list generated from commits; add a
   manual trigger that runs everything up to publishing and publishes nothing, and ask the user to

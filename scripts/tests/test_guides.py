@@ -47,7 +47,9 @@ class PipelineTests(unittest.TestCase):
         text = read(GUIDES / PAGE).lower()
         for topic in [
             "start small", "plan allows", "release description", "without a tag",
-            "once per commit", "the way a person will", "check ci before you cut",
+            "once per commit", "the way a person will", "record ci before you cut",
+            "its own job", "rerun", "artifact", "lock file", "saved only from main",
+            "timeout", "newer push", "cargo-chef", "sccache",
         ]:
             with self.subTest(topic=topic):
                 self.assertTrue(topic in text)
@@ -63,6 +65,14 @@ class PipelineTests(unittest.TestCase):
                     record = text.find(marker)
                     cut = text.find("Cut", record)
                     self.assertTrue(0 <= push < record < cut, f"push {push}, record {record}, cut {cut}")
+
+    def no_guide_prescribes_a_single_job(self) -> None:
+        paths = sorted(GUIDES.glob("*.md")) + [SKILL]
+        for path in paths:
+            text = read(path).lower()
+            for phrase in ("one job, one platform", "one job on one platform"):
+                with self.subTest(file=path.name, phrase=phrase):
+                    self.assertFalse(phrase in text)
 
     def the_index_and_summary_list_the_pipeline_page(self) -> None:
         self.assertTrue(PAGE in read(GUIDES / "index.md"))
@@ -121,6 +131,15 @@ class SkillTests(unittest.TestCase):
 
     def the_skill_keeps_remote_ci_on_the_release(self) -> None:
         self.assertTrue("Remote CI belongs to the release" in read(SKILL))
+
+    def the_skill_proposes_a_staged_pipeline(self) -> None:
+        text = read(SKILL)
+        start = text.index("**Designing CI or a release workflow.**")
+        bullet = text[start:text.index("\n- ", start) if "\n- " in text[start:] else len(text)]
+        bullet = bullet[:bullet.index("\n\n")] if "\n\n" in bullet else bullet
+        for phrase in ("separate stages", "rerun alone", "lock files"):
+            with self.subTest(phrase=phrase):
+                self.assertTrue(phrase in bullet)
 
     def the_skill_designs_a_pipeline_in_the_guides_order(self) -> None:
         text = read(SKILL)

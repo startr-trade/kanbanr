@@ -300,7 +300,7 @@ agent on its next tool call and never restricts you.
 
 **Before your first release, design the pipeline.** A release workflow can only be tested by running
 it, a tag can't be moved once it's pushed, and shipped notes can't be edited, so a mistake in the
-pipeline costs a whole version number. Settle the checks, the release description and a run without a tag first:
+pipeline costs a whole version number. Settle the stages, the checks, the release description and a run without a tag first:
 see [Designing CI and the release workflow](delivery-pipeline.md).
 
 Release in this order, and you won't have to go back. `kanbanr release promote v1.1.0 --plan` shows
