@@ -1342,6 +1342,31 @@ enum PrepareCmd {
         #[arg(long = "source", value_name = "S", required = true)]
         sources: Vec<String>,
     },
+    /// Settle one text to check under an item's docs-folded sign-off: Claude read it against the
+    /// change and it is still right, or a correction is filed. Run it from the project folder.
+    Text {
+        code: String,
+        /// The flagged text: `doc:<path>`, `adr:<id>` or `item:<CODE>`, as `kanbanr check` lists it.
+        target: String,
+        /// The text is still right as the code reads it. Needs --why.
+        #[arg(
+            long,
+            requires = "why",
+            conflicts_with = "correction",
+            required_unless_present = "correction"
+        )]
+        still_right: bool,
+        /// What was compared, for --still-right.
+        #[arg(long)]
+        why: Option<String>,
+        /// The item that files the correction (any status).
+        #[arg(long, value_name = "CODE")]
+        correction: Option<String>,
+        /// Where else the evidence came from (see `prepare signoff --help`). The text and the
+        /// newest commit of the change are named already.
+        #[arg(long = "source", value_name = "S")]
+        sources: Vec<String>,
+    },
     /// The prepared records waiting for the person, newest first.
     List {
         /// Every record: confirmed, rejected, superseded and stale ones too.
@@ -9837,6 +9862,29 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
                 ),
             )
         }
+        PrepareCmd::Text {
+            code,
+            target,
+            still_right,
+            why,
+            correction,
+            sources: s,
+        } => {
+            let fields = if *still_right {
+                json!({"outcome": "confirmed", "why": why.clone().unwrap_or_default()})
+            } else {
+                json!({"outcome": "corrected", "correction": correction.clone().unwrap_or_default()})
+            };
+            (
+                json!({
+                    "kind": "text-check",
+                    "subject": {"item": code, "target": target},
+                    "fields": fields,
+                    "sources": sources(s)?,
+                }),
+                format!("check of {target} for {code}"),
+            )
+        }
         PrepareCmd::Ratify {
             code,
             reason,
@@ -9859,6 +9907,13 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
         return Ok(());
     }
     let v: Value = serde_json::from_str(&resp)?;
+    if v["kind"] == "text-check" {
+        println!(
+            "recorded {what} ({}): the docs-folded sign-off takes it",
+            v["id"].as_str().unwrap_or("")
+        );
+        return Ok(());
+    }
     let page = kanbanr_core::prepared::page_of(v["kind"].as_str().unwrap_or(""));
     println!(
         "prepared {what} ({}): waiting for the person on {}/p/{p}/{page}",

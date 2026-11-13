@@ -2369,7 +2369,7 @@ requirements:
     /// FTR-013: a `docs-folded` board whose work is done, with a doc that names `--since` (listed
     /// by its front matter), and a code repository where the item changed `--since` after the doc
     /// was last written. Returns the board, its folder, the item's code and the code repository.
-    fn drift_board() -> (Store, tempdir::TempDirLike, String, std::path::PathBuf) {
+    pub(crate) fn drift_board() -> (Store, tempdir::TempDirLike, String, std::path::PathBuf) {
         use crate::docdrift::testkit::{code_commit, git_env, scratch};
         let (store, d, code, list) = docs_folded_board();
         crate::git::ensure_repo_as(&d.path, Some(("Ada", "ada@example.com")));
