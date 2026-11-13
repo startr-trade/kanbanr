@@ -1775,6 +1775,8 @@ fn cli_trace_and_why_follow_the_chain_in_both_directions() {
             .env_remove("CLAUDE_CONFIG_DIR")
             .env_remove("KANBANR_DATA_DIR")
             .env_remove("KANBANR_PROJECT")
+            // The person's terminal, not a Claude session, whatever runs the tests (FTR-028).
+            .env_remove("CLAUDECODE")
             .stdin(std::process::Stdio::null())
             .output()
             .expect("run kanbanr CLI")
@@ -7058,7 +7060,8 @@ impl ScopeFx {
                 &fx.work,
                 &["feature", "define", code, "--file", def.to_str().unwrap()],
             );
-            fx.ok(&fx.work, &["approve", code]);
+            // A verdict is the person's: core refuses one from a Claude session (FTR-028).
+            fx.person_ok(&fx.work, &["approve", code]);
             fx.ok(&fx.work, &["move", code, "In Progress"]);
             fx.ok(&fx.work, &["todo", "add", code, "--description", "work"]);
             fx.ok(&fx.work, &["task", "add", code, "TL-001", "--text", "one"]);
@@ -7120,6 +7123,21 @@ impl ScopeFx {
         c.args(args).current_dir(dir);
         self.env(&mut c);
         c.output().expect("run kanbanr CLI")
+    }
+
+    /// A command from the person's own terminal: no CLAUDECODE (FTR-028).
+    fn person_ok(&self, dir: &Path, args: &[&str]) -> String {
+        let mut c = Command::new(cli());
+        c.args(args).current_dir(dir);
+        self.env(&mut c);
+        c.env_remove("CLAUDECODE");
+        let o = c.output().expect("run kanbanr CLI");
+        assert!(
+            o.status.success(),
+            "{args:?} failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        String::from_utf8(o.stdout).unwrap()
     }
 
     fn ok(&self, dir: &Path, args: &[&str]) -> String {
@@ -10381,7 +10399,7 @@ paths:
 fn a_verdict_from_a_terminal_and_one_inside_a_claude_session_differ_in_origin() {
     let (base, work) = togaf_scratch("def028-origin");
     togaf_board(&base, &work);
-    let signoff = |name: &str, claudecode: Option<&str>| {
+    let signoff = |name: &str, claudecode: Option<&str>| -> Output {
         let mut c = Command::new(cli());
         c.args(["signoff", "FEAT-001", name])
             .current_dir(&work)
@@ -10395,13 +10413,19 @@ fn a_verdict_from_a_terminal_and_one_inside_a_claude_session_differ_in_origin() 
         if let Some(v) = claudecode {
             c.env("CLAUDECODE", v);
         }
-        let o = c.output().unwrap();
-        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        c.output().unwrap()
     };
-    signoff("from-terminal", None);
-    signoff("from-session", Some("1"));
+    let ok = |o: Output| assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    ok(signoff("from-terminal", None));
+    // Inside a Claude session the verdict is refused by core itself now, hook or none (FTR-028
+    // T3): this case used to expect it recorded with origin `conversation`.
+    let refused = signoff("from-session", Some("1"));
+    assert!(
+        !refused.status.success(),
+        "a session's sign-off was recorded"
+    );
     // An empty variable is not a session.
-    signoff("from-empty", Some(""));
+    ok(signoff("from-empty", Some("")));
     let shown = run_in(&base, &work, &["feature", "show", "FEAT-001", "--json"]);
     let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
     let def = &v["definition"];
@@ -10415,17 +10439,102 @@ fn a_verdict_from_a_terminal_and_one_inside_a_claude_session_differ_in_origin() 
             .unwrap()
     };
     assert_eq!(origin_of("from-terminal"), "terminal");
-    assert_eq!(origin_of("from-session"), "conversation");
     assert_eq!(origin_of("from-empty"), "terminal");
+    assert!(
+        def["signoffs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["id"] != "from-session"),
+        "{def}"
+    );
     // The approval the board was set up with came from a command here: a terminal.
     assert_eq!(def["approvals"][0]["origin"], "terminal");
     // And the text view says so.
     let text = run_in(&base, &work, &["feature", "show", "FEAT-001"]);
     let text = String::from_utf8_lossy(&text.stdout);
+    assert!(text.contains("via the terminal"), "{text}");
+}
+
+/// FTR-028 R-1: a verdict command run inside a Claude session, with no hook installed, is refused
+/// by kanbanr itself and leaves nothing on the board: core's write recipe decides, not the hook.
+#[test]
+fn a_verdict_from_a_claude_session_is_refused_by_core() {
+    let (base, work) = togaf_scratch("ftr028-core-refuses");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    togaf_board(&base, &work);
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "add",
+            "--title",
+            "Wishlist",
+            "--milestone",
+            "MS-001",
+        ],
+    ));
+    let def = base.join("def2.yaml");
+    std::fs::write(&def, "statement: Keep a wishlist\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "feature",
+            "define",
+            "FEAT-002",
+            "--file",
+            def.to_str().unwrap(),
+        ],
+    ));
+    let data = base.join("code").join("shop.kanbanr");
+    let head = || {
+        let out = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&data)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let in_session = |args: &[&str]| {
+        Command::new(cli())
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", base.join("home"))
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_PROCESSES_DIR")
+            .env("CLAUDECODE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let before = head();
+    for args in [
+        &["approve", "FEAT-002"][..],
+        &["signoff", "FEAT-001", "from-session"][..],
+    ] {
+        let o = in_session(args);
+        assert!(!o.status.success(), "{args:?} was recorded");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.contains("the person's"), "{args:?}: {err}");
+    }
+    assert_eq!(head(), before, "a refused verdict made a commit");
+    let shown = run_in(&base, &work, &["feature", "show", "FEAT-002", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
     assert!(
-        text.contains("via the conversation") && text.contains("via the terminal"),
-        "{text}"
+        v["definition"]["approvals"]
+            .as_array()
+            .is_none_or(|a| a.is_empty()),
+        "{v}"
     );
+    // The same command from the person's terminal is recorded.
+    ok(run_in(&base, &work, &["approve", "FEAT-002"]));
+    assert_ne!(head(), before);
 }
 
 /// DEF-028 R-7: a click on the monitor and then the same verdict as a command records one approval,

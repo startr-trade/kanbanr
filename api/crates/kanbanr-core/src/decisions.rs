@@ -382,11 +382,13 @@ pub fn verdict_of(method: &str, path: &str) -> Option<Verdict> {
     }
 }
 
-/// Is this a route only the person may use: the mode, a grant, a review?
+/// Is this a route only the person may use: the mode, a grant, a review, and the answer to a
+/// prepared record (FTR-034)?
 pub fn is_person_only(method: &str, path: &str) -> bool {
     matches!(
         (method, segments(path).as_slice()),
         ("PUT", ["projects", _, "decisions", "mode"])
+            | ("POST", ["projects", _, "prepared", _, "confirm" | "reject"])
             | (
                 "POST",
                 ["projects", _, "decisions", "delegations", _, "grant"]
@@ -404,10 +406,11 @@ pub enum Authorized {
     Delegated { delegation: String },
 }
 
-/// Who may take what: the one table. `Ok` says how to record the request; `Err` is the refusal,
+/// Who may take what: the one table, behind [`crate::origin::verdict_refusal`], which is the only
+/// caller outside this module's tests. `Ok` says how to record the request; `Err` is the refusal,
 /// in words that name the mode, where the person decides and, for Claude, any delegation that
 /// would cover the verdict. Routes that are neither a verdict nor person-only pass as they are.
-pub fn authorize(
+pub(crate) fn authorize(
     d: &Decisions,
     project: &Project,
     method: &str,
@@ -430,6 +433,12 @@ pub fn authorize(
             Ok(Authorized::AsIs)
         } else if by_the_person {
             Err("`--under` is Claude's; a person needs none".to_string())
+        } else if matches!(segments(path).as_slice(), ["projects", _, "prepared", ..]) {
+            Err(
+                "answering a prepared record is the person's own, recorded on the monitor, never \
+                 by Claude (FTR-024, FTR-034)."
+                    .to_string(),
+            )
         } else {
             Err(
                 "this is the person's own, on the Review page or in their terminal: \
@@ -1378,6 +1387,101 @@ mod tests {
             review(&store, "demo", &id, true, "", who("monitor")).is_err(),
             "only once"
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// R-3: a verdict Claude takes under a delegation, through the write recipe every front end
+    /// uses, is recorded as `delegated`, by Claude, naming the delegation, with the commit's
+    /// trailers saying so; it then waits for review. Without `--under`, or outside the
+    /// delegation, the same verdict is refused and nothing is recorded.
+    #[test]
+    fn a_delegated_verdict_records_its_delegation() {
+        use crate::agentscope::ProcessScope;
+        use crate::git::PushPolicy;
+        use crate::write::{WriteError, apply_as};
+        let (store, dir, defect, feature) = board();
+        store
+            .set_feature_definition(
+                "demo",
+                &defect,
+                Some(FeatureDefinition {
+                    statement: "Fix the bug".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        crate::git::commit_local(&dir, "the board");
+        let now = crate::now_rfc3339();
+        let until = (OffsetDateTime::now_utc() + time::Duration::days(7))
+            .format(&Rfc3339)
+            .unwrap();
+        let at_now = |origin: &str| Stamp {
+            at: now.clone(),
+            ..who(origin)
+        };
+        set_mode(&store, "demo", Mode::Delegated, "", at_now("monitor"), None).unwrap();
+        let g = propose(
+            &store,
+            "demo",
+            NewDelegation { until, ..defects() },
+            at_now("conversation"),
+        )
+        .unwrap();
+        let rev = g.rev();
+        grant(&store, "demo", &g.id, &rev, at_now("monitor")).unwrap();
+        crate::git::commit_local(&dir, "delegation granted");
+        let take = |code: &str, body: Value| {
+            apply_as(
+                &store,
+                &dir,
+                PushPolicy::Off,
+                "POST",
+                &route(code, "signoff/design-review"),
+                Some(&body),
+                None,
+                &crate::eventing::NullSender,
+                &ProcessScope::Unscoped,
+                Origin::Conversation,
+            )
+        };
+        let head = || crate::coderepo::git(&dir, &["rev-parse", "HEAD"]).unwrap();
+        let before = head();
+        // Without naming the delegation: refused, and told which one covers it.
+        match take(&defect, json!({})) {
+            Err(WriteError::Refused(why)) => {
+                assert!(why.contains("--under DLG-001"), "{why}")
+            }
+            other => panic!("not refused: {:?}", other.map(|a| a.body)),
+        }
+        // A feature is outside a delegation for defects.
+        assert!(matches!(
+            take(&feature, json!({"delegation": "DLG-001"})),
+            Err(WriteError::Refused(_))
+        ));
+        assert_eq!(head(), before, "a refused verdict made a commit");
+        // Under it: recorded as delegated, by Claude, naming DLG-001, whatever the body claimed.
+        take(
+            &defect,
+            json!({"delegation": "DLG-001", "by": "Ada", "origin": "monitor"}),
+        )
+        .unwrap();
+        let project = store.load("demo").unwrap();
+        let item = project.feature(&defect).unwrap();
+        let s = item.signoff_current("design-review").unwrap();
+        assert_eq!(
+            (s.origin.as_str(), s.by.as_str(), s.delegation.as_str()),
+            ("delegated", "Claude", "DLG-001")
+        );
+        let log = crate::coderepo::git(&dir, &["log", "-1", "--format=%B"]).unwrap();
+        assert!(
+            log.contains("Kanbanr-Origin: delegated")
+                && log.contains("Kanbanr-Delegation: DLG-001"),
+            "{log}"
+        );
+        let list = to_review(&project, &load(&store, "demo").unwrap());
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].code, defect);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

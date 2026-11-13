@@ -4121,9 +4121,11 @@ fn verdict_refusal(command: &str, review_url: &str) -> Option<String> {
         let Some(verdict) = kanbanr_core::origin::verdict_of_command(&path, rest) else {
             continue;
         };
-        let Some(why) =
-            kanbanr_core::origin::verdict_refusal(verdict, kanbanr_core::origin::Taker::Claude)
-        else {
+        let Some(why) = kanbanr_core::origin::verdict_refusal(
+            verdict,
+            kanbanr_core::origin::Taker::Claude,
+            &kanbanr_core::origin::DecisionContext::monitor_mode(),
+        ) else {
             continue;
         };
         let page = if verdict.on_releases_page() {

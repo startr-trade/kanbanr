@@ -1196,8 +1196,12 @@ pub fn expand(
     body: &Value,
     origin: crate::origin::Origin,
 ) -> Result<Expanded> {
-    use crate::origin::{Taker, Verdict, verdict_refusal};
-    if let Some(why) = verdict_refusal(Verdict::ConfirmPrepared, Taker::of_origin(origin)) {
+    use crate::origin::{DecisionContext, Taker, Verdict, verdict_refusal};
+    if let Some(why) = verdict_refusal(
+        Verdict::ConfirmPrepared,
+        Taker::of_origin(origin),
+        &DecisionContext::monitor_mode(),
+    ) {
         return Err(CoreError::Refused(why));
     }
     let record = open_record(store, p, id, None)?;
@@ -1342,10 +1346,14 @@ pub fn expand(
 /// then the record must be open; the answer is kept and nothing else changes. `body` carries the
 /// origin the front end stamped; a body with none is not taken as the person's.
 pub fn reject(store: &Store, p: &str, id: &str, body: &Value) -> Result<Resolution> {
-    use crate::origin::{Origin, Taker, Verdict, verdict_refusal};
+    use crate::origin::{DecisionContext, Origin, Taker, Verdict, verdict_refusal};
     let origin = Origin::parse(&crate::origin::from_body(body));
     let taker = origin.map(Taker::of_origin).unwrap_or(Taker::Claude);
-    if let Some(why) = verdict_refusal(Verdict::RejectPrepared, taker) {
+    if let Some(why) = verdict_refusal(
+        Verdict::RejectPrepared,
+        taker,
+        &DecisionContext::monitor_mode(),
+    ) {
         return Err(CoreError::Refused(why));
     }
     let by = body
@@ -1827,6 +1835,7 @@ mod tests {
                 "",
                 "",
                 "terminal",
+                "",
                 &[],
             )
             .unwrap();
