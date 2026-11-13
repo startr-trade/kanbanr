@@ -348,7 +348,10 @@ Write the definition with the batch path (`definition` on `feature.add`/`feature
 the user's and is taken on the monitor: approve, ratify, sign off, withdraw, accept or reject a
 decision (Review page), promote or cut a release and confirm each stage after the tag (Releases
 page). **You never record a verdict, and never ask for one in a plan or a question.** kanbanr's
-guard refuses the commands if you try. Your part is one message saying what is waiting and where:
+guard refuses the commands if you try. **Never hand the user a kanbanr command that writes as the
+way to take a decision**: not `gate record`, `signoff`, `approve`, `ratify`, `adr accept`,
+`test … --manual` or `release promote`. Name the page and the button. If they ask for the terminal
+form, the page names it. Your part is one message saying what is waiting and where:
 `kanbanr open --check` gives the addresses. If no monitor accepts writes, offer to start one with
 `kanbanr review --ui` (run it in the background) or tell the user the command to run.
 
@@ -809,14 +812,20 @@ branches; fix it before going on.
   the sign-off it lacks: send the person to the Review page; never record it.
 - Check with `kanbanr release promote <V> --plan` and tell the user what it still needs; the
   promotion itself, the cut included, is theirs, on the Releases page. **The user pushes main and
-  the tag**, by hand; a cut that requires
-  `pushed` waits until main is pushed (and CI has run on it).
+  the tag**, by hand, in this order: Promote to main, push main, CI, record the result, Cut, push
+  the tag. Give that order when asked about pushing, and say nothing needs pushing before Promote
+  to main. A cut that requires `pushed` waits until main is pushed (and CI has run on it).
+- **Remote CI belongs to the release, not to an item.** Never give an item a task or a test that
+  needs the remote CI service (such as "check CI on the remote"). It would block Promote to main,
+  which CI needs first. An item's tests run on this machine. The remote run is the release's `ci`
+  gate, recorded after main is pushed.
 - **A CI result is the user's to confirm.** A stage that requires `gate_passed` needs a recorded
   passed result for the release tip. kanbanr never asks a server. You may read the CI's result
   with your own tools; then `kanbanr prepare gate <gate> --passed|--failed --commit <sha> --url
   <the run>` puts it beside **Record result** on the Releases page, and the person confirms it
-  there with one click (or runs `kanbanr gate record` in their own terminal). When it is missing,
-  say what the plan names and where it waits. **Never run `kanbanr gate record` yourself**, and
+  there with one click. Say where: the **Record result** form above the Cut on the Releases page,
+  with the gate, the run's link, and Passed or Failed. When it is missing, say what the plan names
+  and where it waits. **Never run `kanbanr gate record` yourself**, and
   never prepare a verdict you did not see.
 - A patch is `kanbanr release add <V> --patch-of <P>`: `release/<V>` is made from `<P>`'s tag. A fix
   integrated into a release branch reaches the line through `kanbanr git forward <V>`, which the
@@ -946,8 +955,7 @@ decisions — and ends with the gaps, which are the point of it. `kanbanr why <f
   Consequences and Compliance. Fill them in — `adr list` reports which are still unwritten, and
   doctor warns about a missing Decision or Consequences.
 - **A decision is the user's, never yours.** Draft it as `proposed` (the default — never pass
-  `--status accepted`), then say it is waiting. The user accepts or rejects it on the Review page or with
-  `kanbanr adr accept ADR-0007` / `adr reject ADR-0007 --reason "…"` in their own terminal,
+  `--status accepted`), then say it is waiting. The user accepts or rejects it on the Review page,
   exactly as they approve a definition. Accept is refused while a section is unanswered; the verdict, who gave it and when
   are recorded on the decision and in the activity log.
 - The links live **on the decision** (`affects`, `driven_by`); the item's view is derived, so it

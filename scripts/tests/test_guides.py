@@ -113,6 +113,15 @@ class SkillTests(unittest.TestCase):
     def the_skill_asks_the_interface_question(self) -> None:
         self.assertTrue("Ask whether the product has a user interface" in read(SKILL))
 
+    def the_skill_hands_no_write_command_for_a_decision(self) -> None:
+        text = read(SKILL)
+        self.assertTrue("Never hand the user a kanbanr command that writes" in text)
+        self.assertFalse("(or `kanbanr gate record" in text)
+        self.assertFalse(re.search(r"adr accept[^\n]*\n?[^\n]*in their own terminal", text))
+
+    def the_skill_keeps_remote_ci_on_the_release(self) -> None:
+        self.assertTrue("Remote CI belongs to the release" in read(SKILL))
+
     def the_skill_designs_a_pipeline_in_the_guides_order(self) -> None:
         text = read(SKILL)
         self.assertTrue("Designing CI or a release workflow" in text)
