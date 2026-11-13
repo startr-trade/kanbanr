@@ -135,10 +135,12 @@ fn shown_spec_rev(store: &Store, p: &str, code: &str, name: &str, b: &Value) -> 
     Ok(())
 }
 
-/// What the person settled when giving `docs-folded` (FTR-013). With a code repository the flags are
-/// recomputed: the sign-off is refused while a flagged text is missing from `checked` (or is
-/// corrected without a code), and entries for texts no longer flagged are dropped. Without one,
-/// `checked` is kept as sent. Any other sign-off records nothing.
+/// What was settled when `docs-folded` is given (FTR-013, DEF-039). With a code repository the
+/// flags are recomputed. Each flag is covered by Claude's newest open settlement that still
+/// `settles` it, else by an entry in the request's `checked` (a person's terminal may send one);
+/// the sign-off is refused while any is neither, and entries for texts no longer flagged are
+/// dropped. Without a repository, `checked` is kept as sent. Returns what to record and the ids
+/// of the settlements used, which the sign-off then answers. Any other sign-off records nothing.
 fn signoff_checked(
     store: &Store,
     p: &str,
@@ -146,10 +148,11 @@ fn signoff_checked(
     name: &str,
     body: &Value,
     repo: Option<&std::path::Path>,
-) -> Result<Vec<crate::models::Checked>> {
+    (signer, origin): (&str, &str),
+) -> Result<(Vec<crate::models::Checked>, Vec<String>)> {
     use crate::models::{Checked, Outcome};
     if name != crate::method::DOCS_FOLDED {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let sent: Vec<Checked> = match body.get("checked") {
         None | Some(Value::Null) => Vec::new(),
@@ -157,30 +160,51 @@ fn signoff_checked(
             .map_err(|e| CoreError::Unsupported(format!("checked: {e}")))?,
     };
     let Some(repo) = repo else {
-        return Ok(sent);
+        return Ok((sent, Vec::new()));
     };
     let flags = crate::docdrift::flags_for_item(store, p, code, repo)?;
+    let settlements = if flags.is_empty() {
+        Vec::new()
+    } else {
+        crate::prepared::settlements(store, p, code)?
+    };
+    let now = crate::now_rfc3339();
     let mut kept = Vec::new();
+    let mut used = Vec::new();
     let mut missing = Vec::new();
     for flag in &flags {
         let key = flag.target.key();
+        if let Some(r) = settlements
+            .iter()
+            .find(|r| crate::prepared::settles(r, flag))
+        {
+            kept.push(crate::prepared::checked_of(r, flag));
+            used.push(r.id.clone());
+            continue;
+        }
         match sent.iter().find(|c| c.target == key) {
             Some(c) if c.outcome == Outcome::Corrected && c.correction.trim().is_empty() => {
                 missing.push(format!("{key} (a correction needs its code)"));
             }
-            Some(c) => kept.push(c.clone()),
+            Some(c) => kept.push(Checked {
+                by: signer.to_string(),
+                origin: origin.to_string(),
+                at: now.clone(),
+                text_changed_at: flag.target_changed_at.clone(),
+                ..c.clone()
+            }),
             None => missing.push(key),
         }
     }
     if !missing.is_empty() {
         return Err(CoreError::Unsupported(format!(
-            "docs-folded waits on {} flagged text(s) that name what {code} changed: {}. Read each, \
-             then confirm it is still right or file a correction",
+            "docs-folded waits on {} text(s) Claude has not settled: {}. Claude settles each with \
+             `kanbanr prepare text {code} <TARGET>`",
             missing.len(),
             missing.join(", ")
         )));
     }
-    Ok(kept)
+    Ok((kept, used))
 }
 
 /// Is this a manual test of the item's definition? A test that is not there is not, and the
@@ -1195,17 +1219,31 @@ fn dispatch_routes(
                     return Err(CoreError::Unsupported(why));
                 }
             }
-            let checked = signoff_checked(store, p, code, &name, b, repo)?;
+            let signer = approver(b)?;
+            let origin = crate::origin::from_body(b);
+            let (checked, settled) =
+                signoff_checked(store, p, code, &name, b, repo, (&signer, &origin))?;
             let (feature, held) = store.signoff_feature_checked_as(
-                p,
-                code,
-                &name,
-                &approver(b)?,
-                &note,
-                &doc,
-                &crate::origin::from_body(b),
-                &checked,
+                p, code, &name, &signer, &note, &doc, &origin, &checked,
             )?;
+            // The sign-off answers the settlements it took (DEF-039).
+            for id in settled {
+                crate::prepared::resolve(
+                    store,
+                    p,
+                    &crate::prepared::Resolution {
+                        id,
+                        verdict: crate::prepared::Answer::Confirmed,
+                        by: signer.clone(),
+                        origin: origin.clone(),
+                        at: crate::now_rfc3339(),
+                        changed: Vec::new(),
+                        reason: String::new(),
+                        made: format!("POST /projects/{p}/features/{code}/signoff/{name}"),
+                        extra: Default::default(),
+                    },
+                )?;
+            }
             let mut out = serde_json::to_value(&feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
             if let Some(held) = held {

@@ -736,12 +736,18 @@ Before the move:
 - build every document the item names: the board docs, the repository docs its Design lists under
   `Affects docs` and each task that writes docs. Until then the Review page does not offer
   **docs-folded** and `kanbanr check` names what is unbuilt;
-- say **docs-folded** is waiting for the user's sign-off on the Review page, once it is offered.
-  The Review page may list **texts to check**: docs and items that name a flag, route, setting,
-  stage, status or file the item changed and have not changed since (`kanbanr drift` lists them for
-  the board; a merge prints them on stderr). A flag says what to read, never that the text is wrong.
-  For each, the user says it is still right, or asks you to file a correction. Fix a filed
-  correction as any defect, and never confirm a text on the user's behalf.
+- settle the **texts to check** before docs-folded is offered. They are the docs and items that name
+  a flag, route, setting, stage, status or file the item changed and have not changed since
+  (`kanbanr check` lists those left under "Texts to settle"; `kanbanr drift` lists them for the
+  board; a merge prints them on stderr). A flag says what to read, never that the text is wrong.
+  Read each against the change. If it is right, `kanbanr prepare text <CODE> <TARGET> --still-right
+  --why "what you compared"`. If it is wrong, correct the text as part of folding the design, or
+  file a correction and run `kanbanr prepare text <CODE> <TARGET> --correction <CODE>`. Edit a
+  flagged text only to correct what it says, never to make its flag go away. The record carries
+  who settled it and at which revision; a new commit that names the text again, or an edit to it,
+  puts it back among those left. The person never fills these in;
+- say **docs-folded** is waiting for the user's sign-off on the Review page only once it is offered,
+  which is once no text is left to settle.
 
 With the git model on, entering the integrate role (`kanbanr move <CODE> <status>`) merges the item
 branch into its line, `--no-ff`, with `Refs: kanbanr:<CODE>`. If the merge would conflict, the move

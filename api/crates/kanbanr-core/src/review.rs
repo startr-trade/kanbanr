@@ -122,6 +122,43 @@ pub const DRIFT_SKIPPED: &str =
     "the drift check needs the code repository: start the monitor from the project folder";
 
 /// One item waiting for agreement.
+/// A flagged text and the check Claude recorded for it (DEF-039).
+/// Split `flags` into those left and those a settlement Claude recorded still covers.
+pub fn split_settled(
+    store: &Store,
+    p: &str,
+    code: &str,
+    flags: Vec<crate::docdrift::Flag>,
+) -> (Vec<crate::docdrift::Flag>, Vec<SettledText>) {
+    let settlements = if flags.is_empty() {
+        Vec::new()
+    } else {
+        crate::prepared::settlements(store, p, code).unwrap_or_default()
+    };
+    let mut left = Vec::new();
+    let mut settled = Vec::new();
+    for flag in flags {
+        match settlements
+            .iter()
+            .find(|r| crate::prepared::settles(r, &flag))
+        {
+            Some(r) => settled.push(SettledText {
+                check: crate::prepared::checked_of(r, &flag),
+                flag,
+            }),
+            None => left.push(flag),
+        }
+    }
+    (left, settled)
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SettledText {
+    pub flag: crate::docdrift::Flag,
+    pub check: crate::models::Checked,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ReviewEntry {
@@ -137,10 +174,14 @@ pub struct ReviewEntry {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub changes_no_documents: bool,
     /// `docs-folded` is among them: the texts that name something the item changed since they
-    /// last changed, for the person to confirm or correct (FTR-013). `None` when the check was
-    /// skipped (see `drift_skipped`) or the sign-off is not asked.
+    /// last changed and that Claude has not yet settled (FTR-013, DEF-039). The sign-off is not
+    /// offered while any is left. `None` when the check was skipped (see `drift_skipped`) or the
+    /// sign-off is not asked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_check: Option<Vec<crate::docdrift::Flag>>,
+    /// The flagged texts Claude settled, with what it recorded, for the page to show (DEF-039).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settled: Vec<SettledText>,
     /// Why the drift check did not run: no code repository is attached. The sign-off is offered
     /// all the same, and this is never read as "no drift" (FTR-013).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -381,22 +422,30 @@ pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result
             )
             .then(|| definition.part_changes())
             .flatten();
-            let (to_check, drift_skipped) = if signoffs_needed
+            let (to_check, settled, drift_skipped) = if signoffs_needed
                 .iter()
                 .any(|s| s == crate::method::DOCS_FOLDED)
             {
                 match ctx.code_repo.as_deref() {
-                    None => (None, Some(DRIFT_SKIPPED.to_string())),
+                    None => (None, Vec::new(), Some(DRIFT_SKIPPED.to_string())),
                     Some(repo) => match crate::docdrift::flags_for_item(store, p, &f.code, repo) {
-                        Ok(flags) => (Some(flags), None),
-                        Err(e) => (None, Some(format!("the drift check failed: {e}"))),
+                        Ok(flags) => {
+                            let (left, settled) = split_settled(store, p, &f.code, flags);
+                            (Some(left), settled, None)
+                        }
+                        Err(e) => (
+                            None,
+                            Vec::new(),
+                            Some(format!("the drift check failed: {e}")),
+                        ),
                     },
                 }
             } else {
-                (None, None)
+                (None, Vec::new(), None)
             };
             Some(ReviewEntry {
                 to_check,
+                settled,
                 drift_skipped,
                 changes,
                 code: f.code.clone(),
@@ -471,6 +520,54 @@ mod tests {
         assert_eq!(d.len(), 3000);
         assert!(d[..1500].iter().all(|l| l.op == DiffOp::Removed));
         assert!(d[1500..].iter().all(|l| l.op == DiffOp::Added));
+    }
+
+    /// DEF-039 R-1: the Review entry lists only the texts still left, and shows what Claude
+    /// settled; once none is left `to_check` is empty. `kanbanr check` lists the same texts.
+    #[test]
+    fn the_review_entry_lists_only_the_texts_left_and_what_claude_settled() {
+        let (store, _d, code, repo) = crate::tests::drift_board();
+        let entry = || {
+            let out = crate::dispatch::dispatch_in(
+                &store,
+                "GET",
+                "/projects/demo/review",
+                None,
+                Some(&repo),
+            )
+            .unwrap();
+            let q: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+            q.into_iter().find(|e| e["code"] == code).unwrap()
+        };
+        let e = entry();
+        assert_eq!(e["to_check"].as_array().unwrap().len(), 1, "{e}");
+        assert!(e.get("settled").is_none(), "{e}");
+        let report =
+            crate::readiness::check_board(&store, "demo", Some(&code), Some(&repo)).unwrap();
+        assert_eq!(report.items[0].texts_to_settle, vec!["doc:design/data.md"]);
+
+        crate::prepared::prepare(
+            &store,
+            "demo",
+            &serde_json::json!({
+                "kind": "text-check",
+                "subject": {"item": code, "target": "doc:design/data.md"},
+                "fields": {"outcome": "confirmed", "why": "--since is still a date"},
+                "origin": "conversation",
+            }),
+            Some(&repo),
+        )
+        .unwrap();
+        let e = entry();
+        assert_eq!(e["to_check"], serde_json::json!([]), "{e}");
+        let settled = e["settled"].as_array().expect("settled");
+        assert_eq!(settled.len(), 1);
+        assert_eq!(settled[0]["flag"]["target"]["id"], "design/data.md");
+        assert_eq!(settled[0]["check"]["by"], "Claude");
+        assert_eq!(settled[0]["check"]["why"], "--since is still a date");
+        let report =
+            crate::readiness::check_board(&store, "demo", Some(&code), Some(&repo)).unwrap();
+        assert!(report.items[0].texts_to_settle.is_empty());
     }
 }
 

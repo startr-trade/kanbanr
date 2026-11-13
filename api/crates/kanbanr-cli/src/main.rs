@@ -1345,6 +1345,31 @@ enum PrepareCmd {
         #[arg(long = "source", value_name = "S", required = true)]
         sources: Vec<String>,
     },
+    /// Settle one text to check under an item's docs-folded sign-off: Claude read it against the
+    /// change and it is still right, or a correction is filed. Run it from the project folder.
+    Text {
+        code: String,
+        /// The flagged text: `doc:<path>`, `adr:<id>` or `item:<CODE>`, as `kanbanr check` lists it.
+        target: String,
+        /// The text is still right as the code reads it. Needs --why.
+        #[arg(
+            long,
+            requires = "why",
+            conflicts_with = "correction",
+            required_unless_present = "correction"
+        )]
+        still_right: bool,
+        /// What was compared, for --still-right.
+        #[arg(long)]
+        why: Option<String>,
+        /// The item that files the correction (any status).
+        #[arg(long, value_name = "CODE")]
+        correction: Option<String>,
+        /// Where else the evidence came from (see `prepare signoff --help`). The text and the
+        /// newest commit of the change are named already.
+        #[arg(long = "source", value_name = "S")]
+        sources: Vec<String>,
+    },
     /// Prepare a manual test's result the person stated, for them to confirm on the Review page.
     Test {
         code: String,
@@ -6717,6 +6742,17 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                         println!("        {kind}{at}: {}", u["why"].as_str().unwrap_or(""));
                     }
                 }
+                // The texts Claude settles before `docs-folded` is offered (DEF-039).
+                let to_settle = r["texts_to_settle"].as_array().cloned().unwrap_or_default();
+                if !to_settle.is_empty() {
+                    println!(
+                        "    Texts to settle before docs-folded (kanbanr prepare text {} <TARGET> …):",
+                        r["code"].as_str().unwrap_or("")
+                    );
+                    for t in &to_settle {
+                        println!("        {}", t.as_str().unwrap_or(""));
+                    }
+                }
                 // A manual test nobody ran: a note, not a gap (DEF-003).
                 for open in r["open_manual"].as_array().into_iter().flatten() {
                     println!("    manual test not run: {}", open.as_str().unwrap_or(""));
@@ -9872,6 +9908,29 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
                 ),
             )
         }
+        PrepareCmd::Text {
+            code,
+            target,
+            still_right,
+            why,
+            correction,
+            sources: s,
+        } => {
+            let fields = if *still_right {
+                json!({"outcome": "confirmed", "why": why.clone().unwrap_or_default()})
+            } else {
+                json!({"outcome": "corrected", "correction": correction.clone().unwrap_or_default()})
+            };
+            (
+                json!({
+                    "kind": "text-check",
+                    "subject": {"item": code, "target": target},
+                    "fields": fields,
+                    "sources": sources(s)?,
+                }),
+                format!("check of {target} for {code}"),
+            )
+        }
         PrepareCmd::Test {
             code,
             requirement,
@@ -9921,6 +9980,13 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
         return Ok(());
     }
     let v: Value = serde_json::from_str(&resp)?;
+    if v["kind"] == "text-check" {
+        println!(
+            "recorded {what} ({}): the docs-folded sign-off takes it",
+            v["id"].as_str().unwrap_or("")
+        );
+        return Ok(());
+    }
     let page = kanbanr_core::prepared::page_of(v["kind"].as_str().unwrap_or(""));
     println!(
         "prepared {what} ({}): waiting for the person on {}/p/{p}/{page}",

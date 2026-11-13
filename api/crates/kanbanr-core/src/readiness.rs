@@ -1628,6 +1628,10 @@ pub struct ItemCheck {
     /// The documents still unbuilt while the next stage holds `docs-folded` (DEF-033).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub docs_unbuilt: Vec<crate::docsbuilt::Unbuilt>,
+    /// The flagged texts Claude has not settled, as `doc:<path>`, `adr:<id>` or `item:<CODE>`,
+    /// while the next stage holds `docs-folded` and a code repository is attached (DEF-039).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts_to_settle: Vec<String>,
 }
 
 /// The manual tests of an item that are not green, as `R-4: <name>` (DEF-003): a check nobody
@@ -1700,8 +1704,32 @@ pub fn check_board(
                 .and_then(|n| n.docs_built.as_ref())
                 .map(|d| d.unbuilt.clone())
                 .unwrap_or_default();
+            let at_docs_folded = view
+                .as_ref()
+                .and_then(|v| {
+                    let first = immediate_status(&project, &v.next)?;
+                    v.next.iter().find(|n| n.status == first)
+                })
+                .is_some_and(|n| {
+                    !n.signoffs_held.is_empty()
+                        || n.signoffs_needed
+                            .iter()
+                            .any(|s| s == crate::method::DOCS_FOLDED)
+                });
+            let texts_to_settle = match repo {
+                Some(repo) if at_docs_folded => {
+                    crate::docdrift::flags_for_item(store, p, &f.code, repo)
+                        .map(|flags| crate::review::split_settled(store, p, &f.code, flags).0)
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|fl| fl.target.key())
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
             ItemCheck {
                 docs_unbuilt,
+                texts_to_settle,
                 code: f.code.clone(),
                 title: f.title.clone(),
                 status: f.status.clone(),

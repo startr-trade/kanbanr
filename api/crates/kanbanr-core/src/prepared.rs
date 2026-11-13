@@ -270,6 +270,16 @@ const fn text(name: &'static str, required: bool) -> FieldSpec {
     }
 }
 
+/// A field the caller sets once and the person never edits (a text check is never confirmed alone).
+const fn fixed(name: &'static str, required: bool) -> FieldSpec {
+    FieldSpec {
+        name,
+        ty: FieldType::Text,
+        required,
+        editable: false,
+    }
+}
+
 /// Every kind this version knows.
 pub const KINDS: &[KindSpec] = &[
     KindSpec {
@@ -304,6 +314,18 @@ pub const KINDS: &[KindSpec] = &[
         subject: &["item"],
         fields: &[text("reason", true)],
         rev: RevOf::Definition,
+    },
+    // Claude's check of one flagged text under an item's docs-folded sign-off (DEF-039). It is
+    // settled by that sign-off, never confirmed alone; `covers` is set by kanbanr.
+    KindSpec {
+        kind: "text-check",
+        subject: &["item", "target"],
+        fields: &[
+            fixed("outcome", true),
+            fixed("why", false),
+            fixed("correction", false),
+        ],
+        rev: RevOf::Commit,
     },
     KindSpec {
         kind: "manual-test",
@@ -750,6 +772,18 @@ pub fn prepare(
             });
         }
     }
+    let mut checked_rev = String::new();
+    if kind_name == "text-check" {
+        checked_rev = prepare_text_check(
+            store,
+            p,
+            &project,
+            &subject,
+            &mut fields,
+            &mut sources,
+            repo,
+        )?;
+    }
     if sources.is_empty() {
         return Err(unsupported(format!(
             "a prepared {kind_name} names at least one source: the run's link, the commit, the \
@@ -835,6 +869,7 @@ pub fn prepare(
             }
             plan.release_tip.clone()
         }
+        "text-check" => checked_rev,
         _ => String::new(),
     };
     let origin = crate::origin::from_body(body);
@@ -870,6 +905,174 @@ pub fn prepare(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
     Ok(Prepared { id, ..record })
+}
+
+/// The checks of a `text-check` (DEF-039): the repository is there, the target is one of the
+/// item's flags, the outcome has what it needs. Sets `covers` and the default sources, and
+/// returns the newest commit of the flag, the record's `rev`.
+fn prepare_text_check(
+    store: &Store,
+    p: &str,
+    project: &crate::store::Project,
+    subject: &Subject,
+    fields: &mut Map<String, Value>,
+    sources: &mut Vec<Source>,
+    repo: Option<&std::path::Path>,
+) -> Result<String> {
+    let repo = repo.ok_or_else(|| {
+        unsupported(
+            "settling a text needs the code repository: run it from the project folder".into(),
+        )
+    })?;
+    project.feature(&subject.item)?;
+    let flags = crate::docdrift::flags_for_item(store, p, &subject.item, repo)?;
+    let flag = flags
+        .iter()
+        .find(|f| f.target.key() == subject.target)
+        .ok_or_else(|| {
+            unsupported(format!(
+                "{} is not flagged for {}: there is nothing to settle",
+                subject.target, subject.item
+            ))
+        })?;
+    let text_of = |name: &str| field_text_of(fields, name).to_string();
+    match text_of("outcome").as_str() {
+        "confirmed" => {
+            if text_of("why").is_empty() {
+                return Err(unsupported(
+                    "a text confirmed as still right needs 'why': what was compared".into(),
+                ));
+            }
+        }
+        "corrected" => {
+            let code = text_of("correction");
+            if code.is_empty() {
+                return Err(unsupported(
+                    "a text settled by a correction needs 'correction': the item that files it"
+                        .into(),
+                ));
+            }
+            if project.feature(&code).is_err() {
+                return Err(unsupported(format!(
+                    "the correction {code} is not an item on the board"
+                )));
+            }
+        }
+        other => {
+            return Err(unsupported(format!(
+                "a text check's outcome is 'confirmed' or 'corrected': '{other}'"
+            )));
+        }
+    }
+    let newest = flag
+        .commits
+        .iter()
+        .reduce(|a, b| {
+            if crate::cmp_instants(&b.at, &a.at) == std::cmp::Ordering::Greater {
+                b
+            } else {
+                a
+            }
+        })
+        .map(|c| c.sha.clone())
+        .unwrap_or_default();
+    fields.insert(
+        "covers".into(),
+        serde_json::json!({
+            "text_changed_at": flag.target_changed_at,
+            "commits": flag.commits.iter().map(|c| c.sha.clone()).collect::<Vec<_>>(),
+        }),
+    );
+    let mut defaults = Vec::new();
+    let place = match flag.target.kind {
+        crate::docdrift::TargetKind::Item => format!("item:{}", flag.target.id),
+        _ => format!("doc:{}", flag.target.path),
+    };
+    defaults.push(Source {
+        label: flag.target.title.clone().chars().take(MAX_LABEL).collect(),
+        url: place,
+        ..Default::default()
+    });
+    if !newest.is_empty() {
+        defaults.push(Source {
+            label: format!("{} change", subject.item),
+            url: format!("commit:{newest}"),
+            ..Default::default()
+        });
+    }
+    for d in defaults {
+        if d.label.trim().is_empty() || sources.iter().any(|s| s.url == d.url) {
+            continue;
+        }
+        sources.push(d);
+    }
+    Ok(newest)
+}
+
+fn field_text_of<'a>(fields: &'a Map<String, Value>, name: &str) -> &'a str {
+    fields.get(name).and_then(Value::as_str).unwrap_or("")
+}
+
+/// Does the check `r` cover `flag` (pure)? The same text, as it last changed, and every commit
+/// the flag names was seen when it was checked. A new commit naming the text again, or an edit of
+/// the text, makes the flag need settling again.
+pub fn settles(r: &Prepared, flag: &crate::docdrift::Flag) -> bool {
+    if r.kind != "text-check" || r.subject.target != flag.target.key() {
+        return false;
+    }
+    let Some(covers) = r.fields.get("covers") else {
+        return false;
+    };
+    if covers.get("text_changed_at").and_then(Value::as_str)
+        != Some(flag.target_changed_at.as_str())
+    {
+        return false;
+    }
+    let seen: Vec<&str> = covers
+        .get("commits")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    flag.commits.iter().all(|c| seen.contains(&c.sha.as_str()))
+}
+
+/// The sign-off's record of a settlement `r` that `settles` `flag`.
+pub fn checked_of(r: &Prepared, flag: &crate::docdrift::Flag) -> crate::models::Checked {
+    let field = |k: &str| field_text_of(&r.fields, k).to_string();
+    crate::models::Checked {
+        target: flag.target.key(),
+        outcome: if field("outcome") == "corrected" {
+            crate::models::Outcome::Corrected
+        } else {
+            crate::models::Outcome::Confirmed
+        },
+        correction: field("correction"),
+        by: r.by.clone(),
+        origin: r.origin.clone(),
+        at: r.at.clone(),
+        rev: r.rev.clone(),
+        text_changed_at: flag.target_changed_at.clone(),
+        why: field("why"),
+        prepared: r.id.clone(),
+        ..Default::default()
+    }
+}
+
+/// The open `text-check` records of `item`, newest first. A newer open one for the same target
+/// supersedes an older one; none is deleted, and the drift check is not run here.
+pub fn settlements(store: &Store, p: &str, item: &str) -> Result<Vec<Prepared>> {
+    let (all, _) = read_all(store, p)?;
+    let mut out: Vec<Prepared> = Vec::new();
+    for (r, answer) in all.into_iter().rev() {
+        if r.kind != "text-check" || r.subject.item != item || answer.is_some() {
+            continue;
+        }
+        if out.iter().any(|n| n.subject.target == r.subject.target) {
+            continue;
+        }
+        out.push(r);
+    }
+    Ok(out)
 }
 
 /// Where a record stands (pure): answered; a kind this version does not know; replaced by a newer
@@ -2460,5 +2663,128 @@ mod tests {
             crate::origin::Origin::Terminal,
         )
         .unwrap();
+    }
+
+    // ---- DEF-039: Claude settles the texts to check -----------------------------------------
+
+    fn settle_body(code: &str, target: &str, outcome: &str) -> Value {
+        let mut fields = serde_json::json!({"outcome": outcome});
+        if outcome == "confirmed" {
+            fields["why"] =
+                "the --since flag is still described as a date, as the code reads it".into();
+        } else {
+            fields["correction"] = "DEF-040".into();
+        }
+        serde_json::json!({
+            "kind": "text-check",
+            "subject": {"item": code, "target": target},
+            "fields": fields,
+            "origin": "conversation",
+        })
+    }
+
+    /// DEF-039 R-2: Claude's settlement records which (still right, with why, or a correction),
+    /// by whom, at which revision, and what it covers.
+    #[test]
+    fn claude_settling_a_text_records_which_by_whom_and_at_which_revision() {
+        let (store, _d, code, repo) = crate::tests::drift_board();
+        let flags = crate::docdrift::flags_for_item(&store, "demo", &code, &repo).unwrap();
+        assert_eq!(flags.len(), 1);
+        let got = prepare(
+            &store,
+            "demo",
+            &settle_body(&code, "doc:design/data.md", "confirmed"),
+            Some(&repo),
+        )
+        .unwrap();
+        assert_eq!(got.kind, "text-check");
+        assert_eq!(got.by, "Claude");
+        assert_eq!(got.origin, "conversation");
+        assert_eq!(got.fields["outcome"], "confirmed");
+        assert!(got.fields["why"].as_str().unwrap().contains("--since"));
+        assert_eq!(got.rev, flags[0].commits[0].sha);
+        assert_eq!(
+            got.fields["covers"]["text_changed_at"],
+            flags[0].target_changed_at.as_str()
+        );
+        assert_eq!(
+            got.fields["covers"]["commits"][0],
+            flags[0].commits[0].sha.as_str()
+        );
+        assert!(got.sources.iter().any(|s| s.url == "doc:design/data.md"));
+        assert!(got.sources.iter().any(|s| s.url.starts_with("commit:")));
+        assert!(settles(&got, &flags[0]));
+        let open = settlements(&store, "demo", &code).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].id, got.id);
+        // A correction names an item on the board; a confirmation needs its why.
+        let mut fix = settle_body(&code, "doc:design/data.md", "corrected");
+        fix["fields"]["correction"] = code.as_str().into();
+        let fixed = prepare(&store, "demo", &fix, Some(&repo)).unwrap();
+        assert_eq!(fixed.fields["correction"], code.as_str());
+        assert_eq!(settlements(&store, "demo", &code).unwrap()[0].id, fixed.id);
+        let mut bad = settle_body(&code, "doc:design/data.md", "corrected");
+        bad["fields"]["correction"] = "DEF-999".into();
+        let e = prepare(&store, "demo", &bad, Some(&repo))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("not an item on the board"), "{e}");
+        let mut bad = settle_body(&code, "doc:design/data.md", "confirmed");
+        bad["fields"].as_object_mut().unwrap().remove("why");
+        let e = prepare(&store, "demo", &bad, Some(&repo))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("needs 'why'"), "{e}");
+    }
+
+    /// DEF-039 R-2: only a flagged text can be settled, and only with the code repository.
+    #[test]
+    fn a_text_not_flagged_cannot_be_settled() {
+        let (store, _d, code, repo) = crate::tests::drift_board();
+        let e = prepare(
+            &store,
+            "demo",
+            &settle_body(&code, "doc:design/other.md", "confirmed"),
+            Some(&repo),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("is not flagged"), "{e}");
+        let e = prepare(
+            &store,
+            "demo",
+            &settle_body(&code, "doc:design/data.md", "confirmed"),
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("needs the code repository"), "{e}");
+        assert!(settlements(&store, "demo", &code).unwrap().is_empty());
+    }
+
+    /// DEF-039 R-2: a settlement covers the commits seen; a new commit naming the text again
+    /// puts the text back among those left.
+    #[test]
+    fn a_settlement_stops_covering_a_flag_when_a_new_commit_names_it() {
+        use crate::docdrift::testkit::code_commit;
+        let (store, _d, code, repo) = crate::tests::drift_board();
+        let got = prepare(
+            &store,
+            "demo",
+            &settle_body(&code, "doc:design/data.md", "confirmed"),
+            Some(&repo),
+        )
+        .unwrap();
+        code_commit(
+            &repo,
+            "src/b.rs",
+            "let b = \"--since\";\n",
+            &format!("again\n\nRefs: kanbanr:{code}"),
+            "2099-01-02T00:00:00+00:00",
+        );
+        let flags = crate::docdrift::flags_for_item(&store, "demo", &code, &repo).unwrap();
+        assert_eq!(flags.len(), 1);
+        assert!(flags[0].commits.len() >= 2, "{:?}", flags[0].commits);
+        assert!(!settles(&got, &flags[0]));
     }
 }

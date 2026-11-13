@@ -230,6 +230,10 @@ jobs:
       # links, and is edited or rejected only on request (FTR-034).
       - name: A prepared record shows filled in beside its button
         run: npm run check:prepared
+      # Claude settles the texts to check; the Review page shows what is left and offers docs-folded
+      # only when none is, with no form for the person (DEF-039).
+      - name: The docs-folded sign-off asks for no form
+        run: npm run check:texts-to-check
       # A manual test waiting for a person is listed on the Review page, with its requirement and
       # the check to make, and recorded there as passed or failed (DEF-040).
       - name: The Review page lists manual checks waiting for you

@@ -2370,7 +2370,7 @@ requirements:
     /// FTR-013: a `docs-folded` board whose work is done, with a doc that names `--since` (listed
     /// by its front matter), and a code repository where the item changed `--since` after the doc
     /// was last written. Returns the board, its folder, the item's code and the code repository.
-    fn drift_board() -> (Store, tempdir::TempDirLike, String, std::path::PathBuf) {
+    pub(crate) fn drift_board() -> (Store, tempdir::TempDirLike, String, std::path::PathBuf) {
         use crate::docdrift::testkit::{code_commit, git_env, scratch};
         let (store, d, code, list) = docs_folded_board();
         crate::git::ensure_repo_as(&d.path, Some(("Ada", "ada@example.com")));
@@ -2434,6 +2434,7 @@ requirements:
             .unwrap_err()
             .to_string();
         assert!(err.contains("doc:design/data.md"), "{err}");
+        assert!(err.contains("kanbanr prepare text"), "{err}");
         assert!(current().is_none());
 
         let err = sign_docs_folded(
@@ -2463,6 +2464,64 @@ requirements:
             "a text no longer flagged is dropped"
         );
         assert_eq!(recorded.checked[0].correction, "DEF-040");
+    }
+
+    /// DEF-039 R-2: with every flagged text settled by Claude, the sign-off needs nothing from
+    /// the person; it keeps what Claude recorded, and the settlement is answered by the sign-off.
+    #[test]
+    fn signing_off_docs_folded_takes_the_texts_claude_settled() {
+        use serde_json::json;
+        let (store, _d, code, repo) = drift_board();
+        let err = sign_docs_folded(&store, &code, &repo, json!([]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("kanbanr prepare text"), "{err}");
+        let prepared = crate::prepared::prepare(
+            &store,
+            "demo",
+            &json!({
+                "kind": "text-check",
+                "subject": {"item": code, "target": "doc:design/data.md"},
+                "fields": {"outcome": "confirmed", "why": "--since is still a date"},
+                "origin": "conversation",
+            }),
+            Some(&repo),
+        )
+        .unwrap();
+        crate::dispatch::dispatch_in(
+            &store,
+            "POST",
+            &format!("/projects/demo/features/{code}/signoff/docs-folded"),
+            Some(&json!({"by": "Ada L"})),
+            Some(&repo),
+        )
+        .unwrap();
+        let project = store.load("demo").unwrap();
+        let signoff = project
+            .feature(&code)
+            .unwrap()
+            .signoff_current("docs-folded")
+            .cloned()
+            .unwrap();
+        assert_eq!(signoff.checked.len(), 1);
+        let c = &signoff.checked[0];
+        assert_eq!(c.target, "doc:design/data.md");
+        assert_eq!(c.by, "Claude");
+        assert_eq!(c.rev, prepared.rev);
+        assert_eq!(c.why, "--since is still a date");
+        assert_eq!(c.prepared, prepared.id);
+        assert!(!c.text_changed_at.is_empty());
+        let (all, _) = crate::prepared::read_all(&store, "demo").unwrap();
+        let answer = all[0]
+            .1
+            .as_ref()
+            .expect("the sign-off answers the settlement");
+        assert_eq!(answer.by, "Ada L");
+        assert!(
+            answer.made.contains("signoff/docs-folded"),
+            "{}",
+            answer.made
+        );
     }
 
     fn entry_for<'a>(q: &'a [serde_json::Value], code: &str) -> &'a serde_json::Value {
