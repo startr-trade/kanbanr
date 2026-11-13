@@ -165,6 +165,34 @@ pub fn repository_docs(spec: &str, board_docs: &BTreeSet<String>) -> Vec<String>
     keep
 }
 
+/// The board docs linked under the spec's `Affects docs` heading as this project's doc pages,
+/// `/p/<project>/docs/file/<path>` (DEF-046), as doc keys, sorted and deduplicated. A `#fragment`
+/// or `?query` is cut first. Links to another project, and to items or milestones, are not docs.
+pub fn linked_board_docs(spec: &str, project: &str) -> Vec<String> {
+    let section = affects_section(spec);
+    let prefix = format!("/p/{project}/docs/file/");
+    let mut keys: Vec<String> = Vec::new();
+    let mut rest = section.as_str();
+    while let Some(at) = rest.find("](") {
+        rest = &rest[at + 2..];
+        let Some(end) = rest.find(')') else {
+            break;
+        };
+        let dest = rest[..end].trim();
+        rest = &rest[end..];
+        let Some(path) = dest.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        let path = path.split(['#', '?']).next().unwrap_or_default().trim();
+        if !path.is_empty() {
+            keys.push(crate::refs::doc_key(path));
+        }
+    }
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
 fn path_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/')
 }
@@ -364,6 +392,26 @@ mod tests {
         );
         // No heading, no documents.
         assert!(repository_docs("## Design\n`docs/src/x.md`\n", &board).is_empty());
+    }
+
+    /// DEF-046 R-1: board docs linked under `Affects docs` are read as this project's doc keys.
+    #[test]
+    fn board_docs_linked_under_affects_docs_are_read() {
+        let spec = "## Design\n\nSee [x](/p/demo/docs/file/design/before.md).\n\n\
+            ### Affects docs\n\
+            - [data](/p/demo/docs/file/architecture/data.md#fields): fields.\n\
+            - [again](/p/demo/docs/file/architecture/data.md).\n\
+            - [ADR](/p/demo/docs/file/decisions/0015-pin.md?v=2).\n\
+            - [other](/p/elsewhere/docs/file/design/theirs.md).\n\
+            - [FEAT-1](/p/demo/feature/FEAT-1), [MS-1](/p/demo/milestone/MS-1).\n\
+            - Repository docs: `docs/src/x.md`.\n\n\
+            ### After\n[later](/p/demo/docs/file/design/after.md)\n";
+        assert_eq!(
+            linked_board_docs(spec, "demo"),
+            vec!["architecture/data.md", "decisions/0015-pin.md"]
+        );
+        assert!(linked_board_docs(spec, "other").is_empty());
+        assert!(linked_board_docs("## Design\n[x](/p/demo/docs/file/a.md)\n", "demo").is_empty());
     }
 
     #[test]
