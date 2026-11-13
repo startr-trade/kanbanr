@@ -1689,10 +1689,23 @@ impl Store {
         to: &str,
         reason: Option<&str>,
     ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
+        self.move_feature_gated_in(id, code, to, reason, None)
+    }
+
+    /// As [`Store::move_feature_gated`], judged with the code repository (DEF-046), so a
+    /// `docs-folded` sign-off the item's branch moved on from counts as lapsed.
+    pub fn move_feature_gated_in(
+        &self,
+        id: &str,
+        code: &str,
+        to: &str,
+        reason: Option<&str>,
+        repo: Option<&std::path::Path>,
+    ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let charter = crate::charter::load(self, id)?;
-        let ctx = crate::readiness::Context::load(self, id, &project.config);
+        let ctx = crate::readiness::Context::load_in(self, id, &project.config, repo);
         let (f, warnings) = Self::gated_move_on(
             &mut project,
             &mut pending,
@@ -1743,6 +1756,18 @@ impl Store {
         to: &str,
         reason: Option<&str>,
     ) -> Result<Vec<crate::readiness::Gap>> {
+        self.gate_preview_in(id, code, to, reason, None)
+    }
+
+    /// As [`Store::gate_preview`], judged with the code repository (DEF-046).
+    pub fn gate_preview_in(
+        &self,
+        id: &str,
+        code: &str,
+        to: &str,
+        reason: Option<&str>,
+        repo: Option<&std::path::Path>,
+    ) -> Result<Vec<crate::readiness::Gap>> {
         let project = self.load(id)?;
         if !project.config.has_status(to) {
             return Err(CoreError::UnknownStatus(to.to_string()));
@@ -1762,7 +1787,7 @@ impl Store {
             });
         }
         let charter = crate::charter::load(self, id)?;
-        let ctx = crate::readiness::Context::load(self, id, &project.config);
+        let ctx = crate::readiness::Context::load_in(self, id, &project.config, repo);
         let reason = reason.map(str::trim).filter(|r| !r.is_empty());
         Ok(Self::check_gate(&project, &charter, &ctx, code, to, reason)?.warnings)
     }
@@ -1926,7 +1951,12 @@ impl Store {
             ctx,
             to,
         ));
-        failing.extend(crate::readiness::signoff_gaps(feature, &gate.signoffs));
+        failing.extend(crate::readiness::signoff_gaps_in(
+            project,
+            feature,
+            &gate.signoffs,
+            ctx,
+        ));
         if no_charter {
             failing.retain(|g| {
                 !matches!(

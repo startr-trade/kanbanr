@@ -330,6 +330,37 @@ pub fn signoff_gaps(feature: &FeatureItem, names: &[String]) -> Vec<Gap> {
         .collect()
 }
 
+/// [`signoff_gaps`], and the lapse of a `docs-folded` sign-off whose branch moved on (DEF-046)
+/// when `names` holds it.
+pub fn signoff_gaps_in(
+    project: &crate::store::Project,
+    feature: &FeatureItem,
+    names: &[String],
+    ctx: &Context,
+) -> Vec<Gap> {
+    let mut gaps = signoff_gaps(feature, names);
+    if names.iter().any(|n| n == crate::method::DOCS_FOLDED)
+        && let Some(why) = crate::docsbuilt::moved_on(project, feature, ctx)
+    {
+        gaps.push(docs_folded_lapsed(&why));
+    }
+    gaps
+}
+
+/// The gap of a `docs-folded` sign-off the branch moved on from (DEF-046).
+fn docs_folded_lapsed(why: &str) -> Gap {
+    let name = crate::method::DOCS_FOLDED;
+    gap(
+        Check::Signoff,
+        None,
+        &format!("sign-off '{name}' lapsed"),
+        format!(
+            "sign-off '{name}' lapsed — {why}, so it no longer covers what was built: sign it \
+             again once the docs are folded"
+        ),
+    )
+}
+
 /// The gaps of an item against a gate's conditions.
 /// What some checks need to know about the project beyond the item: the unit it estimates in, and
 /// its cadence (FEAT-121, FEAT-119).
@@ -891,6 +922,23 @@ pub fn next_gates(
                 .filter(|name| feature.signoff_current(name).is_none())
                 .cloned()
                 .collect();
+            // A `docs-folded` the branch moved on from is asked again (DEF-046), then held like a
+            // new one until the item is built and folded.
+            if gate.signoffs.iter().any(|n| n == crate::method::DOCS_FOLDED)
+                && let Some(why) = crate::docsbuilt::moved_on(project, feature, ctx)
+            {
+                signoffs_needed = gate
+                    .signoffs
+                    .iter()
+                    .filter(|n| {
+                        *n == crate::method::DOCS_FOLDED || feature.signoff_current(n).is_none()
+                    })
+                    .cloned()
+                    .collect();
+                let named = format!("'{}'", crate::method::DOCS_FOLDED);
+                signoffs.retain(|g| !(g.check == Check::Signoff && g.label.contains(&named)));
+                signoffs.push(docs_folded_lapsed(&why));
+            }
             // `docs-folded` is offered only once the documents it confirms are built (DEF-033).
             let mut signoffs_held = Vec::new();
             let mut docs_built = None;
@@ -2136,6 +2184,101 @@ mod tests {
         );
         assert!(hold.is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-046 R-2: a docs-folded sign-off pins the item's branch tips, and a commit on the branch
+    /// after it lapses it; a sign-off that pinned no branch does not lapse.
+    #[test]
+    fn a_docs_folded_signoff_lapses_when_the_branch_moves_on() {
+        let (store, dir, code, list) = linked_docs_board("lapse");
+        store
+            .set_task_state("demo", &code, &list, "T1", crate::models::TaskState::Completed)
+            .unwrap();
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv2\n")
+            .unwrap();
+        let repo = crate::coderepo::tests::scratch_repo("readiness-lapse");
+        let branch = {
+            let project = store.load("demo").unwrap();
+            let f = project.feature(&code).unwrap();
+            crate::scm::branch_for(project.config.branch_pattern(), &code, &f.title)
+        };
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "parser.rs", "v1\n", "parser");
+        let tip = crate::coderepo::rev_parse(&repo, &branch).unwrap();
+        let sign = |repo: Option<&std::path::Path>, note: &str| {
+            crate::dispatch::dispatch_in(
+                &store,
+                "POST",
+                &format!("/projects/demo/features/{code}/signoff/docs-folded"),
+                Some(&serde_json::json!({"by": "Ada L", "note": note})),
+                repo,
+            )
+            .unwrap()
+        };
+        sign(Some(&repo), "");
+        let current = |store: &crate::Store| {
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&code)
+                .unwrap()
+                .signoff_current("docs-folded")
+                .cloned()
+                .expect("signed")
+        };
+        assert_eq!(
+            current(&store).branch_heads,
+            [(branch.clone(), tip)].into(),
+            "the record pins the branch tip"
+        );
+        let lapsed = |gaps: &[Gap]| {
+            gaps.iter()
+                .any(|g| g.label == "sign-off 'docs-folded' lapsed" && g.message.contains(&branch))
+        };
+        let judged = |store: &crate::Store| {
+            let project = store.load_for_gates("demo").unwrap();
+            let ctx = Context::load_in(store, "demo", &project.config, Some(&repo));
+            let f = project.feature(&code).unwrap();
+            let gate = next_gates(&project, None, f, &ctx)
+                .into_iter()
+                .find(|g| g.status == "Completed")
+                .unwrap();
+            let names = vec!["design-review".to_string(), "docs-folded".to_string()];
+            (gate, signoff_gaps_in(&project, f, &names, &ctx))
+        };
+        let (gate, gaps) = judged(&store);
+        assert_eq!(gate.signoffs_needed, vec!["design-review".to_string()]);
+        assert!(!lapsed(&gate.gaps) && !lapsed(&gaps), "{gaps:?}");
+
+        // The branch moves on: the sign-off lapses, and is asked again.
+        crate::coderepo::tests::commit_file(&repo, "parser.rs", "v2\n", "more");
+        let (gate, gaps) = judged(&store);
+        assert_eq!(
+            gate.signoffs_needed,
+            vec!["design-review".to_string(), "docs-folded".to_string()]
+        );
+        assert!(lapsed(&gate.gaps), "{:?}", gate.gaps);
+        assert_eq!(
+            gate.gaps
+                .iter()
+                .filter(|g| g.label.contains("'docs-folded'"))
+                .count(),
+            1,
+            "{:?}",
+            gate.gaps
+        );
+        assert!(lapsed(&gaps), "{gaps:?}");
+
+        // Signed again without the repository (a new note, so it is not a repeat): nothing
+        // pinned, so nothing lapses.
+        sign(None, "again");
+        assert!(current(&store).branch_heads.is_empty());
+        let (gate, gaps) = judged(&store);
+        assert_eq!(gate.signoffs_needed, vec!["design-review".to_string()]);
+        assert!(!lapsed(&gate.gaps) && !lapsed(&gaps), "{gaps:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     /// FEAT-205 R-1: a card's next stage names the sign-offs it still needs and the tasks still
