@@ -363,6 +363,23 @@ mod tests {
         }
     }
 
+    /// FTR-028 R-5: the skill says where decisions are taken is the project's choice, how Claude
+    /// acts under a delegation, and that setup proposes the process's delegations under
+    /// **Decisions** in the plan.
+    #[test]
+    fn skill_proposes_delegations_at_setup() {
+        let skill = skill_md();
+        for want in [
+            "Where decisions are taken is the project's choice",
+            "`--under DLG-n`",
+            "**Decisions**",
+            "kanbanr decisions defaults --process <name> --dry-run --json",
+            "Only you, the coordinator, act under a delegation",
+        ] {
+            assert!(skill.contains(want), "the skill says {want:?}");
+        }
+    }
+
     /// FTR-024 R-6: plan mode is for setup and the process, and never while a sub-agent runs.
     #[test]
     fn skill_keeps_plan_mode_for_setup_and_process() {
