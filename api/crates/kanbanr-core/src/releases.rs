@@ -2621,10 +2621,17 @@ fn prepared_at(
             lacking.push(f.path.clone());
         }
     }
-    if let Some(c) = &cfg.changelog
-        && !read(c).is_some_and(|t| crate::releaseprep::has_heading(&t, &ph.number))
-    {
-        lacking.push(format!("{c} (## [{}])", ph.number));
+    if let Some(c) = &cfg.changelog {
+        match read(c) {
+            Some(t) if crate::releaseprep::has_heading(&t, &ph.number) => {
+                if crate::releaseprep::section_body(&t, &ph.number)
+                    .is_some_and(|b| b.trim().is_empty())
+                {
+                    lacking.push(format!("{c} (## [{}] is empty)", ph.number));
+                }
+            }
+            _ => lacking.push(format!("{c} (## [{}])", ph.number)),
+        }
     }
     if let Some(n) = &cfg.notes {
         let path = crate::releaseprep::expand(n, &ph);
@@ -2702,19 +2709,75 @@ fn work_prepare(
                 .to_string(),
         );
     }
+    // What ships, once: the changelog section and the draft notes are both written from it.
+    let mut shipping: Vec<FeatureItem> = Vec::new();
+    if cfg.changelog.is_some() || cfg.notes.is_some() {
+        let shipping_codes: Vec<String> = cut_preview(store, id, &release.version)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .filter(|p| p.ships)
+            .map(|p| p.code)
+            .collect();
+        shipping = project
+            .features
+            .iter()
+            .filter(|f| shipping_codes.contains(&f.code))
+            .cloned()
+            .collect();
+        shipping.sort_by(|a, b| a.code.cmp(&b.code));
+    }
     if let Some(c) = &cfg.changelog {
         let text = read(&files, c)?;
+        let is_empty =
+            |t: &str| prep::section_body(t, &ph.number).is_some_and(|b| b.trim().is_empty());
+        // The section's text from what ships, when it can be filled.
+        let fill = |t: &str| -> std::result::Result<String, String> {
+            let items: Vec<prep::ChangelogItem> = shipping
+                .iter()
+                .map(|f| prep::ChangelogItem {
+                    kind: f.kind.clone().unwrap_or_default(),
+                    code: f.code.clone(),
+                    title: f.title.clone(),
+                })
+                .collect();
+            prep::fill_section(t, &ph.number, &prep::changelog_entries(&items))
+                .map_err(|e| format!("{c}: {e}"))
+        };
+        let from = shipping
+            .iter()
+            .map(|f| f.code.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut write = |files: &mut Vec<(String, String)>, new: String| {
+            for copy in &cfg.changelog_copies {
+                prep::check_repo_path(copy)?;
+                put(files, copy, new.clone());
+            }
+            put(files, c, new);
+            Ok::<(), String>(())
+        };
         match prep::date_changelog(&text, &ph)? {
-            Some(dated) => {
-                for copy in &cfg.changelog_copies {
-                    prep::check_repo_path(copy)?;
-                    put(&mut files, copy, dated.clone());
-                }
-                put(&mut files, c, dated);
+            Some(dated) if !is_empty(&dated) => {
+                write(&mut files, dated)?;
                 parts.push("the changelog heading".to_string());
             }
+            Some(dated) if !shipping.is_empty() => {
+                write(&mut files, fill(&dated)?)?;
+                parts.push(format!("the changelog section (from {from})"));
+            }
+            Some(_) => notes_said.push(format!(
+                "{c}: nothing to put under ## [{}] yet ([Unreleased] is empty and nothing planned \
+                 has finished), so it is left as it is; write the section with \
+                 `kanbanr release notes {} --changelog <file>`",
+                ph.number, release.version
+            )),
             None if prep::has_heading(&text, &ph.number) => {
-                notes_said.push(format!("{c} already has ## [{}]", ph.number));
+                if is_empty(&text) && !shipping.is_empty() {
+                    write(&mut files, fill(&text)?)?;
+                    parts.push(format!("the changelog section (from {from})"));
+                } else {
+                    notes_said.push(format!("{c} already has ## [{}]", ph.number));
+                }
             }
             None => notes_said.push(format!(
                 "{c} has no ## [Unreleased] heading, so it is left as it is"
@@ -2739,19 +2802,6 @@ fn work_prepare(
         if there {
             notes_said.push(format!("{path} is already written, so it is kept"));
         } else {
-            let shipping_codes: Vec<String> = cut_preview(store, id, &release.version)
-                .map_err(|e| e.to_string())?
-                .into_iter()
-                .filter(|p| p.ships)
-                .map(|p| p.code)
-                .collect();
-            let mut shipping: Vec<FeatureItem> = project
-                .features
-                .iter()
-                .filter(|f| shipping_codes.contains(&f.code))
-                .cloned()
-                .collect();
-            shipping.sort_by(|a, b| a.code.cmp(&b.code));
             drafted_from = shipping.iter().map(|f| f.code.clone()).collect();
             let parent = releases
                 .iter()
@@ -4978,6 +5028,151 @@ pub(crate) mod tests {
         assert!(err.contains("v0.2.0 is already at candidate"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// A board and repo with a changelog configured and `changelog` committed on main; a finished
+    /// feature and a finished defect planned into v0.1.0 when `ship` is set.
+    fn changelog_fixture(tag: &str, changelog: &str, ship: bool) -> (Store, PathBuf, PathBuf) {
+        let (store, dir, repo) = board_and_repo(tag);
+        std::fs::write(repo.join("CHANGELOG.md"), changelog).unwrap();
+        coderepo::git(&repo, &["add", "-A"]).unwrap();
+        coderepo::git(&repo, &["commit", "-q", "-m", "changelog"]).unwrap();
+        super::add(&store, "shop", "v0.1.0", "", "").unwrap();
+        if ship {
+            let feature = plan_done(&store, "v0.1.0");
+            let defect = store
+                .add_feature_of_kind("shop", "Mend it", "", "M", None, Some("defect"))
+                .unwrap()
+                .code;
+            for status in ["Scheduled", "Completed"] {
+                store
+                    .move_feature_approved("shop", &defect, status, None)
+                    .unwrap();
+            }
+            super::plan(&store, "shop", "v0.1.0", &[feature, defect]).unwrap();
+        } else {
+            let code = store
+                .add_feature("shop", "Not done", "", "M", None)
+                .unwrap()
+                .code;
+            super::plan(&store, "shop", "v0.1.0", &[code]).unwrap();
+        }
+        configure(
+            &store,
+            &format!("{THREE}release_prepare:\n  changelog: CHANGELOG.md\n"),
+        );
+        (store, dir, repo)
+    }
+
+    fn promote_candidate(store: &Store, repo: &Path) -> super::Promoted {
+        super::promote(store, "shop", "v0.1.0", None, "Ada", "", Some(repo)).unwrap()
+    }
+
+    /// DEF-044 R-1: candidate fills the version's changelog section from what ships, grouped,
+    /// leaving an empty Unreleased heading; entries already under Unreleased are kept as they are.
+    #[test]
+    fn candidate_fills_the_changelog_section() {
+        let (store, dir, repo) = changelog_fixture(
+            "cl-fill",
+            "# Changelog\n\n## [Unreleased]\n\n## [0.0.1] - 2026-01-01\n- old\n",
+            true,
+        );
+        promote_candidate(&store, &repo);
+        let tip = coderepo::rev_parse(&repo, "release/v0.1.0").unwrap();
+        let text = coderepo::read_blob(&repo, &tip, "CHANGELOG.md")
+            .unwrap()
+            .unwrap()
+            .1;
+        let want_head = format!(
+            "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - {}\n\n### Added\n\n- Ships in v0.1.0 (",
+            super::today_ymd()
+        );
+        assert!(text.starts_with(&want_head), "{text}");
+        assert!(text.contains("\n\n### Fixed\n\n- Mend it ("), "{text}");
+        assert!(
+            text.ends_with(")\n\n## [0.0.1] - 2026-01-01\n- old\n"),
+            "{text}"
+        );
+        let project = store.load_meta("shop").unwrap();
+        let (ok, said) = super::prepared_at(&repo, &tip, &project, "v0.1.0", "release/v0.1.0");
+        assert!(ok, "{said}");
+        clean(&dir, &repo);
+
+        // Entries already under Unreleased are the section, and nothing is added.
+        let (store, dir, repo) = changelog_fixture(
+            "cl-keep",
+            "# Changelog\n\n## [Unreleased]\n\n- something\n\n## [0.0.1] - 2026-01-01\n- old\n",
+            true,
+        );
+        promote_candidate(&store, &repo);
+        let tip = coderepo::rev_parse(&repo, "release/v0.1.0").unwrap();
+        let text = coderepo::read_blob(&repo, &tip, "CHANGELOG.md")
+            .unwrap()
+            .unwrap()
+            .1;
+        assert_eq!(
+            text,
+            format!(
+                "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - {}\n\n- something\n\n## [0.0.1] - 2026-01-01\n- old\n",
+                super::today_ymd()
+            )
+        );
+        clean(&dir, &repo);
+    }
+
+    /// DEF-044 R-2: with nothing to put in the section the plan says so, the changelog is left
+    /// alone, and `prepared` fails on it; an empty heading already on a branch reads as empty.
+    #[test]
+    fn candidate_reports_an_empty_changelog_section() {
+        let original = "# Changelog\n\n## [Unreleased]\n\n## [0.0.1] - 2026-01-01\n- old\n";
+        let (store, dir, repo) = changelog_fixture("cl-empty", original, false);
+        let plan = super::plan_promotion(
+            &store,
+            "shop",
+            "v0.1.0",
+            None,
+            "",
+            Some(&repo),
+            super::Fetch::No,
+        )
+        .unwrap();
+        let prep = plan
+            .steps
+            .iter()
+            .find(|s| s.action.name() == "prepare")
+            .unwrap();
+        assert!(
+            prep.does.contains("nothing to put under ## [0.1.0]"),
+            "{}",
+            prep.does
+        );
+        promote_candidate(&store, &repo);
+        let tip = coderepo::rev_parse(&repo, "release/v0.1.0").unwrap();
+        let text = coderepo::read_blob(&repo, &tip, "CHANGELOG.md")
+            .unwrap()
+            .unwrap()
+            .1;
+        assert_eq!(text, original, "no empty section is written");
+        let project = store.load_meta("shop").unwrap();
+        let (ok, said) = super::prepared_at(&repo, &tip, &project, "v0.1.0", "release/v0.1.0");
+        assert!(!ok && said.contains("CHANGELOG.md (## [0.1.0])"), "{said}");
+
+        // An empty heading on the branch is not prepared either.
+        coderepo::commit_files(
+            &repo,
+            "release/v0.1.0",
+            &[(
+                "CHANGELOG.md".to_string(),
+                "# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-11-12\n\n## [0.0.1] - 2026-01-01\n"
+                    .to_string(),
+            )],
+            "empty",
+        )
+        .unwrap();
+        let tip = coderepo::rev_parse(&repo, "release/v0.1.0").unwrap();
+        let (ok, said) = super::prepared_at(&repo, &tip, &project, "v0.1.0", "release/v0.1.0");
+        assert!(!ok && said.contains("is empty"), "{said}");
+        clean(&dir, &repo);
     }
 
     /// DEF-005 R-1: the cut writes the notes file at the tagged commit to the board's release
