@@ -1112,6 +1112,9 @@ impl Store {
             }
             def
         });
+        if let Some(def) = definition.as_ref() {
+            check_test_stages(&project.config.cadence, code, def)?;
+        }
         let feature = project.feature_mut(code)?;
         feature.definition = definition;
         feature.updated_at = now_rfc3339();
@@ -3991,6 +3994,40 @@ fn imported_section(src: &crate::models::Source, original: &str) -> String {
     )
 }
 
+/// A test's `at` names when it is checked (DEF-043): `pushed`, `cut` or one of the project's
+/// release stages, and only on a project with releases.
+fn check_test_stages(
+    cadence: &crate::config::Cadence,
+    code: &str,
+    def: &crate::models::FeatureDefinition,
+) -> Result<()> {
+    let stages = cadence.stages();
+    for r in &def.requirements {
+        for t in &r.tests {
+            let at = t.at.trim();
+            if at.is_empty() {
+                continue;
+            }
+            let id = &r.id;
+            let name = &t.name;
+            if !cadence.releases {
+                return Err(CoreError::Refused(format!(
+                    "{code} {id} test {name}: at '{at}' waits for a release stage, but this \
+                     project has no releases"
+                )));
+            }
+            if at != "pushed" && at != "cut" && !stages.iter().any(|s| s == at) {
+                return Err(CoreError::Refused(format!(
+                    "{code} {id} test {name}: at '{at}' is not a release stage — use pushed, cut \
+                     or one of: {}",
+                    stages.join(", ")
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Give every requirement an id, leaving existing ones alone, so an author can write requirements
 /// without inventing identifiers and still get stable link targets for tests, commits and ADRs.
 /// Ids are handed out above the highest in use: a lower free id may belong to a deleted
@@ -4089,6 +4126,51 @@ mod tests {
             }
         }
         found
+    }
+
+    /// DEF-043 R-1: a test's `at` must be `pushed`, `cut` or a release stage, and only on a
+    /// project with releases.
+    #[test]
+    fn a_checked_at_value_must_name_a_release_stage() {
+        let (store, dir) = atomic_board("checked-at");
+        let f = store.add_feature("demo", "A", "spec", "M", None).unwrap();
+        let def = |at: &str| crate::models::FeatureDefinition {
+            statement: "s".into(),
+            requirements: vec![crate::models::Requirement {
+                text: "THE SYSTEM SHALL run CI".into(),
+                tests: vec![crate::models::TestRef {
+                    name: "ci::runs".into(),
+                    at: at.into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let err = store
+            .set_feature_definition("demo", &f.code, Some(def("pushed")))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("this project has no releases"), "{err}");
+        let mut cadence = store.load("demo").unwrap().config.cadence;
+        cadence.releases = true;
+        store.set_cadence("demo", None, cadence).unwrap();
+        let err = store
+            .set_feature_definition("demo", &f.code, Some(def("staging-2")))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("at 'staging-2' is not a release stage — use pushed, cut or one of: "),
+            "{err}"
+        );
+        let stages = store.load("demo").unwrap().config.cadence.stages();
+        assert!(err.contains(&stages.join(", ")), "{err}");
+        for at in ["pushed", "cut", stages[0].as_str(), ""] {
+            store
+                .set_feature_definition("demo", &f.code, Some(def(at)))
+                .unwrap();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// DEF-025 R-3: a save replaces the item's file instead of writing into it.

@@ -447,7 +447,15 @@ pub(crate) fn definition_sections(
             } else {
                 format!(" ({})", t.kind.trim())
             };
-            out.push_str(&format!("- {mark} `{}`{kind}\n", t.name));
+            // A test checked later says when (DEF-043). The stage a `pushed` or `cut` test waits
+            // for is the project's, which this rendering doesn't read; the plan names it.
+            let when = match t.at.trim() {
+                "" => String::new(),
+                "pushed" => " — checked after main is pushed".to_string(),
+                "cut" => " — checked at the cut".to_string(),
+                stage => format!(" — checked at {stage}"),
+            };
+            out.push_str(&format!("- {mark} `{}`{kind}{when}\n", t.name));
         }
         out.push('\n');
     }

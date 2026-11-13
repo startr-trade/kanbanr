@@ -1542,7 +1542,12 @@ fn requirement_level(check: Check, r: &Requirement, gaps: &mut Vec<Gap>) {
             }
         }
         Check::TestsGreen => {
-            if !r.tests.is_empty() && !r.tests.iter().any(|t| t.state == TestState::Green) {
+            // A test checked later (DEF-043: after main is pushed, at the cut or at a release
+            // stage) holds that stage, not the item's gate.
+            if !r.tests.is_empty()
+                && !r.tests.iter().any(|t| t.state == TestState::Green)
+                && r.tests.iter().any(|t| t.at.trim().is_empty())
+            {
                 push(
                     "not proven",
                     format!("{id} has tests but none is green — not yet proven"),
@@ -2428,6 +2433,31 @@ mod tests {
         .expect("a minimal item");
         f.definition = def;
         f
+    }
+
+    /// DEF-043 R-1: a requirement whose only not-green test is checked later passes the item's
+    /// `TestsGreen`; with one more plain planned test it does not.
+    #[test]
+    fn a_test_checked_later_does_not_hold_the_items_gate() {
+        let mut later = requirement("R-2", "ci", &[("ci::runs", TestState::Planned)]);
+        later.tests[0].at = "pushed".into();
+        let f = item(Some(FeatureDefinition {
+            requirements: vec![later.clone()],
+            ..Default::default()
+        }));
+        let gaps = evaluate(&f, None, &[Check::TestsGreen]);
+        assert!(gaps.is_empty(), "{gaps:?}");
+        later.tests.push(TestRef {
+            name: "plain".into(),
+            ..Default::default()
+        });
+        let f = item(Some(FeatureDefinition {
+            requirements: vec![later],
+            ..Default::default()
+        }));
+        let gaps = evaluate(&f, None, &[Check::TestsGreen]);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert_eq!(gaps[0].label, "not proven");
     }
 
     /// DEF-003 R-1: a manual test not green is named with its requirement; a green one, or one of
