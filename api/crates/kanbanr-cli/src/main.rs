@@ -1345,6 +1345,29 @@ enum PrepareCmd {
         #[arg(long = "source", value_name = "S", required = true)]
         sources: Vec<String>,
     },
+    /// Prepare a manual test's result the person stated, for them to confirm on the Review page.
+    Test {
+        code: String,
+        requirement: String,
+        /// The manual test's name, as the definition has it.
+        test: String,
+        /// The check passed.
+        #[arg(long, conflicts_with = "failed", required_unless_present = "failed")]
+        passed: bool,
+        /// The check failed.
+        #[arg(long)]
+        failed: bool,
+        /// A note kept with the result.
+        #[arg(long)]
+        note: Option<String>,
+        /// The code commit the person checked (default: HEAD of this repository).
+        #[arg(long, value_name = "REV")]
+        rev: Option<String>,
+        /// Where the result came from, usually what the person said:
+        /// `--source "conversation 12 Nov: the smoke test passed on staging"`. At least one.
+        #[arg(long = "source", value_name = "S", required = true)]
+        sources: Vec<String>,
+    },
     /// The prepared records waiting for the person, newest first.
     List {
         /// Every record: confirmed, rejected, superseded and stale ones too.
@@ -9847,6 +9870,33 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
                     if *passed { "passed" } else { "failed" },
                     &sha[..7]
                 ),
+            )
+        }
+        PrepareCmd::Test {
+            code,
+            requirement,
+            test,
+            passed: _,
+            failed,
+            note,
+            rev,
+            sources: s,
+        } => {
+            let mut fields = json!({"state": if *failed { "red" } else { "green" }});
+            if let Some(note) = note {
+                fields["note"] = json!(note);
+            }
+            if let Some(rev) = rev {
+                fields["checked_rev"] = json!(rev);
+            }
+            (
+                json!({
+                    "kind": "manual-test",
+                    "subject": {"item": code, "requirement": requirement, "test": test},
+                    "fields": fields,
+                    "sources": sources(s)?,
+                }),
+                format!("the result of {code} {requirement}"),
             )
         }
         PrepareCmd::Ratify {
