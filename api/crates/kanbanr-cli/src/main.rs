@@ -263,6 +263,11 @@ enum Command {
     /// rejects it there. Preparing is not the decision, and there is no confirm command.
     #[command(subcommand)]
     Prepare(PrepareCmd),
+    /// Where this project's decisions are taken, and what Claude may decide under a delegation
+    /// (FTR-028). `show`, `propose`, `revoke` and `defaults` are anyone's; `mode`, `grant` and
+    /// `review` are the person's own, refused inside a Claude session.
+    #[command(subcommand)]
+    Decisions(DecisionsCmd),
     /// Record that an item was sliced out of another, so a wave's growth can be accounted for.
     SplitFrom {
         code: String,
@@ -346,6 +351,10 @@ enum Command {
         /// `rev`). Refused if the definition changed since — what Claude passes (FEAT-159).
         #[arg(long)]
         rev: Option<String>,
+        /// Take it under this delegation (`DLG-001`): Claude's, within a delegation the person
+        /// granted (FTR-028). A person needs none.
+        #[arg(long, value_name = "DLG")]
+        under: Option<String>,
     },
     /// Take back an approval (FEAT-069). The agreement goes; the record of having given it stays,
     /// and the item returns to what is awaiting review.
@@ -369,6 +378,10 @@ enum Command {
         /// `rev`). Refused if the definition changed since — what Claude passes (FEAT-159).
         #[arg(long)]
         rev: Option<String>,
+        /// Take it under this delegation (`DLG-001`): Claude's, within a delegation the person
+        /// granted (FTR-028). A person needs none.
+        #[arg(long, value_name = "DLG")]
+        under: Option<String>,
     },
     /// Record a named sign-off a stage can require — "design-review", "release" (FEAT-114). It covers
     /// the definition as it stands: change the definition and the sign-off lapses.
@@ -400,6 +413,10 @@ enum Command {
         /// Why the sign-off no longer stands (with --withdraw).
         #[arg(long, requires = "withdraw")]
         reason: Option<String>,
+        /// Take it under this delegation (`DLG-001`): Claude's, within a delegation the person
+        /// granted (FTR-028). A person needs none.
+        #[arg(long, value_name = "DLG", conflicts_with = "withdraw")]
+        under: Option<String>,
     },
     /// Manage a feature's persistent todo-lists (an epic can hold many).
     #[command(subcommand)]
@@ -1279,6 +1296,64 @@ enum GateCmd {
 }
 
 #[derive(Subcommand)]
+enum DecisionsCmd {
+    /// The mode, every delegation, the delegated decisions to review, and what waits where.
+    Show,
+    /// Set where decisions are taken: monitor or delegated. The person's own.
+    Mode {
+        /// monitor | delegated
+        mode: String,
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
+    /// Propose a delegation. It does nothing until the person grants it on the Review page.
+    Propose {
+        /// A verdict it covers: approve, ratify or signoff:<name>. Repeat for more.
+        #[arg(long = "verdict", required = true)]
+        verdict: Vec<String>,
+        /// A status the item is in when the verdict is taken; repeat for more. None: any.
+        #[arg(long)]
+        step: Vec<String>,
+        /// An item it covers; repeat for more.
+        #[arg(long)]
+        item: Vec<String>,
+        /// An item kind it covers (feature, defect, chore…); repeat for more.
+        #[arg(long)]
+        kind: Vec<String>,
+        /// The milestone it covers.
+        #[arg(long, default_value = "")]
+        milestone: String,
+        /// It covers every item, on purpose.
+        #[arg(long)]
+        all: bool,
+        /// When it ends: YYYY-MM-DD (end of that day) or RFC 3339. Default: 14 days from now.
+        #[arg(long, default_value = "")]
+        until: String,
+        #[arg(long, default_value = "")]
+        note: String,
+    },
+    /// Grant a proposed delegation as it stands now. The person's own.
+    Grant { id: String },
+    /// Revoke a delegation, or discard a proposal.
+    Revoke {
+        id: String,
+        #[arg(long)]
+        reason: String,
+    },
+    /// Keep or undo a decision Claude took under a delegation. The person's own.
+    Review {
+        /// The decision's reference, as `decisions show` lists it.
+        decision: String,
+        #[arg(long, conflicts_with = "undo", required_unless_present = "undo")]
+        keep: bool,
+        #[arg(long)]
+        undo: bool,
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum PrepareCmd {
     /// Prepare a sign-off: the note and the doc the person confirms with one click.
     Signoff {
@@ -2036,6 +2111,7 @@ fn command_access(cmd: &Command) -> Access {
         | Command::Release(_)
         | Command::Gate(_)
         | Command::Prepare(_)
+        | Command::Decisions(_)
         | Command::Commit { .. }
         | Command::Tests { .. }
         | Command::Sources { .. }
@@ -6784,6 +6860,20 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 );
                 return Ok(());
             }
+            // Where decisions are taken, and what Claude decided under a delegation (FTR-028).
+            if *pending && code.is_none() {
+                let (mode, review) = decisions_summary(&client, &p);
+                if let Some(line) = mode {
+                    println!("{line}");
+                }
+                if !review.is_empty() {
+                    println!("delegated decisions to keep or undo on the Review page:");
+                    for line in &review {
+                        println!("  {line}");
+                    }
+                    println!();
+                }
+            }
             if features.is_empty() {
                 println!("nothing is waiting for agreement");
                 return Ok(());
@@ -6923,13 +7013,14 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             reason,
             by,
             rev,
+            under,
         } => {
             let p = require_project(cli)?;
             let who = verdict_author(cli, by.as_ref())?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/features/{code}/ratify"),
-                Some(json!({ "by": who, "reason": reason, "rev": rev })),
+                Some(json!({ "by": who, "reason": reason, "rev": rev, "delegation": under })),
             )?;
             print_write(
                 cli,
@@ -6940,14 +7031,20 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Command::Approve { code, by, rev } => {
+        Command::Approve {
+            code,
+            by,
+            rev,
+            under,
+        } => {
             let p = require_project(cli)?;
             let who = verdict_author(cli, by.as_ref())?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/features/{code}/approve"),
-                Some(json!({ "by": who, "rev": rev })),
+                Some(json!({ "by": who, "rev": rev, "delegation": under })),
             )?;
+            let who = recorded_by(&resp, &who);
             print_write(cli, &resp, format!("{code} approved by {who}"));
             Ok(())
         }
@@ -6961,6 +7058,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             spec_rev,
             withdraw,
             reason,
+            under,
         } => {
             let p = require_project(cli)?;
             let who = verdict_author(cli, by.as_ref())?;
@@ -6987,9 +7085,11 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     urlencode_segment(name)
                 ),
                 Some(json!({
-                    "by": who, "note": note, "doc": doc, "rev": rev, "spec_rev": spec_rev
+                    "by": who, "note": note, "doc": doc, "rev": rev, "spec_rev": spec_rev,
+                    "delegation": under
                 })),
             )?;
+            let who = recorded_by(&resp, &who);
             print_write(
                 cli,
                 &resp,
@@ -7008,6 +7108,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         Command::Release(cmd) => run_release(cli, &client, cmd),
         Command::Gate(cmd) => run_gate(cli, &client, cmd),
         Command::Prepare(cmd) => run_prepare(cli, &client, cmd),
+        Command::Decisions(cmd) => run_decisions(cli, &client, cmd),
         Command::Todo(cmd) => run_todo(cli, &client, cmd),
         Command::Task(cmd) => run_task(cli, &client, cmd),
         Command::Milestone(cmd) => run_milestone(cli, &client, cmd),
@@ -7100,6 +7201,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&board_json(&project))?);
             } else {
                 print_board(&project);
+                if let (Some(line), _) = decisions_summary(&client, &p) {
+                    println!("{line}");
+                }
             }
             Ok(())
         }
@@ -9722,6 +9826,314 @@ fn gate_commit(
 }
 
 /// `kanbanr prepare …` (FTR-034): write a prepared record, and say where it waits for the person.
+/// Who a verdict was recorded as given by: under a delegation it is Claude, whatever was asked
+/// (FTR-028).
+fn recorded_by(resp: &str, asked: &str) -> String {
+    let v: Value = serde_json::from_str(resp).unwrap_or(Value::Null);
+    let under = |r: &Value| -> Option<String> {
+        let d = r["delegation"].as_str().filter(|d| !d.is_empty())?;
+        Some(format!(
+            "{} under {d}",
+            r["by"].as_str().unwrap_or("Claude")
+        ))
+    };
+    // The answer is the record, or the item with the record last in its list.
+    under(&v)
+        .or_else(|| {
+            let def = &v["definition"];
+            def["signoffs"]
+                .as_array()
+                .and_then(|a| a.last())
+                .and_then(under)
+                .or_else(|| {
+                    def["approval"]
+                        .as_object()
+                        .and_then(|_| under(&def["approval"]))
+                })
+        })
+        .unwrap_or_else(|| asked.to_string())
+}
+
+/// What `board` and `review --pending` say about decisions (FTR-028): the mode with the
+/// delegations in force (`None` in plain monitor mode), and one line per delegated decision
+/// waiting to be kept or undone. Nothing when the decisions cannot be read.
+fn decisions_summary(client: &Backend, p: &str) -> (Option<String>, Vec<String>) {
+    let Ok(v) = client
+        .get(&format!("/projects/{p}/decisions"))
+        .and_then(|r| Ok(serde_json::from_str::<Value>(&r)?))
+    else {
+        return (None, Vec::new());
+    };
+    let mode = v["mode"].as_str().unwrap_or("monitor");
+    let month = |m: &str| {
+        [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ]
+        .get(m.parse::<usize>().unwrap_or(0).wrapping_sub(1))
+        .copied()
+        .unwrap_or("")
+    };
+    let in_force: Vec<String> = v["delegations"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|g| g["in_force"] == true)
+        .map(|g| {
+            let words = |k: &str| {
+                g[k].as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            };
+            let mut what = words("verdicts");
+            what.extend(words("kinds"));
+            what.extend(words("items"));
+            if let Some(m) = g["milestone"].as_str().filter(|m| !m.is_empty()) {
+                what.push(m.to_string());
+            }
+            if g["all"] == true {
+                what.push("every item".into());
+            }
+            let until = g["until"].as_str().unwrap_or("");
+            let day = match (until.get(8..10), until.get(5..7)) {
+                (Some(d), Some(m)) => format!("{} {}", d.trim_start_matches('0'), month(m)),
+                _ => until.to_string(),
+            };
+            format!(
+                "{} ({}, until {day})",
+                g["id"].as_str().unwrap_or(""),
+                what.join(", ")
+            )
+        })
+        .collect();
+    let line = if mode == "monitor" && in_force.is_empty() {
+        None
+    } else if in_force.is_empty() {
+        Some(format!("Decisions: {mode}"))
+    } else {
+        Some(format!("Decisions: {mode} — {}", in_force.join("; ")))
+    };
+    let review = v["to_review"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| {
+            format!(
+                "{}  {}{}  under {}  ({})",
+                r["code"].as_str().unwrap_or(""),
+                r["verdict"].as_str().unwrap_or(""),
+                r["signoff"]
+                    .as_str()
+                    .map(|s| format!(" {s}"))
+                    .unwrap_or_default(),
+                r["delegation"].as_str().unwrap_or(""),
+                r["decision"].as_str().unwrap_or("")
+            )
+        })
+        .collect();
+    (line, review)
+}
+
+/// One line per delegation: what it covers and where it stands.
+fn delegation_line(g: &Value) -> String {
+    let list = |k: &str| {
+        g[k].as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
+    };
+    let mut scope: Vec<String> = Vec::new();
+    for (k, label) in [("steps", "at"), ("items", "items"), ("kinds", "kinds")] {
+        let l = list(k);
+        if !l.is_empty() {
+            scope.push(format!("{label} {l}"));
+        }
+    }
+    if let Some(m) = g["milestone"].as_str().filter(|m| !m.is_empty()) {
+        scope.push(format!("milestone {m}"));
+    }
+    if g["all"].as_bool() == Some(true) {
+        scope.push("every item".into());
+    }
+    format!(
+        "{}  {}  {} ({}) until {}{}",
+        g["id"].as_str().unwrap_or(""),
+        g["state"].as_str().unwrap_or(""),
+        list("verdicts"),
+        scope.join("; "),
+        g["until"].as_str().unwrap_or(""),
+        g["note"]
+            .as_str()
+            .filter(|n| !n.is_empty())
+            .map(|n| format!(" — {n}"))
+            .unwrap_or_default()
+    )
+}
+
+fn print_waiting(waiting: &Value) {
+    for w in waiting.as_array().into_iter().flatten() {
+        let place = w["place"].as_str().unwrap_or("");
+        let at = match (place, w["delegation"].as_str(), w["url"].as_str()) {
+            ("delegated", Some(d), _) => format!("for Claude under {d}"),
+            (_, _, Some(u)) => format!("on the {place} ({u})"),
+            _ => format!("on the {place}"),
+        };
+        println!(
+            "  {}  {}  {at}",
+            w["code"].as_str().unwrap_or(""),
+            w["what"].as_str().unwrap_or("")
+        );
+    }
+}
+
+fn run_decisions(cli: &Cli, client: &Backend, cmd: &DecisionsCmd) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let base = format!("/projects/{p}/decisions");
+    let show = |resp: &str, human: &dyn Fn(&Value)| -> anyhow::Result<()> {
+        if cli.json {
+            println!("{}", pretty(resp));
+        } else {
+            human(&serde_json::from_str::<Value>(resp)?);
+        }
+        Ok(())
+    };
+    match cmd {
+        DecisionsCmd::Show => {
+            let resp = client.get(&base)?;
+            show(&resp, &|v| {
+                println!("Decisions: {}", v["mode"].as_str().unwrap_or("monitor"));
+                let gs = v["delegations"].as_array().cloned().unwrap_or_default();
+                if gs.is_empty() {
+                    println!("no delegations");
+                }
+                for g in &gs {
+                    println!("  {}", delegation_line(g));
+                }
+                let review = v["to_review"].as_array().cloned().unwrap_or_default();
+                if !review.is_empty() {
+                    println!("delegated decisions to review on the Review page:");
+                    for r in &review {
+                        println!(
+                            "  {}  {} {}  under {}",
+                            r["decision"].as_str().unwrap_or(""),
+                            r["verdict"].as_str().unwrap_or(""),
+                            r["signoff"].as_str().unwrap_or(""),
+                            r["delegation"].as_str().unwrap_or("")
+                        );
+                    }
+                }
+                let waiting = &v["waiting"];
+                if waiting.as_array().is_some_and(|a| !a.is_empty()) {
+                    println!("waiting for a decision:");
+                    print_waiting(waiting);
+                }
+            })
+        }
+        DecisionsCmd::Mode { mode, reason } => {
+            let who = verdict_author(cli, None)?;
+            let resp = client.write(
+                Method::Put,
+                &format!("{base}/mode"),
+                Some(json!({"mode": mode, "reason": reason, "by": who})),
+            )?;
+            show(&resp, &|v| {
+                if v["already_recorded"].as_bool() == Some(true) {
+                    println!("decisions are already taken in {mode} mode; nothing recorded");
+                } else {
+                    println!("decisions: {mode} mode, set by {who}");
+                }
+                if v["waiting"].as_array().is_some_and(|a| !a.is_empty()) {
+                    println!("waiting for a decision, in its place now:");
+                    print_waiting(&v["waiting"]);
+                }
+            })
+        }
+        DecisionsCmd::Propose {
+            verdict,
+            step,
+            item,
+            kind,
+            milestone,
+            all,
+            until,
+            note,
+        } => {
+            let until = kanbanr_core::decisions::until_of(until, &kanbanr_core::now_rfc3339())?;
+            let who = verdict_author(cli, None).unwrap_or_else(|_| "Claude".into());
+            let resp = client.write(
+                Method::Post,
+                &format!("{base}/delegations"),
+                Some(json!({
+                    "verdicts": verdict, "steps": step, "items": item, "kinds": kind,
+                    "milestone": milestone, "all": all, "until": until, "note": note, "by": who
+                })),
+            )?;
+            show(&resp, &|g| {
+                println!(
+                    "{} proposed: the person grants it on the Review page before it covers \
+                     anything",
+                    g["id"].as_str().unwrap_or("")
+                );
+            })
+        }
+        DecisionsCmd::Grant { id } => {
+            // Granted as it stands now: the rev read here is the one the grant is pinned to.
+            let view: Value = serde_json::from_str(&client.get(&base)?)?;
+            let rev = view["delegations"]
+                .as_array()
+                .and_then(|a| a.iter().find(|g| g["id"] == id.as_str()))
+                .and_then(|g| g["rev"].as_str().map(String::from))
+                .ok_or_else(|| anyhow::anyhow!("there is no delegation {id}"))?;
+            let who = verdict_author(cli, None)?;
+            let resp = client.write(
+                Method::Post,
+                &format!("{base}/delegations/{}/grant", urlencode_segment(id)),
+                Some(json!({"rev": rev, "by": who})),
+            )?;
+            show(&resp, &|g| {
+                println!("{} granted by {who}", delegation_line(g))
+            })
+        }
+        DecisionsCmd::Revoke { id, reason } => {
+            let who = verdict_author(cli, None).unwrap_or_else(|_| "Claude".into());
+            let resp = client.write(
+                Method::Post,
+                &format!("{base}/delegations/{}/revoke", urlencode_segment(id)),
+                Some(json!({"reason": reason, "by": who})),
+            )?;
+            show(&resp, &|_| println!("{id} revoked"))
+        }
+        DecisionsCmd::Review {
+            decision,
+            keep,
+            undo: _,
+            reason,
+        } => {
+            let who = verdict_author(cli, None)?;
+            let verdict = if *keep { "keep" } else { "undo" };
+            let resp = client.write(
+                Method::Post,
+                &format!("{base}/reviews"),
+                Some(
+                    json!({"decision": decision, "verdict": verdict, "reason": reason, "by": who}),
+                ),
+            )?;
+            show(&resp, &|_| {
+                println!(
+                    "{decision}: {} by {who}",
+                    if *keep { "kept" } else { "undone" }
+                )
+            })
+        }
+    }
+}
+
 fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     let sources = |given: &[String]| -> anyhow::Result<Vec<Value>> {

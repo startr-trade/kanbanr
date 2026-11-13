@@ -10772,3 +10772,182 @@ fn prepare_gate_records_a_prepared_result_and_list_shows_it() {
     assert!(!bad.status.success());
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A TOGAF board whose System Design gate also asks for `design-review` (FTR-028), and a runner
+/// for commands inside a Claude session (`CLAUDECODE=1`).
+fn delegation_board(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (base, work) = togaf_scratch(tag);
+    togaf_board(&base, &work);
+    let process = base.join("process-review.yaml");
+    std::fs::write(
+        &process,
+        r#"statuses: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+default_state: Vision
+displayed_states: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+terminal_states: [Operations]
+transitions:
+  Vision: [Business Arch]
+  Business Arch: [System Design, Vision]
+  System Design: [Implementation, Business Arch]
+  Implementation: [Migration, System Design]
+  Migration: [Operations, Implementation]
+  Operations: [Migration]
+gates:
+  Business Arch:
+    requires: [definition, approved]
+  System Design:
+    requires: [approved]
+    signoffs: [design-review]
+  Implementation:
+    requires: [approved]
+    on_enter: [branch]
+  Migration:
+    requires: [approved]
+"#,
+    )
+    .unwrap();
+    let o = run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "workflow",
+            "--from-file",
+            process.to_str().unwrap(),
+        ],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    (base, work)
+}
+
+fn in_session(base: &std::path::Path, work: &std::path::Path, args: &[&str]) -> Output {
+    Command::new(cli())
+        .args(args)
+        .current_dir(work)
+        .env("HOME", base.join("home"))
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("KANBANR_DATA_DIR")
+        .env_remove("KANBANR_PROJECT")
+        .env_remove("KANBANR_PROCESSES_DIR")
+        .env("CLAUDECODE", "1")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("run kanbanr CLI")
+}
+
+/// FTR-028 R-2: inside a Claude session a delegation can be proposed but not granted, and the mode
+/// cannot be changed; from the person's terminal both are recorded.
+#[test]
+fn a_session_cannot_grant_a_delegation() {
+    let (base, work) = delegation_board("ftr028-grant");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(in_session(
+        &base,
+        &work,
+        &[
+            "decisions",
+            "propose",
+            "--verdict",
+            "signoff:design-review",
+            "--item",
+            "FEAT-001",
+            "--note",
+            "design reviews of the cart",
+        ],
+    ));
+    for args in [
+        &["decisions", "grant", "DLG-001"][..],
+        &["decisions", "mode", "delegated"][..],
+    ] {
+        let o = in_session(&base, &work, args);
+        assert!(!o.status.success(), "{args:?} was recorded in a session");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.contains("the person's own"), "{args:?}: {err}");
+    }
+    let shown = ok(run_in(&base, &work, &["decisions", "show", "--json"]));
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(v["mode"], "monitor");
+    assert_eq!(v["delegations"][0]["state"], "proposed", "{v}");
+    assert_eq!(v["delegations"][0]["proposed"]["origin"], "conversation");
+    ok(run_in(&base, &work, &["decisions", "grant", "DLG-001"]));
+    ok(run_in(&base, &work, &["decisions", "mode", "delegated"]));
+    let shown = ok(run_in(&base, &work, &["decisions", "show", "--json"]));
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(v["mode"], "delegated");
+    assert_eq!(v["delegations"][0]["state"], "granted", "{v}");
+    assert_eq!(v["delegations"][0]["granted"]["origin"], "terminal");
+}
+
+/// FTR-028 R-2, R-3: Claude proposes, the person grants and sets delegated mode, then Claude takes
+/// the covered sign-off with `--under`; it is recorded as delegated, by Claude, naming DLG-001, and
+/// listed to review. Without `--under`, or for a sign-off it does not cover, it is refused.
+#[test]
+fn decisions_propose_grant_and_take_under() {
+    let (base, work) = delegation_board("ftr028-under");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(in_session(
+        &base,
+        &work,
+        &[
+            "decisions",
+            "propose",
+            "--verdict",
+            "signoff:design-review",
+            "--item",
+            "FEAT-001",
+        ],
+    ));
+    ok(run_in(&base, &work, &["decisions", "grant", "DLG-001"]));
+    ok(run_in(&base, &work, &["decisions", "mode", "delegated"]));
+    let refused = in_session(&base, &work, &["signoff", "FEAT-001", "design-review"]);
+    assert!(!refused.status.success(), "taken without --under");
+    let err = String::from_utf8_lossy(&refused.stderr);
+    assert!(err.contains("--under DLG-001"), "{err}");
+    let other = in_session(
+        &base,
+        &work,
+        &[
+            "signoff",
+            "FEAT-001",
+            "security-review",
+            "--under",
+            "DLG-001",
+        ],
+    );
+    assert!(!other.status.success(), "a sign-off DLG-001 does not cover");
+    let taken = ok(in_session(
+        &base,
+        &work,
+        &["signoff", "FEAT-001", "design-review", "--under", "DLG-001"],
+    ));
+    let said = String::from_utf8_lossy(&taken.stdout);
+    assert!(said.contains("under DLG-001"), "{said}");
+    let shown = ok(run_in(
+        &base,
+        &work,
+        &["feature", "show", "FEAT-001", "--json"],
+    ));
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    let s = v["definition"]["signoffs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "design-review")
+        .unwrap()
+        .clone();
+    assert_eq!(s["origin"], "delegated");
+    assert_eq!(s["by"], "Claude");
+    assert_eq!(s["delegation"], "DLG-001");
+    let shown = ok(run_in(&base, &work, &["decisions", "show", "--json"]));
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    let list = v["to_review"].as_array().unwrap();
+    assert_eq!(list.len(), 1, "{v}");
+    assert_eq!(list[0]["code"], "FEAT-001");
+    assert_eq!(list[0]["delegation"], "DLG-001");
+}

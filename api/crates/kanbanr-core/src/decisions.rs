@@ -670,6 +670,33 @@ pub fn propose(store: &Store, p: &str, new: NewDelegation, stamp: Stamp) -> Resu
     Ok(delegation)
 }
 
+/// A delegation's end as a person gives it: `YYYY-MM-DD` is the end of that day (UTC), RFC 3339
+/// is taken as it is, and nothing is [`DEFAULT_DELEGATION_DAYS`] from `now`, at the end of that
+/// day.
+pub fn until_of(given: &str, now: &str) -> Result<String> {
+    let given = given.trim();
+    let end_of = |d: time::Date| format!("{d}T23:59:59+00:00");
+    if given.is_empty() {
+        let Some(now) = instant(now) else {
+            return unsupported(format!("'{now}' is not a time"));
+        };
+        let day = (now + time::Duration::days(DEFAULT_DELEGATION_DAYS))
+            .to_offset(time::UtcOffset::UTC)
+            .date();
+        return Ok(end_of(day));
+    }
+    if instant(given).is_some() {
+        return Ok(given.to_string());
+    }
+    let fmt = time::macros::format_description!("[year]-[month]-[day]");
+    match time::Date::parse(given, &fmt) {
+        Ok(d) => Ok(end_of(d)),
+        Err(_) => unsupported(format!(
+            "--until takes a date (YYYY-MM-DD) or an RFC 3339 time, not '{given}'"
+        )),
+    }
+}
+
 fn find<'a>(d: &'a mut Decisions, id: &str) -> Result<&'a mut Delegation> {
     d.delegations
         .iter_mut()
