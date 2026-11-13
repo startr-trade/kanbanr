@@ -741,9 +741,12 @@ the user, by the agent for its item (`Agent-Scope:` on the commit).
 
 Before the move:
 - fold the Design into each doc in `affects_docs`, describing it as built (`docs_updated`);
-- build every document the item names: the board docs, the repository docs its Design lists under
-  `Affects docs` and each task that writes docs. Until then the Review page does not offer
-  **docs-folded** and `kanbanr check` names what is unbuilt;
+- build every document the item names and finish every task: the board docs in `affects_docs` or
+  linked under `Affects docs`, and the repository docs its Design lists there. **docs-folded** is
+  offered only once every task is complete and every doc linked under `Affects docs` (board or
+  repository) has changed; until then the Review page does not offer it and `kanbanr check` names
+  what is missing. A commit on the item's branch after the sign-off lapses it, so fold first and
+  commit nothing to the branch after asking;
 - settle the **texts to check** before docs-folded is offered. They are the docs and items that name
   a flag, route, setting, stage, status or file the item changed and have not changed since
   (`kanbanr check` lists those left under "Texts to settle"; `kanbanr drift` lists them for the
