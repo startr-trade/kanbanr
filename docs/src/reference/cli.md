@@ -50,7 +50,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr signoff <CODE> <name>` | record a named sign-off a stage's gate asks for, pinned to the current definition |
 | `kanbanr signoff <CODE> <name> --withdraw --reason "…"` | takes a sign-off back; the earlier one stays on the record and stops counting |
 | `kanbanr ratify <CODE>` | agree after the fact to work started under a recorded override |
-| `kanbanr test <CODE> <R-n> <test> planned\|red\|green` / `kanbanr tests` | move a test along its lifecycle; list tracked tests and check each still exists |
+| `kanbanr test <CODE> <R-n> <test> planned\|red\|green` / `kanbanr tests` | move a test along its lifecycle (`--note TEXT` is kept with a manual test's result, which a person records on the Review page's Manual checks and Claude is refused); list tracked tests and check each still exists |
 | `kanbanr defect <CODE> …` | what a defect cost and where it came from |
 
 **Sprints and releases** (projects with cadence switched on)
@@ -70,6 +70,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr prepare signoff <CODE> <NAME> [--note TEXT] [--doc PATH] --source S…` | prepare a sign-off's note and doc for the Review page |
 | `kanbanr prepare promotion <VERSION> [--stage STAGE] --checked TEXT --source S…` | prepare what was checked for a stage confirmed after the tag (default: the plan's next stage) |
 | `kanbanr prepare ratify <CODE> --reason TEXT --source S…` | prepare a ratification's reason for the Review page |
+| `kanbanr prepare test <CODE> <R-n> "<TEST>" (--passed \| --failed) [--note TEXT] [--rev REV] --source S…` | prepare the result of a manual test the person stated, for them to confirm on the Review page's Manual checks; `--rev` is the code commit they checked (default: HEAD). Claude is refused `kanbanr test` for a manual test ([Manual checks](../using/the-monitor.md#manual-checks)) |
 | `kanbanr prepare list [--all] [--item CODE] [--release VERSION]` | the prepared records waiting for the person, newest first; `--all` adds the confirmed, rejected, superseded and stale ones, each with why |
 | `kanbanr config tag-gate [<NAME>]` | the commit gate whose result judges a release's tag ([Stages after the tag](../using/processes.md#stages-after-the-tag)); with none, the first commit gate judges |
 | `kanbanr config gate-docs [<ENTRY>…] [--none]` | the paths that count as documentation when a recorded gate pass is carried to a later commit: a folder ending in `/`, a suffix starting `*`, or a path; with none, goes back to `docs/` and `*.md`; `--none` carries across no change |

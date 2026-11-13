@@ -62,6 +62,10 @@ pub fn plan_capture(
         let Some(def) = &f.definition else { continue };
         for r in &def.requirements {
             for t in &r.tests {
+                // A manual test is a person's check, recorded by them, never by a run (DEF-040).
+                if t.kind.eq_ignore_ascii_case("manual") {
+                    continue;
+                }
                 if let Some(passed) = results.get(t.name.as_str()) {
                     let state = if *passed { "green" } else { "red" };
                     if t.state == TestState::parse(state).unwrap_or_default()
@@ -311,6 +315,21 @@ some unrelated line ... ok";
             capture_batch(ops).unwrap()["message"],
             "record 2 test result(s) from a run"
         );
+    }
+
+    /// DEF-040 R-2: a manual test's result is a person's check, so a run never records one, even
+    /// if a runner printed a line with its name.
+    #[test]
+    fn capture_never_records_a_manual_test() {
+        let p = project_with_tests(
+            "      - name: 'manual: looks right'\n        kind: manual\n\
+             \x20     - name: a::passes\n        kind: unit\n",
+        );
+        let results = parse_results("test manual: looks right ... ok\ntest a::passes ... ok\n");
+        assert_eq!(results.get("manual: looks right"), Some(&true));
+        let ops = plan_capture(&p, &results, Some("abc"));
+        assert_eq!(ops.len(), 1, "{ops:?}");
+        assert_eq!(ops[0]["test"], "a::passes");
     }
 
     #[test]

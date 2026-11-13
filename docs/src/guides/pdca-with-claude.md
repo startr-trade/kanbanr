@@ -143,6 +143,6 @@ You never need these. [PDCA from the command line](pdca-cli.md) covers them step
 | The definition and design | `kanbanr feature define`, `kanbanr feature edit` |
 | Starting the build | `kanbanr start` |
 | Committing | `kanbanr commit` |
-| Test results | `kanbanr test` |
+| Test results | `kanbanr test` (a manual check waits on the Review page for you to record) |
 | Moving an item | `kanbanr move` |
 | A sub-agent | `kanbanr scope issue` |

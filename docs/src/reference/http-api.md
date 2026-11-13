@@ -41,6 +41,7 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/projects/{project}/adrs` | — | JSON `Adr[]` | The project's architecture decision records |
 | `GET /api/projects/{project}/lessons` | `for` (optional), `all` (optional) | JSON `Lesson[]` | The lessons worth showing, most believed first |
 | `GET /api/projects/{project}/process` | — | JSON `ProcessStatus` | How the project's workflow stands against the process it was applied from |
+| `GET /api/projects/{project}/manual-tests` | — | JSON `ManualWaiting[]` | The manual tests waiting for a person: each one not yet green, with its requirement and the check to make, live work first, then finished work |
 | `GET /api/projects/{project}/gates` | — | JSON `object` | The gate each status's moves are judged by, keyed by status: role-addressed gates resolved, the built-in rule included |
 | `GET /api/projects/{project}/releases/{version}/cut-preview` | — | JSON `CutPreview[]` | What cutting a release now would ship and carry over, with nothing written |
 | `GET /api/projects/{project}/gate-results` | `name` (optional), `commit` (optional) | JSON `GateResult[]` | The gate results recorded for the project, oldest first: which gate, which commit, passed or failed, who and when |
