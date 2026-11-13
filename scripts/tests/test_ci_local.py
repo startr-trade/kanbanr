@@ -314,5 +314,32 @@ class CommandLine(unittest.TestCase):
         self.assertIn("usage:", r.stdout)
 
 
+class WorkflowsAreClassified(unittest.TestCase):
+    """DEF-052 R-2: make ci knows every workflow step and every repository variable."""
+
+    WORKFLOWS = ci_local.ROOT / ".github" / "workflows"
+
+    def test_ci_local_every_step_is_classified_and_every_vars_value_has_a_local_stand_in(self) -> None:
+        import re
+
+        import yaml
+
+        files = sorted(self.WORKFLOWS.glob("*.yml"))
+        unclassified = []
+        for path in files:
+            plan = ci_local.PLAN.get(path.name)
+            if plan is None:
+                unclassified.append(f"{path.name}: the workflow is not in PLAN")
+                continue
+            for job_id, job in (yaml.safe_load(path.read_text()).get("jobs") or {}).items():
+                for step in job.get("steps", []):
+                    if "run" in step and step.get("name") not in plan.get(job_id, {}):
+                        unclassified.append(f"{path.name} {job_id}: {step.get('name')}")
+        self.assertEqual(unclassified, [], "steps not classified in ci_local.PLAN")
+        names = {n for p in files for n in re.findall(r"\bvars\.([A-Za-z_][A-Za-z0-9_]*)", p.read_text())}
+        missing = sorted(n for n in names if f"vars.{n}" not in ci_local.LOCAL_VARS)
+        self.assertEqual(missing, [], "vars.* with no local stand-in in ci_local.LOCAL_VARS")
+
+
 if __name__ == "__main__":
     unittest.main()

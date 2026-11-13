@@ -41,6 +41,15 @@ PWSH = "mcr.microsoft.com/powershell:lts-7.4-ubuntu-22.04"
 
 LOCAL = "local"
 
+# What each repository variable (`vars.NAME`) reads as when make ci runs a step locally. An unset
+# variable reads as empty on GitHub too. ATTEST_RELEASE is on unless it is `false`, so the notes
+# step runs as it does by default; the publish switches stay off, as nothing is published here.
+LOCAL_VARS: dict[str, str] = {
+    "vars.ATTEST_RELEASE": "",
+    "vars.PUBLISH_CRATES": "",
+    "vars.PUBLISH_OPENVSX": "",
+}
+
 # workflow -> job -> step name -> LOCAL, or the reason it can only run on GitHub.
 PLAN: dict[str, dict[str, dict[str, str]]] = {
     "ci.yml": {
@@ -73,6 +82,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "Each release's button says what it does": LOCAL,
             "A release's notes show and are edited from the Releases page": LOCAL,
             "An item says which release it shipped in": LOCAL,
+            "The board can show the items in no sprint": LOCAL,
             "A prepared record shows filled in beside its button": LOCAL,
             "The docs-folded sign-off asks for no form": LOCAL,
             "The Review page lists manual checks waiting for you": LOCAL,
@@ -325,6 +335,7 @@ def run_workflow_steps() -> None:
                     "github.ref_name": f"v{version}",
                     "github.repository": "startr-trade/kanbanr",
                     "runner.os": "Linux",
+                    **LOCAL_VARS,
                     **{f"env.{k}": v for k, v in job_env.items()},
                 }
                 try:
