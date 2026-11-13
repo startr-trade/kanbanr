@@ -58,6 +58,15 @@ expect("web::release_notes_section_lists_unmentioned_items: none when all are me
 s = notesSection(shipped, path, { ...shippedNotes, unmentioned: ["DEF-030"] }, true);
 expect("web::release_notes_section_lists_unmentioned_items: none after the cut", s.unmentioned === "", s);
 
+// DEF-044: the panel shows the version's changelog section, read-only, or says there is none.
+s = notesSection(draft, path, { ...notes, changelog_path: "CHANGELOG.md", changelog_section: "### Added\n\n- A thing." }, true);
+expect("web::release_notes_section_shows_the_changelog_section: heading", s.changelogHeading === "Changelog section (CHANGELOG.md)", s);
+expect("web::release_notes_section_shows_the_changelog_section: rendered text", s.changelogText === "### Added\n\n- A thing." && s.changelogEmpty === "", s);
+s = notesSection(draft, path, { ...notes, changelog_path: "CHANGELOG.md" }, true);
+expect("web::release_notes_section_shows_the_changelog_section: empty says so", s.changelogText === "" && s.changelogEmpty.includes("ask Claude to write it"), s);
+s = notesSection(draft, path, notes, true);
+expect("web::release_notes_section_shows_the_changelog_section: none without a changelog", !s.changelogHeading && !s.changelogEmpty, s);
+
 // A read-only monitor never sends the save, and names the command instead.
 setConfig({ readOnly: true });
 const sent = [];

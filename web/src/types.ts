@@ -562,6 +562,10 @@ export interface ReleaseNotes {
   why_not?: string;
   /** Items planned into the release whose code the notes do not mention (DEF-031). */
   unmentioned?: string[];
+  /** The changelog file, when one is configured (DEF-044). */
+  changelog_path?: string;
+  /** This version's section in it, at the same tip; absent when empty. */
+  changelog_section?: string;
 }
 
 /** A check a gate names, the Zachman check narrowed to some columns, the spec's named sections
