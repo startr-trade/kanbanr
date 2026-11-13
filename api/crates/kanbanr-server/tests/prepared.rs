@@ -178,7 +178,8 @@ fn a_manual_result_recorded_from_the_monitor_matches_kanbanr_tests_record() {
     let s = Scratch::new("manual-result");
     let (a, b) = (manual_board(&s, "a"), manual_board(&s, "b"));
     let route = "projects/demo/features/FEAT-001/tests/R-1/manual%3A%20the%20cart%20looks%20right";
-    let body = json!({"state": "green", "by": "Tester", "checked_rev": "abc1234", "note": "on staging"});
+    let body =
+        json!({"state": "green", "by": "Tester", "checked_rev": "abc1234", "note": "on staging"});
 
     let url = serve(&s, &a);
     let token = page_token(&url);
@@ -207,7 +208,14 @@ fn a_manual_result_recorded_from_the_monitor_matches_kanbanr_tests_record() {
     let test_of = |data: &std::path::Path| {
         let store = kanbanr_core::Store::new(data.to_path_buf());
         let p = store.load("demo").unwrap();
-        p.feature("FEAT-001").unwrap().definition.clone().unwrap().requirements[0].tests[0].clone()
+        p.feature("FEAT-001")
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap()
+            .requirements[0]
+            .tests[0]
+            .clone()
     };
     assert_eq!(test_of(&a), test_of(&b));
     assert_eq!(test_of(&a).state, kanbanr_core::models::TestState::Green);
@@ -217,7 +225,10 @@ fn a_manual_result_recorded_from_the_monitor_matches_kanbanr_tests_record() {
     };
     let (ka, kb) = (kept(&a), kept(&b));
     assert_eq!((ka.len(), kb.len()), (1, 1));
-    assert_eq!((ka[0].origin.as_str(), kb[0].origin.as_str()), ("monitor", "terminal"));
+    assert_eq!(
+        (ka[0].origin.as_str(), kb[0].origin.as_str()),
+        ("monitor", "terminal")
+    );
     let strip = |mut r: kanbanr_core::manual::ManualResult| {
         r.origin.clear();
         r.at.clear();
