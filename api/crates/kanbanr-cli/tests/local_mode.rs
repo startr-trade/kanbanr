@@ -8575,6 +8575,155 @@ fn release_notes_survive_a_notes_path_change() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-044 R-3: `release notes <V> --file F --changelog C` commits the notes and the version's
+/// changelog section in one commit on release/<V>; `--changelog` alone changes only the
+/// changelog; an empty section file is refused and nothing is committed; no item is opened.
+#[test]
+fn release_notes_and_the_changelog_section_are_updated_together() {
+    let (base, work) = release_scratch("release-notes-changelog");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let board = std::fs::canonicalize(ok(run_in(&base, &work, &["where"])).trim()).unwrap();
+    assert!(board.starts_with(std::fs::canonicalize(&base).unwrap()));
+    std::fs::write(
+        work.join("CHANGELOG.md"),
+        "# Changelog\n\n## [Unreleased]\n\n## [0.0.1] - 2026-01-01\n- old\n",
+    )
+    .unwrap();
+    ok(git_in(&base, &work, &["add", "CHANGELOG.md"]));
+    ok(git_in(
+        &base,
+        &work,
+        &["commit", "-q", "-m", "[no-ref] changelog"],
+    ));
+    for args in [
+        &[
+            "config",
+            "release-stage",
+            "candidate",
+            "--on-enter",
+            "branch,prepare",
+        ][..],
+        &[
+            "config",
+            "release-prepare",
+            "--changelog",
+            "CHANGELOG.md",
+            "--notes",
+            "docs/releases/{version}.md",
+        ],
+    ] {
+        ok(run_in(&base, &work, args));
+    }
+    ok(run_in(&base, &work, &["release", "promote", "v1.0.0"]));
+    let items_before = ok(run_in(&base, &work, &["--json", "board"]))
+        .matches("\"code\"")
+        .count();
+    let tip = rev(&base, &work, "release/v1.0.0");
+    let on_branch = |file: &str| {
+        ok(git_in(
+            &base,
+            &work,
+            &["show", &format!("release/v1.0.0:{file}")],
+        ))
+    };
+
+    let notes = base.join("notes.md");
+    let section = base.join("section.md");
+    std::fs::write(&notes, "# v1.0.0\n\nWritten by hand.\n").unwrap();
+    std::fs::write(&section, "### Added\n\n- Written for readers.\n").unwrap();
+    let said = ok(run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "notes",
+            "v1.0.0",
+            "--file",
+            notes.to_str().unwrap(),
+            "--changelog",
+            section.to_str().unwrap(),
+        ],
+    ));
+    assert!(
+        said.contains("changelog: ## [1.0.0] in CHANGELOG.md updated"),
+        "{said}"
+    );
+    let new = rev(&base, &work, "release/v1.0.0");
+    assert_eq!(
+        ok(git_in(&base, &work, &["rev-parse", &format!("{new}~1")])).trim(),
+        tip,
+        "one commit"
+    );
+    let names = ok(git_in(
+        &base,
+        &work,
+        &["show", "--name-only", "--format=", &new],
+    ));
+    let mut names: Vec<&str> = names.lines().collect();
+    names.sort();
+    assert_eq!(names, ["CHANGELOG.md", "docs/releases/v1.0.0.md"]);
+    let changelog = on_branch("CHANGELOG.md");
+    assert!(
+        changelog.contains("\n\n### Added\n\n- Written for readers.\n\n## [0.0.1]"),
+        "{changelog}"
+    );
+
+    // --changelog alone: only the changelog changes.
+    std::fs::write(&section, "### Fixed\n\n- Mended.\n").unwrap();
+    ok(run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "notes",
+            "v1.0.0",
+            "--changelog",
+            section.to_str().unwrap(),
+        ],
+    ));
+    let alone = rev(&base, &work, "release/v1.0.0");
+    let names = ok(git_in(
+        &base,
+        &work,
+        &["show", "--name-only", "--format=", &alone],
+    ));
+    assert_eq!(names.trim(), "CHANGELOG.md");
+    assert_eq!(
+        on_branch("docs/releases/v1.0.0.md"),
+        "# v1.0.0\n\nWritten by hand.\n"
+    );
+    assert!(on_branch("CHANGELOG.md").contains("- Mended."));
+
+    // An empty section file is refused, and nothing is committed.
+    std::fs::write(&section, "\n").unwrap();
+    let o = run_in(
+        &base,
+        &work,
+        &[
+            "release",
+            "notes",
+            "v1.0.0",
+            "--changelog",
+            section.to_str().unwrap(),
+        ],
+    );
+    assert!(!o.status.success());
+    assert!(
+        String::from_utf8_lossy(&o.stderr).contains("needs text"),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert_eq!(rev(&base, &work, "release/v1.0.0"), alone);
+    let items_after = ok(run_in(&base, &work, &["--json", "board"]))
+        .matches("\"code\"")
+        .count();
+    assert_eq!(items_after, items_before, "no fix item was opened");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FEAT-216 R-3: `release notes <V>` shows the notes on release/<V> and where they are, `--json`
 /// carries them, and `--file` (or `--edit`) commits new text onto the branch with nothing checked
 /// out.

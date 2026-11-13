@@ -1398,19 +1398,16 @@ fn dispatch_routes(
         ("GET", ["projects", p, "releases", version, "notes"]) => ser(
             &crate::releases::release_notes(store, p, &percent_decode(version), repo)?,
         ),
-        // `{text, by}`: commit the notes onto release/<V>, nothing checked out (FEAT-216).
+        // `{text?, changelog?, by}`: commit the notes, the version's changelog section, or both
+        // onto release/<V>, nothing checked out (FEAT-216, DEF-044).
         ("PUT", ["projects", p, "releases", version, "notes"]) => {
-            let Some(text) = str_field(b, "text") else {
-                return Err(CoreError::Unsupported(
-                    "saving release notes needs their text".into(),
-                ));
-            };
             ser(&crate::releases::set_release_notes(
                 store,
                 p,
                 &percent_decode(version),
                 repo,
-                &text,
+                str_field(b, "text").as_deref(),
+                str_field(b, "changelog").as_deref(),
                 &str_field(b, "by").unwrap_or_default(),
             )?)
         }
