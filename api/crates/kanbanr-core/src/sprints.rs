@@ -83,9 +83,51 @@ fn save(store: &Store, id: &str, sprints: &[Sprint]) -> Result<()> {
     Ok(())
 }
 
+impl Sprint {
+    /// The sprint's state on `today`: one stored `Active` whose first day is still ahead is
+    /// `Planned` (DEF-041). A start that does not parse keeps the stored state.
+    pub fn state_on(&self, today: time::Date) -> SprintState {
+        if self.state == SprintState::Active
+            && crate::gantt::parse_ymd(&self.start).is_some_and(|first| first > today)
+        {
+            SprintState::Planned
+        } else {
+            self.state
+        }
+    }
+}
+
+/// The sprint running on `today`, if one is.
+pub fn active_on(sprints: &[Sprint], today: time::Date) -> Option<&Sprint> {
+    sprints
+        .iter()
+        .find(|s| s.state_on(today) == SprintState::Active)
+}
+
 /// The sprint currently running, if one is.
 pub fn active(sprints: &[Sprint]) -> Option<&Sprint> {
-    sprints.iter().find(|s| s.state == SprintState::Active)
+    active_on(sprints, today())
+}
+
+/// The sprints as they read on `today`, for showing only. Never saved: reading a board never
+/// rewrites it (ADR-0005).
+pub fn as_of(sprints: &[Sprint], today: time::Date) -> Vec<Sprint> {
+    sprints
+        .iter()
+        .map(|s| Sprint {
+            state: s.state_on(today),
+            ..s.clone()
+        })
+        .collect()
+}
+
+/// A first day: a date, or the word `today`.
+fn first_day(x: &str) -> Option<time::Date> {
+    if x.trim().eq_ignore_ascii_case("today") {
+        Some(today())
+    } else {
+        crate::gantt::parse_ymd(x)
+    }
 }
 
 fn find<'a>(sprints: &'a mut [Sprint], code: &str) -> Result<&'a mut Sprint> {
@@ -113,8 +155,9 @@ pub fn add(
     name: &str,
 ) -> Result<Sprint> {
     let project = cadence_on(store, id)?;
-    let first = crate::gantt::parse_ymd(start)
-        .ok_or_else(|| CoreError::Unsupported(format!("'{start}' is not a date (YYYY-MM-DD)")))?;
+    let first = first_day(start).ok_or_else(|| {
+        CoreError::Unsupported(format!("'{start}' is not a date (YYYY-MM-DD, or today)"))
+    })?;
     let length = length_days
         .or(project.config.cadence.sprint_length_days)
         .unwrap_or(14)
@@ -194,7 +237,9 @@ pub fn edit(store: &Store, id: &str, code: &str, edit: &SprintEdit) -> Result<Sp
     let old_start = date(&sprint.start)?;
     let old_end = date(&sprint.end)?;
     let new_start = match &edit.start {
-        Some(x) => date(x)?,
+        Some(x) => first_day(x).ok_or_else(|| {
+            CoreError::Unsupported(format!("'{x}' is not a date (YYYY-MM-DD, or today)"))
+        })?,
         None => old_start,
     };
     let new_end = if let Some(x) = &edit.end {
@@ -392,9 +437,15 @@ pub fn unplan(store: &Store, id: &str, items: &[String]) -> Result<Unplanned> {
 
 /// Make a sprint the active one. Only one runs at a time.
 pub fn start(store: &Store, id: &str, code: &str) -> Result<Sprint> {
+    start_on(store, id, code, today())
+}
+
+/// [`start`] on a given day. A sprint dated to begin after `today` starts today instead, keeping
+/// its length, so the record is true (DEF-041).
+pub(crate) fn start_on(store: &Store, id: &str, code: &str, today: time::Date) -> Result<Sprint> {
     cadence_on(store, id)?;
     let mut sprints = load(store, id)?;
-    if let Some(running) = active(&sprints)
+    if let Some(running) = active_on(&sprints, today)
         && running.code != code
     {
         return Err(CoreError::Unsupported(format!(
@@ -405,6 +456,16 @@ pub fn start(store: &Store, id: &str, code: &str) -> Result<Sprint> {
     let sprint = find(&mut sprints, code)?;
     if sprint.state == SprintState::Closed {
         return Err(CoreError::Unsupported(format!("{code} is already closed")));
+    }
+    if let Some(first) = crate::gantt::parse_ymd(&sprint.start)
+        && first > today
+    {
+        let last = crate::gantt::parse_ymd(&sprint.end).unwrap_or(first);
+        let end = today.checked_add(last - first).ok_or_else(|| {
+            CoreError::Unsupported(format!("{code}'s dates cannot be moved to today"))
+        })?;
+        sprint.start = crate::gantt::fmt_date(today);
+        sprint.end = crate::gantt::fmt_date(end);
     }
     sprint.state = SprintState::Active;
     let started = sprint.clone();
@@ -1107,5 +1168,78 @@ mod tests {
         assert!(err.contains("has started"), "{err}");
         assert_eq!(super::load(&store, "shop").unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-041 R-2: a sprint stored Active whose first day is still ahead reads as planned.
+    #[test]
+    fn a_sprint_before_its_start_date_is_planned() {
+        use super::{Sprint, SprintState};
+        let day = |m: u8, d: u8| {
+            time::Date::from_calendar_date(2026, time::Month::try_from(m).unwrap(), d).unwrap()
+        };
+        let stored = Sprint {
+            code: "SP-001".into(),
+            start: "2026-11-16".into(),
+            end: "2026-11-29".into(),
+            state: SprintState::Active,
+            ..Sprint::default()
+        };
+        assert_eq!(stored.state_on(day(11, 12)), SprintState::Planned);
+        assert_eq!(stored.state_on(day(11, 16)), SprintState::Active);
+        let sprints = vec![stored.clone()];
+        assert!(super::active_on(&sprints, day(11, 12)).is_none());
+        assert!(super::active_on(&sprints, day(11, 16)).is_some());
+        let seen = super::as_of(&sprints, day(11, 12));
+        assert_eq!(seen[0].state, SprintState::Planned);
+        assert_eq!(sprints[0].state, SprintState::Active);
+        let undated = Sprint {
+            start: String::new(),
+            ..stored
+        };
+        assert_eq!(undated.state_on(day(11, 12)), SprintState::Active);
+    }
+
+    /// DEF-041 R-2: starting a sprint before its first day starts it today and keeps its length.
+    #[test]
+    fn starting_a_sprint_before_its_first_day_starts_it_today() {
+        let (store, codes, dir) = board("def041-early", Default::default());
+        let day = |m: u8, d: u8| {
+            time::Date::from_calendar_date(2026, time::Month::try_from(m).unwrap(), d).unwrap()
+        };
+        // SP-001 is 5-9 Oct (five days); today is 1 Oct.
+        let early = super::start_on(&store, "shop", "SP-001", day(10, 1)).unwrap();
+        assert_eq!(early.state, super::SprintState::Active);
+        assert_eq!(
+            (early.start.as_str(), early.end.as_str()),
+            ("2026-10-01", "2026-10-05")
+        );
+        // A sprint dated in the past keeps its dates.
+        for c in &codes {
+            store.set_feature_sprint("shop", c, None).unwrap();
+        }
+        super::close(&store, "shop", "SP-001", None).unwrap();
+        let sp = super::add(&store, "shop", "2026-10-10", Some(5), "", None, "").unwrap();
+        let late = super::start_on(&store, "shop", &sp.code, day(10, 12)).unwrap();
+        assert_eq!(
+            (late.start.as_str(), late.end.as_str()),
+            ("2026-10-10", "2026-10-14")
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-041 R-3: `today` is a first day, for add and for edit.
+    #[test]
+    fn a_sprint_can_start_today() {
+        let (store, _codes, dir) = board("def041-today", Default::default());
+        let today = crate::gantt::fmt_date(super::today());
+        let added = super::add(&store, "shop", " Today ", Some(5), "", None, "").unwrap();
+        assert_eq!(added.start, today);
+        let edit = super::SprintEdit {
+            start: Some("Today".into()),
+            ..Default::default()
+        };
+        let edited = super::edit(&store, "shop", "SP-001", &edit).unwrap();
+        assert_eq!(edited.start, today);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
