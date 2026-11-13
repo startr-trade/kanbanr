@@ -136,6 +136,7 @@ pub fn run(store: &Store) -> Result<Report> {
         scan_process_drift(store, project, &mut report);
         scan_shipped_release_items(store, project, &charter, &ctx, &mut report);
         scan_release_items_outside_sprint(store, project, &mut report);
+        scan_sprints_started_early(store, project, &mut report);
         if project.config.method.is_on(crate::method::Part::Links) {
             scan_references(store, project, &mut report);
         }
@@ -175,6 +176,7 @@ pub fn run_project(store: &Store, id: &str) -> Result<Report> {
     scan_process_drift(store, &project, &mut report);
     scan_shipped_release_items(store, &project, &charter, &ctx, &mut report);
     scan_release_items_outside_sprint(store, &project, &mut report);
+    scan_sprints_started_early(store, &project, &mut report);
     if project.config.method.is_on(crate::method::Part::Links) {
         scan_references(store, &project, &mut report);
     }
@@ -618,6 +620,30 @@ fn scan_release_items_outside_sprint(store: &Store, project: &Project, report: &
                 o.code, o.release, o.sprint, o.sprint, o.code
             ),
             code: Some(o.code),
+        });
+    }
+}
+
+/// A sprint stored active whose first day is still ahead (DEF-041): it reads as planned until
+/// then, and no item can move into work in it. Starting it again starts it today.
+fn scan_sprints_started_early(store: &Store, project: &Project, report: &mut Report) {
+    let Ok(sprints) = crate::sprints::load(store, &project.id) else {
+        return;
+    };
+    let today = crate::sprints::today();
+    for s in sprints.iter().filter(|s| {
+        s.state == crate::sprints::SprintState::Active
+            && s.state_on(today) == crate::sprints::SprintState::Planned
+    }) {
+        report.issues.push(Issue {
+            severity: Severity::Warning,
+            project: project.id.clone(),
+            code: None,
+            message: format!(
+                "{code} was started before its first day ({start}): it reads as planned until then, and no item can move into work in it. Starting it again (`kanbanr sprint start {code}`) starts it today and keeps its length.",
+                code = s.code,
+                start = s.start
+            ),
         });
     }
 }
@@ -1386,6 +1412,30 @@ mod tests {
         assert!(
             said(&store, "into no sprint").is_empty(),
             "planned in, so quiet"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-041 R-2: a sprint stored active but dated ahead is named, with the way out.
+    #[test]
+    fn a_sprint_started_before_its_first_day_is_reported() {
+        let (store, dir) = release_board();
+        std::fs::write(
+            store.project_dir("demo").join("sprints.yaml"),
+            "- code: SP-001\n  start: 2099-01-05\n  end: 2099-01-18\n  state: active\n",
+        )
+        .unwrap();
+        let found = said(&store, "started before its first day");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found[0].contains("SP-001") && found[0].contains("2099-01-05"),
+            "{}",
+            found[0]
+        );
+        assert!(
+            found[0].contains("kanbanr sprint start SP-001"),
+            "{}",
+            found[0]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
