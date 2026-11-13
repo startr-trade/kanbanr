@@ -20,6 +20,10 @@ All notable changes to kanbanr are documented here. The format follows
   check is skipped, and says so.
 - **The board's Sprint filter offers Unscheduled**, the items in no sprint, for planning the next
   sprint (FTR-032).
+- **Claude prepares a decision's evidence with `kanbanr prepare`** (a sign-off's note, a promotion's
+  what-you-checked, a CI result with its run link, a ratification's reason); the monitor shows it
+  filled in beside one button, and the person confirms, edits or rejects it. Both are kept
+  (FTR-034).
 
 ### Fixed
 

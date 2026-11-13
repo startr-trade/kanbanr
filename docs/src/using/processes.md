@@ -545,6 +545,12 @@ defaults to HEAD; a pass with no commit named is refused while the working tree 
 changes, because it would not be about HEAD. The Releases page offers the same as a **Record result**
 form where a promotion lacks a result, and shows the command on a read-only monitor.
 
+When Claude has read the run's result, it prepares it (`kanbanr prepare gate`) instead of asking you
+to type it. The Releases page then shows the result filled in where **Record result** would be:
+the gate, the commit, passed or failed, the link to the run and the note, with one button. Confirm
+it, change a field first with **Edit**, or **Reject** it. The result is recorded as you, and what
+Claude prepared is kept beside it ([Prepared by Claude](the-monitor.md#prepared-by-claude)).
+
 A promotion that would itself add a commit to the release branch (`prepare`) cannot be covered: no
 result can exist for a commit that is not made yet, so promote to the stage that prepares first and
 record the result once it is on the branch. `make ci` records its own run as the gate `local`, a

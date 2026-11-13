@@ -62,6 +62,8 @@ function templateText(node) {
 }
 
 function resolve(schema) {
+  // The schema `true` is any JSON value, as a serde_json::Value is described (FTR-034).
+  if (schema === true) return {};
   let s = schema;
   for (let i = 0; s && s.$ref && i < 20; i++) {
     s = doc.components.schemas[s.$ref.replace("#/components/schemas/", "")];

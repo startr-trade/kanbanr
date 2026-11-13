@@ -390,6 +390,30 @@ same whichever you use. A read-only monitor shows the command instead.
   releases' notes in place; a shipped release's are read at its tag. When none are found, the
   message lists every path and ref looked at.
 
+### Prepared by Claude
+
+When Claude already has the evidence for a decision, it prepares the record instead of asking you
+to fill in a form (FTR-034): a sign-off's note and the doc it covered, the reason for a
+ratification, what was checked before a stage after the tag, or a CI result with its run's link.
+The Review or Releases page shows it filled in beside the decision's one button, headed "Prepared
+by Claude on 12 Nov 2026 from CI run 4512, release tip 9f078bd", with each source as a link: a
+board doc or item opens here, a web link opens in a new tab, and a commit is shown as its hash.
+
+- **The button** confirms it as it stands. The verdict is made as you, through the same route the
+  form or the command uses, with the same checks: a definition, spec or release branch that moved
+  since the page was shown is refused, and nothing is recorded.
+- **Edit** turns the fields you may change into inputs, filled in with what Claude prepared; the
+  same button then confirms your version.
+- **Reject** takes an optional reason and records that you turned it down. Nothing else changes;
+  ask Claude to prepare it again.
+
+Both parts are kept as files under the project's `prepared/` folder: what Claude prepared, with
+its sources, and your answer, with each field you changed. Neither is rewritten. A record whose
+decision was taken some other way, or whose item or release moved on, shows why and has no button;
+a newer one for the same decision replaces it. A read-only monitor shows the record and the
+command that takes the same decision in your own terminal. Claude can prepare a record but can
+never confirm or reject one.
+
 Across several projects ([Portfolio](portfolio.md)):
 
 ![The portfolio: rollups and cross-project lanes](../images/portfolio.png)
