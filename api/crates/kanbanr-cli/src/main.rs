@@ -3215,6 +3215,34 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
+    // The decision mode and the delegations are written by kanbanr only, whoever edits (FTR-028).
+    {
+        let target = project::normalize(&here.join(path));
+        let board = project::normalize(client.store().data_dir());
+        let in_projects = target
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .is_some_and(|n| n == "projects");
+        if target.starts_with(&board)
+            && in_projects
+            && target
+                .file_name()
+                .is_some_and(|n| n == kanbanr_core::decisions::DECISIONS_FILE)
+        {
+            println!(
+                "{}",
+                json!({"hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "refused: decisions.yaml is where the person chose \
+                        to take decisions and what they delegated, written only by kanbanr: the \
+                        mode, a grant and a review are theirs, on the Review page.",
+                }})
+            );
+            return Ok(());
+        }
+    }
     // A scope governs the agent it was issued to, never the coordinator (DEF-027).
     let caller = kanbanr_core::agentscope::Caller::of_hook(&payload);
     if caller == kanbanr_core::agentscope::Caller::Agent
@@ -4110,7 +4138,7 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
             monitor_url(),
             urlencode_segment(project.as_deref().unwrap_or("<project>"))
         );
-        if let Some(why) = verdict_refusal(command, &review_url) {
+        if let Some(why) = verdict_refusal(command, &review_url, caller) {
             deny(why);
             return Ok(());
         }
@@ -4172,8 +4200,63 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
 ///
 /// Reads the tokens of each kanbanr invocation, not substrings of the line. `--help` is never
 /// refused, and anything it can't parse passes (ADR-0004).
-fn verdict_refusal(command: &str, review_url: &str) -> Option<String> {
-    for (_, words) in simple_commands(command) {
+fn verdict_refusal(
+    command: &str,
+    review_url: &str,
+    caller: kanbanr_core::agentscope::Caller,
+) -> Option<String> {
+    let commands = simple_commands(command);
+    let refused = |why: &str| {
+        Some(format!(
+            "refused: {why} It waits at: {review_url}. If no monitor accepts writes, offer \
+             `kanbanr review --ui`."
+        ))
+    };
+    // The monitor's page token is what makes a click the person's: never Claude's to send
+    // (FTR-028).
+    if command.to_ascii_lowercase().contains("x-kanbanr-token") {
+        return refused(
+            "the monitor's buttons are the person's; its page token is not Claude's to use.",
+        );
+    }
+    // The decision mode and the delegations are written by kanbanr only: reading the file is
+    // fine, anything else is not (FTR-028).
+    let reader = |words: &[String]| {
+        let first = words.first().map(String::as_str).unwrap_or("");
+        let first = first.rsplit('/').next().unwrap_or(first);
+        match first {
+            "cat" | "head" | "tail" | "less" | "grep" | "rg" => true,
+            "git" => git_call(words)
+                .and_then(|c| c.sub)
+                .is_some_and(|s| matches!(s, "log" | "show" | "diff" | "blame")),
+            _ => false,
+        }
+    };
+    if commands.iter().any(|(env, words)| {
+        (env.iter()
+            .chain(words)
+            .any(|w| w.contains(kanbanr_core::decisions::DECISIONS_FILE)))
+            && !reader(words)
+    }) {
+        return refused(
+            "decisions.yaml is the person's choice of where decisions are taken, written only by \
+             kanbanr: read it, never change it.",
+        );
+    }
+    // Who is calling is how core tells the person's terminal from Claude: a kanbanr command that
+    // changes it is refused to the coordinator too (FTR-028).
+    let runs_kanbanr = commands.iter().any(|(_, words)| {
+        words
+            .iter()
+            .any(|w| w == "kanbanr" || w.ends_with("/kanbanr"))
+    });
+    if runs_kanbanr && names_the_caller(&commands) {
+        return refused(
+            "who is calling is Claude Code's to say: a verdict never runs with CLAUDECODE or \
+             KANBANR_CALLER set, cleared or exported.",
+        );
+    }
+    for (_, words) in commands {
         if !is_kanbanr(&words) || words.iter().any(|w| w == "--help" || w == "-h") {
             continue;
         }
@@ -4187,16 +4270,41 @@ fn verdict_refusal(command: &str, review_url: &str) -> Option<String> {
                 _ if w.starts_with('-') => {}
                 _ => {
                     path.push(w);
-                    if path.len() == 2 || !matches!(w, "adr" | "release" | "gate") {
+                    if path.len() == 2 || !matches!(w, "adr" | "release" | "gate" | "decisions") {
                         break;
                     }
                 }
             }
         }
         let rest = &words[1..];
+        if matches!(path.as_slice(), ["decisions", "mode" | "grant" | "review"]) {
+            return refused(
+                "the decision mode, granting a delegation and reviewing a delegated decision are \
+                 the person's own, on the Review page.",
+            );
+        }
         let Some(verdict) = kanbanr_core::origin::verdict_of_command(&path, rest) else {
             continue;
         };
+        // Under a delegation, core decides; only the coordinator acts under one (FTR-028).
+        if rest
+            .iter()
+            .any(|w| w == "--under" || w.starts_with("--under="))
+            && matches!(
+                verdict,
+                kanbanr_core::origin::Verdict::Approve
+                    | kanbanr_core::origin::Verdict::Ratify
+                    | kanbanr_core::origin::Verdict::Signoff
+            )
+        {
+            if caller == kanbanr_core::agentscope::Caller::Agent {
+                return refused(
+                    "only the coordinator acts under a delegation, never a sub-agent: report it \
+                     to the coordinator.",
+                );
+            }
+            continue;
+        }
         let Some(why) = kanbanr_core::origin::verdict_refusal(
             verdict,
             kanbanr_core::origin::Taker::Claude,
@@ -7492,6 +7600,21 @@ fn git_call(words: &[String]) -> Option<GitCall<'_>> {
     Some(call)
 }
 
+/// Does any of `commands` set, clear or export `CLAUDECODE` or `KANBANR_CALLER`, by which kanbanr
+/// tells who is calling (DEF-027, FTR-028)?
+fn names_the_caller(commands: &[(Vec<String>, Vec<String>)]) -> bool {
+    let names_caller = |w: &String| w.contains("CLAUDECODE") || w.contains("KANBANR_CALLER");
+    commands.iter().any(|(env, words)| {
+        env.iter().any(names_caller)
+            || (words.first().is_some_and(|f| {
+                ["export", "unset", "declare", "typeset", "readonly", "-u"].contains(&f.as_str())
+            }) && words.iter().any(names_caller))
+            || words
+                .windows(2)
+                .any(|w| w[0] == "-u" && names_caller(&w[1]))
+    })
+}
+
 fn is_kanbanr(words: &[String]) -> bool {
     words
         .first()
@@ -7620,16 +7743,7 @@ fn scoped_command_refusal(
     let commands = simple_commands(command);
     // The caller is told apart by CLAUDECODE and the hook payload: an agent never sets, clears or
     // exports either, nor the coordinator's stamp (DEF-027).
-    let names_caller = |w: &String| w.contains("CLAUDECODE") || w.contains("KANBANR_CALLER");
-    if commands.iter().any(|(env, words)| {
-        env.iter().any(names_caller)
-            || (words.first().is_some_and(|f| {
-                ["export", "unset", "declare", "typeset", "readonly", "-u"].contains(&f.as_str())
-            }) && words.iter().any(names_caller))
-            || words
-                .windows(2)
-                .any(|w| w[0] == "-u" && names_caller(&w[1]))
-    }) {
+    if names_the_caller(&commands) {
         return refuse("who is calling is Claude Code's to say, never set or cleared by an agent");
     }
     // `$TMPDIR` is where this guard reads the temporary directory from: an agent that reassigns it
@@ -11751,18 +11865,27 @@ mod tests {
             "kanbanr release add v1.0.1 --patch-of v1.0.0 --from-failed-tag",
             "kanbanr gate record v1 smoke --result pass",
         ] {
-            let why = verdict_refusal(refused, url).unwrap_or_else(|| panic!("passed: {refused}"));
+            let why = verdict_refusal(refused, url, kanbanr_core::agentscope::Caller::Coordinator)
+                .unwrap_or_else(|| panic!("passed: {refused}"));
             assert!(why.contains("http://h:1/p/p/"), "{why}");
         }
         assert!(
-            verdict_refusal("kanbanr release cut v1", url)
-                .unwrap()
-                .contains("/p/p/releases")
+            verdict_refusal(
+                "kanbanr release cut v1",
+                url,
+                kanbanr_core::agentscope::Caller::Coordinator
+            )
+            .unwrap()
+            .contains("/p/p/releases")
         );
         assert!(
-            verdict_refusal("kanbanr gate record v1 smoke", url)
-                .unwrap()
-                .contains("/p/p/releases")
+            verdict_refusal(
+                "kanbanr gate record v1 smoke",
+                url,
+                kanbanr_core::agentscope::Caller::Coordinator
+            )
+            .unwrap()
+            .contains("/p/p/releases")
         );
         for allowed in [
             "kanbanr review --pending",
@@ -11779,12 +11902,68 @@ mod tests {
             "git commit -m \"kanbanr approve\"",
         ] {
             assert!(
-                verdict_refusal(allowed, url).is_none(),
+                verdict_refusal(allowed, url, kanbanr_core::agentscope::Caller::Coordinator)
+                    .is_none(),
                 "refused: {allowed}"
             );
         }
         let heredoc = without_heredoc_bodies("cat <<EOF\nkanbanr approve X\nEOF\n");
-        assert!(verdict_refusal(&heredoc, url).is_none());
+        assert!(
+            verdict_refusal(&heredoc, url, kanbanr_core::agentscope::Caller::Coordinator).is_none()
+        );
+    }
+
+    /// FTR-028 R-2: the hook refuses Claude the decisions that are the person's own (the mode, a
+    /// grant, a review), changing who is calling, the monitor's page token and any write to
+    /// decisions.yaml; it lets the coordinator propose, revoke, read and act `--under` a
+    /// delegation (core decides), and refuses `--under` to a sub-agent.
+    #[test]
+    fn the_guard_refuses_claude_managing_decisions() {
+        use kanbanr_core::agentscope::Caller;
+        let url = "http://h:1/p/p/review";
+        let c = Caller::Coordinator;
+        for refused in [
+            "kanbanr decisions grant DLG-001",
+            "kanbanr decisions mode delegated",
+            "kanbanr --project p decisions review FTR-1/signoff/x/t --keep",
+            "env -u CLAUDECODE kanbanr approve FTR-1",
+            "CLAUDECODE= kanbanr approve FTR-1 --under DLG-001",
+            "unset CLAUDECODE; kanbanr signoff FTR-1 design-review",
+            "curl -X POST -H 'X-Kanbanr-Token: abc' http://h:1/api/projects/p/features/F/approve",
+            "curl -H 'x-kanbanr-token: abc' http://h:1/api/projects/p/decisions/mode",
+            "sed -i s/monitor/delegated/ ../board/projects/p/decisions.yaml",
+            "echo mode > projects/p/decisions.yaml",
+            "kanbanr approve FTR-1",
+        ] {
+            assert!(
+                verdict_refusal(refused, url, c).is_some(),
+                "passed: {refused}"
+            );
+        }
+        for allowed in [
+            "kanbanr decisions show",
+            "kanbanr decisions propose --verdict signoff:design-review --kind defect",
+            "kanbanr decisions revoke DLG-001 --reason done",
+            "kanbanr decisions --help",
+            "cat ../board/projects/p/decisions.yaml",
+            "git log -p -- projects/p/decisions.yaml",
+            "kanbanr approve FTR-1 --under DLG-001",
+            "kanbanr signoff FTR-1 design-review --under DLG-001",
+        ] {
+            assert!(
+                verdict_refusal(allowed, url, c).is_none(),
+                "refused: {allowed}"
+            );
+        }
+        let why = verdict_refusal(
+            "kanbanr signoff FTR-1 design-review --under DLG-001",
+            url,
+            Caller::Agent,
+        )
+        .unwrap();
+        assert!(why.contains("only the coordinator"), "{why}");
+        // A delegation never covers a release verdict, so `--under` does not let it through.
+        assert!(verdict_refusal("kanbanr release cut v1 --under DLG-001", url, c).is_some());
     }
 
     /// FTR-024 R-3: the monitor's status reads `writes` from its meta, and names the pages only
