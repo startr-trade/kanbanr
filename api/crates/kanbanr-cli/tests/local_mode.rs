@@ -5566,6 +5566,12 @@ fn integrate_merges_item_branch() {
         &["sprint", "add", "--start", "2026-10-05"],
     ));
     ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    // Work waits for a started sprint, and the item is in it (DEF-041).
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "plan", "SP-001", "FEAT-001"],
+    ));
     let main = tip(&base, &work, "main");
     ok(run_in(&base, &work, &["start", "FEAT-001"]));
     commit_file_in(
@@ -6246,6 +6252,12 @@ fn git_doctor_unfinished_commits_on_line() {
         &["sprint", "add", "--start", "2026-10-05"],
     ));
     ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    // Work waits for a started sprint, and the item is in it (DEF-041).
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "plan", "SP-001", "FEAT-001", "FEAT-002"],
+    ));
     // FEAT-001 is integrated (it has no branch, so nothing to merge).
     ok(run_in(&base, &work, &["move", "FEAT-001", "In Progress"]));
     ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
@@ -6324,6 +6336,12 @@ fn git_doctor_no_integrate_role_status_past_build_is_clean() {
         &["sprint", "add", "--start", "2026-10-05"],
     ));
     ok(run_in(&base, &work, &["sprint", "start", "SP-001"]));
+    // Work waits for a started sprint, and the item is in it (DEF-041).
+    ok(run_in(
+        &base,
+        &work,
+        &["sprint", "plan", "SP-001", "FEAT-001"],
+    ));
     ok(run_in(&base, &work, &["move", "FEAT-001", "In Progress"]));
     ok(run_in(&base, &work, &["move", "FEAT-001", "Completed"]));
     ok(git_in(&base, &work, &["checkout", "-q", "sprint/SP-001"]));
