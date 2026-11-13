@@ -137,6 +137,7 @@ made by mistake is removed with `kanbanr sprint remove SP-001` or `kanbanr relea
 ```text
 kanbanr milestone add --name "Carts"
 kanbanr sprint add --start 2026-11-03 --length 2w --goal "Carts survive a return"
+# or start it today: kanbanr sprint add --start today --length 2w --goal "…"
 kanbanr sprint start SP-001
 kanbanr feature add --title "Restore the cart" --milestone MS-001 --spec "# Restore the cart"
 kanbanr sprint plan SP-001 FEAT-001
@@ -387,7 +388,7 @@ Promote to main, then push it:
 ```text
 v1.0.0 -> main; main fast-forwarded to it, not tagged
   fast-forwards main to release/v1.0.0 (59e2014)
-  merge these forward into sprint/SP-001 (`kanbanr git forward v1.0.0` with the git model on, or by hand):
+  next, for Claude: bring release/v1.0.0 into sprint/SP-001 with `kanbanr git forward v1.0.0` — a local merge, nothing is pushed; a conflict stops it with nothing changed
     59e2014e8aae Release v1.0.0: version, changelog and notes
   nothing was pushed: push main when you are ready
   next: push main (`git push origin main`), then wait for CI, then Cut v1.0.0
@@ -404,7 +405,7 @@ The cut, then the tag push:
 v1.0.0 -> tag; tagged v1.0.0, where main already is
   tags 59e2014 "Release v1.0.0" as v1.0.0
   shipped 1 item(s); notes in releases/v1.0.0.md
-  merge these forward into sprint/SP-001 (`kanbanr git forward v1.0.0` with the git model on, or by hand):
+  next, for Claude: bring release/v1.0.0 into sprint/SP-001 with `kanbanr git forward v1.0.0` — a local merge, nothing is pushed; a conflict stops it with nothing changed
     59e2014e8aae Release v1.0.0: version, changelog and notes
   nothing was pushed: push the tag when you are ready
   push the tag: `git push origin v1.0.0`

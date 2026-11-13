@@ -1293,6 +1293,17 @@ pub fn with_trailer(message: &str, scope: &Scope) -> String {
     if trailer_scope(message).is_some() {
         return message.to_string();
     }
+    let line = trailer(scope);
+    let (key, value) = line.split_once(": ").unwrap_or((TRAILER, ""));
+    with_trailers(message, &[(key, value)])
+}
+
+/// `message` with each `(key, value)` added as a git trailer: joined to its last paragraph when
+/// that is already a trailer block, else after a blank line (FTR-028).
+pub fn with_trailers(message: &str, trailers: &[(&str, &str)]) -> String {
+    if trailers.is_empty() {
+        return message.to_string();
+    }
     let body = message.trim_end();
     let last = body.rsplit("\n\n").next().unwrap_or(body);
     let is_trailer = |l: &str| {
@@ -1302,7 +1313,8 @@ pub fn with_trailer(message: &str, scope: &Scope) -> String {
     };
     let joins = body.contains("\n\n") && !last.trim().is_empty() && last.lines().all(is_trailer);
     let sep = if joins { "\n" } else { "\n\n" };
-    format!("{body}{sep}{}\n", trailer(scope))
+    let lines: Vec<String> = trailers.iter().map(|(k, v)| format!("{k}: {v}")).collect();
+    format!("{body}{sep}{}\n", lines.join("\n"))
 }
 
 /// The boundary table for the agent's brief (R-1), with the claim command for an unbound scope.

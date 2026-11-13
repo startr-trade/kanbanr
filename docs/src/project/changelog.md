@@ -24,6 +24,23 @@ All notable changes to kanbanr are documented here. The format follows
   what-you-checked, a CI result with its run link, a ratification's reason); the monitor shows it
   filled in beside one button, and the person confirms, edits or rejects it. Both are kept
   (FTR-034).
+- **A project chooses where decisions are taken, and can delegate chosen verdicts to Claude for a
+  time; every delegated decision comes back on the Review page to keep or undo (FTR-028).**
+  `kanbanr decisions show|mode|propose|grant|revoke|review` and `--under DLG-n` on `approve`,
+  `ratify` and `signoff`; the mode, granting and reviewing are the person's own.
+
+### Changed
+
+- **A verdict command run inside a Claude session is refused by kanbanr itself, not only by the
+  hook** (FTR-028).
+- **A test can say it is checked after main is pushed, at the cut, or at a named release stage
+  (DEF-043).** The item's gate doesn't wait for it, and that stage does: `at: pushed`, `at: cut` or
+  `at: <stage>` on the test.
+
+### Changed
+
+- **`kanbanr sprint start` on a sprint dated later starts it today and keeps its length**, and
+  `--start today` is accepted wherever a sprint's first day is (DEF-041).
 
 ### Changed
 
@@ -34,13 +51,32 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **An override Claude makes waits on the Review page for the person to ratify, and the item
+  doesn't ship until it is; the cut names requirements whose tests were not run and waits for the
+  person to accept them, and the notes list them (DEF-043).** `kanbanr release promote` and
+  `release cut` take `--accept-untested`, and the Releases page asks with one checkbox.
+
 - **The docs-folded sign-off no longer asks you to tick each text to check or type a defect
   code**: Claude settles each text, with why and the revision it checked, and the sign-off appears
   once none is left (DEF-039).
+- **`kanbanr doctor` no longer calls a project's `gates/` folder, where recorded CI results are
+  kept, a stray folder (DEF-038).** The `prepared/` and `manual/` folders are part of the layout too.
+- **Promote to candidate fills the version's changelog section from what the release ships, or says
+  why it cannot, instead of writing an empty heading; `kanbanr release notes <V> --changelog
+  <file>` updates the section in the same commit as the notes (DEF-044).**
 - **Manual tests waiting for a person are listed on the Review page, recorded there with Passed or
   Failed, and refused when Claude tries to record one (DEF-040).** The board keeps who checked, when,
   from where and any note; `kanbanr test` still records one from the person's own terminal, and
   `kanbanr prepare test` lets Claude prepare a result the person stated, to confirm on the page.
+- **Choosing sprints or releases turns the git model on, and the setup preview says so; applying a
+  process never turns it off.** The built-in agile and design-control processes send a chore through
+  their integrate stage, so it merges before the release is cut; re-apply the process to take the new
+  path. `process check` and `config workflow` warn of a path that skips the integrate stage
+  (DEF-042).
+- **After a fix merges into a release branch, kanbanr names `kanbanr git forward` as Claude's next
+  step, and the skill has Claude run it and report the merge; the person is no longer handed the
+  command (DEF-045).** The cut, `git doctor` and the move say it the same way, and a forward that
+  would conflict says that nothing was changed. Pushing stays yours.
 - **`kanbanr drift --since DATE` starts at the beginning of that day (UTC)**, so its result no
   longer depends on the time it is run (DEF-037).
 - **A release's notes are still found after the notes path is changed, and a missing notes file
@@ -145,6 +181,10 @@ All notable changes to kanbanr are documented here. The format follows
   board-governing check all use it. A real board, a copy of it (it holds scopes), a link to it and a
   path the guard cannot resolve stay refused, and the refusal and the brief name the form to use.
   `$TMPDIR` cannot be reassigned in a command.
+- **On a project with sprints, work waits for its sprint to start (DEF-041).** The first move into
+  a working stage asks for the item to be in a sprint that has started, and a sprint dated in the
+  future reads as planned until its first day. `kanbanr doctor` names a sprint an older version
+  started early. Claude recommends starting a sprint today unless you name another day.
 
 ### Added
 

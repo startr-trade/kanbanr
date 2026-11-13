@@ -68,12 +68,17 @@ pub fn via(stored: &str) -> String {
     match stored {
         "" => " — origin unknown".to_string(),
         "monitor" | "conversation" | "terminal" => format!(" via the {stored}"),
+        "delegated" => " under a delegation".to_string(),
         other => format!(" via {other}"),
     }
 }
 
-/// Is this route one that records a verdict?
+/// Is this route one that records a verdict? The person-only decisions routes (the mode, a
+/// grant, a review) count, so they are stamped and judged as verdicts are (FTR-028).
 pub fn is_verdict_route(method: &str, path: &str) -> bool {
+    if crate::decisions::is_person_only(method, path) {
+        return true;
+    }
     if method != "POST" {
         return false;
     }
@@ -108,8 +113,9 @@ pub fn is_verdict_route(method: &str, path: &str) -> bool {
 }
 
 /// Routes whose body the front end stamps with its origin: every verdict route,
-/// `POST /projects/{p}/prepared`, so a prepared record says who prepared it (FTR-034), and the
-/// tests route, so a manual result says where it was recorded (DEF-040).
+/// `POST /projects/{p}/prepared`, so a prepared record says who prepared it (FTR-034), the
+/// tests route, so a manual result says where it was recorded (DEF-040), and the move and batch
+/// routes, so an override says where it was made (DEF-043).
 pub fn stamps_origin(method: &str, path: &str) -> bool {
     if is_verdict_route(method, path) {
         return true;
@@ -122,7 +128,16 @@ pub fn stamps_origin(method: &str, path: &str) -> bool {
         .filter(|s| !s.is_empty())
         .collect();
     match method {
-        "POST" => matches!(seg.as_slice(), ["projects", _, "prepared"]),
+        // A proposal, a revoke and the setup defaults say where they came from too (FTR-028);
+        // a move, alone or in a batch, records where an override was made (DEF-043).
+        "POST" => matches!(
+            seg.as_slice(),
+            ["projects", _, "prepared"]
+                | ["projects", _, "decisions", "delegations" | "defaults"]
+                | ["projects", _, "decisions", "delegations", _, "revoke"]
+                | ["projects", _, "features", _, "move"]
+                | ["projects", _, "batch"]
+        ),
         // A manual test's kept result says where it was recorded (DEF-040).
         "PUT" => matches!(
             seg.as_slice(),
@@ -149,11 +164,17 @@ pub enum Verdict {
     ManualTest,
     ConfirmPrepared,
     RejectPrepared,
+    /// Setting the project's decision mode (FTR-028).
+    SetDecisionMode,
+    /// Granting a proposed delegation (FTR-028).
+    GrantDelegation,
+    /// Keeping or undoing a delegated decision (FTR-028).
+    ReviewDecision,
 }
 
 impl Verdict {
     /// Every verdict, for a check that must cover them all.
-    pub const ALL: [Verdict; 14] = [
+    pub const ALL: [Verdict; 17] = [
         Verdict::Approve,
         Verdict::Ratify,
         Verdict::Unapprove,
@@ -168,6 +189,9 @@ impl Verdict {
         Verdict::ManualTest,
         Verdict::ConfirmPrepared,
         Verdict::RejectPrepared,
+        Verdict::SetDecisionMode,
+        Verdict::GrantDelegation,
+        Verdict::ReviewDecision,
     ];
 
     /// Is this verdict taken on the Releases page (rather than the Review page)?
@@ -197,18 +221,116 @@ impl Taker {
     }
 }
 
-/// Whether `taker` may take `verdict`: the reason it may not, or `None`. The only place this is
-/// decided (FTR-034): the hook and the write path both ask here.
-pub fn verdict_refusal(verdict: Verdict, taker: Taker) -> Option<String> {
-    let _ = verdict;
-    match taker {
-        Taker::Person => None,
-        Taker::Claude => Some(
-            "a verdict is the person's own, recorded on the monitor, never by Claude (FTR-024). \
-             Prepare its record instead (`kanbanr prepare …`) and tell the person where it waits."
-                .to_string(),
-        ),
+/// What the one guard judges a verdict against (FTR-028): the project's decisions and the route
+/// that records it. [`DecisionContext::monitor_mode`] reads no board, so it judges as `monitor`
+/// mode, where every verdict is the person's: the hook's view, which knows no mode.
+#[derive(Debug, Clone, Default)]
+pub struct DecisionContext<'a> {
+    pub decisions: Option<&'a crate::decisions::Decisions>,
+    pub project: Option<&'a crate::store::Project>,
+    pub method: &'a str,
+    pub path: &'a str,
+    pub body: Option<&'a Value>,
+    /// The front end's own label, which tells the monitor from the terminal; when `None` it is
+    /// taken from the taker.
+    pub origin: Option<Origin>,
+    pub now: String,
+}
+
+impl DecisionContext<'_> {
+    /// No decisions read: every verdict is the person's.
+    pub fn monitor_mode() -> Self {
+        DecisionContext::default()
     }
+}
+
+const PREPARE_INSTEAD: &str = "Prepare its record instead (`kanbanr prepare …`) and tell the \
+                               person where it waits.";
+
+/// Whether `taker` may take `verdict`: the reason it may not, or `None`. The only place this is
+/// decided (FTR-034, FTR-028): the hook and the write path both ask here. With the project's
+/// decisions in `ctx`, it applies their table (who may take what, in which mode, under which
+/// delegation); without them, every verdict is the person's. When Claude may take it, the route's
+/// body names the delegation it is taken under.
+pub fn verdict_refusal(verdict: Verdict, taker: Taker, ctx: &DecisionContext) -> Option<String> {
+    let decisions_route = matches!(
+        verdict,
+        Verdict::SetDecisionMode | Verdict::GrantDelegation | Verdict::ReviewDecision
+    );
+    // A manual test's result says a person checked it (DEF-040): never Claude's, in any mode, and
+    // no delegation covers it.
+    if verdict == Verdict::ManualTest {
+        return match taker {
+            Taker::Person => None,
+            Taker::Claude => Some(format!(
+                "a verdict is the person's own, recorded on the monitor, never by Claude \
+                 (FTR-024). {PREPARE_INSTEAD} A manual test's result says a person checked it, \
+                 so the person records it on the Review page (DEF-040). If they told you the \
+                 result, prepare it: `kanbanr prepare test <CODE> <R-n> \"<test>\" --passed \
+                 --source \"conversation: …\"`."
+            )),
+        };
+    }
+    let (Some(d), Some(project)) = (ctx.decisions, ctx.project) else {
+        return match taker {
+            Taker::Person => None,
+            Taker::Claude if decisions_route => Some(
+                "this is the person's own, on the Review page or in their terminal: Claude \
+                 cannot set the decision mode, grant a delegation or review a decision"
+                    .to_string(),
+            ),
+            Taker::Claude => Some(format!(
+                "a verdict is the person's own, recorded on the monitor, never by Claude \
+                 (FTR-024). {PREPARE_INSTEAD}"
+            )),
+        };
+    };
+    let origin = ctx.origin.unwrap_or(match taker {
+        Taker::Person => Origin::Terminal,
+        Taker::Claude => Origin::Conversation,
+    });
+    match crate::decisions::authorize(d, project, ctx.method, ctx.path, ctx.body, origin, &ctx.now)
+    {
+        Ok(_) => None,
+        Err(why) if taker == Taker::Claude && !decisions_route => {
+            Some(format!("{why} {PREPARE_INSTEAD}"))
+        }
+        Err(why) => Some(why),
+    }
+}
+
+/// The verdict a route records, for [`verdict_refusal`]; `None` for a route that records none.
+pub fn verdict_of_route(method: &str, path: &str) -> Option<Verdict> {
+    let seg: Vec<&str> = path
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    Some(match (method, seg.as_slice()) {
+        ("PUT", ["projects", _, "decisions", "mode"]) => Verdict::SetDecisionMode,
+        ("POST", ["projects", _, "decisions", "delegations", _, "grant"]) => {
+            Verdict::GrantDelegation
+        }
+        ("POST", ["projects", _, "decisions", "reviews"]) => Verdict::ReviewDecision,
+        ("POST", ["projects", _, "features", _, "approve"]) => Verdict::Approve,
+        ("POST", ["projects", _, "features", _, "ratify"]) => Verdict::Ratify,
+        ("POST", ["projects", _, "features", _, "unapprove"]) => Verdict::Unapprove,
+        ("POST", ["projects", _, "features", _, "signoff", _]) => Verdict::Signoff,
+        ("POST", ["projects", _, "features", _, "signoff", _, "withdraw"]) => {
+            Verdict::WithdrawSignoff
+        }
+        ("POST", ["projects", _, "adrs", _, "accept"]) => Verdict::AcceptAdr,
+        ("POST", ["projects", _, "adrs", _, "reject"]) => Verdict::RejectAdr,
+        ("POST", ["projects", _, "releases", _, "promote"]) => Verdict::Promote,
+        ("POST", ["projects", _, "releases", _, "cut"]) => Verdict::Cut,
+        ("POST", ["projects", _, "releases", _, "patch-from-tag"]) => Verdict::PatchFromTag,
+        ("POST", ["projects", _, "gate-results"]) => Verdict::GateResult,
+        ("POST", ["projects", _, "prepared", _, "confirm"]) => Verdict::ConfirmPrepared,
+        ("POST", ["projects", _, "prepared", _, "reject"]) => Verdict::RejectPrepared,
+        _ => return None,
+    })
 }
 
 /// The verdict a write request would record that its route does not show: a manual test's
@@ -300,6 +422,14 @@ pub fn from_body(body: &Value) -> String {
         .unwrap_or_default()
 }
 
+/// The delegation a verdict body names (`DLG-001`), trimmed; "" when it names none.
+pub fn delegation_from_body(b: &Value) -> String {
+    b.get("delegation")
+        .and_then(|v| v.as_str())
+        .map(|d| d.trim().to_string())
+        .unwrap_or_default()
+}
+
 /// The record a repeat verdict collides with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Earlier {
@@ -321,6 +451,7 @@ impl Earlier {
         let from = match self.origin.as_str() {
             "" => "from an unknown origin".to_string(),
             o @ ("monitor" | "conversation" | "terminal") => format!("from the {o}"),
+            "delegated" => "from a delegation".to_string(),
             o => format!("from {o}"),
         };
         format!("{} by {} on {} {}", self.what, self.by, at, from)
@@ -447,9 +578,20 @@ mod tests {
     #[test]
     fn claude_is_refused_every_verdict_and_a_person_none() {
         for v in Verdict::ALL {
-            assert_eq!(verdict_refusal(v, Taker::Person), None, "{v:?}");
-            let why = verdict_refusal(v, Taker::Claude).unwrap_or_else(|| panic!("{v:?}"));
-            assert!(why.contains("kanbanr prepare"), "{why}");
+            let ctx = DecisionContext::monitor_mode();
+            assert_eq!(verdict_refusal(v, Taker::Person, &ctx), None, "{v:?}");
+            let why = verdict_refusal(v, Taker::Claude, &ctx).unwrap_or_else(|| panic!("{v:?}"));
+            // The decisions routes have no record to prepare: they are the person's own (FTR-028).
+            let decisions = matches!(
+                v,
+                Verdict::SetDecisionMode | Verdict::GrantDelegation | Verdict::ReviewDecision
+            );
+            let says = if decisions {
+                "the person's own"
+            } else {
+                "kanbanr prepare"
+            };
+            assert!(why.contains(says), "{why}");
         }
         assert_eq!(Taker::of_origin(Origin::Conversation), Taker::Claude);
         assert_eq!(Taker::of_origin(Origin::Delegated), Taker::Claude);
@@ -542,7 +684,7 @@ mod tests {
         let (store, dir) = board();
         let code = item(&store, true);
         store
-            .approve_feature_as("demo", &code, "Ada", "monitor")
+            .approve_feature_as("demo", &code, "Ada", "monitor", "")
             .unwrap();
         let d = def(&store, &code);
         assert_eq!(d.approval.as_ref().unwrap().origin, "monitor");
@@ -556,7 +698,7 @@ mod tests {
         assert_eq!(d.approvals.last().unwrap().origin, "terminal");
 
         store
-            .ratify_feature_as("demo", &code, "Ada", "built first", "conversation")
+            .ratify_feature_as("demo", &code, "Ada", "built first", "conversation", "")
             .unwrap();
         let d = def(&store, &code);
         assert_eq!(d.approval.as_ref().unwrap().origin, "conversation");
@@ -837,7 +979,7 @@ mod tests {
         // An approval withdrawn twice, and a sign-off withdrawn twice.
         let code = item(&store, false);
         store
-            .approve_feature_as("demo", &code, "Ada", "monitor")
+            .approve_feature_as("demo", &code, "Ada", "monitor", "")
             .unwrap();
         store
             .unapprove_feature_as("demo", &code, "Ada", "no", "conversation")
@@ -868,8 +1010,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
         // A cut twice.
         let (rstore, rdir, rrepo) = board_and_repo("def028-twice");
-        crate::releases::cut_as(&rstore, "shop", "v1", "Grace", "terminal").unwrap();
-        let why = crate::releases::cut_as(&rstore, "shop", "v1", "Bo", "monitor")
+        crate::releases::cut_as(&rstore, "shop", "v1", "Grace", "terminal", &[]).unwrap();
+        let why = crate::releases::cut_as(&rstore, "shop", "v1", "Bo", "monitor", &[])
             .unwrap_err()
             .to_string();
         assert!(
@@ -915,6 +1057,7 @@ mod tests {
                 expect_tip: None,
                 fetch: crate::releases::Fetch::No,
                 origin,
+                accept_untested: &[],
             },
         )
     }
@@ -972,7 +1115,8 @@ mod tests {
 
         // A cut by `release cut` names who cut it and from where.
         let (store, dir, repo) = board_and_repo("def028-cut");
-        let cut = crate::releases::cut_as(&store, "shop", "v1", "Grace", "conversation").unwrap();
+        let cut =
+            crate::releases::cut_as(&store, "shop", "v1", "Grace", "conversation", &[]).unwrap();
         assert_eq!(
             (
                 cut.release.shipped_by.as_str(),
@@ -1072,5 +1216,26 @@ mod tests {
         );
         assert_eq!(activity::read(&dir, "demo", 1)[0].origin, "");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// FTR-028 R-3: a record taken under a delegation reads as such, where the origin shows.
+    #[test]
+    fn delegated_reads_as_under_a_delegation() {
+        assert_eq!(via("delegated"), " under a delegation");
+        let e = Earlier {
+            what: "signed off design-review".into(),
+            by: "Claude".into(),
+            at: "2026-11-12T10:00:00+00:00".into(),
+            origin: "delegated".into(),
+        };
+        assert!(
+            e.sentence().ends_with("from a delegation"),
+            "{}",
+            e.sentence()
+        );
+        let b = json!({"delegation": " DLG-001 "});
+        assert_eq!(delegation_from_body(&b), "DLG-001");
+        assert_eq!(delegation_from_body(&json!({})), "");
+        assert_eq!(delegation_from_body(&json!({"delegation": 3})), "");
     }
 }

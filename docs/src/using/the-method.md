@@ -189,7 +189,7 @@ main only once main is pushed. A release prepares itself, so no item is made to 
 `kanbanr release promote <V> --plan` says what the next stage does and still needs; after each
 promotion kanbanr says what is next. A release with nothing planned into it is never promoted. A patch is
 `kanbanr release add <V> --patch-of <P>` ([Patch releases](processes.md#patch-releases)), and a fix
-made on a release branch reaches the line through `kanbanr git forward <V>`. With sprints and no
+made on a release branch reaches the line when Claude runs `kanbanr git forward <V>`, as soon as kanbanr says so; you push. With sprints and no
 releases, `kanbanr sprint close <SP>` is the cut.
 
 **Carry-over.** `kanbanr sprint close <SP> --carry-to <next>` carries unfinished items and keeps

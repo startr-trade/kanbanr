@@ -146,6 +146,16 @@ class SkillTests(unittest.TestCase):
         self.assertTrue("Designing CI or a release workflow" in text)
         self.assertTrue(PAGE in text)
 
+    def the_skill_recommends_a_sprint_starting_today(self) -> None:
+        """DEF-041 R-3: the sprint's first day is recommended as today, and the guides say so."""
+        text = section(read(SKILL), "## Starting the first sprint or release")
+        self.assertTrue("--start today" in text)
+        self.assertFalse("next Monday" in text)
+        for process in PROCESSES:
+            with self.subTest(guide=process):
+                planning = section(read(GUIDES / f"{process}-with-claude.md"), "## Planning a sprint")
+                self.assertTrue("starting today" in planning)
+
 
 def load_tests(loader: unittest.TestLoader, tests: unittest.TestSuite, pattern: str | None) -> unittest.TestSuite:
     suite = unittest.TestSuite()

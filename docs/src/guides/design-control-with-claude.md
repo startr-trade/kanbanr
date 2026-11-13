@@ -12,6 +12,9 @@ You don't need to learn any commands:
   Claude tells you what is waiting there and links to it. It never records a decision, and it
   doesn't ask for one in a plan or a question. What Claude already knows, such as a CI run's
   result or what a sign-off covered, arrives filled in beside the button: you check it and click.
+- **You can delegate the small decisions.** Tell Claude which ones it may take, such as the design
+  review of small defects, and until when. It proposes a delegation; you grant it on the
+  **Review** page. Whatever Claude decides under it comes back there for you to keep or undo.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [Design control from the command line](design-control-cli.md).
@@ -99,13 +102,13 @@ you give before Verification starts.
 
 ### Chores
 
-A chore doesn't walk every stage. It goes Planning → Design → Verification → Released, skipping Inputs, Review and Validation, because their
+A chore doesn't walk every stage. It goes Planning → Design → Verification → Validation → Released, skipping Inputs and Review, because their
 questions don't fit small maintenance work. Tell Claude it's a chore when you ask for it.
 
 > Pin the CI image: it's a chore.
 
 Before its first move Claude asks once for what every item records: a one-sentence statement, the goal
-it serves, and a requirement in the EARS form that says how it's verified. You still approve it, and the sign-offs that belong to the stages it enters (such as the one before release) are still yours. A chore has no Design section and no **design-review**. If
+it serves, and a requirement in the EARS form that says how it's verified. You still approve it, and the sign-offs that belong to the stages it enters (such as the one at Validation, before release) are still yours. A chore has no Design section and no **design-review**. If
 you change an item's kind to a chore while it's at a stage the chore path leaves out, it's off
 the path: it moves by the ordinary moves, or back to Planning.
 

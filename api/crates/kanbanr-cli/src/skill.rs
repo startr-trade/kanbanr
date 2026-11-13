@@ -206,6 +206,22 @@ mod tests {
         d
     }
 
+    /// DEF-045 R-1: the skill has Claude bring a release fix forward itself and report the merge.
+    #[test]
+    fn skill_has_claude_bring_a_release_fix_forward() {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        let flat = skill.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains("run `kanbanr git forward <V>` yourself"),
+            "the skill does not have Claude run the forward"
+        );
+        assert!(!flat.contains("it is never done for you"));
+    }
+
     /// DEF-027 R-9: the skill tells the coordinator to stay in the project folder and look inside an
     /// agent's worktree with `git -C`.
     #[test]
@@ -360,6 +376,25 @@ mod tests {
             "The user accepting the plan is their approval",
         ] {
             assert!(!skill.contains(gone), "the skill no longer says {gone:?}");
+        }
+    }
+
+    /// FTR-028 R-5: the skill says where decisions are taken is the project's choice, how Claude
+    /// acts under a delegation, and that setup proposes the process's delegations under
+    /// **Decisions** in the plan.
+    #[test]
+    fn skill_proposes_delegations_at_setup() {
+        let skill = skill_md();
+        for want in [
+            "Where decisions are taken is the project's choice",
+            "`--under DLG-n`",
+            "**Decisions**",
+            "kanbanr decisions defaults --process <name> --dry-run --json",
+            "Only you, the coordinator, act under a delegation",
+            // Back-moves are the person's (decided by the maintainer, 13 Nov 2026).
+            "When an item has moved back to an earlier stage, ask the user before taking any\ndecision or making any change for it, even if a delegation would cover it",
+        ] {
+            assert!(skill.contains(want), "the skill says {want:?}");
         }
     }
 

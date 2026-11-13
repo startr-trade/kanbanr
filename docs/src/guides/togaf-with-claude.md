@@ -10,6 +10,9 @@ You don't need to learn any commands:
   Claude tells you what is waiting there and links to it. It never records a decision, and it
   doesn't ask for one in a plan or a question. What Claude already knows, such as a CI run's
   result or what a sign-off covered, arrives filled in beside the button: you check it and click.
+- **You can delegate the small decisions.** Tell Claude which ones it may take, such as the design
+  review of small defects, and until when. It proposes a delegation; you grant it on the
+  **Review** page. Whatever Claude decides under it comes back there for you to keep or undo.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [TOGAF from the command line](togaf-cli.md).
@@ -98,6 +101,8 @@ for them.
 
 A sprint and a release don't have to line up. One release can take items from several sprints.
 
+Claude recommends starting today. Work past the first stage waits until the sprint has started; a sprint dated later reads as planned until its first day.
+
 ## One item, phase by phase
 
 Ask for the work in your own words, and Claude asks only what it can't work out. Each phase has a
@@ -150,7 +155,9 @@ tells you what has shipped.
 > Move the saved basket on to System Design.
 
 If something's missing, Claude tells you what and either fixes it or asks you. Nothing moves past a
-gate unless you say why, and that reason stays on the item.
+gate unless you say why, and that reason stays on the item. If Claude moves it past a gate, the move
+waits on the Review page for you to **Ratify**, even on an item you approved, and the item doesn't
+ship until you do.
 
 **Moving to Migration is the merge.** kanbanr merges the item's branch into the sprint's branch. It
 isn't released yet.
@@ -200,7 +207,7 @@ Follow this order and you won't have to go back:
 | Step | Who | Do this |
 |---|---|---|
 | 1 | You | **Releases** page: **Promote to candidate**. This makes the release branch and drafts the version, changelog and notes |
-| 2 | Claude | Say "Write the release notes for readers", because the draft only lists requirements |
+| 2 | Claude | Say "Write the release notes and the changelog for readers", because the draft only lists requirements |
 | 3 | You | Open **Release notes** on the release, then **Edit notes** and **Save** for any changes |
 | 4 | Claude | Say "Run the full checks over the release" |
 | 5 | You | **Review** page: **Sign off release** on each item, if you haven't already |
@@ -208,11 +215,11 @@ Follow this order and you won't have to go back:
 | 7 | You | Terminal: `git push origin main`. This is the first push the release needs |
 | 8 | You | Wait for CI on main to go green |
 | 9 | Claude, then you | Claude reads the run and prepares the result. **Releases** page: check the run's link and click **Record ci passed** |
-| 10 | You | **Check again**, then **Cut v0.1.0**. This tags main. The Cut stays greyed out until step 9 is done for the commit main is at. If your stages continue after the tag, the page shows the result you recorded for it; when it is green, **Confirm** each later stage with a note of what you checked. Confirming the last one moves any item not already there to Operations |
+| 10 | You | **Check again**, then **Cut v0.1.0**. This tags main. The Cut stays greyed out until step 9 is done for the commit main is at. If your stages continue after the tag, the page shows the result you recorded for it; when it is green, **Confirm** each later stage with a note of what you checked. Confirming the last one moves any item not already there to Operations. If some shipping requirements still have tests not run, the page lists them with one checkbox: tick it to ship them unverified, and the notes name them |
 | 11 | You | Terminal: `git push origin v0.1.0`, then wait for the release workflow |
-| 12 | Claude | Say "The release is out. Bring it forward into the sprint" |
+| 12 | Claude | Brings the release forward into the sprint and tells you; you push the sprint branch when you push |
 
-**When to push.** You push twice for a release: main after **Promote to main**, and the tag after the **Cut**. Nothing earlier is needed: every check before that runs on your machine. If you want to see the pipeline run sooner, you can push the sprint's branch; that run is a preview and records nothing for the release.
+**When to push.** You push twice for a release: main after **Promote to main**, and the tag after the **Cut**. Nothing earlier is needed: every check before that runs on your machine. If you want to see the pipeline run sooner, you can push the sprint's branch; that run is a preview and records nothing for the release. Recording CI, promoting and the cut are never delegated: even when you have let Claude take some forward decisions, these stay your clicks. If an item has moved back to an earlier stage, Claude asks you before it acts on it, delegation or not.
 
 **Recording CI.** The Cut waits for a CI result recorded for the exact commit main is at. kanbanr never asks your CI service. Claude reads the CI result and prepares it with the link to the run. You check it and confirm it with one click; you can edit it or reject it instead. A failed run is recorded as failed, and the page then says what to fix.
 
@@ -257,6 +264,8 @@ Claude reports where the release is and confirms no stage; the buttons are yours
 doesn't send the release back. A release that is already tagged and waiting for its later stages
 takes no change: the merge is refused, and the change needs a patch release (**Start a patch
 release** on the page, or ask Claude).
+
+**A fix made during the release reaches the sprint the same way:** Claude brings it forward.
 
 ## Closing the sprint
 

@@ -81,6 +81,23 @@ fn ser_already(
 /// caller can produce one by omission; the CLI resolves `--by` from the commit identity and the
 /// monitor from `/api/meta`, and a caller with neither is told to set one rather than quietly
 /// attributed to nobody.
+/// Who took a decisions action, when and from where (FTR-028): the origin the front end stamped;
+/// from the conversation it is Claude, else the `by` the front end sent.
+fn decision_stamp(b: &Value) -> Result<crate::decisions::Stamp> {
+    let origin = crate::origin::from_body(b);
+    let by = if origin == "conversation" {
+        "Claude".to_string()
+    } else {
+        approver(b)?
+    };
+    Ok(crate::decisions::Stamp {
+        by,
+        at: crate::now_rfc3339(),
+        origin,
+        ..Default::default()
+    })
+}
+
 fn approver(b: &Value) -> Result<String> {
     match str_field(b, "by") {
         Some(who) if !who.trim().is_empty() => Ok(who),
@@ -702,13 +719,34 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
             if cadence.release_prepare.is_empty() {
                 cadence.release_prepare = config.cadence.release_prepare.clone();
             }
+            // DEF-042: the file's `true` wins, the first choice turns it on, and the project's own
+            // `true` is kept: a process never turns the git model off.
+            cadence.git_model = config
+                .cadence
+                .git_model_after(&cadence, cadence.git_model.then_some(true))
+                || config.cadence.git_model;
             store.set_cadence(p, unit, cadence)?
         }
     };
-    if config.process == source {
+    let config = if config.process == source {
+        config
+    } else {
+        store.set_process_source(p, source)?
+    };
+    // DEF-042: a path that never enters the integrate stage is a warning, not a refusal.
+    let skipping = config.paths_skipping_integrate();
+    if skipping.is_empty() {
         return ser(&config);
     }
-    ser(&store.set_process_source(p, source)?)
+    let mut out =
+        serde_json::to_value(&config).map_err(|e| CoreError::Unsupported(e.to_string()))?;
+    out["warnings"] = json!(
+        skipping
+            .iter()
+            .map(|(kind, stage)| crate::config::skipped_integrate_warning(kind, stage))
+            .collect::<Vec<_>>()
+    );
+    ser(&out)
 }
 
 /// `"process": {name, library, version, rev}` in a body: where the workflow it carries came from.
@@ -1068,6 +1106,7 @@ fn dispatch_routes(
                 reason.as_deref(),
                 repo,
                 &str_field(b, "by").unwrap_or_else(|| "kanbanr".to_string()),
+                &crate::origin::from_body(b),
             )?;
             let mut out = serde_json::to_value(&moved.feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
@@ -1085,6 +1124,9 @@ fn dispatch_routes(
             }
             if let Some(v) = &moved.forward_needed {
                 out["forward_needed"] = json!(v);
+            }
+            if let Some(next) = &moved.forward_next {
+                out["forward_next"] = json!(next);
             }
             if let Some(sent) = &moved.sent_back {
                 out["release_sent_back"] = json!(sent);
@@ -1177,6 +1219,7 @@ fn dispatch_routes(
                 &approver(b)?,
                 &str_field(b, "reason").unwrap_or_default(),
                 &crate::origin::from_body(b),
+                &crate::origin::delegation_from_body(b),
             )?)
         }
         ("POST", ["projects", p, "features", code, "approve"]) => {
@@ -1184,7 +1227,13 @@ fn dispatch_routes(
             if let Some(earlier) = repeat_approval(store, p, code, "approved")? {
                 return ser_already(store, p, code, &earlier);
             }
-            ser(&store.approve_feature_as(p, code, &approver(b)?, &crate::origin::from_body(b))?)
+            ser(&store.approve_feature_as(
+                p,
+                code,
+                &approver(b)?,
+                &crate::origin::from_body(b),
+                &crate::origin::delegation_from_body(b),
+            )?)
         }
         // Withdraw a sign-off given in error (FEAT-182). Matched before the sign-off route.
         ("POST", ["projects", p, "features", code, "signoff", name, "withdraw"]) => ser(&store
@@ -1224,7 +1273,15 @@ fn dispatch_routes(
             let (checked, settled) =
                 signoff_checked(store, p, code, &name, b, repo, (&signer, &origin))?;
             let (feature, held) = store.signoff_feature_checked_as(
-                p, code, &name, &signer, &note, &doc, &origin, &checked,
+                p,
+                code,
+                &name,
+                &signer,
+                &note,
+                &doc,
+                &origin,
+                &crate::origin::delegation_from_body(b),
+                &checked,
             )?;
             // The sign-off answers the settlements it took (DEF-039).
             for id in settled {
@@ -1368,12 +1425,14 @@ fn dispatch_routes(
             }
             ser(&body)
         }
+        // DEF-043: `accept_untested?` names the requirements the person accepts shipping untested.
         ("POST", ["projects", p, "releases", version, "cut"]) => ser(&crate::releases::cut_as(
             store,
             p,
             &percent_decode(version),
             &str_field(b, "by").unwrap_or_default(),
             &crate::origin::from_body(b),
+            &vec_field(b, "accept_untested").unwrap_or_default(),
         )?),
         // What cutting a release now would ship and carry over, by the cut's own rule, with nothing
         // written (FEAT-185): the monitor's production confirmation lists exactly this.
@@ -1384,6 +1443,8 @@ fn dispatch_routes(
         // is the release tip the caller's plan showed (FEAT-212): a branch moved since is refused.
         ("POST", ["projects", p, "releases", version, "promote"]) => {
             let expect = str_field(b, "expect");
+            // DEF-043: the untested requirements the person accepts shipping at the cut.
+            let accept = vec_field(b, "accept_untested").unwrap_or_default();
             ser(&crate::releases::promote_with(
                 store,
                 p,
@@ -1396,6 +1457,7 @@ fn dispatch_routes(
                     expect_tip: expect.as_deref(),
                     fetch: crate::releases::Fetch::Try,
                     origin: &crate::origin::from_body(b),
+                    accept_untested: &accept,
                 },
             )?)
         }
@@ -1436,19 +1498,16 @@ fn dispatch_routes(
         ("GET", ["projects", p, "releases", version, "notes"]) => ser(
             &crate::releases::release_notes(store, p, &percent_decode(version), repo)?,
         ),
-        // `{text, by}`: commit the notes onto release/<V>, nothing checked out (FEAT-216).
+        // `{text?, changelog?, by}`: commit the notes, the version's changelog section, or both
+        // onto release/<V>, nothing checked out (FEAT-216, DEF-044).
         ("PUT", ["projects", p, "releases", version, "notes"]) => {
-            let Some(text) = str_field(b, "text") else {
-                return Err(CoreError::Unsupported(
-                    "saving release notes needs their text".into(),
-                ));
-            };
             ser(&crate::releases::set_release_notes(
                 store,
                 p,
                 &percent_decode(version),
                 repo,
-                &text,
+                str_field(b, "text").as_deref(),
+                str_field(b, "changelog").as_deref(),
                 &str_field(b, "by").unwrap_or_default(),
             )?)
         }
@@ -1506,6 +1565,100 @@ fn dispatch_routes(
             };
             crate::gates::record(store, p, &result)?;
             ser(&result)
+        }
+        // ---- where decisions are taken, and delegations (FTR-028) ----
+        ("GET", ["projects", p, "decisions"]) => ser(&crate::decisions::view(
+            store,
+            p,
+            repo,
+            None,
+            &crate::now_rfc3339(),
+        )?),
+        // `{mode, reason?}`: the person's alone; answers what waits where now.
+        ("PUT", ["projects", p, "decisions", "mode"]) => {
+            let given = str_field(b, "mode").unwrap_or_default();
+            let mode = crate::decisions::Mode::parse(given.trim()).ok_or_else(|| {
+                CoreError::Unsupported(format!(
+                    "the decision mode is monitor, delegated or conversation, not '{given}'"
+                ))
+            })?;
+            ser(&crate::decisions::set_mode(
+                store,
+                p,
+                mode,
+                &str_field(b, "reason").unwrap_or_default(),
+                decision_stamp(b)?,
+                None,
+            )?)
+        }
+        // `{verdicts, steps, items, kinds, milestone, all?, until, note}`: a proposal, inert until
+        // the person grants it.
+        ("POST", ["projects", p, "decisions", "delegations"]) => {
+            let new: crate::decisions::NewDelegation = serde_json::from_value(b.clone())
+                .map_err(|e| CoreError::Unsupported(format!("a delegation: {e}")))?;
+            ser(&crate::decisions::propose(
+                store,
+                p,
+                new,
+                decision_stamp(b)?,
+            )?)
+        }
+        // `{rev}`: the person grants the proposal as they saw it.
+        ("POST", ["projects", p, "decisions", "delegations", id, "grant"]) => {
+            ser(&crate::decisions::grant(
+                store,
+                p,
+                id,
+                &str_field(b, "rev").unwrap_or_default(),
+                decision_stamp(b)?,
+            )?)
+        }
+        // `{reason}`: anyone may revoke.
+        ("POST", ["projects", p, "decisions", "delegations", id, "revoke"]) => {
+            ser(&crate::decisions::revoke(
+                store,
+                p,
+                id,
+                &str_field(b, "reason").unwrap_or_default(),
+                decision_stamp(b)?,
+            )?)
+        }
+        // `{process?, dry_run?}`: propose the process's default delegations (R-5); with dry_run,
+        // only what they would be.
+        ("POST", ["projects", p, "decisions", "defaults"]) => {
+            let process = str_field(b, "process").filter(|x| !x.trim().is_empty());
+            match crate::decisions::propose_defaults(
+                store,
+                p,
+                process.as_deref(),
+                decision_stamp(b)?,
+                is_dry_run(Some(b)),
+            )? {
+                Ok(made) => ser(&made),
+                Err(preview) => ser(&preview),
+            }
+        }
+        // `{decision, verdict: keep|undo, reason?}`: the person keeps or undoes a delegated
+        // decision; an undo withdraws it, in the same commit.
+        ("POST", ["projects", p, "decisions", "reviews"]) => {
+            let keep = match str_field(b, "verdict").as_deref() {
+                Some("keep") => true,
+                Some("undo") => false,
+                other => {
+                    return Err(CoreError::Unsupported(format!(
+                        "a review's verdict is keep or undo, not '{}'",
+                        other.unwrap_or("")
+                    )));
+                }
+            };
+            ser(&crate::decisions::review(
+                store,
+                p,
+                &str_field(b, "decision").unwrap_or_default(),
+                keep,
+                &str_field(b, "reason").unwrap_or_default(),
+                decision_stamp(b)?,
+            )?)
         }
         // FTR-034: `{kind, subject, fields, sources, by?}`: the evidence for a decision, prepared for
         // the person to confirm. Not a verdict: nothing a gate reads changes.
@@ -1650,7 +1803,10 @@ fn dispatch_routes(
             ser(&store.set_release_prepare(p, prep)?.cadence.release_prepare)
         }
         // ---- sprints (FEAT-119) ----
-        ("GET", ["projects", p, "sprints"]) => ser(&crate::sprints::load(store, p)?),
+        ("GET", ["projects", p, "sprints"]) => ser(&crate::sprints::as_of(
+            &crate::sprints::load(store, p)?,
+            crate::sprints::today(),
+        )),
         ("GET", ["projects", p, "sprints", code]) => {
             let code = match *code {
                 "active" => crate::sprints::active(&crate::sprints::load(store, p)?)
@@ -1879,7 +2035,8 @@ fn dispatch_routes(
             let current = store.load_meta(p)?.config.cadence;
             let current_inert = current.inert_stages();
             let current_cadence = current.clone();
-            let cadence = crate::config::Cadence {
+            let named_git_model = bool_field(b, "git_model");
+            let mut cadence = crate::config::Cadence {
                 extra: current.extra.clone(),
                 // FEAT-212: the stages' gates and what `prepare` writes have routes of their own;
                 // a cadence write that does not name them keeps them.
@@ -1920,8 +2077,12 @@ fn dispatch_routes(
                     None => current.main_branch,
                 },
                 // FEAT-189: branching follows the git model only when switched on.
-                git_model: bool_field(b, "git_model").unwrap_or(current.git_model),
+                git_model: named_git_model.unwrap_or(current.git_model),
             };
+            // DEF-042: the first choice of sprints or releases turns the git model on.
+            cadence.git_model = current_cadence.git_model_after(&cadence, named_git_model);
+            let turned_on =
+                cadence.git_model && !current_cadence.git_model && named_git_model.is_none();
             let config = store.set_cadence(p, unit, cadence)?;
             // FTR-020: an inert stage that is newly there, and how to make the tag wait for CI.
             let was = current_inert;
@@ -1933,6 +2094,12 @@ fn dispatch_routes(
                 .map(|s| crate::config::Cadence::inert_warning(s))
                 .collect();
             warnings.extend(config.cadence.has_ci_note(&current_cadence));
+            if turned_on {
+                warnings.push(
+                    "the git model is on: kanbanr merges items into their line as `kanbanr git model` shows; `kanbanr config cadence --git-model off` turns it off"
+                        .to_string(),
+                );
+            }
             let mut body =
                 serde_json::to_value(&config).map_err(|e| CoreError::Unsupported(e.to_string()))?;
             if !warnings.is_empty() {
@@ -2275,7 +2442,13 @@ fn dispatch_routes(
             let dry_run = b.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
             // Under an agent scope the write path holds every item where it is (FEAT-214).
             let hold = str_field(b, "hold_advance");
-            let results = store.apply_batch_held(p, ops, dry_run, hold.as_deref())?;
+            let results = store.apply_batch_held(
+                p,
+                ops,
+                dry_run,
+                hold.as_deref(),
+                &crate::origin::from_body(b),
+            )?;
             Ok(json!({ "results": results }).to_string())
         }
 
@@ -2335,6 +2508,13 @@ pub fn commit_message_after(
     let msg = commit_message(method, path, body);
     let bare = path.split('?').next().unwrap_or(path);
     let segs: Vec<&str> = bare.split('/').filter(|s| !s.is_empty()).collect();
+    if method.eq_ignore_ascii_case("POST")
+        && matches!(segs.as_slice(), ["projects", _, "decisions", "delegations"])
+        && let Ok(v) = serde_json::from_str::<Value>(response)
+        && let Some(id) = v["id"].as_str()
+    {
+        return format!("propose delegation {id}");
+    }
     if method.eq_ignore_ascii_case("POST")
         && matches!(segs.as_slice(), ["projects", _, "scopes"])
         && let Ok(v) = serde_json::from_str::<Value>(response)
@@ -2450,6 +2630,28 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
                 .unwrap_or_else(|| "record".into())
         ),
         ["projects", _p, "prepared", id, "reject"] => format!("reject prepared record {id}"),
+        ["projects", _p, "decisions", "mode"] => format!(
+            "set the decision mode to {}",
+            body.and_then(|b| str_field(b, "mode")).unwrap_or_default()
+        ),
+        ["projects", _p, "decisions", "delegations"] => "propose a delegation".into(),
+        ["projects", _p, "decisions", "defaults"] => "propose the default delegations".into(),
+        ["projects", _p, "decisions", "delegations", id, "grant"] => {
+            format!("grant delegation {id}")
+        }
+        ["projects", _p, "decisions", "delegations", id, "revoke"] => {
+            format!("revoke delegation {id}")
+        }
+        ["projects", _p, "decisions", "reviews"] => format!(
+            "{} delegated decision {}",
+            if body.and_then(|b| str_field(b, "verdict")).as_deref() == Some("undo") {
+                "undo"
+            } else {
+                "keep"
+            },
+            body.and_then(|b| str_field(b, "decision"))
+                .unwrap_or_default()
+        ),
         ["projects", _p, "config", "commit-gates"] => "set the commit gates".into(),
         ["projects", _p, "config", "tag-gate"] => "set the tag gate".into(),
         ["projects", _p, "config", "gate-docs"] => "set the documentation paths".into(),
@@ -3185,6 +3387,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// DEF-042 R-1: applying a process never turns the git model off.
+    #[test]
+    fn applying_a_process_keeps_the_git_model_on() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-dispatch-gm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        let call = |method: &str, path: &str, body: Value| -> Value {
+            serde_json::from_str(&dispatch(&store, method, path, Some(&body)).unwrap()).unwrap()
+        };
+        let set = call(
+            "PUT",
+            "/projects/demo/config/cadence",
+            json!({ "sprints": true }),
+        );
+        assert_eq!(set["cadence"]["git_model"], true, "the first choice");
+        assert!(set["warnings"].to_string().contains("git model is on"));
+        let applied = call(
+            "PUT",
+            "/projects/demo/config/workflow",
+            json!({ "preset": "default" }),
+        );
+        assert_eq!(applied["cadence"]["git_model"], true);
+        // A later choice of releases leaves a person's `off` alone.
+        call(
+            "PUT",
+            "/projects/demo/config/cadence",
+            json!({ "git_model": false }),
+        );
+        let more = call(
+            "PUT",
+            "/projects/demo/config/cadence",
+            json!({ "releases": true }),
+        );
+        assert!(!more["cadence"]["git_model"].as_bool().unwrap_or(false));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// DEF-018 R-5: a batch with a field an operation does not take is refused whole, in a dry run
     /// as in a real one, and the operation before it is not written.
     #[test]
@@ -3221,5 +3464,39 @@ mod tests {
             assert_eq!(store.load("demo").unwrap().features.len(), before);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-041 R-2: a sprint stored active but dated ahead is listed as planned, and reading it
+    /// rewrites nothing.
+    #[test]
+    fn the_sprint_list_reports_a_future_sprint_as_planned() {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-dispatch-def041-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        dispatch(
+            &store,
+            "PUT",
+            "/projects/demo/config/cadence",
+            Some(&serde_json::json!({"sprints": true})),
+        )
+        .unwrap();
+        let file = store.project_dir("demo").join("sprints.yaml");
+        std::fs::write(
+            &file,
+            "- code: SP-001\n  start: 2099-01-05\n  end: 2099-01-18\n  state: active\n",
+        )
+        .unwrap();
+        let before = std::fs::read(&file).unwrap();
+        let listed: serde_json::Value =
+            serde_json::from_str(&dispatch(&store, "GET", "/projects/demo/sprints", None).unwrap())
+                .unwrap();
+        assert_eq!(listed[0]["state"], "planned", "{listed}");
+        assert_eq!(std::fs::read(&file).unwrap(), before);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

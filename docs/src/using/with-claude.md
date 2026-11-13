@@ -49,7 +49,10 @@ kanbanr merges (once the model is on):
   - sprint/<SP> into main when the sprint closes (a fast-forward, tagged with the sprint's code)
   - sprint/<SP> into each item branch carried into that sprint (a catch-up merge; a conflict is reported for that item)
 pushing:    never automatic — you review and push
+automation: on
 ```
+
+Choosing sprints or releases turns the git model on.
 
 The plan quotes that output under *Branching*, lists which stage holds each role (design, build,
 integrate, release) under *Process*, and says that the method's gates are on. Approving the plan
@@ -100,9 +103,53 @@ If you ask it to explain one, it does, and sends you back to the page.
 | Promote or cut a release, and confirm each stage after the tag | **Releases** page |
 | Change it | tell Claude what to change: it revises the definition, and the item comes back to the queue |
 
+Checks that need a push are marked to be checked after it; Claude records them once CI has run;
+anything still unchecked at the cut waits for you to accept it, and the notes say so. An override
+Claude makes past a gate waits on the Review page for you to ratify, and the item doesn't ship
+until you do.
+
 Claude may run `kanbanr release promote <V> --plan`, `kanbanr sprint close` and
 `kanbanr release plan`, which record no verdict. If a verdict was ever recorded that you did not
 give, Claude says so at once and asks you to withdraw it on the item's page.
+
+## Where decisions are taken, and delegating them
+
+Each project chooses where its decisions are taken. In **monitor** mode, the default, every
+decision is yours, on the Review and Releases pages, as above. In **delegated** mode you still
+decide there, and Claude may also take the decisions you have delegated to it, for a time.
+
+To delegate, tell Claude what it may decide, for example: "you can sign off the design review of
+small defects for the next two weeks". Claude proposes a delegation: which verdicts (approve,
+ratify, or a named sign-off), for which items, kinds of item, milestone or stages, and until when
+(two weeks unless you say otherwise, three months at most). A proposal does nothing until you
+grant it: it waits in the **Decisions here** panel at the top of the Review page, where you grant
+it or discard it, and where you switch the project to delegated mode. Only you can grant one,
+change the mode, or review what was decided; kanbanr refuses Claude all three.
+
+When you set a project up, Claude proposes the delegations its process usually wants, and the
+setup plan shows them under **Decisions**: for most processes, the design review of defects and
+chores, and the docs fold-in of every item; for TOGAF, only the docs fold-in, so Business
+Architecture and System Design stay yours; for design control, none. Each covers the stage an item
+is in when that sign-off is asked: a sign-off named for a stage, such as the fold-in "at
+Migration", is the one for the move into it, so it is taken in the stage before. Only forward
+moves are delegated: when an item has moved back to an earlier stage, Claude asks you before
+deciding or changing anything for it, even if a delegation would cover it. You grant them on the
+Review page after setup, or don't.
+
+When Claude takes a decision under a delegation, it tells you which one and under which delegation,
+and the decision is recorded as delegated, by Claude, naming the delegation. It comes back on the
+Review page under **Delegated decisions to review**: **Keep** it, or **Undo** it, which withdraws
+it with a reason that names the delegation. Until you do, a release holding the item shows it as a
+warning beside its promote button and in `kanbanr release promote --plan`; it never blocks the
+release. A delegation can't cover a release, a withdrawal, a
+design decision (ADR) or the decisions settings themselves, and only the Claude you are talking to
+acts under one, never a sub-agent it briefs. Revoke a delegation on the same panel at any time;
+switching back to monitor mode suspends them all.
+
+Outside a delegation nothing changes: a verdict run inside a Claude session is refused by kanbanr
+itself, not only by its hook. This keeps Claude to what you delegated through kanbanr's own
+commands and hooks, and makes any departure visible; it is not a security boundary against a
+program running as you.
 
 ## Plan mode
 
@@ -221,7 +268,7 @@ same in every workflow:
 | `bypass` | your ratification on the Review page |
 | `signoff` | a "Sign off *name*" question |
 | `estimated` | a question: how big, in your project's unit (points or days) |
-| `in_sprint` | a question: plan it into the active sprint? |
+| `in_sprint` | a question: plan it into the running sprint, or start its sprint today? |
 | `in_release` | a question: which planned release? |
 | `tests_green` | **never a question**: evidence decides; Claude reports what isn't green yet and makes it green |
 

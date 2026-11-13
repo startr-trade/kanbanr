@@ -136,11 +136,18 @@ project"** (or anything equivalent):
 
      After the answer, run `kanbanr git model --sprints on|off --releases on|off` with it. It needs
      no board. Show its output verbatim in the follow-up and in the plan: where items branch from
-     and merge into, what kanbanr merges, and that pushing is always the user's.
+     and merge into, what kanbanr merges, and that pushing is always the user's. With sprints or
+     releases on, setup turns the git model on: the preview says `automation: on`, and kanbanr
+     merges as it shows. Say so in the plan. Turning it off is the user's choice
+     (`kanbanr config cadence --git-model off`).
    - *Definitions*: every item carries the Zachman six-dimension definition, EARS requirements
      and tests. That is the method, not an option. Say so, so the user is not surprised by it.
      Say also, without asking, that design before build and the docs fold-in are on by default
      (`kanbanr config method --off` turns them off later).
+   - *Decisions*: after the process is chosen, run
+     `kanbanr decisions defaults --process <name> --dry-run --json` (it needs no board: the
+     proposal is computed from the process alone) and show the proposed mode and delegations in
+     the plan under **Decisions**, with "you grant them on the Review page after setup".
    - *Git hooks* in the code repo (`kanbanr git install-hooks`): every commit names its board
      item, and commits on the default branch are refused. Offer them **defaulting to yes**.
    - *No git repository yet?* If the project folder isn't one, say so and plan `git init` plus
@@ -163,6 +170,7 @@ project"** (or anything equivalent):
    kanbanr init <name> --data-dir <board> --author "<name>" --email <email> --description "<…>"
    kanbanr process save <name> --description "<…>" [--personal] --from-file <scratch>/process.yaml   # a process designed now
    kanbanr config workflow --preset <name>         # a saved, built-in or just-saved process; omit for default
+   kanbanr decisions defaults                      # propose the process's default delegations; the user grants them
    kanbanr charter set --file <scratch>/charter.yaml
    kanbanr hooks status                            # init registered them; install if it did not
    kanbanr claude sync                             # CLAUDE.md block pointing at the charter
@@ -192,14 +200,16 @@ project"** (or anything equivalent):
    Save the approved plan as the board doc named in it, so the reasons for the setup outlive the
    session. Finish by checking `kanbanr hooks status`, `kanbanr git model`, `kanbanr git status`
    and `kanbanr git doctor` (these two if the hooks were chosen) and `kanbanr doctor`, then show
-   the board. On a new board, doctor's only expected
+   the board. `kanbanr git model` must say `automation: on` when sprints or releases are on; if it
+   does not, that is a setup fault to fix now. On a new board, doctor's only expected
    warnings are the goals that no item links to yet. Anything else is a setup fault to fix now.
    Doctor warns only about what an item's current stage asks; what later stages will ask appears
    after the warnings as counts ("Later stages will ask"), which are not warnings and need no
    clearing. `kanbanr check` lists them.
    Tell the user how to watch the board: `kanbanr serve` starts the monitor, which is built into
    the binary (it needs no `--ui-dir`, and never another checkout's build), and `kanbanr open`
-   opens it. **Only then** go back to what the user originally asked for.
+   opens it. Say that the proposed delegations wait on the Review page for them to grant.
+   **Only then** go back to what the user originally asked for.
 6. From that point on, treat kanbanr as the **system of record for the entire project**, with no
    further prompting.
 
@@ -214,7 +224,11 @@ Setup makes neither, so the first one is made when the user asks for it, with th
 known:
 
 - **A sprint.** When the user first asks to start or plan a sprint, ask its goal, its first day
-  (default next Monday) and its capacity (points under Scrum), then `kanbanr sprint add`. If a
+  (recommend today, `--start today`, unless the user names another day) and its capacity (points
+  under Scrum), then `kanbanr sprint add`. Work past the first stage waits for a started sprint.
+  If the user wants to begin before a sprint's first day, ask whether to start it today;
+  `kanbanr sprint start` then moves its dates to today and keeps its length. Never start a sprint
+  without asking. If a
   planned sprint with no items already exists, offer `kanbanr sprint edit <SP>` or reuse it. Never
   add a second sprint to change a date. A mistaken empty sprint is `kanbanr sprint remove <SP>`.
 - **A release.** When the user first plans an item into a release and none is suitable, ask the
@@ -342,6 +356,10 @@ visible, a plausible guess is not. Never write `[MISSING: …]` into the data; t
 Write the definition with the batch path (`definition` on `feature.add`/`feature.edit`) or
 `kanbanr feature define <CODE> --file def.yaml`.
 
+A check you can only see after main is pushed (a CI job, a tag's publish) gets `at: pushed` on its
+test; one that needs the cut gets `at: cut` (or `at: <release stage>`). The item's gate doesn't wait
+for it; the release stage does. Say so when the person approves. Never override a gate for it.
+
 ## Agreement before work: decided on the pages
 
 **Scope → define → the user decides on the Review page → only then write code.** Every verdict is
@@ -354,6 +372,17 @@ way to take a decision**: not `gate record`, `signoff`, `approve`, `ratify`, `ad
 form, the page names it. Your part is one message saying what is waiting and where:
 `kanbanr open --check` gives the addresses. If no monitor accepts writes, offer to start one with
 `kanbanr review --ui` (run it in the background) or tell the user the command to run.
+
+**Where decisions are taken is the project's choice** (FTR-028). `kanbanr decisions show` says the
+mode. In `monitor` mode, every verdict is the user's, on the pages. In `delegated` mode, you may
+take a verdict a delegation in force covers, with `--under DLG-n`, and nothing else. Say in one
+message what you decided and under which delegation; it waits on the Review page for them to keep
+or undo. **When an item has moved back to an earlier stage, ask the user before taking any
+decision or making any change for it, even if a delegation would cover it**: delegations are for
+forward moves. You never change the mode, grant a delegation or review a decision: kanbanr
+refuses it.
+You may propose a delegation (`kanbanr decisions propose …`); it covers nothing until the user
+grants it on the Review page.
 
 **Prepare the record before you say a decision waits** (FTR-034). When you have its evidence (the
 CI run's link and result, the commit, the doc that holds the minutes, what the person said), put
@@ -381,7 +410,7 @@ organisation's own process file changes what you ask with nothing changed here:
 | `approved` | the user's approval **on the Review page**: say it is waiting, with the link |
 | `bypass` | a ratification **on the Review page**: say it is waiting |
 | `signoff` (a name in `signoffs_needed`, e.g. `design-review`, `docs-folded`) | a sign-off **on the Review page**: say it is waiting |
-| `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; the active sprint; planned releases) |
+| `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; plan it into the running sprint, or start its sprint today; planned releases) |
 | `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
 | `docs_updated` | **never a question** — fold the design into each doc in `affects_docs`, as built, and draft that fold-in into the definition, saying which docs change; if the item names none, ask whether it really changes no architecture doc |
 | `diagrams_valid` | **never a question** — fix each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then run `kanbanr doctor` to confirm none is left |
@@ -475,6 +504,10 @@ asked for, so don't ask for it either.
 **A decision you draft is announced at once:** fill its sections, show it in a few lines, and say
 it waits on the Review page.
 
+The **delegated decisions to review** (`kanbanr decisions show --json`, `to_review`) are listed
+alongside the queue: say how many wait to be kept or undone, under which delegation. When the user
+changes the mode, relay the `waiting` list it answers with once: what waits, and where now.
+
 ### Designing a process with the user
 
 Plan mode is for this, and for setup, only: never for a routine move or a new item, and **never
@@ -535,8 +568,11 @@ match a process by hand.
 The user moves work by asking: "park FEAT-074", "put FEAT-150 back to Planned". Run
 `kanbanr move <CODE> <status>`. If a gate refuses, say what the stage still needs — it is the same
 table — and offer to work through it. `--override "<reason>"` is for genuine emergencies, with the
-user's reason, and the item then needs ratifying. A write that prints `coverage:` lines has left a
-view behind: add the links each one names before you move the item on.
+user's reason, and the item then needs ratifying. An override is yours to explain and the person's
+to ratify. After any `--override`, prepare its ratification at once (`kanbanr prepare ratify <CODE>
+--reason … --source …`) and tell the person it waits on the Review page. The item does not ship
+until it is ratified. A write that prints `coverage:` lines has left a view behind:
+add the links each one names before you move the item on.
 
 ### The rules underneath
 
@@ -670,6 +706,9 @@ design before build, it adds `signoffs: [design-review]` to the same gate.
 
 ### Sub-agents: what each may do
 
+Only you, the coordinator, act under a delegation; never brief an agent to (kanbanr refuses
+`--under` from a sub-agent).
+
 When you hand work to a sub-agent, its limits are not left to its judgement or to a one-off line
 in the brief. Each role has fixed boundaries, kanbanr enforces them,
 and the brief states them **verbatim**:
@@ -795,7 +834,11 @@ branches; fix it before going on.
   checkout: `kanbanr release notes <V>` shows them and where they are; `--file F` (or `-`) or
   `--edit` commits new text there, nothing checked out, until the cut. When the user asks where
   the notes are or wants them changed, use this — never a fix item, never a checkout of
-  `release/<V>`. The Releases page shows them too, with Edit on a write-enabled monitor.
+  `release/<V>`. The Releases page shows them too, with Edit on a write-enabled monitor. Write the
+  notes and the changelog section together: `kanbanr release notes <V> --file notes.md --changelog
+  section.md`. Candidate fills the section from what ships (or says why it cannot); rewrite it for
+  readers with the notes. Never open a fix item to change the changelog or the notes of a release
+  under test.
 - **A merge sends a promoted release back.** When a move merges an item into a release that is past
   candidate, kanbanr sends the release back to candidate and says so. Tell the person, in one
   message, what the Releases page now offers: update the notes, run the gate again, promote to
@@ -819,6 +862,11 @@ branches; fix it before going on.
   needs the remote CI service (such as "check CI on the remote"). It would block Promote to main,
   which CI needs first. An item's tests run on this machine. The remote run is the release's `ci`
   gate, recorded after main is pushed.
+- **Tests checked later.** After main is pushed and CI has run, read the run and record each later
+  test's result (`kanbanr test <CODE> <R-n> <test> green --rev <sha>`). If the cut's plan lists
+  untested requirements (`untested_accepted`), write a "Not verified in this release" section into
+  the notes (`kanbanr release notes <V>`) and tell the person the cut waits for their acceptance on
+  the Releases page. Never accept it yourself.
 - **A CI result is the user's to confirm.** A stage that requires `gate_passed` needs a recorded
   passed result for the release tip. kanbanr never asks a server. You may read the CI's result
   with your own tools; then `kanbanr prepare gate <gate> --passed|--failed --commit <sha> --url
@@ -828,8 +876,11 @@ branches; fix it before going on.
   and where it waits. **Never run `kanbanr gate record` yourself**, and
   never prepare a verdict you did not see.
 - A patch is `kanbanr release add <V> --patch-of <P>`: `release/<V>` is made from `<P>`'s tag. A fix
-  integrated into a release branch reaches the line through `kanbanr git forward <V>`, which the
-  move says is needed; it is never done for you.
+  integrated into a release branch reaches the line through `kanbanr git forward <V>`. When a move
+  or a promotion says it is needed (`next, for Claude: …`), run `kanbanr git forward <V>` yourself
+  at once, and tell the user what merged: from, into, the commit. It is a local merge; the user
+  still pushes. If it reports a conflict, nothing changed: say which files conflict and ask how
+  to resolve them. Never hand the user the command.
 - In the sprints-only model, `kanbanr sprint close <SP>` is the cut: main fast-forwards to
   `sprint/<SP>`, tagged with the sprint's code.
 - **Designing CI or a release workflow.** When the user asks for a pipeline, design it as
@@ -1270,7 +1321,7 @@ kanbanr finish [FEAT-001]         # gated: tasks complete, requirements proven
 kanbanr git install-hooks [--force] | uninstall-hooks | status
 kanbanr git model [--json]                       # main, the line, item branches, protected lines, what kanbanr merges
 kanbanr git model --sprints on|off --releases on|off   # preview a cadence's model; needs no board
-kanbanr git forward <VERSION>                    # merge a release's fixes forward into the line
+kanbanr git forward <VERSION>                    # merge a release's fixes forward into the line (yours, never the user's)
 kanbanr git doctor [--json]                      # board vs branches; read-only, exits 1 on an error
 kanbanr defect FEAT-002 --introduced-by FEAT-001 --found-in production [--severity …] [--root-cause …]
 kanbanr approve FEAT-001 --rev <rev>   # the user's, on the monitor; refused when Claude runs it (so are ratify, unapprove)
@@ -1311,8 +1362,14 @@ kanbanr prepare signoff <CODE> <NAME> [--note …] [--doc PATH] --source S…   
 kanbanr prepare promotion <V> [--stage S] --checked "…" --source S…   # what was checked, for a stage confirmed after the tag
 kanbanr prepare ratify <CODE> --reason "…" --source S…   # why the work went ahead, for the person to ratify
 kanbanr prepare list [--all] [--item CODE] [--release V]   # what waits for the person, and where; stale ones say why
+kanbanr decisions show                            # the mode, delegations, delegated decisions to review, what waits where
+kanbanr decisions propose --verdict signoff:<name>|approve|ratify [--step S] [--item CODE] [--kind K] [--milestone MS] [--all] [--until YYYY-MM-DD] [--note …]   # yours: inert until the user grants it
+kanbanr decisions revoke DLG-001 --reason "…"     # yours or the user's
+kanbanr decisions defaults [--process <name> --dry-run]   # yours: propose the process's default delegations
+kanbanr decisions mode monitor|delegated | grant DLG-001 | review <decision> --keep|--undo   # the user's, on the Review page; refused when Claude runs it
+kanbanr approve|ratify|signoff … --under DLG-001  # yours, in delegated mode, only for what a delegation in force covers
 kanbanr release redate v0.1.0                     # date the notes and changelog today, before the cut
-kanbanr release notes v0.1.0 [--file F | --edit]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut
+kanbanr release notes v0.1.0 [--file F | --edit] [--changelog F]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut; --changelog commits the version's changelog section in the same commit
 kanbanr release stages                            # each stage: requires, on_enter, declared or default
 kanbanr config release-stage main --requires items_finished --on-enter move_main [--after ci] [--clear]
 kanbanr config release-prepare --version-file api/Cargo.toml --changelog CHANGELOG.md --notes 'docs/src/releases/{version}.md'

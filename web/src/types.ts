@@ -165,6 +165,8 @@ export interface ApprovalEvent {
   rev?: string;
   /** Where it was taken: monitor, conversation, terminal or delegated (DEF-028). Absent means unknown. */
   origin?: string;
+  /** The delegation it was taken under, such as DLG-001, when origin is delegated (FTR-028). */
+  delegation?: string;
 }
 
 export interface FeatureDefinition {
@@ -206,6 +208,8 @@ export interface Signoff {
   reason?: string;
   /** Where it was taken (DEF-028). Absent means unknown. */
   origin?: string;
+  /** The delegation it was taken under, such as DLG-001, when origin is delegated (FTR-028). */
+  delegation?: string;
 }
 
 /** The six completeness dimensions, one line each. */
@@ -226,6 +230,8 @@ export interface Approval {
   parts?: Record<string, string>;
   /** Where it was taken (DEF-028). Absent means unknown. */
   origin?: string;
+  /** The delegation it was taken under, such as DLG-001, when origin is delegated (FTR-028). */
+  delegation?: string;
 }
 
 export interface Requirement {
@@ -251,6 +257,8 @@ export interface TestRef {
   kind?: string;
   state: "planned" | "red" | "green";
   checked_rev?: string;
+  /** When it can be checked (DEF-043): "pushed", "cut" or a release stage; absent at the item's gates. */
+  at?: string;
 }
 
 /** The six dimensions in order, with blanks named — derived here exactly as the CLI derives it. */
@@ -307,6 +315,17 @@ export interface PendingReview {
   spec_rev?: string;
   /** The spec that sign-off pins, with what changed since the last one (FTR-023). */
   spec?: SpecBrief;
+  /** Claude's overrides on the item that wait for the person to ratify, oldest first (DEF-043). */
+  overrides?: OverrideView[];
+}
+
+/** One override Claude made past a gate, as the Review page shows it (DEF-043). */
+export interface OverrideView {
+  at: string;
+  from: string;
+  to: string;
+  reason: string;
+  origin: string;
 }
 
 export interface SpecBrief {
@@ -533,6 +552,8 @@ export interface Release {
     reason?: string;
     item?: string;
     origin?: string;
+    /** The requirements accepted shipping untested at the cut, as CODE/R-n (DEF-043). */
+    accepted_untested?: string[];
   }[];
   /** Who cut the release and from where (DEF-028). Absent means unknown. */
   shipped_by?: string;
@@ -564,6 +585,10 @@ export interface ReleaseNotes {
   why_not?: string;
   /** Items planned into the release whose code the notes do not mention (DEF-031). */
   unmentioned?: string[];
+  /** The changelog file, when one is configured (DEF-044). */
+  changelog_path?: string;
+  /** This version's section in it, at the same tip; absent when empty. */
+  changelog_section?: string;
 }
 
 /** A check a gate names, the Zachman check narrowed to some columns, the spec's named sections
@@ -697,11 +722,25 @@ export interface ManualWaiting {
 
 /** One condition of a release stage a promotion enters, and whether it holds (FEAT-212). */
 export interface PlanCondition {
-  check: "items_finished" | "prepared" | "main_at_release" | "pushed" | "gate_passed" | "tag_passed" | "items_merged" | "stage_passed" | "merged_items_ship";
+  check:
+    | "items_finished"
+    | "prepared"
+    | "main_at_release"
+    | "pushed"
+    | "gate_passed"
+    | "tag_passed"
+    | "items_merged"
+    | "stage_passed"
+    | "merged_items_ship"
+    | "later_tests_green"
+    | "untested_accepted";
   stage: string;
   holds: boolean;
   detail: string;
   fix?: string;
+  /** The requirements it names, as CODE/R-n (DEF-043): for untested_accepted, exactly what the
+   * person accepts shipping unverified. */
+  refs?: string[];
 }
 
 /** One step a promotion takes (FEAT-212). */
@@ -1036,4 +1075,91 @@ export interface DriftChecked {
 export interface SettledText {
   flag: DriftFlag;
   check: DriftChecked;
+}
+
+/** Where a project's decisions are taken (FTR-028). */
+export type DecisionMode = "monitor" | "delegated" | "conversation";
+
+/** Who did something on the decisions record, when and from where; a grant pins its `rev`. */
+export interface DecisionStamp {
+  by: string;
+  at: string;
+  origin: string;
+  rev?: string;
+  reason?: string;
+}
+
+/** One entry of the decision mode's history. */
+export interface ModeChange {
+  mode: DecisionMode;
+  by: string;
+  at: string;
+  origin: string;
+  reason?: string;
+}
+
+/** A delegation: the verdicts Claude may take, on which items, until when (FTR-028). */
+export interface Delegation {
+  id: string;
+  /** approve, ratify or signoff:<name>. */
+  verdicts: string[];
+  steps?: string[];
+  items?: string[];
+  kinds?: string[];
+  milestone?: string;
+  all?: boolean;
+  until: string;
+  note?: string;
+  proposed: DecisionStamp;
+  granted?: DecisionStamp;
+  revoked?: DecisionStamp;
+}
+
+/** A delegation with where it stands now. */
+export interface DelegationView extends Delegation {
+  state: "proposed" | "granted" | "ended" | "revoked";
+  in_force: boolean;
+  /** What a grant is pinned to; sent back with it. */
+  rev: string;
+  /** Granted, but not through kanbanr: Claude's verdicts under it are refused. */
+  not_granted_through_kanbanr?: boolean;
+}
+
+/** A decision Claude took under a delegation, waiting for the person to keep or undo it. */
+export interface DelegatedDecision {
+  /** `<CODE>/<approve|ratify|signoff>/<name or ->/<record at>`. */
+  decision: string;
+  code: string;
+  title: string;
+  verdict: string;
+  signoff?: string;
+  delegation: string;
+  at: string;
+  status: string;
+  undo_route: string;
+}
+
+/** Something waiting for a decision, and where. */
+export interface Waiting {
+  code: string;
+  what: string;
+  place: "monitor" | "conversation" | "delegated";
+  delegation?: string;
+  url?: string;
+}
+
+/** `GET /projects/{p}/decisions` (FTR-028). */
+export interface DecisionsView {
+  mode: DecisionMode;
+  modes: ModeChange[];
+  delegations: DelegationView[];
+  to_review: DelegatedDecision[];
+  waiting: Waiting[];
+}
+
+/** The answer to a mode change: what waits where now. */
+export interface ModeChanged {
+  mode: DecisionMode;
+  already_recorded?: boolean;
+  waiting: Waiting[];
 }

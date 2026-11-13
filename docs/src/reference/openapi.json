@@ -215,6 +215,10 @@
           "by": {
             "type": "string"
           },
+          "delegation": {
+            "description": "The delegation a record was taken under, such as `DLG-001`, when `origin` is `delegated`\n(FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.",
+            "type": "string"
+          },
           "origin": {
             "description": "Where it was taken: `monitor`, `conversation`, `terminal` or `delegated` (DEF-028). Absent on a\nrecord written before origin existed, which reads as unknown; kept as a string so a newer\nkanbanr's value survives.",
             "type": "string"
@@ -245,6 +249,10 @@
             "type": "string"
           },
           "by": {
+            "type": "string"
+          },
+          "delegation": {
+            "description": "The delegation a record was taken under, such as `DLG-001`, when `origin` is `delegated`\n(FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.",
             "type": "string"
           },
           "origin": {
@@ -991,6 +999,46 @@
         ],
         "type": "object"
       },
+      "DecisionsView": {
+        "description": "`GET /projects/{p}/decisions`: the mode and its history, every delegation, the delegated\ndecisions to review, and what waits for a decision where.",
+        "properties": {
+          "delegations": {
+            "items": {
+              "$ref": "#/components/schemas/DelegationView"
+            },
+            "type": "array"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/Mode"
+          },
+          "modes": {
+            "items": {
+              "$ref": "#/components/schemas/ModeChange"
+            },
+            "type": "array"
+          },
+          "to_review": {
+            "items": {
+              "$ref": "#/components/schemas/DelegatedDecision"
+            },
+            "type": "array"
+          },
+          "waiting": {
+            "items": {
+              "$ref": "#/components/schemas/Waiting"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "mode",
+          "modes",
+          "delegations",
+          "to_review",
+          "waiting"
+        ],
+        "type": "object"
+      },
       "Defect": {
         "additionalProperties": true,
         "description": "What a defect cost and where it came from (FEAT-053).\n\n`escaped` is the field that earns its keep: a defect found after the work was called done is a\ndifferent animal from one caught during it, and the ratio between them is the one quality\nnumber a board can honestly produce.",
@@ -1022,6 +1070,146 @@
         },
         "required": [
           "escaped"
+        ],
+        "type": "object"
+      },
+      "DelegatedDecision": {
+        "description": "A delegated decision waiting for the person to keep or undo it.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "decision": {
+            "description": "`<CODE>/<approve|ratify|signoff>/<name or ->/<record at>`.",
+            "type": "string"
+          },
+          "delegation": {
+            "type": "string"
+          },
+          "signoff": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "undo_route": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision",
+          "code",
+          "title",
+          "verdict",
+          "delegation",
+          "at",
+          "status",
+          "undo_route"
+        ],
+        "type": "object"
+      },
+      "DelegationState": {
+        "description": "What a delegation is in, at a moment.",
+        "enum": [
+          "proposed",
+          "granted",
+          "ended",
+          "revoked"
+        ],
+        "type": "string"
+      },
+      "DelegationView": {
+        "additionalProperties": true,
+        "description": "A delegation with where it stands now.",
+        "properties": {
+          "all": {
+            "description": "Names no items, kinds or milestone on purpose: every item.",
+            "type": "boolean"
+          },
+          "granted": {
+            "$ref": "#/components/schemas/Stamp"
+          },
+          "id": {
+            "type": "string"
+          },
+          "in_force": {
+            "description": "Granted, not ended and not revoked: Claude may act under it.",
+            "type": "boolean"
+          },
+          "items": {
+            "description": "Item codes; empty is any.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kinds": {
+            "description": "Item kinds; empty is any. An item with no kind is a `feature`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "milestone": {
+            "description": "A milestone code; empty is any.",
+            "type": "string"
+          },
+          "not_granted_through_kanbanr": {
+            "description": "Granted, but not through kanbanr (T9): written into the file by hand, or not committed.\nClaude's verdicts under it are refused.",
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string"
+          },
+          "proposed": {
+            "$ref": "#/components/schemas/Stamp"
+          },
+          "rev": {
+            "description": "What a grant is pinned to: [`Delegation::rev`], sent back with the grant.",
+            "type": "string"
+          },
+          "revoked": {
+            "$ref": "#/components/schemas/Stamp"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DelegationState"
+          },
+          "steps": {
+            "description": "Statuses the item is in when the verdict is taken; empty is any.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "until": {
+            "description": "RFC 3339; the delegation is in force until then.",
+            "type": "string"
+          },
+          "verdicts": {
+            "description": "`approve`, `ratify` or `signoff:<name>`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "verdicts",
+          "until",
+          "proposed",
+          "state",
+          "in_force",
+          "rev"
         ],
         "type": "object"
       },
@@ -2455,6 +2643,54 @@
         ],
         "type": "object"
       },
+      "Mode": {
+        "description": "Where a project's decisions are taken.",
+        "oneOf": [
+          {
+            "const": "monitor",
+            "description": "On the monitor, by the person: today's behaviour, and the default.",
+            "type": "string"
+          },
+          {
+            "const": "delegated",
+            "description": "On the monitor, and by Claude within a granted delegation.",
+            "type": "string"
+          },
+          {
+            "const": "conversation",
+            "description": "In the conversation (FTR-035; recording it is refused until that is built).",
+            "type": "string"
+          }
+        ]
+      },
+      "ModeChange": {
+        "additionalProperties": true,
+        "description": "One entry of the mode history.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/Mode"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "by",
+          "at",
+          "origin"
+        ],
+        "type": "object"
+      },
       "Name": {
         "description": "Something a change put in the code that a text may describe.",
         "properties": {
@@ -2647,6 +2883,34 @@
           }
         ]
       },
+      "OverrideView": {
+        "description": "One override Claude made, as the Review page shows it (DEF-043).",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "from",
+          "to",
+          "reason",
+          "origin"
+        ],
+        "type": "object"
+      },
       "Part": {
         "description": "One part of the method.",
         "oneOf": [
@@ -2706,6 +2970,15 @@
         ],
         "type": "object"
       },
+      "Place": {
+        "description": "A decision waiting for someone, and where.",
+        "enum": [
+          "monitor",
+          "conversation",
+          "delegated"
+        ],
+        "type": "string"
+      },
       "PlanCondition": {
         "description": "One condition of a stage entered or passed, and whether it holds (FEAT-212).",
         "properties": {
@@ -2722,6 +2995,13 @@
           },
           "holds": {
             "type": "boolean"
+          },
+          "refs": {
+            "description": "The requirements it names, as `CODE/R-n` (DEF-043): for `untested_accepted`, exactly what\nthe person accepts; for `later_tests_green`, what is not green yet.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "stage": {
             "description": "The stage that requires it.",
@@ -3489,6 +3769,16 @@
             "const": "merged_items_ship",
             "description": "Every item planned into the release whose code is merged can ship: the cut would not carry\nmerged work away (DEF-029). Only a plan names it, so it is not in `ALL`.",
             "type": "string"
+          },
+          {
+            "const": "later_tests_green",
+            "description": "Every test of the release's items checked at this stage or before it is green (DEF-043).\nOnly a plan names it, so it is not in `ALL`.",
+            "type": "string"
+          },
+          {
+            "const": "untested_accepted",
+            "description": "The person accepted shipping exactly the requirements whose tests were not run (DEF-043).\nOnly a plan names it, at the cut, so it is not in `ALL`.",
+            "type": "string"
           }
         ]
       },
@@ -3955,6 +4245,13 @@
             "description": "What the ordering keys on, and useful to a client besides.",
             "type": "boolean"
           },
+          "overrides": {
+            "description": "Claude's overrides on the item that wait for the person to ratify (DEF-043), oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/OverrideView"
+            },
+            "type": "array"
+          },
           "release_choices": {
             "description": "The planned releases it could ship in, in file order (FEAT-185). Present whenever the\nrelease question is due, so a surface asking another question first can ask this one too.\nEmpty: only a new release to choose.",
             "items": {
@@ -4073,6 +4370,10 @@
               "$ref": "#/components/schemas/Checked"
             },
             "type": "array"
+          },
+          "delegation": {
+            "description": "The delegation a record was taken under, such as `DLG-001`, when `origin` is `delegated`\n(FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.",
+            "type": "string"
           },
           "doc": {
             "description": "A board doc holding the record — minutes, a checklist.",
@@ -4385,6 +4686,13 @@
         "additionalProperties": true,
         "description": "One move of a release between stages: where to, who moved it, and when (FEAT-183). A move back\ncarries the reason it was made.",
         "properties": {
+          "accepted_untested": {
+            "description": "The requirements the person accepted shipping untested at the cut, as `CODE/R-n`\n(DEF-043). Empty on every other change.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "at": {
             "type": "string"
           },
@@ -4429,6 +4737,33 @@
         },
         "required": [
           "name"
+        ],
+        "type": "object"
+      },
+      "Stamp": {
+        "additionalProperties": true,
+        "description": "Who did something, when, and from where; a grant also pins the revision it granted.",
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "rev": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "by",
+          "at",
+          "origin"
         ],
         "type": "object"
       },
@@ -4530,6 +4865,10 @@
         "additionalProperties": true,
         "description": "A test that verifies a requirement, and where it currently stands.",
         "properties": {
+          "at": {
+            "description": "When it can be checked (DEF-043): empty at the item's gates, `pushed` after main is pushed,\n`cut` at the cut, or a release stage's name. The item's gate doesn't wait for a test with\nan `at`; the release stage it names does. Part of the definition, so changing it lapses an\napproval.",
+            "type": "string"
+          },
           "checked_rev": {
             "description": "The project revision at which this was last observed green. A green older than HEAD is\nstale rather than trustworthy.",
             "type": "string"
@@ -4619,6 +4958,10 @@
           "from": {
             "type": "string"
           },
+          "origin": {
+            "description": "Where a move with an override was made: `monitor`, `conversation`, `terminal` or\n`delegated` (DEF-043). Set only on a transition with an override; empty on every move\nbefore this version.",
+            "type": "string"
+          },
           "override": {
             "description": "Why a gate was passed over, when it was (FEAT-113). Absent on an ordinary move.",
             "type": "string"
@@ -4649,6 +4992,31 @@
         },
         "required": [
           "path"
+        ],
+        "type": "object"
+      },
+      "Waiting": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "delegation": {
+            "type": "string"
+          },
+          "place": {
+            "$ref": "#/components/schemas/Place"
+          },
+          "url": {
+            "type": "string"
+          },
+          "what": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "what",
+          "place"
         ],
         "type": "object"
       },
@@ -5068,6 +5436,47 @@
           }
         },
         "summary": "The project's charter: purpose, goals, scope and constraints"
+      }
+    },
+    "/api/projects/{project}/decisions": {
+      "get": {
+        "operationId": "getProjectsDecisions",
+        "parameters": [
+          {
+            "description": "The project's id.",
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionsView"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "400": {
+            "$ref": "#/components/responses/E400"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "409": {
+            "$ref": "#/components/responses/E409"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          }
+        },
+        "summary": "Where the project's decisions are taken (FTR-028): the mode and its history, every delegation with where it stands, the decisions Claude took under one for the person to keep or undo, and what waits for a decision where"
       }
     },
     "/api/projects/{project}/docs": {

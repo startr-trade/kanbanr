@@ -11,6 +11,9 @@ any commands:
   Claude tells you what is waiting there and links to it. It never records a decision, and it
   doesn't ask for one in a plan or a question. What Claude already knows, such as a CI run's
   result or what a sign-off covered, arrives filled in beside the button: you check it and click.
+- **You can delegate the small decisions.** Tell Claude which ones it may take, such as the design
+  review of small defects, and until when. It proposes a delegation; you grant it on the
+  **Review** page. Whatever Claude decides under it comes back there for you to keep or undo.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [Scrum from the command line](scrum-cli.md). For the other
@@ -64,6 +67,8 @@ release's version and target, when you first ask. Then it creates the sprint and
 Your checkout doesn't move. A sprint and a release don't have to line up: one release can take items
 from several sprints.
 
+Claude recommends starting today. Work past the first stage waits until the sprint has started; a sprint dated later reads as planned until its first day.
+
 ## One item, stage by stage
 
 Ask for the work in your own words, and Claude asks only what it can't work out. When something's
@@ -89,6 +94,10 @@ is a decision and not an oversight. If it has screens, Claude also asks how the 
 
 **Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
+
+**Claude's overrides come to you.** If Claude moves an item past a gate, it says why and the move
+waits on the Review page with that reason, even on an item you approved. **Ratify** it there; until
+you do, the item doesn't ship.
 
 **Each approval covers the text you saw.** Adding to the definition keeps the approval, and what was
 added is reviewed at the next decision. Changing or removing approved text lapses it, and the item
@@ -139,18 +148,18 @@ see [Designing CI and the release workflow](delivery-pipeline.md).
 | Step | Who | Do this |
 |---|---|---|
 | 1 | You | **Releases** page: **Promote to candidate**. This makes the release branch and drafts the version, changelog and notes |
-| 2 | Claude | Say "Write the release notes for readers", because the draft only lists requirements |
+| 2 | Claude | Say "Write the release notes and the changelog for readers", because the draft only lists requirements |
 | 3 | You | Open **Release notes** on the release, then **Edit notes** and **Save** for any changes |
 | 4 | Claude | Say "Run the full checks over the release" |
 | 5 | You | **Releases** page: **Promote to main**. This moves main to the release, without tagging |
 | 6 | You | Terminal: `git push origin main`. This is the first push the release needs |
 | 7 | You | Wait for CI on main to go green |
 | 8 | Claude, then you | Claude reads the run and prepares the result. **Releases** page: check the run's link and click **Record ci passed** |
-| 9 | You | **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Released, unless your stages continue after the tag: then **Confirm** each later stage, and the last one moves the items. The Cut stays greyed out until step 8 is done for the commit main is at |
+| 9 | You | **Check again**, then **Cut v1.0.0**. This tags main and moves the items to Released, unless your stages continue after the tag: then **Confirm** each later stage, and the last one moves the items. The Cut stays greyed out until step 8 is done for the commit main is at. If some shipping requirements still have tests not run, the page lists them with one checkbox: tick it to ship them unverified, and the notes name them |
 | 10 | You | Terminal: `git push origin v1.0.0`, then wait for the release workflow |
-| 11 | Claude | Say "The release is out. Bring it forward into the sprint" |
+| 11 | Claude | Brings the release forward into the sprint and tells you; you push the sprint branch when you push |
 
-**When to push.** You push twice for a release: main after **Promote to main**, and the tag after the **Cut**. Nothing earlier is needed: every check before that runs on your machine. If you want to see the pipeline run sooner, you can push the sprint's branch; that run is a preview and records nothing for the release.
+**When to push.** You push twice for a release: main after **Promote to main**, and the tag after the **Cut**. Nothing earlier is needed: every check before that runs on your machine. If you want to see the pipeline run sooner, you can push the sprint's branch; that run is a preview and records nothing for the release. Recording CI, promoting and the cut are never delegated: even when you have let Claude take some forward decisions, these stay your clicks. If an item has moved back to an earlier stage, Claude asks you before it acts on it, delegation or not.
 
 **Recording CI.** The Cut waits for a CI result recorded for the exact commit main is at. kanbanr never asks your CI service. Claude reads the CI result and prepares it with the link to the run. You check it and confirm it with one click; you can edit it or reject it instead. A failed run is recorded as failed, and the page then says what to fix.
 
@@ -167,6 +176,8 @@ again and wait for CI before the cut.
 **The date follows the release.** Promoting to main dates the notes and changelog today. If main moved
 earlier and the cut comes later, the page warns you: ask Claude to re-date them before you cut,
 because shipped notes can't be edited.
+
+**A fix made during the release reaches the sprint the same way:** Claude brings it forward.
 
 ## Closing the sprint
 

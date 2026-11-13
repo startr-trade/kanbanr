@@ -68,8 +68,11 @@ fn unsupported(msg: String) -> CoreError {
     CoreError::Unsupported(msg)
 }
 
+/// The project folder that holds recorded manual test results.
+pub const FOLDER: &str = "manual";
+
 fn dir(store: &Store, id: &str) -> PathBuf {
-    store.project_dir(id).join("manual")
+    store.project_dir(id).join(FOLDER)
 }
 
 fn state_name(s: TestState) -> &'static str {

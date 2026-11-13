@@ -158,6 +158,7 @@ made by mistake is removed with `kanbanr sprint remove SP-001` or `kanbanr relea
 
 ```text
 kanbanr sprint add --start 2026-11-03 --length 2w --goal "Carts survive a return"
+# or start it today: kanbanr sprint add --start today --length 2w --goal "…"
 kanbanr sprint start SP-001
 kanbanr feature add --title "Restore the cart" --milestone MS-001 --spec "# Restore the cart"
 kanbanr sprint plan SP-001 FEAT-001
