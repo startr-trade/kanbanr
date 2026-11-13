@@ -1032,13 +1032,18 @@ fn scan_leftover_writes(store: &Store, id: &str, report: &mut Report) {
 
 fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
     let known: BTreeSet<&str> = project.config.statuses.iter().map(String::as_str).collect();
-    const EXPECTED: [&str; 6] = [
+    // Every folder kanbanr writes at a project's root. A new one goes here too, or doctor calls it
+    // stray.
+    const EXPECTED: [&str; 9] = [
         "features",
         "milestones",
         "docs",
         "activity",
         "events",
         "pins",
+        crate::gates::FOLDER,
+        crate::prepared::FOLDER,
+        crate::manual::FOLDER,
     ];
     let Ok(entries) = std::fs::read_dir(store.project_dir(&project.id)) else {
         return;
@@ -1055,9 +1060,9 @@ fn scan_stray_folders(store: &Store, project: &Project, report: &mut Report) {
             .map(|d| d.flatten().count())
             .unwrap_or(0);
         let note = if known.contains(name.as_str()) {
-            "a status folder at the project root — it belongs under features/ and will move on the              next write"
+            "a status folder at the project root — it belongs under features/ and will move on the next write"
         } else if items == 0 {
-            "an empty folder matching no status and no part of the layout — most likely left by a              status rename"
+            "an empty folder matching no status and no part of the layout — most likely left by a status rename"
         } else {
             "a folder matching no status and no part of the layout, and it is not empty"
         };
@@ -2053,6 +2058,53 @@ mod tests {
         // The portfolio-wide run says the same.
         let all = coverage(&run(&store).unwrap());
         assert_eq!(all.len(), found.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-038 R-1: the folders kanbanr writes at a project's root (recorded gate results,
+    /// prepared evidence, manual results) are part of the layout, not stray; others still are.
+    #[test]
+    fn a_recorded_gate_result_is_not_a_stray_folder() {
+        let (store, dir) = fixture();
+        crate::gates::record(
+            &store,
+            "demo",
+            &crate::gates::GateResult {
+                name: "ci".into(),
+                commit: "a".repeat(40),
+                passed: true,
+                by: "Tester".into(),
+                at: "2026-11-12T10:00:00Z".into(),
+                source: "person".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let root = store.project_dir("demo");
+        for folder in [crate::prepared::FOLDER, crate::manual::FOLDER] {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            std::fs::write(root.join(folder).join("x.yaml"), "a: 1\n").unwrap();
+        }
+        let report = run_project(&store, "demo").unwrap();
+        let strays: Vec<&str> = report
+            .issues
+            .iter()
+            .map(|i| i.message.as_str())
+            .filter(|m| m.contains("matching no status"))
+            .collect();
+        assert!(strays.is_empty(), "{strays:?}");
+        // The scan still runs.
+        std::fs::create_dir_all(root.join("stray")).unwrap();
+        std::fs::write(root.join("stray").join("x.txt"), "x").unwrap();
+        let report = run_project(&store, "demo").unwrap();
+        let strays: Vec<&str> = report
+            .issues
+            .iter()
+            .map(|i| i.message.as_str())
+            .filter(|m| m.contains("matching no status"))
+            .collect();
+        assert_eq!(strays.len(), 1, "{strays:?}");
+        assert!(strays[0].starts_with("stray/ is a folder matching no status"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
