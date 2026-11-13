@@ -241,6 +241,10 @@ flowchart TD
   Migration and one of them is yours (a sign-off or approval); the rest are Claude's. "Waiting on
   you: docs-folded" appears only when nothing but your part remains. The card says nothing about
   stages the item could skip to.
+- **Review: texts to check.** Under an item's docs-folded sign-off, the page lists the docs and
+  items that name something the item changed and have not changed since, and says Claude settles
+  them. You fill in nothing: the sign-off appears once none is left, and "Checked by Claude" lists
+  what Claude confirmed or corrected, with why.
 - **Status page**: features in one status, grouped by feature, each showing only its **open**
   todo-lists (those not fully completed), newest first, with their tasks.
 - **Feature page** (an *epic*): the **Specification** (rendered markdown) and a **tile per
