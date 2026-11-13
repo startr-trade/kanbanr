@@ -4731,8 +4731,11 @@ pub(crate) mod tests {
             &store,
             "PUT",
             "/projects/shop/config/cadence",
+            // Release tests here exercise the plain release path; DEF-042 turns the git model on
+            // with the first cadence choice, so keep it off explicitly (DEF-048).
             Some(&serde_json::json!({
                 "releases": true,
+                "git_model": false,
                 "release_stages": ["candidate", "test", "staging", "production"],
             })),
         )
