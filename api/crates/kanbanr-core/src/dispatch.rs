@@ -1480,6 +1480,21 @@ fn dispatch_routes(
                 decision_stamp(b)?,
             )?)
         }
+        // `{process?, dry_run?}`: propose the process's default delegations (R-5); with dry_run,
+        // only what they would be.
+        ("POST", ["projects", p, "decisions", "defaults"]) => {
+            let process = str_field(b, "process").filter(|x| !x.trim().is_empty());
+            match crate::decisions::propose_defaults(
+                store,
+                p,
+                process.as_deref(),
+                decision_stamp(b)?,
+                is_dry_run(Some(b)),
+            )? {
+                Ok(made) => ser(&made),
+                Err(preview) => ser(&preview),
+            }
+        }
         // `{decision, verdict: keep|undo, reason?}`: the person keeps or undoes a delegated
         // decision; an undo withdraws it, in the same commit.
         ("POST", ["projects", p, "decisions", "reviews"]) => {
@@ -2457,6 +2472,7 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
             body.and_then(|b| str_field(b, "mode")).unwrap_or_default()
         ),
         ["projects", _p, "decisions", "delegations"] => "propose a delegation".into(),
+        ["projects", _p, "decisions", "defaults"] => "propose the default delegations".into(),
         ["projects", _p, "decisions", "delegations", id, "grant"] => {
             format!("grant delegation {id}")
         }

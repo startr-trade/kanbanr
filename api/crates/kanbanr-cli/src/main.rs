@@ -1340,6 +1340,16 @@ enum DecisionsCmd {
         #[arg(long)]
         reason: String,
     },
+    /// Propose the process's default delegations (setup). With `--process` and `--dry-run` it
+    /// needs no board: the proposal is worked out from the process alone.
+    Defaults {
+        /// The process to propose for (default: the project's own).
+        #[arg(long)]
+        process: Option<String>,
+        /// Say what would be proposed; record nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Keep or undo a decision Claude took under a delegation. The person's own.
     Review {
         /// The decision's reference, as `decisions show` lists it.
@@ -6430,6 +6440,11 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         Command::Process(ProcessCmd::List) => return run_process_list(cli),
         Command::Process(ProcessCmd::Show { name }) => return run_process_show(cli, name),
+        // Setup asks before any board exists (FTR-028 R-5).
+        Command::Decisions(DecisionsCmd::Defaults {
+            process: Some(name),
+            dry_run: true,
+        }) => return run_defaults_preview(cli, name),
         Command::Process(ProcessCmd::Save {
             name,
             from_file,
@@ -10106,6 +10121,41 @@ fn print_waiting(waiting: &Value) {
     }
 }
 
+/// Print a proposal of default delegations (FTR-028 R-5): the mode and each delegation.
+fn print_defaults(cli: &Cli, v: &Value) -> anyhow::Result<()> {
+    if cli.json {
+        println!("{}", serde_json::to_string_pretty(v)?);
+        return Ok(());
+    }
+    println!(
+        "Decisions: {} mode, proposed",
+        v["mode"].as_str().unwrap_or("monitor")
+    );
+    let list = v["delegations"].as_array().cloned().unwrap_or_default();
+    if list.is_empty() {
+        println!("  no delegations: every decision stays the person's");
+    }
+    for g in &list {
+        println!("  {}", delegation_line(g).trim_start());
+    }
+    if !list.is_empty() {
+        println!("they wait on the Review page for the person to grant");
+    }
+    Ok(())
+}
+
+/// `kanbanr decisions defaults --process <name> --dry-run`: needs no board (FTR-028 R-5).
+fn run_defaults_preview(cli: &Cli, name: &str) -> anyhow::Result<()> {
+    let (file, _) = resolve_process(cli, name)?;
+    let config = file.into_config(name);
+    let (mode, delegations) = kanbanr_core::decisions::proposed_defaults(
+        &config,
+        Some(name),
+        &kanbanr_core::now_rfc3339(),
+    );
+    print_defaults(cli, &json!({"mode": mode, "delegations": delegations}))
+}
+
 fn run_decisions(cli: &Cli, client: &Backend, cmd: &DecisionsCmd) -> anyhow::Result<()> {
     let p = require_project(cli)?;
     let base = format!("/projects/{p}/decisions");
@@ -10222,6 +10272,39 @@ fn run_decisions(cli: &Cli, client: &Backend, cmd: &DecisionsCmd) -> anyhow::Res
                 Some(json!({"reason": reason, "by": who})),
             )?;
             show(&resp, &|_| println!("{id} revoked"))
+        }
+        DecisionsCmd::Defaults { process, dry_run } => {
+            let who = verdict_author(cli, None).unwrap_or_else(|_| "Claude".into());
+            let resp = client.write(
+                Method::Post,
+                &format!("{base}/defaults"),
+                Some(json!({"process": process, "dry_run": dry_run, "by": who})),
+            )?;
+            let v: Value = serde_json::from_str(&resp)?;
+            if *dry_run {
+                return print_defaults(cli, &v);
+            }
+            if cli.json {
+                println!("{}", pretty(&resp));
+            } else {
+                let made = v.as_array().cloned().unwrap_or_default();
+                if made.is_empty() {
+                    println!(
+                        "no default delegations for this process: every decision stays the person's"
+                    );
+                }
+                for g in &made {
+                    println!(
+                        "{} proposed: {}",
+                        g["id"].as_str().unwrap_or(""),
+                        delegation_line(g)
+                    );
+                }
+                if !made.is_empty() {
+                    println!("they wait on the Review page for the person to grant");
+                }
+            }
+            Ok(())
         }
         DecisionsCmd::Review {
             decision,

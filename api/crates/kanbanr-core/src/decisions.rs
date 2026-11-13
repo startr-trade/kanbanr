@@ -670,6 +670,120 @@ pub fn propose(store: &Store, p: &str, new: NewDelegation, stamp: Stamp) -> Resu
     Ok(delegation)
 }
 
+/// The statuses an item is in when `signoff` is offered: every status with a transition into a
+/// status whose gate asks for it. A delegation's `steps` are the statuses the item is in when the
+/// verdict is taken, so these are what make a default delegation cover anything.
+fn offered_from(config: &crate::config::ProjectConfig, signoff: &str) -> Vec<String> {
+    let gates = config.effective_gates();
+    let asks = |status: &String| {
+        gates
+            .get(status)
+            .is_some_and(|g| g.signoffs.iter().any(|x| x == signoff))
+    };
+    config
+        .statuses
+        .iter()
+        .filter(|s| {
+            config
+                .transitions
+                .get(*s)
+                .is_some_and(|to| to.iter().any(asks))
+        })
+        .cloned()
+        .collect()
+}
+
+/// What setup proposes for a process (R-5): a mode and default delegations, worked out from stage
+/// roles so saved and custom processes get them too. The Defaults table names each sign-off by the
+/// stage whose move it guards ("at the integrate-role stage", "at Migration"): the delegation's
+/// steps are the stages that move leaves from, where the item is when it is signed. Approvals,
+/// ratifications, ADRs and release verdicts are never proposed; a sign-off the process does not
+/// ask for is left out. Each runs [`DEFAULT_DELEGATION_DAYS`] from `today`. The mode is
+/// `delegated` when anything is proposed, else `monitor`.
+pub fn proposed_defaults(
+    config: &crate::config::ProjectConfig,
+    process: Option<&str>,
+    today: &str,
+) -> (Mode, Vec<NewDelegation>) {
+    use crate::method::{DESIGN_REVIEW, DOCS_FOLDED};
+    let process = process
+        .map(str::to_string)
+        .or_else(|| config.process.as_ref().map(|p| p.name.clone()))
+        .unwrap_or_default();
+    let until = until_of("", today).unwrap_or_default();
+    let wanted: &[&str] = match process.as_str() {
+        // A design-control project keeps its reviews with a person.
+        "design-control" => &[],
+        // Business Arch and System Design stay the person's (the spec).
+        "togaf" => &[DOCS_FOLDED],
+        _ => &[DESIGN_REVIEW, DOCS_FOLDED],
+    };
+    let mut out = Vec::new();
+    for &name in wanted {
+        let steps = offered_from(config, name);
+        if steps.is_empty() {
+            continue;
+        }
+        let small = name == DESIGN_REVIEW;
+        out.push(NewDelegation {
+            verdicts: vec![format!("signoff:{name}")],
+            steps,
+            kinds: if small {
+                vec!["chore".into(), "defect".into()]
+            } else {
+                Vec::new()
+            },
+            all: !small,
+            until: until.clone(),
+            note: if small {
+                "Design reviews of defects and chores (proposed at setup)".into()
+            } else {
+                "The docs fold-in of every item (proposed at setup)".into()
+            },
+            ..Default::default()
+        });
+    }
+    let mode = if out.is_empty() {
+        Mode::Monitor
+    } else {
+        Mode::Delegated
+    };
+    (mode, out)
+}
+
+/// What `POST /projects/{p}/decisions/defaults` answers with `dry_run`: the proposal, unsaved.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProposedDefaults {
+    pub mode: Mode,
+    pub delegations: Vec<NewDelegation>,
+}
+
+/// Propose the process's default delegations (inert until the person grants them); with
+/// `dry_run`, only say what they would be.
+pub fn propose_defaults(
+    store: &Store,
+    p: &str,
+    process: Option<&str>,
+    stamp: Stamp,
+    dry_run: bool,
+) -> Result<std::result::Result<Vec<Delegation>, ProposedDefaults>> {
+    let config = store.load_meta(p)?.config;
+    let now = if stamp.at.is_empty() {
+        crate::now_rfc3339()
+    } else {
+        stamp.at.clone()
+    };
+    let (mode, delegations) = proposed_defaults(&config, process, &now);
+    if dry_run {
+        return Ok(Err(ProposedDefaults { mode, delegations }));
+    }
+    delegations
+        .into_iter()
+        .map(|d| propose(store, p, d, stamp.clone()))
+        .collect::<Result<Vec<_>>>()
+        .map(Ok)
+}
+
 /// Was delegation `id` granted through kanbanr (T9)? Only when `decisions.yaml` has no change
 /// outside a commit, and the first commit in its history that shows `id` granted carries
 /// `Kanbanr-Origin: monitor` or `terminal`, the trailer kanbanr's write recipe adds to a grant.
@@ -2090,5 +2204,62 @@ mod tests {
         std::fs::write(&file, text).unwrap();
         take("DLG-002").unwrap();
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// R-5: each built-in process proposes the Defaults table: design-control nothing; togaf the
+    /// docs fold-in for every kind; the rest also the design review of defects and chores. Every
+    /// proposed step is a status from which the move into the gate that asks for the sign-off
+    /// exists, so a default can never be inert; each runs the default 14 days.
+    #[test]
+    fn setup_proposes_defaults_for_each_process() {
+        for (name, _) in crate::config::presets() {
+            let config = crate::config::preset(name).unwrap().into_config(name);
+            let (mode, proposed) = proposed_defaults(&config, Some(name), NOW);
+            let names: Vec<&str> = proposed.iter().map(|d| d.verdicts[0].as_str()).collect();
+            match name {
+                "design-control" => {
+                    assert_eq!(mode, Mode::Monitor, "{name}");
+                    assert!(proposed.is_empty(), "{name}: {proposed:?}");
+                }
+                "togaf" => assert_eq!(names, ["signoff:docs-folded"], "{name}"),
+                _ => assert_eq!(
+                    names,
+                    ["signoff:design-review", "signoff:docs-folded"],
+                    "{name}"
+                ),
+            }
+            if !proposed.is_empty() {
+                assert_eq!(mode, Mode::Delegated, "{name}");
+            }
+            let gates = config.effective_gates();
+            for d in &proposed {
+                let signoff = d.verdicts[0].trim_start_matches("signoff:");
+                assert_eq!(d.until, until_of("", NOW).unwrap(), "{name}");
+                assert!(!d.steps.is_empty(), "{name} {signoff}: no steps");
+                for step in &d.steps {
+                    let leads_in = config.transitions.get(step).is_some_and(|to| {
+                        to.iter().any(|t| {
+                            gates
+                                .get(t)
+                                .is_some_and(|g| g.signoffs.iter().any(|x| x == signoff))
+                        })
+                    });
+                    assert!(
+                        leads_in,
+                        "{name}: {step} has no move into a gate asking {signoff}"
+                    );
+                }
+                match signoff {
+                    "design-review" => {
+                        assert_eq!(d.kinds, ["chore", "defect"], "{name}");
+                        assert!(!d.all, "{name}");
+                    }
+                    _ => assert!(d.all && d.kinds.is_empty(), "{name}"),
+                }
+            }
+        }
+        // A process that asks for neither sign-off proposes nothing.
+        let (mode, none) = proposed_defaults(&ProjectConfig::default_for("demo"), None, NOW);
+        assert_eq!((mode, none.len()), (Mode::Monitor, 0));
     }
 }
