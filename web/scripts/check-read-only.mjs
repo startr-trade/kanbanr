@@ -54,6 +54,7 @@ const writes = {
       {},
     ),
   rejectPrepared: () => api.rejectPrepared("demo", "x", "Reviewer"),
+  recordManual: () => api.recordManual("demo", "FEAT-1", "R-1", "manual: looks right", true, "Reviewer"),
 };
 for (const [name, call] of Object.entries(writes)) {
   sent.length = 0;

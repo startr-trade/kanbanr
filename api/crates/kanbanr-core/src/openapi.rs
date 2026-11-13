@@ -252,6 +252,13 @@ pub fn public_routes() -> Vec<RouteDoc> {
             response: Response::Json(schema_of::<crate::library::ProcessStatus>),
         },
         RouteDoc {
+            path: "/api/projects/{project}/manual-tests",
+            summary: "The manual tests waiting for a person: each one not yet green, with its \
+                      requirement and the check to make, live work first, then finished work",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<Vec<crate::manual::ManualWaiting>>),
+        },
+        RouteDoc {
             path: "/api/projects/{project}/gates",
             summary: "The gate each status's moves are judged by, keyed by status: role-addressed \
                       gates resolved, the built-in rule included",

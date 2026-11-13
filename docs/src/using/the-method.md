@@ -103,6 +103,12 @@ only when a person really did it.
 (`open_manual` in `--json`). It is a note, not a gap: readiness and the exit status do not change,
 but an unrun check is seen before you call the item done.
 
+A manual test that is not green also waits on the monitor's **Review** page, under **Manual
+checks**, with its requirement and the check to make. The person who did the check clicks Passed
+or Failed there; the board keeps who, when, from where and any note. `kanbanr test` still records
+it from the person's own terminal. Claude cannot record one, because the result says a person
+checked: if you tell Claude the result, it prepares the record and you confirm it on the page.
+
 ## The method by stage role
 
 kanbanr carries one way of working for every process: a build-ready design before code,

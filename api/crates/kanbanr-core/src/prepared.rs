@@ -248,6 +248,8 @@ pub enum RevOf {
     ReleaseTip,
     /// The subject's commit.
     Commit,
+    /// The commit the person checked, a field of the record (a manual test's result).
+    CheckedRev,
 }
 
 /// A kind of prepared record: its subject's required keys, its fields and its `rev`.
@@ -324,6 +326,26 @@ pub const KINDS: &[KindSpec] = &[
             fixed("correction", false),
         ],
         rev: RevOf::Commit,
+    },
+    KindSpec {
+        kind: "manual-test",
+        subject: &["item", "requirement", "test"],
+        fields: &[
+            FieldSpec {
+                name: "state",
+                ty: FieldType::State,
+                required: true,
+                editable: true,
+            },
+            text("note", false),
+            FieldSpec {
+                name: "checked_rev",
+                ty: FieldType::Text,
+                required: false,
+                editable: false,
+            },
+        ],
+        rev: RevOf::CheckedRev,
     },
 ];
 
@@ -803,6 +825,37 @@ pub fn prepare(
             }
             subject.commit.clone()
         }
+        "manual-test" => {
+            let state = fields.get("state").and_then(Value::as_str).unwrap_or("");
+            if !matches!(state, "green" | "red") {
+                return Err(unsupported(
+                    "a manual test's result is passed (green) or failed (red)".into(),
+                ));
+            }
+            if !crate::dispatch::is_manual_test(
+                store,
+                p,
+                &subject.item,
+                &subject.requirement,
+                &subject.test,
+            ) {
+                return Err(unsupported(format!(
+                    "{} {} has no manual test '{}': only a manual test's result is prepared \
+                     this way",
+                    subject.item, subject.requirement, subject.test
+                )));
+            }
+            let checked = match fields.get("checked_rev").and_then(Value::as_str) {
+                Some(r) => r.to_string(),
+                None => repo
+                    .and_then(|r| crate::coderepo::rev_parse(r, "HEAD").ok())
+                    .unwrap_or_default(),
+            };
+            if !checked.is_empty() {
+                fields.insert("checked_rev".into(), Value::String(checked.clone()));
+            }
+            checked
+        }
         "promotion" => {
             let plan = plan
                 .as_ref()
@@ -1154,6 +1207,17 @@ pub fn equivalent_command(r: &Prepared) -> String {
             flag(&mut words, "url", field_text(r, "url"));
             flag(&mut words, "note", field_text(r, "note"));
         }
+        "manual-test" => {
+            words.extend([
+                "test".into(),
+                quote(&r.subject.item),
+                quote(&r.subject.requirement),
+                quote(&r.subject.test),
+                quote(field_text(r, "state")),
+            ]);
+            flag(&mut words, "rev", field_text(r, "checked_rev"));
+            flag(&mut words, "note", field_text(r, "note"));
+        }
         "promotion" => {
             words.extend([
                 "release".into(),
@@ -1229,6 +1293,36 @@ pub fn still_waiting(
                 )),
                 None => Ok(()),
             }
+        }
+        "manual-test" => {
+            if !crate::dispatch::is_manual_test(
+                store,
+                p,
+                &r.subject.item,
+                &r.subject.requirement,
+                &r.subject.test,
+            ) {
+                return Err(format!(
+                    "'{}' is no longer a manual test of {} {}",
+                    r.subject.test, r.subject.item, r.subject.requirement
+                ));
+            }
+            let now = project
+                .feature(&r.subject.item)
+                .ok()
+                .and_then(|f| f.definition.as_ref())
+                .and_then(|d| {
+                    d.requirements
+                        .iter()
+                        .find(|q| q.id == r.subject.requirement)
+                })
+                .and_then(|q| q.tests.iter().find(|t| t.name == r.subject.test))
+                .map(|t| t.state);
+            let prepared = crate::models::TestState::parse(field_text(r, "state"));
+            if now.is_some() && now == prepared {
+                return Err(format!("the test is already {}", field_text(r, "state")));
+            }
+            Ok(())
         }
         "promotion" => {
             let releases = crate::releases::load(store, p).map_err(|e| e.to_string())?;
@@ -1507,6 +1601,22 @@ pub fn expand(
             }
             (format!("/projects/{p}/gate-results"), v)
         }
+        "manual-test" => {
+            if !matches!(text("state").as_str(), "green" | "red") {
+                return Err(unsupported(
+                    "a manual test's result is passed (green) or failed (red)".into(),
+                ));
+            }
+            let mut v = serde_json::json!({
+                "state": text("state"), "by": by, "prepared": id,
+            });
+            for k in ["checked_rev", "note"] {
+                if !text(k).is_empty() {
+                    v[k] = Value::String(text(k));
+                }
+            }
+            return finish_manual(p, s, v, id, by, origin, changed);
+        }
         "promotion" => (
             format!("/projects/{p}/releases/{}/promote", s.release),
             serde_json::json!({"by": by, "stage": s.stage, "reason": text("checked")}),
@@ -1539,6 +1649,55 @@ pub fn expand(
         body: verdict,
         resolution,
     })
+}
+
+/// A confirmed manual result goes to the tests route, as `kanbanr test` does (DEF-040): a PUT,
+/// with none of the pins a verdict route reads, and the record's id so the kept result names it.
+fn finish_manual(
+    p: &str,
+    s: &Subject,
+    body: Value,
+    id: &str,
+    by: String,
+    origin: crate::origin::Origin,
+    changed: Vec<FieldChange>,
+) -> Result<Expanded> {
+    let path = format!(
+        "/projects/{p}/features/{}/tests/{}/{}",
+        s.item,
+        percent_encode(&s.requirement),
+        percent_encode(&s.test)
+    );
+    let resolution = Resolution {
+        id: id.to_string(),
+        verdict: Answer::Confirmed,
+        by,
+        origin: origin.as_str().to_string(),
+        at: crate::now_rfc3339(),
+        changed,
+        reason: String::new(),
+        made: format!("PUT {path}"),
+        extra: Default::default(),
+    };
+    Ok(Expanded {
+        method: "PUT".into(),
+        path,
+        body,
+        resolution,
+    })
+}
+
+/// `s` as one path segment: everything but unreserved characters percent-encoded.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// Reject an open record (`POST /projects/{p}/prepared/{id}/reject`, `{by, reason?}`): the guard,
@@ -2112,6 +2271,125 @@ mod tests {
             .project_dir("demo")
             .join(format!("prepared/{id}.resolved.yaml"));
         crate::yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// DEF-040 R-2: a result the person states in the conversation is prepared as a manual-test
+    /// record, refused to confirm from the conversation, and confirmed from the monitor; the test
+    /// takes the state, and the kept result names the person, the origin and the record.
+    #[test]
+    fn a_manual_result_stated_in_conversation_is_prepared_and_confirmed_by_the_person() {
+        use crate::models::{Requirement, TestRef, TestState};
+        let (store, dir, code) = board_with_item(false);
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "x".into(),
+                        tests: vec![
+                            TestRef {
+                                name: "manual: the cart looks right".into(),
+                                kind: "manual".into(),
+                                ..Default::default()
+                            },
+                            TestRef {
+                                name: "cart::unit".into(),
+                                kind: "unit".into(),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let body = |test: &str, state: &str| {
+            serde_json::json!({"kind": "manual-test",
+                "subject": {"item": code, "requirement": "R-1", "test": test},
+                "fields": {"state": state, "note": "on staging", "checked_rev": "abc1234"},
+                "sources": [{"label": "what the person said", "url": ""}]})
+        };
+        // Only a manual test, and only passed or failed, is prepared.
+        for bad in [
+            body("cart::unit", "green"),
+            body("manual: the cart looks right", "planned"),
+        ] {
+            let mut b = bad;
+            b["origin"] = Value::String("conversation".into());
+            assert!(prepare(&store, "demo", &b, None).is_err());
+        }
+        let id = prepare_as_claude(&store, body("manual: the cart looks right", "green"));
+        let view = list(&store, "demo", &ListQuery::default(), None).unwrap();
+        assert_eq!(view[0].state, State::Open);
+        assert_eq!(view[0].record.rev, "abc1234");
+        assert!(
+            view[0].command.starts_with(&format!(
+                "kanbanr test {code} R-1 'manual: the cart looks right' green"
+            )),
+            "{}",
+            view[0].command
+        );
+        // Claude cannot confirm it; the person can.
+        let by_claude = apply(
+            &store,
+            &dir,
+            "POST",
+            &format!("/projects/demo/prepared/{id}/confirm"),
+            serde_json::json!({"by": "Ada L"}),
+            crate::origin::Origin::Conversation,
+        );
+        assert!(by_claude.is_err());
+        let state_of = || {
+            let p = store.load("demo").unwrap();
+            p.feature(&code)
+                .unwrap()
+                .definition
+                .clone()
+                .unwrap()
+                .requirements[0]
+                .tests[0]
+                .state
+        };
+        assert_eq!(state_of(), TestState::Planned);
+        confirm(&store, &dir, &id, serde_json::json!({"by": "Ada L"})).unwrap();
+        assert_eq!(state_of(), TestState::Green);
+        let kept = crate::manual::results(&store, "demo", Some(&code)).unwrap();
+        assert_eq!(kept.len(), 1);
+        let k = &kept[0];
+        assert_eq!(
+            (
+                k.by.as_str(),
+                k.origin.as_str(),
+                k.state.as_str(),
+                k.note.as_str()
+            ),
+            ("Ada L", "monitor", "green", "on staging")
+        );
+        assert_eq!(
+            (k.prepared.as_str(), k.checked_rev.as_str()),
+            (id.as_str(), "abc1234")
+        );
+        assert_eq!(resolution_of(&store, &id).verdict, Answer::Confirmed);
+        // The decision is made: a second record for the same state is stale.
+        let again = prepare_as_claude(&store, body("manual: the cart looks right", "green"));
+        let v = list(
+            &store,
+            "demo",
+            &ListQuery {
+                all: true,
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            v.iter().find(|x| x.record.id == again).unwrap().state,
+            State::Stale
+        );
     }
 
     /// FTR-034 R-3: confirming a prepared sign-off, ratification and gate result makes the same

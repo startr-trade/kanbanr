@@ -19,6 +19,7 @@
     "check:sprint-filter": "node scripts/check-sprint-filter.mjs",
     "check:prepared": "node scripts/check-prepared.mjs",
     "check:texts-to-check": "node scripts/check-texts-to-check.mjs",
+    "check:manual-tests": "node scripts/check-manual-tests.mjs",
     "check:workflow": "node scripts/check-workflow-sections.mjs",
     "check:api-types": "node scripts/check-api-types.mjs",
     "check:diagram-lint": "node scripts/check-diagram-lint.mjs",

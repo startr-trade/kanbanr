@@ -394,6 +394,17 @@ same whichever you use. A read-only monitor shows the command instead.
   releases' notes in place; a shipped release's are read at its tag. When none are found, the
   message lists every path and ref looked at.
 
+### Manual checks
+
+A manual test that is not yet green waits on the **Review** page, under **Manual checks**: the
+item, the requirement and its text, the check to make, and its state ("not run", or "failed" with
+who failed it and when). Do the check, then click **Passed** or **Failed**. **Add a note** opens an
+optional note; nothing has to be typed. The click records the result as you, the same record
+`kanbanr test` makes in your own terminal. Claude is refused a manual result, since it says a
+person checked; if you tell Claude the result, it prepares the record filled in and you confirm it
+here. A failed check is recorded as failed and no defect is filed for you: ask Claude to file one.
+A read-only monitor shows the `kanbanr test` command instead.
+
 ### Prepared by Claude
 
 When Claude already has the evidence for a decision, it prepares the record instead of asking you

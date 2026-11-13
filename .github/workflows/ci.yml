@@ -234,6 +234,10 @@ jobs:
       # only when none is, with no form for the person (DEF-039).
       - name: The docs-folded sign-off asks for no form
         run: npm run check:texts-to-check
+      # A manual test waiting for a person is listed on the Review page, with its requirement and
+      # the check to make, and recorded there as passed or failed (DEF-040).
+      - name: The Review page lists manual checks waiting for you
+        run: npm run check:manual-tests
       # The Workflow page shows the cadence, the git model and every guard rail, each with the
       # command that changes it, and changes nothing itself (FEAT-213).
       - name: The Workflow page shows the cadence, the git model and the guard rails

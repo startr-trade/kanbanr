@@ -107,14 +107,12 @@ pub fn is_verdict_route(method: &str, path: &str) -> bool {
     )
 }
 
-/// Routes whose body the front end stamps with its origin: every verdict route, and
-/// `POST /projects/{p}/prepared`, so a prepared record says who prepared it (FTR-034).
+/// Routes whose body the front end stamps with its origin: every verdict route,
+/// `POST /projects/{p}/prepared`, so a prepared record says who prepared it (FTR-034), and the
+/// tests route, so a manual result says where it was recorded (DEF-040).
 pub fn stamps_origin(method: &str, path: &str) -> bool {
     if is_verdict_route(method, path) {
         return true;
-    }
-    if method != "POST" {
-        return false;
     }
     let seg: Vec<&str> = path
         .split('?')
@@ -123,7 +121,15 @@ pub fn stamps_origin(method: &str, path: &str) -> bool {
         .split('/')
         .filter(|s| !s.is_empty())
         .collect();
-    matches!(seg.as_slice(), ["projects", _, "prepared"])
+    match method {
+        "POST" => matches!(seg.as_slice(), ["projects", _, "prepared"]),
+        // A manual test's kept result says where it was recorded (DEF-040).
+        "PUT" => matches!(
+            seg.as_slice(),
+            ["projects", _, "features", _, "tests", _, _]
+        ),
+        _ => false,
+    }
 }
 
 /// A decision that is the person's own (FTR-024, FTR-034).
@@ -202,6 +208,49 @@ pub fn verdict_refusal(verdict: Verdict, taker: Taker) -> Option<String> {
              Prepare its record instead (`kanbanr prepare …`) and tell the person where it waits."
                 .to_string(),
         ),
+    }
+}
+
+/// The verdict a write request would record that its route does not show: a manual test's
+/// result (DEF-040), by the tests route or by a `test.state` operation in a batch. Setting a
+/// test back to `planned` is not a verdict. `None` for every other request.
+pub fn guarded_verdict(
+    store: &crate::store::Store,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+) -> Option<Verdict> {
+    use crate::dispatch::{is_manual_test, percent_decode};
+    let seg: Vec<&str> = path
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    let result = |s: Option<&str>| matches!(s, Some("green" | "red"));
+    match (method, seg.as_slice()) {
+        ("PUT", ["projects", p, "features", code, "tests", req, test]) => {
+            let state = body.and_then(|b| b.get("state")).and_then(|v| v.as_str());
+            (result(state)
+                && is_manual_test(store, p, code, &percent_decode(req), &percent_decode(test)))
+            .then_some(Verdict::ManualTest)
+        }
+        ("POST", ["projects", p, "batch"]) => {
+            let ops = body?.get("operations")?.as_array()?;
+            let text = |op: &Value, k: &str| op.get(k).and_then(|v| v.as_str()).map(String::from);
+            ops.iter()
+                .any(|op| {
+                    text(op, "op").as_deref() == Some("test.state")
+                        && result(text(op, "state").as_deref())
+                        && matches!(
+                            (text(op, "feature"), text(op, "requirement"), text(op, "test")),
+                            (Some(c), Some(r), Some(t)) if is_manual_test(store, p, &c, &r, &t)
+                        )
+                })
+                .then_some(Verdict::ManualTest)
+        }
+        _ => None,
     }
 }
 

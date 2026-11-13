@@ -187,6 +187,9 @@ enum Command {
         /// The project revision the result was observed at; a green older than HEAD is stale.
         #[arg(long)]
         rev: Option<String>,
+        /// A note kept with a manual test's result.
+        #[arg(long)]
+        note: Option<String>,
     },
     /// What hangs off a goal, an item, a requirement or a doc — and what is missing from it.
     /// (FEAT-057, FEAT-181)
@@ -1365,6 +1368,29 @@ enum PrepareCmd {
         /// Where else the evidence came from (see `prepare signoff --help`). The text and the
         /// newest commit of the change are named already.
         #[arg(long = "source", value_name = "S")]
+        sources: Vec<String>,
+    },
+    /// Prepare a manual test's result the person stated, for them to confirm on the Review page.
+    Test {
+        code: String,
+        requirement: String,
+        /// The manual test's name, as the definition has it.
+        test: String,
+        /// The check passed.
+        #[arg(long, conflicts_with = "failed", required_unless_present = "failed")]
+        passed: bool,
+        /// The check failed.
+        #[arg(long)]
+        failed: bool,
+        /// A note kept with the result.
+        #[arg(long)]
+        note: Option<String>,
+        /// The code commit the person checked (default: HEAD of this repository).
+        #[arg(long, value_name = "REV")]
+        rev: Option<String>,
+        /// Where the result came from, usually what the person said:
+        /// `--source "conversation 12 Nov: the smoke test passed on staging"`. At least one.
+        #[arg(long = "source", value_name = "S", required = true)]
         sources: Vec<String>,
     },
     /// The prepared records waiting for the person, newest first.
@@ -6432,11 +6458,20 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             test,
             state,
             rev,
+            note,
         } => {
             let p = require_project(cli)?;
             let mut body = json!({ "state": state });
+            // `by` names the person for a manual test's kept result (DEF-040); any other test
+            // ignores it, so a missing identity only matters when a manual result is recorded.
+            if let Ok(by) = verdict_author(cli, None) {
+                body["by"] = json!(by);
+            }
             if let Some(rev) = rev {
                 body["checked_rev"] = json!(rev);
+            }
+            if let Some(note) = note {
+                body["note"] = json!(note);
             }
             let resp = client.write(
                 Method::Put,
@@ -9894,6 +9929,33 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
                     "sources": sources(s)?,
                 }),
                 format!("check of {target} for {code}"),
+            )
+        }
+        PrepareCmd::Test {
+            code,
+            requirement,
+            test,
+            passed: _,
+            failed,
+            note,
+            rev,
+            sources: s,
+        } => {
+            let mut fields = json!({"state": if *failed { "red" } else { "green" }});
+            if let Some(note) = note {
+                fields["note"] = json!(note);
+            }
+            if let Some(rev) = rev {
+                fields["checked_rev"] = json!(rev);
+            }
+            (
+                json!({
+                    "kind": "manual-test",
+                    "subject": {"item": code, "requirement": requirement, "test": test},
+                    "fields": fields,
+                    "sources": sources(s)?,
+                }),
+                format!("the result of {code} {requirement}"),
             )
         }
         PrepareCmd::Ratify {

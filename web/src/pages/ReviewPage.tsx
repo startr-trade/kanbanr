@@ -12,6 +12,7 @@ import { docsFoldedOffer } from "../textsToCheck";
 import { approveBlocker, checkBlocks, type DiagramProblem } from "../diagramCheck";
 import { PreparedPanel } from "../components/PreparedPanel";
 import { openFor } from "../prepared";
+import { lastResultLine, manualCommand, manualRows, type ManualRow } from "../manualTests";
 import type { PreparedView } from "../types";
 
 /**
@@ -54,11 +55,14 @@ export default function ReviewPage() {
   const prepared = useAsync(() => api.getPrepared(project), [project, tick]);
   // Decisions waiting for their owner (FEAT-153): proposed, and nothing else.
   const adrs = useAsync(() => api.getAdrs(project), [project, tick]);
+  // Manual tests waiting for a person (DEF-040): recorded here, not in the terminal.
+  const manual = useAsync(() => api.getManualTests(project), [project, tick]);
 
   if (pending.loading && !pending.data) return <Loading />;
   if (pending.error) return <ErrorBox error={pending.error} />;
   const items = pending.data ?? [];
   const proposed = (adrs.data ?? []).filter((a) => a.status.toLowerCase() === "proposed");
+  const manualWaiting = manual.data ?? [];
   // Who a yes here is recorded as (FEAT-077). The board's commit identity, exactly as
   // `kanbanr approve` defaults it — not the string "reviewed in the monitor", which named the place
   // the click happened and left twenty-eight approvals on this board attributable to nobody.
@@ -149,6 +153,48 @@ export default function ReviewPage() {
     }
   };
 
+  // A manual test's result, recorded as the person who checked it (DEF-040): the route
+  // `kanbanr test` uses, so the board's record is the same.
+  const recordManual = async (m: ManualRow, passed: boolean, note: string) => {
+    if (!who) return;
+    const key = manualKey(m);
+    setBusy(key);
+    try {
+      await api.recordManual(project, m.row.code, m.row.requirement, m.row.test, passed, who, note);
+      setDone((d) => ({ ...d, [key]: passed ? "recorded as passed" : "recorded as failed" }));
+    } catch (e) {
+      setDone((d) => ({ ...d, [key]: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const confirmManual = async (m: ManualRow, view: PreparedView, edits: Record<string, unknown>) => {
+    if (!who) return;
+    const key = manualKey(m);
+    setBusy(key);
+    try {
+      await api.confirmPrepared(project, view, who, edits);
+      setDone((d) => ({ ...d, [key]: "recorded" }));
+    } catch (e) {
+      setDone((d) => ({ ...d, [key]: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const rejectManual = async (m: ManualRow, view: PreparedView, reason: string) => {
+    if (!who) return;
+    const key = manualKey(m);
+    setBusy(key);
+    try {
+      await api.rejectPrepared(project, view.id ?? "", who, reason);
+      setDone((d) => ({ ...d, [key]: "rejected what Claude prepared" }));
+    } catch (e) {
+      setDone((d) => ({ ...d, [key]: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   // Which release a ready item ships in (FEAT-185): the same plan route `kanbanr release plan` uses.
   const planRelease = async (item: PendingReview, version: string) => {
     const code = item.code;
@@ -185,7 +231,7 @@ export default function ReviewPage() {
         <LiveDot />
       </div>
 
-      {items.length === 0 && proposed.length > 0 ? (
+      {items.length === 0 && (proposed.length > 0 || manualWaiting.length > 0) ? (
         <p className="muted">No definitions are waiting for agreement.</p>
       ) : items.length === 0 ? (
         <p className="muted">
@@ -255,6 +301,19 @@ export default function ReviewPage() {
         />
       ))}
 
+      {manualWaiting.length > 0 && (
+        <ManualChecks
+          project={project}
+          rows={manualRows(manualWaiting, prepared.data)}
+          writable={writable}
+          busy={busy}
+          done={done}
+          onRecord={recordManual}
+          onConfirm={confirmManual}
+          onReject={rejectManual}
+        />
+      )}
+
       {proposed.length > 0 && (
         <>
           <h2>Decisions</h2>
@@ -276,6 +335,151 @@ export default function ReviewPage() {
           ))}
         </>
       )}
+    </div>
+  );
+}
+
+const manualKey = (m: ManualRow) => `manual:${m.row.code}:${m.row.requirement}:${m.row.test}`;
+
+/**
+ * The manual tests waiting for a person (DEF-040): each with its requirement and the check to make,
+ * and Passed / Failed for the person who did it. Nothing has to be typed; a note is behind a link.
+ * Where the monitor cannot write, the command for the person's own terminal is shown instead.
+ */
+function ManualChecks({
+  project,
+  rows,
+  writable,
+  busy,
+  done,
+  onRecord,
+  onConfirm,
+  onReject,
+}: {
+  project: string;
+  rows: ManualRow[];
+  writable: boolean;
+  busy: string | null;
+  done: Record<string, string>;
+  onRecord: (m: ManualRow, passed: boolean, note: string) => void;
+  onConfirm: (m: ManualRow, view: PreparedView, edits: Record<string, unknown>) => void;
+  onReject: (m: ManualRow, view: PreparedView, reason: string) => void;
+}) {
+  return (
+    <>
+      <h2>Manual checks</h2>
+      <p className="muted">
+        {rows.length} manual check{rows.length === 1 ? "" : "s"} waiting for someone to do them. Do the
+        check, then record whether it passed.
+      </p>
+      {rows.map((m) => (
+        <ManualCheck
+          key={manualKey(m)}
+          project={project}
+          m={m}
+          writable={writable}
+          busy={busy === manualKey(m)}
+          outcome={done[manualKey(m)]}
+          onRecord={(passed, note) => onRecord(m, passed, note)}
+          onConfirm={(view, edits) => onConfirm(m, view, edits)}
+          onReject={(view, reason) => onReject(m, view, reason)}
+        />
+      ))}
+    </>
+  );
+}
+
+function ManualCheck({
+  project,
+  m,
+  writable,
+  busy,
+  outcome,
+  onRecord,
+  onConfirm,
+  onReject,
+}: {
+  project: string;
+  m: ManualRow;
+  writable: boolean;
+  busy: boolean;
+  outcome?: string;
+  onRecord: (passed: boolean, note: string) => void;
+  onConfirm: (view: PreparedView, edits: Record<string, unknown>) => void;
+  onReject: (view: PreparedView, reason: string) => void;
+}) {
+  const { row, prepared } = m;
+  const [noting, setNoting] = useState(false);
+  const [note, setNote] = useState("");
+  const last = lastResultLine(row.last);
+  const recorded = outcome != null && outcome.startsWith("recorded");
+  const failed = row.state === "red";
+  return (
+    <div className="review-item manual-check">
+      <p>
+        <Link to={`/p/${encodeURIComponent(project)}/feature/${encodeURIComponent(row.code)}`}>
+          <code className="taskkey">{row.code}</code> {row.title}
+        </Link>{" "}
+        <code className="taskkey">{row.requirement}</code>{" "}
+        <span className={`chip ${failed ? "warn" : ""}`}>{failed ? "failed" : "not run"}</span>
+      </p>
+      <p className="small">{row.requirement_text}</p>
+      <p>
+        <strong>Check:</strong> {row.test}
+      </p>
+      {last ? <p className="small muted">Last result: {last}.</p> : null}
+      {failed ? (
+        <p className="small muted">It is recorded as failed. To have a defect filed, ask Claude to file one.</p>
+      ) : null}
+      {recorded ? (
+        <span className="chip done">{outcome} — it leaves this list on the next refresh</span>
+      ) : prepared && writable ? (
+        <PreparedPanel
+          project={project}
+          view={prepared}
+          writable={writable}
+          busy={busy}
+          label={prepared.fields?.state === "red" ? "Record failed" : "Record passed"}
+          onConfirm={(edits) => onConfirm(prepared, edits)}
+          onReject={(reason) => onReject(prepared, reason)}
+        />
+      ) : writable ? (
+        <>
+          <div className="review-actions">
+            <button className="btn btn-primary" disabled={busy} onClick={() => onRecord(true, note.trim())}>
+              Passed
+            </button>
+            <button className="btn" disabled={busy} onClick={() => onRecord(false, note.trim())}>
+              Failed
+            </button>
+            {noting ? null : (
+              <a
+                href="#add-a-note"
+                className="small"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setNoting(true);
+                }}
+              >
+                Add a note
+              </a>
+            )}
+          </div>
+          {noting ? (
+            <p className="small">
+              <label>
+                Note (optional){" "}
+                <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={4000} aria-label="Note" />
+              </label>
+            </p>
+          ) : null}
+        </>
+      ) : (
+        <p className="small">
+          To record it in your own terminal: <code>{manualCommand(row, true)}</code> (or <code>red</code>)
+        </p>
+      )}
+      {outcome && !recorded ? <p className="small warn">{outcome}</p> : null}
     </div>
   );
 }
