@@ -702,13 +702,34 @@ fn apply_workflow(store: &Store, p: &str, body: &Value) -> Result<String> {
             if cadence.release_prepare.is_empty() {
                 cadence.release_prepare = config.cadence.release_prepare.clone();
             }
+            // DEF-042: the file's `true` wins, the first choice turns it on, and the project's own
+            // `true` is kept: a process never turns the git model off.
+            cadence.git_model = config
+                .cadence
+                .git_model_after(&cadence, cadence.git_model.then_some(true))
+                || config.cadence.git_model;
             store.set_cadence(p, unit, cadence)?
         }
     };
-    if config.process == source {
+    let config = if config.process == source {
+        config
+    } else {
+        store.set_process_source(p, source)?
+    };
+    // DEF-042: a path that never enters the integrate stage is a warning, not a refusal.
+    let skipping = config.paths_skipping_integrate();
+    if skipping.is_empty() {
         return ser(&config);
     }
-    ser(&store.set_process_source(p, source)?)
+    let mut out =
+        serde_json::to_value(&config).map_err(|e| CoreError::Unsupported(e.to_string()))?;
+    out["warnings"] = json!(
+        skipping
+            .iter()
+            .map(|(kind, stage)| crate::config::skipped_integrate_warning(kind, stage))
+            .collect::<Vec<_>>()
+    );
+    ser(&out)
 }
 
 /// `"process": {name, library, version, rev}` in a body: where the workflow it carries came from.
@@ -1879,7 +1900,8 @@ fn dispatch_routes(
             let current = store.load_meta(p)?.config.cadence;
             let current_inert = current.inert_stages();
             let current_cadence = current.clone();
-            let cadence = crate::config::Cadence {
+            let named_git_model = bool_field(b, "git_model");
+            let mut cadence = crate::config::Cadence {
                 extra: current.extra.clone(),
                 // FEAT-212: the stages' gates and what `prepare` writes have routes of their own;
                 // a cadence write that does not name them keeps them.
@@ -1920,8 +1942,12 @@ fn dispatch_routes(
                     None => current.main_branch,
                 },
                 // FEAT-189: branching follows the git model only when switched on.
-                git_model: bool_field(b, "git_model").unwrap_or(current.git_model),
+                git_model: named_git_model.unwrap_or(current.git_model),
             };
+            // DEF-042: the first choice of sprints or releases turns the git model on.
+            cadence.git_model = current_cadence.git_model_after(&cadence, named_git_model);
+            let turned_on =
+                cadence.git_model && !current_cadence.git_model && named_git_model.is_none();
             let config = store.set_cadence(p, unit, cadence)?;
             // FTR-020: an inert stage that is newly there, and how to make the tag wait for CI.
             let was = current_inert;
@@ -1933,6 +1959,12 @@ fn dispatch_routes(
                 .map(|s| crate::config::Cadence::inert_warning(s))
                 .collect();
             warnings.extend(config.cadence.has_ci_note(&current_cadence));
+            if turned_on {
+                warnings.push(
+                    "the git model is on: kanbanr merges items into their line as `kanbanr git model` shows; `kanbanr config cadence --git-model off` turns it off"
+                        .to_string(),
+                );
+            }
             let mut body =
                 serde_json::to_value(&config).map_err(|e| CoreError::Unsupported(e.to_string()))?;
             if !warnings.is_empty() {
@@ -3182,6 +3214,47 @@ mod tests {
         );
         let off = call("GET", "/projects/demo/guards", Value::Null);
         assert_eq!(off["commits"]["protected"], json!(["main"]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-042 R-1: applying a process never turns the git model off.
+    #[test]
+    fn applying_a_process_keeps_the_git_model_on() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-dispatch-gm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        let call = |method: &str, path: &str, body: Value| -> Value {
+            serde_json::from_str(&dispatch(&store, method, path, Some(&body)).unwrap()).unwrap()
+        };
+        let set = call(
+            "PUT",
+            "/projects/demo/config/cadence",
+            json!({ "sprints": true }),
+        );
+        assert_eq!(set["cadence"]["git_model"], true, "the first choice");
+        assert!(set["warnings"].to_string().contains("git model is on"));
+        let applied = call(
+            "PUT",
+            "/projects/demo/config/workflow",
+            json!({ "preset": "default" }),
+        );
+        assert_eq!(applied["cadence"]["git_model"], true);
+        // A later choice of releases leaves a person's `off` alone.
+        call(
+            "PUT",
+            "/projects/demo/config/cadence",
+            json!({ "git_model": false }),
+        );
+        let more = call(
+            "PUT",
+            "/projects/demo/config/cadence",
+            json!({ "releases": true }),
+        );
+        assert!(!more["cadence"]["git_model"].as_bool().unwrap_or(false));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

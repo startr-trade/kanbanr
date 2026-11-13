@@ -49,7 +49,10 @@ kanbanr merges (once the model is on):
   - sprint/<SP> into main when the sprint closes (a fast-forward, tagged with the sprint's code)
   - sprint/<SP> into each item branch carried into that sprint (a catch-up merge; a conflict is reported for that item)
 pushing:    never automatic — you review and push
+automation: on
 ```
+
+Choosing sprints or releases turns the git model on.
 
 The plan quotes that output under *Branching*, lists which stage holds each role (design, build,
 integrate, release) under *Process*, and says that the method's gates are on. Approving the plan

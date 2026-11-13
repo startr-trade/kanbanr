@@ -44,7 +44,7 @@ New projects already get the default workflow, so the second line only makes it 
 `kanbanr config cadence` confirms that sprints and releases are off:
 
 ```text
-sprints off, releases off, estimates in days
+sprints off, releases off, estimates in days, git model off
 ```
 
 `kanbanr git model` shows what the git model will do. Nothing is pushed for you:

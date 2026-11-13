@@ -43,9 +43,9 @@ cadence:
   releases: true
   sprint_length_days: 14
   release: per_sprint
-# A chore skips Design and Review (FTR-019).
+# A chore skips Design (FTR-019); it passes Review, where its branch merges (DEF-042).
 paths:
   chore:
-    stages: [Plan, Develop, Test, Released]
+    stages: [Plan, Develop, Test, Review, Released]
     requires: [statement, goals, requirements, ears]
     method_off: [design, design-review]
