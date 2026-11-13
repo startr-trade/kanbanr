@@ -67,9 +67,9 @@ it becomes an item on the board, so it has a definition, a test and an approval 
    address, not only from the one that built it. A container that calls its own machine by name
    passes every check on the machine that made it and fails everywhere else.
 7. **Record CI before you cut.** kanbanr can see that main was pushed. It can't see whether CI
-   passed. The Cut waits until a CI result is recorded for main's commit, on the Releases page
-   (**Record result**).
-   <!-- FTR-034: rule 7 changes to the prepared result -->
+   passed. The Cut waits until a CI result is recorded for main's commit, on the Releases page.
+   Claude reads the run and prepares the result with its link; you check it and click **Record ci
+   passed**.
 
 ## Where it fits
 
@@ -77,7 +77,7 @@ it becomes an item on the board, so it has a definition, a test and an approval 
 |---|---|
 | During setup or the first sprint | Ask Claude to design the pipeline, and approve it |
 | Before **Promote to main** | Run the release workflow without a tag, and fix what it shows |
-| After you push main | Wait for CI to go green, record the result (**Record result**), then **Check again** and **Cut** |
+| After you push main | Wait for CI to go green, check the result Claude prepared and click **Record ci passed**, then **Check again** and **Cut** |
 | After you push the tag | Wait for the release workflow, and check the release page has your notes |
 
 If the pipeline needs a fix after the cut, that is a patch release. See

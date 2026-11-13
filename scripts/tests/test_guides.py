@@ -57,7 +57,7 @@ class PipelineTests(unittest.TestCase):
 
     def every_release_path_records_ci_before_the_cut(self) -> None:
         for process in PROCESSES:
-            for kind, marker in (("with-claude", "Record result"), ("cli", "gate record")):
+            for kind, marker in (("with-claude", "Record ci passed"), ("cli", "gate record")):
                 name = f"{process}-{kind}.md"
                 with self.subTest(guide=name):
                     text = section(read(GUIDES / name), "## Releasing")
