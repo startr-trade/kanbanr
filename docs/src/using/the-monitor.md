@@ -287,6 +287,10 @@ through; `kanbanr doctor` lists the same ones. A requirement link lands on that 
 
 ![An item's page](../images/feature.png)
 
+An override Claude made past a gate waits on the **Review** page to be ratified, even on an item
+you approved: the entry shows each one as "Moved Test → Review on 2026-11-12 by Claude, past its
+gate: …" above **Ratify**. Until you ratify it, the item does not ship.
+
 The **Review** page also lists a finished item whose approval lapsed or that gained text since
 you approved it, labelled with its status, after all the live decisions. The work is done, but the
 definition changed after you approved it: approving again covers what it says now.
@@ -384,6 +388,12 @@ same whichever you use. A read-only monitor shows the command instead.
   on the code repository, and the monitor uses the repository it was started in. Started anywhere
   else, it says "the monitor was not started in the project folder" and names the CLI command. A
   read-only monitor shows the command and the plan, never the button.
+- **Shipping untested work.** When the cut's one missing condition is that some shipping
+  requirements have tests not run, the release card lists them (`FEAT-005/R-2`, …) with one
+  checkbox, "Ship these unverified; the notes will name them". Ticking it enables **Cut**, which
+  sends exactly that list; if the list changed since the page read it, the cut is refused and you
+  look again. The notes on the board gain a "Not verified in this release" section. This is
+  `kanbanr release promote <VERSION> --accept-untested …`.
 - **Release notes.** A release with a branch has a **Release notes** section, collapsed until
   opened, showing the notes as they are on `release/<V>` — headed "draft on release/v0.3.0 @
   8f995e1", or "as shipped on …" after the cut. Until the cut, **Edit notes** opens the text;

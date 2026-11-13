@@ -953,6 +953,15 @@ function Brief({
           </ul>
         </div>
       ) : null}
+      {ratify && item.overrides?.length ? (
+        <ul className="dep-list small">
+          {item.overrides.map((o) => (
+            <li key={`${o.at}-${o.to}`}>
+              Moved {o.from} → {o.to} on {o.at.slice(0, 10)} by Claude, past its gate: {o.reason}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {docsFolded.settled.length ? (
         <details className="drift-settled">
           <summary>Checked by Claude ({docsFolded.settled.length})</summary>

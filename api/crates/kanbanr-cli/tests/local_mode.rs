@@ -11134,3 +11134,54 @@ fn prepare_gate_records_a_prepared_result_and_list_shows_it() {
     assert!(!bad.status.success());
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// DEF-043 R-2: a move with an override records where it was made: `conversation` inside a
+/// Claude Code session, `terminal` outside one.
+#[test]
+fn an_override_inside_a_claude_session_records_its_origin() {
+    let moved = |tag: &str, claudecode: bool| {
+        let (base, work) = togaf_scratch(tag);
+        togaf_board(&base, &work);
+        let mut c = Command::new(cli());
+        c.args(["move", "FEAT-001", "Business Arch", "--override", "why"])
+            .current_dir(&work)
+            .env("HOME", base.join("home"))
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_PROCESSES_DIR")
+            .env_remove("CLAUDECODE")
+            .stdin(std::process::Stdio::null());
+        if claudecode {
+            c.env("CLAUDECODE", "1");
+        }
+        let o = c.output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let shown = run_in(&base, &work, &["feature", "show", "FEAT-001", "--json"]);
+        let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+        let last = v["history"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(last["override"], "why", "{last}");
+        let review = run_in(&base, &work, &["--json", "review", "--pending"]);
+        assert!(
+            review.status.success(),
+            "{}",
+            String::from_utf8_lossy(&review.stderr)
+        );
+        let pending: serde_json::Value = serde_json::from_slice(&review.stdout).unwrap();
+        let _ = std::fs::remove_dir_all(&base);
+        (last["origin"].as_str().unwrap_or("").to_string(), pending)
+    };
+    let listed = |pending: &serde_json::Value| {
+        pending
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["code"] == "FEAT-001" && e["approval"] == "unratified")
+    };
+    let (origin, pending) = moved("def043-session", true);
+    assert_eq!(origin, "conversation");
+    assert!(listed(&pending), "{pending}");
+    let (origin, pending) = moved("def043-terminal", false);
+    assert_eq!(origin, "terminal");
+    assert!(!listed(&pending), "{pending}");
+}

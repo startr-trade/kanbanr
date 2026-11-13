@@ -350,6 +350,10 @@ visible, a plausible guess is not. Never write `[MISSING: …]` into the data; t
 Write the definition with the batch path (`definition` on `feature.add`/`feature.edit`) or
 `kanbanr feature define <CODE> --file def.yaml`.
 
+A check you can only see after main is pushed (a CI job, a tag's publish) gets `at: pushed` on its
+test; one that needs the cut gets `at: cut` (or `at: <release stage>`). The item's gate doesn't wait
+for it; the release stage does. Say so when the person approves. Never override a gate for it.
+
 ## Agreement before work: decided on the pages
 
 **Scope → define → the user decides on the Review page → only then write code.** Every verdict is
@@ -540,8 +544,11 @@ match a process by hand.
 The user moves work by asking: "park FEAT-074", "put FEAT-150 back to Planned". Run
 `kanbanr move <CODE> <status>`. If a gate refuses, say what the stage still needs — it is the same
 table — and offer to work through it. `--override "<reason>"` is for genuine emergencies, with the
-user's reason, and the item then needs ratifying. A write that prints `coverage:` lines has left a
-view behind: add the links each one names before you move the item on.
+user's reason, and the item then needs ratifying. An override is yours to explain and the person's
+to ratify. After any `--override`, prepare its ratification at once (`kanbanr prepare ratify <CODE>
+--reason … --source …`) and tell the person it waits on the Review page. The item does not ship
+until it is ratified. A write that prints `coverage:` lines has left a view behind:
+add the links each one names before you move the item on.
 
 ### The rules underneath
 
@@ -815,6 +822,11 @@ branches; fix it before going on.
   promotion itself, the cut included, is theirs, on the Releases page. **The user pushes main and
   the tag**, by hand; a cut that requires
   `pushed` waits until main is pushed (and CI has run on it).
+- **Tests checked later.** After main is pushed and CI has run, read the run and record each later
+  test's result (`kanbanr test <CODE> <R-n> <test> green --rev <sha>`). If the cut's plan lists
+  untested requirements (`untested_accepted`), write a "Not verified in this release" section into
+  the notes (`kanbanr release notes <V>`) and tell the person the cut waits for their acceptance on
+  the Releases page. Never accept it yourself.
 - **A CI result is the user's to confirm.** A stage that requires `gate_passed` needs a recorded
   passed result for the release tip. kanbanr never asks a server. You may read the CI's result
   with your own tools; then `kanbanr prepare gate <gate> --passed|--failed --commit <sha> --url

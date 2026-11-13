@@ -1468,6 +1468,10 @@ enum ReleaseCmd {
         /// With --plan: fetch main from its remote first, so `pushed` reads what is there now.
         #[arg(long, requires = "plan")]
         fetch: bool,
+        /// At the cut: the requirements you accept shipping with tests not run, exactly as the
+        /// plan lists them (`FEAT-005/R-2,FEAT-005/R-3`). The notes name them (DEF-043).
+        #[arg(long, value_delimiter = ',', value_name = "CODE/R-n,…")]
+        accept_untested: Vec<String>,
     },
     /// Each release stage: what it requires, what entering it does, and whether that is the
     /// project's own gate or the default (FEAT-212).
@@ -1514,6 +1518,10 @@ enum ReleaseCmd {
         /// production` (its last stage), so main is fast-forwarded to the release too (FEAT-183).
         #[arg(long)]
         tag: bool,
+        /// The requirements you accept shipping with tests not run, exactly as the cut lists them
+        /// (`FEAT-005/R-2,FEAT-005/R-3`). The notes name them (DEF-043).
+        #[arg(long, value_delimiter = ',', value_name = "CODE/R-n,…")]
+        accept_untested: Vec<String>,
     },
 }
 
@@ -10244,6 +10252,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
             note,
             by,
             plan: false,
+            accept_untested,
             ..
         } => {
             promote_release(
@@ -10254,6 +10263,7 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                 stage.as_deref(),
                 reason.as_deref().or(note.as_deref()),
                 by.as_ref(),
+                accept_untested,
             )?;
         }
         ReleaseCmd::List => {
@@ -10320,20 +10330,40 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
         }
         // `cut --tag` is promotion to the last stage (FEAT-183): the tag comes with the main branch
         // fast-forwarded to the release, through the same preflight and rollback.
-        ReleaseCmd::Cut { version, tag: true } => {
+        ReleaseCmd::Cut {
+            version,
+            tag: true,
+            accept_untested,
+        } => {
             let project = get_project(client, &p)?;
             let last = project.config.cadence.stages().last().cloned();
-            promote_release(cli, client, &p, version, last.as_deref(), None, None)?;
+            promote_release(
+                cli,
+                client,
+                &p,
+                version,
+                last.as_deref(),
+                None,
+                None,
+                accept_untested,
+            )?;
         }
         ReleaseCmd::Cut {
             version,
             tag: false,
+            accept_untested,
         } => {
             let by = verdict_author(cli, None)?;
             let resp = client.write(
                 Method::Post,
                 &format!("/projects/{p}/releases/{}/cut", urlencode_segment(version)),
-                Some(json!({ "by": by })),
+                Some(obj(vec![
+                    ("by", Some(json!(by))),
+                    (
+                        "accept_untested",
+                        (!accept_untested.is_empty()).then(|| json!(accept_untested)),
+                    ),
+                ])),
             )?;
             let v: Value = serde_json::from_str(&resp)?;
             let release = &v["release"];
@@ -10559,6 +10589,7 @@ fn promote_release(
     stage: Option<&str>,
     reason: Option<&str>,
     by: Option<&String>,
+    accept_untested: &[String],
 ) -> anyhow::Result<()> {
     let by = verdict_author(cli, by)?;
     let stage = match stage {
@@ -10576,6 +10607,10 @@ fn promote_release(
             ("stage", Some(json!(stage))),
             ("by", Some(json!(by))),
             ("reason", reason.map(|r| json!(r))),
+            (
+                "accept_untested",
+                (!accept_untested.is_empty()).then(|| json!(accept_untested)),
+            ),
         ])),
         repo.as_deref(),
     )?;
@@ -10791,6 +10826,13 @@ fn print_release_plan(
                     .map(|f| format!(" — {f}"))
                     .unwrap_or_default()
             );
+            // What the cut asks you to accept, one per line, as --accept-untested takes them
+            // (DEF-043).
+            if c["check"] == "untested_accepted" {
+                for r in c["refs"].as_array().into_iter().flatten() {
+                    println!("        {}", r.as_str().unwrap_or_default());
+                }
+            }
         }
     }
     if let Some(o) = plan["origin"].as_object() {

@@ -24,6 +24,9 @@ All notable changes to kanbanr are documented here. The format follows
   what-you-checked, a CI result with its run link, a ratification's reason); the monitor shows it
   filled in beside one button, and the person confirms, edits or rejects it. Both are kept
   (FTR-034).
+- **A test can say it is checked after main is pushed, at the cut, or at a named release stage
+  (DEF-043).** The item's gate doesn't wait for it, and that stage does: `at: pushed`, `at: cut` or
+  `at: <stage>` on the test.
 
 ### Changed
 
@@ -31,6 +34,11 @@ All notable changes to kanbanr are documented here. The format follows
   `--start today` is accepted wherever a sprint's first day is (DEF-041).
 
 ### Fixed
+
+- **An override Claude makes waits on the Review page for the person to ratify, and the item
+  doesn't ship until it is; the cut names requirements whose tests were not run and waits for the
+  person to accept them, and the notes list them (DEF-043).** `kanbanr release promote` and
+  `release cut` take `--accept-untested`, and the Releases page asks with one checkbox.
 
 - **The docs-folded sign-off no longer asks you to tick each text to check or type a defect
   code**: Claude settles each text, with why and the revision it checked, and the sign-off appears

@@ -1089,6 +1089,7 @@ fn dispatch_routes(
                 reason.as_deref(),
                 repo,
                 &str_field(b, "by").unwrap_or_else(|| "kanbanr".to_string()),
+                &crate::origin::from_body(b),
             )?;
             let mut out = serde_json::to_value(&moved.feature)
                 .map_err(|e| CoreError::Unsupported(e.to_string()))?;
@@ -1392,12 +1393,14 @@ fn dispatch_routes(
             }
             ser(&body)
         }
+        // DEF-043: `accept_untested?` names the requirements the person accepts shipping untested.
         ("POST", ["projects", p, "releases", version, "cut"]) => ser(&crate::releases::cut_as(
             store,
             p,
             &percent_decode(version),
             &str_field(b, "by").unwrap_or_default(),
             &crate::origin::from_body(b),
+            &vec_field(b, "accept_untested").unwrap_or_default(),
         )?),
         // What cutting a release now would ship and carry over, by the cut's own rule, with nothing
         // written (FEAT-185): the monitor's production confirmation lists exactly this.
@@ -1408,6 +1411,8 @@ fn dispatch_routes(
         // is the release tip the caller's plan showed (FEAT-212): a branch moved since is refused.
         ("POST", ["projects", p, "releases", version, "promote"]) => {
             let expect = str_field(b, "expect");
+            // DEF-043: the untested requirements the person accepts shipping at the cut.
+            let accept = vec_field(b, "accept_untested").unwrap_or_default();
             ser(&crate::releases::promote_with(
                 store,
                 p,
@@ -1420,6 +1425,7 @@ fn dispatch_routes(
                     expect_tip: expect.as_deref(),
                     fetch: crate::releases::Fetch::Try,
                     origin: &crate::origin::from_body(b),
+                    accept_untested: &accept,
                 },
             )?)
         }
@@ -2310,7 +2316,13 @@ fn dispatch_routes(
             let dry_run = b.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
             // Under an agent scope the write path holds every item where it is (FEAT-214).
             let hold = str_field(b, "hold_advance");
-            let results = store.apply_batch_held(p, ops, dry_run, hold.as_deref())?;
+            let results = store.apply_batch_held(
+                p,
+                ops,
+                dry_run,
+                hold.as_deref(),
+                &crate::origin::from_body(b),
+            )?;
             Ok(json!({ "results": results }).to_string())
         }
 

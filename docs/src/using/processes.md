@@ -136,6 +136,11 @@ A refused move names each diagram: `FEAT-012 spec, diagram #1, line 14: … (sem
 - **`--override "<reason>"`** gets past a blocking gate, and the reason is kept in the item's
   history. It also records the item as started without agreement, so it shows on the Review page
   until someone ratifies it. `--unapproved` is the older name.
+- **An override Claude makes** (inside a Claude Code session, or by a delegated agent) records
+  where it was made, and waits on the Review page for you to ratify it even when the item was
+  approved before. Until you do, `kanbanr check` shows it as `override not ratified` and the item
+  does not ship: Promote to main and the cut carry it, saying why. Your own overrides, from your
+  terminal or the monitor, are your decision already and wait for nothing.
 - **Finishing the last task** moves the item to its end status only if that status's gate is
   met — and, on a workflow with no gates, only if every requirement has a green test. Otherwise
   it stays, and `kanbanr task state` says why. A batch is judged after its last operation, so one
@@ -471,6 +476,42 @@ cadence:
 | `tag_passed` | the newest result of the tag gate for the tag commit, recorded since the tag was made, is passed; only a stage after the tag can require it | run your CI on the tag and record its verdict, or start a patch release if it failed |
 | `merged_items_ship` | every item planned into the release whose code is merged can ship; a plan to the stage that tags, or the last stage, adds it when no `items_finished` is required, and holds the promotion | give what the item lacks (`kanbanr check <CODE>`), or plan it into another release |
 | `items_merged` | every item planned into the release (other than one in a no-op status) is at the integrate stage or later; read from the board, so it needs no repository | move the item to the integrate stage, which merges its branch, or plan it into another release |
+
+Two more conditions are the plan's own, never configured:
+
+| condition | holds when | fix shown |
+|---|---|---|
+| `later_tests_green` | every test of the release's items checked at this stage or before it is green (see [Tests checked later](#tests-checked-later)) | check them and record each result |
+| `untested_accepted` | at the cut: every shipping requirement has a green test, or you accepted shipping exactly those without one | run them and record the results, or accept shipping them unverified on the Releases page |
+
+#### Tests checked later
+
+Some checks can only be seen after main is pushed: a CI job runs, a tag publishes the notes. A test
+says when it is checked with `at` in its definition:
+
+| `at` | the item's gate | the release |
+|---|---|---|
+| empty | waits for it | — |
+| `pushed` | doesn't wait | the first stage that requires `pushed`, else the cut |
+| `cut` | doesn't wait | the cut |
+| a release stage | doesn't wait | that stage |
+
+```yaml
+tests:
+  - name: release::tag_publishes_notes
+    kind: e2e
+    state: planned
+    at: pushed
+```
+
+`at` must be `pushed`, `cut` or one of the project's release stages, and only a project with
+releases can use it. It is part of what was agreed, so adding or changing it lapses the approval.
+A stage before the cut that a test waits for holds the promotion (`later_tests_green`) until the
+test is green. At the cut, every shipping requirement whose tests have none green is listed
+(`untested_accepted`): the cut waits until you accept exactly that list, on the Releases page or
+with `--accept-untested FEAT-005/R-2,FEAT-005/R-3`. The acceptance is kept on the stage change, and
+the release notes on the board gain a "Not verified in this release" section naming each one. A
+test that waits for a stage after the cut holds that stage instead, and needs no acceptance.
 
 A stage can also list earlier stages in `after` (`kanbanr config release-stage tag --after ci`). The
 release must have been promoted forward into each of them before it enters this one, so a named

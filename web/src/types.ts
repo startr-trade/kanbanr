@@ -251,6 +251,8 @@ export interface TestRef {
   kind?: string;
   state: "planned" | "red" | "green";
   checked_rev?: string;
+  /** When it can be checked (DEF-043): "pushed", "cut" or a release stage; absent at the item's gates. */
+  at?: string;
 }
 
 /** The six dimensions in order, with blanks named — derived here exactly as the CLI derives it. */
@@ -307,6 +309,17 @@ export interface PendingReview {
   spec_rev?: string;
   /** The spec that sign-off pins, with what changed since the last one (FTR-023). */
   spec?: SpecBrief;
+  /** Claude's overrides on the item that wait for the person to ratify, oldest first (DEF-043). */
+  overrides?: OverrideView[];
+}
+
+/** One override Claude made past a gate, as the Review page shows it (DEF-043). */
+export interface OverrideView {
+  at: string;
+  from: string;
+  to: string;
+  reason: string;
+  origin: string;
 }
 
 export interface SpecBrief {
@@ -533,6 +546,8 @@ export interface Release {
     reason?: string;
     item?: string;
     origin?: string;
+    /** The requirements accepted shipping untested at the cut, as CODE/R-n (DEF-043). */
+    accepted_untested?: string[];
   }[];
   /** Who cut the release and from where (DEF-028). Absent means unknown. */
   shipped_by?: string;
@@ -701,11 +716,25 @@ export interface ManualWaiting {
 
 /** One condition of a release stage a promotion enters, and whether it holds (FEAT-212). */
 export interface PlanCondition {
-  check: "items_finished" | "prepared" | "main_at_release" | "pushed" | "gate_passed" | "tag_passed" | "items_merged" | "stage_passed" | "merged_items_ship";
+  check:
+    | "items_finished"
+    | "prepared"
+    | "main_at_release"
+    | "pushed"
+    | "gate_passed"
+    | "tag_passed"
+    | "items_merged"
+    | "stage_passed"
+    | "merged_items_ship"
+    | "later_tests_green"
+    | "untested_accepted";
   stage: string;
   holds: boolean;
   detail: string;
   fix?: string;
+  /** The requirements it names, as CODE/R-n (DEF-043): for untested_accepted, exactly what the
+   * person accepts shipping unverified. */
+  refs?: string[];
 }
 
 /** One step a promotion takes (FEAT-212). */
