@@ -100,6 +100,11 @@ If you ask it to explain one, it does, and sends you back to the page.
 | Promote or cut a release, and confirm each stage after the tag | **Releases** page |
 | Change it | tell Claude what to change: it revises the definition, and the item comes back to the queue |
 
+Checks that need a push are marked to be checked after it; Claude records them once CI has run;
+anything still unchecked at the cut waits for you to accept it, and the notes say so. An override
+Claude makes past a gate waits on the Review page for you to ratify, and the item doesn't ship
+until you do.
+
 Claude may run `kanbanr release promote <V> --plan`, `kanbanr sprint close` and
 `kanbanr release plan`, which record no verdict. If a verdict was ever recorded that you did not
 give, Claude says so at once and asks you to withdraw it on the item's page.
