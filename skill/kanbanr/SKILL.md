@@ -144,6 +144,10 @@ project"** (or anything equivalent):
      and tests. That is the method, not an option. Say so, so the user is not surprised by it.
      Say also, without asking, that design before build and the docs fold-in are on by default
      (`kanbanr config method --off` turns them off later).
+   - *Decisions*: after the process is chosen, run
+     `kanbanr decisions defaults --process <name> --dry-run --json` (it needs no board: the
+     proposal is computed from the process alone) and show the proposed mode and delegations in
+     the plan under **Decisions**, with "you grant them on the Review page after setup".
    - *Git hooks* in the code repo (`kanbanr git install-hooks`): every commit names its board
      item, and commits on the default branch are refused. Offer them **defaulting to yes**.
    - *No git repository yet?* If the project folder isn't one, say so and plan `git init` plus
@@ -166,6 +170,7 @@ project"** (or anything equivalent):
    kanbanr init <name> --data-dir <board> --author "<name>" --email <email> --description "<…>"
    kanbanr process save <name> --description "<…>" [--personal] --from-file <scratch>/process.yaml   # a process designed now
    kanbanr config workflow --preset <name>         # a saved, built-in or just-saved process; omit for default
+   kanbanr decisions defaults                      # propose the process's default delegations; the user grants them
    kanbanr charter set --file <scratch>/charter.yaml
    kanbanr hooks status                            # init registered them; install if it did not
    kanbanr claude sync                             # CLAUDE.md block pointing at the charter
@@ -203,7 +208,8 @@ project"** (or anything equivalent):
    clearing. `kanbanr check` lists them.
    Tell the user how to watch the board: `kanbanr serve` starts the monitor, which is built into
    the binary (it needs no `--ui-dir`, and never another checkout's build), and `kanbanr open`
-   opens it. **Only then** go back to what the user originally asked for.
+   opens it. Say that the proposed delegations wait on the Review page for them to grant.
+   **Only then** go back to what the user originally asked for.
 6. From that point on, treat kanbanr as the **system of record for the entire project**, with no
    further prompting.
 
@@ -364,6 +370,17 @@ guard refuses the commands if you try. Your part is one message saying what is w
 `kanbanr open --check` gives the addresses. If no monitor accepts writes, offer to start one with
 `kanbanr review --ui` (run it in the background) or tell the user the command to run.
 
+**Where decisions are taken is the project's choice** (FTR-028). `kanbanr decisions show` says the
+mode. In `monitor` mode, every verdict is the user's, on the pages. In `delegated` mode, you may
+take a verdict a delegation in force covers, with `--under DLG-n`, and nothing else. Say in one
+message what you decided and under which delegation; it waits on the Review page for them to keep
+or undo. **When an item has moved back to an earlier stage, ask the user before taking any
+decision or making any change for it, even if a delegation would cover it**: delegations are for
+forward moves. You never change the mode, grant a delegation or review a decision: kanbanr
+refuses it.
+You may propose a delegation (`kanbanr decisions propose …`); it covers nothing until the user
+grants it on the Review page.
+
 **Prepare the record before you say a decision waits** (FTR-034). When you have its evidence (the
 CI run's link and result, the commit, the doc that holds the minutes, what the person said), put
 it on the record with `kanbanr prepare signoff|promotion|gate|ratify …`, naming every source you
@@ -483,6 +500,10 @@ asked for, so don't ask for it either.
 
 **A decision you draft is announced at once:** fill its sections, show it in a few lines, and say
 it waits on the Review page.
+
+The **delegated decisions to review** (`kanbanr decisions show --json`, `to_review`) are listed
+alongside the queue: say how many wait to be kept or undone, under which delegation. When the user
+changes the mode, relay the `waiting` list it answers with once: what waits, and where now.
 
 ### Designing a process with the user
 
@@ -673,6 +694,9 @@ design before build, it adds `signoffs: [design-review]` to the same gate.
 - Never commit on main or on a line of integration (the hooks refuse), and never push.
 
 ### Sub-agents: what each may do
+
+Only you, the coordinator, act under a delegation; never brief an agent to (kanbanr refuses
+`--under` from a sub-agent).
 
 When you hand work to a sub-agent, its limits are not left to its judgement or to a one-off line
 in the brief. Each role has fixed boundaries, kanbanr enforces them,
@@ -1317,6 +1341,12 @@ kanbanr prepare signoff <CODE> <NAME> [--note …] [--doc PATH] --source S…   
 kanbanr prepare promotion <V> [--stage S] --checked "…" --source S…   # what was checked, for a stage confirmed after the tag
 kanbanr prepare ratify <CODE> --reason "…" --source S…   # why the work went ahead, for the person to ratify
 kanbanr prepare list [--all] [--item CODE] [--release V]   # what waits for the person, and where; stale ones say why
+kanbanr decisions show                            # the mode, delegations, delegated decisions to review, what waits where
+kanbanr decisions propose --verdict signoff:<name>|approve|ratify [--step S] [--item CODE] [--kind K] [--milestone MS] [--all] [--until YYYY-MM-DD] [--note …]   # yours: inert until the user grants it
+kanbanr decisions revoke DLG-001 --reason "…"     # yours or the user's
+kanbanr decisions defaults [--process <name> --dry-run]   # yours: propose the process's default delegations
+kanbanr decisions mode monitor|delegated | grant DLG-001 | review <decision> --keep|--undo   # the user's, on the Review page; refused when Claude runs it
+kanbanr approve|ratify|signoff … --under DLG-001  # yours, in delegated mode, only for what a delegation in force covers
 kanbanr release redate v0.1.0                     # date the notes and changelog today, before the cut
 kanbanr release notes v0.1.0 [--file F | --edit] [--changelog F]  # the notes on release/<V> and where; --file/--edit commits new text there until the cut; --changelog commits the version's changelog section in the same commit
 kanbanr release stages                            # each stage: requires, on_enter, declared or default

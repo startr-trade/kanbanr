@@ -23,6 +23,7 @@ pub mod coderepo;
 pub mod config;
 pub mod coverage;
 pub mod daylog;
+pub mod decisions;
 pub mod diagrams;
 pub mod dispatch;
 pub mod docdrift;

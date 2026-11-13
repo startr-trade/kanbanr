@@ -1225,7 +1225,7 @@ impl Store {
 
     /// Record agreement to an item's definition as it currently stands (FEAT-048).
     pub fn approve_feature(&self, id: &str, code: &str, by: &str) -> Result<FeatureItem> {
-        self.approve_feature_as(id, code, by, "")
+        self.approve_feature_as(id, code, by, "", "")
     }
 
     /// As [`Store::approve_feature`], recording where it was taken (DEF-028).
@@ -1235,6 +1235,7 @@ impl Store {
         code: &str,
         by: &str,
         origin: &str,
+        delegation: &str,
     ) -> Result<FeatureItem> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
@@ -1254,10 +1255,12 @@ impl Store {
             rev: rev.clone(),
             parts: definition.part_revs(),
             origin: origin.to_string(),
+            delegation: delegation.to_string(),
         });
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
             origin: origin.to_string(),
+            delegation: delegation.to_string(),
             at: at.clone(),
             by: by.to_string(),
             verdict: "approved".to_string(),
@@ -1289,7 +1292,7 @@ impl Store {
         by: &str,
         reason: &str,
     ) -> Result<FeatureItem> {
-        self.ratify_feature_as(id, code, by, reason, "")
+        self.ratify_feature_as(id, code, by, reason, "", "")
     }
 
     /// As [`Store::ratify_feature`], recording where it was taken (DEF-028).
@@ -1300,6 +1303,7 @@ impl Store {
         by: &str,
         reason: &str,
         origin: &str,
+        delegation: &str,
     ) -> Result<FeatureItem> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
@@ -1325,10 +1329,12 @@ impl Store {
             rev: rev.clone(),
             parts: definition.part_revs(),
             origin: origin.to_string(),
+            delegation: delegation.to_string(),
         });
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
             origin: origin.to_string(),
+            delegation: delegation.to_string(),
             at: at.clone(),
             by: by.to_string(),
             verdict: "ratified".to_string(),
@@ -1405,6 +1411,7 @@ impl Store {
         definition.approval = None;
         definition.approvals.push(crate::models::ApprovalEvent {
             extra: Default::default(),
+            delegation: String::new(),
             origin: origin.to_string(),
             at: at.clone(),
             by: by.to_string(),
@@ -1476,7 +1483,7 @@ impl Store {
         doc: &str,
         origin: &str,
     ) -> Result<(FeatureItem, Option<String>)> {
-        self.signoff_feature_checked_as(id, code, signoff, by, note, doc, origin, &[])
+        self.signoff_feature_checked_as(id, code, signoff, by, note, doc, origin, "", &[])
     }
 
     /// As [`Store::signoff_feature_reported_as`], recording the flagged texts the person settled
@@ -1491,6 +1498,7 @@ impl Store {
         note: &str,
         doc: &str,
         origin: &str,
+        delegation: &str,
         checked: &[crate::models::Checked],
     ) -> Result<(FeatureItem, Option<String>)> {
         let signoff = signoff.trim();
@@ -1539,6 +1547,7 @@ impl Store {
             doc: doc.trim().to_string(),
             status,
             origin: origin.to_string(),
+            delegation: delegation.to_string(),
             checked: checked.to_vec(),
             ..Default::default()
         });
@@ -2855,6 +2864,7 @@ impl Store {
                     })?;
                     definition.approval = Some(crate::models::Approval {
                         extra: Default::default(),
+                        delegation: String::new(),
                         by: by.unwrap_or_else(|| "unknown".to_string()),
                         at: now_rfc3339(),
                         rev: definition.content_rev(),

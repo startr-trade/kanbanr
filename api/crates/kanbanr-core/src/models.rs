@@ -336,6 +336,10 @@ pub struct Signoff {
     /// kanbanr's value survives.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub origin: String,
+    /// The delegation a record was taken under, such as `DLG-001`, when `origin` is `delegated`
+    /// (FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub delegation: String,
     /// What the person checked when giving `docs-folded` (FTR-013): each text flagged as naming
     /// something the item changed, with whether they confirmed it is still right or filed a
     /// correction. Absent on a record without flags, or one an older kanbanr wrote.
@@ -464,6 +468,10 @@ pub struct ApprovalEvent {
     /// kanbanr's value survives.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub origin: String,
+    /// The delegation a record was taken under, such as `DLG-001`, when `origin` is `delegated`
+    /// (FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub delegation: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -491,6 +499,10 @@ pub struct Approval {
     /// kanbanr's value survives.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub origin: String,
+    /// The delegation a record was taken under, such as `DLG-001`, when `origin` is `delegated`
+    /// (FTR-028). Absent otherwise; an older kanbanr keeps it in `extra`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub delegation: String,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -1795,6 +1807,44 @@ mod tests {
         assert_eq!(d.approval_state(), ApprovalState::Lapsed);
         sign_off(&mut d, "2026-11-06T11:00:00Z");
         assert_eq!(d.approval_state(), ApprovalState::Lapsed);
+    }
+
+    /// FTR-028 R-3: a record names its delegation; an older reader, whose struct lacks the field,
+    /// keeps it in `extra` and writes it back; a record without it writes nothing.
+    #[test]
+    fn a_delegation_field_survives_an_older_reader() {
+        let yaml = "id: design-review\nby: Claude\nat: 2026-11-12T10:00:00Z\nrev: abc\n\
+                    origin: delegated\ndelegation: DLG-001\n";
+        let s: Signoff = crate::yaml::from_str(yaml).unwrap();
+        assert_eq!(s.delegation, "DLG-001");
+        assert!(
+            crate::yaml::to_string(&s)
+                .unwrap()
+                .contains("delegation: DLG-001")
+        );
+        let plain = Signoff {
+            id: "design-review".into(),
+            ..Default::default()
+        };
+        assert!(
+            !crate::yaml::to_string(&plain)
+                .unwrap()
+                .contains("delegation")
+        );
+
+        #[derive(Serialize, Deserialize)]
+        struct Older {
+            id: String,
+            #[serde(flatten, default)]
+            extra: Extra,
+        }
+        let o: Older = crate::yaml::from_str(yaml).unwrap();
+        assert_eq!(o.extra["delegation"], serde_json::json!("DLG-001"));
+        assert!(
+            crate::yaml::to_string(&o)
+                .unwrap()
+                .contains("delegation: DLG-001")
+        );
     }
 
     /// DEF-043 compat: a test's `at`, a transition's `origin` and a stage change's

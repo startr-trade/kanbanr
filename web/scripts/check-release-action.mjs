@@ -234,6 +234,16 @@ expect("web::release_returned_banner: no banner for a release that was not sent 
 a = releaseAction({ ...base, returned }, false);
 expect("web::release_returned_banner: shown on a read-only monitor too", a.returned?.item === "DEF-030" && !a.button, a);
 
+// FTR-028 Decision 5: a delegated decision not yet kept or undone is a warning beside the button
+// (the page lists the plan's warnings), never a block.
+const delegated = "DEF-9: the design-review sign-off Claude took under DLG-001 is not kept or undone yet: review it on the Review page";
+a = releaseAction({ ...base, warnings: [delegated] }, true);
+expect(
+  "web::release_warns_of_unreviewed_delegated_decisions: the button stays enabled",
+  a.button && a.enabled && a.label === "Promote to main" && !a.missing.some((m) => m.text.includes("DLG-001")),
+  a,
+);
+
 // DEF-043 R-3 (web::release_action untested): a cut whose one unmet condition is the person's
 // acceptance of what ships untested offers that list, disabled until accepted; any other unmet
 // condition beside it offers none.

@@ -744,7 +744,7 @@ mod tests {
             ("a", "via the monitor"),
             ("b", "via the conversation"),
             ("c", "via the terminal"),
-            ("d", "via delegated"),
+            ("d", "under a delegation"),
             ("e", "origin unknown"),
         ] {
             let line = md

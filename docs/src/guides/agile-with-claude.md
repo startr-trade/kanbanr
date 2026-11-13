@@ -10,6 +10,9 @@ releases. You don't need to learn any commands:
   Claude tells you what is waiting there and links to it. It never records a decision, and it
   doesn't ask for one in a plan or a question. What Claude already knows, such as a CI run's
   result or what a sign-off covered, arrives filled in beside the button: you check it and click.
+- **You can delegate the small decisions.** Tell Claude which ones it may take, such as the design
+  review of small defects, and until when. It proposes a delegation; you grant it on the
+  **Review** page. Whatever Claude decides under it comes back there for you to keep or undo.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [Agile from the command line](agile-cli.md). For the other

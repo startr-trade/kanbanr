@@ -54,6 +54,10 @@ const writes = {
       {},
     ),
   rejectPrepared: () => api.rejectPrepared("demo", "x", "Reviewer"),
+  setDecisionMode: () => api.setDecisionMode("demo", "delegated", "Reviewer"),
+  grantDelegation: () => api.grantDelegation("demo", "DLG-001", "rev", "Reviewer"),
+  revokeDelegation: () => api.revokeDelegation("demo", "DLG-001", "Reviewer", "done"),
+  reviewDelegated: () => api.reviewDelegated("demo", "FTR-1/signoff/design-review/t", "keep", "Reviewer"),
   recordManual: () => api.recordManual("demo", "FEAT-1", "R-1", "manual: looks right", true, "Reviewer"),
 };
 for (const [name, call] of Object.entries(writes)) {

@@ -2612,7 +2612,7 @@ mod tests {
         );
 
         store
-            .ratify_feature_as("shop", &code, "Ada", "agreed", "monitor")
+            .ratify_feature_as("shop", &code, "Ada", "agreed", "monitor", "")
             .unwrap();
         let f = store.load("shop").unwrap().feature(&code).unwrap().clone();
         assert!(open_overrides(&f).is_empty());
@@ -2762,6 +2762,7 @@ mod tests {
         };
         def.approval = Some(Approval {
             extra: Default::default(),
+            delegation: String::new(),
             by: "A".into(),
             at: "2026-09-29T00:00:00Z".into(),
             rev: def.content_rev(),
