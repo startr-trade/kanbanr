@@ -924,7 +924,10 @@ pub fn next_gates(
                 .collect();
             // A `docs-folded` the branch moved on from is asked again (DEF-046), then held like a
             // new one until the item is built and folded.
-            if gate.signoffs.iter().any(|n| n == crate::method::DOCS_FOLDED)
+            if gate
+                .signoffs
+                .iter()
+                .any(|n| n == crate::method::DOCS_FOLDED)
                 && let Some(why) = crate::docsbuilt::moved_on(project, feature, ctx)
             {
                 signoffs_needed = gate
@@ -1468,7 +1471,12 @@ pub(crate) fn docs_updated_gaps(
     let keys: Vec<String> = feature
         .definition
         .as_ref()
-        .map(|d| d.affects_docs.iter().map(|doc| affects_doc_key(doc)).collect())
+        .map(|d| {
+            d.affects_docs
+                .iter()
+                .map(|doc| affects_doc_key(doc))
+                .collect()
+        })
         .unwrap_or_default();
     docs_unchanged_gaps(feature, &keys, docs, history, "declared in affects_docs")
 }
@@ -2107,7 +2115,9 @@ mod tests {
         next_second();
         let spec = "## Design\n\nParse it.\n\n### Affects docs\n\
             - [data](/p/demo/docs/file/architecture/data.md): the parser.\n";
-        let item = store.add_feature("demo", "Parser", spec, "M", None).unwrap();
+        let item = store
+            .add_feature("demo", "Parser", spec, "M", None)
+            .unwrap();
         store
             .set_feature_definition(
                 "demo",
@@ -2152,7 +2162,11 @@ mod tests {
         let (store, dir, code, list) = linked_docs_board("open");
         let (gate, hold) = completed_gate(&store, &code, None);
         assert_eq!(gate.signoffs_needed, vec!["design-review".to_string()]);
-        let held: Vec<&str> = gate.signoffs_held.iter().map(|g| g.message.as_str()).collect();
+        let held: Vec<&str> = gate
+            .signoffs_held
+            .iter()
+            .map(|g| g.message.as_str())
+            .collect();
         assert!(held.contains(&"task T1 is not complete"), "{held:?}");
         assert!(
             held.iter().any(|m| m.contains("architecture/data.md")),
@@ -2165,11 +2179,21 @@ mod tests {
 
         // The task done, the doc still unchanged: still held, for the doc alone.
         store
-            .set_task_state("demo", &code, &list, "T1", crate::models::TaskState::Completed)
+            .set_task_state(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
             .unwrap();
         let (gate, hold) = completed_gate(&store, &code, None);
         assert_eq!(gate.signoffs_held.len(), 1, "{:?}", gate.signoffs_held);
-        assert!(gate.signoffs_held[0].message.contains("architecture/data.md"));
+        assert!(
+            gate.signoffs_held[0]
+                .message
+                .contains("architecture/data.md")
+        );
         assert!(hold.is_some());
 
         // The doc folded: offered.
@@ -2192,7 +2216,13 @@ mod tests {
     fn a_docs_folded_signoff_lapses_when_the_branch_moves_on() {
         let (store, dir, code, list) = linked_docs_board("lapse");
         store
-            .set_task_state("demo", &code, &list, "T1", crate::models::TaskState::Completed)
+            .set_task_state(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
             .unwrap();
         store
             .write_doc("demo", "architecture/data.md", "# Data\n\nv2\n")

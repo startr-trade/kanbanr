@@ -633,7 +633,10 @@ mod tests {
 
         task(&store, &code, "Build it", TaskState::InProgress);
         let got = judge(&store, &code, None);
-        assert!(got.unbuilt[0].why.contains("task T1 is not complete"), "{got:?}");
+        assert!(
+            got.unbuilt[0].why.contains("task T1 is not complete"),
+            "{got:?}"
+        );
 
         let todo = store.add_todo_list("demo", &code, "u", None).unwrap();
         let t = store

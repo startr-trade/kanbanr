@@ -1530,7 +1530,10 @@ mod tests {
         assert!(text.contains(&sha), "{text}");
         let back: Signoff = crate::yaml::from_str(&text).unwrap();
         assert_eq!(back, pinned);
-        assert!(back.extra.is_empty(), "the field is known, not kept as extra");
+        assert!(
+            back.extra.is_empty(),
+            "the field is known, not kept as extra"
+        );
     }
 
     /// FTR-013 R-6: a sign-off records each flagged text and how it was settled, nothing when none

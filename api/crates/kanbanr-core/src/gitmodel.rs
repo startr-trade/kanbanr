@@ -1300,7 +1300,9 @@ mod tests {
         store
             .set_gates("demo", [("Completed".to_string(), gate)].into())
             .unwrap();
-        let f = store.add_feature("demo", "Lapse", "# x", "M", None).unwrap();
+        let f = store
+            .add_feature("demo", "Lapse", "# x", "M", None)
+            .unwrap();
         let code = f.code.clone();
         store
             .set_feature_definition(
@@ -1315,7 +1317,9 @@ mod tests {
         store.approve_feature("demo", &code, "Ada").unwrap();
         store.move_feature("demo", &code, "Scheduled").unwrap();
         let list = store.add_todo_list("demo", &code, "work", None).unwrap();
-        store.add_task("demo", &code, &list.code, "one", None).unwrap();
+        store
+            .add_task("demo", &code, &list.code, "one", None)
+            .unwrap();
         store
             .set_task_state(
                 "demo",
@@ -1344,7 +1348,10 @@ mod tests {
             .unwrap()
         };
         sign();
-        assert_eq!(store.load("demo").unwrap().feature(&code).unwrap().status, "Scheduled");
+        assert_eq!(
+            store.load("demo").unwrap().feature(&code).unwrap().status,
+            "Scheduled"
+        );
         crate::coderepo::tests::commit_file(&repo, "a.rs", "v2\n", "after the sign-off");
 
         let err = move_item(&store, "demo", &code, "Completed", None, Some(&repo), "Ada")
@@ -1352,10 +1359,14 @@ mod tests {
             .to_string();
         assert!(err.contains("sign-off 'docs-folded' lapsed"), "{err}");
         assert!(err.contains(&branch), "{err}");
-        assert_eq!(store.load("demo").unwrap().feature(&code).unwrap().status, "Scheduled");
+        assert_eq!(
+            store.load("demo").unwrap().feature(&code).unwrap().status,
+            "Scheduled"
+        );
 
         sign();
-        let moved = move_item(&store, "demo", &code, "Completed", None, Some(&repo), "Ada").unwrap();
+        let moved =
+            move_item(&store, "demo", &code, "Completed", None, Some(&repo), "Ada").unwrap();
         assert_eq!(moved.feature.status, "Completed");
         assert!(moved.merged.is_some());
         let _ = std::fs::remove_dir_all(&dir);
