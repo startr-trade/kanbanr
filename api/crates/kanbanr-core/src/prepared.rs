@@ -983,6 +983,28 @@ pub fn settles(r: &Prepared, flag: &crate::docdrift::Flag) -> bool {
     flag.commits.iter().all(|c| seen.contains(&c.sha.as_str()))
 }
 
+/// The sign-off's record of a settlement `r` that `settles` `flag`.
+pub fn checked_of(r: &Prepared, flag: &crate::docdrift::Flag) -> crate::models::Checked {
+    let field = |k: &str| field_text_of(&r.fields, k).to_string();
+    crate::models::Checked {
+        target: flag.target.key(),
+        outcome: if field("outcome") == "corrected" {
+            crate::models::Outcome::Corrected
+        } else {
+            crate::models::Outcome::Confirmed
+        },
+        correction: field("correction"),
+        by: r.by.clone(),
+        origin: r.origin.clone(),
+        at: r.at.clone(),
+        rev: r.rev.clone(),
+        text_changed_at: flag.target_changed_at.clone(),
+        why: field("why"),
+        prepared: r.id.clone(),
+        ..Default::default()
+    }
+}
+
 /// The open `text-check` records of `item`, newest first. A newer open one for the same target
 /// supersedes an older one; none is deleted, and the drift check is not run here.
 pub fn settlements(store: &Store, p: &str, item: &str) -> Result<Vec<Prepared>> {
