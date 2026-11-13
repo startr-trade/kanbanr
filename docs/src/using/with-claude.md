@@ -221,7 +221,7 @@ same in every workflow:
 | `bypass` | your ratification on the Review page |
 | `signoff` | a "Sign off *name*" question |
 | `estimated` | a question: how big, in your project's unit (points or days) |
-| `in_sprint` | a question: plan it into the active sprint? |
+| `in_sprint` | a question: plan it into the running sprint, or start its sprint today? |
 | `in_release` | a question: which planned release? |
 | `tests_green` | **never a question**: evidence decides; Claude reports what isn't green yet and makes it green |
 

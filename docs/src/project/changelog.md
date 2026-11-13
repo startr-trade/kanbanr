@@ -25,6 +25,11 @@ All notable changes to kanbanr are documented here. The format follows
   filled in beside one button, and the person confirms, edits or rejects it. Both are kept
   (FTR-034).
 
+### Changed
+
+- **`kanbanr sprint start` on a sprint dated later starts it today and keeps its length**, and
+  `--start today` is accepted wherever a sprint's first day is (DEF-041).
+
 ### Fixed
 
 - **Manual tests waiting for a person are listed on the Review page, recorded there with Passed or
@@ -135,6 +140,10 @@ All notable changes to kanbanr are documented here. The format follows
   board-governing check all use it. A real board, a copy of it (it holds scopes), a link to it and a
   path the guard cannot resolve stay refused, and the refusal and the brief name the form to use.
   `$TMPDIR` cannot be reassigned in a command.
+- **On a project with sprints, work waits for its sprint to start (DEF-041).** The first move into
+  a working stage asks for the item to be in a sprint that has started, and a sprint dated in the
+  future reads as planned until its first day. `kanbanr doctor` names a sprint an older version
+  started early. Claude recommends starting a sprint today unless you name another day.
 
 ### Added
 

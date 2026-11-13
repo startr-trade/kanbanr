@@ -98,6 +98,8 @@ for them.
 
 A sprint and a release don't have to line up. One release can take items from several sprints.
 
+Claude recommends starting today. Work past the first stage waits until the sprint has started; a sprint dated later reads as planned until its first day.
+
 ## One item, phase by phase
 
 Ask for the work in your own words, and Claude asks only what it can't work out. Each phase has a

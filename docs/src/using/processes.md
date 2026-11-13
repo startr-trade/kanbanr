@@ -351,6 +351,7 @@ and `agile` presets do this, and any other project can too:
 ```bash
 kanbanr config cadence --sprints on --releases on --unit points --sprint-length 14
 kanbanr sprint add --start 2026-10-05 --goal "Shoppers can pay" --capacity 20
+# or start today: kanbanr sprint add --start today --goal "…"   # or a date
 kanbanr sprint plan SP-001 FEAT-001 FEAT-002    # warns when it goes over capacity
 kanbanr sprint unplan FEAT-001                  # back to no sprint
 kanbanr sprint start SP-001
@@ -370,6 +371,14 @@ kanbanr release promote v0.1.0 production       # the cut: ship, notes, fast-for
 kanbanr release stages                          # what each stage requires and does
 kanbanr feature add --title "…" --milestone MS-001 --found-in v0.1.0   # feedback on a release
 ```
+
+Work waits for a started sprint. On a project with sprints, the first move off the starting stage
+into a working stage (Business Arch in `togaf`, Design in `agile`, In Progress in `default`)
+asks for `in_sprint`: the item must be planned into a sprint whose first day is today or earlier.
+Processes that already ask for it, such as `scrum`, are left as they are. A sprint dated later
+reads as planned, not active, until its first day. `kanbanr sprint start` on one starts it today,
+moves its dates and keeps its length, and says so. `kanbanr doctor` names a sprint that an older
+version started early.
 
 The burndown and velocity are derived from the moves items record; nothing is stored for them. An
 item counts as finished from the day it first reaches a stage marked `done` — Done, in `scrum` — or

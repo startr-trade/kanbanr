@@ -214,7 +214,11 @@ Setup makes neither, so the first one is made when the user asks for it, with th
 known:
 
 - **A sprint.** When the user first asks to start or plan a sprint, ask its goal, its first day
-  (default next Monday) and its capacity (points under Scrum), then `kanbanr sprint add`. If a
+  (recommend today, `--start today`, unless the user names another day) and its capacity (points
+  under Scrum), then `kanbanr sprint add`. Work past the first stage waits for a started sprint.
+  If the user wants to begin before a sprint's first day, ask whether to start it today;
+  `kanbanr sprint start` then moves its dates to today and keeps its length. Never start a sprint
+  without asking. If a
   planned sprint with no items already exists, offer `kanbanr sprint edit <SP>` or reuse it. Never
   add a second sprint to change a date. A mistaken empty sprint is `kanbanr sprint remove <SP>`.
 - **A release.** When the user first plans an item into a release and none is suitable, ask the
@@ -378,7 +382,7 @@ organisation's own process file changes what you ask with nothing changed here:
 | `approved` | the user's approval **on the Review page**: say it is waiting, with the link |
 | `bypass` | a ratification **on the Review page**: say it is waiting |
 | `signoff` (a name in `signoffs_needed`, e.g. `design-review`, `docs-folded`) | a sign-off **on the Review page**: say it is waiting |
-| `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; the active sprint; planned releases) |
+| `estimated`, `in_sprint`, `in_release` | a **question** with the choices the board offers (points or days; plan it into the running sprint, or start its sprint today; planned releases) |
 | `tests_green` | **never a question** — evidence decides; report what is not green yet, and make it green |
 | `docs_updated` | **never a question** — fold the design into each doc in `affects_docs`, as built, and draft that fold-in into the definition, saying which docs change; if the item names none, ask whether it really changes no architecture doc |
 | `diagrams_valid` | **never a question** — fix each Mermaid diagram the lint names, in the spec or a doc in `affects_docs`, then run `kanbanr doctor` to confirm none is left |
