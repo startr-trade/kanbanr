@@ -11,7 +11,7 @@ import type { Adr, DriftChecked, DriftFlag, PendingReview, PlannedRelease, SpecB
 import { approveBlocker, checkBlocks, type DiagramProblem } from "../diagramCheck";
 import { PreparedPanel } from "../components/PreparedPanel";
 import { openFor } from "../prepared";
-import type { PreparedView } from "../types";
+import type { DecisionsView, DelegationView, PreparedView, Waiting } from "../types";
 
 /**
  * What to show once a verdict went through. A repeat of the latest verdict records nothing; the
@@ -53,6 +53,8 @@ export default function ReviewPage() {
   const prepared = useAsync(() => api.getPrepared(project), [project, tick]);
   // Decisions waiting for their owner (FEAT-153): proposed, and nothing else.
   const adrs = useAsync(() => api.getAdrs(project), [project, tick]);
+  // Where this project's decisions are taken, and what was delegated (FTR-028).
+  const decisions = useAsync(() => api.getDecisions(project), [project, tick]);
 
   if (pending.loading && !pending.data) return <Loading />;
   if (pending.error) return <ErrorBox error={pending.error} />;
@@ -65,6 +67,8 @@ export default function ReviewPage() {
   // A monitor configured read-only (the standalone bundle, FEAT-178) offers no decision at all; each
   // brief shows the CLI command that records it instead.
   const writable = !isReadOnly() && meta.data?.writes === true && who != null;
+  // In conversation mode core refuses the monitor's item verdicts, so none is offered (FTR-028).
+  const inConversation = decisions.data?.mode === "conversation";
 
   // One verdict per item, and which one follows from how it got here: work built under a recorded
   // bypass is ratified — agreed after the fact, and recorded as such (FEAT-109) — anything else is
@@ -184,6 +188,11 @@ export default function ReviewPage() {
         <LiveDot />
       </div>
 
+      <DecisionsHere project={project} view={decisions.data ?? null} error={decisions.error} writable={writable} who={who} />
+      {inConversation ? (
+        <p className="muted">Decisions are taken in the conversation in this project.</p>
+      ) : null}
+
       {items.length === 0 && proposed.length > 0 ? (
         <p className="muted">No definitions are waiting for agreement.</p>
       ) : items.length === 0 ? (
@@ -238,7 +247,7 @@ export default function ReviewPage() {
           project={project}
           item={item}
           tick={tick}
-          writable={writable}
+          writable={writable && !inConversation}
           busy={busy === item.code}
           outcome={done[item.code]}
           // The first is open so the page shows what a brief looks like; the rest are collapsed,
@@ -276,6 +285,254 @@ export default function ReviewPage() {
         </>
       )}
     </div>
+  );
+}
+
+/** Where a waiting decision is taken, in words. */
+function placeWords(w: Waiting): string {
+  if (w.place === "delegated") return `for Claude, under ${w.delegation ?? "a delegation"}`;
+  if (w.place === "conversation") return "in the conversation";
+  return "here, on the monitor";
+}
+
+/** A proposed delegation as FTR-034's prepared panel shows a prepared record (FTR-028). */
+function asPrepared(g: DelegationView): PreparedView {
+  const fields: Record<string, unknown> = { verdicts: g.verdicts.join(", ") };
+  if (g.steps?.length) fields.steps = g.steps.join(", ");
+  if (g.items?.length) fields.items = g.items.join(", ");
+  if (g.kinds?.length) fields.kinds = g.kinds.join(", ");
+  if (g.milestone) fields.milestone = g.milestone;
+  if (g.all) fields.covers = "every item";
+  fields.until = g.until;
+  if (g.note) fields.note = g.note;
+  return {
+    id: g.id,
+    kind: "delegation",
+    subject: {},
+    fields,
+    sources: [],
+    by: g.proposed.by,
+    origin: g.proposed.origin,
+    at: g.proposed.at,
+    rev: g.rev,
+    state: "open",
+    resolution: null,
+    stale_why: "",
+    page: "review",
+    command: `kanbanr decisions grant ${g.id}`,
+  };
+}
+
+/**
+ * Decisions here (FTR-028): where this project's decisions are taken, the delegations the person
+ * granted or Claude proposed, and the decisions Claude took under one, to keep or undo.
+ */
+function DecisionsHere({
+  project,
+  view,
+  error,
+  writable,
+  who,
+}: {
+  project: string;
+  view: DecisionsView | null;
+  error: unknown;
+  writable: boolean;
+  who: string | null;
+}) {
+  const [mode, setMode] = useState<string>("");
+  const [said, setSaid] = useState<Record<string, string>>({});
+  const [waiting, setWaiting] = useState<Waiting[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [reasons, setReasons] = useState<Record<string, string>>({});
+  if (error) {
+    return (
+      <section className="decisions-here">
+        <h2>Decisions here</h2>
+        <p className="error">Where decisions are taken could not be read: {String(error)}</p>
+      </section>
+    );
+  }
+  if (!view) return null;
+  const run = async (key: string, f: () => Promise<unknown>, ok: string) => {
+    setBusy(key);
+    try {
+      await f();
+      setSaid((d) => ({ ...d, [key]: ok }));
+    } catch (e) {
+      setSaid((d) => ({ ...d, [key]: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const by = who ?? "";
+  const chosen = mode || view.mode;
+  const proposed = view.delegations.filter((g) => g.state === "proposed");
+  const granted = view.delegations.filter((g) => g.state === "granted");
+  const reason = (k: string) => reasons[k] ?? "";
+  const setReason = (k: string, v: string) => setReasons((r) => ({ ...r, [k]: v }));
+  return (
+    <section className="decisions-here">
+      <h2>Decisions here</h2>
+      <p className="muted">
+        Decisions are taken in <strong>{view.mode}</strong> mode.{" "}
+        {view.mode === "delegated"
+          ? "You decide here; Claude may take a verdict a delegation you granted covers, and it comes back below for you to keep or undo."
+          : view.mode === "conversation"
+            ? "Decisions are taken in the conversation in this project."
+            : "Every verdict is yours, taken here."}
+      </p>
+      {writable ? (
+        <p>
+          <label>
+            Mode{" "}
+            <select value={chosen} onChange={(e) => setMode(e.target.value)} aria-label="Decision mode">
+              <option value="monitor">monitor</option>
+              <option value="delegated">delegated</option>
+            </select>
+          </label>{" "}
+          <button
+            disabled={busy === "mode" || chosen === view.mode}
+            onClick={() =>
+              run(
+                "mode",
+                async () => {
+                  const answer = await api.setDecisionMode(project, chosen, by);
+                  setWaiting(answer.waiting);
+                },
+                `now ${chosen}`,
+              )
+            }
+          >
+            Change
+          </button>{" "}
+          {said.mode ? <span className="small">{said.mode}</span> : null}
+        </p>
+      ) : (
+        <p className="muted small">
+          Change it with <code>kanbanr decisions mode &lt;monitor|delegated&gt;</code> in your own terminal.
+        </p>
+      )}
+      {waiting && waiting.length > 0 ? (
+        <ul className="small">
+          {waiting.map((w, i) => (
+            <li key={`${w.code}-${i}`}>
+              <strong>{w.code}</strong> {w.what}: {placeWords(w)}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <h3>Delegations</h3>
+      {proposed.length === 0 && granted.length === 0 ? (
+        <p className="muted small">None in force or proposed.</p>
+      ) : null}
+      {proposed.map((g) => (
+        <div key={g.id}>
+          <p className="small">
+            <strong>{g.id}</strong> proposed
+          </p>
+          {said[g.id] ? (
+            <p className="small">{said[g.id]}</p>
+          ) : (
+            <PreparedPanel
+              project={project}
+              view={asPrepared(g)}
+              writable={writable}
+              busy={busy === g.id}
+              label="Grant"
+              onConfirm={() => run(g.id, () => api.grantDelegation(project, g.id, g.rev, by), "granted")}
+              onReject={(why) =>
+                run(
+                  g.id,
+                  () => api.revokeDelegation(project, g.id, by, why || "discarded on the Review page"),
+                  "discarded",
+                )
+              }
+            />
+          )}
+        </div>
+      ))}
+      {granted.map((g) => (
+        <div key={g.id} className="small">
+          <p>
+            <strong>{g.id}</strong> granted: {g.verdicts.join(", ")}
+            {g.kinds?.length ? ` · ${g.kinds.join(", ")}` : ""}
+            {g.items?.length ? ` · ${g.items.join(", ")}` : ""}
+            {g.milestone ? ` · ${g.milestone}` : ""}
+            {g.all ? " · every item" : ""}
+            {g.steps?.length ? ` · at ${g.steps.join(", ")}` : ""} · until {g.until.slice(0, 10)}
+          </p>
+          {said[g.id] ? (
+            <p>{said[g.id]}</p>
+          ) : writable ? (
+            <p>
+              <input
+                aria-label={`Why revoke ${g.id}`}
+                placeholder="why"
+                value={reason(g.id)}
+                onChange={(e) => setReason(g.id, e.target.value)}
+              />{" "}
+              <button
+                disabled={busy === g.id || !reason(g.id).trim()}
+                onClick={() => run(g.id, () => api.revokeDelegation(project, g.id, by, reason(g.id)), "revoked")}
+              >
+                Revoke
+              </button>
+            </p>
+          ) : (
+            <p className="muted">
+              Revoke with <code>kanbanr decisions revoke {g.id} --reason "…"</code>.
+            </p>
+          )}
+        </div>
+      ))}
+
+      <h3>Delegated decisions to review</h3>
+      {view.to_review.length === 0 ? (
+        <p className="muted small">Nothing Claude decided under a delegation is waiting.</p>
+      ) : null}
+      {view.to_review.map((d) => (
+        <div key={d.decision} className="small">
+          <p>
+            <strong>{d.code}</strong> {d.title}: {d.verdict}
+            {d.signoff ? ` ${d.signoff}` : ""}, under {d.delegation}, on {d.at.slice(0, 10)}
+          </p>
+          {said[d.decision] ? (
+            <p>{said[d.decision]}</p>
+          ) : writable ? (
+            <p>
+              <input
+                aria-label={`Reason for ${d.decision}`}
+                placeholder="reason (optional)"
+                value={reason(d.decision)}
+                onChange={(e) => setReason(d.decision, e.target.value)}
+              />{" "}
+              <button
+                disabled={busy === d.decision}
+                onClick={() =>
+                  run(d.decision, () => api.reviewDelegated(project, d.decision, "keep", by, reason(d.decision)), "kept")
+                }
+              >
+                Keep
+              </button>{" "}
+              <button
+                disabled={busy === d.decision}
+                onClick={() =>
+                  run(d.decision, () => api.reviewDelegated(project, d.decision, "undo", by, reason(d.decision)), "undone")
+                }
+              >
+                Undo
+              </button>
+            </p>
+          ) : (
+            <p className="muted">
+              <code>kanbanr decisions review {d.decision} --keep</code> or <code>--undo</code>
+            </p>
+          )}
+        </div>
+      ))}
+    </section>
   );
 }
 

@@ -995,3 +995,88 @@ export interface DriftChecked {
   outcome: "confirmed" | "corrected";
   correction?: string;
 }
+
+/** Where a project's decisions are taken (FTR-028). */
+export type DecisionMode = "monitor" | "delegated" | "conversation";
+
+/** Who did something on the decisions record, when and from where; a grant pins its `rev`. */
+export interface DecisionStamp {
+  by: string;
+  at: string;
+  origin: string;
+  rev?: string;
+  reason?: string;
+}
+
+/** One entry of the decision mode's history. */
+export interface ModeChange {
+  mode: DecisionMode;
+  by: string;
+  at: string;
+  origin: string;
+  reason?: string;
+}
+
+/** A delegation: the verdicts Claude may take, on which items, until when (FTR-028). */
+export interface Delegation {
+  id: string;
+  /** approve, ratify or signoff:<name>. */
+  verdicts: string[];
+  steps?: string[];
+  items?: string[];
+  kinds?: string[];
+  milestone?: string;
+  all?: boolean;
+  until: string;
+  note?: string;
+  proposed: DecisionStamp;
+  granted?: DecisionStamp;
+  revoked?: DecisionStamp;
+}
+
+/** A delegation with where it stands now. */
+export interface DelegationView extends Delegation {
+  state: "proposed" | "granted" | "ended" | "revoked";
+  in_force: boolean;
+  /** What a grant is pinned to; sent back with it. */
+  rev: string;
+}
+
+/** A decision Claude took under a delegation, waiting for the person to keep or undo it. */
+export interface DelegatedDecision {
+  /** `<CODE>/<approve|ratify|signoff>/<name or ->/<record at>`. */
+  decision: string;
+  code: string;
+  title: string;
+  verdict: string;
+  signoff?: string;
+  delegation: string;
+  at: string;
+  status: string;
+  undo_route: string;
+}
+
+/** Something waiting for a decision, and where. */
+export interface Waiting {
+  code: string;
+  what: string;
+  place: "monitor" | "conversation" | "delegated";
+  delegation?: string;
+  url?: string;
+}
+
+/** `GET /projects/{p}/decisions` (FTR-028). */
+export interface DecisionsView {
+  mode: DecisionMode;
+  modes: ModeChange[];
+  delegations: DelegationView[];
+  to_review: DelegatedDecision[];
+  waiting: Waiting[];
+}
+
+/** The answer to a mode change: what waits where now. */
+export interface ModeChanged {
+  mode: DecisionMode;
+  already_recorded?: boolean;
+  waiting: Waiting[];
+}

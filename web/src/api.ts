@@ -1,5 +1,5 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -275,6 +275,44 @@ export const api = {
       "reject what Claude prepared",
       "kanbanr prepare list",
     ) as Promise<Resolution>,
+  /**
+   * Where this project's decisions are taken (FTR-028): the mode, the delegations, the decisions
+   * Claude took under one for the person to keep or undo, and what waits where.
+   */
+  getDecisions: (id: string) => getJson<DecisionsView>(apiUrl(`/projects/${encodeURIComponent(id)}/decisions`)),
+  /** The person sets the decision mode; the answer lists what waits where now. */
+  setDecisionMode: (id: string, mode: string, by: string, reason = "") =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/decisions/mode`,
+      { mode, by, ...(reason ? { reason } : {}) },
+      "change where decisions are taken",
+      `kanbanr decisions mode ${mode}`,
+      "PUT",
+    ) as Promise<ModeChanged>,
+  /** The person grants a proposed delegation, pinned to the `rev` the page showed. */
+  grantDelegation: (id: string, delegation: string, rev: string, by: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/decisions/delegations/${encodeURIComponent(delegation)}/grant`,
+      { rev, by },
+      "grant a delegation",
+      `kanbanr decisions grant ${delegation}`,
+    ) as Promise<Delegation>,
+  /** Revoke a delegation, or discard a proposal; a reason is required. */
+  revokeDelegation: (id: string, delegation: string, by: string, reason: string) =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/decisions/delegations/${encodeURIComponent(delegation)}/revoke`,
+      { reason, by },
+      "revoke a delegation",
+      `kanbanr decisions revoke ${delegation} --reason "…"`,
+    ) as Promise<Delegation>,
+  /** The person keeps or undoes a decision Claude took under a delegation. */
+  reviewDelegated: (id: string, decision: string, verdict: "keep" | "undo", by: string, reason = "") =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/decisions/reviews`,
+      { decision, verdict, by, ...(reason ? { reason } : {}) },
+      `${verdict} a delegated decision`,
+      `kanbanr decisions review ${decision} --${verdict}`,
+    ),
   /** Every architecture decision on the board, newest first (FEAT-057). */
   getAdrs: (id: string) => getJson<Adr[]>(apiUrl(`/projects/${encodeURIComponent(id)}/adrs`)),
   /** The user's verdict on a proposed decision (FEAT-153), through the route `kanbanr adr accept`
