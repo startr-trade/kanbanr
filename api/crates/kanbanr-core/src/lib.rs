@@ -49,6 +49,7 @@ pub mod guards;
 pub mod hash;
 pub mod lessons;
 pub mod library;
+pub mod manual;
 pub mod mermaid;
 pub mod method;
 pub mod migrate;

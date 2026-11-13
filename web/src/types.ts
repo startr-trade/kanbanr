@@ -669,6 +669,36 @@ export interface PreparedView extends Prepared {
   command: string;
 }
 
+/** A kept manual-test result: who checked, when, from where, and any note (DEF-040). */
+export interface ManualResult {
+  code: string;
+  requirement: string;
+  test: string;
+  /** green | red */
+  state: string;
+  by: string;
+  at: string;
+  /** monitor | terminal */
+  origin?: string;
+  checked_rev?: string;
+  note?: string;
+  prepared?: string;
+}
+
+/** A manual test waiting for a person, with its requirement and the check to make (DEF-040). */
+export interface ManualWaiting {
+  code: string;
+  title: string;
+  status: string;
+  requirement: string;
+  requirement_text: string;
+  test: string;
+  /** planned | red */
+  state: string;
+  checked_rev: string;
+  last: ManualResult | null;
+}
+
 /** One condition of a release stage a promotion enters, and whether it holds (FEAT-212). */
 export interface PlanCondition {
   check: "items_finished" | "prepared" | "main_at_release" | "pushed" | "gate_passed" | "tag_passed" | "items_merged" | "stage_passed" | "merged_items_ship";

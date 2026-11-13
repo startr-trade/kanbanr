@@ -9,7 +9,8 @@ import { EDITABLE, fieldLabel, preparedLine, sourceHref } from "../prepared";
 
 type Mode = "show" | "edit" | "reject";
 
-function shown(value: unknown): string {
+function shown(value: unknown, kind = "", field = ""): string {
+  if (kind === "manual-test" && field === "state") return value === "green" ? "passed" : value === "red" ? "failed" : "";
   if (value === true) return "passed";
   if (value === false) return "failed";
   if (value == null) return "";
@@ -54,7 +55,7 @@ export function PreparedPanel({
           {names.map((k) => (
             <div key={k}>
               <dt>{fieldLabel(kind, k)}</dt>
-              <dd>{shown(fields[k]) || "—"}</dd>
+              <dd>{shown(fields[k], kind, k) || "—"}</dd>
             </div>
           ))}
         </dl>
@@ -62,7 +63,21 @@ export function PreparedPanel({
       {mode === "edit" ? (
         <div className="small">
           {editable.map((k) =>
-            typeof fields[k] === "boolean" || k === "passed" ? (
+            kind === "manual-test" && k === "state" ? (
+              <p key={k}>
+                <label>
+                  {fieldLabel(kind, k)}{" "}
+                  <select
+                    value={value(k) === "red" ? "red" : "green"}
+                    onChange={(e) => set(k, e.target.value)}
+                    aria-label={fieldLabel(kind, k)}
+                  >
+                    <option value="green">Passed</option>
+                    <option value="red">Failed</option>
+                  </select>
+                </label>
+              </p>
+            ) : typeof fields[k] === "boolean" || k === "passed" ? (
               <p key={k}>
                 <label>
                   {fieldLabel(kind, k)}{" "}

@@ -1,5 +1,5 @@
 import { apiUrl, isReadOnly } from "./runtimeConfig.ts";
-import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation } from "./types";
+import type { Activity, Adr, BoardReport, Charter, DocFolder, Lesson, PendingReview, PortfolioView, Project, ProjectSummary, RollupReport, Readiness, Sprint, SprintReport, Release, ProcessStatus, Gate, CutPreview, ItemDiagrams, GitModelView, GitDoctorIssue, Guards, AgentScope, ScopeDrift, ReleasePlan, ReleaseNotes, PlannedRelease, DriftChecked, PreparedView, Resolution, DecisionsView, ModeChanged, Delegation, ManualWaiting } from "./types";
 
 // The monitor is a read-only view of the local data folder served by the view daemon — no auth.
 
@@ -232,6 +232,21 @@ export const api = {
       { name, commit, passed, by, ...(url ? { url } : {}), ...(note ? { note } : {}) },
       "record a gate result",
       `kanbanr gate record ${name} ${passed ? "--passed" : "--failed"} --commit ${commit}`,
+    ),
+  /** The manual tests waiting for a person, live work first (DEF-040). */
+  getManualTests: (id: string) =>
+    getJson<ManualWaiting[]>(apiUrl(`/projects/${encodeURIComponent(id)}/manual-tests`)),
+  /**
+   * Record a manual test as passed or failed, as the person who checked it (DEF-040), through the
+   * route `kanbanr test` uses; the daemon keeps who, when and the note beside the test's state.
+   */
+  recordManual: (id: string, code: string, requirement: string, test: string, passed: boolean, by: string, note = "") =>
+    writePost(
+      `/projects/${encodeURIComponent(id)}/features/${encodeURIComponent(code)}/tests/${encodeURIComponent(requirement)}/${encodeURIComponent(test)}`,
+      { state: passed ? "green" : "red", by, ...(note ? { note } : {}) },
+      "record a manual test",
+      `kanbanr test ${code} ${requirement} "${test}" ${passed ? "green" : "red"}`,
+      "PUT",
     ),
   /**
    * The records Claude prepared for the person to confirm (FTR-034), newest first: the open ones,

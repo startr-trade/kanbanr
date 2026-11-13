@@ -127,3 +127,121 @@ fn confirming_a_prepared_record_makes_the_persons_record_and_keeps_the_prepared_
     .send_string(&json!({"by": "Tester"}).to_string());
     assert_eq!(status(again), 400);
 }
+
+/// A board with one item holding a manual test, built the same way each time.
+fn manual_board(s: &Scratch, name: &str) -> std::path::PathBuf {
+    use kanbanr_core::models::{FeatureDefinition, Requirement, TestRef};
+    let data = s.0.join(name);
+    std::fs::create_dir_all(data.join("projects")).unwrap();
+    common::git(&data, &["init", "-q"]);
+    common::git(&data, &["config", "user.name", "Tester"]);
+    common::git(&data, &["config", "user.email", "t@example.com"]);
+    common::git(&data, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    write(
+        &data,
+        "/projects",
+        json!({"name": "demo"}),
+        kanbanr_core::Origin::Terminal,
+    );
+    let store = kanbanr_core::Store::new(data.clone());
+    store
+        .add_milestone("demo", "M", "", vec![], Some("M".into()))
+        .unwrap();
+    let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+    store
+        .set_feature_definition(
+            "demo",
+            &f.code,
+            Some(FeatureDefinition {
+                requirements: vec![Requirement {
+                    id: "R-1".into(),
+                    text: "x".into(),
+                    tests: vec![TestRef {
+                        name: "manual: the cart looks right".into(),
+                        kind: "manual".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    data
+}
+
+/// DEF-040 R-2: recording Passed on the Review page makes the same record `kanbanr test` makes:
+/// two boards from one fixture, one recorded by the monitor and one by the terminal's request.
+/// The items' tests are equal and the kept results agree apart from where and when.
+#[test]
+fn a_manual_result_recorded_from_the_monitor_matches_kanbanr_tests_record() {
+    let s = Scratch::new("manual-result");
+    let (a, b) = (manual_board(&s, "a"), manual_board(&s, "b"));
+    let route = "projects/demo/features/FEAT-001/tests/R-1/manual%3A%20the%20cart%20looks%20right";
+    let body =
+        json!({"state": "green", "by": "Tester", "checked_rev": "abc1234", "note": "on staging"});
+
+    let url = serve(&s, &a);
+    let token = page_token(&url);
+    let r = ureq::put(&format!("{url}/api/write/{route}"))
+        .set("x-kanbanr-token", &token)
+        .set("Origin", &url)
+        .set("content-type", "application/json")
+        .send_string(&body.to_string());
+    assert_eq!(status(r), 200);
+
+    let store = kanbanr_core::Store::new(b.clone());
+    kanbanr_core::write::apply_as(
+        &store,
+        &b,
+        kanbanr_core::git::PushPolicy::Off,
+        "PUT",
+        &format!("/{route}"),
+        Some(&body),
+        None,
+        &kanbanr_core::eventing::NullSender,
+        &kanbanr_core::agentscope::ProcessScope::Unscoped,
+        kanbanr_core::Origin::Terminal,
+    )
+    .unwrap();
+
+    let test_of = |data: &std::path::Path| {
+        let store = kanbanr_core::Store::new(data.to_path_buf());
+        let p = store.load("demo").unwrap();
+        p.feature("FEAT-001")
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap()
+            .requirements[0]
+            .tests[0]
+            .clone()
+    };
+    assert_eq!(test_of(&a), test_of(&b));
+    assert_eq!(test_of(&a).state, kanbanr_core::models::TestState::Green);
+    let kept = |data: &std::path::Path| {
+        let store = kanbanr_core::Store::new(data.to_path_buf());
+        kanbanr_core::manual::results(&store, "demo", Some("FEAT-001")).unwrap()
+    };
+    let (ka, kb) = (kept(&a), kept(&b));
+    assert_eq!((ka.len(), kb.len()), (1, 1));
+    assert_eq!(
+        (ka[0].origin.as_str(), kb[0].origin.as_str()),
+        ("monitor", "terminal")
+    );
+    let strip = |mut r: kanbanr_core::manual::ManualResult| {
+        r.origin.clear();
+        r.at.clear();
+        r
+    };
+    assert_eq!(strip(ka[0].clone()), strip(kb[0].clone()));
+    assert_eq!(ka[0].by, "Tester");
+
+    // The list no longer holds it.
+    let listed = ureq::get(&format!("{url}/api/projects/demo/manual-tests"))
+        .call()
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert_eq!(listed.trim(), "[]");
+}

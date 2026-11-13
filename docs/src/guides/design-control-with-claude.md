@@ -179,5 +179,5 @@ You never need these, but here they are if you want to check what Claude did.
 | Checking what's missing | `kanbanr check` |
 | Starting the build | `kanbanr start` |
 | Moving an item | `kanbanr move` |
-| Recording test results | `kanbanr test` |
+| Recording test results | `kanbanr test` (a manual check waits on the Review page for you to record) |
 | Committing | `kanbanr commit` |

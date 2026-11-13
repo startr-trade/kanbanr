@@ -274,6 +274,20 @@ pub fn apply_as(
                 .map_err(WriteError::Core)?;
             expanded = Some((project, e));
         }
+        // A manual test's result is a person's check (DEF-040): refused to Claude here, for the
+        // tests route and for a batch alike, before anything is written.
+        if let Some(v) = origin::guarded_verdict(store, method, path, body)
+            && let Some(why) = origin::verdict_refusal(
+                v,
+                Taker::of_origin(origin),
+                &DecisionContext {
+                    origin: Some(origin),
+                    ..DecisionContext::monitor_mode()
+                },
+            )
+        {
+            return Err(WriteError::Refused(format!("refused: {why}")));
+        }
         let (method, path, body) = match &expanded {
             Some((_, e)) => (e.method.as_str(), e.path.as_str(), Some(&e.body)),
             None => (method, path, body),
@@ -882,6 +896,125 @@ mod tests {
             "{log}"
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// DEF-040 R-2: a manual result is the person's verdict. Claude is refused it, through the
+    /// tests route and through a batch; a test that is not manual, and setting one back to
+    /// planned, are not refused; the person's terminal and the monitor pass.
+    #[test]
+    fn a_manual_result_from_claude_is_refused() {
+        use crate::models::{FeatureDefinition, Requirement, TestRef};
+        let dir = std::env::temp_dir().join(format!("kanbanr-write-manual-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = Store::new(dir.clone());
+        let write = |origin: Origin, m: &str, p: &str, b: Value| {
+            apply_as(
+                &store,
+                &dir,
+                PushPolicy::Auto,
+                m,
+                p,
+                Some(&b),
+                None,
+                &eventing::NullSender,
+                &ProcessScope::Unscoped,
+                origin,
+            )
+        };
+        let t = Origin::Terminal;
+        write(t, "POST", "/projects", json!({"name": "demo"})).unwrap();
+        write(
+            t,
+            "POST",
+            "/projects/demo/milestones",
+            json!({"name": "M", "code": "M"}),
+        )
+        .unwrap();
+        write(
+            t,
+            "POST",
+            "/projects/demo/features",
+            json!({"title": "T", "milestone": "M"}),
+        )
+        .unwrap();
+        let test = |name: &str, kind: &str| TestRef {
+            name: name.into(),
+            kind: kind.into(),
+            ..Default::default()
+        };
+        store
+            .set_feature_definition(
+                "demo",
+                "FEAT-001",
+                Some(FeatureDefinition {
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "x".into(),
+                        tests: vec![
+                            test("manual: looks right", "manual"),
+                            test("a::unit", "unit"),
+                        ],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let route = "/projects/demo/features/FEAT-001/tests/R-1/";
+        let manual = format!("{route}manual%3A%20looks%20right");
+        for o in [Origin::Conversation, Origin::Delegated] {
+            let e = write(o, "PUT", &manual, json!({"state": "green", "by": "x"})).unwrap_err();
+            assert!(e.to_string().contains("Review page"), "{o:?}: {e}");
+            let batch = json!({"operations": [{"op": "test.state", "feature": "FEAT-001",
+                "requirement": "R-1", "test": "manual: looks right", "state": "red"}]});
+            let e = write(o, "POST", "/projects/demo/batch", batch).unwrap_err();
+            assert!(e.to_string().contains("Review page"), "{o:?} batch: {e}");
+        }
+        let state_of = |name: &str| {
+            let p = store.load_meta("demo").unwrap();
+            let f = p.feature("FEAT-001").unwrap();
+            f.definition.as_ref().unwrap().requirements[0]
+                .tests
+                .iter()
+                .find(|t| t.name == name)
+                .unwrap()
+                .state
+        };
+        assert_eq!(
+            state_of("manual: looks right"),
+            crate::models::TestState::Planned
+        );
+        // Not a verdict: a test that is not manual, and putting a manual test back to planned.
+        write(
+            Origin::Conversation,
+            "PUT",
+            &format!("{route}a%3A%3Aunit"),
+            json!({"state": "green"}),
+        )
+        .unwrap();
+        write(
+            Origin::Conversation,
+            "PUT",
+            &manual,
+            json!({"state": "planned"}),
+        )
+        .unwrap();
+        // The person's own terminal and the monitor pass.
+        write(t, "PUT", &manual, json!({"state": "green", "by": "Ada"})).unwrap();
+        write(
+            Origin::Monitor,
+            "PUT",
+            &manual,
+            json!({"state": "red", "by": "Ada"}),
+        )
+        .unwrap();
+        assert_eq!(
+            state_of("manual: looks right"),
+            crate::models::TestState::Red
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
