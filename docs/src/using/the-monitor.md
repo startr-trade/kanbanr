@@ -245,6 +245,9 @@ flowchart TD
   items that name something the item changed and have not changed since, and says Claude settles
   them. You fill in nothing: the sign-off appears once none is left, and "Checked by Claude" lists
   what Claude confirmed or corrected, with why.
+- **Review: a lapsed docs-folded.** When the item's branch gets a commit after its docs-folded
+  sign-off, the page asks for the sign-off again and says why: "The earlier docs-folded sign-off
+  lapsed: feat/… has commits after sign-off 'docs-folded' was given."
 - **Status page**: features in one status, grouped by feature, each showing only its **open**
   todo-lists (those not fully completed), newest first, with their tasks.
 - **Feature page** (an *epic*): the **Specification** (rendered markdown) and a **tile per

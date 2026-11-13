@@ -1,10 +1,12 @@
 //! Whether the documents an item says it will write are built (DEF-033).
 //!
 //! `docs-folded` is a person's word that the documents are folded into the record. It is offered
-//! only once there is something to confirm: every board doc the item names has changed since it
-//! entered its stage, every repository doc its Design lists under `Affects docs` has changed on its
-//! branch, and every task that writes docs is complete. An item that lists no documents is offered
-//! the sign-off once its tasks are done, and the offer says it changes no documents.
+//! only once there is something to confirm: every board doc the item names in `affects_docs` or
+//! links under `Affects docs` has changed since it entered its stage, every repository doc its
+//! Design lists there has changed on its branch, and every task is complete (DEF-046). An item that
+//! lists no documents is offered the sign-off once its tasks are done, and the offer says it changes
+//! no documents. A sign-off given with the code repository pins the item's branch tips, and a
+//! commit on any of them after it lapses it ([`moved_on`]).
 //!
 //! The pure parts (what an item lists, what a task writes) come first; reading the board's history
 //! and the code repository comes last, and only when the item lists repository docs.
@@ -12,7 +14,7 @@
 use crate::models::{FeatureItem, TaskState};
 use crate::readiness::{Check, Context, Gap, Level};
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The kind of document that is not built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -165,6 +167,34 @@ pub fn repository_docs(spec: &str, board_docs: &BTreeSet<String>) -> Vec<String>
     keep
 }
 
+/// The board docs linked under the spec's `Affects docs` heading as this project's doc pages,
+/// `/p/<project>/docs/file/<path>` (DEF-046), as doc keys, sorted and deduplicated. A `#fragment`
+/// or `?query` is cut first. Links to another project, and to items or milestones, are not docs.
+pub fn linked_board_docs(spec: &str, project: &str) -> Vec<String> {
+    let section = affects_section(spec);
+    let prefix = format!("/p/{project}/docs/file/");
+    let mut keys: Vec<String> = Vec::new();
+    let mut rest = section.as_str();
+    while let Some(at) = rest.find("](") {
+        rest = &rest[at + 2..];
+        let Some(end) = rest.find(')') else {
+            break;
+        };
+        let dest = rest[..end].trim();
+        rest = &rest[end..];
+        let Some(path) = dest.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        let path = path.split(['#', '?']).next().unwrap_or_default().trim();
+        if !path.is_empty() {
+            keys.push(crate::refs::doc_key(path));
+        }
+    }
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
 fn path_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '/')
 }
@@ -220,10 +250,25 @@ pub fn evaluate(
         .map(|d| crate::readiness::affects_doc_key(d))
         .collect();
 
-    // Board docs: the existing gate's answer, reused.
+    // Board docs: the existing gate's answer, reused, then the docs the Design links under
+    // `Affects docs` (DEF-046), judged the same way.
+    let linked: Vec<String> = linked_board_docs(&feature.specification, &project.id)
+        .into_iter()
+        .filter(|k| !board_keys.contains(k))
+        .collect();
     built.listed.extend(board_keys.iter().cloned());
+    built.listed.extend(linked.iter().cloned());
     if let Some(docs) = ctx.docs_dir.as_deref() {
-        for gap in crate::readiness::docs_updated_gaps(feature, docs, &ctx.history) {
+        let gaps = crate::readiness::docs_updated_gaps(feature, docs, &ctx.history)
+            .into_iter()
+            .chain(crate::readiness::docs_unchanged_gaps(
+                feature,
+                &linked,
+                docs,
+                &ctx.history,
+                "linked under Affects docs",
+            ));
+        for gap in gaps {
             built.unbuilt.push(Unbuilt {
                 kind: DocKind::Board,
                 path: gap.label.clone(),
@@ -233,7 +278,8 @@ pub fn evaluate(
     }
 
     // Repository docs.
-    let repo_docs = repository_docs(&feature.specification, &board_keys);
+    let board_named: BTreeSet<String> = board_keys.iter().chain(&linked).cloned().collect();
+    let repo_docs = repository_docs(&feature.specification, &board_named);
     built.listed.extend(repo_docs.iter().cloned());
     if !repo_docs.is_empty() {
         built
@@ -241,40 +287,82 @@ pub fn evaluate(
             .extend(repository_unbuilt(project, feature, ctx, &repo_docs));
     }
 
-    // Tasks that write docs.
+    // Every open task holds the sign-off (DEF-046); one that writes docs says so, and is listed.
     let listed_paths: Vec<String> = declared
         .iter()
         .cloned()
         .chain(built.listed.clone())
         .collect();
     for task in feature.all_tasks() {
-        if is_docs_task(&task.text, &listed_paths) {
+        let writes_docs = is_docs_task(&task.text, &listed_paths);
+        if writes_docs {
             built.listed.push(format!("{}: {}", task.key, task.text));
-            if task.state != TaskState::Completed {
-                built.unbuilt.push(Unbuilt {
-                    kind: DocKind::Task,
-                    path: task.key.clone(),
-                    why: format!("task {} writes docs and is not complete", task.key),
-                });
-            }
+        }
+        if task.state != TaskState::Completed {
+            built.unbuilt.push(Unbuilt {
+                kind: DocKind::Task,
+                path: task.key.clone(),
+                why: if writes_docs {
+                    format!("task {} writes docs and is not complete", task.key)
+                } else {
+                    format!("task {} is not complete", task.key)
+                },
+            });
         }
     }
 
     // Nothing listed: the sign-off confirms finished work and nothing else.
     built.changes_no_documents = built.listed.is_empty();
-    if built.changes_no_documents && !feature.all_tasks_completed() {
-        let why = if feature.all_tasks().next().is_none() {
-            "it has no tasks, so nothing shows any work was done"
-        } else {
-            "its tasks are not all done"
-        };
+    if built.changes_no_documents && feature.all_tasks().next().is_none() {
         built.unbuilt.push(Unbuilt {
             kind: DocKind::Task,
             path: String::new(),
-            why: why.to_string(),
+            why: "it has no tasks, so nothing shows any work was done".to_string(),
         });
     }
     built
+}
+
+/// The item's branches and their tips now (DEF-046), as a `docs-folded` sign-off records them.
+/// Empty without the code repository's branches, or when the item has no branch.
+pub fn branch_heads(
+    project: &crate::store::Project,
+    feature: &FeatureItem,
+    ctx: &Context,
+) -> BTreeMap<String, String> {
+    let Some(facts) = ctx.branch_facts() else {
+        return BTreeMap::new();
+    };
+    crate::gitmodel::item_branches(&project.config, facts, &feature.code)
+        .into_iter()
+        .filter_map(|b| facts.branches.get(&b).map(|tip| (b.clone(), tip.clone())))
+        .collect()
+}
+
+/// Why the item's current `docs-folded` sign-off no longer covers what was built (DEF-046): one
+/// of its branches has a tip other than the one recorded, or is new since. `None` when it is not
+/// signed, recorded no branches, or the branches cannot be read: the lapse cannot be shown, so the
+/// sign-off stands. A recorded branch since deleted is not a lapse. Tips are compared, never commit
+/// times, which are whole seconds and can run out of order (DEF-035).
+pub fn moved_on(
+    project: &crate::store::Project,
+    feature: &FeatureItem,
+    ctx: &Context,
+) -> Option<String> {
+    let signed = feature.signoff_current(crate::method::DOCS_FOLDED)?;
+    if signed.branch_heads.is_empty() {
+        return None;
+    }
+    let facts = ctx.branch_facts()?;
+    crate::gitmodel::item_branches(&project.config, facts, &feature.code)
+        .into_iter()
+        .find(|b| signed.branch_heads.get(b) != facts.branches.get(b))
+        .map(|b| {
+            format!(
+                "{b} has commits after sign-off '{}' was given",
+                crate::method::DOCS_FOLDED
+            )
+        })
 }
 
 /// The repository docs `paths` that have not changed on the item's branch against its line, or one
@@ -364,6 +452,26 @@ mod tests {
         );
         // No heading, no documents.
         assert!(repository_docs("## Design\n`docs/src/x.md`\n", &board).is_empty());
+    }
+
+    /// DEF-046 R-1: board docs linked under `Affects docs` are read as this project's doc keys.
+    #[test]
+    fn board_docs_linked_under_affects_docs_are_read() {
+        let spec = "## Design\n\nSee [x](/p/demo/docs/file/design/before.md).\n\n\
+            ### Affects docs\n\
+            - [data](/p/demo/docs/file/architecture/data.md#fields): fields.\n\
+            - [again](/p/demo/docs/file/architecture/data.md).\n\
+            - [ADR](/p/demo/docs/file/decisions/0015-pin.md?v=2).\n\
+            - [other](/p/elsewhere/docs/file/design/theirs.md).\n\
+            - [FEAT-1](/p/demo/feature/FEAT-1), [MS-1](/p/demo/milestone/MS-1).\n\
+            - Repository docs: `docs/src/x.md`.\n\n\
+            ### After\n[later](/p/demo/docs/file/design/after.md)\n";
+        assert_eq!(
+            linked_board_docs(spec, "demo"),
+            vec!["architecture/data.md", "decisions/0015-pin.md"]
+        );
+        assert!(linked_board_docs(spec, "other").is_empty());
+        assert!(linked_board_docs("## Design\n[x](/p/demo/docs/file/a.md)\n", "demo").is_empty());
     }
 
     #[test]
@@ -485,6 +593,35 @@ mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    /// DEF-046 R-1: an item that lists a document is held by an open task that writes none.
+    #[test]
+    fn every_open_task_holds_the_signoff() {
+        let (store, dir, repo) = fixture("open-task");
+        let code = item(
+            &store,
+            "Open",
+            "## Design\n\n### Affects docs\nRepository docs: `docs/src/o.md`.\n",
+            &[],
+        );
+        task(&store, &code, "Build the parser", TaskState::InProgress);
+        let branch = branch_for(&store, &code);
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        std::fs::create_dir_all(repo.join("docs/src")).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "docs/src/o.md", "o\n", "docs");
+        let got = judge(&store, &code, Some(&repo));
+        assert!(!got.changes_no_documents);
+        assert_eq!(
+            got.unbuilt,
+            vec![Unbuilt {
+                kind: DocKind::Task,
+                path: "T1".into(),
+                why: "task T1 is not complete".into(),
+            }]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
     /// DEF-033 R-3: no documents at all means the tasks decide, and the answer says so.
     #[test]
     fn an_item_with_no_documents_is_offered_the_signoff_once_its_tasks_are_done() {
@@ -496,7 +633,10 @@ mod tests {
 
         task(&store, &code, "Build it", TaskState::InProgress);
         let got = judge(&store, &code, None);
-        assert!(got.unbuilt[0].why.contains("not all done"), "{got:?}");
+        assert!(
+            got.unbuilt[0].why.contains("task T1 is not complete"),
+            "{got:?}"
+        );
 
         let todo = store.add_todo_list("demo", &code, "u", None).unwrap();
         let t = store

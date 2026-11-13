@@ -191,12 +191,13 @@ offered as before. A skipped check is never read as "no drift".
 The `docs-folded` sign-off says the documents are folded into the record, so it is offered only
 once there is something to confirm. An item's documents are built when all three hold:
 
-1. every board doc it names in `affects_docs` has changed since it entered its stage;
+1. every board doc it names in `affects_docs`, or links under `Affects docs` as a page of this
+   board's docs (`/p/<project>/docs/file/<path>`), has changed since it entered its stage;
 2. every repository doc its Design lists under `Affects docs`, written as a path in backticks, has
    changed on its branch against the line it merges into (guides, reference pages, `SECURITY.md`,
    the changelog);
-3. every task that writes docs is complete. A task writes docs when its text names a listed
-   document, a path under `docs/`, or `CHANGELOG.md`, `SECURITY.md` or `README.md`.
+3. every task is complete. A task that names a listed document, a path under `docs/`, or
+   `CHANGELOG.md`, `SECURITY.md` or `README.md` is said to write docs.
 
 An item that names no documents at all is offered the sign-off once it has tasks and all are
 complete, and the Review page says the item changes no documents, so the sign-off confirms that.
@@ -206,3 +207,10 @@ is unbuilt, and `kanbanr check` prints `Documents not built yet:` with each docu
 the code repository cannot be read, because none is attached or the item has no branch in it, the
 sign-off is held and the reason is said. A sign-off given before this check existed stays recorded
 and counted.
+
+A `docs-folded` sign-off given with the code repository records the tip of each of the item's
+branches. A commit on any of them after the sign-off lapses it: the Review page asks for it again,
+saying which branch moved on, and a move into the stage that asks for it is refused until it is
+signed again. Fold the docs first, and commit nothing to the branch after asking for the sign-off.
+A sign-off recorded without branch tips, by an older kanbanr or without the repository, is not
+judged by its branches.

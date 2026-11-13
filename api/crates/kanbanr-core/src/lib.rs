@@ -2354,8 +2354,8 @@ requirements:
             )
         };
         let err = sign().unwrap_err().to_string();
-        assert!(err.contains("documents are not built"), "{err}");
-        assert!(err.contains("tasks are not all done"), "{err}");
+        assert!(err.contains("not built and folded"), "{err}");
+        assert!(err.contains("task T1 is not complete"), "{err}");
         let project = store.load("demo").unwrap();
         assert!(
             project
@@ -2366,6 +2366,56 @@ requirements:
         );
         complete_first_task(&store, &code, &list);
         sign().unwrap();
+    }
+
+    /// DEF-046 R-2: once the branch moves on from a docs-folded sign-off, the Review entry asks
+    /// for it again and says why, naming the branch.
+    #[test]
+    fn the_review_queue_says_why_docs_folded_lapsed() {
+        let (store, _d, code, list) = docs_folded_board();
+        // A second sign-off, so signing docs-folded does not finish the item.
+        let gate = crate::config::Gate {
+            signoffs: vec!["design-review".into(), "docs-folded".into()],
+            ..Default::default()
+        };
+        store
+            .set_gates("demo", [("Completed".to_string(), gate)].into())
+            .unwrap();
+        complete_first_task(&store, &code, &list);
+        let repo = crate::coderepo::tests::scratch_repo("lib-review-lapse");
+        let branch = {
+            let project = store.load("demo").unwrap();
+            let f = project.feature(&code).unwrap();
+            crate::scm::branch_for(project.config.branch_pattern(), &code, &f.title)
+        };
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "a.rs", "v1\n", "work");
+        sign_docs_folded(&store, &code, &repo, serde_json::json!([])).unwrap();
+        let entry = |store: &Store| {
+            let out = crate::dispatch::dispatch_in(
+                store,
+                "GET",
+                "/projects/demo/review",
+                None,
+                Some(&repo),
+            )
+            .unwrap();
+            let q: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+            q.into_iter().find(|e| e["code"] == code.as_str()).unwrap()
+        };
+        let e = entry(&store);
+        assert_eq!(e["signoffs_needed"], serde_json::json!(["design-review"]));
+        assert!(e.get("signoff_lapsed").is_none(), "{e}");
+
+        crate::coderepo::tests::commit_file(&repo, "a.rs", "v2\n", "after");
+        let e = entry(&store);
+        assert_eq!(
+            e["signoffs_needed"],
+            serde_json::json!(["design-review", "docs-folded"])
+        );
+        let why = e["signoff_lapsed"].as_str().expect("says why");
+        assert!(why.contains(&branch), "{why}");
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     /// FTR-013: a `docs-folded` board whose work is done, with a doc that names `--since` (listed

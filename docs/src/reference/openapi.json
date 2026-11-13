@@ -4270,6 +4270,10 @@
             },
             "type": "array"
           },
+          "signoff_lapsed": {
+            "description": "`docs-folded` is asked again because the item's branch got a commit after the earlier one\n(DEF-046): why, naming the branch.",
+            "type": "string"
+          },
           "signoffs_needed": {
             "description": "The sign-offs the next stage still needs, by name; empty unless `approval` is `signoff`.",
             "items": {
@@ -4360,6 +4364,13 @@
         "properties": {
           "at": {
             "type": "string"
+          },
+          "branch_heads": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The item's branches and their tips when `docs-folded` was given (DEF-046): a later commit on\nany of them lapses it. Empty on a record an older kanbanr wrote, or one given without the code\nrepository: such a record is not judged by its branches.",
+            "type": "object"
           },
           "by": {
             "type": "string"

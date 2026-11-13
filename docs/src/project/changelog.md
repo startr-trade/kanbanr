@@ -77,6 +77,10 @@ All notable changes to kanbanr are documented here. The format follows
   step, and the skill has Claude run it and report the merge; the person is no longer handed the
   command (DEF-045).** The cut, `git doctor` and the move say it the same way, and a forward that
   would conflict says that nothing was changed. Pushing stays yours.
+- **The docs-folded sign-off is offered only once every task is done and every document the Design
+  links is folded, and lapses when the item's branch gets a commit after it (DEF-046).** The Review
+  page says which branch moved on, and the move into the stage that asks for the sign-off is refused
+  until it is given again.
 - **`kanbanr drift --since DATE` starts at the beginning of that day (UTC)**, so its result no
   longer depends on the time it is run (DEF-037).
 - **A release's notes are still found after the notes path is changed, and a missing notes file

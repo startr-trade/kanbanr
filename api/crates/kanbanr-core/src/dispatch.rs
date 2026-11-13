@@ -1254,25 +1254,40 @@ fn dispatch_routes(
                 str_field(b, "doc").unwrap_or_default(),
             );
             let item = store.load_meta(p)?.feature(code)?.clone();
-            if let Some(earlier) = crate::origin::duplicate_signoff(&item, &name, &note, &doc) {
-                return ser_already_item(&item, &earlier);
-            }
-            // `docs-folded` is refused until the item's documents are built (DEF-033): the same
-            // answer the Review page and `kanbanr check` give.
-            if name == crate::method::DOCS_FOLDED {
+            // `docs-folded` is judged against the item's branches (DEF-046): read them once.
+            let folded = if name == crate::method::DOCS_FOLDED {
                 let project = store.load_for_gates(p)?;
                 let ctx = crate::readiness::Context::load_in(store, p, &project.config, repo);
-                if let Some(why) =
-                    crate::readiness::signoff_hold(&project, project.feature(code)?, &ctx, &name)
-                {
+                Some((project, ctx))
+            } else {
+                None
+            };
+            // A docs-folded whose branch moved on has lapsed, so giving it again is no repeat.
+            let lapsed = folded.as_ref().is_some_and(|(project, ctx)| {
+                project
+                    .feature(code)
+                    .is_ok_and(|f| crate::docsbuilt::moved_on(project, f, ctx).is_some())
+            });
+            if !lapsed
+                && let Some(earlier) = crate::origin::duplicate_signoff(&item, &name, &note, &doc)
+            {
+                return ser_already_item(&item, &earlier);
+            }
+            // `docs-folded` is refused until the item is built and folded (DEF-033, DEF-046): the
+            // same answer the Review page and `kanbanr check` give. Given, it pins the branches.
+            let mut heads = std::collections::BTreeMap::new();
+            if let Some((project, ctx)) = &folded {
+                let feature = project.feature(code)?;
+                if let Some(why) = crate::readiness::signoff_hold(project, feature, ctx, &name) {
                     return Err(CoreError::Unsupported(why));
                 }
+                heads = crate::docsbuilt::branch_heads(project, feature, ctx);
             }
             let signer = approver(b)?;
             let origin = crate::origin::from_body(b);
             let (checked, settled) =
                 signoff_checked(store, p, code, &name, b, repo, (&signer, &origin))?;
-            let (feature, held) = store.signoff_feature_checked_as(
+            let (feature, held) = store.signoff_feature_pinned_as(
                 p,
                 code,
                 &name,
@@ -1282,6 +1297,7 @@ fn dispatch_routes(
                 &origin,
                 &crate::origin::delegation_from_body(b),
                 &checked,
+                &heads,
             )?;
             // The sign-off answers the settlements it took (DEF-039).
             for id in settled {

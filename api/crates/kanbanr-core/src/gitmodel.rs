@@ -617,7 +617,8 @@ pub fn move_item(
         && !is_integrated(config, &feature.status)
         && is_integrated(config, to);
     let plain = |note: Option<String>| -> Result<Moved> {
-        let (feature, warnings) = store.move_feature_gated_as(id, code, to, reason, origin)?;
+        let (feature, warnings) =
+            store.move_feature_gated_in_as(id, code, to, reason, repo, origin)?;
         Ok(Moved {
             feature,
             warnings,
@@ -638,7 +639,7 @@ pub fn move_item(
         ))
     })?;
     // Preflight: nothing is written until every reason to refuse has been looked for.
-    store.gate_preview(id, code, to, reason)?;
+    store.gate_preview_in(id, code, to, reason, Some(repo))?;
     let (model, facts) = load(store, id, repo)?;
     let branches = item_branches(config, &facts, code);
     let branch = match branches.as_slice() {
@@ -725,7 +726,7 @@ pub fn move_item(
     };
 
     // Board.
-    let (moved, warnings) = match store.move_feature_gated(id, code, to, reason) {
+    let (moved, warnings) = match store.move_feature_gated_in(id, code, to, reason, Some(repo)) {
         Ok(done) => done,
         Err(e) => {
             undo_line(old.as_deref());
@@ -1265,5 +1266,131 @@ mod tests {
         assert!(may_be_integrated(&c, "Completed"));
         assert!(!may_be_integrated(&c, "Scheduled"));
         assert!(!may_be_integrated(&c, "Planned"));
+    }
+
+    /// DEF-046 R-2: with the repository, a move into the integrate stage after the branch moved on
+    /// from a docs-folded sign-off is refused, and passes once it is signed again.
+    #[test]
+    fn a_move_after_the_branch_moves_on_needs_docs_folded_again() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-gm-lapse-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let mut cadence = store.load("demo").unwrap().config.cadence;
+        cadence.git_model = true;
+        cadence.sprints = false;
+        cadence.releases = false;
+        store.set_cadence("demo", None, cadence).unwrap();
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::charter::Charter {
+                purpose: "p".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let gate = crate::config::Gate {
+            signoffs: vec!["docs-folded".into()],
+            ..Default::default()
+        };
+        store
+            .set_gates("demo", [("Completed".to_string(), gate)].into())
+            .unwrap();
+        let f = store
+            .add_feature("demo", "Lapse", "# x", "M", None)
+            .unwrap();
+        let code = f.code.clone();
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "s".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        store.approve_feature("demo", &code, "Ada").unwrap();
+        store.move_feature("demo", &code, "Scheduled").unwrap();
+        let list = store.add_todo_list("demo", &code, "work", None).unwrap();
+        store
+            .add_task("demo", &code, &list.code, "one", None)
+            .unwrap();
+        store
+            .set_task_state(
+                "demo",
+                &code,
+                &list.code,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        let repo = crate::coderepo::tests::scratch_repo("gm-lapse");
+        let branch = crate::scm::branch_for(
+            store.load("demo").unwrap().config.branch_pattern(),
+            &code,
+            &f.title,
+        );
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "a.rs", "v1\n", "work");
+        let sign = || {
+            crate::dispatch::dispatch_in(
+                &store,
+                "POST",
+                &format!("/projects/demo/features/{code}/signoff/docs-folded"),
+                Some(&serde_json::json!({"by": "Ada L"})),
+                Some(&repo),
+            )
+            .unwrap()
+        };
+        sign();
+        assert_eq!(
+            store.load("demo").unwrap().feature(&code).unwrap().status,
+            "Scheduled"
+        );
+        crate::coderepo::tests::commit_file(&repo, "a.rs", "v2\n", "after the sign-off");
+
+        let err = move_item(
+            &store,
+            "demo",
+            &code,
+            "Completed",
+            None,
+            Some(&repo),
+            "Ada",
+            "",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("sign-off 'docs-folded' lapsed"), "{err}");
+        assert!(err.contains(&branch), "{err}");
+        assert_eq!(
+            store.load("demo").unwrap().feature(&code).unwrap().status,
+            "Scheduled"
+        );
+
+        sign();
+        let moved = move_item(
+            &store,
+            "demo",
+            &code,
+            "Completed",
+            None,
+            Some(&repo),
+            "Ada",
+            "",
+        )
+        .unwrap();
+        assert_eq!(moved.feature.status, "Completed");
+        assert!(moved.merged.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }

@@ -345,6 +345,11 @@ pub struct Signoff {
     /// correction. Absent on a record without flags, or one an older kanbanr wrote.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checked: Vec<Checked>,
+    /// The item's branches and their tips when `docs-folded` was given (DEF-046): a later commit on
+    /// any of them lapses it. Empty on a record an older kanbanr wrote, or one given without the code
+    /// repository: such a record is not judged by its branches.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub branch_heads: std::collections::BTreeMap<String, String>,
     /// Keys this version does not know — written by a newer kanbanr — kept and written back
     /// unchanged, so an older binary never deletes what a newer one recorded (FEAT-151).
     #[serde(
@@ -1520,6 +1525,38 @@ mod tests {
             parts: d.part_revs(),
             ..Default::default()
         });
+    }
+
+    /// DEF-046 R-2: a sign-off's branch heads are written only when set, and a record without
+    /// them reads as before.
+    #[test]
+    fn branch_heads_round_trip_and_stay_absent_when_empty() {
+        let plain = Signoff {
+            id: "docs-folded".into(),
+            by: "Ada".into(),
+            at: "2026-11-13T10:00:00Z".into(),
+            ..Default::default()
+        };
+        let text = crate::yaml::to_string(&plain).unwrap();
+        assert!(!text.contains("branch_heads"), "{text}");
+        let back: Signoff = crate::yaml::from_str(&text).unwrap();
+        assert!(back.branch_heads.is_empty());
+        assert_eq!(back, plain);
+
+        let sha = "8c22bb1".repeat(5) + "abcde";
+        let pinned = Signoff {
+            branch_heads: [("feat/DEF-040-a-manual-test-result".to_string(), sha.clone())].into(),
+            ..plain
+        };
+        let text = crate::yaml::to_string(&pinned).unwrap();
+        assert!(text.contains("branch_heads"), "{text}");
+        assert!(text.contains(&sha), "{text}");
+        let back: Signoff = crate::yaml::from_str(&text).unwrap();
+        assert_eq!(back, pinned);
+        assert!(
+            back.extra.is_empty(),
+            "the field is known, not kept as extra"
+        );
     }
 
     /// FTR-013 R-6: a sign-off records each flagged text and how it was settled, nothing when none

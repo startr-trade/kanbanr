@@ -1182,6 +1182,7 @@ function Brief({
       ) : null}
 
       {/* The action lives in the body, not the summary: approving should follow reading. */}
+      {item.signoff_lapsed ? <p>The earlier docs-folded sign-off lapsed: {item.signoff_lapsed}.</p> : null}
       {item.changes_no_documents && signoffs.includes("docs-folded") ? (
         <p>This item changes no documents; signing off confirms that.</p>
       ) : null}

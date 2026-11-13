@@ -1501,6 +1501,36 @@ impl Store {
         delegation: &str,
         checked: &[crate::models::Checked],
     ) -> Result<(FeatureItem, Option<String>)> {
+        self.signoff_feature_pinned_as(
+            id,
+            code,
+            signoff,
+            by,
+            note,
+            doc,
+            origin,
+            delegation,
+            checked,
+            &Default::default(),
+        )
+    }
+
+    /// As [`Store::signoff_feature_checked_as`], recording the item's branches and their tips
+    /// (DEF-046): a `docs-folded` sign-off lapses when any of them moves on.
+    #[allow(clippy::too_many_arguments)]
+    pub fn signoff_feature_pinned_as(
+        &self,
+        id: &str,
+        code: &str,
+        signoff: &str,
+        by: &str,
+        note: &str,
+        doc: &str,
+        origin: &str,
+        delegation: &str,
+        checked: &[crate::models::Checked],
+        branch_heads: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(FeatureItem, Option<String>)> {
         let signoff = signoff.trim();
         if signoff.is_empty() {
             return Err(CoreError::Unsupported(
@@ -1549,6 +1579,7 @@ impl Store {
             origin: origin.to_string(),
             delegation: delegation.to_string(),
             checked: checked.to_vec(),
+            branch_heads: branch_heads.clone(),
             ..Default::default()
         });
         feature.updated_at = at;
@@ -1672,7 +1703,20 @@ impl Store {
         to: &str,
         reason: Option<&str>,
     ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
-        self.move_feature_gated_as(id, code, to, reason, "")
+        self.move_feature_gated_in_as(id, code, to, reason, None, "")
+    }
+
+    /// As [`Store::move_feature_gated`], judged with the code repository (DEF-046), so a
+    /// `docs-folded` sign-off the item's branch moved on from counts as lapsed.
+    pub fn move_feature_gated_in(
+        &self,
+        id: &str,
+        code: &str,
+        to: &str,
+        reason: Option<&str>,
+        repo: Option<&std::path::Path>,
+    ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
+        self.move_feature_gated_in_as(id, code, to, reason, repo, "")
     }
 
     /// As [`Store::move_feature_gated`], recording `origin` (`monitor`, `conversation`,
@@ -1686,10 +1730,23 @@ impl Store {
         reason: Option<&str>,
         origin: &str,
     ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
+        self.move_feature_gated_in_as(id, code, to, reason, None, origin)
+    }
+
+    /// As [`Store::move_feature_gated_as`], judged with the code repository (DEF-046).
+    pub fn move_feature_gated_in_as(
+        &self,
+        id: &str,
+        code: &str,
+        to: &str,
+        reason: Option<&str>,
+        repo: Option<&std::path::Path>,
+        origin: &str,
+    ) -> Result<(FeatureItem, Vec<crate::readiness::Gap>)> {
         let mut project = self.load(id)?;
         let mut pending = Pending::default();
         let charter = crate::charter::load(self, id)?;
-        let ctx = crate::readiness::Context::load(self, id, &project.config);
+        let ctx = crate::readiness::Context::load_in(self, id, &project.config, repo);
         let (f, warnings) = Self::gated_move_on(
             &mut project,
             &mut pending,
@@ -1742,6 +1799,18 @@ impl Store {
         to: &str,
         reason: Option<&str>,
     ) -> Result<Vec<crate::readiness::Gap>> {
+        self.gate_preview_in(id, code, to, reason, None)
+    }
+
+    /// As [`Store::gate_preview`], judged with the code repository (DEF-046).
+    pub fn gate_preview_in(
+        &self,
+        id: &str,
+        code: &str,
+        to: &str,
+        reason: Option<&str>,
+        repo: Option<&std::path::Path>,
+    ) -> Result<Vec<crate::readiness::Gap>> {
         let project = self.load(id)?;
         if !project.config.has_status(to) {
             return Err(CoreError::UnknownStatus(to.to_string()));
@@ -1761,7 +1830,7 @@ impl Store {
             });
         }
         let charter = crate::charter::load(self, id)?;
-        let ctx = crate::readiness::Context::load(self, id, &project.config);
+        let ctx = crate::readiness::Context::load_in(self, id, &project.config, repo);
         let reason = reason.map(str::trim).filter(|r| !r.is_empty());
         Ok(Self::check_gate(&project, &charter, &ctx, code, to, reason)?.warnings)
     }
@@ -1927,7 +1996,12 @@ impl Store {
             ctx,
             to,
         ));
-        failing.extend(crate::readiness::signoff_gaps(feature, &gate.signoffs));
+        failing.extend(crate::readiness::signoff_gaps_in(
+            project,
+            feature,
+            &gate.signoffs,
+            ctx,
+        ));
         if no_charter {
             failing.retain(|g| {
                 !matches!(

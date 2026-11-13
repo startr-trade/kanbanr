@@ -173,6 +173,10 @@ pub struct ReviewEntry {
     /// changes none (DEF-033).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub changes_no_documents: bool,
+    /// `docs-folded` is asked again because the item's branch got a commit after the earlier one
+    /// (DEF-046): why, naming the branch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signoff_lapsed: Option<String>,
     /// `docs-folded` is among them: the texts that name something the item changed since they
     /// last changed and that Claude has not yet settled (FTR-013, DEF-039). The sign-off is not
     /// offered while any is left. `None` when the check was skipped (see `drift_skipped`) or the
@@ -384,6 +388,14 @@ pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result
                         .as_ref()
                         .is_some_and(|d| d.changes_no_documents)
             });
+            let signoff_lapsed = next
+                .as_ref()
+                .filter(|n| {
+                    n.signoffs_needed
+                        .iter()
+                        .any(|s| s == crate::method::DOCS_FOLDED)
+                })
+                .and_then(|_| crate::docsbuilt::moved_on(&project, f, &ctx));
             let signoffs_needed: Vec<String> = next.map(|n| n.signoffs_needed).unwrap_or_default();
             let approval = match definition.approval_state() {
                 _ if unratified => ApprovalKind::Unratified,
@@ -473,6 +485,11 @@ pub fn pending(store: &Store, p: &str, repo: Option<&std::path::Path>) -> Result
                     && signoffs_needed
                         .iter()
                         .any(|s| s == crate::method::DOCS_FOLDED),
+                signoff_lapsed: signoff_lapsed.filter(|_| {
+                    signoffs_needed
+                        .iter()
+                        .any(|s| s == crate::method::DOCS_FOLDED)
+                }),
                 signoffs_needed,
                 started_unapproved: definition.started_unapproved.clone(),
                 definition: definition.clone(),

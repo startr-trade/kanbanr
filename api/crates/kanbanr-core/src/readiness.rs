@@ -330,6 +330,37 @@ pub fn signoff_gaps(feature: &FeatureItem, names: &[String]) -> Vec<Gap> {
         .collect()
 }
 
+/// [`signoff_gaps`], and the lapse of a `docs-folded` sign-off whose branch moved on (DEF-046)
+/// when `names` holds it.
+pub fn signoff_gaps_in(
+    project: &crate::store::Project,
+    feature: &FeatureItem,
+    names: &[String],
+    ctx: &Context,
+) -> Vec<Gap> {
+    let mut gaps = signoff_gaps(feature, names);
+    if names.iter().any(|n| n == crate::method::DOCS_FOLDED)
+        && let Some(why) = crate::docsbuilt::moved_on(project, feature, ctx)
+    {
+        gaps.push(docs_folded_lapsed(&why));
+    }
+    gaps
+}
+
+/// The gap of a `docs-folded` sign-off the branch moved on from (DEF-046).
+fn docs_folded_lapsed(why: &str) -> Gap {
+    let name = crate::method::DOCS_FOLDED;
+    gap(
+        Check::Signoff,
+        None,
+        &format!("sign-off '{name}' lapsed"),
+        format!(
+            "sign-off '{name}' lapsed — {why}, so it no longer covers what was built: sign it \
+             again once the docs are folded"
+        ),
+    )
+}
+
 /// The gaps of an item against a gate's conditions.
 /// What some checks need to know about the project beyond the item: the unit it estimates in, and
 /// its cadence (FEAT-121, FEAT-119).
@@ -891,6 +922,26 @@ pub fn next_gates(
                 .filter(|name| feature.signoff_current(name).is_none())
                 .cloned()
                 .collect();
+            // A `docs-folded` the branch moved on from is asked again (DEF-046), then held like a
+            // new one until the item is built and folded.
+            if gate
+                .signoffs
+                .iter()
+                .any(|n| n == crate::method::DOCS_FOLDED)
+                && let Some(why) = crate::docsbuilt::moved_on(project, feature, ctx)
+            {
+                signoffs_needed = gate
+                    .signoffs
+                    .iter()
+                    .filter(|n| {
+                        *n == crate::method::DOCS_FOLDED || feature.signoff_current(n).is_none()
+                    })
+                    .cloned()
+                    .collect();
+                let named = format!("'{}'", crate::method::DOCS_FOLDED);
+                signoffs.retain(|g| !(g.check == Check::Signoff && g.label.contains(&named)));
+                signoffs.push(docs_folded_lapsed(&why));
+            }
             // `docs-folded` is offered only once the documents it confirms are built (DEF-033).
             let mut signoffs_held = Vec::new();
             let mut docs_built = None;
@@ -942,7 +993,7 @@ pub fn signoff_hold(
         return None;
     }
     Some(format!(
-        "{} cannot be signed off '{name}' yet: its documents are not built ({})",
+        "{} cannot be signed off '{name}' yet: it is not built and folded ({})",
         feature.code,
         next.signoffs_held
             .iter()
@@ -1467,16 +1518,33 @@ pub(crate) fn docs_updated_gaps(
     docs: &std::path::Path,
     history: &crate::git::DocHistory,
 ) -> Vec<Gap> {
-    let declared = feature
+    let keys: Vec<String> = feature
         .definition
         .as_ref()
-        .map(|d| d.affects_docs.as_slice())
-        .unwrap_or(&[]);
+        .map(|d| {
+            d.affects_docs
+                .iter()
+                .map(|doc| affects_doc_key(doc))
+                .collect()
+        })
+        .unwrap_or_default();
+    docs_unchanged_gaps(feature, &keys, docs, history, "declared in affects_docs")
+}
+
+/// One gap per board doc among `keys` that has not changed since `feature` entered its stage, or
+/// that is not on the board (DEF-046). `unknown` says where a missing doc was named, as the tail
+/// of "{key} is {unknown} but is not on the board".
+pub(crate) fn docs_unchanged_gaps(
+    feature: &FeatureItem,
+    keys: &[String],
+    docs: &std::path::Path,
+    history: &crate::git::DocHistory,
+    unknown: &str,
+) -> Vec<Gap> {
     let since = feature.entered_status_at();
     let mut gaps = Vec::new();
-    for doc in declared {
-        let key = affects_doc_key(doc);
-        let path = docs.join(&key);
+    for key in keys {
+        let path = docs.join(key);
         let changed = history.changed_since(&path, since);
         if !path.is_file() && changed != Some(true) {
             gaps.push(Gap {
@@ -1485,7 +1553,7 @@ pub(crate) fn docs_updated_gaps(
                     Check::DocsUpdated,
                     None,
                     &format!("unknown doc {key}"),
-                    format!("{key} is declared in affects_docs but is not on the board"),
+                    format!("{key} is {unknown} but is not on the board"),
                 )
             });
         } else if changed == Some(false) {
@@ -2064,6 +2132,242 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A board in a temp git repository whose `Completed` gate asks for `docs-folded` and
+    /// `design-review`, with `architecture/data.md` committed before the item is made (MNT-008),
+    /// and one item at `Scheduled` that names no `affects_docs` but links the doc under its
+    /// Design's `Affects docs`, with one open code task (DEF-046).
+    fn linked_docs_board(tag: &str) -> (crate::Store, std::path::PathBuf, String, String) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-linked-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = crate::Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        // An adopted charter, so the gate holds the item where it is when its last task is done.
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::charter::Charter {
+                purpose: "p".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let gate = crate::config::Gate {
+            signoffs: vec!["design-review".into(), "docs-folded".into()],
+            ..Default::default()
+        };
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert("Completed".to_string(), gate);
+        store.set_gates("demo", gates).unwrap();
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv1\n")
+            .unwrap();
+        assert!(crate::git::commit(&dir, "Ada", "ada@example.com", "board"));
+        next_second();
+        let spec = "## Design\n\nParse it.\n\n### Affects docs\n\
+            - [data](/p/demo/docs/file/architecture/data.md): the parser.\n";
+        let item = store
+            .add_feature("demo", "Parser", spec, "M", None)
+            .unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &item.code,
+                Some(FeatureDefinition {
+                    statement: "Parse it".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        store.approve_feature("demo", &item.code, "Ada").unwrap();
+        store.move_feature("demo", &item.code, "Scheduled").unwrap();
+        let list = store
+            .add_todo_list("demo", &item.code, "build", None)
+            .unwrap();
+        store
+            .add_task("demo", &item.code, &list.code, "Write the parser", None)
+            .unwrap();
+        (store, dir, item.code, list.code)
+    }
+
+    /// The `Completed` gate of `code`, with the docs-folded hold, judged with `repo`.
+    fn completed_gate(
+        store: &crate::Store,
+        code: &str,
+        repo: Option<&std::path::Path>,
+    ) -> (NextGate, Option<String>) {
+        let project = store.load_for_gates("demo").unwrap();
+        let ctx = Context::load_in(store, "demo", &project.config, repo);
+        let f = project.feature(code).unwrap();
+        let gate = next_gates(&project, None, f, &ctx)
+            .into_iter()
+            .find(|g| g.status == "Completed")
+            .expect("a Completed gate");
+        (gate, signoff_hold(&project, f, &ctx, "docs-folded"))
+    }
+
+    /// DEF-046 R-1: docs-folded is held while a task is open, then while a doc the Design links is
+    /// unchanged, and offered once both are done; the refusal names each.
+    #[test]
+    fn docs_folded_is_not_offered_while_tasks_are_open_or_docs_unchanged() {
+        let (store, dir, code, list) = linked_docs_board("open");
+        let (gate, hold) = completed_gate(&store, &code, None);
+        assert_eq!(gate.signoffs_needed, vec!["design-review".to_string()]);
+        let held: Vec<&str> = gate
+            .signoffs_held
+            .iter()
+            .map(|g| g.message.as_str())
+            .collect();
+        assert!(held.contains(&"task T1 is not complete"), "{held:?}");
+        assert!(
+            held.iter().any(|m| m.contains("architecture/data.md")),
+            "{held:?}"
+        );
+        let hold = hold.expect("refused");
+        assert!(hold.contains("not built and folded"), "{hold}");
+        assert!(hold.contains("task T1 is not complete"), "{hold}");
+        assert!(hold.contains("architecture/data.md"), "{hold}");
+
+        // The task done, the doc still unchanged: still held, for the doc alone.
+        store
+            .set_task_state(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        let (gate, hold) = completed_gate(&store, &code, None);
+        assert_eq!(gate.signoffs_held.len(), 1, "{:?}", gate.signoffs_held);
+        assert!(
+            gate.signoffs_held[0]
+                .message
+                .contains("architecture/data.md")
+        );
+        assert!(hold.is_some());
+
+        // The doc folded: offered.
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv2\n")
+            .unwrap();
+        let (gate, hold) = completed_gate(&store, &code, None);
+        assert!(gate.signoffs_held.is_empty(), "{:?}", gate.signoffs_held);
+        assert_eq!(
+            gate.signoffs_needed,
+            vec!["design-review".to_string(), "docs-folded".to_string()]
+        );
+        assert!(hold.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-046 R-2: a docs-folded sign-off pins the item's branch tips, and a commit on the branch
+    /// after it lapses it; a sign-off that pinned no branch does not lapse.
+    #[test]
+    fn a_docs_folded_signoff_lapses_when_the_branch_moves_on() {
+        let (store, dir, code, list) = linked_docs_board("lapse");
+        store
+            .set_task_state(
+                "demo",
+                &code,
+                &list,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv2\n")
+            .unwrap();
+        let repo = crate::coderepo::tests::scratch_repo("readiness-lapse");
+        let branch = {
+            let project = store.load("demo").unwrap();
+            let f = project.feature(&code).unwrap();
+            crate::scm::branch_for(project.config.branch_pattern(), &code, &f.title)
+        };
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "parser.rs", "v1\n", "parser");
+        let tip = crate::coderepo::rev_parse(&repo, &branch).unwrap();
+        let sign = |repo: Option<&std::path::Path>, note: &str| {
+            crate::dispatch::dispatch_in(
+                &store,
+                "POST",
+                &format!("/projects/demo/features/{code}/signoff/docs-folded"),
+                Some(&serde_json::json!({"by": "Ada L", "note": note})),
+                repo,
+            )
+            .unwrap()
+        };
+        sign(Some(&repo), "");
+        let current = |store: &crate::Store| {
+            store
+                .load("demo")
+                .unwrap()
+                .feature(&code)
+                .unwrap()
+                .signoff_current("docs-folded")
+                .cloned()
+                .expect("signed")
+        };
+        assert_eq!(
+            current(&store).branch_heads,
+            [(branch.clone(), tip)].into(),
+            "the record pins the branch tip"
+        );
+        let lapsed = |gaps: &[Gap]| {
+            gaps.iter()
+                .any(|g| g.label == "sign-off 'docs-folded' lapsed" && g.message.contains(&branch))
+        };
+        let judged = |store: &crate::Store| {
+            let project = store.load_for_gates("demo").unwrap();
+            let ctx = Context::load_in(store, "demo", &project.config, Some(&repo));
+            let f = project.feature(&code).unwrap();
+            let gate = next_gates(&project, None, f, &ctx)
+                .into_iter()
+                .find(|g| g.status == "Completed")
+                .unwrap();
+            let names = vec!["design-review".to_string(), "docs-folded".to_string()];
+            (gate, signoff_gaps_in(&project, f, &names, &ctx))
+        };
+        let (gate, gaps) = judged(&store);
+        assert_eq!(gate.signoffs_needed, vec!["design-review".to_string()]);
+        assert!(!lapsed(&gate.gaps) && !lapsed(&gaps), "{gaps:?}");
+
+        // The branch moves on: the sign-off lapses, and is asked again.
+        crate::coderepo::tests::commit_file(&repo, "parser.rs", "v2\n", "more");
+        let (gate, gaps) = judged(&store);
+        assert_eq!(
+            gate.signoffs_needed,
+            vec!["design-review".to_string(), "docs-folded".to_string()]
+        );
+        assert!(lapsed(&gate.gaps), "{:?}", gate.gaps);
+        assert_eq!(
+            gate.gaps
+                .iter()
+                .filter(|g| g.label.contains("'docs-folded'"))
+                .count(),
+            1,
+            "{:?}",
+            gate.gaps
+        );
+        assert!(lapsed(&gaps), "{gaps:?}");
+
+        // Signed again without the repository (a new note, so it is not a repeat): nothing
+        // pinned, so nothing lapses.
+        sign(None, "again");
+        assert!(current(&store).branch_heads.is_empty());
+        let (gate, gaps) = judged(&store);
+        assert_eq!(gate.signoffs_needed, vec!["design-review".to_string()]);
+        assert!(!lapsed(&gate.gaps) && !lapsed(&gaps), "{gaps:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
     /// FEAT-205 R-1: a card's next stage names the sign-offs it still needs and the tasks still
     /// open, apart from its unmet conditions — so "ready" can only mean ready.
     #[test]
@@ -2071,7 +2375,8 @@ mod tests {
         let (store, dir, code) = docs_board("next-stage");
         let gate = crate::config::Gate {
             requires: vec![Condition::Check(Check::Definition)],
-            signoffs: vec!["docs-folded".into()],
+            // Not docs-folded, which waits for every task (DEF-046): this asks of the card only.
+            signoffs: vec!["design-review".into()],
             ..Default::default()
         };
         let mut gates = std::collections::BTreeMap::new();
@@ -2102,11 +2407,6 @@ mod tests {
                 .unwrap()
                 .1
         };
-        // The doc it declares is folded in, so `docs-folded` is offered (DEF-033).
-        next_second();
-        store
-            .write_doc("demo", "architecture/data.md", "# Data\n\nv2\n")
-            .unwrap();
         let next = &card(&store).next;
         assert_eq!(next.len(), 1, "{next:?}");
         assert_eq!(next[0].status, "Scheduled");
@@ -2114,11 +2414,11 @@ mod tests {
             next[0].missing, 1,
             "the definition is there; the sign-off is not"
         );
-        assert_eq!(next[0].signoffs, vec!["docs-folded".to_string()]);
+        assert_eq!(next[0].signoffs, vec!["design-review".to_string()]);
         assert_eq!(next[0].tasks_open, 1);
 
         store
-            .signoff_feature("demo", &code, "docs-folded", "Ada", "", "")
+            .signoff_feature("demo", &code, "design-review", "Ada", "", "")
             .unwrap();
         store
             .set_task_state(
