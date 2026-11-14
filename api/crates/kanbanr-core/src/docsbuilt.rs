@@ -171,25 +171,53 @@ pub fn repository_docs(spec: &str, board_docs: &BTreeSet<String>) -> Vec<String>
 /// `/p/<project>/docs/file/<path>` (DEF-046), as doc keys, sorted and deduplicated. A `#fragment`
 /// or `?query` is cut first. Links to another project, and to items or milestones, are not docs.
 pub fn linked_board_docs(spec: &str, project: &str) -> Vec<String> {
+    let mut keys: Vec<String> = linked_lines(spec, project)
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// Each board doc linked under `Affects docs`, with the text of the line that links it (DEF-047).
+fn linked_lines(spec: &str, project: &str) -> Vec<(String, String)> {
     let section = affects_section(spec);
     let prefix = format!("/p/{project}/docs/file/");
-    let mut keys: Vec<String> = Vec::new();
-    let mut rest = section.as_str();
-    while let Some(at) = rest.find("](") {
-        rest = &rest[at + 2..];
-        let Some(end) = rest.find(')') else {
-            break;
-        };
-        let dest = rest[..end].trim();
-        rest = &rest[end..];
-        let Some(path) = dest.strip_prefix(prefix.as_str()) else {
-            continue;
-        };
-        let path = path.split(['#', '?']).next().unwrap_or_default().trim();
-        if !path.is_empty() {
-            keys.push(crate::refs::doc_key(path));
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in section.lines() {
+        let mut rest = line;
+        while let Some(at) = rest.find("](") {
+            rest = &rest[at + 2..];
+            let Some(end) = rest.find(')') else {
+                break;
+            };
+            let dest = rest[..end].trim();
+            rest = &rest[end..];
+            let Some(path) = dest.strip_prefix(prefix.as_str()) else {
+                continue;
+            };
+            let path = path.split(['#', '?']).next().unwrap_or_default().trim();
+            if !path.is_empty() {
+                out.push((crate::refs::doc_key(path), line.to_string()));
+            }
         }
     }
+    out
+}
+
+/// The linked board docs the item must change (DEF-047): [`linked_board_docs`] minus those whose
+/// list line says `unchanged` or `not changed` (any case), which the Design only reads. A doc
+/// linked on two lines is read-only only when every line says so. Sorted, deduplicated, pure.
+pub fn docs_to_change(spec: &str, project: &str) -> Vec<String> {
+    let mut keys: Vec<String> = linked_lines(spec, project)
+        .into_iter()
+        .filter(|(_, line)| {
+            let l = line.to_lowercase();
+            !(l.contains("unchanged") || l.contains("not changed"))
+        })
+        .map(|(key, _)| key)
+        .collect();
     keys.sort();
     keys.dedup();
     keys
@@ -472,6 +500,27 @@ mod tests {
         );
         assert!(linked_board_docs(spec, "other").is_empty());
         assert!(linked_board_docs("## Design\n[x](/p/demo/docs/file/a.md)\n", "demo").is_empty());
+    }
+
+    #[test]
+    fn docs_to_change_drops_read_only_links() {
+        let spec = "## Design\n\n### Affects docs\n\
+            - [data](/p/demo/docs/file/architecture/data.md): fields.\n\
+            - [ADR](/p/demo/docs/file/decisions/0005-x.md): Unchanged, only read.\n\
+            - [flow](/p/demo/docs/file/design/flow.md) is not changed here.\n\
+            - [other](/p/demo/docs/file/design/other.md) (unchanged) and \
+            [again](/p/demo/docs/file/architecture/data.md).\n";
+        assert_eq!(docs_to_change(spec, "demo"), vec!["architecture/data.md"]);
+        assert_eq!(
+            linked_board_docs(spec, "demo"),
+            vec![
+                "architecture/data.md",
+                "decisions/0005-x.md",
+                "design/flow.md",
+                "design/other.md"
+            ]
+        );
+        assert!(docs_to_change("## Design\nnothing\n", "demo").is_empty());
     }
 
     #[test]
