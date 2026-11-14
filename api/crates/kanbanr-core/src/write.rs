@@ -183,6 +183,22 @@ fn changes_tasks(method: &str, path: &str) -> bool {
     )
 }
 
+/// The item being worked on (DEF-050): the scope's item when the process is scoped; else the item
+/// the code repository's branch names; else none. With none, no spec edit is refused.
+pub fn current_item(
+    store: &Store,
+    project: &str,
+    scope: &ProcessScope,
+    repo: Option<&Path>,
+) -> Option<String> {
+    if let ProcessScope::Scoped(s) = scope {
+        return Some(s.item.clone());
+    }
+    let branch = crate::coderepo::git(repo?, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
+    let p = store.load_meta(project).ok()?;
+    crate::scm::branch_item(&p, Some(&branch))
+}
+
 /// [`apply`] under a scope already resolved (FEAT-214). Under the lock and before anything changes:
 /// an agent context with no valid scope is refused (only a claim gets through); a scoped write must
 /// be within its scope, on a board with no changes made outside kanbanr, and holds every item it
@@ -287,6 +303,24 @@ pub fn apply_as(
             )
         {
             return Err(WriteError::Refused(format!("refused: {why}")));
+        }
+        // Another item's approved spec is not Claude's to edit outside a proposed change
+        // (DEF-050): refused here, under the lock, before anything is written.
+        if records
+            && let Some(why) = origin::guarded_spec_edit(
+                store,
+                method,
+                path,
+                body,
+                Taker::of_origin(origin),
+                (Taker::of_origin(origin) == Taker::Claude
+                    && (method == "PATCH" || path.ends_with("/batch")))
+                .then(|| project_of(path).and_then(|p| current_item(store, &p, scope, repo)))
+                .flatten()
+                .as_deref(),
+            )
+        {
+            return Err(WriteError::Refused(why));
         }
         let (method, path, body) = match &expanded {
             Some((_, e)) => (e.method.as_str(), e.path.as_str(), Some(&e.body)),
@@ -1029,5 +1063,209 @@ mod tests {
         );
         assert_eq!(item_of("/projects/demo/milestones"), None);
         assert_eq!(project_of("/portfolio/programs"), None);
+    }
+
+    /// A board with FEAT-001 (the item being worked on), FEAT-002 (approved) and FEAT-003 (not),
+    /// and a code repository on the branch of FEAT-001.
+    fn spec_guard_fixture(tag: &str) -> (std::path::PathBuf, Store, std::path::PathBuf) {
+        use crate::docdrift::testkit::{code_commit, git_env, scratch};
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-write-spec-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        for _ in 0..3 {
+            store.add_feature("demo", "T", "Spec.", "M", None).unwrap();
+        }
+        for code in ["FEAT-002"] {
+            store
+                .set_feature_definition(
+                    "demo",
+                    code,
+                    Some(crate::models::FeatureDefinition {
+                        statement: "Agreed".into(),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+            store.approve_feature("demo", code, "Ada").unwrap();
+        }
+        let p = store.load("demo").unwrap();
+        assert!(
+            p.feature("FEAT-002")
+                .unwrap()
+                .definition
+                .as_ref()
+                .unwrap()
+                .approval_state()
+                .is_agreed()
+        );
+        assert!(p.feature("FEAT-003").unwrap().definition.is_none());
+        let repo = scratch(&format!("spec-{tag}"));
+        git_env(&repo, &["init", "-q", "-b", "feat/FEAT-001-t"], None);
+        code_commit(&repo, "a.txt", "a\n", "a", "2026-11-01T10:00:00+00:00");
+        (dir, store, repo)
+    }
+
+    fn spec_write(
+        store: &Store,
+        dir: &Path,
+        repo: Option<&Path>,
+        origin: Origin,
+        target: &str,
+        batch: bool,
+    ) -> Result<Applied, WriteError> {
+        let (method, path, body) = if batch {
+            (
+                "POST",
+                "/projects/demo/batch".to_string(),
+                json!({"operations": [{"op": "feature.edit", "code": target, "spec": "New spec.\n"}]}),
+            )
+        } else {
+            (
+                "PATCH",
+                format!("/projects/demo/features/{target}"),
+                json!({"specification": "New spec.\n"}),
+            )
+        };
+        apply_as(
+            store,
+            dir,
+            PushPolicy::Auto,
+            method,
+            &path,
+            Some(&body),
+            repo,
+            &eventing::NullSender,
+            &ProcessScope::Unscoped,
+            origin,
+        )
+    }
+
+    /// DEF-050 R-2: Claude is refused an edit to another item's approved spec, by the route and by
+    /// a batch; the person's terminal and the monitor pass.
+    #[test]
+    fn claude_is_refused_an_edit_to_another_items_approved_spec() {
+        let (dir, store, repo) = spec_guard_fixture("refused");
+        for origin in [Origin::Conversation, Origin::Delegated] {
+            for batch in [false, true] {
+                let e = spec_write(&store, &dir, Some(&repo), origin, "FEAT-002", batch)
+                    .unwrap_err()
+                    .to_string();
+                assert!(
+                    e.contains("FEAT-002's specification belongs to an approved item"),
+                    "{e}"
+                );
+                assert!(e.contains("Work on FEAT-001 stays on FEAT-001"), "{e}");
+            }
+        }
+        assert_ne!(
+            store
+                .load("demo")
+                .unwrap()
+                .feature("FEAT-002")
+                .unwrap()
+                .specification,
+            "New spec.\n"
+        );
+        for origin in [Origin::Terminal, Origin::Monitor] {
+            for batch in [false, true] {
+                spec_write(&store, &dir, Some(&repo), origin, "FEAT-002", batch).unwrap();
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-050 R-2: the current item's own spec, and the spec of an item not approved, are Claude's
+    /// to edit; a scope names its item as the current one.
+    #[test]
+    fn an_edit_to_the_current_items_own_spec_or_an_unapproved_items_spec_is_allowed() {
+        let (dir, store, repo) = spec_guard_fixture("allowed");
+        for batch in [false, true] {
+            spec_write(
+                &store,
+                &dir,
+                Some(&repo),
+                Origin::Conversation,
+                "FEAT-001",
+                batch,
+            )
+            .unwrap();
+            spec_write(
+                &store,
+                &dir,
+                Some(&repo),
+                Origin::Conversation,
+                "FEAT-003",
+                batch,
+            )
+            .unwrap();
+        }
+        // The scope's item is the current one, whatever branch the checkout is on.
+        let scope = ProcessScope::Scoped(agentscope::Scope {
+            id: "SC-001".into(),
+            project: "demo".into(),
+            role: agentscope::Role::Build,
+            item: "FEAT-003".into(),
+            operations: agentscope::Role::Build.operations(),
+            branch: None,
+            base: None,
+            issued_by: "Ada".into(),
+            issued_at: crate::now_rfc3339(),
+            expires_at: "2999-01-01T00:00:00Z".into(),
+            note: String::new(),
+            worktree: None,
+            claimed_at: None,
+            revoked_at: None,
+            revoked_by: None,
+            revoked_reason: None,
+            extra: Default::default(),
+        });
+        assert_eq!(
+            current_item(&store, "demo", &scope, Some(&repo)).as_deref(),
+            Some("FEAT-003")
+        );
+        assert_eq!(
+            current_item(&store, "demo", &ProcessScope::Unscoped, Some(&repo)).as_deref(),
+            Some("FEAT-001")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-050 R-2: with no current item (no code repository, or a branch that names no item)
+    /// nothing is refused: the design stage writes the Design into the item being designed.
+    #[test]
+    fn with_no_current_item_no_spec_edit_is_refused() {
+        let (dir, store, repo) = spec_guard_fixture("none");
+        for batch in [false, true] {
+            spec_write(&store, &dir, None, Origin::Conversation, "FEAT-002", batch).unwrap();
+        }
+        crate::docdrift::testkit::git_env(&repo, &["checkout", "-q", "-b", "main"], None);
+        assert_eq!(
+            current_item(&store, "demo", &ProcessScope::Unscoped, Some(&repo)),
+            None
+        );
+        for batch in [false, true] {
+            spec_write(
+                &store,
+                &dir,
+                Some(&repo),
+                Origin::Conversation,
+                "FEAT-002",
+                batch,
+            )
+            .unwrap();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }
