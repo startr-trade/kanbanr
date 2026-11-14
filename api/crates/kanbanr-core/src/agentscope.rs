@@ -168,6 +168,10 @@ pub struct Scope {
     /// The bound worktree, relative to the main worktree's root, `/`-separated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<String>,
+    /// The `worktree-agent-*` branch Claude Code made for the agent's worktree, recorded when the
+    /// claim switched off it; revoke deletes it when merged (DEF-051).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claimed_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -261,6 +265,9 @@ pub struct ScopeView {
     pub scope: Scope,
     pub project: String,
     pub state: ScopeState,
+    /// The merged agent branch a revoke deleted (DEF-051).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_deleted: Option<String>,
 }
 
 impl ScopeView {
@@ -269,6 +276,7 @@ impl ScopeView {
             scope: scope.clone(),
             project: scope.project.clone(),
             state: scope.state(now),
+            branch_deleted: None,
         }
     }
 }
@@ -624,6 +632,7 @@ pub fn issue(
         expires_at: add_hours(now, hours)?,
         note: req.note.trim().to_string(),
         worktree: None,
+        agent_branch: None,
         claimed_at: None,
         revoked_at: None,
         revoked_by: None,
@@ -686,6 +695,7 @@ pub fn claim(
         ));
     }
     let mut switched_from = None;
+    let mut agent_branch = None;
     if let Some(branch) = &scope.branch
         && wt.branch.as_deref() != Some(branch.as_str())
     {
@@ -697,6 +707,10 @@ pub fn claim(
         }
         coderepo::git(&wt.root, &["switch", "-q", branch])?;
         switched_from = Some(wt.branch.clone());
+        agent_branch = wt
+            .branch
+            .clone()
+            .filter(|b| b.starts_with(crate::gitmodel::AGENT_BRANCH_PREFIX));
     }
     let undo = |from: &Option<Option<String>>| {
         if let Some(Some(b)) = from {
@@ -708,6 +722,9 @@ pub fn claim(
         if s.worktree.is_none() {
             s.worktree = Some(rel.clone());
             s.claimed_at = Some(now.to_string());
+        }
+        if agent_branch.is_some() {
+            s.agent_branch = agent_branch;
         }
     }
     if let Err(e) = save(store, id, &scopes) {
@@ -758,6 +775,18 @@ pub fn revoke(
     let out = s.clone();
     save(store, id, &scopes)?;
     Ok(out)
+}
+
+/// Delete the scope's recorded agent branch when it is merged into `main` and free (DEF-051).
+/// Any refusal (unmerged, checked out, gone) returns `None` and leaves the branch.
+pub fn delete_agent_branch(scope: &Scope, repo: &Path, main: &str) -> Option<String> {
+    let branch = scope.agent_branch.as_deref()?;
+    if !branch.starts_with(crate::gitmodel::AGENT_BRANCH_PREFIX) {
+        return None;
+    }
+    coderepo::delete_merged_branch(repo, branch, main)
+        .ok()
+        .map(|_| branch.to_string())
 }
 
 /// Renew a scope for `hours` from now. A revoked scope stays revoked.
@@ -1631,6 +1660,7 @@ mod tests {
             expires_at: "2026-10-21T17:00:00Z".into(),
             note: String::new(),
             worktree: Some(".claude/worktrees/agent-x".into()),
+            agent_branch: None,
             claimed_at: Some("2026-10-21T09:01:00Z".into()),
             revoked_at: None,
             revoked_by: None,
@@ -2560,5 +2590,132 @@ mod tests {
             s.by_agent().to_string(),
             "by the agent for FEAT-214 (SC-007)"
         );
+    }
+
+    // ---- DEF-051: the agent branch ------------------------------------------------------
+
+    /// A board, a repository on `main` and an unclaimed build scope on `feat/FEAT-001-cart`.
+    fn agent_fixture(name: &str) -> (PathBuf, Store, PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-def051-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (board, repo) = (dir.join("board"), dir.join("repo"));
+        std::fs::create_dir_all(&board).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [
+            &["init", "-q", "--initial-branch=main"][..],
+            &["config", "user.email", "t@example.com"],
+            &["config", "user.name", "T"],
+            &["config", "commit.gpgsign", "false"],
+            &["commit", "-q", "--allow-empty", "-m", "base"],
+            &["branch", "feat/FEAT-001-cart"],
+        ] {
+            coderepo::git(&repo, args).unwrap();
+        }
+        let store = Store::new(board);
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        let mut sc = scope(Role::Build);
+        sc.project = "demo".into();
+        sc.item = "FEAT-001".into();
+        sc.branch = Some("feat/FEAT-001-cart".into());
+        sc.worktree = None;
+        sc.claimed_at = None;
+        sc.expires_at = "2099-01-01T00:00:00Z".into();
+        save(&store, "demo", &[sc]).unwrap();
+        (dir, store, repo)
+    }
+
+    /// Make a linked worktree on a new branch `branch` and claim the scope from it.
+    fn claim_from(store: &Store, repo: &Path, dir: &Path, branch: &str) -> Scope {
+        let wt_path = dir.join("wt");
+        coderepo::git(
+            repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                branch,
+                wt_path.to_str().unwrap(),
+            ],
+        )
+        .unwrap();
+        let facts = coderepo::worktree_facts(&wt_path).unwrap();
+        claim(store, "demo", "SC-007", &facts, NOW).unwrap()
+    }
+
+    /// DEF-051 R-2: claim records the branch it switched off only when Claude Code made it.
+    #[test]
+    fn claim_records_the_agent_branch_only_for_a_worktree_agent_name() {
+        let (dir, store, repo) = agent_fixture("claim-records");
+        let s = claim_from(&store, &repo, &dir, "worktree-agent-a1");
+        assert_eq!(s.agent_branch.as_deref(), Some("worktree-agent-a1"));
+        assert_eq!(
+            load(&store, "demo").unwrap()[0].agent_branch,
+            s.agent_branch
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (dir, store, repo) = agent_fixture("claim-other-name");
+        let s = claim_from(&store, &repo, &dir, "my-own-branch");
+        assert_eq!(s.agent_branch, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-051 R-2: revoke deletes the recorded agent branch once it is merged and free.
+    #[test]
+    fn revoking_a_scope_deletes_its_merged_agent_branch() {
+        let (dir, store, repo) = agent_fixture("revoke-deletes");
+        let s = claim_from(&store, &repo, &dir, "worktree-agent-a1");
+        // the worktree now holds the item branch; the agent branch is free and merged into main
+        let revoked = revoke(&store, "demo", "SC-007", "me", "done", NOW).unwrap();
+        assert_eq!(revoked.agent_branch, s.agent_branch);
+        assert_eq!(
+            delete_agent_branch(&revoked, &repo, "main").as_deref(),
+            Some("worktree-agent-a1")
+        );
+        assert!(!coderepo::branch_exists(&repo, "worktree-agent-a1"));
+        // nothing recorded: nothing deleted
+        assert_eq!(
+            delete_agent_branch(&scope(Role::Build), &repo, "main"),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-051 R-2: an agent branch with work main lacks is kept.
+    #[test]
+    fn revoking_a_scope_keeps_an_unmerged_agent_branch() {
+        let (dir, store, repo) = agent_fixture("revoke-keeps");
+        claim_from(&store, &repo, &dir, "worktree-agent-a1");
+        coderepo::git(&repo, &["switch", "-q", "worktree-agent-a1"]).unwrap();
+        coderepo::git(
+            &repo,
+            &["commit", "-q", "--allow-empty", "-m", "agent work"],
+        )
+        .unwrap();
+        coderepo::git(&repo, &["switch", "-q", "main"]).unwrap();
+        let revoked = revoke(&store, "demo", "SC-007", "me", "done", NOW).unwrap();
+        assert_eq!(delete_agent_branch(&revoked, &repo, "main"), None);
+        assert!(coderepo::branch_exists(&repo, "worktree-agent-a1"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-051 compat: `agent_branch` and a key a newer kanbanr wrote survive a rewrite.
+    #[test]
+    fn an_older_scopes_file_keeps_agent_branch_through_a_rewrite() {
+        let (dir, store, _repo) = agent_fixture("compat");
+        let mut raw = std::fs::read_to_string(path(&store, "demo")).unwrap();
+        raw.push_str("  agent_branch: worktree-agent-zz\n  from_the_future: 1\n");
+        std::fs::write(path(&store, "demo"), raw).unwrap();
+        let scopes = load(&store, "demo").unwrap();
+        assert_eq!(scopes[0].agent_branch.as_deref(), Some("worktree-agent-zz"));
+        save(&store, "demo", &scopes).unwrap();
+        let again = std::fs::read_to_string(path(&store, "demo")).unwrap();
+        assert!(again.contains("agent_branch: worktree-agent-zz"), "{again}");
+        assert!(again.contains("from_the_future"), "{again}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
