@@ -196,8 +196,9 @@ pub fn check(
                 Severity::Warning,
                 Some(&code),
                 format!(
-                    "{code} is finished and {branch} is merged: delete it with `git branch -d \
-                     {branch}`"
+                    "{code} is finished and {branch} is merged: `kanbanr git tidy` lists the merged \
+                     branches, and `--yes` deletes them locally after one confirmation (never a \
+                     remote)"
                 ),
             ));
         } else if gitmodel::is_parked(config, status) {
@@ -624,7 +625,7 @@ mod tests {
         let m = messages(&check(&p, &[], &[], &model, &d));
         assert!(
             m.iter()
-                .any(|x| x.contains("FEAT-001 is finished") && x.contains("git branch -d")),
+                .any(|x| x.contains("FEAT-001 is finished") && x.contains("kanbanr git tidy")),
             "{m:?}"
         );
         assert!(
