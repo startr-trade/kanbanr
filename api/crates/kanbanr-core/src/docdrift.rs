@@ -9,7 +9,8 @@
 //! 1. [`item_changes`]: the names in the diff of the commits that reference the item;
 //! 2. [`linked`]: the docs and items linked to it, from the board alone;
 //! 3. [`scan`]: which of the names a text holds, as whole tokens, with their lines;
-//! 4. [`flag_for`] / [`flags_for_item`]: a text is flagged for the names changed after it last did.
+//! 4. [`flag_for`] / [`flags_for_item`]: a text is flagged for the names it held when they changed.
+//!    An edit after that never closes the flag; only a check does (DEF-050).
 //!
 //! Nothing is stored. Everything is derived from the board's files and the repository's history
 //! on each read (ADR-0005).
@@ -872,8 +873,29 @@ pub struct CommitRef {
     pub names: Vec<Name>,
 }
 
-/// A linked text that names something changed after it last changed. A flag says which text names
-/// which changed name, never that the text is wrong.
+/// One edit to a flagged text after the change that opened the flag (DEF-050). `sha` is empty for
+/// an edit not yet committed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Edit {
+    pub sha: String,
+    /// RFC 3339.
+    pub at: String,
+    pub subject: String,
+}
+
+/// One version of a text in the board's history, oldest first in a list (DEF-050).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Version {
+    pub sha: String,
+    pub at: String,
+    pub subject: String,
+    pub text: String,
+}
+
+/// A linked text that names something changed in the code. A flag says which text names which
+/// changed name, never that the text is wrong. It stays open after the text is edited, until a
+/// check settles it (DEF-050).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Flag {
@@ -883,15 +905,244 @@ pub struct Flag {
     pub commits: Vec<CommitRef>,
     /// When the text last changed, RFC 3339.
     pub target_changed_at: String,
+    /// Edits to the text since the first change that opened the flag, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edits: Vec<Edit>,
+    /// Unified diff from the text as it stood when the flag opened to the text now.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub diff: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub diff_truncated: bool,
 }
 
 fn instant(t: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(t.trim(), &Rfc3339).ok()
 }
 
-/// Flag `linked` if its `text` (last changed at `changed_at`) holds a name that a change after
-/// that moment put in the code. Pure.
-pub fn flag_for(linked: &Linked, text: &str, changed_at: &str, changes: &[Change]) -> Option<Flag> {
+/// How many commits of a text's history are read.
+const MAX_VERSIONS: usize = 30;
+const DIFF_MAX_LINES: usize = 200;
+const DIFF_MAX_BYTES: usize = 20 * 1024;
+
+/// The versions of the text in `file` (an absolute path in the board's repository), oldest first:
+/// at most the 30 newest commits, a version equal to the one before it dropped (a move between
+/// status folders is not an edit), and a last `uncommitted` version when the working text differs
+/// from the newest. Any git failure gives an empty list. Never writes.
+pub fn target_versions(board: &Path, file: &Path, current: &str) -> Vec<Version> {
+    let file_arg = file.to_string_lossy().to_string();
+    let Ok(log) = coderepo::git(
+        board,
+        &[
+            "log",
+            "--follow",
+            "--format=%H%x1f%cI%x1f%s",
+            "--name-only",
+            "--",
+            &file_arg,
+        ],
+    ) else {
+        return Vec::new();
+    };
+    let mut commits: Vec<(String, String, String, String)> = Vec::new();
+    for line in log.lines() {
+        let fields: Vec<&str> = line.split('\u{1f}').collect();
+        if fields.len() == 3 {
+            commits.push((
+                fields[0].to_string(),
+                fields[1].to_string(),
+                fields[2].to_string(),
+                String::new(),
+            ));
+        } else if !line.trim().is_empty()
+            && let Some(last) = commits.last_mut()
+            && last.3.is_empty()
+        {
+            last.3 = line.to_string();
+        }
+    }
+    commits.truncate(MAX_VERSIONS);
+    commits.reverse();
+    let mut versions: Vec<Version> = Vec::new();
+    for (sha, at, subject, path) in commits {
+        if path.is_empty() {
+            continue;
+        }
+        let spec = format!("{sha}:{path}");
+        let Ok(text) = coderepo::git(board, &["show", &spec]) else {
+            continue;
+        };
+        if versions
+            .last()
+            .is_some_and(|v| v.text.trim() == text.trim())
+        {
+            continue;
+        }
+        versions.push(Version {
+            sha,
+            at,
+            subject,
+            text,
+        });
+    }
+    if versions.is_empty() {
+        return versions;
+    }
+    if versions
+        .last()
+        .is_some_and(|v| v.text.trim() != current.trim())
+        && let Ok(now) = OffsetDateTime::now_utc().format(&Rfc3339)
+    {
+        versions.push(Version {
+            sha: String::new(),
+            at: now,
+            subject: "uncommitted".into(),
+            text: current.to_string(),
+        });
+    }
+    versions
+}
+
+/// A unified diff of two texts by `git diff --no-index`, cut at 200 lines or 20 KB. A failure
+/// gives an empty diff.
+fn unified_diff(before: &str, after: &str) -> (String, bool) {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "kanbanr-diff-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    ));
+    let run = || -> Option<String> {
+        std::fs::create_dir_all(&dir).ok()?;
+        std::fs::write(dir.join("before"), format!("{}\n", before.trim_end())).ok()?;
+        std::fs::write(dir.join("after"), format!("{}\n", after.trim_end())).ok()?;
+        let out = std::process::Command::new("git")
+            .args([
+                "diff",
+                "--no-index",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-prefix",
+                "--",
+                "before",
+                "after",
+            ])
+            .current_dir(&dir)
+            .output()
+            .ok()?;
+        // Exit 1 means the texts differ; anything above is a failure.
+        (out.status.code().is_some_and(|c| c <= 1))
+            .then(|| String::from_utf8_lossy(&out.stdout).to_string())
+    };
+    let text = run();
+    let _ = std::fs::remove_dir_all(&dir);
+    let Some(text) = text else {
+        return (String::new(), false);
+    };
+    let mut out = String::new();
+    for (n, line) in text.lines().enumerate() {
+        if n >= DIFF_MAX_LINES || out.len() + line.len() + 1 > DIFF_MAX_BYTES {
+            return (out, true);
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    (out, false)
+}
+
+/// Flag `linked` if some change put in the code a name that the text, as it stood when the change
+/// was made, held. An edit after the change never closes the flag; only a check does. `versions`
+/// is the text's history, oldest first; with none (history unreadable) the old rule applies: a
+/// name changed after `changed_at` that the text holds now. Pure but for the diff.
+pub fn flag_for(
+    linked: &Linked,
+    current: &str,
+    versions: &[Version],
+    changed_at: &str,
+    changes: &[Change],
+) -> Option<Flag> {
+    if versions.is_empty() {
+        return flag_after(linked, current, changed_at, changes);
+    }
+    // Each change opens the flag by the names the text held when it was made.
+    let mut opening: Vec<(&Change, &Version, Vec<Hit>)> = Vec::new();
+    for c in changes {
+        let Some(at) = instant(&c.at) else {
+            continue;
+        };
+        let Some(v) = versions
+            .iter()
+            .rev()
+            .find(|v| instant(&v.at).is_some_and(|t| t <= at))
+        else {
+            continue;
+        };
+        let held = scan(&v.text, &c.names);
+        if !held.is_empty() {
+            opening.push((c, v, held));
+        }
+    }
+    if opening.is_empty() {
+        return None;
+    }
+    let mut held: BTreeSet<Name> = BTreeSet::new();
+    for (_, _, hits) in &opening {
+        held.extend(hits.iter().map(|h| h.name.clone()));
+    }
+    let now = scan(current, &held);
+    let hits: Vec<Hit> = held
+        .iter()
+        .map(|n| {
+            now.iter().find(|h| h.name == *n).cloned().unwrap_or(Hit {
+                name: n.clone(),
+                lines: Vec::new(),
+            })
+        })
+        .collect();
+    let mut commits: Vec<CommitRef> = opening
+        .iter()
+        .map(|(c, _, hits)| CommitRef {
+            sha: c.sha.clone(),
+            at: c.at.clone(),
+            item: c.item.clone(),
+            names: hits.iter().map(|h| h.name.clone()).collect(),
+        })
+        .collect();
+    commits.sort_by(|a, b| (&a.at, &a.sha).cmp(&(&b.at, &b.sha)));
+    commits.dedup();
+    let first = opening
+        .iter()
+        .filter_map(|(c, v, _)| instant(&c.at).map(|t| (t, *v)))
+        .min_by_key(|(t, _)| *t)?;
+    let edits: Vec<Edit> = versions
+        .iter()
+        .filter(|v| instant(&v.at).is_some_and(|t| t > first.0))
+        .map(|v| Edit {
+            sha: v.sha.clone(),
+            at: v.at.clone(),
+            subject: v.subject.clone(),
+        })
+        .collect();
+    let (diff, diff_truncated) = if edits.is_empty() {
+        (String::new(), false)
+    } else {
+        unified_diff(&first.1.text, current)
+    };
+    Some(Flag {
+        target: linked.target.clone(),
+        via: linked.via.clone(),
+        hits,
+        commits,
+        target_changed_at: changed_at.to_string(),
+        edits,
+        diff,
+        diff_truncated,
+    })
+}
+
+/// The rule before DEF-050, kept for a text whose history cannot be read: flag when a change
+/// after the text last changed names something the text holds now.
+fn flag_after(linked: &Linked, text: &str, changed_at: &str, changes: &[Change]) -> Option<Flag> {
     let since = instant(changed_at)?;
     let later: Vec<&Change> = changes
         .iter()
@@ -928,6 +1179,9 @@ pub fn flag_for(linked: &Linked, text: &str, changed_at: &str, changes: &[Change
         hits,
         commits,
         target_changed_at: changed_at.to_string(),
+        edits: Vec::new(),
+        diff: String::new(),
+        diff_truncated: false,
     })
 }
 
@@ -941,15 +1195,17 @@ impl Flag {
         }
     }
 
-    /// One line per name the text holds, for a terminal: the name, the commit that changed it and
-    /// when the text last changed. It says what to read, never that the text is wrong.
+    /// One line per name the text held, for a terminal: the name, the commit that changed it and
+    /// when the text last changed; then, when the text was edited since, one line that says the
+    /// flag stays open until checked. It says what to read, never that the text is wrong.
     pub fn lines(&self) -> Vec<String> {
         let day = |t: &str| t.get(..10).unwrap_or(t).to_string();
         let what = match self.target.kind {
             TargetKind::Doc | TargetKind::Adr => "doc",
             TargetKind::Item => "item",
         };
-        self.hits
+        let mut out: Vec<String> = self
+            .hits
             .iter()
             .map(|h| {
                 let name = match h.name.kind {
@@ -969,12 +1225,37 @@ impl Flag {
                         )
                     })
                     .unwrap_or_default();
+                let gone = if h.lines.is_empty() {
+                    " (no longer in the text)"
+                } else {
+                    ""
+                };
                 format!(
-                    "names {name}  {by}; this {what} last changed {}",
+                    "names {name}{gone}  {by}; this {what} last changed {}",
                     day(&self.target_changed_at)
                 )
             })
-            .collect()
+            .collect();
+        if !self.edits.is_empty() {
+            let shas: Vec<String> = self
+                .edits
+                .iter()
+                .map(|e| {
+                    if e.sha.is_empty() {
+                        "uncommitted".to_string()
+                    } else {
+                        e.sha.get(..7).unwrap_or(&e.sha).to_string()
+                    }
+                })
+                .collect();
+            out.push(format!(
+                "edited {} time{} since ({}), the flag stays open until checked",
+                self.edits.len(),
+                if self.edits.len() == 1 { "" } else { "s" },
+                shas.join(", ")
+            ));
+        }
+        out
     }
 }
 
@@ -1049,7 +1330,18 @@ pub fn flags_for_changes(
         let Some(at) = changed_at(board, &refs) else {
             continue;
         };
-        if let Some(flag) = flag_for(&l, &text, &at, changes) {
+        // The history of the text itself: an item's spec file, or the doc file.
+        let versions = match l.target.kind {
+            TargetKind::Item => files
+                .get(1)
+                .map(|spec| target_versions(board, spec, &text))
+                .unwrap_or_default(),
+            _ => files
+                .first()
+                .map(|file| target_versions(board, file, &text))
+                .unwrap_or_default(),
+        };
+        if let Some(flag) = flag_for(&l, &text, &versions, &at, changes) {
             flags.push(flag);
         }
     }
@@ -1222,6 +1514,17 @@ fn merge_flags(flags: Vec<Flag>) -> Vec<Flag> {
                     }
                 }
                 into.hits.sort_by(|a, b| a.name.cmp(&b.name));
+                for e in flag.edits {
+                    if !into.edits.iter().any(|k| k.sha == e.sha && k.at == e.at) {
+                        into.edits.push(e);
+                    }
+                }
+                into.edits
+                    .sort_by(|a, b| (&a.at, &a.sha).cmp(&(&b.at, &b.sha)));
+                if into.diff.is_empty() {
+                    into.diff = flag.diff;
+                    into.diff_truncated = flag.diff_truncated;
+                }
                 for c in flag.commits {
                     match into
                         .commits
@@ -1554,9 +1857,10 @@ mod tests {
         assert_eq!(lines(NameKind::Env, "KANBANR_BIN"), None);
     }
 
-    /// FTR-013 R-3: a text the item updated after the change was folded: not flagged.
+    /// DEF-050 R-1: with no readable history the old rule applies exactly (FTR-013 R-3): a text the
+    /// item updated after the change was folded is not flagged.
     #[test]
-    fn a_text_changed_after_the_commit_is_not_flagged() {
+    fn unreadable_history_falls_back_to_the_old_rule() {
         let l = Linked {
             target: Target {
                 kind: TargetKind::Doc,
@@ -1576,6 +1880,7 @@ mod tests {
         let before = flag_for(
             &l,
             text,
+            &[],
             "2026-11-02T09:00:00+00:00",
             std::slice::from_ref(&change),
         )
@@ -1588,6 +1893,7 @@ mod tests {
             flag_for(
                 &l,
                 text,
+                &[],
                 "2026-11-07T16:00:00+05:30",
                 std::slice::from_ref(&change)
             )
@@ -1597,13 +1903,163 @@ mod tests {
             flag_for(
                 &l,
                 text,
+                &[],
                 "2026-11-08T00:00:00+00:00",
                 std::slice::from_ref(&change)
             )
             .is_none()
         );
         // An unreadable time is never flagged.
-        assert!(flag_for(&l, text, "yesterday", &[change]).is_none());
+        assert!(flag_for(&l, text, &[], "yesterday", &[change]).is_none());
+    }
+
+    /// A board whose doc `design/data.md` has the given versions, each committed at its date, and
+    /// a code repository where FEAT-1 changed `--since` at `change_at`.
+    fn dated_fixture(
+        tag: &str,
+        versions: &[(&str, &str)],
+        change_at: &str,
+    ) -> (Store, PathBuf, PathBuf) {
+        let (store, dir) = board(tag);
+        let item = store
+            .add_feature("demo", "Drift", "Spec.", "M", Some("FEAT-1".into()))
+            .unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &item.code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Find drift".into(),
+                    affects_docs: vec!["design/data.md".into()],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        for (text, date) in versions {
+            store.write_doc("demo", "design/data.md", text).unwrap();
+            git_env(&dir, &["add", "-A"], None);
+            git_env(&dir, &["commit", "-q", "-m", "doc"], Some(date));
+        }
+        let repo = scratch(&format!("{tag}-code"));
+        git_env(&repo, &["init", "-q", "-b", "main"], None);
+        code_commit(
+            &repo,
+            "src/a.rs",
+            "let a = \"--since\";\n",
+            "add\n\nRefs: kanbanr:FEAT-1",
+            change_at,
+        );
+        (store, dir, repo)
+    }
+
+    /// DEF-050 R-1: an edit made after the change, to a text that already named it, leaves the
+    /// flag open, lists the edit and shows its diff.
+    #[test]
+    fn an_edit_to_a_flagged_text_leaves_the_flag_open_and_is_shown() {
+        let (store, dir, repo) = dated_fixture(
+            "edit-open",
+            &[
+                (
+                    "# Data\n\nRun with --since to look back.\n",
+                    "2026-11-01T10:00:00+00:00",
+                ),
+                (
+                    "# Data\n\nRun with --since, folded in.\n",
+                    "2026-11-06T10:00:00+00:00",
+                ),
+            ],
+            "2026-11-05T10:00:00+00:00",
+        );
+        let flags = flags_for_item(&store, "demo", "FEAT-1", &repo).unwrap();
+        assert_eq!(flags.len(), 1, "{flags:?}");
+        let f = &flags[0];
+        assert_eq!(f.edits.len(), 1, "{:?}", f.edits);
+        assert_eq!(f.edits[0].subject, "doc");
+        assert!(!f.diff.is_empty());
+        assert!(
+            f.diff.contains("-Run with --since to look back."),
+            "{}",
+            f.diff
+        );
+        assert!(
+            f.diff.contains("+Run with --since, folded in."),
+            "{}",
+            f.diff
+        );
+        assert!(!f.diff_truncated);
+        assert!(
+            f.lines()
+                .iter()
+                .any(|l| l.contains("stays open until checked"))
+        );
+        // An edit that removes the name keeps the flag, with the name marked gone.
+        store
+            .write_doc("demo", "design/data.md", "# Data\n\nNothing named now.\n")
+            .unwrap();
+        let flags = flags_for_item(&store, "demo", "FEAT-1", &repo).unwrap();
+        assert_eq!(flags.len(), 1, "{flags:?}");
+        assert!(flags[0].hits[0].lines.is_empty());
+        assert_eq!(flags[0].edits.len(), 2);
+        assert_eq!(flags[0].edits[1].sha, "");
+        assert!(flags[0].lines()[0].contains("no longer in the text"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-050 R-1: a text that gained the name only after the change is not flagged.
+    #[test]
+    fn a_text_written_after_the_change_is_not_flagged() {
+        let (store, dir, repo) = dated_fixture(
+            "written-after",
+            &[
+                ("# Data\n\nNothing named.\n", "2026-11-01T10:00:00+00:00"),
+                ("# Data\n\nRun with --since.\n", "2026-11-06T10:00:00+00:00"),
+            ],
+            "2026-11-05T10:00:00+00:00",
+        );
+        assert!(
+            flags_for_item(&store, "demo", "FEAT-1", &repo)
+                .unwrap()
+                .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-050 R-1: moving a file between folders changes no text, so it is no edit.
+    #[test]
+    fn a_move_between_status_folders_is_not_an_edit() {
+        let repo = scratch("move");
+        git_env(&repo, &["init", "-q", "-b", "main"], None);
+        let text = "# Spec\n\nUses --since.\n";
+        code_commit(&repo, "todo/X.md", text, "add", "2026-11-01T10:00:00+00:00");
+        std::fs::create_dir_all(repo.join("done")).unwrap();
+        git_env(&repo, &["mv", "todo/X.md", "done/X.md"], None);
+        git_env(
+            &repo,
+            &["commit", "-q", "-m", "move"],
+            Some("2026-11-02T10:00:00+00:00"),
+        );
+        let file = repo.join("done/X.md");
+        let versions = target_versions(&repo, &file, text);
+        assert_eq!(versions.len(), 1, "{versions:?}");
+        assert_eq!(versions[0].subject, "add");
+        // A real edit after the move is one.
+        std::fs::write(&file, "# Spec\n\nUses --since twice.\n").unwrap();
+        git_env(&repo, &["add", "-A"], None);
+        git_env(
+            &repo,
+            &["commit", "-q", "-m", "edit"],
+            Some("2026-11-03T10:00:00+00:00"),
+        );
+        let now = std::fs::read_to_string(&file).unwrap();
+        let versions = target_versions(&repo, &file, &now);
+        assert_eq!(versions.len(), 2, "{versions:?}");
+        // Working text that differs adds an uncommitted version; a missing file gives none.
+        let versions = target_versions(&repo, &file, "changed\n");
+        assert_eq!(versions.last().unwrap().sha, "");
+        assert!(target_versions(&repo, &repo.join("nope.md"), "x").is_empty());
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     /// FTR-013 R-3: a config key, check or status name in prose is quiet; in a code span or a
