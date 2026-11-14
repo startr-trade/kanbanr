@@ -1084,19 +1084,17 @@ mod tests {
         for _ in 0..3 {
             store.add_feature("demo", "T", "Spec.", "M", None).unwrap();
         }
-        for code in ["FEAT-002"] {
-            store
-                .set_feature_definition(
-                    "demo",
-                    code,
-                    Some(crate::models::FeatureDefinition {
-                        statement: "Agreed".into(),
-                        ..Default::default()
-                    }),
-                )
-                .unwrap();
-            store.approve_feature("demo", code, "Ada").unwrap();
-        }
+        store
+            .set_feature_definition(
+                "demo",
+                "FEAT-002",
+                Some(crate::models::FeatureDefinition {
+                    statement: "Agreed".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        store.approve_feature("demo", "FEAT-002", "Ada").unwrap();
         let p = store.load("demo").unwrap();
         assert!(
             p.feature("FEAT-002")
