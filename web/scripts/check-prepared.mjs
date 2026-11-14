@@ -143,7 +143,7 @@ const waiting = (state) => ({
   to: "production",
   direction: "again",
   cut: false,
-  confirm: true,
+  confirm: false,
   ships: true,
   awaiting: true,
   tag: { commit: sha, gate: "ci", state },

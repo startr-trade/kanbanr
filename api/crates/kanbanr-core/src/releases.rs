@@ -1692,7 +1692,7 @@ fn work_out(
     let cut = direction == Direction::Forward
         && current.is_none_or(|c| c < cut_stage)
         && target >= cut_stage;
-    let confirm = (direction == Direction::Forward && target > cut_stage) || awaiting;
+    let confirm = direction == Direction::Forward && target > cut_stage;
     // The cut into a last tag stage that a gate judges tags and waits: it ships on the result.
     let ships =
         (direction == Direction::Forward && target == last && !cadence.tag_waits()) || awaiting;
@@ -3449,6 +3449,19 @@ pub fn promote_with(
                 again
             } else {
                 format!("{again} — {reason}")
+            }
+        } else if w.plan.awaiting && reason.is_empty() {
+            // The evidence is on the board already: the passed result, with its run link.
+            let found = w.plan.tag.as_ref().and_then(|t| t.result.as_ref());
+            match found {
+                Some(r) if !r.url.is_empty() => format!("tag workflow passed: {}", r.url),
+                Some(r) => format!(
+                    "tag workflow passed: {} on {} at {}",
+                    r.name,
+                    short(&r.commit),
+                    r.at
+                ),
+                None => "tag workflow passed".to_string(),
             }
         } else {
             reason.to_string()
@@ -7053,7 +7066,7 @@ pub(crate) mod tests {
         let (store, dir, repo, sha) = tagged("def049-await", TAG_LAST);
         let plan = awaiting_plan(&store, &repo);
         assert!(
-            plan.awaiting && plan.confirm && plan.ships && !plan.cut,
+            plan.awaiting && !plan.confirm && plan.ships && !plan.cut,
             "{plan:#?}"
         );
         assert!(plan.steps.is_empty() && !plan.ready);
@@ -7071,6 +7084,12 @@ pub(crate) mod tests {
         assert_eq!(done.release.state, super::ReleaseState::Shipped);
         assert_eq!(done.release.stage, "tag");
         assert_eq!(done.release.shipped_by, "Ada");
+        // One click, nothing typed: the reason is filled from the passed result.
+        let reason = &done.release.stages.last().unwrap().reason;
+        assert!(
+            reason.starts_with("tag workflow passed: ci on "),
+            "{reason}"
+        );
         assert!(done.notes.is_some() && !done.release.notes_doc.is_empty());
         assert!(!done.release.shipped.is_empty());
         clean(&dir, &repo);
