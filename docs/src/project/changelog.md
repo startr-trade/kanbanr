@@ -52,7 +52,8 @@ All notable changes to kanbanr are documented here. The format follows
   stages rerun alone, with caches for the project's stack.
 - **The TOGAF guide says when to approve, how to use a delegation, and what to set before a release
   (DOC-001).** You approve in Vision, a granted delegation needs Mode set to delegated, and the
-  release files and CI workflows are set up before the first candidate.
+  release files and CI workflows are set up before the first candidate. Under Claude Code's auto
+  mode, a delegated sign-off also needs a permission rule for `kanbanr signoff`.
 
 ### Fixed
 

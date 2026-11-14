@@ -15,7 +15,9 @@ You don't need to learn any commands:
   **docs-folded** sign-off (DLG-001), besides any Claude proposes when you ask. You **Grant** each one
   on the **Review** page, under "Decisions here". A granted delegation does nothing until you set
   **Mode** to **delegated** there and click **Change**. Whatever Claude decides under it comes back
-  there for you to keep or undo.
+  there for you to keep or undo. If Claude Code runs in auto mode, its safety check may stop Claude
+  taking a delegated decision. Claude then prepares the decision for your click instead. To let it
+  through, add a permission rule for `kanbanr signoff` to the project's Claude Code settings.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [TOGAF from the command line](togaf-cli.md).
