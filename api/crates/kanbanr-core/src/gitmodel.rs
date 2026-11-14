@@ -726,13 +726,14 @@ pub fn move_item(
     };
 
     // Board.
-    let (moved, warnings) = match store.move_feature_gated_in(id, code, to, reason, Some(repo)) {
-        Ok(done) => done,
-        Err(e) => {
-            undo_line(old.as_deref());
-            return Err(e);
-        }
-    };
+    let (moved, warnings) =
+        match store.move_feature_gated_in_as(id, code, to, reason, Some(repo), origin) {
+            Ok(done) => done,
+            Err(e) => {
+                undo_line(old.as_deref());
+                return Err(e);
+            }
+        };
     let forward_needed = line.strip_prefix(RELEASE_PREFIX).map(str::to_string);
     let forward_next = forward_needed.as_deref().map(|version| {
         forward_step(
@@ -1390,6 +1391,158 @@ mod tests {
         .unwrap();
         assert_eq!(moved.feature.status, "Completed");
         assert!(moved.merged.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// A git-model project whose item sits in Scheduled, finished and on its branch, with the
+    /// `docs-folded` sign-off required to complete and not given: the move to Completed integrates.
+    fn gated_integrating(tag: &str) -> (Store, std::path::PathBuf, std::path::PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("kanbanr-gm-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let mut cadence = store.load("demo").unwrap().config.cadence;
+        cadence.git_model = true;
+        cadence.sprints = false;
+        cadence.releases = false;
+        store.set_cadence("demo", None, cadence).unwrap();
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::charter::Charter {
+                purpose: "p".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let gate = crate::config::Gate {
+            signoffs: vec!["docs-folded".into()],
+            ..Default::default()
+        };
+        store
+            .set_gates("demo", [("Completed".to_string(), gate)].into())
+            .unwrap();
+        let f = store
+            .add_feature("demo", "Gated", "# x", "M", None)
+            .unwrap();
+        let code = f.code.clone();
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "s".into(),
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        store.approve_feature("demo", &code, "Ada").unwrap();
+        store.move_feature("demo", &code, "Scheduled").unwrap();
+        let list = store.add_todo_list("demo", &code, "work", None).unwrap();
+        store
+            .add_task("demo", &code, &list.code, "one", None)
+            .unwrap();
+        store
+            .set_task_state(
+                "demo",
+                &code,
+                &list.code,
+                "T1",
+                crate::models::TaskState::Completed,
+            )
+            .unwrap();
+        let repo = crate::coderepo::tests::scratch_repo(tag);
+        let branch = crate::scm::branch_for(
+            store.load("demo").unwrap().config.branch_pattern(),
+            &code,
+            &f.title,
+        );
+        crate::coderepo::git(&repo, &["checkout", "-q", "-b", &branch]).unwrap();
+        crate::coderepo::tests::commit_file(&repo, "a.rs", "v1\n", "work");
+        (store, dir, repo, code)
+    }
+
+    /// DEF-054 R-1: an override made through a git-model move (the merge) records its origin, so it
+    /// waits on the Review page for the person to ratify and the item does not ship until then.
+    #[test]
+    fn git_model_override_waits_for_ratification() {
+        let (store, dir, repo, code) = gated_integrating("gm-ovr");
+        let moved = move_item(
+            &store,
+            "demo",
+            &code,
+            "Completed",
+            Some("the sign-off is not needed here"),
+            Some(&repo),
+            "Claude",
+            "conversation",
+        )
+        .unwrap();
+        assert_eq!(moved.feature.status, "Completed");
+        assert!(moved.merged.is_some());
+        let project = store.load("demo").unwrap();
+        let f = project.feature(&code).unwrap();
+        let last = f.history.last().unwrap();
+        assert_eq!(last.origin, "conversation");
+        assert_eq!(crate::readiness::open_overrides(f).len(), 1);
+        let charter = crate::charter::load(&store, "demo").unwrap();
+        let why =
+            crate::releases::ship_to(&project, &charter, &crate::readiness::Context::default(), f)
+                .unwrap_err();
+        assert!(why.contains("ratify"), "{why}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-054 R-1: a git-model move that integrates records the origin it was given. The store
+    /// records an origin only on an override (a plain move leaves it empty), so this is an override
+    /// by a delegated agent: its origin is kept, and a person's own (empty origin) override is not
+    /// held for ratification.
+    #[test]
+    fn git_model_move_records_its_origin() {
+        let (store, dir, repo, code) = gated_integrating("gm-origin");
+        let moved = move_item(
+            &store,
+            "demo",
+            &code,
+            "Completed",
+            Some("the sign-off is not needed here"),
+            Some(&repo),
+            "Claude",
+            "delegated",
+        )
+        .unwrap();
+        assert!(moved.merged.is_some());
+        let project = store.load("demo").unwrap();
+        let f = project.feature(&code).unwrap();
+        assert_eq!(f.history.last().unwrap().origin, "delegated");
+        assert_eq!(crate::readiness::open_overrides(f).len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+
+        let (store, dir, repo, code) = gated_integrating("gm-origin-own");
+        move_item(
+            &store,
+            "demo",
+            &code,
+            "Completed",
+            Some("the sign-off is not needed here"),
+            Some(&repo),
+            "Ada",
+            "",
+        )
+        .unwrap();
+        let project = store.load("demo").unwrap();
+        let f = project.feature(&code).unwrap();
+        assert_eq!(f.history.last().unwrap().origin, "");
+        assert!(crate::readiness::open_overrides(f).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }
