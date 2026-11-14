@@ -263,10 +263,11 @@ mod tests {
             ..Default::default()
         };
         let first = record(&store, "demo", &r).unwrap();
+        // By components, so Windows' `\\` separator compares too (DEF-062).
         assert!(
-            first
-                .to_string_lossy()
-                .ends_with("manual/20261112T110200Z-FEAT-002-R-17.yaml"),
+            first.ends_with(
+                std::path::Path::new("manual").join("20261112T110200Z-FEAT-002-R-17.yaml")
+            ),
             "{first:?}"
         );
         // The same second keeps both files, never rewriting the first.
