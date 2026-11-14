@@ -1293,6 +1293,10 @@ pub struct ReleasePlan {
     pub confirm: bool,
     /// This promotion enters the last stage: it ships the release (FTR-026).
     pub ships: bool,
+    /// This plan is the release waiting at the last stage for its tag workflow's result: it
+    /// ships once that is recorded as passed (DEF-049).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub awaiting: bool,
     /// The recorded CI result for the tag, once the release is tagged and not shipped (FTR-026).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<TagResult>,
@@ -1655,6 +1659,12 @@ fn work_out(
     }
     let from = release.stage.clone();
     let current = stages.iter().position(|s| *s == from);
+    // Tagged at the last stage and waiting for the tag workflow: asked for no stage, the plan is
+    // the wait, and it ships once the result is passed (DEF-049).
+    let awaiting = to.map(str::trim).is_none_or(str::is_empty)
+        && release.waits_on_tag()
+        && cadence.tag_waits()
+        && current.is_some_and(|c| c + 1 == stages.len());
     let target = match to.map(str::trim).filter(|s| !s.is_empty()) {
         Some(name) => stages.iter().position(|s| s == name).ok_or_else(|| {
             CoreError::Unsupported(format!(
@@ -1662,6 +1672,7 @@ fn work_out(
                 stages.join(", ")
             ))
         })?,
+        None if awaiting => current.unwrap_or(0),
         None => current.map_or(0, |c| c + 1),
     };
     let Some(stage) = stages.get(target).cloned() else {
@@ -1681,8 +1692,10 @@ fn work_out(
     let cut = direction == Direction::Forward
         && current.is_none_or(|c| c < cut_stage)
         && target >= cut_stage;
-    let confirm = direction == Direction::Forward && target > cut_stage;
-    let ships = direction == Direction::Forward && target == last;
+    let confirm = (direction == Direction::Forward && target > cut_stage) || awaiting;
+    // The cut into a last tag stage that a gate judges tags and waits: it ships on the result.
+    let ships =
+        (direction == Direction::Forward && target == last && !cadence.tag_waits()) || awaiting;
     let entered: Vec<usize> = match direction {
         Direction::Forward => (current.map_or(0, |c| c + 1)..=target).collect(),
         Direction::Again => vec![target],
@@ -1746,6 +1759,12 @@ fn work_out(
                 requires.push((c, tag_stage.clone()));
             }
         }
+    }
+    if awaiting {
+        // Nothing runs: the one thing needed is the tag's passed result.
+        actions.clear();
+        afters.clear();
+        requires = vec![(ReleaseCheck::TagPassed, stage.clone())];
     }
     // Every forward move needs the release's branch: a move that skipped the stage making it, or
     // a process whose one stage is also the cut, makes it first (FEAT-184, R-4).
@@ -2593,7 +2612,7 @@ fn work_out(
             "moving {version} back from {from} to {stage} needs a reason (--reason)"
         ));
     }
-    if direction == Direction::Again && steps.iter().all(|s| s.noop) && !empty {
+    if direction == Direction::Again && !awaiting && steps.iter().all(|s| s.noop) && !empty {
         missing.push(format!("{version} is already at {stage}"));
     }
     for c in conditions.iter().filter(|c| !c.holds) {
@@ -2617,7 +2636,10 @@ fn work_out(
             format!("Promote to {}", stages[i])
         }
     };
+    let tag_ready = missing.is_empty();
     let button = match direction {
+        _ if awaiting && tag_ready => format!("Ship {version}"),
+        _ if awaiting => "Waiting for the tag workflow".to_string(),
         Direction::Forward => button_for(target),
         Direction::Again => format!("Promote to {stage} again"),
         Direction::Back => format!("Move back to {stage}"),
@@ -2635,6 +2657,13 @@ fn work_out(
                 "run your CI on the tag and record the result, then {}",
                 button_for(target + 1)
             );
+            if push.is_empty() {
+                then
+            } else {
+                format!("{push}, {then}")
+            }
+        } else if cadence.tag_waits() {
+            let then = "let the tag workflow run, then confirm its result".to_string();
             if push.is_empty() {
                 then
             } else {
@@ -2698,6 +2727,7 @@ fn work_out(
         cut,
         confirm,
         ships,
+        awaiting,
         tag: tag_result(store, id, cadence, &release),
         returned: returned.clone(),
         button,
@@ -3412,7 +3442,7 @@ pub fn promote_with(
         origin: opts.origin.to_string(),
         accepted_untested: untested_refs,
         extra: Default::default(),
-        reason: if w.direction == Direction::Again {
+        reason: if w.direction == Direction::Again && !w.plan.awaiting {
             let names: Vec<&str> = taken.iter().map(|s| s.action.name()).collect();
             let again = format!("again: {}", names.join(", "));
             if reason.is_empty() {
@@ -3603,7 +3633,7 @@ pub fn promote_with(
                 // The notes that shipped, when there are some at the tip, replace the generated
                 // text; a read that fails keeps the generated notes.
                 let shipped_notes =
-                    repo.and_then(|r| shipped_notes_at(r, store, id, &w, &cut.release));
+                    repo.and_then(|r| shipped_notes_at(r, store, id, &w.branch, &cut.release));
                 let wrote = shipped_notes.is_some();
                 if let Some(text) = shipped_notes {
                     notes = text;
@@ -3657,7 +3687,7 @@ fn shipped_notes_at(
     repo: &Path,
     store: &Store,
     id: &str,
-    w: &Worked,
+    branch: &str,
     release: &Release,
 ) -> Option<String> {
     let project = with_recorded_notes(&store.load_meta(id).ok()?, release);
@@ -3666,7 +3696,7 @@ fn shipped_notes_at(
         .ok()?;
     let path = crate::releaseprep::expand(template, &ph);
     crate::releaseprep::check_repo_path(&path).ok()?;
-    let tip = coderepo::rev_parse(repo, &w.branch).ok()?;
+    let tip = coderepo::rev_parse(repo, branch).ok()?;
     coderepo::read_blob(repo, &tip, &path)
         .ok()
         .flatten()
@@ -3681,7 +3711,9 @@ fn refusal(w: &Worked) -> CoreError {
     if w.empty {
         return CoreError::Unsupported(empty_release(&p.version));
     }
-    if p.needs_reason || (w.direction == Direction::Again && p.steps.iter().all(|s| s.noop)) {
+    if p.needs_reason
+        || (w.direction == Direction::Again && !p.awaiting && p.steps.iter().all(|s| s.noop))
+    {
         let mut said = p.missing[0].clone();
         // Who moved it there first, when, and from where (DEF-028).
         if !p.needs_reason
@@ -6824,13 +6856,57 @@ pub(crate) mod tests {
 
     // ---- DEF-049: a release is shipped only once its tag workflow has passed ----
 
-    /// DEF-049 R-1: only a last tag stage that a gate judges waits; no gate, or a stage after the
-    /// tag, is as before.
+    /// The plan for the release as it waits, asked for no stage.
+    fn awaiting_plan(store: &Store, repo: &Path) -> super::ReleasePlan {
+        super::plan_promotion(store, "shop", "v1", None, "", Some(repo), super::Fetch::No).unwrap()
+    }
+
+    /// DEF-049 R-1: the cut of a last tag stage that a gate judges tags and holds the release:
+    /// nothing ships, the items stay, and the item reads as tagged.
+    #[test]
+    fn a_cut_release_reads_as_tagged_until_its_tag_workflow_passes() {
+        let (store, dir, repo) = staged("def049-cut", TAG_LAST);
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        let before = store.load("shop").unwrap().features.clone();
+        let cut = go(&store, &repo, "tag");
+        assert_eq!(cut.tagged, "v1");
+        assert!(cut.notes.is_none() && cut.preview.is_empty());
+        let r = v1(&store);
+        assert_eq!(r.state, super::ReleaseState::Planned);
+        assert!(r.waits_on_tag() && !r.tagged_at.is_empty());
+        assert_eq!(r.tag_commit, coderepo::rev_parse(&repo, "v1").unwrap());
+        assert_eq!((r.stage.as_str(), r.shipped_at.as_str()), ("tag", ""));
+        assert!(r.shipped.is_empty() && r.notes_doc.is_empty());
+        let project = store.load("shop").unwrap();
+        let held = |fs: &[crate::FeatureItem]| {
+            fs.iter()
+                .map(|f| (f.code.clone(), f.status.clone(), f.release.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(held(&before), held(&project.features));
+        let item = project
+            .features
+            .iter()
+            .find(|f| f.release.as_deref() == Some("v1"))
+            .unwrap();
+        let label = super::release_line(&project, &super::load(&store, "shop").unwrap(), item);
+        assert_eq!(label.as_deref(), Some("Tagged in v1, not released yet"));
+        clean(&dir, &repo);
+    }
+
+    /// DEF-049 R-1: the rule names the last tag stage with a judging gate; the cut's plan tags and
+    /// does not ship, while a project with no commit gate ships at the tag as before.
     #[test]
     fn a_tag_stage_that_is_last_waits_only_when_a_gate_judges_the_tag() {
         let waits = |store: &Store| store.load_meta("shop").unwrap().config.cadence.tag_waits();
         let (store, dir, repo) = staged("def049-rule-last", TAG_LAST);
         assert!(waits(&store));
+        go(&store, &repo, "candidate");
+        go(&store, &repo, "main");
+        let plan = plan_to(&store, &repo, "tag");
+        assert!(plan.cut && !plan.ships && !plan.awaiting, "{plan:#?}");
+        assert!(plan.after.contains("tag workflow"), "{}", plan.after);
         clean(&dir, &repo);
         let (store, dir, repo) = staged("def049-rule-after", STAGED);
         assert!(!waits(&store), "a stage follows the tag");
@@ -6838,6 +6914,81 @@ pub(crate) mod tests {
         let (store, dir, repo) = board_and_repo("def049-rule-nogate");
         configure(&store, TAG_LAST);
         assert!(!waits(&store), "no commit gate names the tag");
+        let plan = plan_to(&store, &repo, "tag");
+        assert!(plan.cut && plan.ships, "ships at the tag as before");
+        clean(&dir, &repo);
+    }
+
+    /// DEF-049 R-1: the waiting release has a plan of its own; it is ready on a passed result and
+    /// `promote` then ships it.
+    #[test]
+    fn the_awaiting_plan_ships_by_promote_when_the_result_is_passed() {
+        let (store, dir, repo, sha) = tagged("def049-await", TAG_LAST);
+        let plan = awaiting_plan(&store, &repo);
+        assert!(
+            plan.awaiting && plan.confirm && plan.ships && !plan.cut,
+            "{plan:#?}"
+        );
+        assert!(plan.steps.is_empty() && !plan.ready);
+        assert_eq!(plan.button, "Waiting for the tag workflow");
+        assert_eq!(plan.tag.as_ref().map(|t| t.state.as_str()), Some("none"));
+        let refused = super::promote(&store, "shop", "v1", None, "Ada", "", Some(&repo))
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("tag_passed"), "{refused}");
+        now_result(&store, &sha, true);
+        let plan = awaiting_plan(&store, &repo);
+        assert!(plan.ready, "{plan:#?}");
+        assert_eq!(plan.button, "Ship v1");
+        let done = super::promote(&store, "shop", "v1", None, "Ada", "", Some(&repo)).unwrap();
+        assert_eq!(done.release.state, super::ReleaseState::Shipped);
+        assert_eq!(done.release.stage, "tag");
+        assert_eq!(done.release.shipped_by, "Ada");
+        assert!(done.notes.is_some() && !done.release.notes_doc.is_empty());
+        assert!(!done.release.shipped.is_empty());
+        clean(&dir, &repo);
+    }
+
+    /// DEF-049 R-2: a failed result keeps the release tagged and names the patch release; a later
+    /// pass for the same commit (a re-run) lets it ship.
+    #[test]
+    fn a_failed_tag_workflow_keeps_the_release_tagged_and_names_a_patch() {
+        let (store, dir, repo, sha) = tagged("def049-failed", TAG_LAST);
+        now_result(&store, &sha, false);
+        let plan = awaiting_plan(&store, &repo);
+        assert!(!plan.ready && plan.awaiting, "{plan:#?}");
+        assert_eq!(plan.tag.as_ref().map(|t| t.state.as_str()), Some("failed"));
+        assert!(
+            plan.missing
+                .iter()
+                .any(|m| m.contains("start a patch release")),
+            "{:?}",
+            plan.missing
+        );
+        assert!(super::promote(&store, "shop", "v1", None, "Ada", "", Some(&repo)).is_err());
+        assert!(v1(&store).waits_on_tag());
+        // The re-run passes on the same commit: the newest result stands, and it ships.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        now_result(&store, &sha, true);
+        assert!(awaiting_plan(&store, &repo).ready);
+        clean(&dir, &repo);
+        // And the way on from a failure is the patch release.
+        let (store, dir, repo, sha) = tagged("def049-failed-patch", TAG_LAST);
+        now_result(&store, &sha, false);
+        let made = super::patch_from_failed_tag(
+            &store,
+            "shop",
+            "v1",
+            "v1.0.1",
+            "Ada",
+            "",
+            "red on the tag",
+            Some(&repo),
+            "",
+        )
+        .unwrap();
+        assert_eq!(made.release.parent, "v1");
+        assert_eq!(v1(&store).superseded_by, "v1.0.1");
         clean(&dir, &repo);
     }
 
@@ -6992,6 +7143,13 @@ pub(crate) mod tests {
         let change = release.stages.last().unwrap();
         assert_eq!(change.stage, "production");
         assert_eq!(change.accepted_untested, refs);
+        // The cut of a last tag stage that a gate judges waits for the tag workflow (DEF-049): the
+        // acceptance stays on the tag's stage change and the notes come when the release ships.
+        assert!(release.waits_on_tag());
+        now_result(&store, &release.tag_commit, true);
+        let shipped = super::promote(&store, "shop", "v1", None, "Ada", "", Some(&repo)).unwrap();
+        let release = v1(&store);
+        assert_eq!(shipped.release.state, super::ReleaseState::Shipped);
         let notes = store.read_doc("shop", &release.notes_doc).unwrap();
         assert!(notes.contains("## Not verified in this release"), "{notes}");
         assert!(notes.contains(&format!("{code} R-2")), "{notes}");
