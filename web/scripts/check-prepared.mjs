@@ -7,7 +7,7 @@
 //
 // Usage: npm run check:prepared
 import { readFileSync } from "node:fs";
-import { EDITABLE, openFor, preparedLine, sourceHref } from "../src/prepared.ts";
+import { EDITABLE, editedWhileFlagged, openFor, preparedLine, sourceHref } from "../src/prepared.ts";
 
 const problems = [];
 const expect = (name, got, want) => {
@@ -134,8 +134,39 @@ if (!/openFor\(prepared, "promotion"/.test(button) || !/<PreparedPanel/.test(but
 }
 if (!/expect: tip/.test(button)) problems.push("ReleasesPage.tsx: a prepared promotion is not pinned to the release tip shown");
 
+// web::drift_edits_shown (DEF-050 R-1): a flagged text that was edited shows the edits and the diff
+// on the Review entry; the edit is only shown, never a way to settle the flag.
+expect("an unedited flag shows no edits", editedWhileFlagged({}), null);
+expect("an empty edit list shows no edits", editedWhileFlagged({ edits: [], diff: "x" }), null);
+expect(
+  "an edited flag counts its edits, shortens their shas and carries the diff",
+  editedWhileFlagged({
+    edits: [
+      { sha: "0123456789abcdef", at: "2026-11-06T10:00:00Z", subject: "doc" },
+      { sha: "", at: "2026-11-07T10:00:00Z", subject: "uncommitted" },
+    ],
+    diff: "-a\n+b\n",
+    diff_truncated: true,
+  }),
+  { count: 2, shas: ["0123456", "uncommitted"], diff: "-a\n+b\n", truncated: true },
+);
+expect(
+  "a diff that was not cut is not marked truncated",
+  editedWhileFlagged({ edits: [{ sha: "abcdef0123", at: "", subject: "" }] })?.truncated,
+  false,
+);
+if (!/<EditedWhileFlagged flag=\{f\}/.test(review) || !/<EditedWhileFlagged flag=\{t\.flag\}/.test(review)) {
+  problems.push("ReviewPage.tsx: the edits are not shown in both the left-to-check and the checked lists");
+}
+const editedBlock = between(review, "function EditedWhileFlagged(", "/** How a flag is named");
+if (!/Edited while flagged/.test(editedBlock) || !/<details>/.test(editedBlock) || !/<pre>\{edited\.diff\}/.test(editedBlock)) {
+  problems.push("ReviewPage.tsx: EditedWhileFlagged does not show 'Edited while flagged' and the diff in a <details>");
+}
+if (/<input/.test(editedBlock)) problems.push("ReviewPage.tsx: EditedWhileFlagged renders an <input>: an edit settles nothing");
+
 if (problems.length) {
   for (const p of problems) console.error(`web::prepared — ${p}`);
   process.exit(1);
 }
+console.log("web::drift_edits_shown — an edit to a flagged text is shown with its diff, and settles nothing.");
 console.log("web::prepared — a prepared record shows filled in beside its button, with its sources as links, and is edited or rejected only on request.");

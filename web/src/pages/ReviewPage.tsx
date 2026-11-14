@@ -11,7 +11,7 @@ import type { Adr, DriftFlag, PendingReview, PlannedRelease, SettledText, SpecBr
 import { docsFoldedOffer } from "../textsToCheck";
 import { approveBlocker, checkBlocks, type DiagramProblem } from "../diagramCheck";
 import { PreparedPanel } from "../components/PreparedPanel";
-import { openFor } from "../prepared";
+import { editedWhileFlagged, openFor } from "../prepared";
 import { lastResultLine, manualCommand, manualRows, type ManualRow } from "../manualTests";
 import type { DecisionsView, DelegationView, PreparedView, Waiting } from "../types";
 
@@ -1203,7 +1203,7 @@ function Brief({
                 {f.hits.map((h, i) => (
                   <span key={i}>
                     {i ? "; " : ""}
-                    <code>{h.name.text}</code> (line {h.lines.join(", ")})
+                    <code>{h.name.text}</code> ({h.lines.length ? `line ${h.lines.join(", ")}` : "no longer in the text"})
                   </span>
                 ))}
                 {f.commits[0] ? (
@@ -1212,6 +1212,7 @@ function Brief({
                     — changed by {f.commits[0].item}, {f.commits[0].sha.slice(0, 7)}
                   </span>
                 ) : null}
+                <EditedWhileFlagged flag={f} />
               </li>
             ))}
           </ul>
@@ -1242,6 +1243,7 @@ function Brief({
                 )}{" "}
                 — {t.check.by}
                 {t.check.at ? `, ${t.check.at.slice(0, 10)}` : ""}
+                <EditedWhileFlagged flag={t.flag} />
               </li>
             ))}
           </ul>
@@ -1414,6 +1416,34 @@ function Changes({
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * The edits made to a flagged text while its flag was open, with their diff (DEF-050). Shown so the
+ * person who signs sees a text that changed while flagged; the edit settles nothing.
+ */
+function EditedWhileFlagged({ flag }: { flag: DriftFlag }) {
+  const edited = editedWhileFlagged(flag);
+  if (!edited) return null;
+  return (
+    <div className="drift-edited">
+      <strong>Edited while flagged</strong>: {edited.count} {edited.count === 1 ? "edit" : "edits"} (
+      {flag.edits?.map((e, i) => (
+        <span key={`${e.sha}-${e.at}`}>
+          {i ? "; " : ""}
+          <code>{edited.shas[i]}</code> {e.at.slice(0, 10)} {e.subject}
+        </span>
+      ))}
+      ). Only Claude&apos;s check settles this flag, not the edit.
+      {edited.diff ? (
+        <details>
+          <summary>Diff of the edits</summary>
+          <pre>{edited.diff}</pre>
+          {edited.truncated ? <p>The diff is cut short.</p> : null}
+        </details>
+      ) : null}
     </div>
   );
 }
