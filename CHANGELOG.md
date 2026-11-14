@@ -57,6 +57,8 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **The monitor updates live for a board under a linked folder on macOS (DEF-062).** macOS
+  reports a change under the folder's resolved path, which the watcher did not recognise.
 - **A sprint's release is made from that sprint, even after an earlier release was brought forward
   into the previous one (DEF-059).** A closed sprint whose work is all in main no longer counts as
   unreleased because of the merges that brought a release forward, so the second sprint's release

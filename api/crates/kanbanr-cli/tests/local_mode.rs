@@ -10297,8 +10297,12 @@ fn gates_route_records_what_the_page_posts() {
     let where_ = run_in(&base, &work, &["where", "--json"]);
     let w: serde_json::Value = serde_json::from_slice(&where_.stdout).unwrap();
     let data_dir = std::path::PathBuf::from(w["data_dir"].as_str().unwrap());
+    // Resolved on both sides: macOS reports /private/var for /var, Windows the long form of a
+    // short name (DEF-062).
+    let resolved =
+        |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     assert!(
-        data_dir.starts_with(&base),
+        resolved(&data_dir).starts_with(resolved(&base)),
         "the test's own board: {data_dir:?}"
     );
     let store = kanbanr_core::Store::new(data_dir);

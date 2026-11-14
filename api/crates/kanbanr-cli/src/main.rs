@@ -13072,10 +13072,20 @@ Refs: kanbanr:FEAT-082/R-1""#;
         let wt = scratch_wt(Path::new("/work/tree"));
         let at = b.0.display();
         let real = outside.display();
+        // The link exists only on Unix, so only there is it a link out of the temporary
+        // directory; on Windows it would name a plain folder inside it (DEF-062).
+        let link = if cfg!(unix) {
+            vec![format!("kanbanr --data-dir {at}/link board")]
+        } else {
+            Vec::new()
+        };
         for command in [
             format!("kanbanr --data-dir {real} board"),
             "kanbanr --data-dir /elsewhere board".to_string(),
-            format!("kanbanr --data-dir {at}/link board"),
+        ]
+        .into_iter()
+        .chain(link)
+        .chain([
             "kanbanr --data-dir $(mktemp -d) board".to_string(),
             "kanbanr --data-dir $HOME/board board".to_string(),
             "kanbanr --data-dir board".to_string(),
@@ -13084,7 +13094,7 @@ Refs: kanbanr:FEAT-082/R-1""#;
             "export KANBANR_DATA_DIR=/elsewhere".to_string(),
             "KANBANR_PROJECT=other kanbanr board".to_string(),
             "export KANBANR_PROJECT=other".to_string(),
-        ] {
+        ]) {
             let why = scoped_command_refusal(&command, Path::new("/work/tree"), &wt, None)
                 .unwrap_or_else(|| panic!("{command} was allowed"));
             assert!(why.contains("never another"), "{command}: {why}");
@@ -13137,7 +13147,6 @@ Refs: kanbanr:FEAT-082/R-1""#;
             "cd \"$TMPDIR/b\" && git status",
             "git -C $TMPDIR/b status",
             "cd $TMPDIR && kanbanr board",
-            "cd /work/tree/sub && git status",
         ] {
             assert_eq!(
                 scoped_command_refusal(command, base, &wt, None),
@@ -13145,6 +13154,12 @@ Refs: kanbanr:FEAT-082/R-1""#;
                 "{command}"
             );
         }
+        // `/work/tree` is an absolute path only on Unix; on Windows it has no drive (DEF-062).
+        #[cfg(unix)]
+        assert_eq!(
+            scoped_command_refusal("cd /work/tree/sub && git status", base, &wt, None),
+            None
+        );
         let temp = kanbanr_core::agentscope::temp_root();
         for command in [
             "cd /usr && git status",
