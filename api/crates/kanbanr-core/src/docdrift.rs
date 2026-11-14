@@ -1857,10 +1857,20 @@ mod tests {
         assert_eq!(lines(NameKind::Env, "KANBANR_BIN"), None);
     }
 
-    /// DEF-050 R-1: with no readable history the old rule applies exactly (FTR-013 R-3): a text the
-    /// item updated after the change was folded is not flagged.
+    /// FTR-013 R-3: a text the item updated after the change was folded: not flagged.
+    #[test]
+    fn a_text_changed_after_the_commit_is_not_flagged() {
+        old_rule_cases();
+    }
+
+    /// DEF-050 R-1: with no readable history the old rule applies exactly (FTR-013 R-3).
     #[test]
     fn unreadable_history_falls_back_to_the_old_rule() {
+        old_rule_cases();
+    }
+
+    /// The old rule's cases, with no versions given (so the old rule is the one that applies).
+    fn old_rule_cases() {
         let l = Linked {
             target: Target {
                 kind: TargetKind::Doc,
