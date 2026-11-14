@@ -376,6 +376,9 @@ pub struct Context {
     /// The project's doc folder, for [`Check::DocsUpdated`] (FEAT-180). Its history is read only
     /// when that check is evaluated, and only for items that declare docs.
     pub docs_dir: Option<std::path::PathBuf>,
+    /// The project's id, to tell its own `/p/<project>/docs/file/...` links from another's
+    /// (DEF-047). Empty reads no links.
+    pub project: String,
     /// What the coverage rules' source docs reference (FEAT-197), read only when the project has
     /// rules and some gate asks for `docs_cover`.
     pub coverage: Option<std::sync::Arc<crate::coverage::Snapshot>>,
@@ -445,6 +448,7 @@ impl Context {
             Vec::new()
         };
         Context {
+            project: id.to_string(),
             sprints_off: !config.cadence.sprints,
             sprint_starts: all_sprints
                 .iter()
@@ -1205,6 +1209,7 @@ pub fn evaluate_in(
         && let Some(docs) = ctx.docs_dir.as_deref()
     {
         gaps.extend(docs_updated_gaps(feature, docs, &ctx.history));
+        gaps.extend(linked_docs_gaps(feature, docs, ctx));
     }
     // An override Claude made waits for the person to ratify it, even on an agreed item
     // (DEF-043). Unagreed, the "started without approval" gap already asks.
@@ -1529,6 +1534,36 @@ pub(crate) fn docs_updated_gaps(
         })
         .unwrap_or_default();
     docs_unchanged_gaps(feature, &keys, docs, history, "declared in affects_docs")
+}
+
+/// The board docs the Design links under `Affects docs` that the item must change and does not
+/// already declare, and have not changed since it entered its stage (DEF-047). A doc the Design
+/// only reads (its line says `unchanged`) is not judged. No project id reads no links.
+pub(crate) fn linked_docs_gaps(
+    feature: &FeatureItem,
+    docs: &std::path::Path,
+    ctx: &Context,
+) -> Vec<Gap> {
+    if ctx.project.is_empty() {
+        return Vec::new();
+    }
+    let declared: Vec<String> = feature
+        .definition
+        .as_ref()
+        .map(|d| d.affects_docs.iter().map(|x| affects_doc_key(x)).collect())
+        .unwrap_or_default();
+    let linked: Vec<String> =
+        crate::docsbuilt::docs_to_change(&feature.specification, &ctx.project)
+            .into_iter()
+            .filter(|k| !declared.contains(k))
+            .collect();
+    docs_unchanged_gaps(
+        feature,
+        &linked,
+        docs,
+        &ctx.history,
+        "linked under Affects docs",
+    )
 }
 
 /// One gap per board doc among `keys` that has not changed since `feature` entered its stage, or
@@ -2080,6 +2115,84 @@ mod tests {
     /// Commit times are whole seconds: keep "entered the stage" and "changed the doc" apart.
     fn next_second() {
         std::thread::sleep(std::time::Duration::from_millis(1100));
+    }
+
+    fn set_spec(store: &crate::Store, code: &str, spec: &str) {
+        store
+            .edit_feature("demo", code, None, Some(spec.into()), None, None)
+            .unwrap();
+    }
+
+    /// DEF-047 R-1: the gate also reads the board docs a Design links under `Affects docs`.
+    #[test]
+    fn docs_updated_reads_board_docs_linked_under_affects_docs() {
+        let (store, dir, code, _) = linked_docs_board("gate047");
+        // Empty affects_docs, a Design linking the doc: held, naming it once.
+        let gaps = docs_gaps(&store, &code);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert!(
+            gaps[0]
+                .message
+                .contains("architecture/data.md has not changed since"),
+            "{}",
+            gaps[0].message
+        );
+        // Declared as well as linked: still named once.
+        let mut def = store
+            .load("demo")
+            .unwrap()
+            .feature(&code)
+            .unwrap()
+            .definition
+            .clone()
+            .unwrap();
+        def.affects_docs = vec!["architecture/data".into()];
+        store
+            .set_feature_definition("demo", &code, Some(def))
+            .unwrap();
+        assert_eq!(docs_gaps(&store, &code).len(), 1);
+        // Changing the doc clears it.
+        store
+            .write_doc("demo", "architecture/data.md", "# Data\n\nv2\n")
+            .unwrap();
+        assert!(docs_gaps(&store, &code).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-047 R-1: another project's link, an item link and a read-only link add no gap, and an
+    /// item with no `Affects docs` at all is judged as before (L-29).
+    #[test]
+    fn linked_docs_that_need_no_change_add_no_gap() {
+        let (store, dir, code, _) = linked_docs_board("nogap047");
+        let spec = "## Design\n\n### Affects docs\n\
+            - [other](/p/elsewhere/docs/file/architecture/data.md)\n\
+            - [item](/p/demo/feature/FEAT-1)\n\
+            - [data](/p/demo/docs/file/architecture/data.md): unchanged, only read.\n";
+        set_spec(&store, &code, spec);
+        assert!(docs_gaps(&store, &code).is_empty());
+        set_spec(&store, &code, "## Design\n\nNo docs.\n");
+        assert!(docs_gaps(&store, &code).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-047 R-1: a linked doc that is not on the board is an error, as a declared one is.
+    #[test]
+    fn a_linked_doc_not_on_the_board_is_an_error() {
+        let (store, dir, code, _) = linked_docs_board("missing047");
+        let spec = "## Design\n\n### Affects docs\n\
+            - [x](/p/demo/docs/file/architecture/missing.md)\n";
+        set_spec(&store, &code, spec);
+        let gaps = docs_gaps(&store, &code);
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        assert!(
+            gaps[0].message.contains(
+                "architecture/missing.md is linked under Affects docs but is not on the board"
+            ),
+            "{}",
+            gaps[0].message
+        );
+        assert_eq!(gaps[0].level, Level::Error);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// DEF-033 R-4: the next gate holds `docs-folded` while a listed document is unbuilt, names
