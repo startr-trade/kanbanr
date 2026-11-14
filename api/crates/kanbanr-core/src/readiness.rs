@@ -2377,6 +2377,15 @@ mod tests {
             vec!["design-review".to_string(), "docs-folded".to_string()]
         );
         assert!(hold.is_none());
+
+        // A doc the Design only reads (DEF-047) never holds the offer.
+        let spec = "## Design\n\nParse it.\n\n### Affects docs\n\
+            - [data](/p/demo/docs/file/architecture/data.md): the parser.\n\
+            - [ADR](/p/demo/docs/file/decisions/0005-x.md): unchanged, only read.\n";
+        set_spec(&store, &code, spec);
+        let (gate, hold) = completed_gate(&store, &code, None);
+        assert!(gate.signoffs_held.is_empty(), "{:?}", gate.signoffs_held);
+        assert!(hold.is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

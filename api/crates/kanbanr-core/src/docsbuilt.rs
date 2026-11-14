@@ -280,7 +280,7 @@ pub fn evaluate(
 
     // Board docs: the existing gate's answer, reused, then the docs the Design links under
     // `Affects docs` (DEF-046), judged the same way.
-    let linked: Vec<String> = linked_board_docs(&feature.specification, &project.id)
+    let linked: Vec<String> = docs_to_change(&feature.specification, &project.id)
         .into_iter()
         .filter(|k| !board_keys.contains(k))
         .collect();
