@@ -3703,6 +3703,67 @@ fn shipped_notes_at(
         .map(|(_, t)| t)
 }
 
+/// A gate result was just recorded: ship the release that waits on it (DEF-049). It matches when
+/// the result is a pass of the tag gate, for the tag's commit, recorded since the tag was made, and
+/// the newest result the tag reads is that pass. Anything else is `None` and changes nothing. The
+/// release ships as `by` (the person who confirmed the result), with the notes the promotion
+/// writes, naming what was accepted untested at the cut. A failure leaves it tagged.
+pub fn settle_tagged(
+    store: &Store,
+    id: &str,
+    result: &crate::gates::GateResult,
+    by: &str,
+    origin: &str,
+    repo: Option<&Path>,
+) -> Result<Option<Cut>> {
+    if !result.passed {
+        return Ok(None);
+    }
+    // A project without releases has nothing to settle, and a gate result is no reason to refuse.
+    let project = store.load_meta(id)?;
+    let cadence = &project.config.cadence;
+    if !cadence.releases
+        || !cadence.tag_waits()
+        || cadence.tag_gate_name().as_deref() != Some(result.name.as_str())
+    {
+        return Ok(None);
+    }
+    let Some(release) = load(store, id)?.into_iter().find(|r| {
+        r.waits_on_tag()
+            && r.tag_commit == result.commit
+            && crate::cmp_instants(&result.at, &r.tagged_at) != std::cmp::Ordering::Less
+    }) else {
+        return Ok(None);
+    };
+    let passed = tag_result(store, id, cadence, &release).is_some_and(|t| t.state == "passed");
+    if !passed {
+        return Ok(None);
+    }
+    let version = release.version.clone();
+    let mut cut = ship_release(store, id, &version, None, by, origin).map_err(|e| {
+        CoreError::Unsupported(format!(
+            "the result is recorded, but {version} did not ship: {e}; retry with `kanbanr release \
+             promote {version}`"
+        ))
+    })?;
+    let branch = if release.branch.is_empty() {
+        format!("release/{version}")
+    } else {
+        release.branch.clone()
+    };
+    let shipped = repo.and_then(|r| shipped_notes_at(r, store, id, &branch, &cut.release));
+    let wrote = shipped.is_some();
+    if let Some(text) = shipped {
+        cut.notes = text;
+    }
+    let unverified = not_verified_section(&store.load_meta(id)?, &cut.release);
+    cut.notes.push_str(&unverified);
+    if wrote || !unverified.is_empty() {
+        store.write_doc(id, &cut.release.notes_doc, &cut.notes)?;
+    }
+    Ok(Some(cut))
+}
+
 /// Why a plan that is not ready is refused: a back move's reason or an "already at" as before;
 /// every missing condition with its fix when a stage requires something; else the first step's
 /// refusal, word for word as the cut always gave it.
@@ -6861,6 +6922,29 @@ pub(crate) mod tests {
         super::plan_promotion(store, "shop", "v1", None, "", Some(repo), super::Fetch::No).unwrap()
     }
 
+    /// Record a result of gate `name` for `commit` as the route does, then settle: what shipped.
+    fn record_and_settle(
+        store: &Store,
+        repo: &Path,
+        name: &str,
+        commit: &str,
+        passed: bool,
+        at: &str,
+    ) -> Option<super::Cut> {
+        let r = crate::gates::GateResult {
+            name: name.into(),
+            commit: commit.into(),
+            passed,
+            by: "Grace".into(),
+            at: at.into(),
+            source: "person".into(),
+            origin: "monitor".into(),
+            ..Default::default()
+        };
+        crate::gates::record(store, "shop", &r).unwrap();
+        super::settle_tagged(store, "shop", &r, "Grace", "monitor", Some(repo)).unwrap()
+    }
+
     /// DEF-049 R-1: the cut of a last tag stage that a gate judges tags and holds the release:
     /// nothing ships, the items stay, and the item reads as tagged.
     #[test]
@@ -6892,6 +6976,28 @@ pub(crate) mod tests {
             .unwrap();
         let label = super::release_line(&project, &super::load(&store, "shop").unwrap(), item);
         assert_eq!(label.as_deref(), Some("Tagged in v1, not released yet"));
+        // The tag workflow passes: recording its result ships the release, as the person who
+        // confirmed it.
+        let now = crate::now_rfc3339();
+        let shipped = record_and_settle(&store, &repo, "ci", &r.tag_commit, true, &now).unwrap();
+        let r = v1(&store);
+        assert_eq!(r.state, super::ReleaseState::Shipped);
+        assert_eq!(
+            (r.shipped_by.as_str(), r.shipped_origin.as_str()),
+            ("Grace", "monitor")
+        );
+        assert!(!r.shipped.is_empty() && !r.notes_doc.is_empty() && !shipped.notes.is_empty());
+        let project = store.load("shop").unwrap();
+        let item = project
+            .features
+            .iter()
+            .find(|f| r.shipped.contains(&f.code))
+            .unwrap();
+        assert!(
+            project.config.counts_as_done(&item.status),
+            "{}",
+            item.status
+        );
         clean(&dir, &repo);
     }
 
@@ -6916,6 +7022,27 @@ pub(crate) mod tests {
         assert!(!waits(&store), "no commit gate names the tag");
         let plan = plan_to(&store, &repo, "tag");
         assert!(plan.cut && plan.ships, "ships at the tag as before");
+        clean(&dir, &repo);
+    }
+
+    /// DEF-049 R-1: a pass from before the tag, for another commit or of another gate does not
+    /// ship the release; the right one does.
+    #[test]
+    fn a_passed_result_from_before_the_tag_or_for_another_commit_does_not_ship() {
+        let (store, dir, repo, sha) = tagged("def049-stale", TAG_LAST);
+        let other = "9f078bd0c1e2aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let now = crate::now_rfc3339();
+        for (name, commit, at) in [
+            ("ci", sha.as_str(), "2020-01-01T00:00:00Z"),
+            ("ci", other, now.as_str()),
+            ("lint", sha.as_str(), now.as_str()),
+        ] {
+            assert!(record_and_settle(&store, &repo, name, commit, true, at).is_none());
+            assert!(v1(&store).waits_on_tag(), "{name} {commit} {at}");
+        }
+        assert!(!awaiting_plan(&store, &repo).ready);
+        assert!(record_and_settle(&store, &repo, "ci", &sha, true, &now).is_some());
+        assert_eq!(v1(&store).state, super::ReleaseState::Shipped);
         clean(&dir, &repo);
     }
 
@@ -6954,7 +7081,8 @@ pub(crate) mod tests {
     #[test]
     fn a_failed_tag_workflow_keeps_the_release_tagged_and_names_a_patch() {
         let (store, dir, repo, sha) = tagged("def049-failed", TAG_LAST);
-        now_result(&store, &sha, false);
+        let now = crate::now_rfc3339();
+        assert!(record_and_settle(&store, &repo, "ci", &sha, false, &now).is_none());
         let plan = awaiting_plan(&store, &repo);
         assert!(!plan.ready && plan.awaiting, "{plan:#?}");
         assert_eq!(plan.tag.as_ref().map(|t| t.state.as_str()), Some("failed"));
@@ -6969,8 +7097,9 @@ pub(crate) mod tests {
         assert!(v1(&store).waits_on_tag());
         // The re-run passes on the same commit: the newest result stands, and it ships.
         std::thread::sleep(std::time::Duration::from_millis(1100));
-        now_result(&store, &sha, true);
-        assert!(awaiting_plan(&store, &repo).ready);
+        let now = crate::now_rfc3339();
+        assert!(record_and_settle(&store, &repo, "ci", &sha, true, &now).is_some());
+        assert_eq!(v1(&store).state, super::ReleaseState::Shipped);
         clean(&dir, &repo);
         // And the way on from a failure is the patch release.
         let (store, dir, repo, sha) = tagged("def049-failed-patch", TAG_LAST);
@@ -7150,6 +7279,57 @@ pub(crate) mod tests {
         let shipped = super::promote(&store, "shop", "v1", None, "Ada", "", Some(&repo)).unwrap();
         let release = v1(&store);
         assert_eq!(shipped.release.state, super::ReleaseState::Shipped);
+        let notes = store.read_doc("shop", &release.notes_doc).unwrap();
+        assert!(notes.contains("## Not verified in this release"), "{notes}");
+        assert!(notes.contains(&format!("{code} R-2")), "{notes}");
+        clean(&dir, &repo);
+        let _ = std::fs::remove_dir_all(&bare);
+    }
+
+    /// DEF-043 through DEF-049: the notes written when the tag workflow's result ships the
+    /// release still name what the person accepted untested at the cut.
+    #[test]
+    fn a_settled_release_names_the_requirements_accepted_untested_at_its_cut() {
+        use crate::releasegates::ReleaseCheck::UntestedAccepted;
+        let (store, dir, repo) = staged("def049-settle", THREE);
+        let bare = with_remote(&repo);
+        let code = later_item(&store, "");
+        go(&store, &repo, "candidate");
+        on_release(&repo, "release/v1", "fix", "fixed\n");
+        go(&store, &repo, "main");
+        plain_git(&repo, &["push", "-q", &bare.to_string_lossy(), "main:main"]);
+        plain_git(&repo, &["fetch", "-q", "origin"]);
+        let plan = plan_to(&store, &repo, "production");
+        let c = condition(&plan, UntestedAccepted).unwrap();
+        assert!(!c.holds);
+        let refs = vec![format!("{code}/R-2")];
+        assert_eq!(c.refs, refs);
+        let cut = |accept: &[String]| {
+            super::promote_with(
+                &store,
+                "shop",
+                "v1",
+                Some("production"),
+                "Ada",
+                "",
+                Some(&repo),
+                super::PromoteOptions {
+                    expect_tip: None,
+                    fetch: super::Fetch::Try,
+                    origin: "monitor",
+                    accept_untested: accept,
+                },
+            )
+        };
+        let done = cut(&refs).unwrap();
+        assert_eq!(done.tagged, "v1");
+        let release = v1(&store);
+        assert_eq!(release.stages.last().unwrap().accepted_untested, refs);
+        assert!(release.waits_on_tag());
+        let now = crate::now_rfc3339();
+        record_and_settle(&store, &repo, "ci", &release.tag_commit, true, &now).unwrap();
+        let release = v1(&store);
+        assert_eq!(release.state, super::ReleaseState::Shipped);
         let notes = store.read_doc("shop", &release.notes_doc).unwrap();
         assert!(notes.contains("## Not verified in this release"), "{notes}");
         assert!(notes.contains(&format!("{code} R-2")), "{notes}");
