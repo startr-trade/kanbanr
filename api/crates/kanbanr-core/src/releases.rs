@@ -110,6 +110,16 @@ pub struct Release {
     pub extra: Extra,
 }
 
+impl Release {
+    /// Tagged, not shipped, and not given up: the release waits for what its tag started
+    /// (DEF-049). Derived from `tagged_at`, `state` and `superseded_by`; nothing more is stored.
+    pub fn waits_on_tag(&self) -> bool {
+        !self.tagged_at.is_empty()
+            && self.state == ReleaseState::Planned
+            && self.superseded_by.is_empty()
+    }
+}
+
 /// One move of a release between stages: where to, who moved it, and when (FEAT-183). A move back
 /// carries the reason it was made.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -6755,6 +6765,11 @@ pub(crate) mod tests {
          release_gates:\n  candidate: { on_enter: [branch] }\n  \
          main: { on_enter: [move_main] }\n  tag: { on_enter: [tag] }\n";
 
+    /// The recommended shape: the tag stage is the last (DEF-049).
+    pub(crate) const TAG_LAST: &str = "release_stages: [candidate, main, tag]\n\
+         release_gates:\n  candidate: { on_enter: [branch] }\n  \
+         main: { on_enter: [move_main] }\n  tag: { on_enter: [tag] }\n";
+
     pub(crate) fn staged(name: &str, yaml: &str) -> (Store, PathBuf, PathBuf) {
         let (store, dir, repo) = board_and_repo(name);
         configure(&store, yaml);
@@ -6805,6 +6820,25 @@ pub(crate) mod tests {
     pub(crate) fn clean(dir: &Path, repo: &Path) {
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(repo);
+    }
+
+    // ---- DEF-049: a release is shipped only once its tag workflow has passed ----
+
+    /// DEF-049 R-1: only a last tag stage that a gate judges waits; no gate, or a stage after the
+    /// tag, is as before.
+    #[test]
+    fn a_tag_stage_that_is_last_waits_only_when_a_gate_judges_the_tag() {
+        let waits = |store: &Store| store.load_meta("shop").unwrap().config.cadence.tag_waits();
+        let (store, dir, repo) = staged("def049-rule-last", TAG_LAST);
+        assert!(waits(&store));
+        clean(&dir, &repo);
+        let (store, dir, repo) = staged("def049-rule-after", STAGED);
+        assert!(!waits(&store), "a stage follows the tag");
+        clean(&dir, &repo);
+        let (store, dir, repo) = board_and_repo("def049-rule-nogate");
+        configure(&store, TAG_LAST);
+        assert!(!waits(&store), "no commit gate names the tag");
+        clean(&dir, &repo);
     }
 
     // ---- DEF-043: tests checked later, and the cut's acceptance ----
