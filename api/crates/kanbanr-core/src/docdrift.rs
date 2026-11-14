@@ -2402,6 +2402,63 @@ mod perf {
     use super::*;
     use std::process::Command;
 
+    /// DEF-050: one flagged doc with 30 committed versions reads in under 100 ms (the Design's
+    /// budget). Run: `cargo test -p kanbanr-core --release docdrift::perf -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn one_flagged_text_with_thirty_versions() {
+        let (store, dir) = board("perf-versions");
+        let item = store
+            .add_feature("demo", "Drift", "Spec.", "M", Some("FEAT-1".into()))
+            .unwrap();
+        store
+            .set_feature_definition(
+                "demo",
+                &item.code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Find drift".into(),
+                    affects_docs: vec!["design/d.md".into()],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        for v in 0..30 {
+            let body: String = (0..200)
+                .map(|n| format!("Line {n} v{v} uses --since.\n"))
+                .collect();
+            store
+                .write_doc("demo", "design/d.md", &format!("# D\n\n{body}"))
+                .unwrap();
+            git_env(&dir, &["add", "-A"], None);
+            git_env(
+                &dir,
+                &["commit", "-q", "-m", "v"],
+                Some(&format!("2026-10-{:02}T10:00:00+00:00", v + 1)),
+            );
+        }
+        let repo = scratch("perf-versions-code");
+        git_env(&repo, &["init", "-q", "-b", "main"], None);
+        crate::docdrift::testkit::code_commit(
+            &repo,
+            "src/a.rs",
+            "let a = \"--since\";\n",
+            "add\n\nRefs: kanbanr:FEAT-1",
+            "2026-10-05T12:00:00+00:00",
+        );
+        let started = std::time::Instant::now();
+        let flags = flags_for_item(&store, "demo", "FEAT-1", &repo).unwrap();
+        let took = started.elapsed();
+        eprintln!("30 versions, one flagged text: {took:?}");
+        assert_eq!(flags.len(), 1);
+        assert!(flags[0].edits.len() >= 20, "{}", flags[0].edits.len());
+        assert!(
+            took < std::time::Duration::from_millis(100),
+            "took {took:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
     /// FTR-013 R-10: one item on a history of 2,500 commits with 40 linked texts, under 2 seconds.
     /// Run in release: `cargo test -p kanbanr-core --release docdrift::perf -- --ignored`.
     #[test]
