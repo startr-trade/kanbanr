@@ -62,6 +62,12 @@ counts. An item that names no docs passes, since not every change touches the ar
 `kanbanr doctor` points it out when the next stage asks for `docs_updated`, so a missing list is
 seen rather than waved through.
 
+`docs_updated` also reads the board docs a Design links under its `Affects docs` heading, as
+`/p/<project>/docs/file/<path>`. Each must have changed since the item entered its stage, and one
+that is not on the board is an error. A doc the Design only reads is marked on its list line with
+the word `unchanged` (or `not changed`) and needs no change. An item with no `Affects docs` links
+is judged by `affects_docs` alone.
+
 ### Coverage rules: keeping the views whole
 
 `docs_updated` checks the docs an item names. The views that span every item — a Zachman matrix,
