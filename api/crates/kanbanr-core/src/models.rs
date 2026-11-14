@@ -404,6 +404,10 @@ pub struct Checked {
     /// The id of the `text-check` prepared record it came from.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prepared: String,
+    /// The shas of the edits made to the text while it was flagged, which the check rested on
+    /// (DEF-050); an empty sha is an edit not yet committed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edits: Vec<String>,
     /// Keys this version does not know, kept and written back unchanged (FEAT-151).
     #[serde(
         flatten,
@@ -1647,6 +1651,32 @@ mod tests {
 
         let kept: Checked = crate::yaml::from_str(&format!("{text}newer_key: 7\n")).unwrap();
         assert!(crate::yaml::to_string(&kept).unwrap().contains("newer_key"));
+    }
+
+    /// DEF-050 R-1: a checked text records the edits it rested on, and reads as before without them.
+    #[test]
+    fn a_checked_text_records_the_edits_it_rested_on() {
+        let bare = Checked {
+            target: "doc:design/data.md".into(),
+            outcome: Outcome::Confirmed,
+            ..Default::default()
+        };
+        let text = crate::yaml::to_string(&bare).unwrap();
+        assert!(!text.contains("edits"), "{text}");
+        assert!(
+            crate::yaml::from_str::<Checked>(&text)
+                .unwrap()
+                .edits
+                .is_empty()
+        );
+        let edited = Checked {
+            edits: vec!["abc1234".into(), String::new()],
+            ..bare
+        };
+        let text = crate::yaml::to_string(&edited).unwrap();
+        assert!(text.contains("edits:"), "{text}");
+        assert!(text.contains("abc1234"), "{text}");
+        assert_eq!(crate::yaml::from_str::<Checked>(&text).unwrap(), edited);
     }
 
     /// FTR-018 R-1: a part for every piece of a definition, blank answers excepted.

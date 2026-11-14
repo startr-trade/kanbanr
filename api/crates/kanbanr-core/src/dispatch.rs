@@ -208,6 +208,7 @@ fn signoff_checked(
                 origin: origin.to_string(),
                 at: now.clone(),
                 text_changed_at: flag.target_changed_at.clone(),
+                edits: flag.edits.iter().map(|e| e.sha.clone()).collect(),
                 ..c.clone()
             }),
             None => missing.push(key),
