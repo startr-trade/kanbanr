@@ -6,6 +6,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A flagged text stays flagged after an edit, and the Review page shows the edit and its diff;
+  Claude is refused an edit to another item's approved spec (DEF-050).
+
 ## [0.6.0] - 2026-11-14
 
 ### Added
