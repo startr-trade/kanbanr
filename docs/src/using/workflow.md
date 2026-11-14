@@ -34,6 +34,15 @@ Merging an item into a release that is past its first stage and not yet cut send
 to that stage, whatever the item's own workflow. The release then follows its steps again; see
 [A change merged into a promoted release](processes.md#a-change-merged-into-a-promoted-release).
 
+A release does not read as shipped before the workflow its tag started has passed. When the tag
+stage is the last one and a commit gate judges the tag, the cut tags the release and leaves it
+"tagged, not released yet"; its items stay where they are. Recording a passed result for the tag's
+commit (a gate result recorded after the tag was made) ships it, as the person who recorded it, and
+writes the release notes. A failed result keeps it tagged and the Releases page and
+`kanbanr release promote --plan` name the patch release as the way on; a re-run that passes ships
+it. A project with no commit gate has nothing to wait for and ships at the tag as before, and a
+stage after the tag still confirms the release as it did.
+
 ## Permanence & deletion
 
 - **Feature items can't be deleted** — they're the project's work. To retire one, `move` it to a

@@ -161,7 +161,7 @@ see [Designing CI and the release workflow](delivery-pipeline.md).
 
 **When to push.** You push twice for a release: main after **Promote to main**, and the tag after the **Cut**. Nothing earlier is needed: every check before that runs on your machine. If you want to see the pipeline run sooner, you can push the sprint's branch; that run is a preview and records nothing for the release. Recording CI, promoting and the cut are never delegated: even when you have let Claude take some forward decisions, these stay your clicks. If an item has moved back to an earlier stage, Claude asks you before it acts on it, delegation or not.
 
-**Recording CI.** The Cut waits for a CI result recorded for the exact commit main is at. kanbanr never asks your CI service. Claude reads the CI result and prepares it with the link to the run. You check it and confirm it with one click; you can edit it or reject it instead. A failed run is recorded as failed, and the page then says what to fix.
+**Recording CI.** The Cut waits for a CI result recorded for the exact commit main is at. kanbanr never asks your CI service. Claude reads the CI result and prepares it with the link to the run. You check it and confirm it with one click; you can edit it or reject it instead. A failed run is recorded as failed, and the page then says what to fix. After the Cut the release reads as tagged, not shipped, until the result of the workflow the tag started is recorded as passed; confirming that result ships it. A failed result keeps it tagged, and the page names the patch release as the way on.
 
 **Each button says what it will do**, and stays greyed out with the reason until it's ready.
 

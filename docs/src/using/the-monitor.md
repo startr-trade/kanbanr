@@ -397,6 +397,12 @@ same whichever you use. A read-only monitor shows the command instead.
   sends exactly that list; if the list changed since the page read it, the cut is refused and you
   look again. The notes on the board gain a "Not verified in this release" section. This is
   `kanbanr release promote <VERSION> --accept-untested …`.
+- **Tagged, waiting for the tag workflow.** When the tag stage is the last and a gate judges the
+  tag, the cut leaves the release "tagged, not released yet". Its card keeps the tag's panel and a
+  button, "Waiting for the tag workflow", that stays off until a passed result is recorded for the
+  tag's commit. Confirming Claude's prepared result (or recording it with **Record result**) ships
+  the release. A failed result keeps it tagged and the panel offers the patch release. This is
+  `kanbanr gate record <gate> --passed --commit <tag>`, or `kanbanr release promote <VERSION>`.
 - **Release notes.** A release with a branch has a **Release notes** section, collapsed until
   opened, showing the notes as they are on `release/<V>` — headed "draft on release/v0.3.0 @
   8f995e1", or "as shipped on …" after the cut. Until the cut, **Edit notes** opens the text;

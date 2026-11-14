@@ -878,6 +878,14 @@ branches; fix it before going on.
   with the gate, the run's link, and Passed or Failed. When it is missing, say what the plan names
   and where it waits. **Never run `kanbanr gate record` yourself**, and
   never prepare a verdict you did not see.
+- **A release whose tag stage is last reads as tagged until its tag workflow has passed
+  (DEF-049).** After the cut, tell the person to push main and the tag, then watch the workflow the
+  tag started. When it ends, `kanbanr prepare gate <gate> --passed|--failed --commit <the tag's sha>
+  --url <the run>` puts the result beside **Record result**; the person's one click records it and
+  ships the release. Never record it, and never report the release as shipped before then. If the
+  run failed, the release stays tagged: prepare it as failed and name the patch release (`kanbanr
+  release add <V> --patch-of <P> --from-failed-tag`) as the way on. A re-run that passes is
+  prepared the same way and ships it.
 - A patch is `kanbanr release add <V> --patch-of <P>`: `release/<V>` is made from `<P>`'s tag. A fix
   integrated into a release branch reaches the line through `kanbanr git forward <V>`. When a move
   or a promotion says it is needed (`next, for Claude: …`), run `kanbanr git forward <V>` yourself
