@@ -34,6 +34,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// The integration branch a releases-only project uses when it names none (Q5).
+/// The prefix of the branch Claude Code makes for an agent's worktree (DEF-051).
+pub const AGENT_BRANCH_PREFIX: &str = "worktree-agent-";
+
 pub const DEFAULT_INTEGRATION_BRANCH: &str = "integration";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
