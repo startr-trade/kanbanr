@@ -11501,3 +11501,182 @@ fn an_override_inside_a_claude_session_records_its_origin() {
     assert_eq!(origin, "terminal");
     assert!(!listed(&pending), "{pending}");
 }
+
+/// DEF-055: a code repository with the git model on and FEAT-001 started, its spec linking
+/// `docs/src/cart.md` under `Affects docs`, one task complete, and that doc changed on its branch.
+/// The `docs-folded` sign-off is offered at the Completed stage.
+fn docs_folded_board(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (base, work) = togaf_scratch(tag);
+    git_model_board(&base, &work, false, false);
+    let run = |args: &[&str]| {
+        let o = run_in(&base, &work, args);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    run(&[
+        "feature",
+        "edit",
+        "FEAT-001",
+        "--spec",
+        "## Design\n\nChanges the cart.\n\n### Affects docs\n- `docs/src/cart.md`\n",
+    ]);
+    run(&["todo", "add", "FEAT-001", "--description", "work"]);
+    run(&[
+        "task",
+        "add",
+        "FEAT-001",
+        "TL-001",
+        "--text",
+        "Write the cart code",
+    ]);
+    run(&["start", "FEAT-001"]);
+    std::fs::create_dir_all(work.join("docs/src")).unwrap();
+    commit_file_in(
+        &base,
+        &work,
+        "docs/src/cart.md",
+        "# Cart\n",
+        "docs: the cart\n\nRefs: kanbanr:FEAT-001",
+    );
+    run(&["task", "state", "FEAT-001", "TL-001", "T1", "Completed"]);
+    (base, work)
+}
+
+/// DEF-055 R-1: `signoff docs-folded` run from the code folder reads the code repository, so a
+/// repository doc the item's branch changed is not refused as "the code repository is not
+/// available here".
+#[test]
+fn signoff_docs_folded_reads_the_code_repository() {
+    let (base, work) = docs_folded_board("def055-signoff");
+    let on = run_in(&base, &work, &["config", "method", "--on", "docs-folded"]);
+    assert!(
+        on.status.success(),
+        "{}",
+        String::from_utf8_lossy(&on.stderr)
+    );
+    let o = run_in(&base, &work, &["signoff", "FEAT-001", "docs-folded"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!err.contains("code repository is not available"), "{err}");
+    assert!(o.status.success(), "{err}");
+    let shown = run_in(&base, &work, &["feature", "show", "FEAT-001", "--json"]);
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    let s = v["definition"]["signoffs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "docs-folded")
+        .unwrap_or_else(|| panic!("not recorded: {v}"))
+        .clone();
+    assert_eq!(s["origin"], "terminal", "{s}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-055 R-1: Claude takes `docs-folded` under a granted delegation from the code folder; it is
+/// recorded as delegated and listed for review.
+#[test]
+fn delegated_docs_folded_is_taken_under_its_delegation() {
+    let (base, work) = docs_folded_board("def055-delegated");
+    let ok = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    // A delegation covers a sign-off some gate asks for.
+    ok(run_in(
+        &base,
+        &work,
+        &["config", "method", "--on", "docs-folded"],
+    ));
+    ok(in_session(
+        &base,
+        &work,
+        &[
+            "decisions",
+            "propose",
+            "--verdict",
+            "signoff:docs-folded",
+            "--item",
+            "FEAT-001",
+        ],
+    ));
+    ok(run_in(&base, &work, &["decisions", "grant", "DLG-001"]));
+    ok(run_in(&base, &work, &["decisions", "mode", "delegated"]));
+    let taken = in_session(
+        &base,
+        &work,
+        &["signoff", "FEAT-001", "docs-folded", "--under", "DLG-001"],
+    );
+    let err = String::from_utf8_lossy(&taken.stderr);
+    assert!(!err.contains("code repository is not available"), "{err}");
+    assert!(taken.status.success(), "{err}");
+    let shown = ok(run_in(
+        &base,
+        &work,
+        &["feature", "show", "FEAT-001", "--json"],
+    ));
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    let s = v["definition"]["signoffs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "docs-folded")
+        .unwrap_or_else(|| panic!("not recorded: {v}"))
+        .clone();
+    assert_eq!(s["origin"], "delegated", "{s}");
+    assert_eq!(s["by"], "Claude", "{s}");
+    assert_eq!(s["delegation"], "DLG-001", "{s}");
+    let shown = ok(run_in(&base, &work, &["decisions", "show", "--json"]));
+    let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    let list = v["to_review"].as_array().unwrap();
+    assert_eq!(list.len(), 1, "{v}");
+    assert_eq!(list[0]["delegation"], "DLG-001", "{v}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// DEF-055 R-1: `prepare text` run from the code folder reads the code repository, so a flagged
+/// doc is prepared rather than refused for a missing repository.
+#[test]
+fn prepare_text_check_reads_the_code_repository() {
+    let (base, work) = togaf_scratch("def055-prepare-text");
+    git_model_board(&base, &work, false, false);
+    let run = |args: &[&str]| run_in(&base, &work, args);
+    let good = |o: Output| {
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    good(run(&[
+        "doc",
+        "add",
+        "design/cart.md",
+        "--content",
+        "# Cart\n\nHow FEAT-001 keeps a cart; pass --expires to set the time.\n",
+    ]));
+    good(run(&["start", "FEAT-001"]));
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    commit_file_in(
+        &base,
+        &work,
+        "cart.txt",
+        "flag: --expires\n",
+        "feat: cart\n\nRefs: kanbanr:FEAT-001",
+    );
+    let o = in_session(
+        &base,
+        &work,
+        &[
+            "prepare",
+            "text",
+            "FEAT-001",
+            "doc:design/cart.md",
+            "--still-right",
+            "--why",
+            "read it against the cart flag",
+        ],
+    );
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!err.contains("needs the code repository"), "{err}");
+    assert!(o.status.success(), "{err}");
+    let list = in_session(&base, &work, &["--json", "prepare", "list"]);
+    let v: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+    assert_eq!(v[0]["kind"], "text-check", "{v}");
+    assert_eq!(v[0]["state"], "open", "{v}");
+    let _ = std::fs::remove_dir_all(&base);
+}

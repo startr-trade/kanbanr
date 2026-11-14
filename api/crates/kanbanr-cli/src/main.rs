@@ -7282,13 +7282,14 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             let p = require_project(cli)?;
             let who = verdict_author(cli, by.as_ref())?;
             if *withdraw {
-                let resp = client.write(
+                let resp = client.write_in(
                     Method::Post,
                     &format!(
                         "/projects/{p}/features/{code}/signoff/{}/withdraw",
                         urlencode_segment(name)
                     ),
                     Some(json!({ "by": who, "reason": reason })),
+                    scm::repo_root().as_deref(),
                 )?;
                 print_write(
                     cli,
@@ -7297,7 +7298,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 );
                 return Ok(());
             }
-            let resp = client.write(
+            let resp = client.write_in(
                 Method::Post,
                 &format!(
                     "/projects/{p}/features/{code}/signoff/{}",
@@ -7307,6 +7308,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     "by": who, "note": note, "doc": doc, "rev": rev, "spec_rev": spec_rev,
                     "delegation": under
                 })),
+                scm::repo_root().as_deref(),
             )?;
             let who = recorded_by(&resp, &who);
             print_write(
@@ -10618,7 +10620,12 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
     };
     let mut body = body;
     body["by"] = json!(verdict_author(cli, None)?);
-    let resp = client.write(Method::Post, &format!("/projects/{p}/prepared"), Some(body))?;
+    let resp = client.write_in(
+        Method::Post,
+        &format!("/projects/{p}/prepared"),
+        Some(body),
+        scm::repo_root().as_deref(),
+    )?;
     if cli.json {
         println!("{}", pretty(&resp));
         return Ok(());
