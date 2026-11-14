@@ -11,8 +11,11 @@ You don't need to learn any commands:
   doesn't ask for one in a plan or a question. What Claude already knows, such as a CI run's
   result or what a sign-off covered, arrives filled in beside the button: you check it and click.
 - **You can delegate the small decisions.** Tell Claude which ones it may take, such as the design
-  review of small defects, and until when. It proposes a delegation; you grant it on the
-  **Review** page. Whatever Claude decides under it comes back there for you to keep or undo.
+  review of small defects, and until when. Setup proposes one for every item, to take the
+  **docs-folded** sign-off (DLG-001), besides any Claude proposes when you ask. You **Grant** each one
+  on the **Review** page, under "Decisions here". A granted delegation does nothing until you set
+  **Mode** to **delegated** there and click **Change**. Whatever Claude decides under it comes back
+  there for you to keep or undo.
 - **You push from your terminal.** Nothing reaches your remote server until you do.
 
 Prefer to run the commands yourself? See [TOGAF from the command line](togaf-cli.md).
@@ -118,14 +121,14 @@ is a decision and not an oversight. If it has screens, Claude also asks how the 
 
 | Phase | What Claude does | What you do on the Review page |
 |---|---|---|
-| **Vision** | Writes what it is and why | Nothing yet. The page may offer **Approve**, but it isn't needed here |
-| **Business Arch** | Drafts who, what, why and the requirements | **Approve** |
+| **Vision** | Writes what it is and why, then the statement, goal and the who, what and why | **Approve**, once Claude has written them. **Business Arch** needs the approval before the item can move |
+| **Business Arch** | Drafts the requirements and how each is verified | **Approve** again if the page offers it, because **System Design** needs an approval that covers what you see |
 | **System Design** | Proposes how and where, and checks that against the requirements | Nothing: the approval stands while the definition grows |
 | **Implementation** | Writes the design and its task list, and names a test for each requirement | **Sign off design-review**, which also reviews what was added |
 | **Migration** | Builds on the item's branch, runs the tests and updates the docs | **Sign off docs-folded**, which appears once the docs are built; until then the Review page does not offer it. Claude first checks any doc or item that names something the item changed and has not changed since, confirming it is still right or filing a correction; the Review page shows what is left and what Claude checked, and you fill in nothing |
 | **Operations** | Nothing: the cut moves it here | **Sign off release** |
 
-**Approve first, then sign off.** An item with both waiting shows **Approve**, then **Sign off** once
+**Approve first, then sign off.** You approve in **Vision**, before the item moves on. An item with both waiting shows **Approve**, then **Sign off** once
 you've approved it, so check back after approving.
 
 **Each decision notes where you made it.** The monitor, your terminal, and your answer to Claude
@@ -201,6 +204,21 @@ every item in the release has reached Migration, and the Releases page lists any
 When you plan an item into a release while a sprint is running, ask Claude to plan it into the
 sprint too; Claude does that unless you say otherwise, and `kanbanr doctor` names any item planned
 into a release but into no sprint.
+
+**Before the first Promote to candidate, set up the release files.** The candidate drafts the
+version, changelog and notes only from the release's prepare configuration: the notes path, the
+changelog and the version files. Without it the candidate drafts nothing. When you plan the first
+release, ask Claude to set up the release files, or Claude proposes it. Wait until Claude says it is
+done before you click. If there is no `CHANGELOG.md`, Claude offers a chore to add one.
+
+**If the project has CI, build its workflows first.** The CI and release workflow (tests, scan,
+release or publish) is designed and built as an item with the first release, before the cut. See
+[Designing CI and the release workflow](delivery-pipeline.md).
+
+**If the release files change after Promote to candidate, prepare the release again.** The Releases
+page does not offer that yet (a later release adds it). Claude gives you one command to run in your
+own terminal: `kanbanr release promote <V> candidate`. Make sure your terminal runs the same
+kanbanr as the monitor: check `kanbanr --version` in both.
 
 Follow this order and you won't have to go back:
 
@@ -318,6 +336,7 @@ You never need these, but here they are if you're curious, or if you want to che
 | Starting the build | `kanbanr start` |
 | A sub-agent | `kanbanr scope issue` |
 | Release notes | `kanbanr release notes` |
+| The release files (notes path, changelog, version files) | `kanbanr config release-prepare` |
 | Bringing a release forward | `kanbanr git forward` |
 | Closing a sprint | `kanbanr sprint close`, `kanbanr retro` |
 
