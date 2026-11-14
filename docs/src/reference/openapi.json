@@ -705,7 +705,7 @@
           },
           {
             "const": "docs_updated",
-            "description": "Every doc the item declares in `affects_docs` has changed since it entered its current\nstage (FEAT-180) — the design was folded into the docs it said it would change.",
+            "description": "Every doc the item declares in `affects_docs`, and every board doc its Design links under\n`Affects docs` (except a line marked `unchanged`), has changed since it entered its current\nstage (FEAT-180, DEF-047) — the design was folded into the docs it said it would change.",
             "type": "string"
           },
           {

@@ -60,8 +60,9 @@ pub enum Check {
     /// The spec has each named section, with content (FEAT-179). A design stage asks for the
     /// design itself, not a promise of one: `{spec_sections: [Design]}`.
     SpecSections,
-    /// Every doc the item declares in `affects_docs` has changed since it entered its current
-    /// stage (FEAT-180) — the design was folded into the docs it said it would change.
+    /// Every doc the item declares in `affects_docs`, and every board doc its Design links under
+    /// `Affects docs` (except a line marked `unchanged`), has changed since it entered its current
+    /// stage (FEAT-180, DEF-047) — the design was folded into the docs it said it would change.
     DocsUpdated,
     /// Every Mermaid diagram in the spec and in each `affects_docs` doc passes the diagram lint
     /// (FEAT-200), judged when the item moves, never cached.
@@ -142,8 +143,9 @@ impl Check {
                  `Design`"
             }
             Check::DocsUpdated => {
-                "every board doc the item names in `affects_docs` has changed since it entered its \
-                 current stage"
+                "every board doc the item declares in `affects_docs`, and every board doc linked under \
+                 the Design's Affects docs (except lines marked unchanged), has changed since it \
+                 entered its current stage"
             }
             Check::DiagramsValid => {
                 "every Mermaid diagram in the spec and in each doc it names in `affects_docs` \
