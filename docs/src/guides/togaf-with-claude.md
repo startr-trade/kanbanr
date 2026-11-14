@@ -122,7 +122,7 @@ is a decision and not an oversight. If it has screens, Claude also asks how the 
 | Phase | What Claude does | What you do on the Review page |
 |---|---|---|
 | **Vision** | Writes what it is and why, then the statement, goal and the who, what and why | **Approve**, once Claude has written them. **Business Arch** needs the approval before the item can move |
-| **Business Arch** | Drafts the requirements and how each is verified | **Approve** again if the page offers it, because **System Design** needs an approval that covers what you see |
+| **Business Arch** | Drafts the requirements and how each is verified | Nothing: your approval stands while the definition grows. If you changed what you approved, the page offers **Approve** again |
 | **System Design** | Proposes how and where, and checks that against the requirements | Nothing: the approval stands while the definition grows |
 | **Implementation** | Writes the design and its task list, and names a test for each requirement | **Sign off design-review**, which also reviews what was added |
 | **Migration** | Builds on the item's branch, runs the tests and updates the docs | **Sign off docs-folded**, which appears once the docs are built; until then the Review page does not offer it. Claude first checks any doc or item that names something the item changed and has not changed since, confirming it is still right or filing a correction; the Review page shows what is left and what Claude checked, and you fill in nothing |
