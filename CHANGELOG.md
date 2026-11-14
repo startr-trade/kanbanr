@@ -57,6 +57,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ### Fixed
 
+- **A sprint's release is made from that sprint, even after an earlier release was brought forward
+  into the previous one (DEF-059).** A closed sprint whose work is all in main no longer counts as
+  unreleased because of the merges that brought a release forward, so the second sprint's release
+  carries its own items.
+
 - **An override Claude makes waits on the Review page for the person to ratify, and the item
   doesn't ship until it is; the cut names requirements whose tests were not run and waits for the
   person to accept them, and the notes list them (DEF-043).** `kanbanr release promote` and

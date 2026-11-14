@@ -62,6 +62,9 @@ pub struct BranchFacts {
     pub branches: BTreeMap<String, String>,
     /// Branches main already contains.
     pub merged_into_main: BTreeSet<String>,
+    /// Sprint branches main does not contain, but whose every non-merge commit it has: bringing a
+    /// release forward adds only merges, so such a sprint's work has shipped (DEF-059).
+    pub work_in_main: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -315,11 +318,12 @@ pub fn start_base(
 /// A sprint branch that exists and main does not yet contain.
 fn unreleased(sprint: &Sprint, facts: &BranchFacts) -> Option<String> {
     let b = sprint_branch(&sprint.code);
-    (facts.branches.contains_key(&b) && !facts.merged_into_main.contains(&b)).then_some(b)
+    let shipped = facts.merged_into_main.contains(&b) || facts.work_in_main.contains(&b);
+    (facts.branches.contains_key(&b) && !shipped).then_some(b)
 }
 
-/// Where `sprint/<SP>` is made: the latest sprint branch main does not contain yet, else main —
-/// so a sprint builds on work that has not shipped.
+/// Where `sprint/<SP>` is made: the latest sprint branch that has not shipped (main lacks some of
+/// its work), else main — so a sprint builds on work that has not shipped.
 pub fn sprint_base(sprints: &[Sprint], facts: &BranchFacts) -> String {
     sprints
         .iter()
@@ -329,7 +333,8 @@ pub fn sprint_base(sprints: &[Sprint], facts: &BranchFacts) -> String {
 }
 
 /// Where `release/<V>` is made: the releases topology's integration branch; with sprints, the most
-/// recently closed sprint that has not shipped, else the active sprint's branch; trunk, main.
+/// recently closed sprint that has not shipped (main lacks some of its work), else the active
+/// sprint's branch; trunk, main.
 pub fn release_base(model: &GitModel, sprints: &[Sprint], facts: &BranchFacts) -> String {
     match model.topology {
         Topology::Trunk => model.main.clone(),
@@ -1081,7 +1086,35 @@ mod tests {
                 .map(|b| (b.to_string(), "0".repeat(40)))
                 .collect(),
             merged_into_main: merged.iter().map(|b| b.to_string()).collect(),
+            work_in_main: Default::default(),
         }
+    }
+
+    /// DEF-059 R-1: a closed sprint whose work main has (only a release brought forward is
+    /// missing) is skipped: the release and the next sprint come from the active sprint.
+    #[test]
+    fn release_base_skips_a_closed_sprint_whose_work_shipped() {
+        let sprints = [
+            sprint("SP-001", SprintState::Closed),
+            sprint("SP-002", SprintState::Active),
+        ];
+        let mut f = facts(&["main", "sprint/SP-001", "sprint/SP-002"], &["main"]);
+        f.work_in_main.insert("sprint/SP-001".into());
+        let model = derive(&config(true, true), &sprints, &f);
+        assert_eq!(release_base(&model, &sprints, &f), "sprint/SP-002");
+        assert_eq!(sprint_base(&sprints, &f), "sprint/SP-002");
+    }
+
+    /// DEF-059 R-2: a closed sprint with work main lacks is still where the release comes from.
+    #[test]
+    fn release_base_keeps_a_closed_sprint_with_unshipped_work() {
+        let sprints = [
+            sprint("SP-001", SprintState::Closed),
+            sprint("SP-002", SprintState::Active),
+        ];
+        let f = facts(&["main", "sprint/SP-001", "sprint/SP-002"], &["main"]);
+        let model = derive(&config(true, true), &sprints, &f);
+        assert_eq!(release_base(&model, &sprints, &f), "sprint/SP-001");
     }
 
     /// FEAT-189 R-1: the four cadences give their topology, line, production and protected

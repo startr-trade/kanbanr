@@ -51,7 +51,10 @@ pub fn lines(model: &GitModel, facts: &BranchFacts, releases: &[Release]) -> Vec
         add(&model.main);
     }
     for b in facts.branches.keys() {
-        if b.starts_with(SPRINT_PREFIX) && !facts.merged_into_main.contains(b) {
+        if b.starts_with(SPRINT_PREFIX)
+            && !facts.merged_into_main.contains(b)
+            && !facts.work_in_main.contains(b)
+        {
             add(b);
         }
     }
@@ -347,6 +350,7 @@ mod tests {
                 .map(|b| (b.to_string(), "1".repeat(40)))
                 .collect(),
             merged_into_main: merged_main.iter().map(|b| b.to_string()).collect(),
+            work_in_main: Default::default(),
         }
     }
 

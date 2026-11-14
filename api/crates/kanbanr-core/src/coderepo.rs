@@ -236,6 +236,24 @@ pub fn branch_facts(root: &Path, main: &str) -> Result<crate::gitmodel::BranchFa
             &["branch", "--merged", main, "--format=%(refname:short)"],
         )?;
         facts.merged_into_main = merged.lines().map(|l| l.trim().to_string()).collect();
+        // A sprint that only took merges since main has all its work: a release brought forward
+        // into it (DEF-059). One git call per open sprint branch; a failure leaves it out.
+        let open: Vec<String> = facts
+            .branches
+            .keys()
+            .filter(|b| {
+                b.starts_with(crate::scm::SPRINT_PREFIX) && !facts.merged_into_main.contains(*b)
+            })
+            .cloned()
+            .collect();
+        for b in open {
+            let range = format!("{main}..{b}");
+            if let Ok(n) = git(root, &["rev-list", "--count", "--no-merges", &range])
+                && n.trim() == "0"
+            {
+                facts.work_in_main.insert(b);
+            }
+        }
     }
     Ok(facts)
 }
@@ -850,6 +868,56 @@ pub(crate) mod tests {
         );
         assert!(changed_files(&repo, "nope", "feat/x").is_err());
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-059 R-1: a sprint that only took a release brought forward has all its work in main,
+    /// although main does not contain the branch; a sprint with an unmerged item commit has not.
+    #[test]
+    fn branch_facts_counts_a_forwarded_sprint_as_shipped() {
+        let repo = scratch_repo("forwarded-sprint");
+        create_branch_from(&repo, "sprint/SP-001", "main").unwrap();
+        create_branch_from(&repo, "feat/A", "main").unwrap();
+        git(&repo, &["checkout", "-q", "feat/A"]).unwrap();
+        commit_file(&repo, "a.txt", "a\n", "item A");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        merge_no_ff(&repo, "sprint/SP-001", "feat/A", "Merge feat/A").unwrap();
+        create_branch_from(&repo, "release/v0.1.0", "sprint/SP-001").unwrap();
+        git(&repo, &["checkout", "-q", "release/v0.1.0"]).unwrap();
+        commit_file(&repo, "VERSION", "0.1.0\n", "Release v0.1.0");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+        git(
+            &repo,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                "Merge release",
+                "release/v0.1.0",
+            ],
+        )
+        .unwrap();
+        // The release goes forward into the sprint, as `kanbanr git forward` does.
+        merge_no_ff(
+            &repo,
+            "sprint/SP-001",
+            "release/v0.1.0",
+            "Merge release forward",
+        )
+        .unwrap();
+        create_branch_from(&repo, "sprint/SP-002", "main").unwrap();
+        git(&repo, &["checkout", "-q", "sprint/SP-002"]).unwrap();
+        commit_file(&repo, "b.txt", "b\n", "item B, not shipped");
+        git(&repo, &["checkout", "-q", "main"]).unwrap();
+
+        let facts = branch_facts(&repo, "main").unwrap();
+        assert!(
+            !facts.merged_into_main.contains("sprint/SP-001"),
+            "main does not contain the forward merge"
+        );
+        assert!(facts.work_in_main.contains("sprint/SP-001"), "{facts:?}");
+        assert!(!facts.merged_into_main.contains("sprint/SP-002"));
+        assert!(!facts.work_in_main.contains("sprint/SP-002"), "{facts:?}");
     }
 
     /// FEAT-190: merging into a branch that is not checked out makes the merge commit without
