@@ -459,13 +459,8 @@ const ASKING: &[&str] = &[
     "a reply of",
     "reply with",
     "your answer",
-    "waiting for your",
-    "waiting on your",
-    "blocked on",
-    "i still need",
     "need your answer",
-    "asked for",
-    "let me know",
+    "i still need your",
     "tell me which",
 ];
 
@@ -502,10 +497,36 @@ pub fn parse_text_question(text: &str) -> Option<TextQuestion> {
         .iter()
         .rposition(|l| option_label(l).is_none() && question_sentence(l).is_some())
     {
-        let question = question_sentence(lines[idx]).unwrap_or_default();
+        let mut question = question_sentence(lines[idx]).unwrap_or_default();
+        let mut options = options_after(idx + 1);
+        if options.is_empty() {
+            // "…list… Which one?": the options come before a short closing question, and the
+            // question they answer is the one above them.
+            if let Some(last) = (0..idx).rev().find(|&j| option_label(lines[j]).is_some()) {
+                let mut first = last;
+                while first > 0
+                    && (option_label(lines[first - 1]).is_some()
+                        || (lines[first - 1].trim().is_empty()
+                            && first >= 2
+                            && option_label(lines[first - 2]).is_some()))
+                {
+                    first -= 1;
+                }
+                options = options_after(first);
+                if question.split_whitespace().count() <= 4
+                    && let Some(q) = (0..first).rev().find_map(|j| {
+                        (option_label(lines[j]).is_none())
+                            .then(|| question_sentence(lines[j]))
+                            .flatten()
+                    })
+                {
+                    question = q;
+                }
+            }
+        }
         return Some(TextQuestion {
             text: question,
-            options: options_after(idx + 1),
+            options,
             context,
         });
     }
@@ -517,7 +538,7 @@ pub fn parse_text_question(text: &str) -> Option<TextQuestion> {
         .collect();
     let recommended = all_options
         .iter()
-        .any(|o| o.to_ascii_lowercase().contains("(recommended)"));
+        .any(|o| crate::walkthrough::answer::is_recommended(o));
     let low = text.to_ascii_lowercase();
     let phrase = ASKING.iter().find(|p| low.contains(*p));
     if !recommended && phrase.is_none() {

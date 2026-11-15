@@ -114,7 +114,12 @@ pub struct Picked {
 /// Is this option marked recommended? Claude writes "(Recommended)" after the label in a dialog
 /// and "(recommended)" in text.
 pub fn is_recommended(label: &str) -> bool {
-    label.to_ascii_lowercase().contains("(recommended)")
+    // "(recommended)", "(Recommended)", and "(recommended, since …)" / "(recommended if …)".
+    let l = label.to_ascii_lowercase();
+    l.contains("(recommended)")
+        || l.contains("(recommended,")
+        || l.contains("(recommended ")
+        || l.contains("(recommended:")
 }
 
 /// The answer policy of one run: the runbook's rules, the current step, and the values that fill
@@ -166,8 +171,10 @@ impl<'a> Policy<'a> {
         out
     }
 
-    /// Answer a question: the first matching rule, else the recommended option(s), else the first,
-    /// else the free-text pick.
+    /// Answer a question, in this order: a rule matching the question itself (`runbook`); the
+    /// recommended option(s) (`recommended`); a rule matching the whole message, only when the
+    /// question has no options (`runbook-context`); the first option (`first`); the free-text pick
+    /// (`free-text`). The policy is logged with every answer.
     pub fn answer(&self, q: &Question) -> Picked {
         let rules = self.rules();
         if let Some(rule) = rules.iter().find(|r| r.matches(&q.text)) {
@@ -177,17 +184,9 @@ impl<'a> Policy<'a> {
                 rule: Some(rule.pattern.clone()),
             };
         }
-        // The question alone named nothing a rule knows ("Which one?"): the message it came in
-        // says what it is about.
-        if !q.context.is_empty()
-            && let Some(rule) = rules.iter().find(|r| r.matches(&q.context))
-        {
-            return Picked {
-                pick: self.fill(&rule.pick),
-                policy: "runbook-context",
-                rule: Some(rule.pattern.clone()),
-            };
-        }
+        // Then the option Claude recommends: a rule that matches only somewhere in the message
+        // must not beat it (the second real run answered 42 of 65 questions with a canned line
+        // that answered nothing).
         let recommended: Vec<&str> = q
             .options
             .iter()
@@ -204,6 +203,18 @@ impl<'a> Policy<'a> {
                 pick,
                 policy: "recommended",
                 rule: None,
+            };
+        }
+        // A question with no options ("A reply of just 1 is enough"): the message it came in says
+        // what it is about.
+        if q.options.is_empty()
+            && !q.context.is_empty()
+            && let Some(rule) = rules.iter().find(|r| r.matches(&q.context))
+        {
+            return Picked {
+                pick: self.fill(&rule.pick),
+                policy: "runbook-context",
+                rule: Some(rule.pattern.clone()),
             };
         }
         if let Some(first) = q.options.first() {
@@ -458,9 +469,13 @@ mod tests {
     #[test]
     fn the_real_togaf_runs_questions_are_detected_and_answered_by_rule() {
         let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/walkthrough-texts/togaf-v070-preview-1.json");
-        let texts: Vec<serde_json::Value> =
-            serde_json::from_str(&std::fs::read_to_string(fixture).unwrap()).unwrap();
+            .join("tests/fixtures/walkthrough-texts");
+        let mut texts: Vec<serde_json::Value> = Vec::new();
+        for f in ["togaf-v070-preview-1.json", "togaf-v070-preview-2.json"] {
+            let t: Vec<serde_json::Value> =
+                serde_json::from_str(&std::fs::read_to_string(fixture.join(f)).unwrap()).unwrap();
+            texts.extend(t);
+        }
         let runbook_text = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/walkthroughs/togaf.md"),
@@ -475,17 +490,15 @@ mod tests {
             let q = crate::walkthrough::driver::parse_text_question(text)
                 .unwrap_or_else(|| panic!("not read as a question: {text}"));
             let picked = policy.answer(&Question::from_text(&q));
-            assert!(
-                picked.policy.starts_with("runbook"),
-                "{:?} answered by {} with {:?}",
-                q.text,
-                picked.policy,
-                picked.pick
-            );
-            assert_eq!(picked.rule.as_deref(), Some(want), "{:?}", q.text);
+            match want {
+                "recommended" | "first" | "free-text" => {
+                    assert_eq!(picked.policy, want, "{:?} got {:?}", q.text, picked.pick)
+                }
+                _ => assert_eq!(picked.rule.as_deref(), Some(want), "{:?}", q.text),
+            }
             if t["recommended"].as_bool() == Some(true) {
                 assert!(
-                    q.options.iter().any(|o| o.contains("(recommended)")),
+                    q.options.iter().any(|o| is_recommended(o)),
                     "{:?}",
                     q.options
                 );

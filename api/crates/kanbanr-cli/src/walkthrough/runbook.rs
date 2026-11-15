@@ -98,9 +98,11 @@ pub enum Decision {
         passed: bool,
         link: Option<String>,
     },
-    /// Confirm the newest open prepared record of this kind.
+    /// Confirm the newest open prepared record of this kind; with `release`, the one for that
+    /// release (a promotion of it, or a CI result for its tip or its tag).
     ConfirmPrepared {
         kind: String,
+        release: Option<String>,
     },
     GrantDelegation(DelegationSel),
     SetMode(String),
@@ -353,6 +355,8 @@ struct RawGate {
 #[serde(deny_unknown_fields)]
 struct RawKind {
     kind: String,
+    #[serde(default)]
+    release: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -429,7 +433,10 @@ impl RawDecision {
             });
         }
         if let Some(k) = self.confirm_prepared {
-            out.push(Decision::ConfirmPrepared { kind: k.kind });
+            out.push(Decision::ConfirmPrepared {
+                kind: k.kind,
+                release: k.release,
+            });
         }
         if let Some(g) = self.grant_delegation {
             out.push(Decision::GrantDelegation(
@@ -1055,7 +1062,8 @@ steps:
         assert_eq!(
             rb.steps[4].decide,
             Some(Decision::ConfirmPrepared {
-                kind: "gate-result".into()
+                kind: "gate-result".into(),
+                release: None
             })
         );
         assert_eq!(
@@ -1141,8 +1149,9 @@ steps:
     }
 
     /// The two guide runbooks that ship as fixtures (the board copies are made from them): each
-    /// parses, lints clean, and places SPK-004's markers exactly once — MT-1 to MT-5 for TOGAF,
-    /// MT-1 to MT-8 for agile — and names no person, account or server.
+    /// parses, lints clean, and places every check it defines — SPK-004's MT-1 to MT-5 and DEF-056's
+    /// MT-9 for TOGAF, MT-1 to MT-8 for agile; a marker on several steps is one check — and names
+    /// no person, account or server.
     #[test]
     fn the_guide_runbooks_parse_and_lint_clean_with_their_eight_checks() {
         let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1150,7 +1159,7 @@ steps:
             .join("fixtures")
             .join("walkthroughs");
         for (file, process, markers) in
-            [("togaf.md", "togaf", 5usize), ("agile.md", "agile", 8usize)]
+            [("togaf.md", "togaf", 6usize), ("agile.md", "agile", 8usize)]
         {
             let text = std::fs::read_to_string(fixtures.join(file)).unwrap();
             let rb = Runbook::parse(&text).unwrap_or_else(|e| panic!("{file}: {e}"));
@@ -1159,9 +1168,10 @@ steps:
             assert_eq!(rb.checks.len(), markers, "{file}");
             let mut used = rb.check_markers();
             used.sort();
+            used.dedup();
             let mut defined: Vec<&str> = rb.checks.keys().map(String::as_str).collect();
             defined.sort();
-            assert_eq!(used, defined, "{file}: every check is placed exactly once");
+            assert_eq!(used, defined, "{file}: every check is placed");
             assert_eq!(lint(&rb), Vec::<LintError>::new(), "{file}");
             for word in ["/home/", "github.com", "@", "http://", "https://"] {
                 assert!(

@@ -517,6 +517,10 @@ impl Monitor {
                 let release = match decision {
                     Some(Decision::Promote { release, .. })
                     | Some(Decision::GateResult { release, .. }) => Some(release.clone()),
+                    Some(Decision::ConfirmPrepared {
+                        release: Some(release),
+                        ..
+                    }) => Some(release.clone()),
                     _ => None,
                 };
                 if starts("Record") || starts("Passed") || starts("Failed") {
@@ -685,11 +689,40 @@ impl Monitor {
                 }
                 self.write("POST", &format!("/projects/{p}/gate-results"), &body)
             }
-            Decision::ConfirmPrepared { kind } => {
+            Decision::ConfirmPrepared { kind, release } => {
                 let open = self.prepared_open(project)?;
+                // The commits a CI result for the release may be about: its tip and its tag's.
+                let commits: Vec<String> = match release {
+                    Some(r) if kind == "gate-result" => {
+                        let plan = self.plan(project, r).unwrap_or(Value::Null);
+                        [plan["release_tip"].as_str(), plan["tag"]["commit"].as_str()]
+                            .into_iter()
+                            .flatten()
+                            .filter(|c| !c.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    }
+                    _ => Vec::new(),
+                };
+                let for_release = |r: &Value| match release {
+                    None => true,
+                    Some(v) if kind == "gate-result" => r["subject"]["commit"]
+                        .as_str()
+                        .is_some_and(|c| commits.iter().any(|x| x == c)),
+                    Some(v) => r["subject"]["release"] == v.as_str(),
+                };
                 // Newest first, as the listing comes.
-                let Some(record) = open.iter().find(|r| r["kind"] == kind.as_str()) else {
-                    bail!("no prepared {kind} waits for the person");
+                let Some(record) = open
+                    .iter()
+                    .find(|r| r["kind"] == kind.as_str() && for_release(r))
+                else {
+                    bail!(
+                        "no prepared {kind}{} waits for the person",
+                        release
+                            .as_ref()
+                            .map(|r| format!(" for {r}"))
+                            .unwrap_or_default()
+                    );
                 };
                 let id = record["id"].as_str().unwrap_or("").to_string();
                 let mut body = json!({"by": by});
