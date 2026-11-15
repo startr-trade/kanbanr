@@ -56,10 +56,7 @@ pub fn project_config_dir(project_root: &Path) -> PathBuf {
 
 /// The Claude Code config dir: `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
 pub fn claude_dir() -> Option<PathBuf> {
-    std::env::var_os("CLAUDE_CONFIG_DIR")
-        .filter(|d| !d.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| kanbanr_core::project::home_dir().map(|h| h.join(".claude")))
+    kanbanr_core::claude::claude_config_dir()
 }
 
 pub fn settings_path(claude_dir: &Path) -> PathBuf {
@@ -132,11 +129,7 @@ pub fn plugin_enabled(settings: &Value) -> bool {
 /// the project's `settings.json` or `settings.local.json` or the user's `settings.json`, or the
 /// kanbanr plugin, which brings them, is enabled. A scope is told apart from its agent by them.
 pub fn identifying_hooks_registered(project_root: &Path) -> bool {
-    let mut files = vec![
-        settings_path(&project_config_dir(project_root)),
-        project_config_dir(project_root).join("settings.local.json"),
-    ];
-    files.extend(claude_dir().map(|d| settings_path(&d)));
+    let files = kanbanr_core::claude::settings_files(project_root);
     let all: Vec<Value> = files
         .iter()
         .filter_map(|f| std::fs::read_to_string(f).ok())

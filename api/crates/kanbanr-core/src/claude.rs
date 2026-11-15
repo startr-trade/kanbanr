@@ -253,6 +253,177 @@ pub fn docs_guard_reason(suggestion: &str) -> String {
     )
 }
 
+// ---- Permission rules for delegated commands (DEF-060) ----
+
+use std::path::{Path, PathBuf};
+
+/// The Claude Code allow rule that lets Claude run the command for one delegable verdict:
+/// `approve`, `ratify`, or `signoff:<name>`. Anything else has none.
+pub fn permission_rule(verdict: &str) -> Option<String> {
+    let verdict = verdict.trim();
+    match verdict {
+        "approve" => Some("Bash(kanbanr approve:*)".into()),
+        "ratify" => Some("Bash(kanbanr ratify:*)".into()),
+        v => match v.strip_prefix("signoff:") {
+            Some(name) if !name.trim().is_empty() => Some("Bash(kanbanr signoff:*)".into()),
+            _ => None,
+        },
+    }
+}
+
+/// The rules every granted delegation in force needs, sorted and deduplicated. None unless the
+/// mode is delegated.
+pub fn permission_rules(d: &crate::decisions::Decisions, now: &str) -> Vec<String> {
+    if d.mode() != crate::decisions::Mode::Delegated {
+        return Vec::new();
+    }
+    let mut rules: Vec<String> = d
+        .delegations
+        .iter()
+        .filter(|g| g.state(now) == crate::decisions::DelegationState::Granted)
+        .flat_map(|g| g.verdicts.iter())
+        .filter_map(|v| permission_rule(v))
+        .collect();
+    rules.sort();
+    rules.dedup();
+    rules
+}
+
+/// The Claude Code config dir: `$CLAUDE_CONFIG_DIR` when set and non-empty, else `~/.claude`.
+pub fn claude_config_dir() -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::project::home_dir().map(|h| h.join(".claude")))
+}
+
+/// The settings files that can allow a rule for a repository, in the order they are reported:
+/// the project's `settings.local.json` and `settings.json`, then the user's `settings.json`.
+pub fn settings_files(repo: &Path) -> Vec<PathBuf> {
+    let mut files = vec![
+        repo.join(".claude").join("settings.local.json"),
+        repo.join(".claude").join("settings.json"),
+    ];
+    files.extend(claude_config_dir().map(|d| d.join("settings.json")));
+    files
+}
+
+/// `Bash(<prefix>:*)` -> `<prefix>`.
+fn bash_prefix(rule: &str) -> Option<&str> {
+    rule.trim()
+        .strip_prefix("Bash(")?
+        .strip_suffix(":*)")
+        .map(str::trim)
+}
+
+/// Does `permissions.allow` hold `rule`, exactly or through a covering prefix rule
+/// (`Bash(kanbanr:*)` covers `Bash(kanbanr signoff:*)`)? Nothing else is interpreted.
+pub fn allows(settings: &serde_json::Value, rule: &str) -> bool {
+    let rule = rule.trim();
+    let want = bash_prefix(rule);
+    settings["permissions"]["allow"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.as_str())
+        .any(|e| {
+            let e = e.trim();
+            if e == rule {
+                return true;
+            }
+            match (bash_prefix(e), want) {
+                (Some(p), Some(q)) => {
+                    q == p || q.strip_prefix(p).is_some_and(|rest| rest.starts_with(' '))
+                }
+                _ => false,
+            }
+        })
+}
+
+fn read_settings(path: &Path) -> Option<serde_json::Value> {
+    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+}
+
+/// The first of `files` that allows `rule`.
+pub fn allowed_in(files: &[PathBuf], rule: &str) -> Option<PathBuf> {
+    files
+        .iter()
+        .find(|f| read_settings(f).is_some_and(|s| allows(&s, rule)))
+        .cloned()
+}
+
+/// The rules none of `files` allows. An absent, empty or invalid file allows nothing.
+pub fn rules_missing(files: &[PathBuf], rules: &[String]) -> Vec<String> {
+    let all: Vec<serde_json::Value> = files.iter().filter_map(|f| read_settings(f)).collect();
+    rules
+        .iter()
+        .filter(|r| !all.iter().any(|s| allows(s, r)))
+        .cloned()
+        .collect()
+}
+
+/// Add each rule not already in `permissions.allow` of the settings file at `path`, keeping every
+/// other key and its order. Returns the rules added; nothing is written when none was. Invalid
+/// JSON, or an `allow` that is not an array, is an error naming the file, and the file is left
+/// alone.
+pub fn add_permission_rules(path: &Path, rules: &[String]) -> Result<Vec<String>> {
+    let bad = |what: &str| {
+        crate::error::CoreError::Refused(format!("{} {what}; left alone", path.display()))
+    };
+    let raw = std::fs::read_to_string(path).unwrap_or_default();
+    let mut doc: serde_json::Value = if raw.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(&raw).map_err(|e| bad(&format!("is not valid JSON ({e})")))?
+    };
+    let root = doc
+        .as_object_mut()
+        .ok_or_else(|| bad("is not a JSON object"))?;
+    let permissions = root
+        .entry("permissions")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| bad("has a `permissions` that is not an object"))?;
+    let allow = permissions
+        .entry("allow")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .ok_or_else(|| bad("has a `permissions.allow` that is not an array"))?;
+    let mut added = Vec::new();
+    for rule in rules {
+        if !allow
+            .iter()
+            .any(|e| e.as_str().map(str::trim) == Some(rule.trim()))
+        {
+            allow.push(serde_json::Value::String(rule.clone()));
+            added.push(rule.clone());
+        }
+    }
+    if added.is_empty() {
+        return Ok(added);
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut out = serde_json::to_string_pretty(&doc).map_err(|e| bad(&e.to_string()))?;
+    out.push('\n');
+    crate::atomic::write(path, out)?;
+    Ok(added)
+}
+
+/// Does the repository's `.gitignore` have a line equal to `relative` or `**/<file name>`?
+/// Read-only; false when unreadable.
+pub fn gitignore_covers(repo: &Path, relative: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(repo.join(".gitignore")) else {
+        return false;
+    };
+    let name = relative.rsplit('/').next().unwrap_or(relative);
+    let wide = format!("**/{name}");
+    text.lines()
+        .map(str::trim)
+        .any(|l| l == relative || l == wide)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -461,5 +632,164 @@ mod tests {
         // Case is not identity: a repository's README is a README however it is spelled.
         assert!(!belongs_on_board("readme.md"));
         assert!(!belongs_on_board("Docs/design.md"));
+    }
+
+    // ---- Permission rules (DEF-060) ----
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "kanbanr-perm-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn deleg(
+        id: &str,
+        verdicts: &[&str],
+        until: &str,
+        state: &str,
+    ) -> crate::decisions::Delegation {
+        use crate::decisions::Stamp;
+        let stamp = Stamp {
+            by: "p".into(),
+            at: "2026-11-01T00:00:00Z".into(),
+            origin: "monitor".into(),
+            ..Default::default()
+        };
+        crate::decisions::Delegation {
+            id: id.into(),
+            verdicts: verdicts.iter().map(|v| v.to_string()).collect(),
+            all: true,
+            until: until.into(),
+            proposed: stamp.clone(),
+            granted: (state != "proposed").then(|| stamp.clone()),
+            revoked: (state == "revoked").then(|| stamp.clone()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn permission_rules_follow_the_delegations_in_force_in_delegated_mode() {
+        use crate::decisions::{Decisions, Mode, ModeChange};
+        let now = "2026-11-15T00:00:00Z";
+        let future = "2027-01-01T00:00:00Z";
+        let mut d = Decisions {
+            delegations: vec![
+                deleg(
+                    "DLG-001",
+                    &["signoff:design-review", "signoff:docs-folded"],
+                    future,
+                    "granted",
+                ),
+                deleg("DLG-002", &["approve"], future, "proposed"),
+                deleg("DLG-003", &["ratify"], "2026-11-01T00:00:00Z", "granted"),
+                deleg("DLG-004", &["ratify"], future, "revoked"),
+            ],
+            ..Default::default()
+        };
+        assert!(permission_rules(&d, now).is_empty(), "monitor mode: none");
+        d.modes.push(ModeChange {
+            mode: Mode::Delegated,
+            by: "p".into(),
+            at: now.into(),
+            origin: "monitor".into(),
+            reason: String::new(),
+            extra: Default::default(),
+        });
+        assert_eq!(permission_rules(&d, now), vec!["Bash(kanbanr signoff:*)"]);
+        d.delegations
+            .push(deleg("DLG-005", &["approve"], future, "granted"));
+        assert_eq!(
+            permission_rules(&d, now),
+            vec!["Bash(kanbanr approve:*)", "Bash(kanbanr signoff:*)"]
+        );
+        assert_eq!(permission_rule("release"), None);
+        assert_eq!(permission_rule("signoff:"), None);
+        assert_eq!(permission_rule("ratify").unwrap(), "Bash(kanbanr ratify:*)");
+    }
+
+    #[test]
+    fn a_rule_is_added_to_settings_local_without_touching_the_rest() {
+        let dir = scratch("add");
+        let rule = "Bash(kanbanr signoff:*)".to_string();
+        let path = dir.join(".claude").join("settings.local.json");
+
+        // Absent: created with the rule.
+        assert_eq!(
+            add_permission_rules(&path, &[rule.clone()]).unwrap(),
+            vec![rule.clone()]
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["permissions"]["allow"], serde_json::json!([rule]));
+
+        // Existing keys and entries are kept, in order.
+        std::fs::write(
+            &path,
+            r#"{"theme": "dark", "hooks": {"a": 1}, "permissions": {"allow": ["Bash(ls:*)"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            add_permission_rules(&path, &[rule.clone()]).unwrap().len(),
+            1
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.ends_with('\n'));
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["theme"], "dark");
+        assert_eq!(
+            v["permissions"]["allow"],
+            serde_json::json!(["Bash(ls:*)", rule])
+        );
+        let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["theme", "hooks", "permissions"]);
+        // A second add changes nothing.
+        assert!(
+            add_permission_rules(&path, &[rule.clone()])
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+
+        // Invalid JSON: an error naming the file, text unchanged.
+        std::fs::write(&path, "{ not json").unwrap();
+        let err = add_permission_rules(&path, &[rule.clone()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("settings.local.json"), "{err}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+
+        // allows / rules_missing read the result.
+        let ok = dir.join("ok.json");
+        add_permission_rules(&ok, &[rule.clone()]).unwrap();
+        assert!(rules_missing(&[ok.clone(), path.clone()], &[rule.clone()]).is_empty());
+        assert_eq!(
+            rules_missing(&[path.clone()], &[rule.clone()]),
+            vec![rule.clone()]
+        );
+
+        // A covering prefix rule allows; near misses do not.
+        let allow = |r: &str| serde_json::json!({"permissions": {"allow": [r]}});
+        assert!(allows(&allow("Bash(kanbanr:*)"), &rule));
+        assert!(!allows(&allow("Bash(kanbanrx:*)"), &rule));
+        assert!(!allows(&allow("Bash(kanbanr sign:*)"), &rule));
+        assert!(allows(&allow("Bash(kanbanr signoff:*)"), &rule));
+
+        // gitignore_covers
+        assert!(!gitignore_covers(&dir, ".claude/settings.local.json"));
+        std::fs::write(dir.join(".gitignore"), "target\n**/settings.local.json\n").unwrap();
+        assert!(gitignore_covers(&dir, ".claude/settings.local.json"));
+
+        // settings_files lists the project's two files, then the user's.
+        let files = settings_files(&dir);
+        assert_eq!(files[0], dir.join(".claude").join("settings.local.json"));
+        assert_eq!(files[1], dir.join(".claude").join("settings.json"));
+        assert!(files.len() >= 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
