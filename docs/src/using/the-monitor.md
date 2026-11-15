@@ -362,6 +362,16 @@ and the page shows the branches it found there. A monitor started anywhere else 
 from the cadence alone, without git doctor, and says so. Whether the git hooks are installed is the
 CLI's to read: the page shows it as not known and names `kanbanr git status`, which tells.
 
+### Which kanbanr the monitor runs
+
+The header shows the kanbanr version and commit the monitor runs, for example `v0.6.0 · 1138833`
+(FTR-036). Every write to the board records the newest kanbanr that wrote it in `writer.yaml` at
+the board's root. When that writer is newer than the monitor, a warning under the header names
+both versions: decisions taken on that monitor follow older rules than the work was built for.
+Restart the monitor from the newer kanbanr before taking sign-offs. For two builds of the same
+version, the monitor compares commits in the project's code repository; outside it, only a higher
+version warns. A board no stamping kanbanr has written shows no warning.
+
 ### Release actions
 
 With releases on, release decisions can be made from the monitor started with writes on

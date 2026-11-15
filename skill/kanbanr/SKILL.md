@@ -372,6 +372,8 @@ way to take a decision**: not `gate record`, `signoff`, `approve`, `ratify`, `ad
 form, the page names it. Your part is one message saying what is waiting and where:
 `kanbanr open --check` gives the addresses. If no monitor accepts writes, offer to start one with
 `kanbanr review --ui` (run it in the background) or tell the user the command to run.
+When the monitor's header warns that the board was last written by a newer kanbanr than it runs
+(FTR-036), restart the monitor from the newer kanbanr before the user takes sign-offs on it.
 
 **Where decisions are taken is the project's choice** (FTR-028). `kanbanr decisions show` says the
 mode. In `monitor` mode, every verdict is the user's, on the pages. In `delegated` mode, you may

@@ -6,6 +6,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The monitor shows the kanbanr version and commit it runs, and warns when the board was last
+  written by a newer one (FTR-036).
+
 ## [0.6.0] - 2026-11-14
 
 ### Added
