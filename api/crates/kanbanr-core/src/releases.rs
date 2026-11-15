@@ -1332,6 +1332,26 @@ pub struct ReleasePlan {
     /// Things worth knowing that do not stop the promotion, e.g. a stale release date (DEF-001).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// The stage it is at can be entered again and would redo something (DEF-057). Only on the
+    /// default plan (no stage asked for), for a stage before the cut whose gate prepares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub again: Option<AgainOffer>,
+}
+
+/// Entering the stage the release is at again, when that would redo something (DEF-057): what the
+/// second button says, what it would do, and whether it can go. Derived, never stored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct AgainOffer {
+    /// The stage entered again: `plan.from`.
+    pub stage: String,
+    /// What the button says: the Again plan's `button`, "Promote to candidate again".
+    pub button: String,
+    /// What it would do, one sentence per step that runs: "commits the version 0.1.1 to release/v0.1.1".
+    pub does: Vec<String>,
+    pub ready: bool,
+    /// What stands in the way, each as what to do about it (the Again plan's `missing`).
+    pub missing: Vec<String>,
 }
 
 /// The newest result recorded for a release's tag (FTR-026), read from the board only.
@@ -1621,7 +1641,67 @@ pub fn plan_promotion(
     repo: Option<&Path>,
     fetch: Fetch,
 ) -> Result<ReleasePlan> {
-    work_out(store, id, version, to, reason, repo, fetch, &[]).map(|w| w.plan)
+    let mut plan = work_out(store, id, version, to, reason, repo, fetch, &[]).map(|w| w.plan)?;
+    if to.map(str::trim).is_none_or(str::is_empty) {
+        plan.again = again_offer(store, id, version, &plan, repo);
+    }
+    Ok(plan)
+}
+
+/// The offer to enter `plan.from` again, or `None` when there is nothing to offer (DEF-057). The
+/// judgement is `work_out`'s for `Direction::Again`: a `prepare` step that is not a no-op.
+fn again_offer(
+    store: &Store,
+    id: &str,
+    version: &str,
+    plan: &ReleasePlan,
+    repo: Option<&Path>,
+) -> Option<AgainOffer> {
+    repo?;
+    if plan.from.is_empty() || plan.awaiting || plan.empty {
+        return None;
+    }
+    let project = cadence_on(store, id).ok()?;
+    let cadence = &project.config.cadence;
+    let stages = cadence.stages();
+    let at = stages.iter().position(|s| *s == plan.from)?;
+    if at >= cadence.cut_index() || cadence.release_prepare.writes_nothing() {
+        return None;
+    }
+    let prepares = cadence
+        .effective_release_gates()
+        .iter()
+        .any(|(name, g)| *name == plan.from && g.on_enter.contains(&ReleaseAction::Prepare));
+    if !prepares {
+        return None;
+    }
+    let w = work_out(
+        store,
+        id,
+        version,
+        Some(&plan.from),
+        "",
+        repo,
+        Fetch::No,
+        &[],
+    )
+    .ok()?;
+    if w.plan.steps.iter().all(|s| s.noop) {
+        return None;
+    }
+    Some(AgainOffer {
+        stage: plan.from.clone(),
+        button: w.plan.button,
+        does: w
+            .plan
+            .steps
+            .iter()
+            .filter(|s| !s.noop && s.blocked.is_none())
+            .map(|s| s.does.clone())
+            .collect(),
+        ready: w.plan.ready,
+        missing: w.plan.missing,
+    })
 }
 
 /// `accept` is the untested requirements the person accepts shipping, as `CODE/R-n` (DEF-043).
@@ -2744,6 +2824,7 @@ fn work_out(
         repo: repo.is_some(),
         empty,
         warnings,
+        again: None,
     };
     Ok(Worked {
         plan,
@@ -5653,6 +5734,100 @@ pub(crate) mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("v0.2.0 is already at candidate"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// DEF-057 R-1: a candidate whose release-prepare configuration changed since it entered
+    /// candidate offers entering candidate again, on the default plan only.
+    #[test]
+    fn release_plan_offers_candidate_again_after_prepare_changes() {
+        let (store, dir, repo) = board_and_repo("def057");
+        prepare_fixture(&repo);
+        super::add(&store, "shop", "v0.2.0", "", "Gates").unwrap();
+        plan_done(&store, "v0.2.0");
+        configure(&store, THREE);
+        let plan = |to: Option<&str>, repo: Option<&Path>| {
+            super::plan_promotion(&store, "shop", "v0.2.0", to, "", repo, super::Fetch::No).unwrap()
+        };
+        super::promote(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some("candidate"),
+            "Ada",
+            "",
+            Some(&repo),
+        )
+        .unwrap();
+        let before = plan(None, Some(&repo));
+        assert_eq!(before.to, "main");
+        assert!(before.again.is_none(), "nothing configured");
+        configure(&store, &format!("{THREE}{PREPARE}"));
+        let after = plan(None, Some(&repo));
+        assert_eq!(after.to, "main");
+        let again = after.again.expect("offered");
+        assert_eq!(again.stage, "candidate");
+        assert_eq!(again.button, "Promote to candidate again");
+        assert_eq!(
+            again.does,
+            ["commits the version 0.2.0, the changelog heading and draft notes to release/v0.2.0"]
+        );
+        assert!(again.ready, "{:?}", again.missing);
+        assert!(again.missing.is_empty());
+        assert!(
+            plan(Some("main"), Some(&repo)).again.is_none(),
+            "only the default plan offers"
+        );
+        assert!(plan(None, None).again.is_none(), "no repository");
+        super::promote(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some("candidate"),
+            "Ada",
+            "",
+            Some(&repo),
+        )
+        .unwrap();
+        let releases = super::load(&store, "shop").unwrap();
+        let last = releases
+            .iter()
+            .find(|r| r.version == "v0.2.0")
+            .and_then(|r| r.stages.last())
+            .unwrap();
+        assert!(last.reason.starts_with("again: "), "{}", last.reason);
+        assert!(
+            plan(None, Some(&repo)).again.is_none(),
+            "redone: nothing left"
+        );
+        let err = super::promote(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some("candidate"),
+            "Ada",
+            "",
+            Some(&repo),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("already at candidate"), "{err}");
+        super::promote(
+            &store,
+            "shop",
+            "v0.2.0",
+            Some("main"),
+            "Ada",
+            "",
+            Some(&repo),
+        )
+        .unwrap();
+        // Main does not prepare, whatever the configuration says.
+        assert!(
+            plan(None, Some(&repo)).again.is_none(),
+            "main does not prepare"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
     }
