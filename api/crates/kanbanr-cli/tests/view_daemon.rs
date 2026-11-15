@@ -1885,3 +1885,91 @@ fn a_verdict_posted_to_the_monitor_is_recorded_as_monitor() {
         "{second}"
     );
 }
+
+/// R-8: `kanbanr serve` started in the scratch repository answers both routes with the bytes the
+/// CLI prints; an unavailable position is a 409 and a stray parameter a 400.
+#[test]
+fn the_daemon_serves_the_position_and_the_docs_view() {
+    let base = std::env::temp_dir().join(format!("kanbanr-view-pos-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("home");
+    let work = base.join("code").join("shop");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(work.join("docs")).unwrap();
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .output()
+            .expect("run git");
+        assert!(o.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    let kanbanr = |args: &[&str]| release_cli(&home, &work, args);
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.name", "T"]);
+    git(&["config", "user.email", "t@x"]);
+    git(&["config", "core.autocrlf", "false"]);
+    std::fs::write(work.join("docs/a.md"), "# A\n").unwrap();
+    kanbanr(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    let board = kanbanr(&["where"]);
+    assert!(
+        std::fs::canonicalize(&board)
+            .unwrap()
+            .starts_with(std::fs::canonicalize(&base).unwrap()),
+        "the scratch board must be the test's own, not {board}"
+    );
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "--no-verify", "-m", "[no-ref] docs"]);
+    let head = git(&["rev-parse", "HEAD"]);
+
+    let port = free_port();
+    let child = cli_cmd()
+        .args(["serve", "--bind", &format!("127.0.0.1:{port}")])
+        .current_dir(&work)
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &board)
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let _daemon = Daemon(child);
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while ureq::get(&format!("{url}/api/projects")).call().is_err() {
+        assert!(Instant::now() < deadline, "daemon did not become ready");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let get = |path: &str| -> (u16, String) {
+        match ureq::get(&format!("{url}/api{path}")).call() {
+            Ok(r) => (r.status(), r.into_string().unwrap()),
+            Err(ureq::Error::Status(c, r)) => (c, r.into_string().unwrap()),
+            Err(e) => panic!("no answer: {e}"),
+        }
+    };
+    let (status, pos) = get("/projects/shop/position");
+    assert_eq!(status, 200, "{pos}");
+    assert_eq!(pos, kanbanr(&["--json", "position"]));
+    let v: serde_json::Value = serde_json::from_str(&pos).unwrap();
+    assert_eq!(v["live"]["commit"], head.as_str());
+    let (status, view) = get("/projects/shop/views/docs?root=docs&max-nodes=60");
+    assert_eq!(status, 200, "{view}");
+    assert_eq!(view, kanbanr(&["--json", "view", "docs"]));
+    let (status, same) = get(&format!("/projects/shop/views/docs?at={head}"));
+    assert_eq!(status, 200);
+    assert_eq!(same, view);
+    let (status, why) = get(&format!("/projects/shop/views/docs?at={}", "1".repeat(40)));
+    assert_eq!(status, 409, "{why}");
+    assert!(why.contains("is not here: this checkout is at"), "{why}");
+    assert_eq!(get("/projects/shop/views/docs?at=zz").0, 400);
+    assert_eq!(get("/projects/shop/views/docs?rooot=docs").0, 400);
+    assert_eq!(get("/projects/shop/position?x=1").0, 400);
+    let _ = std::fs::remove_dir_all(&base);
+}
