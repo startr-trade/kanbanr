@@ -565,51 +565,7 @@ impl Monitor {
                     ));
                 };
                 let plan = self.plan(project, &release)?;
-                let label = plan["button"].as_str().unwrap_or("");
-                if plan["empty"] == true {
-                    return Ok(Found::Absent(format!("{release} holds nothing")));
-                }
-                if !starts(label) {
-                    return Ok(Found::Absent(format!(
-                        "the Releases page offers \"{label}\" for {release}, not \"{}\"",
-                        offer.button
-                    )));
-                }
-                let ready = plan["ready"] == true && plan["repo"] == true;
-                let tag_blocked = plan["confirm"] == true
-                    && plan["tag"].is_object()
-                    && plan["tag"]["gate"].as_str().is_some_and(|g| !g.is_empty())
-                    && plan["tag"]["state"] != "passed";
-                let accept_only = accept_untested(&plan).is_some();
-                if (ready && !tag_blocked) || accept_only {
-                    Ok(Found::Offered)
-                } else {
-                    let missing: Vec<String> = plan["conditions"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter(|c| c["holds"] != true)
-                        .map(|c| {
-                            format!(
-                                "{}: {}",
-                                c["check"].as_str().unwrap_or(""),
-                                c["detail"].as_str().unwrap_or("")
-                            )
-                        })
-                        .chain(
-                            plan["missing"]
-                                .as_array()
-                                .into_iter()
-                                .flatten()
-                                .filter_map(Value::as_str)
-                                .map(str::to_string),
-                        )
-                        .collect();
-                    Ok(Found::Absent(format!(
-                        "\"{label}\" is greyed out for {release}: {}",
-                        missing.join("; ")
-                    )))
-                }
+                Ok(release_offer(&plan, &release, &offer.button))
             }
             other => Ok(Found::Absent(format!("no page named {other}"))),
         }
@@ -976,6 +932,116 @@ pub fn append_prepared_row(
     Ok(())
 }
 
+/// Which of a release plan's buttons an offer names: the primary (`plan.button`), or the second
+/// one a plan at a preparing stage whose preparation would change carries as `plan.again.button`
+/// (DEF-057, "Promote to candidate again"). An exact label wins over a prefix, so "Promote to
+/// candidate" never takes the `again` button and "Promote to candidate again" never takes the
+/// primary. `Err` lists the labels the page offers instead.
+pub fn release_button(
+    plan: &Value,
+    button: &str,
+) -> std::result::Result<(String, bool), Vec<String>> {
+    let primary = plan["button"].as_str().unwrap_or("").to_string();
+    let again = plan["again"]["button"]
+        .as_str()
+        .filter(|b| !b.is_empty())
+        .map(str::to_string);
+    let wanted = norm(button);
+    let mut labels: Vec<(String, bool)> = Vec::new();
+    if !primary.is_empty() {
+        labels.push((primary, false));
+    }
+    if let Some(a) = again {
+        labels.push((a, true));
+    }
+    if let Some((l, is_again)) = labels.iter().find(|(l, _)| norm(l) == wanted) {
+        return Ok((l.clone(), *is_again));
+    }
+    if let Some((l, is_again)) = labels
+        .iter()
+        .find(|(l, _)| norm(l).starts_with(&wanted) || wanted.starts_with(&norm(l)))
+    {
+        return Ok((l.clone(), *is_again));
+    }
+    Err(labels.into_iter().map(|(l, _)| l).collect())
+}
+
+/// Is the button an offer names offered for `release`, as the Releases page would show it from
+/// `plan` (`GET /projects/{p}/releases/{v}/plan`)? The primary button is offered when the plan is
+/// ready with the repository and no tag result blocks it, or when the cut waits only for the
+/// person's acceptance of untested requirements; the `again` button when its own `ready` is true.
+pub fn release_offer(plan: &Value, release: &str, button: &str) -> Found {
+    if plan["empty"] == true {
+        return Found::Absent(format!("{release} holds nothing"));
+    }
+    let (label, is_again) = match release_button(plan, button) {
+        Ok(found) => found,
+        Err(labels) => {
+            let offered: Vec<String> = labels.iter().map(|l| format!("\"{l}\"")).collect();
+            return Found::Absent(format!(
+                "the Releases page offers {} for {release}, not \"{button}\"",
+                if offered.is_empty() {
+                    "no button".to_string()
+                } else {
+                    offered.join(" and ")
+                }
+            ));
+        }
+    };
+    if is_again {
+        return if plan["again"]["ready"] == true {
+            Found::Offered
+        } else {
+            let missing: Vec<String> = plan["again"]["missing"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            Found::Absent(format!(
+                "\"{label}\" is greyed out for {release}: {}",
+                missing.join("; ")
+            ))
+        };
+    }
+    let ready = plan["ready"] == true && plan["repo"] == true;
+    let tag_blocked = plan["confirm"] == true
+        && plan["tag"].is_object()
+        && plan["tag"]["gate"].as_str().is_some_and(|g| !g.is_empty())
+        && plan["tag"]["state"] != "passed";
+    let accept_only = accept_untested(plan).is_some();
+    if (ready && !tag_blocked) || accept_only {
+        Found::Offered
+    } else {
+        let missing: Vec<String> = plan["conditions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|c| c["holds"] != true)
+            .map(|c| {
+                format!(
+                    "{}: {}",
+                    c["check"].as_str().unwrap_or(""),
+                    c["detail"].as_str().unwrap_or("")
+                )
+            })
+            .chain(
+                plan["missing"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string),
+            )
+            .collect();
+        Found::Absent(format!(
+            "\"{label}\" is greyed out for {release}: {}",
+            missing.join("; ")
+        ))
+    }
+}
+
 /// The commit a release's page records a CI result for: the release tip while `gate_passed` is
 /// unmet, else the tag's commit while its result is not passed.
 fn gate_commit(plan: &Value) -> Option<String> {
@@ -1104,9 +1170,12 @@ pub fn is_no_browser(e: &anyhow::Error) -> bool {
     e.downcast_ref::<NoBrowser>().is_some()
 }
 
-/// A headless Chromium or Chrome over the DevTools protocol (the `headless_chrome` crate).
+/// A headless Chromium or Chrome over the DevTools protocol (the `chromiumoxide` crate, async on a
+/// tokio runtime of its own; this API stays synchronous for the run loop).
 pub struct Browser {
-    inner: headless_chrome::Browser,
+    rt: tokio::runtime::Runtime,
+    inner: chromiumoxide::Browser,
+    handler: tokio::task::JoinHandle<()>,
 }
 
 impl std::fmt::Debug for Browser {
@@ -1116,12 +1185,13 @@ impl std::fmt::Debug for Browser {
 }
 
 /// One rendered page.
-pub struct Page {
-    tab: std::sync::Arc<headless_chrome::Tab>,
+pub struct Page<'a> {
+    rt: &'a tokio::runtime::Runtime,
+    page: chromiumoxide::Page,
 }
 
 /// The browser to drive: `KANBANR_WALKTHROUGH_CHROME`, else `CHROME`, else the first of the usual
-/// names on PATH.
+/// names on PATH (chromiumoxide's detection, Edge included).
 pub fn find_browser() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("KANBANR_WALKTHROUGH_CHROME")
         .map(PathBuf::from)
@@ -1129,7 +1199,7 @@ pub fn find_browser() -> Option<PathBuf> {
     {
         return Some(p);
     }
-    headless_chrome::browser::default_executable().ok()
+    chromiumoxide::detection::default_executable(Default::default()).ok()
 }
 
 impl Browser {
@@ -1148,33 +1218,60 @@ impl Browser {
             )
             .into());
         };
-        let options = headless_chrome::LaunchOptions::default_builder()
-            .headless(true)
-            .path(Some(path.clone()))
-            .window_size(Some((1400, 1000)))
-            .idle_browser_timeout(Duration::from_secs(600))
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()?;
+        let config = chromiumoxide::BrowserConfig::builder()
+            .chrome_executable(&path)
+            .new_headless_mode()
+            .window_size(1400, 1000)
+            .launch_timeout(Duration::from_secs(60))
+            .request_timeout(Duration::from_secs(30))
             .build()
             .map_err(|e| anyhow!("browser options: {e}"))?;
-        let inner = headless_chrome::Browser::new(options)
+        let (inner, mut handler) = rt
+            .block_on(chromiumoxide::Browser::launch(config))
             .map_err(|e| NoBrowser(format!("{} would not start: {e}", path.display())))?;
-        Ok(Browser { inner })
+        // The handler drives the DevTools connection for as long as the browser lives.
+        let handler = rt.spawn(async move {
+            use futures::StreamExt;
+            while let Some(event) = handler.next().await {
+                if event.is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(Browser { rt, inner, handler })
     }
 
     /// Open `url` in a new tab and wait for its text to settle (the monitor renders after load).
-    pub fn page(&self, url: &str) -> Result<Page> {
-        let tab = self.inner.new_tab().map_err(|e| anyhow!("new tab: {e}"))?;
-        tab.set_default_timeout(Duration::from_secs(30));
-        tab.navigate_to(url)
+    pub fn page(&self, url: &str) -> Result<Page<'_>> {
+        let page = self
+            .rt
+            .block_on(async {
+                let page = self.inner.new_page(url).await?;
+                page.wait_for_navigation().await?;
+                Ok::<_, chromiumoxide::error::CdpError>(page)
+            })
             .map_err(|e| anyhow!("open {url}: {e}"))?;
-        tab.wait_until_navigated()
-            .map_err(|e| anyhow!("load {url}: {e}"))?;
-        let page = Page { tab };
+        let page = Page { rt: &self.rt, page };
         page.settle(Duration::from_secs(10))?;
         Ok(page)
     }
 }
 
-impl Page {
+impl Drop for Browser {
+    fn drop(&mut self) {
+        self.rt.block_on(async {
+            let _ = self.inner.close().await;
+            let _ = self.inner.wait().await;
+        });
+        self.handler.abort();
+    }
+}
+
+impl Page<'_> {
     /// Wait until two reads of the page's text, 400 ms apart, agree, or `max` has passed.
     fn settle(&self, max: Duration) -> Result<()> {
         let deadline = Instant::now() + max;
@@ -1190,14 +1287,23 @@ impl Page {
         Ok(())
     }
 
+    /// Run `js` as an expression (never as a function to call) and read its string value.
     fn eval_string(&self, js: &str) -> Result<String> {
+        use chromiumoxide::cdp::js_protocol::runtime::EvaluateParams;
+        let params = EvaluateParams::builder()
+            .expression(js)
+            .return_by_value(true)
+            .build()
+            .map_err(|e| anyhow!("page script: {e}"))?;
         let out = self
-            .tab
-            .evaluate(js, false)
+            .rt
+            .block_on(
+                self.page
+                    .evaluate(chromiumoxide::js::Evaluation::from(params)),
+            )
             .map_err(|e| anyhow!("page script: {e}"))?;
         Ok(out
-            .value
-            .as_ref()
+            .value()
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string())
@@ -1253,10 +1359,15 @@ impl Page {
 
     /// Save the page as a PNG.
     pub fn screenshot(&self, file: &Path) -> Result<()> {
-        use headless_chrome::protocol::cdp::Page::CaptureScreenshotFormatOption;
+        use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
+        use chromiumoxide::page::ScreenshotParams;
+        let params = ScreenshotParams::builder()
+            .format(CaptureScreenshotFormat::Png)
+            .full_page(true)
+            .build();
         let png = self
-            .tab
-            .capture_screenshot(CaptureScreenshotFormatOption::Png, None, None, true)
+            .rt
+            .block_on(self.page.screenshot(params))
             .map_err(|e| anyhow!("screenshot: {e}"))?;
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent)?;
@@ -1478,6 +1589,28 @@ pub(crate) mod tests {
             panic!("no release exists")
         };
         assert!(!why.is_empty());
+        // A plan with DEF-057's second button: the offer naming it is found, the primary still is,
+        // and an absent offer names both.
+        let plan = json!({
+            "version": "v0.1.0", "button": "Promote to candidate", "ready": true, "repo": true,
+            "empty": false, "confirm": false, "conditions": [], "missing": [],
+            "again": {"stage": "candidate", "button": "Promote to candidate again", "does": [], "ready": true, "missing": []}
+        });
+        assert_eq!(
+            release_offer(&plan, "v0.1.0", "Promote to candidate again"),
+            Found::Offered
+        );
+        assert_eq!(
+            release_offer(&plan, "v0.1.0", "Promote to candidate"),
+            Found::Offered
+        );
+        let Found::Absent(why) = release_offer(&plan, "v0.1.0", "Cut v0.1.0") else {
+            panic!("the cut is not offered")
+        };
+        assert!(
+            why.contains("\"Promote to candidate\" and \"Promote to candidate again\""),
+            "{why}"
+        );
         // The board is untouched: the item is still unapproved.
         let feature = monitor.feature("shop", "FEAT-001").unwrap();
         assert!(
@@ -1729,6 +1862,82 @@ pub(crate) mod tests {
         }
         monitor.stop();
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// T15 (DEF-057): a release plan's `again` button is an offer too; an exact label wins over a
+    /// prefix either way; the `again` button follows its own readiness; a plan without `again`
+    /// reads as before, naming the one button it has.
+    #[test]
+    fn a_release_plans_again_button_is_an_offer_too() {
+        let with_again = |again_ready: bool| {
+            json!({
+                "version": "v0.1.0", "button": "Promote to candidate", "ready": false, "repo": true,
+                "empty": false, "confirm": false,
+                "conditions": [{"check": "items_finished", "holds": false, "detail": "FEAT-002 is at Design"}],
+                "missing": [],
+                "again": {"stage": "candidate", "button": "Promote to candidate again", "does": ["prepare again"],
+                          "ready": again_ready, "missing": if again_ready { vec![] } else { vec!["the notes changed since"] }}
+            })
+        };
+        assert_eq!(
+            release_button(&with_again(true), "Promote to candidate again"),
+            Ok(("Promote to candidate again".into(), true))
+        );
+        assert_eq!(
+            release_button(&with_again(true), "Promote to candidate"),
+            Ok(("Promote to candidate".into(), false))
+        );
+        assert_eq!(
+            release_button(&with_again(true), "promote"),
+            Ok(("Promote to candidate".into(), false)),
+            "a prefix takes the primary first"
+        );
+        assert_eq!(
+            release_offer(&with_again(true), "v0.1.0", "Promote to candidate again"),
+            Found::Offered
+        );
+        let Found::Absent(why) =
+            release_offer(&with_again(false), "v0.1.0", "Promote to candidate again")
+        else {
+            panic!("not ready")
+        };
+        assert!(
+            why.contains("greyed out") && why.contains("the notes changed since"),
+            "{why}"
+        );
+        let Found::Absent(why) = release_offer(&with_again(true), "v0.1.0", "Promote to candidate")
+        else {
+            panic!("the primary is not ready")
+        };
+        assert!(
+            why.contains("items_finished: FEAT-002 is at Design"),
+            "{why}"
+        );
+        let Found::Absent(why) = release_offer(&with_again(true), "v0.1.0", "Promote to main")
+        else {
+            panic!("not offered")
+        };
+        assert!(
+            why.contains("offers \"Promote to candidate\" and \"Promote to candidate again\" for v0.1.0, not \"Promote to main\""),
+            "{why}"
+        );
+        // Without `again`: one label named, as before.
+        let plain = json!({"button": "Cut v0.1.0", "ready": true, "repo": true, "empty": false, "confirm": false, "conditions": [], "missing": []});
+        assert_eq!(
+            release_offer(&plain, "v0.1.0", "Cut v0.1.0"),
+            Found::Offered
+        );
+        let Found::Absent(why) = release_offer(&plain, "v0.1.0", "Promote to main") else {
+            panic!("not offered")
+        };
+        assert!(
+            why.contains("offers \"Cut v0.1.0\" for v0.1.0, not \"Promote to main\""),
+            "{why}"
+        );
+        assert!(matches!(
+            release_offer(&json!({"empty": true}), "v0.1.0", "Cut v0.1.0"),
+            Found::Absent(_)
+        ));
     }
 
     #[test]
