@@ -1,0 +1,3 @@
+time	step	id	kind	prepared_by	confirmed_by	edited
+2026-11-15T10:05:00Z	4.6	20261115T100400Z-manual-test	manual-test	Claude	Tester	none
+2026-11-15T10:17:00Z	6.19	20261115T101600Z-gate-result	gate-result	Claude	Tester	none

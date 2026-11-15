@@ -1,0 +1,6 @@
+security.yaml
+.kanbanr.lock
+.kanbanr.unpushed
+events.config.yaml
+.sessions/
+*.tmp
