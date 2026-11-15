@@ -25,6 +25,8 @@ pub fn parse_results(text: &str) -> BTreeMap<String, bool> {
             vec![r]
         } else if let Some(r) = read_pytest(line) {
             vec![r]
+        } else if let Some(rs) = read_playwright(line) {
+            rs
         } else if let Some(r) = read_marked(line) {
             vec![r]
         } else {
@@ -44,6 +46,7 @@ pub fn parse_results(text: &str) -> BTreeMap<String, bool> {
 /// What one line says, once a reader owns it. `Unproven`: the line is a result that proves
 /// nothing (skipped, todo, ignored); owning it keeps a later reader from misreading it.
 /// (Named `Outcome`, not `Verdict`: a verdict is a person's decision elsewhere in kanbanr.)
+#[derive(Clone, Copy)]
 enum Outcome {
     Passed,
     Failed,
@@ -110,6 +113,91 @@ fn read_pytest(line: &str) -> Option<Reading> {
         }
     }
     None
+}
+
+/// Playwright list reporter: `✓|✘|-  <n> [<project>] › <file>:<l>:<c> › <titles> (<duration>)`.
+/// Boundary: a mark, two or more spaces, the digits of the index, one space, then a title of an
+/// optional `[<project>] › `, a location ending `:<digits>:<digits>`, ` › ` and the titles. Two
+/// readings: `<file> › <titles>` and `<titles>`. The `ok`/`x` marks are not read.
+fn read_playwright(line: &str) -> Option<Vec<Reading>> {
+    const SEP: &str = " \u{203a} ";
+    let (mark_len, outcome) = if line.starts_with('\u{2713}') {
+        ('\u{2713}'.len_utf8(), Outcome::Passed)
+    } else if line.starts_with('\u{2718}') {
+        ('\u{2718}'.len_utf8(), Outcome::Failed)
+    } else if line.starts_with('-') {
+        (1, Outcome::Unproven)
+    } else {
+        return None;
+    };
+    let rest = &line[mark_len..];
+    let after_spaces = rest.trim_start_matches(' ');
+    if rest.len() - after_spaces.len() < 2 {
+        return None;
+    }
+    let digits = after_spaces.bytes().take_while(u8::is_ascii_digit).count();
+    let title = after_spaces[digits..]
+        .strip_prefix(' ')
+        .filter(|_| digits > 0)?;
+    // Optional `[<project>] › `.
+    let title = match title.strip_prefix('[') {
+        Some(t) => {
+            let (_project, t) = t.split_once(']')?;
+            t.strip_prefix(SEP)?
+        }
+        None => title,
+    };
+    let (location, titles) = title.split_once(SEP)?;
+    let (file_line, col) = location.rsplit_once(':')?;
+    let (file, row) = file_line.rsplit_once(':')?;
+    if file.is_empty() || !all_digits(row) || !all_digits(col) {
+        return None;
+    }
+    let titles = without_playwright_suffix(titles);
+    if titles.is_empty() {
+        return None;
+    }
+    let mk = |name: String| Reading { name, outcome };
+    Some(vec![
+        mk(format!("{file}{SEP}{titles}")),
+        mk(titles.to_string()),
+    ])
+}
+
+/// Whether `d` is a Playwright duration: `<N>ms`, `<N>.<d>s`, `<N>.<d>m` or `<N>.<d>h`.
+fn is_playwright_duration(d: &str) -> bool {
+    if let Some(n) = d.strip_suffix("ms") {
+        return all_digits(n);
+    }
+    let Some(n) = d
+        .strip_suffix('s')
+        .or_else(|| d.strip_suffix('m'))
+        .or_else(|| d.strip_suffix('h'))
+    else {
+        return false;
+    };
+    n.split_once('.')
+        .is_some_and(|(a, b)| all_digits(a) && b.len() == 1 && all_digits(b))
+}
+
+/// A Playwright title without its trailing ` (<duration>)` and then ` (retry #<N>)`.
+fn without_playwright_suffix(title: &str) -> &str {
+    let mut s = title.trim();
+    if let Some(h) = s.strip_suffix(')')
+        && let Some(i) = h.rfind(" (")
+        && is_playwright_duration(&h[i + 2..])
+        && !h[..i].trim_end().is_empty()
+    {
+        s = h[..i].trim_end();
+    }
+    if let Some(h) = s.strip_suffix(')')
+        && let Some(i) = h.rfind(" (retry #")
+        && all_digits(&h[i + " (retry #".len()..])
+        && !h[..i].trim_end().is_empty()
+    {
+        s = h[..i].trim_end();
+    }
+    s
 }
 
 /// A marked line: `✓|×|✗|↓|□|PASS|FAIL <name>`, Vitest's suffix removed. Boundary: the mark is
@@ -509,6 +597,52 @@ tests/test_repository.py::test_changelog_exists_with_unreleased_section PASSED [
         assert!(one("PASSED tests/x.py::test_r").is_empty());
         assert!(one("FAILED tests/x.py::test_r - assert 1 == 2").is_empty());
         assert!(one("the tests PASSED quickly").is_empty());
+    }
+
+    /// A real line from the Playwright 1.65.1 list-reporter run of DOC-001 (14 Nov 2026).
+    const PLAYWRIGHT_1_65: &str = "  \u{2713}  1 [chromium] \u{203a} e2e/kept-basket.spec.ts:4:3 \u{203a} kept basket \u{203a} basket is kept after the browser is closed and reopened (701ms)";
+
+    #[test]
+    fn playwright_list_lines_are_read_as_file_and_titles() {
+        let full = "e2e/kept-basket.spec.ts \u{203a} kept basket \u{203a} basket is kept after the browser is closed and reopened";
+        let titles = "kept basket \u{203a} basket is kept after the browser is closed and reopened";
+        let r = parse_results(PLAYWRIGHT_1_65);
+        assert_eq!(r.len(), 2, "{r:?}");
+        assert_eq!(r.get(full), Some(&true));
+        assert_eq!(r.get(titles), Some(&true));
+        let one = |t: &str| parse_results(t);
+        let r = one(
+            "  \u{2718}  2 [chromium] \u{203a} e2e/basket.spec.ts:10:1 \u{203a} removes a line (800ms)",
+        );
+        assert_eq!(
+            r.get("e2e/basket.spec.ts \u{203a} removes a line"),
+            Some(&false)
+        );
+        assert_eq!(r.get("removes a line"), Some(&false));
+        assert!(
+            one("  -  3 [chromium] \u{203a} e2e/basket.spec.ts:20:1 \u{203a} later").is_empty()
+        );
+        // The same test failing in one project and passing in another stays red, in either order.
+        let a = "  \u{2718}  2 [chromium] \u{203a} e2e/basket.spec.ts:10:1 \u{203a} removes a line (800ms)";
+        let b = "  \u{2713}  4 [firefox] \u{203a} e2e/basket.spec.ts:10:1 \u{203a} removes a line (retry #1) (1.0s)";
+        assert_eq!(
+            one(&format!("{a}\n{b}")).get("removes a line"),
+            Some(&false)
+        );
+        assert_eq!(
+            one(&format!("{b}\n{a}")).get("removes a line"),
+            Some(&false)
+        );
+        let r = one("  \u{2713}  5 e2e/basket.spec.ts:30:1 \u{203a} no project (1.2m)");
+        assert_eq!(r.get("e2e/basket.spec.ts \u{203a} no project"), Some(&true));
+        let r = one(
+            "  \u{2713}  6 [chromium] \u{203a} e2e/basket.spec.ts:40:1 \u{203a} tagged @smoke (3ms)",
+        );
+        assert_eq!(
+            r.get("e2e/basket.spec.ts \u{203a} tagged @smoke"),
+            Some(&true)
+        );
+        assert!(one("\u{2713}  7 something else").is_empty());
     }
 
     fn project_with_tests(tests: &str) -> Project {
