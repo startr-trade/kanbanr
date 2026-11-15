@@ -108,9 +108,10 @@ answer is not exact, has no ID, and says so in a warning.
 
 Two facts shape what a position can see. A **submodule's own state does not move the position**
 (its gitlink is skipped, as katalogr's code skips it; committing a new submodule pointer does move
-it). And a checkout whose **filters change bytes** (`core.autocrlf`, `text=auto`) reads dirty where
-`git status` says clean, because a position hashes raw bytes, so there a view is exact only at the
-live position, never at the commit it would otherwise equal. Measured in a release build: one read of a clean checkout of 10,000 tracked files takes 110.7 ms
+it). Each working file is compared in its **repository form**, after git's to-git conversion
+(`core.autocrlf`, `core.eol`, the `text`, `eol`, `crlf` and `ident` attributes), so a checkout whose
+line endings git converts reads clean, as katalogr reads it. Driver filters such as LFS are never
+run, and `working-tree-encoding` is not applied. Measured in a release build: one read of a clean checkout of 10,000 tracked files takes 110.7 ms
 (median of three, machine load about 7; SPK-001 measured 141.8 ms on a busier machine), against a
 budget of 200 ms; a view ID takes about 6 µs against a budget of 100 µs. A debug build is slower
 (224 ms) and its test prints the figure and asserts nothing.
