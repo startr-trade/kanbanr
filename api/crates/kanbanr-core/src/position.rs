@@ -303,8 +303,14 @@ fn workers_for(n: usize) -> usize {
     MAX_WORKERS.min(cores).min(n.div_ceil(512)).max(1)
 }
 
+/// HEAD's blobs: path bytes to blob id.
+type HeadBlobs = BTreeMap<Vec<u8>, String>;
+
+/// Tracked paths whose stored id differs from HEAD's (None when deleted), in path order.
+type TrackedLines = Vec<(Vec<u8>, Option<String>)>;
+
 /// HEAD's commit, None when unborn, and its blobs.
-fn head_of_checkout(root: &Path) -> Result<(Option<String>, BTreeMap<Vec<u8>, String>)> {
+fn head_of_checkout(root: &Path) -> Result<(Option<String>, HeadBlobs)> {
     let commit = rev_parse(root, "HEAD").ok();
     let head = match &commit {
         Some(c) => head_blobs(root, c, "")?,
@@ -314,7 +320,10 @@ fn head_of_checkout(root: &Path) -> Result<(Option<String>, BTreeMap<Vec<u8>, St
 }
 
 /// read_position's body: the state, and how many files it converted. `workers` is the number of
-/// threads that read the tracked files (1 reads on the calling thread).
+/// threads that read the tracked files (1 reads on the calling thread). read_position lists HEAD
+/// once and calls [`read_from`] with `workers_for` of its length; this entry point, with the count
+/// given, is what the tests use.
+#[cfg(test)]
 pub(crate) fn read_state(root: &Path, repo: &str, workers: usize) -> Result<(WorkingState, usize)> {
     let (commit, head) = head_of_checkout(root)?;
     read_from(root, repo, commit, head, workers)
@@ -322,7 +331,7 @@ pub(crate) fn read_state(root: &Path, repo: &str, workers: usize) -> Result<(Wor
 
 /// The tracked paths of `part` whose stored id differs from HEAD's, or that are deleted (None), in
 /// order, and how many files the read converted.
-fn read_tracked(root: &Path, part: &[(&[u8], &str)]) -> (Vec<(Vec<u8>, Option<String>)>, usize) {
+fn read_tracked(root: &Path, part: &[(&[u8], &str)]) -> (TrackedLines, usize) {
     let mut form = RepoForm::new(root);
     let mut out = Vec::new();
     for (path, oid) in part {
@@ -341,7 +350,7 @@ fn read_from(
     root: &Path,
     repo: &str,
     commit: Option<String>,
-    head: BTreeMap<Vec<u8>, String>,
+    head: HeadBlobs,
     workers: usize,
 ) -> Result<(WorkingState, usize)> {
     let tracked: Vec<(&[u8], &str)> = head
@@ -349,8 +358,7 @@ fn read_from(
         .map(|(p, o)| (p.as_slice(), o.as_str()))
         .collect();
     let workers = workers.max(1);
-    let parts: Vec<(Vec<(Vec<u8>, Option<String>)>, usize)> = if workers == 1 || tracked.len() < 2
-    {
+    let parts: Vec<(TrackedLines, usize)> = if workers == 1 || tracked.len() < 2 {
         vec![read_tracked(root, &tracked)]
     } else {
         let chunk = tracked.len().div_ceil(workers);
@@ -1141,7 +1149,10 @@ mod tests {
             std::fs::remove_file(d.join(f)).unwrap();
         }
         git(&d, &["checkout", "--", "."]).unwrap();
-        assert_eq!(std::fs::read(d.join("a.txt")).unwrap(), b"alpha\r\nbeta\r\n");
+        assert_eq!(
+            std::fs::read(d.join("a.txt")).unwrap(),
+            b"alpha\r\nbeta\r\n"
+        );
         assert_eq!(
             std::fs::read(d.join("src/lib.rs")).unwrap(),
             b"fn a() {}\r\nfn b() {}\r\n"
@@ -1172,7 +1183,10 @@ mod tests {
     /// binary file counts as unchanged.
     #[test]
     fn crlf_checkout_is_clean() {
-        for (name, eol) in [("clean-auto", Eol::AutoCrlf), ("clean-attr", Eol::Attributes)] {
+        for (name, eol) in [
+            ("clean-auto", Eol::AutoCrlf),
+            ("clean-attr", Eol::Attributes),
+        ] {
             let d = crlf_checkout(name, eol);
             let head = git(&d, &["rev-parse", "HEAD"]).unwrap();
             for _ in 0..2 {
@@ -1271,7 +1285,9 @@ mod tests {
         ] {
             let st = pos(root);
             for f in &names {
-                let id = id_of(&st, f).unwrap_or_else(|| panic!("{f} not changed")).to_string();
+                let id = id_of(&st, f)
+                    .unwrap_or_else(|| panic!("{f} not changed"))
+                    .to_string();
                 assert_eq!(added_id(root, f), id, "{f}");
             }
             assert_eq!(pos(root), st, "staging changed the position");
@@ -1517,10 +1533,17 @@ mod tests {
         }
         git(&d, &["checkout", "--", "."]).unwrap();
         let sample = std::fs::read(d.join("d042/f017.txt")).unwrap();
-        assert!(sample.windows(2).any(|w| w == b"\r\n"), "no CRLF checked out");
+        assert!(
+            sample.windows(2).any(|w| w == b"\r\n"),
+            "no CRLF checked out"
+        );
         // Warm the file cache, then time three reads.
         let first = pos(&d);
-        assert!(first.position.is_clean(), "{:?}", &first.changed[..1.min(first.changed.len())]);
+        assert!(
+            first.position.is_clean(),
+            "{:?}",
+            &first.changed[..1.min(first.changed.len())]
+        );
         let (median, all) = median_ms(&d);
         let load = std::fs::read_to_string("/proc/loadavg").unwrap_or_else(|_| "n/a".into());
         let tracked = git(&d, &["ls-files"]).unwrap().lines().count();
