@@ -2,8 +2,8 @@
 //! CD-2 and CD-3 of katalogr FEAT-043, shared byte for byte with katalogr), and files read at a
 //! position with nothing checked out.
 //!
-//! A spike's code: nothing here is reachable from the CLI, the daemon or the monitor yet. FTR-003
-//! takes it over.
+//! FTR-003 took this over from SPK-001: `kanbanr position`, `kanbanr view` and the daemon's
+//! position and view routes read it.
 
 use crate::coderepo::{git_raw, rev_parse};
 use crate::error::{CoreError, Result};
@@ -374,6 +374,85 @@ pub fn tree_at(root: &Path, state: &WorkingState, prefix: &str) -> Result<Vec<(S
         }
     }
     Ok(files.into_iter().collect())
+}
+
+/// What `kanbanr position --json` prints and `GET /projects/{p}/position` returns (FTR-003).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PositionAnswer {
+    pub schema: u32,
+    pub live: PositionRef,
+    /// `live.text()`.
+    pub text: String,
+    /// The dirty part, sorted by path.
+    pub changed: Vec<ChangedPath>,
+}
+
+/// One uncommitted path: its raw blob id, absent for a deleted path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ChangedPath {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob: Option<String>,
+}
+
+/// The live position of the work tree `root` (its top), named `repo`.
+pub fn position_answer(root: &Path, repo: &str) -> Result<PositionAnswer> {
+    let st = read_position(root, repo)?;
+    Ok(PositionAnswer {
+        schema: 1,
+        text: st.position.text(),
+        live: st.position,
+        changed: st
+            .changed
+            .into_iter()
+            .map(|(path, blob)| ChangedPath { path, blob })
+            .collect(),
+    })
+}
+
+/// What a read answers for: the live checkout, or a clean commit read from objects.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Resolved {
+    Live(WorkingState),
+    Commit(WorkingState),
+}
+
+impl Resolved {
+    pub fn state(&self) -> &WorkingState {
+        match self {
+            Resolved::Live(s) | Resolved::Commit(s) => s,
+        }
+    }
+}
+
+/// Resolve `at` against the checkout at `root`: None, or equal to the live position, gives the live
+/// state; a clean position whose commit exists here gives that commit, read from objects with
+/// nothing checked out; anything else is [`CoreError::PositionUnavailable`] naming the live
+/// position. Text that is not a position is `CoreError::Unsupported` (a 400).
+pub fn resolve_position(root: &Path, repo: &str, at: Option<&str>) -> Result<Resolved> {
+    let live = read_position(root, repo)?;
+    let Some(text) = at else {
+        return Ok(Resolved::Live(live));
+    };
+    let wanted =
+        PositionRef::parse(repo, text).map_err(|e| CoreError::Unsupported(e.to_string()))?;
+    if wanted == live.position {
+        return Ok(Resolved::Live(live));
+    }
+    if let (true, Some(commit)) = (wanted.is_clean(), &wanted.commit)
+        && rev_parse(root, commit).is_ok()
+    {
+        return Ok(Resolved::Commit(WorkingState {
+            position: wanted,
+            changed: vec![],
+        }));
+    }
+    Err(CoreError::PositionUnavailable {
+        wanted: wanted.text(),
+        available: vec![live.position],
+    })
 }
 
 #[cfg(test)]
@@ -912,11 +991,17 @@ mod tests {
         (ms[1], ms)
     }
 
-    /// R-6: one position read of a clean 10,000-file checkout, warm, three times; the median is
-    /// printed with the load average. No budget is asserted: the number is the finding. Run it
-    /// with `--release --nocapture` for the figure the result doc records.
+    /// The decided budget (SPK-001: 141.8 ms measured in a release build, 200 ms set) for one
+    /// position read of a clean 10,000-file checkout, warm.
+    const BUDGET_MS: f64 = 200.0;
+
+    /// R-10: one position read of a clean 10,000-file checkout, warm, three times; the median is
+    /// printed with the load average and held to the budget (twice the budget when the load
+    /// average is above 4, so a busy machine does not fail it for being busy). A release-build
+    /// figure: a debug build (224 ms measured) prints the number and asserts nothing; run it with
+    /// `cargo test --release -p kanbanr-core --lib position::tests::read_position_10k -- --nocapture`.
     #[test]
-    fn read_position_10k_files_is_measured() {
+    fn read_position_10k_files_within_budget() {
         let d = repo("tenk");
         let mut n = 0u32;
         for dir in 0..100 {
@@ -941,10 +1026,26 @@ mod tests {
         let load = std::fs::read_to_string("/proc/loadavg").unwrap_or_else(|_| "n/a".into());
         let tracked = git(&d, &["ls-files"]).unwrap().lines().count();
         println!(
-            "SPK-001 R-6: {tracked} tracked files, median {median:.1} ms of {all:?} ms, load {}",
+            "FTR-003 R-10: {tracked} tracked files, median {median:.1} ms of {all:?} ms, load {}",
             load.trim()
         );
         assert_eq!(tracked, 10_001);
+        let load1: f64 = load
+            .split_whitespace()
+            .next()
+            .and_then(|l| l.parse().ok())
+            .unwrap_or(0.0);
+        #[allow(unused_variables)]
+        let budget = if load1 > 4.0 {
+            BUDGET_MS * 2.0
+        } else {
+            BUDGET_MS
+        };
+        #[cfg(not(debug_assertions))]
+        assert!(
+            median <= budget,
+            "median {median:.1} ms over the {budget} ms budget (load {load1})"
+        );
         assert_eq!(pos(&d), first, "repeats");
         // This repository, for scale (informational).
         let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -955,10 +1056,40 @@ mod tests {
             let t = std::time::Instant::now();
             let ok = read_position(&here, "kanbanr").is_ok();
             println!(
-                "SPK-001 R-6: this repository, {files} tracked files: {:.1} ms (ok: {ok})",
+                "FTR-003 R-10: this repository, {files} tracked files: {:.1} ms (ok: {ok})",
                 t.elapsed().as_secs_f64() * 1000.0
             );
         }
         gone(&d);
+    }
+
+    /// R-10: a view ID is computed within 100 microseconds (median of 1,000 computations).
+    #[test]
+    fn view_id_under_100_microseconds() {
+        let ps = [
+            PositionRef::at_commit("app", C),
+            PositionRef::parse("zed", &format!("none+{D}")).unwrap(),
+        ];
+        let q = ViewQuery {
+            op: "docs".into(),
+            args: BTreeMap::from([
+                ("max-nodes".to_string(), "60".to_string()),
+                ("root".to_string(), "docs".to_string()),
+            ]),
+        };
+        let mut us: Vec<f64> = (0..1000)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                let id = view_id(&ps, "0123abcd", &q);
+                let e = t.elapsed().as_secs_f64() * 1e6;
+                assert!(is_view_id(&id));
+                e
+            })
+            .collect();
+        us.sort_by(f64::total_cmp);
+        let median = us[500];
+        println!("FTR-003 R-10: view ID median {median:.1} us of 1000");
+        #[cfg(not(debug_assertions))]
+        assert!(median < 100.0, "median {median:.1} us");
     }
 }

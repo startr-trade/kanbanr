@@ -97,6 +97,13 @@ pub enum CoreError {
     /// `start` and `finish` planning, shown as they are.
     #[error("{0}")]
     Refused(String),
+    /// No checkout or object store here holds the position asked for (FTR-003; exit 6, HTTP 409).
+    /// `available` is the position(s) this checkout does hold, empty when there is no checkout.
+    #[error("{}", position_unavailable_text(.wanted, .available))]
+    PositionUnavailable {
+        wanted: String,
+        available: Vec<crate::position::PositionRef>,
+    },
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     /// A board file, or YAML a front end was handed, that does not parse (FEAT-187).
@@ -105,6 +112,19 @@ pub enum CoreError {
     /// A record that could not be written as YAML (FEAT-187).
     #[error(transparent)]
     YamlSer(#[from] serde_saphyr::SerializeError),
+}
+
+/// The words for [`CoreError::PositionUnavailable`]: what was asked for and what is held.
+fn position_unavailable_text(wanted: &str, available: &[crate::position::PositionRef]) -> String {
+    if available.is_empty() {
+        format!("position {wanted} is not here: no checkout on this machine")
+    } else {
+        let held: Vec<String> = available.iter().map(|p| p.text()).collect();
+        format!(
+            "position {wanted} is not here: this checkout is at {}",
+            held.join(", ")
+        )
+    }
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;
@@ -158,6 +178,8 @@ impl CoreError {
             // A workflow rule refused a step (FEAT-176): as with the repository, the request was
             // well formed and the item's state is what stood in the way.
             Refused(_) => 409,
+            // No checkout holds the position asked for (FTR-003): the request was well formed.
+            PositionUnavailable { .. } => 409,
             Io(_) | YamlDe(_) | YamlSer(_) => 500,
         }
     }
