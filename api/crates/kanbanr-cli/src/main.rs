@@ -1816,6 +1816,15 @@ enum ClaudeCmd {
         #[arg(long)]
         show: bool,
     },
+    /// The Claude Code allow rules the delegations in force need in delegated mode, each allowed
+    /// or missing. With `--write`, add the missing ones to this project's
+    /// `.claude/settings.local.json` (nothing else is touched or committed). Run it with the
+    /// person's yes: it is the one sanctioned change kanbanr makes to Claude Code's settings.
+    Permissions {
+        /// Add the missing rules to `.claude/settings.local.json`.
+        #[arg(long)]
+        write: bool,
+    },
     /// Decide whether a file write belongs on the board (run by the Claude Code hook).
     Guard,
 }
@@ -2212,6 +2221,10 @@ fn command_access(cmd: &Command) -> Access {
             ClaudeCmd::Guard => Hook,
             ClaudeCmd::Sync { show: true, .. } => Read,
             ClaudeCmd::Sync { .. } => Outside("`kanbanr claude sync` changes kanbanr itself"),
+            ClaudeCmd::Permissions { write: false } => Read,
+            ClaudeCmd::Permissions { write: true } => Outside(
+                "`kanbanr claude permissions --write` changes Claude Code's settings, outside the board",
+            ),
         },
         Command::Hooks(cmd) => match cmd {
             HooksCmd::Status { .. } => Read,
@@ -3316,10 +3329,168 @@ fn run_claude(cli: &Cli, client: &Backend, cmd: &ClaudeCmd) -> anyhow::Result<()
                 );
             }
             refresh_readme(client);
+            if let Ok(resp) = get_decisions(client, &format!("/projects/{p}/decisions"))
+                && let Ok(view) = serde_json::from_str::<Value>(&resp)
+                && let Some(line) = permission_hint(&view, None)
+                    .into_iter()
+                    .find(|l| !l.contains("are allowed"))
+            {
+                println!("{line}");
+            }
             Ok(())
         }
+        ClaudeCmd::Permissions { write } => run_claude_permissions(cli, client, *write),
         ClaudeCmd::Guard => run_docs_guard(cli, client),
     }
+}
+
+/// What auto mode needs for each granted delegation in delegated mode (DEF-060): the hint lines
+/// `decisions grant|mode|show` and `claude sync` print. `id` limits it to one delegation. Nothing
+/// is said for a delegation whose rules were not checked.
+fn permission_hint(view: &Value, id: Option<&str>) -> Vec<String> {
+    let mut out = Vec::new();
+    if view["mode"] != "delegated" {
+        return out;
+    }
+    for g in view["delegations"].as_array().into_iter().flatten() {
+        let gid = g["id"].as_str().unwrap_or("");
+        if g["state"] != "granted"
+            || g["permission_rules_checked"] != true
+            || id.is_some_and(|i| i != gid)
+        {
+            continue;
+        }
+        let missing: Vec<&str> = g["permission_rules_missing"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        if missing.is_empty() {
+            out.push(format!("auto mode: {gid}'s commands are allowed"));
+        }
+        for rule in missing {
+            out.push(format!(
+                "auto mode: {gid} needs `{rule}` in .claude/settings.local.json: ask Claude, or \
+                 run `kanbanr claude permissions --write`"
+            ));
+        }
+    }
+    out
+}
+
+/// `GET /projects/{p}/decisions` with the code repository this folder belongs to, so the view can
+/// say whether Claude Code's settings allow each delegated command (DEF-060).
+fn get_decisions(client: &Backend, base: &str) -> anyhow::Result<String> {
+    let cwd = std::env::current_dir()?;
+    let root = project::project_root(&cwd, project::home_dir().as_deref());
+    client.get_in(base, Some(&root))
+}
+
+/// Print the hint for the project's decisions as they stand now; silent when they cannot be read.
+fn print_permission_hint(client: &Backend, base: &str, id: Option<&str>) {
+    if let Ok(resp) = get_decisions(client, base)
+        && let Ok(view) = serde_json::from_str::<Value>(&resp)
+    {
+        for line in permission_hint(&view, id) {
+            println!("{line}");
+        }
+    }
+}
+
+/// `kanbanr claude permissions [--write]` (DEF-060).
+fn run_claude_permissions(cli: &Cli, client: &Backend, write: bool) -> anyhow::Result<()> {
+    let p = require_project(cli)?;
+    let view: Value =
+        serde_json::from_str(&get_decisions(client, &format!("/projects/{p}/decisions"))?)?;
+    let mode = view["mode"].as_str().unwrap_or("monitor").to_string();
+    let cwd = std::env::current_dir()?;
+    let root = project::project_root(&cwd, project::home_dir().as_deref());
+    let files = kanbanr_core::claude::settings_files(&root);
+    let mut rules: Vec<String> = Vec::new();
+    if mode == "delegated" {
+        for g in view["delegations"].as_array().into_iter().flatten() {
+            if g["in_force"] == true {
+                rules.extend(
+                    g["permission_rules"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|r| r.as_str().map(String::from)),
+                );
+            }
+        }
+    }
+    rules.sort();
+    rules.dedup();
+    let allowed: Vec<(String, Option<PathBuf>)> = rules
+        .iter()
+        .map(|r| (r.clone(), kanbanr_core::claude::allowed_in(&files, r)))
+        .collect();
+    let missing: Vec<String> = allowed
+        .iter()
+        .filter(|(_, f)| f.is_none())
+        .map(|(r, _)| r.clone())
+        .collect();
+    let local = root.join(".claude").join("settings.local.json");
+    let mut added = Vec::new();
+    if write && !missing.is_empty() {
+        added = kanbanr_core::claude::add_permission_rules(&local, &missing)?;
+    }
+    if cli.json {
+        let rules_json: Vec<Value> = allowed
+            .iter()
+            .map(|(r, f)| json!({"rule": r, "allowed_in": f.as_ref().map(|f| f.display().to_string())}))
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &json!({"mode": mode, "rules": rules_json, "added": added})
+            )?
+        );
+        return Ok(());
+    }
+    println!("mode: {mode}");
+    if allowed.is_empty() {
+        println!("no delegation in force in delegated mode: no permission rule is needed");
+    }
+    for (rule, file) in &allowed {
+        match file {
+            Some(f) => println!("{rule}: allowed (in {})", f.display()),
+            None if added.contains(rule) => {}
+            None => println!("{rule}: missing"),
+        }
+    }
+    // A verdict rule left in this project's file that no delegation in force names.
+    if let Some(settings) = std::fs::read_to_string(&local)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    {
+        for v in ["approve", "ratify", "signoff"] {
+            let rule = format!("Bash(kanbanr {v}:*)");
+            if !rules.contains(&rule) && kanbanr_core::claude::allows(&settings, &rule) {
+                println!("{rule}: not needed now (no delegation in force names it)");
+            }
+        }
+    }
+    if write {
+        for rule in &added {
+            println!("added {rule} to .claude/settings.local.json");
+        }
+        if added.is_empty() {
+            println!("every delegated command is allowed already");
+        } else if !kanbanr_core::claude::gitignore_covers(&root, ".claude/settings.local.json") {
+            println!(
+                "warning: add `.claude/settings.local.json` to .gitignore: this file is this machine's"
+            );
+        }
+    } else if !missing.is_empty() {
+        println!(
+            "add the missing rules: `kanbanr claude permissions --write` (writes \
+             .claude/settings.local.json; nothing is committed)"
+        );
+    }
+    Ok(())
 }
 
 /// The documentation rule, enforced rather than requested (FEAT-040, FEAT-065).
@@ -10358,7 +10529,7 @@ fn run_decisions(cli: &Cli, client: &Backend, cmd: &DecisionsCmd) -> anyhow::Res
     };
     match cmd {
         DecisionsCmd::Show => {
-            let resp = client.get(&base)?;
+            let resp = get_decisions(client, &base)?;
             show(&resp, &|v| {
                 println!("Decisions: {}", v["mode"].as_str().unwrap_or("monitor"));
                 let gs = v["delegations"].as_array().cloned().unwrap_or_default();
@@ -10367,6 +10538,9 @@ fn run_decisions(cli: &Cli, client: &Backend, cmd: &DecisionsCmd) -> anyhow::Res
                 }
                 for g in &gs {
                     println!("  {}", delegation_line(g));
+                    for line in permission_hint(v, g["id"].as_str()) {
+                        println!("    {line}");
+                    }
                 }
                 let review = v["to_review"].as_array().cloned().unwrap_or_default();
                 if !review.is_empty() {
@@ -10405,7 +10579,11 @@ fn run_decisions(cli: &Cli, client: &Backend, cmd: &DecisionsCmd) -> anyhow::Res
                     println!("waiting for a decision, in its place now:");
                     print_waiting(&v["waiting"]);
                 }
-            })
+            })?;
+            if !cli.json && mode.as_str() == "delegated" {
+                print_permission_hint(client, &base, None);
+            }
+            Ok(())
         }
         DecisionsCmd::Propose {
             verdict,
@@ -10451,7 +10629,11 @@ fn run_decisions(cli: &Cli, client: &Backend, cmd: &DecisionsCmd) -> anyhow::Res
             )?;
             show(&resp, &|g| {
                 println!("{} granted by {who}", delegation_line(g))
-            })
+            })?;
+            if !cli.json {
+                print_permission_hint(client, &base, Some(id.as_str()));
+            }
+            Ok(())
         }
         DecisionsCmd::Revoke { id, reason } => {
             let who = verdict_author(cli, None).unwrap_or_else(|_| "Claude".into());
