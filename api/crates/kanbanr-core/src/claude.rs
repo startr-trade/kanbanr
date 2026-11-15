@@ -172,24 +172,7 @@ pub fn merge(existing: &str, block: &str) -> String {
 /// suggestion is built from the repo-relative path, never the absolute one, which used to come out
 /// as `notes//home/…`.
 pub fn board_path_for(path: &str, root: &std::path::Path, cwd: &std::path::Path) -> Option<String> {
-    let given = std::path::Path::new(path);
-    let absolute = if given.is_absolute() {
-        given.to_path_buf()
-    } else {
-        cwd.join(given)
-    };
-    // Resolve `.` and `..` by the text alone: the file may not exist yet, so it cannot be
-    // canonicalised, and an escape through `..` must not count as inside the repository.
-    let mut resolved = std::path::PathBuf::new();
-    for part in absolute.components() {
-        match part {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                resolved.pop();
-            }
-            other => resolved.push(other),
-        }
-    }
+    let resolved = resolve_lexically(path, cwd);
     // Then resolve on disk as far as the path exists (FEAT-129). The root comes from the working
     // directory, which the OS reports with symlinks resolved; the file path arrives as Claude Code
     // spelled it. On macOS the temp folder is `/var/…`, a symlink to `/private/var/…`, so the two
@@ -203,7 +186,14 @@ pub fn board_path_for(path: &str, root: &std::path::Path, cwd: &std::path::Path)
         .components()
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .collect();
-    let relative = relative.join("/");
+    // A linked worktree's file seen from the main checkout (DEF-065): judge it by its path inside
+    // the worktree, or `docs/src/x.md` there counts as a loose note in the main checkout.
+    let relative = match relative.as_slice() {
+        [claude, worktrees, _name, rest @ ..] if claude == ".claude" && worktrees == "worktrees" => {
+            rest.join("/")
+        }
+        _ => relative.join("/"),
+    };
     if relative.is_empty() || !belongs_on_board(&relative) {
         return None;
     }
@@ -214,6 +204,51 @@ pub fn board_path_for(path: &str, root: &std::path::Path, cwd: &std::path::Path)
             .replace(' ', "-")
             .to_lowercase(),
     )
+}
+
+/// `path` made absolute against `cwd`, with `.` and `..` resolved by the text alone: the file may
+/// not exist yet, so it cannot be canonicalised, and an escape through `..` must not count as
+/// inside the repository.
+fn resolve_lexically(path: &str, cwd: &std::path::Path) -> std::path::PathBuf {
+    let given = std::path::Path::new(path);
+    let absolute = if given.is_absolute() {
+        given.to_path_buf()
+    } else {
+        cwd.join(given)
+    };
+    let mut resolved = std::path::PathBuf::new();
+    for part in absolute.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            other => resolved.push(other),
+        }
+    }
+    resolved
+}
+
+/// The docs guard's single entry point (DEF-065): [`board_path_for`], judged against the git top
+/// level of the folder the file is in rather than the session's checkout.
+///
+/// The file's own repository decides: in a linked worktree that is the worktree, so its
+/// `docs/src/x.md` is the book, not a stray note in the main checkout. The file, and often its
+/// folder, does not exist yet, so git is asked from the nearest existing ancestor. When git gives no
+/// answer, `fallback_root` is used, and the guard still never fails a write.
+pub fn docs_guard_suggestion(
+    path: &str,
+    cwd: &std::path::Path,
+    fallback_root: &std::path::Path,
+) -> Option<String> {
+    let resolved = resolve_lexically(path, cwd);
+    let top_level = resolved
+        .ancestors()
+        .skip(1)
+        .find(|dir| dir.is_dir())
+        .and_then(crate::coderepo::repo_root_in);
+    let root = top_level.as_deref().unwrap_or(fallback_root);
+    board_path_for(path, root, cwd)
 }
 
 /// Is this markdown file project *reasoning* (board) rather than a shipped *deliverable* (repo)?
@@ -476,5 +511,39 @@ mod tests {
         // Case is not identity: a repository's README is a README however it is spelled.
         assert!(!belongs_on_board("readme.md"));
         assert!(!belongs_on_board("Docs/design.md"));
+    }
+
+    /// DEF-065 R-1, R-3: a linked worktree under `.claude/worktrees/<name>` is judged by its path
+    /// inside the worktree, whether the root is the main checkout or the worktree itself, and the
+    /// suggestion for a refused file is built from that path.
+    #[test]
+    fn the_docs_guard_judges_a_worktree_path_by_its_own_root() {
+        let main = std::path::Path::new("/work/shop");
+        let worktree = main.join(".claude/worktrees/ftr");
+        for root in [main, worktree.as_path()] {
+            for path in [
+                "/work/shop/.claude/worktrees/ftr/docs/src/x.md",
+                "/work/shop/.claude/worktrees/ftr/CHANGELOG.md",
+                "/work/shop/.claude/worktrees/ftr/skill/kanbanr/SKILL.md",
+                "/work/shop/.claude/worktrees/ftr/crates/a/tests/fixtures/b.md",
+            ] {
+                assert_eq!(board_path_for(path, root, root), None, "{path} from {root:?}");
+            }
+            assert_eq!(
+                board_path_for("/work/shop/.claude/worktrees/ftr/notes.md", root, root).as_deref(),
+                Some("notes"),
+                "from {root:?}"
+            );
+            assert_eq!(
+                board_path_for(
+                    "/work/shop/.claude/worktrees/ftr/api/Design Notes.md",
+                    root,
+                    root
+                )
+                .as_deref(),
+                Some("api/design-notes"),
+                "from {root:?}"
+            );
+        }
     }
 }
