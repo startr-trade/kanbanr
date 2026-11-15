@@ -558,6 +558,7 @@ fn build_project_config(store: &Store, name: &str, body: &Value) -> Result<Proje
                 schema_version: crate::config::BASE_SCHEMA_VERSION,
                 name: name.to_string(),
                 description: String::new(),
+                repository: None,
                 displayed_states: displayed
                     .clone()
                     .unwrap_or_else(|| s.iter().filter(|x| !no_ops.contains(x)).cloned().collect()),
