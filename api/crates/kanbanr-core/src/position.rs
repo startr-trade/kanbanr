@@ -564,4 +564,169 @@ mod tests {
         assert_eq!(pos(&dir).position.dirty, None);
         gone(&dir);
     }
+
+    // ---- the shared file (R-1) ----
+
+    fn contract() -> serde_json::Value {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../fixtures/contract/position-v1.json");
+        serde_json::from_slice(&std::fs::read(path).expect("read position-v1.json"))
+            .expect("parse position-v1.json")
+    }
+
+    fn files(v: &serde_json::Value) -> BTreeMap<String, String> {
+        v.as_object()
+            .map(|o| {
+                o.iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn put(root: &Path, path: &str, text: &str) {
+        let p = root.join(path);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+
+    /// `git` with stdin, in a clean environment, as katalogr's test runs it.
+    fn git_in(
+        root: &Path,
+        args: &[&str],
+        stdin: &[u8],
+        env: &[(&str, &str)],
+    ) -> std::process::Output {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let mut cmd = Command::new("git");
+        cmd.current_dir(root)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let mut ch = cmd.spawn().unwrap();
+        ch.stdin.take().unwrap().write_all(stdin).unwrap();
+        ch.wait_with_output().unwrap()
+    }
+
+    /// R-1: the file names the six required cases, each `expected` parses and round-trips.
+    #[test]
+    fn shared_file_covers_required_cases() {
+        let v = contract();
+        assert_eq!(v["format"], 1);
+        let names: Vec<&str> = v["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap())
+            .collect();
+        for need in [
+            "clean",
+            "edited",
+            "deleted",
+            "untracked",
+            "staged_only",
+            "line_endings",
+        ] {
+            assert!(names.contains(&need), "missing case {need}: {names:?}");
+        }
+        let unique: std::collections::BTreeSet<_> = names.iter().collect();
+        assert_eq!(unique.len(), names.len(), "duplicate case names");
+        for c in v["cases"].as_array().unwrap() {
+            let name = c["name"].as_str().unwrap();
+            assert!(c["head"].is_object() && c["worktree"].is_object(), "{name}");
+            let expected = c["expected"].as_str().unwrap();
+            let parsed = PositionRef::parse("r", expected).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(parsed.text(), expected, "{name}");
+        }
+    }
+
+    /// R-1: every case of the shared file, built with real git as katalogr builds it, gives its
+    /// expected text, cold and on a second read.
+    #[test]
+    fn shared_file_cases_match() {
+        let v = contract();
+        let author = v["commit"]["author"].as_str().unwrap();
+        let (name, email) = author.split_once(" <").unwrap();
+        let email = email.trim_end_matches('>');
+        let time = format!("@{}", v["commit"]["time"].as_str().unwrap());
+        let message = v["commit"]["message"].as_str().unwrap();
+        let mut failures = Vec::new();
+        for c in v["cases"].as_array().unwrap() {
+            let case = c["name"].as_str().unwrap();
+            let r = std::env::temp_dir().join(format!(
+                "kanbanr-pos-{}-shared-{case}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&r);
+            std::fs::create_dir_all(&r).unwrap();
+            git(&r, &["init", "-q"]).unwrap();
+            let empty = r.join(".git/empty-config");
+            std::fs::write(&empty, "").unwrap();
+            let empty_s = empty.to_str().unwrap();
+            git(&r, &["config", "core.autocrlf", "false"]).unwrap();
+            git(&r, &["config", "core.excludesFile", empty_s]).unwrap();
+            for (path, text) in files(&c["head"]) {
+                put(&r, &path, &text);
+            }
+            git(&r, &["add", "-A"]).unwrap();
+            let out = git_in(
+                &r,
+                &["commit", "-q", "--no-gpg-sign", "-F", "-"],
+                message.as_bytes(),
+                &[
+                    ("GIT_CONFIG_GLOBAL", empty_s),
+                    ("GIT_CONFIG_SYSTEM", empty_s),
+                    ("GIT_AUTHOR_NAME", name),
+                    ("GIT_AUTHOR_EMAIL", email),
+                    ("GIT_AUTHOR_DATE", &time),
+                    ("GIT_COMMITTER_NAME", name),
+                    ("GIT_COMMITTER_EMAIL", email),
+                    ("GIT_COMMITTER_DATE", &time),
+                ],
+            );
+            assert!(out.status.success(), "{case}: commit failed");
+            if let Some(cfg) = c["config"].as_object() {
+                for (k, val) in cfg {
+                    git(&r, &["config", k, val.as_str().unwrap()]).unwrap();
+                }
+            }
+            let want = files(&c["worktree"]);
+            for (path, _) in files(&c["head"]) {
+                if !want.contains_key(&path) {
+                    std::fs::remove_file(r.join(&path)).unwrap();
+                }
+            }
+            for (path, text) in &want {
+                put(&r, path, text);
+            }
+            for (path, text) in files(&c["index"]) {
+                let blob = git_in(&r, &["hash-object", "-w", "--stdin"], text.as_bytes(), &[]);
+                let id = String::from_utf8(blob.stdout).unwrap().trim().to_string();
+                git(
+                    &r,
+                    &[
+                        "update-index",
+                        "--add",
+                        "--cacheinfo",
+                        &format!("100644,{id},{path}"),
+                    ],
+                )
+                .unwrap();
+            }
+            let expected = c["expected"].as_str().unwrap();
+            for how in ["cold", "second read"] {
+                let got = pos(&r).position.text();
+                if got != expected {
+                    failures.push(format!("{case} ({how}): got {got}, expected {expected}"));
+                }
+            }
+            gone(&r);
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
 }
