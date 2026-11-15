@@ -6,6 +6,10 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The guides and the setup interview recommend agile for a new project, and every release guide says a patch release starts at candidate (DOC-009).
+
 ## [0.6.0] - 2026-11-14
 
 ### Added
