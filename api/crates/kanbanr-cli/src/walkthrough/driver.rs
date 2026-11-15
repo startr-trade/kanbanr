@@ -43,6 +43,8 @@ pub struct SessionCfg {
     pub path: Option<std::ffi::OsString>,
     /// How long one turn may take before the session is given up as stalled.
     pub turn_timeout: Duration,
+    /// How long the stream must stay quiet, with no agent running, for the session to be idle.
+    pub quiet: Duration,
 }
 
 impl SessionCfg {
@@ -60,6 +62,7 @@ impl SessionCfg {
             persona_file: None,
             path: None,
             turn_timeout: Duration::from_secs(30 * 60),
+            quiet: Duration::from_secs(5),
         }
     }
 }
@@ -118,6 +121,25 @@ pub struct Turn {
     pub num_turns: u64,
     /// stdout lines read for this turn.
     pub lines: usize,
+    /// Background agents still running when the turn ended (sub-agent builds).
+    pub agents_running: usize,
+    /// Agents this turn started.
+    pub agents_started: usize,
+    /// A background agent that was running before this turn ended or reported during it: the
+    /// reply may be about that, not about what the turn asked (RC3).
+    pub notified: bool,
+}
+
+/// What waiting for the session to go idle saw.
+#[derive(Debug, Clone, Default)]
+pub struct IdleWait {
+    /// No agent left running, and the stream went quiet.
+    pub idle: bool,
+    /// Turns Claude took on its own meanwhile (reacting to an agent's notification).
+    pub unsolicited: usize,
+    /// The last of their texts.
+    pub last_text: String,
+    pub lines: usize,
 }
 
 /// One running `claude -p` process.
@@ -131,6 +153,11 @@ pub struct Session {
     turns: u32,
     turn_timeout: Duration,
     stopped: Option<StopReason>,
+    /// Background agents running now, by task id (`local_agent` tasks only: a Monitor watch or a
+    /// background shell never ends on its own and is not waited for).
+    agents: std::collections::BTreeSet<String>,
+    /// How long the stream must stay quiet for the session to count as idle.
+    quiet: Duration,
 }
 
 impl Session {
@@ -211,7 +238,99 @@ impl Session {
             turns: 0,
             turn_timeout: cfg.turn_timeout,
             stopped: None,
+            agents: Default::default(),
+            quiet: cfg.quiet,
         })
+    }
+
+    /// Background agents running now.
+    pub fn agents_running(&self) -> usize {
+        self.agents.len()
+    }
+
+    /// Follow the session's background tasks from one stream event. Returns what changed:
+    /// `(started, ended)` agent counts.
+    fn track(&mut self, ev: &Value) -> (usize, usize) {
+        if ev.get("type").and_then(Value::as_str) != Some("system") {
+            return (0, 0);
+        }
+        let mut started = 0;
+        let mut ended = 0;
+        let id = ev["task_id"].as_str().unwrap_or("").to_string();
+        match ev["subtype"].as_str().unwrap_or("") {
+            "background_tasks_changed" => {
+                let now: std::collections::BTreeSet<String> = ev["tasks"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|t| t["task_type"] == "local_agent")
+                    .filter_map(|t| t["task_id"].as_str().map(str::to_string))
+                    .collect();
+                started = now.difference(&self.agents).count();
+                ended = self.agents.difference(&now).count();
+                self.agents = now;
+            }
+            "task_started" if ev["task_type"] == "local_agent" && !id.is_empty() => {
+                if self.agents.insert(id) {
+                    started = 1;
+                }
+            }
+            "task_updated" => {
+                let status = ev["patch"]["status"].as_str().unwrap_or("");
+                if matches!(status, "completed" | "failed" | "killed" | "cancelled")
+                    && self.agents.remove(&id)
+                {
+                    ended = 1;
+                }
+            }
+            "task_notification" if self.agents.remove(&id) => {
+                ended = 1;
+            }
+            _ => {}
+        }
+        (started, ended)
+    }
+
+    /// Read the stream without sending until no background agent runs and nothing has arrived for
+    /// the quiet period, or `timeout` passes. Turns Claude takes on its own meanwhile are kept in
+    /// the transcript and counted.
+    pub fn wait_idle(&mut self, timeout: Duration) -> Result<IdleWait> {
+        let deadline = Instant::now() + timeout;
+        let mut out = IdleWait::default();
+        let mut last_line = Instant::now();
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(out);
+            }
+            if self.agents.is_empty() && now.duration_since(last_line) >= self.quiet {
+                out.idle = true;
+                return Ok(out);
+            }
+            let wait = (deadline - now).min(Duration::from_millis(200));
+            let got = match self.lines.recv_timeout(wait) {
+                Ok(Some(l)) => l,
+                Ok(None) | Err(RecvTimeoutError::Disconnected) => {
+                    self.stopped = Some(StopReason::Exited);
+                    return Ok(out);
+                }
+                Err(RecvTimeoutError::Timeout) => continue,
+            };
+            last_line = Instant::now();
+            out.lines += 1;
+            writeln!(self.transcript, "{got}")?;
+            let Ok(ev) = serde_json::from_str::<Value>(&got) else {
+                continue;
+            };
+            self.track(&ev);
+            if ev.get("type").and_then(Value::as_str) == Some("result") {
+                out.unsolicited += 1;
+                if let Some(total) = ev.get("total_cost_usd").and_then(Value::as_f64) {
+                    self.cost_so_far = total;
+                }
+                out.last_text = ev["result"].as_str().unwrap_or("").to_string();
+            }
+        }
     }
 
     /// The session id the `init` or a `result` line named; empty until one has.
@@ -274,6 +393,7 @@ impl Session {
         let deadline = Instant::now() + self.turn_timeout;
         let mut turn = Turn::default();
         let mut last_text = String::new();
+        let running_before = !self.agents.is_empty();
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             let got = match self.lines.recv_timeout(left) {
@@ -301,6 +421,11 @@ impl Session {
                 && !id.is_empty()
             {
                 self.session_id = id.to_string();
+            }
+            let (started, ended) = self.track(&ev);
+            turn.agents_started += started;
+            if ended > 0 || (running_before && ev["subtype"] == "task_progress") {
+                turn.notified = true;
             }
             match ev.get("type").and_then(Value::as_str) {
                 Some("assistant") => {
@@ -331,6 +456,8 @@ impl Session {
                     } else {
                         turn.asked = parse_text_question(&turn.final_text);
                     }
+                    turn.agents_running = self.agents.len();
+                    turn.notified |= running_before;
                     return Ok(turn);
                 }
                 _ => {}
@@ -692,6 +819,84 @@ pub(crate) mod tests {
         s.end();
         let transcript = std::fs::read_to_string(dir.join("raw/transcripts/stream.jsonl")).unwrap();
         assert!(transcript.contains("error_max_budget_usd"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RC3: a turn that starts a background build reports it as running; waiting for the session
+    /// to go idle reads the agent's end and the turn Claude takes on its own, and only then is the
+    /// session idle. A turn sent while an agent runs is marked, so the run can wait and say it again.
+    #[cfg(unix)]
+    #[test]
+    fn a_turn_that_starts_a_build_waits_for_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("build");
+        let p = |s: &str| format!("printf '%s\\n' '{s}'");
+        let script = format!(
+            "#!/bin/sh\n\
+             {init}\n\
+             n=0\n\
+             while IFS= read -r line; do\n\
+               n=$((n+1))\n\
+               if [ $n -eq 1 ]; then\n\
+                 {bg}\n\
+                 {started}\n\
+                 {result1}\n\
+                 ( sleep 1; {updated}; {notified}; {bg0}; {assistant2}; {result2} ) &\n\
+               else\n\
+                 {result3}\n\
+               fi\n\
+             done\n\
+             wait\n",
+            init = p(r#"{"type":"system","subtype":"init","session_id":"fake-2"}"#),
+            bg = p(
+                r#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a1","task_type":"local_agent"},{"task_id":"m1","task_type":"local_bash"}]}"#
+            ),
+            started = p(
+                r#"{"type":"system","subtype":"task_started","task_id":"a1","task_type":"local_agent","is_backgrounded":true}"#
+            ),
+            result1 = p(
+                r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.5,"num_turns":1,"result":"The build has started."}"#
+            ),
+            updated = p(
+                r#"{"type":"system","subtype":"task_updated","task_id":"a1","patch":{"status":"completed"}}"#
+            ),
+            notified = p(
+                r#"{"type":"system","subtype":"task_notification","task_id":"a1","status":"completed"}"#
+            ),
+            bg0 = p(
+                r#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"m1","task_type":"local_bash"}]}"#
+            ),
+            assistant2 = p(
+                r#"{"type":"assistant","message":{"content":[{"type":"text","text":"The build finished."}]}}"#
+            ),
+            result2 = p(
+                r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.75,"num_turns":1,"result":"The build finished."}"#
+            ),
+            result3 = p(
+                r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.9,"num_turns":1,"result":"Done."}"#
+            ),
+        );
+        let claude = dir.join("claude");
+        std::fs::write(&claude, script).unwrap();
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut c = cfg(&dir, &claude);
+        c.quiet = Duration::from_millis(300);
+        let mut s = Session::start(&c).unwrap();
+        let t = s.say("Have a sub-agent build these tasks.").unwrap();
+        assert_eq!(t.final_text, "The build has started.");
+        assert_eq!((t.agents_started, t.agents_running), (1, 1), "{t:?}");
+        assert!(!t.notified, "nothing was running before this turn");
+        assert_eq!(s.agents_running(), 1, "a Monitor watch is not an agent");
+        let w = s.wait_idle(Duration::from_secs(20)).unwrap();
+        assert!(w.idle, "{w:?}");
+        assert_eq!(w.unsolicited, 1);
+        assert_eq!(w.last_text, "The build finished.");
+        assert_eq!(s.agents_running(), 0);
+        assert!((s.cost_usd() - 0.75).abs() < 1e-9);
+        let t2 = s.say("Move the saved basket on.").unwrap();
+        assert_eq!(t2.final_text, "Done.");
+        assert!(!t2.notified);
+        s.end();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

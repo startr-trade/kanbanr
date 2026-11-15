@@ -597,6 +597,37 @@ impl Running {
         }
     }
 
+    /// Wait, within the run's time left, for the session's background agents to finish and the
+    /// stream to go quiet; a timeout is a finding and the run goes on.
+    fn wait_for_agents(&mut self, step: &str) {
+        if self.session.agents_running() == 0 {
+            return;
+        }
+        let left =
+            Duration::from_secs(self.max_minutes * 60).saturating_sub(self.started.elapsed());
+        eprintln!(
+            "step {step}: waiting for {} background agent(s) to finish",
+            self.session.agents_running()
+        );
+        match self.session.wait_idle(left) {
+            Ok(w) => {
+                self.lines += w.lines;
+                if !w.idle {
+                    self.finding(
+                        step,
+                        "agents-still-running",
+                        format!(
+                            "{} background agent(s) still running",
+                            self.session.agents_running()
+                        ),
+                        "the run's time ran out waiting; the run goes on".into(),
+                    );
+                }
+            }
+            Err(e) => eprintln!("step {step}: waiting for the session: {e}"),
+        }
+    }
+
     fn over_time(&self) -> bool {
         self.started.elapsed() > Duration::from_secs(self.max_minutes * 60)
     }
@@ -620,7 +651,11 @@ impl Running {
         let mut why = Vec::new();
         let mut asked_here: Vec<String> = Vec::new();
         let mut final_text = String::new();
+        // RC3: a step starts on an idle session — no sub-agent build still running, nothing still
+        // arriving — so its say is not answered by a turn about earlier work.
+        self.wait_for_agents(&id);
         if let Some(say) = &step.say {
+            let mut resends = 0;
             let mut text = fill(say, &self.vars);
             // A step's say goes on while Claude asks: a setup interview asks one question per turn.
             // The same question answered three times without settling is a finding; twenty
@@ -643,6 +678,20 @@ impl Running {
                     );
                     self.stopped = Some(stop.to_string());
                     return Ok(false);
+                }
+                if turn.agents_running > 0 || turn.notified {
+                    self.wait_for_agents(&id);
+                }
+                // A reply that came while a background agent was running may be about that agent,
+                // not about this step: once the session is idle, the step is said again (twice at most).
+                if turn.notified && turn.agents_started == 0 && turn.asked.is_none() && resends < 2
+                {
+                    resends += 1;
+                    eprintln!(
+                        "step {id}: the reply came during background work; saying the step again"
+                    );
+                    text = fill(say, &self.vars);
+                    continue;
                 }
                 let Some(q) = &turn.asked else { break };
                 asked_here.push(q.text.clone());
