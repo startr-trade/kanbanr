@@ -358,8 +358,9 @@ pub(crate) fn read_state(root: &Path, repo: &str, workers: usize) -> Result<(Wor
 }
 
 /// The bytes of `path` at the position `state` describes, with nothing checked out. None when the
-/// path is absent there. Err when an uncommitted path's bytes no longer hash to what the position
-/// recorded ("position moved").
+/// path is absent there. An uncommitted path is served in its repository form (DEF-066 R-3): the
+/// raw bytes when they already hash to the recorded id, else the bytes git would store, which do.
+/// Err when neither hashes to what the position recorded ("position moved").
 pub fn read_at(root: &Path, state: &WorkingState, path: &str) -> Result<Option<Vec<u8>>> {
     if let Ok(i) = state
         .changed
@@ -368,8 +369,9 @@ pub fn read_at(root: &Path, state: &WorkingState, path: &str) -> Result<Option<V
         let Some(want) = &state.changed[i].1 else {
             return Ok(None);
         };
-        return match raw_bytes(root, path.as_bytes()) {
-            Some((bytes, _)) if &blob_id(&bytes) == want => Ok(Some(bytes)),
+        let mut form = RepoForm::new(root);
+        return match stored_id(&mut form, root, path.as_bytes(), Some(want)) {
+            Some((id, bytes)) if &id == want => Ok(Some(bytes)),
             _ => Err(CoreError::Git(format!(
                 "position moved: {path} changed since the position was read"
             ))),
@@ -1248,6 +1250,24 @@ mod tests {
         let st = pos(&d);
         assert_eq!(id_of(&st, "README"), Some(blob_id(edit).as_str()));
         assert_eq!(id_of(&st, "b.txt"), Some(blob_id(b"b\r\n").as_str()));
+        gone(&d);
+    }
+
+    /// DEF-066 R-3: an uncommitted CRLF file is served as the LF bytes git would store, which hash
+    /// to the recorded id; a later edit is still "position moved".
+    #[test]
+    fn read_at_serves_the_repository_form_of_a_crlf_file() {
+        let d = crlf_checkout("readat-crlf", Eol::AutoCrlf);
+        std::fs::write(d.join("docs/guide.md"), "# Guide\r\n\r\nEdited.\r\n").unwrap();
+        let st = pos(&d);
+        let lf: &[u8] = b"# Guide\n\nEdited.\n";
+        assert_eq!(id_of(&st, "docs/guide.md"), Some(blob_id(lf).as_str()));
+        let got = read_at(&d, &st, "docs/guide.md").unwrap().unwrap();
+        assert_eq!(got, lf);
+        assert_eq!(Some(blob_id(&got).as_str()), id_of(&st, "docs/guide.md"));
+        std::fs::write(d.join("docs/guide.md"), "# Guide\r\n\r\nAgain.\r\n").unwrap();
+        let err = read_at(&d, &st, "docs/guide.md").unwrap_err().to_string();
+        assert!(err.contains("position moved"), "{err}");
         gone(&d);
     }
 

@@ -471,7 +471,64 @@ mod tests {
             &["config", "core.excludesFile", empty.to_str().unwrap()],
         )
         .unwrap();
+        // libgit2 reads the person's global attributes file: pin an empty one here (DEF-066).
+        let attrs = dir.join(".git/empty-attributes");
+        std::fs::write(&attrs, "").unwrap();
+        git(
+            &dir,
+            &["config", "core.attributesFile", attrs.to_str().unwrap()],
+        )
+        .unwrap();
         dir
+    }
+
+    /// DEF-066 R-3: a CRLF checkout gives the LF checkout's view bytes and ID, clean and with the
+    /// same uncommitted edit written in each line ending.
+    #[test]
+    fn a_crlf_checkout_gives_the_lf_checkouts_view() {
+        let d = repo("crlf");
+        assert!(
+            d.canonicalize()
+                .unwrap()
+                .starts_with(std::env::temp_dir().canonicalize().unwrap())
+        );
+        std::fs::create_dir_all(d.join("docs")).unwrap();
+        commit_file(&d, "docs/overview.md", "# Overview\n\nText.\n", "overview");
+        commit_file(
+            &d,
+            "docs/guide.md",
+            "# Guide\n\n```mermaid\nflowchart LR\n  A --> B\n```\n",
+            "guide",
+        );
+        let facts = facts_version("board0", "");
+        let view = || {
+            let st = read_position(&d, "r").unwrap();
+            docs_view(&d, &st, &facts, "docs", 60).unwrap()
+        };
+        let edit = "# Guide, edited\n\nMore.\n";
+        let lf_clean = view();
+        std::fs::write(d.join("docs/guide.md"), edit).unwrap();
+        let lf_dirty = view();
+        assert_ne!(lf_dirty.view_id, lf_clean.view_id);
+        git(&d, &["checkout", "--", "docs/guide.md"]).unwrap();
+
+        git(&d, &["config", "core.autocrlf", "true"]).unwrap();
+        for f in ["docs/overview.md", "docs/guide.md"] {
+            std::fs::remove_file(d.join(f)).unwrap();
+        }
+        git(&d, &["checkout", "--", "."]).unwrap();
+        assert_eq!(
+            std::fs::read(d.join("docs/overview.md")).unwrap(),
+            b"# Overview\r\n\r\nText.\r\n"
+        );
+        let crlf_clean = view();
+        assert_eq!(answer_bytes(&crlf_clean), answer_bytes(&lf_clean));
+        assert_eq!(crlf_clean.view_id, lf_clean.view_id);
+        std::fs::write(d.join("docs/guide.md"), edit.replace('\n', "\r\n")).unwrap();
+        let crlf_dirty = view();
+        assert_eq!(answer_bytes(&crlf_dirty), answer_bytes(&lf_dirty));
+        assert_eq!(crlf_dirty.view_id, lf_dirty.view_id);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// R-4: the Mermaid of a view with quotes and odd names in labels passes the lint.
