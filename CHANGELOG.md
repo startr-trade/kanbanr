@@ -11,6 +11,9 @@ All notable changes to kanbanr are documented here. The format follows
 - `kanbanr capture` reads Vitest 5 verbose lines with their durations, pytest `-v` node ids and
   Playwright list-reporter lines (project, location and duration dropped); a name reported more
   than once in a run is green only if every line passed (DEF-061).
+- `kanbanr capture` reads `python -m unittest -v` results as `module.Class.test` (Python 3.10's
+  form and a docstring's two-line form too; a failed subtest turns its test red), and tells Claude
+  when a test run printed nothing it can read, naming the forms it reads (DEF-068).
 
 ## [0.6.0] - 2026-11-14
 
