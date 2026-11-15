@@ -190,6 +190,28 @@ fn world(name: &str) -> World {
         "--file",
         &def.display().to_string(),
     ]);
+    // An item whose test a run proves: kind walkthrough.
+    k(&[
+        "feature",
+        "add",
+        "--title",
+        "Runs record themselves",
+        "--milestone",
+        "MS-1",
+    ]);
+    let def2 = root.join("target-def2.yaml");
+    std::fs::write(
+        &def2,
+        "statement: a run records what it saw\nrequirements:\n  - id: R-1\n    text: WHEN a walkthrough pushes THE SYSTEM SHALL record it\n    tests:\n      - name: 'walkthrough: the run pushed main to its own remote'\n        kind: walkthrough\n",
+    )
+    .unwrap();
+    k(&[
+        "feature",
+        "define",
+        "FEAT-002",
+        "--file",
+        &def2.display().to_string(),
+    ]);
     let claude = fake_claude(&root);
     World {
         root,
@@ -210,6 +232,8 @@ budget_usd: 2
 max_minutes: 10
 checks:
   MT-1: {item: FEAT-001, requirement: R-5, test: "manual: in a walkthrough, every sign-off, promotion and CI result is taken with one click and nothing typed"}
+  MT-W: {item: FEAT-002, requirement: R-1, test: "walkthrough: the run pushed main to its own remote"}
+  MT-V: {item: FEAT-001, requirement: R-5, test: "manual: in a walkthrough, every sign-off, promotion and CI result is taken with one click and nothing typed"}
 answers:
   - {match: "where .*board", pick: "Beside the project, with the remote {board_remote}."}
 steps:
@@ -218,12 +242,14 @@ steps:
     expect: {board: {project: exists}}
   - id: "1.2"
     say: "Please ask the tool which colour the basket page should use."
+    check: MT-V
   - id: "2.1"
     decide: {approve: {item: newest}}
     offer: {page: review, button: Approve, subject: {item: newest}}
     check: MT-1
   - id: "2.2"
-    push: {repo: code, refspec: main}
+    push: {repo: code, refspec: "{code_branch}"}
+    check: MT-W
 STEPS_TAIL```
 "#;
 
@@ -488,6 +514,41 @@ fn a_fake_claude_run_leaves_the_public_board_and_the_kanbanr_repository_untouche
     )
     .unwrap();
     assert!(!item.contains("state: green"), "{item}");
+    // A walkthrough-kind test is the run's own automated evidence: recorded, at the binary's
+    // commit; a check on a step that checked nothing is put nowhere.
+    let item2 = std::fs::read_to_string(
+        w.target_board
+            .join("projects/target/features/Planned/FEAT-002.yaml"),
+    )
+    .unwrap();
+    assert!(item2.contains("state: green"), "{item2}");
+    let own = Command::new(cli()).arg("--version").output().unwrap();
+    let own = String::from_utf8_lossy(&own.stdout).to_string();
+    let sha = own
+        .split('(')
+        .nth(1)
+        .unwrap()
+        .split(',')
+        .next()
+        .unwrap()
+        .trim()
+        .to_string();
+    // The binary's commit is the evidence's revision; a dirty build names none.
+    if sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        assert!(item2.contains(&format!("checked_rev: {sha}")), "{item2}");
+    } else {
+        assert!(!item2.contains("checked_rev:"), "{item2}");
+    }
+    assert!(
+        shown.contains("recorded walkthrough test: MT-W FEAT-002 R-1 green"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("not put on the board: MT-V (1.2): not measured"),
+        "{shown}"
+    );
+    let checks = std::fs::read_to_string(w.runs.join("u1/raw/checks.tsv")).unwrap();
+    assert!(checks.contains("MT-V\t1.2\tnot-measured"), "{checks}");
     // Every push went to the run's own remote.
     let pushes = std::fs::read_to_string(w.runs.join("u1/raw/pushes.tsv")).unwrap();
     assert!(pushes.contains("code\tmain\ttrue"), "{pushes}");

@@ -156,41 +156,58 @@ pub struct CheckResult {
     pub step: String,
     pub passed: bool,
     pub why: String,
+    /// The step checked something: a decision, a press, a push or an expectation. A check on a
+    /// step that only says something is "not measured", never passed, and is not prepared.
+    pub measured: bool,
 }
+
+/// The reason a check on a step that checked nothing carries.
+pub const NOT_MEASURED: &str = "not measured: the step checked nothing";
 
 /// The checks of a run, one per marker: a marker named on several steps passed only if every one
 /// of them passed; `step` names them all (`2.2b+2.2c`), and the reason joins the failed steps',
 /// each prefixed with its step id. Markers keep the order they were first named in.
 pub fn merge_checks(checks: &[CheckResult]) -> Vec<CheckResult> {
-    let mut out: Vec<(CheckResult, Vec<String>)> = Vec::new();
+    let mut order: Vec<String> = Vec::new();
+    let mut by: BTreeMap<String, Vec<&CheckResult>> = BTreeMap::new();
     for c in checks {
-        match out.iter_mut().find(|(m, _)| m.marker == c.marker) {
-            Some((m, failed)) => {
-                m.step = format!("{}+{}", m.step, c.step);
-                if !c.passed {
-                    m.passed = false;
-                    failed.push(format!("{}: {}", c.step, c.why));
-                }
-            }
-            None => {
-                let failed = if c.passed {
-                    Vec::new()
-                } else {
-                    vec![format!("{}: {}", c.step, c.why)]
-                };
-                out.push((c.clone(), failed));
-            }
+        if !by.contains_key(&c.marker) {
+            order.push(c.marker.clone());
         }
+        by.entry(c.marker.clone()).or_default().push(c);
     }
-    out.into_iter()
-        .map(|(mut m, failed)| {
-            let several = m.step.contains('+');
-            if !m.passed {
-                m.why = failed.join("; ");
-            } else if several {
-                m.why = "every step went through as the guide says".into();
+    order
+        .into_iter()
+        .map(|marker| {
+            let steps = &by[&marker];
+            let measured: Vec<&&CheckResult> = steps.iter().filter(|c| c.measured).collect();
+            let failed: Vec<String> = measured
+                .iter()
+                .filter(|c| !c.passed)
+                .map(|c| format!("{}: {}", c.step, c.why))
+                .collect();
+            let is_measured = !measured.is_empty();
+            let passed = is_measured && failed.is_empty();
+            let why = if !is_measured {
+                NOT_MEASURED.to_string()
+            } else if !failed.is_empty() {
+                failed.join("; ")
+            } else if steps.len() > 1 {
+                "every step went through as the guide says".into()
+            } else {
+                measured[0].why.clone()
+            };
+            CheckResult {
+                marker,
+                step: steps
+                    .iter()
+                    .map(|c| c.step.as_str())
+                    .collect::<Vec<_>>()
+                    .join("+"),
+                passed,
+                why,
+                measured: is_measured,
             }
-            m
         })
         .collect()
 }
@@ -386,7 +403,11 @@ fn write_checks(run: &RunDirs, checks: &[CheckResult]) -> Result<()> {
             "{}\t{}\t{}\t{}\n",
             c.marker,
             c.step,
-            c.passed,
+            if c.measured {
+                c.passed.to_string()
+            } else {
+                "not-measured".into()
+            },
             c.why.replace(['\t', '\n', '\r'], " ")
         ));
     }
@@ -940,17 +961,28 @@ impl Running {
                 runbook::CodeOrBoard::Code => "code",
                 runbook::CodeOrBoard::Board => "board",
             };
-            match guard::git_push(&repo, &remote, &push.refspec) {
+            // `{board_branch}` / `{code_branch}`: the repository's own branch, whatever git named it.
+            let mut vars = self.vars.clone();
+            for (k, dir) in [
+                ("board_branch", self.dirs.board()),
+                ("code_branch", self.dirs.project()),
+            ] {
+                if let Some(b) = kanbanr_core::coderepo::current_branch(&dir) {
+                    vars.insert(k.into(), b);
+                }
+            }
+            let refspec = fill(&push.refspec, &vars);
+            match guard::git_push(&repo, &remote, &refspec) {
                 Ok(said) => {
-                    append_push(&self.dirs, which, &push.refspec, true, &said)?;
-                    eprintln!("step {id}: pushed {which} {}", push.refspec);
+                    append_push(&self.dirs, which, &refspec, true, &said)?;
+                    eprintln!("step {id}: pushed {which} {refspec}");
                 }
                 Err(e) => {
-                    append_push(&self.dirs, which, &push.refspec, false, &e.to_string())?;
+                    append_push(&self.dirs, which, &refspec, false, &e.to_string())?;
                     self.finding(
                         &id,
                         "push-failed",
-                        format!("push {which} {}", push.refspec),
+                        format!("push {which} {refspec}"),
                         e.to_string(),
                     );
                     step_ok = false;
@@ -999,15 +1031,22 @@ impl Running {
             return Ok(false);
         }
         if let Some(marker) = &step.check {
+            let measured = step.decide.is_some()
+                || step.press.is_some()
+                || step.push.is_some()
+                || step.expect.as_ref().is_some_and(|e| !e.is_empty());
             self.checks.push(CheckResult {
                 marker: marker.clone(),
                 step: id.clone(),
-                passed: step_ok,
-                why: if step_ok {
+                passed: step_ok && measured,
+                why: if !measured {
+                    NOT_MEASURED.into()
+                } else if step_ok {
                     "the step went through as the guide says".into()
                 } else {
                     why.join("; ")
                 },
+                measured,
             });
             eprintln!(
                 "step {id}: check {marker} {}",
@@ -1417,9 +1456,19 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     // A run whose setup never made its board prepares nothing: its checks say nothing about the
     // guide, only that the run could not follow it.
     let batch = if running.setup_failed {
-        Ok(Vec::new())
+        Ok(BatchOutcome::default())
     } else {
-        prepare_batch(cli, &running.checks, &running.runbook, &name, &target_board)
+        let commit = SetupLog::read(&dirs)
+            .ok()
+            .and_then(|l| l.get("kanbanr").and_then(version_commit));
+        prepare_batch(
+            cli,
+            &running.checks,
+            &running.runbook,
+            &name,
+            &target_board,
+            commit.as_deref(),
+        )
     };
     println!();
     println!(
@@ -1435,19 +1484,31 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         println!("{f}");
     }
     match batch {
-        Ok(ids) if !ids.is_empty() => println!(
-            "prepared {} result(s) as batch {name} on {}: confirm them at {}/p/{}/review",
-            ids.len(),
-            target_project.as_deref().unwrap_or("the board"),
-            crate::monitor_url(),
-            target_project.as_deref().unwrap_or("<project>")
-        ),
         Ok(_) if running.setup_failed => {
             println!(
                 "no batch prepared: setup did not complete, so the run says nothing about the guide"
             )
         }
-        Ok(_) => println!("no check to prepare on the target board"),
+        Ok(o) => {
+            if !o.prepared.is_empty() {
+                println!(
+                    "prepared {} result(s) as batch {name} on {}: confirm them at {}/p/{}/review",
+                    o.prepared.len(),
+                    target_project.as_deref().unwrap_or("the board"),
+                    crate::monitor_url(),
+                    target_project.as_deref().unwrap_or("<project>")
+                );
+            }
+            for r in &o.recorded {
+                println!("recorded walkthrough test: {r}");
+            }
+            for k in &o.skipped {
+                println!("not put on the board: {k}");
+            }
+            if o.prepared.is_empty() && o.recorded.is_empty() {
+                println!("no check to prepare on the target board");
+            }
+        }
         Err(e) => println!("the batch could not be prepared on the target board: {e}"),
     }
     println!("run folder: {}", dirs.root.display());
@@ -1460,28 +1521,104 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     Ok(())
 }
 
-/// Prepare every check the run recorded as `manual-test` records on the target board, all in one
-/// batch named for the run (ADR-0018: the target board only ever receives prepared records).
+/// What putting a run's checks on the target board did.
+#[derive(Debug, Default)]
+pub struct BatchOutcome {
+    /// Prepared records (manual tests), for the person to confirm as one batch.
+    pub prepared: Vec<String>,
+    /// Walkthrough-kind tests recorded as the run's own automated evidence.
+    pub recorded: Vec<String>,
+    /// Checks not put anywhere, and why (not measured, no definition, an error).
+    pub skipped: Vec<String>,
+}
+
+/// The commit a `kanbanr --version` line names: `kanbanr 0.7.0 (<sha>, built …)`.
+fn version_commit(line: &str) -> Option<String> {
+    let inner = line.split_once('(')?.1;
+    let sha = inner.split([',', ')']).next()?.trim();
+    (sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit())).then(|| sha.to_string())
+}
+
+/// Put every measured check of the run on the target board, one per marker. A `walkthrough:`
+/// test is the run's own automated evidence: recorded with the tests route as `kanbanr test`
+/// records any automated result, at the commit of the binary under test — no person's verdict is
+/// involved, so none is asked for. A `manual:` test is a person's check: prepared as a
+/// `manual-test` record in one batch named for the run, for the person to confirm (ADR-0018). A
+/// check whose steps checked nothing is not put anywhere.
 fn prepare_batch(
     cli: &crate::Cli,
     checks: &[CheckResult],
     runbook: &Runbook,
     batch: &str,
     target_board: &Path,
-) -> Result<Vec<String>> {
+    binary_commit: Option<&str>,
+) -> Result<BatchOutcome> {
     let checks = merge_checks(checks);
+    let mut out = BatchOutcome::default();
     if checks.is_empty() {
-        return Ok(Vec::new());
+        return Ok(out);
     }
     let project = kanbanr_core::project::resolve_project(cli.project.as_deref())
         .ok_or_else(|| anyhow!("no project here to prepare the checks on; pass --project"))?;
     let backend = crate::Backend::new(target_board.to_path_buf());
+    let board = kanbanr_core::Store::new(target_board).load(&project).ok();
+    let kind_of = |item: &str, req: &str, test: &str| -> Option<String> {
+        let f = board.as_ref()?.feature(item).ok()?;
+        f.definition
+            .as_ref()?
+            .requirements
+            .iter()
+            .find(|r| r.id == req)?
+            .tests
+            .iter()
+            .find(|t| t.name == test)
+            .map(|t| t.kind.trim().to_lowercase())
+    };
     let repo = crate::scm::repo_root();
-    let mut ids = Vec::new();
     for c in &checks {
         let Some(def) = runbook.checks.get(&c.marker) else {
+            out.skipped
+                .push(format!("{}: not defined under checks", c.marker));
             continue;
         };
+        if !c.measured {
+            out.skipped
+                .push(format!("{} ({}): {NOT_MEASURED}", c.marker, c.step));
+            continue;
+        }
+        let note = format!("walkthrough run {batch} step {}: {}", c.step, c.why);
+        if kind_of(&def.item, &def.requirement, &def.test).as_deref() == Some("walkthrough") {
+            let mut body = serde_json::json!({
+                "state": if c.passed { "green" } else { "red" },
+                "note": note,
+            });
+            if let Some(sha) = binary_commit {
+                body["checked_rev"] = serde_json::json!(sha);
+            }
+            match backend.write_in(
+                crate::Method::Put,
+                &format!(
+                    "/projects/{project}/features/{}/tests/{}/{}",
+                    person::urlencode(&def.item),
+                    person::urlencode(&def.requirement),
+                    person::urlencode(&def.test)
+                ),
+                Some(body),
+                repo.as_deref(),
+            ) {
+                Ok(_) => out.recorded.push(format!(
+                    "{} {} {} {}",
+                    c.marker,
+                    def.item,
+                    def.requirement,
+                    if c.passed { "green" } else { "red" }
+                )),
+                Err(e) => out
+                    .skipped
+                    .push(format!("{}: could not record: {e}", c.marker)),
+            }
+            continue;
+        }
         let body = serde_json::json!({
             "kind": "manual-test",
             "subject": {"item": def.item, "requirement": def.requirement, "test": def.test},
@@ -1498,12 +1635,15 @@ fn prepare_batch(
         ) {
             Ok(resp) => {
                 let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or_default();
-                ids.push(v["id"].as_str().unwrap_or("").to_string());
+                out.prepared
+                    .push(v["id"].as_str().unwrap_or("").to_string());
             }
-            Err(e) => eprintln!("{}: could not prepare on the target board: {e}", c.marker),
+            Err(e) => out
+                .skipped
+                .push(format!("{}: could not prepare: {e}", c.marker)),
         }
     }
-    Ok(ids)
+    Ok(out)
 }
 
 fn which(program: &str) -> Option<PathBuf> {
@@ -1523,7 +1663,38 @@ mod tests {
             step: step.into(),
             passed,
             why: why.into(),
+            measured: true,
         }
+    }
+
+    #[test]
+    fn the_binary_commit_is_read_from_its_version_line() {
+        assert_eq!(
+            version_commit(
+                "kanbanr 0.6.0 (6a973c690bb2a0909aae0b8e1f5a75e867cec7f1, built 2026-11-14)"
+            )
+            .as_deref(),
+            Some("6a973c690bb2a0909aae0b8e1f5a75e867cec7f1")
+        );
+        assert_eq!(version_commit("kanbanr 0.6.0"), None);
+    }
+
+    /// A check on a step that checked nothing is "not measured", never passed: alone it stays so,
+    /// and beside a measured step it is ignored (the vacuous MT-5 pass of the second real run).
+    #[test]
+    fn a_check_on_a_step_that_checked_nothing_is_not_measured() {
+        let unmeasured = CheckResult {
+            measured: false,
+            passed: false,
+            why: NOT_MEASURED.into(),
+            ..check("MT-5", "6.7", false, "")
+        };
+        let alone = merge_checks(std::slice::from_ref(&unmeasured));
+        assert!(!alone[0].measured && !alone[0].passed);
+        assert_eq!(alone[0].why, NOT_MEASURED);
+        let beside = merge_checks(&[unmeasured, check("MT-5", "6.8", true, "ok")]);
+        assert!(beside[0].measured && beside[0].passed, "{beside:?}");
+        assert_eq!(beside[0].step, "6.7+6.8");
     }
 
     /// T16: a marker named on two steps is one result — passed only if both passed, naming both
