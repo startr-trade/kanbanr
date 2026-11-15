@@ -206,6 +206,66 @@ mod tests {
         d
     }
 
+    fn skill_flat() -> String {
+        let skill = SKILL_FILES
+            .iter()
+            .find(|(r, _)| *r == "SKILL.md")
+            .map(|(_, bytes)| String::from_utf8_lossy(bytes).to_string())
+            .unwrap();
+        skill.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// DEF-056 R-1: the first release proposes release-prepare and the pipeline before Promote.
+    #[test]
+    fn the_first_release_proposes_release_prepare_and_the_pipeline() {
+        let flat = skill_flat();
+        let section = flat
+            .split("**The first release has a checklist")
+            .nth(1)
+            .and_then(|r| r.split("A started sprint is a record").next())
+            .expect("first-release checklist");
+        for w in [
+            "kanbanr config release-prepare",
+            "CHANGELOG",
+            "has_ci",
+            "pipeline item",
+            "before you name Promote to candidate",
+        ] {
+            assert!(section.contains(w), "missing {w}");
+        }
+        assert!(!flat.contains("`docs/src/guides/delivery-pipeline.md` says"));
+        for w in ["manual trigger", "scan", "publish"] {
+            assert!(flat.contains(w), "missing {w}");
+        }
+    }
+
+    /// DEF-056 R-2: an override follows a fresh check.
+    #[test]
+    fn an_override_follows_a_fresh_check() {
+        let flat = skill_flat();
+        let section = flat
+            .split("### Moving work")
+            .nth(1)
+            .and_then(|r| r.split("###").next())
+            .expect("moving work");
+        assert!(
+            section.contains("Before any `--override`, run `kanbanr check <CODE> --json` again")
+        );
+        assert!(section.contains("move without `--override`"));
+        assert!(section.contains("records no override a gate did not need"));
+    }
+
+    /// DEF-056 R-3: a chore Claude files asks the once-only questions.
+    #[test]
+    fn a_chore_claude_files_asks_the_once_only_questions() {
+        let flat = skill_flat();
+        assert!(flat.contains("A chore you file yourself"));
+        assert!(flat.contains("statement, goal and one EARS invariant"));
+        assert!(flat.contains(
+            "**one** AskUserQuestion (confirm, or change) before `kanbanr feature add --kind chore`"
+        ));
+    }
+
     /// DEF-045 R-1: the skill has Claude bring a release fix forward itself and report the merge.
     #[test]
     fn skill_has_claude_bring_a_release_fix_forward() {
