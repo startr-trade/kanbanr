@@ -11555,6 +11555,31 @@ fn print_release_plan(
     if let Some(after) = plan["after"].as_str() {
         println!("  after: {after}");
     }
+    // Entering the stage it is at again would redo something (DEF-057).
+    if let Some(again) = plan.get("again").filter(|a| a.is_object()) {
+        let button = again["button"].as_str().unwrap_or_default();
+        let list = |key: &str, sep: &str| {
+            again[key]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(sep)
+        };
+        if again["ready"] == true {
+            println!(
+                "  again: {button} \u{2014} {} (`kanbanr release promote {version} {}`)",
+                list("does", "; "),
+                again["stage"].as_str().unwrap_or_default()
+            );
+        } else {
+            println!(
+                "  again: {button} \u{2014} not ready: {}",
+                list("missing", "; ")
+            );
+        }
+    }
     println!("  (a plan: nothing was changed)");
     Ok(())
 }
