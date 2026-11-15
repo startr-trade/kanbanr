@@ -221,7 +221,7 @@ entry and the event, and as an `Agent-Scope:` trailer on the board commit and th
 
 Claude keeps an eye on the agents' branches: `kanbanr scope drift` names a build agent's commits
 that are newer than its item's last task change, and so do the Stop hook, session start and
-`kanbanr git doctor`. When the agent's work has been reviewed, Claude revokes its scope
+`kanbanr git doctor`. A merge that catches the branch up with its sprint, a release or main, and what it brings in, is not drift. When the agent's work has been reviewed, Claude revokes its scope
 (`kanbanr scope revoke SC-007 --reason done`); `kanbanr scope list` shows the ones in force, and
 `kanbanr scope renew SC-007 --for 4h` extends one. Your own checkout is never scoped.
 

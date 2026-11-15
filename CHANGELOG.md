@@ -6,6 +6,13 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A sprint catch-up merge is no longer agent work ahead of the board (DEF-063).**
+  `kanbanr scope drift`, the Stop hook, session start and `git doctor` count a build agent's own
+  non-merge commits, not the merges that bring a sprint, release or main branch into its item
+  branch, nor what those branches already hold.
+
 ## [0.6.0] - 2026-11-14
 
 ### Added

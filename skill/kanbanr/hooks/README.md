@@ -201,7 +201,8 @@ Both hooks read the agent scopes in force:
 
 - **SessionStart** prints an `### Agents at work` section from `kanbanr scope list` and
   `kanbanr scope drift --brief`: every scope in force, and any build agent whose branch has commits
-  newer than its item's last task change.
+  of its own newer than its item's last task change; merges, and what main, a sprint or a release
+  branch already holds, do not count.
 - **Stop** runs `kanbanr scope drift --brief` before its staleness rule, with its own per-session
   stamp (`kanbanr-agents-<session>` in the temp dir). When an agent's branch is ahead of the board
   it blocks once with: "kanbanr: agent work is ahead of the board: … Look at the branch and bring
