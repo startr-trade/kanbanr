@@ -979,7 +979,14 @@ command you run and flips the tracked tests to match what actually happened, sta
 project revision it was observed at. So:
 
 - Name the test entry exactly as the runner prints it (`cart::retains_for_seven_days`,
-  `src/cart.test.ts`), or the run cannot find it.
+  `src/cart.test.ts`), or the run cannot find it. Run tests so the hook can read them, and name
+  tracked tests as the hook reads them: cargo `module::tests::name`; Vitest with
+  `--reporter=verbose`, `src/App.test.tsx > title shows the basket item count` (the duration is
+  dropped); pytest with `-v`, `tests/test_x.py::test_y`; Playwright with `--reporter=list`,
+  `e2e/basket.spec.ts › kept basket › basket is kept after the browser is closed and reopened`
+  (project, location and duration dropped; the titles alone also match). Vitest's default
+  reporter and Playwright's `line` and `dot` reporters print no per-test pass line, so a run under
+  them records nothing.
 - **Never** set a test `green` by hand to make `check` pass. If the hook did not record it, the
   test did not pass — say so instead.
 - A green recorded at an older revision is reported as **stale evidence**: the code has changed
