@@ -23,7 +23,9 @@ answer as data.
 One item, one branch, and every commit says what it serves. The hooks refuse a commit on the
 default branch, a branch that names no item, and a message with no reference — and they let through
 merges, reverts, `spike/*` branches, and a recorded escape (`[no-ref] <why>` in the message, which
-leaves the reason in git history forever). If kanbanr is not on PATH the hooks step aside rather
+leaves the reason in git history forever). Setup's own first commit in a repository that already
+has history is let through on the default branch too: only `.kanbanr`, `CLAUDE.md` and
+`.gitignore`, with `[no-ref] <why>`, and only until the marker is committed. If kanbanr is not on PATH the hooks step aside rather
 than making the repository uncommittable for someone who never installed it.
 
 ### Commits made by an agent
