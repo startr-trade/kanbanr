@@ -6,7 +6,7 @@
 //! takes it over.
 
 use crate::coderepo::{git_raw, rev_parse};
-use crate::error::Result;
+use crate::error::{CoreError, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -312,6 +312,65 @@ pub fn read_position(root: &Path, repo: &str) -> Result<WorkingState> {
         },
         changed,
     })
+}
+
+/// The bytes of `path` at the position `state` describes, with nothing checked out. None when the
+/// path is absent there. Err when an uncommitted path's bytes no longer hash to what the position
+/// recorded ("position moved").
+pub fn read_at(root: &Path, state: &WorkingState, path: &str) -> Result<Option<Vec<u8>>> {
+    if let Ok(i) = state.changed.binary_search_by(|(p, _)| p.as_str().cmp(path)) {
+        let Some(want) = &state.changed[i].1 else {
+            return Ok(None);
+        };
+        return match raw_bytes(root, path.as_bytes()) {
+            Some(bytes) if &blob_id(&bytes) == want => Ok(Some(bytes)),
+            _ => Err(CoreError::Git(format!(
+                "position moved: {path} changed since the position was read"
+            ))),
+        };
+    }
+    let Some(commit) = &state.position.commit else {
+        return Ok(None);
+    };
+    match git_raw(root, &["cat-file", "blob", &format!("{commit}:{path}")]) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(CoreError::Git(why))
+            if why.contains("does not exist") || why.contains("Not a valid object name") =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The files under `prefix` ("" for all; "docs" means "docs/") at the position: (path, blob id),
+/// sorted by path. Deleted paths are gone, uncommitted and untracked ones present.
+pub fn tree_at(root: &Path, state: &WorkingState, prefix: &str) -> Result<Vec<(String, String)>> {
+    let prefix = match prefix.trim_matches('/') {
+        "" => String::new(),
+        dir => format!("{dir}/"),
+    };
+    let mut files: BTreeMap<String, String> = match &state.position.commit {
+        Some(c) => head_blobs(root, c, &prefix)?
+            .into_iter()
+            .map(|(p, o)| (String::from_utf8_lossy(&p).into_owned(), o))
+            .collect(),
+        None => BTreeMap::new(),
+    };
+    for (path, id) in &state.changed {
+        if !path.starts_with(&prefix) {
+            continue;
+        }
+        match id {
+            None => {
+                files.remove(path);
+            }
+            Some(id) => {
+                files.insert(path.clone(), id.clone());
+            }
+        }
+    }
+    Ok(files.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -728,5 +787,95 @@ mod tests {
             gone(&r);
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    // ---- reading at a position (R-2) ----
+
+    fn head_of(d: &Path) -> (String, String, String) {
+        (
+            git(d, &["rev-parse", "HEAD"]).unwrap(),
+            git(d, &["symbolic-ref", "HEAD"]).unwrap(),
+            git(d, &["status", "--porcelain=v1", "--untracked-files=no"]).unwrap(),
+        )
+    }
+
+    /// R-2: a clean path comes from the commit even when the disk differs later, an uncommitted
+    /// path from disk, a deleted or absent path is None, and nothing is checked out.
+    #[test]
+    fn read_at_serves_commit_disk_and_deleted() {
+        let d = repo("readat");
+        commit_file(&d, "keep.txt", "keep\n", "keep");
+        commit_file(&d, "gone.txt", "gone\n", "gone");
+        std::fs::write(d.join("README"), "edited\n").unwrap();
+        std::fs::remove_file(d.join("gone.txt")).unwrap();
+        std::fs::write(d.join("new.txt"), "new\n").unwrap();
+        let st = pos(&d);
+        let before = head_of(&d);
+        assert_eq!(read_at(&d, &st, "keep.txt").unwrap(), Some(b"keep\n".to_vec()));
+        assert_eq!(read_at(&d, &st, "README").unwrap(), Some(b"edited\n".to_vec()));
+        assert_eq!(read_at(&d, &st, "new.txt").unwrap(), Some(b"new\n".to_vec()));
+        assert_eq!(read_at(&d, &st, "gone.txt").unwrap(), None);
+        assert_eq!(read_at(&d, &st, "never.txt").unwrap(), None);
+        // A clean path is the commit's bytes, whatever the disk holds later.
+        std::fs::write(d.join("keep.txt"), "disk moved on\n").unwrap();
+        assert_eq!(read_at(&d, &st, "keep.txt").unwrap(), Some(b"keep\n".to_vec()));
+        assert_eq!(head_of(&d).0, before.0);
+        assert_eq!(head_of(&d).1, before.1);
+        // An unborn position holds nothing committed.
+        let no_commit = WorkingState {
+            position: PositionRef {
+                repo: "r".into(),
+                commit: None,
+                dirty: None,
+            },
+            changed: vec![],
+        };
+        assert_eq!(read_at(&d, &no_commit, "README").unwrap(), None);
+        gone(&d);
+    }
+
+    /// R-2: an uncommitted file edited after the position was read is an error, never new bytes.
+    #[test]
+    fn read_at_refuses_a_moved_file() {
+        let d = repo("moved");
+        std::fs::write(d.join("README"), "edited\n").unwrap();
+        let st = pos(&d);
+        std::fs::write(d.join("README"), "edited again\n").unwrap();
+        let err = read_at(&d, &st, "README").unwrap_err().to_string();
+        assert!(err.contains("position moved"), "{err}");
+        std::fs::remove_file(d.join("README")).unwrap();
+        assert!(read_at(&d, &st, "README").is_err());
+        gone(&d);
+    }
+
+    /// R-2: the list is the position's files, not the disk's.
+    #[test]
+    fn tree_at_lists_the_position_not_the_disk() {
+        let d = repo("tree");
+        commit_file(&d, "keep.txt", "k\n", "k");
+        std::fs::create_dir_all(d.join("docs")).unwrap();
+        std::fs::create_dir_all(d.join("docs2")).unwrap();
+        commit_file(&d, "docs/a.md", "a\n", "a");
+        commit_file(&d, "docs/b.md", "b\n", "b");
+        commit_file(&d, "docs2/c.md", "c\n", "c");
+        std::fs::remove_file(d.join("docs/b.md")).unwrap();
+        std::fs::write(d.join("docs/a.md"), "a edited\n").unwrap();
+        std::fs::write(d.join("docs/new.md"), "n\n").unwrap();
+        let st = pos(&d);
+        let paths = |prefix: &str| -> Vec<String> {
+            tree_at(&d, &st, prefix)
+                .unwrap()
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect()
+        };
+        assert_eq!(paths("docs"), vec!["docs/a.md", "docs/new.md"]);
+        assert_eq!(paths("docs/"), paths("docs"));
+        assert_eq!(paths("docs2"), vec!["docs2/c.md"]);
+        assert_eq!(paths("empty"), Vec::<String>::new());
+        assert_eq!(paths("").len(), 5);
+        let a = tree_at(&d, &st, "docs").unwrap();
+        assert_eq!(a[0].1, blob_id(b"a edited\n"));
+        gone(&d);
     }
 }
