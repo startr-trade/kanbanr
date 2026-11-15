@@ -6,7 +6,9 @@
 use crate::diagrams;
 use crate::error::Result;
 use crate::hash::stable_hash;
-use crate::position::{PositionRef, ViewQuery, WorkingState, read_at, tree_at, view_id};
+use crate::position::{
+    PositionRef, ViewQuery, WorkingState, blob_id, read_at, read_position, tree_at, view_id,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -240,6 +242,134 @@ pub fn answer_bytes(a: &ViewAnswer) -> Vec<u8> {
     serde_json::to_vec(a).unwrap_or_default()
 }
 
+/// The state at `at`: a branch or commit name as a clean position (nothing uncommitted), or None
+/// for the live checkout.
+pub fn state_at(root: &Path, repo: &str, at: Option<&str>) -> Result<WorkingState> {
+    match at {
+        Some(name) => Ok(WorkingState {
+            position: PositionRef::at_commit(repo, &crate::coderepo::rev_parse(root, name)?),
+            changed: vec![],
+        }),
+        None => read_position(root, repo),
+    }
+}
+
+/// One row of the proof: a position, the written doc's blob there, the view's ID, and whether a
+/// second read at that position repeated the bytes and the ID.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProofRow {
+    pub at: String,
+    pub position: String,
+    pub doc_blob: Option<String>,
+    pub view_id: String,
+    pub bytes_repeat: bool,
+    pub id_repeat: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProofTable {
+    pub rows: Vec<ProofRow>,
+    /// Every pair repeated and the IDs are pairwise distinct.
+    pub ok: bool,
+}
+
+/// The proof (R-5) as a library function so a test can run it: for each `at` (a branch or commit
+/// name, or None for the live checkout) the doc's blob id, the view's ID and whether a second
+/// read at that position repeated the bytes and the ID.
+pub fn proof(
+    root: &Path,
+    repo: &str,
+    facts: &str,
+    doc: &str,
+    ats: &[Option<&str>],
+    docs_root: &str,
+    max_nodes: usize,
+) -> Result<ProofTable> {
+    proof_with(
+        root,
+        repo,
+        facts,
+        doc,
+        ats,
+        docs_root,
+        max_nodes,
+        &mut |_| {},
+    )
+}
+
+/// [`proof`] with a hook that runs between the two reads of each position (the test's way to edit
+/// the checkout in the middle).
+#[allow(clippy::too_many_arguments)]
+fn proof_with(
+    root: &Path,
+    repo: &str,
+    facts: &str,
+    doc: &str,
+    ats: &[Option<&str>],
+    docs_root: &str,
+    max_nodes: usize,
+    between: &mut dyn FnMut(Option<&str>),
+) -> Result<ProofTable> {
+    let mut rows = Vec::new();
+    for at in ats {
+        let first = state_at(root, repo, *at)?;
+        let a = docs_view(root, &first, facts, docs_root, max_nodes)?;
+        let doc_blob = read_at(root, &first, doc)?.map(|b| blob_id(&b));
+        between(*at);
+        let second = state_at(root, repo, *at)?;
+        let b = docs_view(root, &second, facts, docs_root, max_nodes)?;
+        rows.push(ProofRow {
+            at: at.unwrap_or("working tree").to_string(),
+            position: first.position.text(),
+            doc_blob,
+            view_id: a.view_id.clone().unwrap_or_default(),
+            bytes_repeat: answer_bytes(&a) == answer_bytes(&b),
+            id_repeat: a.view_id == b.view_id,
+        });
+    }
+    let ids: BTreeSet<&str> = rows.iter().map(|r| r.view_id.as_str()).collect();
+    let ok = rows.iter().all(|r| r.bytes_repeat && r.id_repeat) && ids.len() == rows.len();
+    Ok(ProofTable { rows, ok })
+}
+
+impl ProofTable {
+    /// The table as the proof script prints it.
+    pub fn render(&self) -> String {
+        let yn = |b: bool| if b { "yes" } else { "NO" };
+        let mut out = format!(
+            "{:<20} {:<50} {:<12} {:<36} {:<12} {}\n",
+            "at", "position", "doc blob", "view id", "bytes repeat", "id repeats"
+        );
+        for r in &self.rows {
+            let pos = if r.position.len() > 48 {
+                format!(
+                    "{}..{}",
+                    &r.position[..22],
+                    &r.position[r.position.len() - 24..]
+                )
+            } else {
+                r.position.clone()
+            };
+            out.push_str(&format!(
+                "{:<20} {:<50} {:<12} {:<36} {:<12} {}\n",
+                r.at,
+                pos,
+                r.doc_blob
+                    .as_deref()
+                    .map_or("absent".to_string(), |b| b[..10].to_string()),
+                r.view_id,
+                yn(r.bytes_repeat),
+                yn(r.id_repeat)
+            ));
+        }
+        out.push_str(&format!(
+            "positions distinct, every second read identical: {}\n",
+            if self.ok { "yes" } else { "NO" }
+        ));
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,7 +384,11 @@ mod tests {
         let empty = dir.join(".git/empty-excludes");
         std::fs::write(&empty, "").unwrap();
         git(&dir, &["config", "core.autocrlf", "false"]).unwrap();
-        git(&dir, &["config", "core.excludesFile", empty.to_str().unwrap()]).unwrap();
+        git(
+            &dir,
+            &["config", "core.excludesFile", empty.to_str().unwrap()],
+        )
+        .unwrap();
         dir
     }
 
@@ -303,7 +437,12 @@ mod tests {
         let d = repo("repeat");
         std::fs::create_dir_all(d.join("docs")).unwrap();
         commit_file(&d, "docs/overview.md", "# Overview\n", "overview");
-        commit_file(&d, "docs/guide.md", "# Guide\n\n```mermaid\nflowchart LR\n  A --> B\n```\n", "guide");
+        commit_file(
+            &d,
+            "docs/guide.md",
+            "# Guide\n\n```mermaid\nflowchart LR\n  A --> B\n```\n",
+            "guide",
+        );
         let facts = facts_version("board0", "");
         let view = |st: &WorkingState| docs_view(&d, st, &facts, "docs", 60).unwrap();
 
@@ -337,6 +476,64 @@ mod tests {
         let g = docs_view(&d, &st2, &facts, "docs", 1).unwrap();
         assert_ne!(g.view_id, e.view_id);
         assert_eq!((g.graph.shown, g.graph.total), (1, 2));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// R-5: main, a branch and an uncommitted position give three distinct positions and IDs, each
+    /// repeated; an edit between the two reads of one position makes `ok` false.
+    #[test]
+    fn the_proof_table_shows_three_positions_each_repeating() {
+        let d = repo("proof");
+        std::fs::create_dir_all(d.join("docs")).unwrap();
+        commit_file(&d, "docs/overview.md", "# Overview\n", "overview");
+        commit_file(&d, "docs/guide.md", "# Guide\n", "guide");
+        git(&d, &["checkout", "-q", "-b", "feat/SPK-001-proof"]).unwrap();
+        commit_file(
+            &d,
+            "docs/guide.md",
+            "# Guide, edited on the branch\n",
+            "edit",
+        );
+        std::fs::write(
+            d.join("docs/overview.md"),
+            "# Overview\n\n```mermaid\nflowchart LR\n  A --> B\n```\n",
+        )
+        .unwrap();
+        std::fs::write(d.join("docs/new.md"), "# New\n").unwrap();
+        std::fs::remove_file(d.join("docs/guide.md")).unwrap();
+        let facts = facts_version("board0", "");
+        let ats = [Some("main"), Some("feat/SPK-001-proof"), None];
+        let t = proof(&d, "r", &facts, "docs/guide.md", &ats, "docs", 60).unwrap();
+        assert_eq!(t.rows.len(), 3);
+        assert!(t.ok, "{}", t.render());
+        assert!(t.rows.iter().all(|r| r.bytes_repeat && r.id_repeat));
+        let pos: BTreeSet<&str> = t.rows.iter().map(|r| r.position.as_str()).collect();
+        assert_eq!(pos.len(), 3);
+        assert!(t.rows[0].doc_blob.is_some());
+        assert_ne!(t.rows[0].doc_blob, t.rows[1].doc_blob);
+        assert_eq!(t.rows[2].doc_blob, None, "deleted in the working tree");
+        assert!(t.rows[2].position.contains('+'));
+        assert!(t.render().contains("main"));
+
+        // An edit between the two reads of the live position breaks the repeat.
+        let mut n = 0;
+        let t = proof_with(
+            &d,
+            "r",
+            &facts,
+            "docs/guide.md",
+            &[None],
+            "docs",
+            60,
+            &mut |_| {
+                n += 1;
+                std::fs::write(d.join("docs/new.md"), "# New, edited between reads\n").unwrap();
+            },
+        )
+        .unwrap();
+        assert_eq!(n, 1);
+        assert!(!t.ok);
+        assert!(!t.rows[0].id_repeat);
         let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -318,7 +318,10 @@ pub fn read_position(root: &Path, repo: &str) -> Result<WorkingState> {
 /// path is absent there. Err when an uncommitted path's bytes no longer hash to what the position
 /// recorded ("position moved").
 pub fn read_at(root: &Path, state: &WorkingState, path: &str) -> Result<Option<Vec<u8>>> {
-    if let Ok(i) = state.changed.binary_search_by(|(p, _)| p.as_str().cmp(path)) {
+    if let Ok(i) = state
+        .changed
+        .binary_search_by(|(p, _)| p.as_str().cmp(path))
+    {
         let Some(want) = &state.changed[i].1 else {
             return Ok(None);
         };
@@ -499,7 +502,11 @@ mod tests {
         let empty = dir.join(".git/empty-excludes");
         std::fs::write(&empty, "").unwrap();
         git(&dir, &["config", "core.autocrlf", "false"]).unwrap();
-        git(&dir, &["config", "core.excludesFile", empty.to_str().unwrap()]).unwrap();
+        git(
+            &dir,
+            &["config", "core.excludesFile", empty.to_str().unwrap()],
+        )
+        .unwrap();
         dir
     }
 
@@ -699,7 +706,8 @@ mod tests {
             let name = c["name"].as_str().unwrap();
             assert!(c["head"].is_object() && c["worktree"].is_object(), "{name}");
             let expected = c["expected"].as_str().unwrap();
-            let parsed = PositionRef::parse("r", expected).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let parsed =
+                PositionRef::parse("r", expected).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(parsed.text(), expected, "{name}");
         }
     }
@@ -717,10 +725,8 @@ mod tests {
         let mut failures = Vec::new();
         for c in v["cases"].as_array().unwrap() {
             let case = c["name"].as_str().unwrap();
-            let r = std::env::temp_dir().join(format!(
-                "kanbanr-pos-{}-shared-{case}",
-                std::process::id()
-            ));
+            let r = std::env::temp_dir()
+                .join(format!("kanbanr-pos-{}-shared-{case}", std::process::id()));
             let _ = std::fs::remove_dir_all(&r);
             std::fs::create_dir_all(&r).unwrap();
             git(&r, &["init", "-q"]).unwrap();
@@ -811,14 +817,26 @@ mod tests {
         std::fs::write(d.join("new.txt"), "new\n").unwrap();
         let st = pos(&d);
         let before = head_of(&d);
-        assert_eq!(read_at(&d, &st, "keep.txt").unwrap(), Some(b"keep\n".to_vec()));
-        assert_eq!(read_at(&d, &st, "README").unwrap(), Some(b"edited\n".to_vec()));
-        assert_eq!(read_at(&d, &st, "new.txt").unwrap(), Some(b"new\n".to_vec()));
+        assert_eq!(
+            read_at(&d, &st, "keep.txt").unwrap(),
+            Some(b"keep\n".to_vec())
+        );
+        assert_eq!(
+            read_at(&d, &st, "README").unwrap(),
+            Some(b"edited\n".to_vec())
+        );
+        assert_eq!(
+            read_at(&d, &st, "new.txt").unwrap(),
+            Some(b"new\n".to_vec())
+        );
         assert_eq!(read_at(&d, &st, "gone.txt").unwrap(), None);
         assert_eq!(read_at(&d, &st, "never.txt").unwrap(), None);
         // A clean path is the commit's bytes, whatever the disk holds later.
         std::fs::write(d.join("keep.txt"), "disk moved on\n").unwrap();
-        assert_eq!(read_at(&d, &st, "keep.txt").unwrap(), Some(b"keep\n".to_vec()));
+        assert_eq!(
+            read_at(&d, &st, "keep.txt").unwrap(),
+            Some(b"keep\n".to_vec())
+        );
         assert_eq!(head_of(&d).0, before.0);
         assert_eq!(head_of(&d).1, before.1);
         // An unborn position holds nothing committed.
