@@ -230,6 +230,9 @@ jobs:
       # links, and is edited or rejected only on request (FTR-034).
       - name: A prepared record shows filled in beside its button
         run: npm run check:prepared
+      # A disabled Approve or Ratify says beneath it what is missing and who provides it (DEF-064).
+      - name: A disabled Approve or Ratify button says what is missing and who provides it
+        run: npm run check:review-blocked
       # Claude settles the texts to check; the Review page shows what is left and offers docs-folded
       # only when none is, with no form for the person (DEF-039).
       - name: The docs-folded sign-off asks for no form

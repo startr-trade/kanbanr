@@ -92,3 +92,20 @@ export function approveBlocker(state: {
   if (n > 0) return `${n} diagram${n === 1 ? " does" : "s do"} not parse — fix ${n === 1 ? "it" : "them"} first`;
   return null;
 }
+
+/** The sentence shown beside a disabled Approve or Ratify button (DEF-064): what is missing and
+ *  who provides it. Null exactly when approveBlocker is null, so the button is offered. */
+export function blockedSentence(
+  verb: "Approve" | "Ratify",
+  state: { loading: boolean; failed: string | null; problems: DiagramProblem[] },
+): string | null {
+  if (state.failed) {
+    return `${verb} is held because the diagram check could not run (${state.failed}): reload the page, and if it fails again ask Claude to look at the daemon's diagrams route.`;
+  }
+  if (state.loading) return `${verb} waits for the diagram check, which this page is running now.`;
+  const n = state.problems.length;
+  if (n > 0) {
+    return `${verb} is held until the ${n} diagram${n === 1 ? "" : "s"} listed above parse${n === 1 ? "s" : ""}: Claude fixes ${n === 1 ? "it" : "them"} in the spec or the doc, and this page checks again.`;
+  }
+  return null;
+}

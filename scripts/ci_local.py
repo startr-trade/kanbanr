@@ -84,6 +84,7 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "An item says which release it shipped in": LOCAL,
             "The board can show the items in no sprint": LOCAL,
             "A prepared record shows filled in beside its button": LOCAL,
+            "A disabled Approve or Ratify button says what is missing and who provides it": LOCAL,
             "The docs-folded sign-off asks for no form": LOCAL,
             "The Review page lists manual checks waiting for you": LOCAL,
             "The Workflow page shows the cadence, the git model and the guard rails": LOCAL,

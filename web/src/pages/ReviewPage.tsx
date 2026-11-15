@@ -9,7 +9,7 @@ import Markdown from "../components/Markdown";
 import { zachmanColumns } from "../types";
 import type { Adr, DriftFlag, PendingReview, PlannedRelease, SettledText, SpecBrief } from "../types";
 import { docsFoldedOffer } from "../textsToCheck";
-import { approveBlocker, checkBlocks, type DiagramProblem } from "../diagramCheck";
+import { approveBlocker, blockedSentence, checkBlocks, type DiagramProblem } from "../diagramCheck";
 import { PreparedPanel } from "../components/PreparedPanel";
 import { openFor } from "../prepared";
 import { lastResultLine, manualCommand, manualRows, type ManualRow } from "../manualTests";
@@ -1267,14 +1267,17 @@ function Brief({
         ) : writable ? (
           <>
             {waitingOnSignoff || specChanged || whichRelease || preparedRatify ? null : (
-              <button
-                className="btn btn-primary"
-                onClick={onApprove}
-                disabled={busy || blocker != null}
-                title={blocker ?? undefined}
-              >
-                {busy ? "recording…" : `${verb} ${item.code}`}
-              </button>
+              <>
+                <button
+                  className="btn btn-primary"
+                  onClick={onApprove}
+                  disabled={busy || blocker != null}
+                  title={blocker ?? undefined}
+                >
+                  {busy ? "recording…" : `${verb} ${item.code}`}
+                </button>
+                {blocker ? <p className="muted small review-held">{blockedSentence(verb, diagrams)}</p> : null}
+              </>
             )}
             {signoffs.filter((name) => !preparedSignoff(name) && (name !== "docs-folded" || docsFolded.offer)).map((name) => (
               <button
