@@ -13,7 +13,9 @@ fn cli() -> PathBuf {
 }
 
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
 }
 
 /// The fake `claude`: a Python script (JSON in, JSON out) beside a `kanbanr` link, so the turn that
@@ -120,26 +122,64 @@ fn world(name: &str) -> World {
         .unwrap();
     std::fs::write(target_project.join("README.md"), "# target\n").unwrap();
     Command::new("git")
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "add", "."])
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "add",
+            ".",
+        ])
         .current_dir(&target_project)
         .output()
         .unwrap();
     Command::new("git")
-        .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "init"])
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "commit",
+            "-qm",
+            "init",
+        ])
         .current_dir(&target_project)
         .output()
         .unwrap();
     let board = target_board.display().to_string();
-    k(&["init", "target", "--data-dir", &board, "--author", "Tester", "--email", "t@example.com", "--no-hooks"]);
+    k(&[
+        "init",
+        "target",
+        "--data-dir",
+        &board,
+        "--author",
+        "Tester",
+        "--email",
+        "t@example.com",
+        "--no-hooks",
+    ]);
     k(&["milestone", "add", "--name", "M1", "--code", "MS-1"]);
-    k(&["feature", "add", "--title", "One-click decisions", "--milestone", "MS-1"]);
+    k(&[
+        "feature",
+        "add",
+        "--title",
+        "One-click decisions",
+        "--milestone",
+        "MS-1",
+    ]);
     let def = root.join("target-def.yaml");
     std::fs::write(
         &def,
         "statement: every decision is one click\nrequirements:\n  - id: R-5\n    text: WHEN a walkthrough runs THE SYSTEM SHALL take every decision with one click\n    tests:\n      - name: 'manual: in a walkthrough, every sign-off, promotion and CI result is taken with one click and nothing typed'\n        kind: manual\n",
     )
     .unwrap();
-    k(&["feature", "define", "FEAT-001", "--file", &def.display().to_string()]);
+    k(&[
+        "feature",
+        "define",
+        "FEAT-001",
+        "--file",
+        &def.display().to_string(),
+    ]);
     let claude = fake_claude(&root);
     World {
         root,
@@ -205,7 +245,14 @@ fn run_walkthrough(w: &World, runbook: &Path, name: &str) -> Output {
         ])
         .current_dir(&w.target_project)
         .env("KANBANR_BOARD_FENCE", &w.root)
-        .env("PATH", format!("{}:{}", w.root.join("bin").display(), std::env::var("PATH").unwrap_or_default()))
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                w.root.join("bin").display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
         .env_remove("KANBANR_DATA_DIR")
         .env_remove("KANBANR_PROJECT")
         .env_remove("CLAUDECODE")
@@ -243,15 +290,30 @@ fn every_question_asked_in_a_run_has_one_row_in_questions_tsv() {
     let shown = text(&out);
     assert!(out.status.success(), "{shown}");
     let run = w.runs.join("q1");
-    let tsv = std::fs::read_to_string(run.join("raw/questions.tsv")).unwrap_or_else(|_| panic!("no questions.tsv\n{shown}"));
-    let rows: Vec<Vec<&str>> = tsv.lines().skip(1).map(|l| l.split('\t').collect()).collect();
+    let tsv = std::fs::read_to_string(run.join("raw/questions.tsv"))
+        .unwrap_or_else(|_| panic!("no questions.tsv\n{shown}"));
+    let rows: Vec<Vec<&str>> = tsv
+        .lines()
+        .skip(1)
+        .map(|l| l.split('\t').collect())
+        .collect();
     assert_eq!(rows.len(), 2, "one row per question:\n{tsv}\n{shown}");
-    let by_source = |s: &str| rows.iter().find(|r| r[2] == s).unwrap_or_else(|| panic!("no {s} row in\n{tsv}"));
+    let by_source = |s: &str| {
+        rows.iter()
+            .find(|r| r[2] == s)
+            .unwrap_or_else(|| panic!("no {s} row in\n{tsv}"))
+    };
     let in_text = by_source("text");
     assert_eq!(in_text[1], "1.1");
     assert_eq!(in_text[3], "Where should the board live?");
-    assert!(in_text[4].contains("Beside the project (recommended)"), "{tsv}");
-    assert!(in_text[5].starts_with("Beside the project, with the remote "), "the runbook's pick, filled in: {tsv}");
+    assert!(
+        in_text[4].contains("Beside the project (recommended)"),
+        "{tsv}"
+    );
+    assert!(
+        in_text[5].starts_with("Beside the project, with the remote "),
+        "the runbook's pick, filled in: {tsv}"
+    );
     assert!(in_text[6].starts_with("runbook"), "{tsv}");
     let dialog = by_source("dialog");
     assert_eq!(dialog[1], "1.2");
@@ -284,12 +346,18 @@ fn a_run_past_its_budget_stops_within_one_turn_and_still_snapshots() {
     );
     let out = run_walkthrough(&w, &rb, "b1");
     let shown = text(&out);
-    assert!(!out.status.success(), "a stopped run exits non-zero:\n{shown}");
+    assert!(
+        !out.status.success(),
+        "a stopped run exits non-zero:\n{shown}"
+    );
     assert!(shown.contains("stopped early"), "{shown}");
     let run = w.runs.join("b1");
     let stream = std::fs::read_to_string(run.join("raw/transcripts/stream.jsonl")).unwrap();
     let sent: Vec<&str> = stream.lines().filter(|l| l.starts_with("# >>> ")).collect();
-    assert!(sent.last().unwrap().contains("Spend everything."), "the budget turn is the last one sent:\n{stream}");
+    assert!(
+        sent.last().unwrap().contains("Spend everything."),
+        "the budget turn is the last one sent:\n{stream}"
+    );
     assert!(!stream.contains("This is never said."), "{stream}");
     assert!(stream.contains("error_max_budget_usd"));
     let findings = std::fs::read_to_string(run.join("raw/findings.md")).unwrap();
@@ -322,21 +390,35 @@ fn a_fake_claude_run_leaves_the_public_board_and_the_kanbanr_repository_untouche
     let rb = runbook_file(&w, "smoke", "");
     let before_board: Vec<String> = walk(&w.target_board);
     let before_repo = git_status(&w.target_project);
-    let head_before = Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&w.target_project).output().unwrap();
+    let head_before = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&w.target_project)
+        .output()
+        .unwrap();
     let out = run_walkthrough(&w, &rb, "u1");
     let shown = text(&out);
     assert!(out.status.success(), "{shown}");
     // The repository the run was started from: untouched.
     assert_eq!(git_status(&w.target_project), before_repo, "{shown}");
-    let head_after = Command::new("git").args(["rev-parse", "HEAD"]).current_dir(&w.target_project).output().unwrap();
+    let head_after = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&w.target_project)
+        .output()
+        .unwrap();
     assert_eq!(head_before.stdout, head_after.stdout);
     // The target board: only prepared records (and the board's own activity/events/commit of them).
     let after_board: Vec<String> = walk(&w.target_board);
-    let new: Vec<&String> = after_board.iter().filter(|f| !before_board.contains(f)).collect();
+    let new: Vec<&String> = after_board
+        .iter()
+        .filter(|f| !before_board.contains(f))
+        .collect();
     assert!(!new.is_empty(), "the batch was prepared:\n{shown}");
     for f in &new {
         assert!(
-            f.contains("/prepared/") || f.contains("/activity/") || f.contains("/events/") || f.contains("/.git/"),
+            f.contains("/prepared/")
+                || f.contains("/activity/")
+                || f.contains("/events/")
+                || f.contains("/.git/"),
             "{f} appeared on the target board\n{shown}"
         );
     }
@@ -348,21 +430,39 @@ fn a_fake_claude_run_leaves_the_public_board_and_the_kanbanr_repository_untouche
             !p.exists()
         })
         .collect();
-    assert!(changed.is_empty(), "files vanished from the target board: {changed:?}");
-    let prepared: Vec<&String> = new.iter().copied().filter(|f| f.contains("/prepared/") && f.ends_with(".yaml")).collect();
-    assert_eq!(prepared.len(), 1, "one check, one prepared record: {prepared:?}");
+    assert!(
+        changed.is_empty(),
+        "files vanished from the target board: {changed:?}"
+    );
+    let prepared: Vec<&String> = new
+        .iter()
+        .copied()
+        .filter(|f| f.contains("/prepared/") && f.ends_with(".yaml"))
+        .collect();
+    assert_eq!(
+        prepared.len(),
+        1,
+        "one check, one prepared record: {prepared:?}"
+    );
     let record = std::fs::read_to_string(prepared[0]).unwrap();
     assert!(record.contains("batch: u1"), "{record}");
     assert!(record.contains("kind: manual-test"), "{record}");
     assert!(record.contains("walkthrough run u1 step 2.1"), "{record}");
     // The item on the target board is as it was: nothing recorded, only prepared.
-    let item = std::fs::read_to_string(w.target_board.join("projects/target/features/Planned/FEAT-001.yaml")).unwrap();
+    let item = std::fs::read_to_string(
+        w.target_board
+            .join("projects/target/features/Planned/FEAT-001.yaml"),
+    )
+    .unwrap();
     assert!(!item.contains("state: green"), "{item}");
     // Every push went to the run's own remote.
     let pushes = std::fs::read_to_string(w.runs.join("u1/raw/pushes.tsv")).unwrap();
     assert!(pushes.contains("code\tmain\ttrue"), "{pushes}");
     let remotes = std::fs::read_to_string(w.runs.join("u1/remotes.env")).unwrap();
-    assert!(remotes.contains(&w.runs.join("u1/remotes/code.git").display().to_string()), "{remotes}");
+    assert!(
+        remotes.contains(&w.runs.join("u1/remotes/code.git").display().to_string()),
+        "{remotes}"
+    );
     let refs = std::fs::read_to_string(w.runs.join("u1/raw/remote-refs.txt")).unwrap();
     assert!(refs.contains("refs/heads/main"), "{refs}");
     let _ = std::fs::remove_dir_all(&w.root);

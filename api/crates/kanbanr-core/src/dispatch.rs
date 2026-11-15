@@ -2660,7 +2660,14 @@ pub fn commit_message(method: &str, path: &str, body: Option<&Value>) -> String 
                 .unwrap_or_else(|| "record".into())
         ),
         ["projects", _p, "prepared", id, "reject"] => format!("reject prepared record {id}"),
-        ["projects", _p, "prepared", "batch", batch, action @ ("confirm" | "reject")] => {
+        [
+            "projects",
+            _p,
+            "prepared",
+            "batch",
+            batch,
+            action @ ("confirm" | "reject"),
+        ] => {
             format!("{action} prepared batch {batch}")
         }
         ["projects", _p, "decisions", "mode"] => format!(

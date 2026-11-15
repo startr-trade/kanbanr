@@ -463,7 +463,8 @@ fn confirm_batch(
     let mut expanded = Vec::with_capacity(open.len());
     for v in &open {
         expanded.push(
-            prepared::expand(store, project, &v.record.id, body, origin).map_err(WriteError::Core)?,
+            prepared::expand(store, project, &v.record.id, body, origin)
+                .map_err(WriteError::Core)?,
         );
     }
     let mut results = Vec::with_capacity(expanded.len());
@@ -477,14 +478,18 @@ fn confirm_batch(
                         .get_or_insert_with(|| e.body.clone())
                         .as_object_mut()
                 {
-                    m.insert("origin".into(), Value::String(Origin::Delegated.as_str().into()));
+                    m.insert(
+                        "origin".into(),
+                        Value::String(Origin::Delegated.as_str().into()),
+                    );
                     m.insert("delegation".into(), Value::String(d.clone()));
                 }
                 let verdict_body = stamped.as_ref().unwrap_or(&e.body);
                 dispatch::dispatch_in(store, &e.method, &e.path, Some(verdict_body), repo)
                     .map_err(|err| err.to_string())
                     .and_then(|_| {
-                        prepared::resolve(store, project, &e.resolution).map_err(|err| err.to_string())
+                        prepared::resolve(store, project, &e.resolution)
+                            .map_err(|err| err.to_string())
                     })
             }
         };
@@ -519,7 +524,15 @@ fn confirm_batch(
         by.as_ref(),
         origin.as_str(),
     );
-    let events = eventing::record_with(store, data_dir, "POST", path, &out, by.as_ref(), origin.as_str());
+    let events = eventing::record_with(
+        store,
+        data_dir,
+        "POST",
+        path,
+        &out,
+        by.as_ref(),
+        origin.as_str(),
+    );
     let policy = match scope {
         ProcessScope::Unscoped => policy,
         _ => PushPolicy::Off,
