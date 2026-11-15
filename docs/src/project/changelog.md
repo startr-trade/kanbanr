@@ -6,6 +6,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `kanbanr doctor` judges an item at its current stage by its kind's path, as the move does: a chore
+  is no longer warned that it has no Design section (DEF-069).
+
 ## [0.6.0] - 2026-11-14
 
 ### Added
