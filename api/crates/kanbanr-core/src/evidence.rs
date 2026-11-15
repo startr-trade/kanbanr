@@ -229,7 +229,7 @@ fn read_marked(line: &str) -> Option<Reading> {
 }
 
 /// `s` without its last space-separated token when `token_ok` accepts it and something remains.
-fn drop_last_token<'a>(s: &'a str, token_ok: impl Fn(&str) -> bool) -> Option<&'a str> {
+fn drop_last_token(s: &str, token_ok: impl Fn(&str) -> bool) -> Option<&str> {
     let (head, tail) = s.rsplit_once(' ')?;
     let head = head.trim_end();
     (!head.is_empty() && token_ok(tail)).then_some(head)
