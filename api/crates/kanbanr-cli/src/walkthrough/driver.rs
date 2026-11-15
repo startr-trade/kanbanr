@@ -161,7 +161,12 @@ impl Session {
         cmd.env_clear();
         for (k, v) in std::env::vars_os() {
             let key = k.to_string_lossy();
-            if key.starts_with("KANBANR_") || key == "CLAUDECODE" || key == "CLAUDE_CONFIG_DIR" {
+            // The person's board, caller and config never reach the session; the run's own
+            // variables (`KANBANR_WALKTHROUGH_*`: the allowed remotes) do.
+            if (key.starts_with("KANBANR_") && !key.starts_with("KANBANR_WALKTHROUGH_"))
+                || key == "CLAUDECODE"
+                || key == "CLAUDE_CONFIG_DIR"
+            {
                 continue;
             }
             cmd.env(k, v);
@@ -332,16 +337,23 @@ impl Session {
 
     /// Close stdin and wait for the process to end; kill it if it does not within 15 s.
     pub fn close(mut self) -> Result<()> {
+        self.end();
+        Ok(())
+    }
+
+    /// The same as [`Session::close`], on a session that stays owned: nothing more is said to it.
+    pub fn end(&mut self) {
         drop(self.stdin.take());
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
-            if self.child.try_wait()?.is_some() {
-                return Ok(());
+            match self.child.try_wait() {
+                Ok(Some(_)) | Err(_) => return,
+                Ok(None) => {}
             }
             if Instant::now() >= deadline {
                 let _ = self.child.kill();
                 let _ = self.child.wait();
-                return Ok(());
+                return;
             }
             std::thread::sleep(Duration::from_millis(100));
         }
