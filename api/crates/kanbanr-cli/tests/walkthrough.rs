@@ -471,6 +471,48 @@ fn a_fake_claude_run_leaves_the_public_board_and_the_kanbanr_repository_untouche
     let _ = std::fs::remove_dir_all(&w.root);
 }
 
+/// A run whose setup never makes its board stops at the first project claim with a finding that
+/// names Claude's last question, and prepares nothing on the target board (the first real TOGAF
+/// run, 15 Nov 2026, put five red results there for a board it never made).
+#[cfg(unix)]
+#[test]
+fn a_run_whose_setup_never_made_its_board_stops_and_prepares_nothing() {
+    let w = world("nosetup");
+    let rb = w.root.join("nosetup.md");
+    std::fs::write(
+        &rb,
+        RUNBOOK
+            .replace(
+                "say: \"Start using kanbanr for this project.\"",
+                "say: \"Tell me about the weather.\"",
+            )
+            .replace("STEPS_TAIL", ""),
+    )
+    .unwrap();
+    let before = walk(&w.target_board);
+    let out = run_walkthrough(&w, &rb, "n1");
+    let shown = text(&out);
+    assert!(!out.status.success(), "{shown}");
+    assert!(shown.contains("setup did not complete"), "{shown}");
+    assert!(shown.contains("no batch prepared"), "{shown}");
+    let findings = std::fs::read_to_string(w.runs.join("n1/raw/findings.md")).unwrap();
+    assert!(findings.contains("setup-incomplete"), "{findings}");
+    let stream = std::fs::read_to_string(w.runs.join("n1/raw/transcripts/stream.jsonl")).unwrap();
+    assert_eq!(
+        stream.lines().filter(|l| l.starts_with("# >>> ")).count(),
+        1,
+        "nothing after step 1.1:\n{stream}"
+    );
+    let new: Vec<String> = walk(&w.target_board)
+        .into_iter()
+        .filter(|f| !before.contains(f) && f.contains("/prepared/"))
+        .collect();
+    assert!(new.is_empty(), "prepared on the target board: {new:?}");
+    // The captures are still made.
+    assert!(w.runs.join("n1/raw/MANIFEST.sha256").exists());
+    let _ = std::fs::remove_dir_all(&w.root);
+}
+
 fn walk(dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     fn go(dir: &Path, out: &mut Vec<String>) {

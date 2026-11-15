@@ -24,7 +24,7 @@ checks:
   MT-4: {item: DEF-040, requirement: R-2, test: "manual: on a walkthrough board, a manual test is recorded from the Review page with no terminal command"}
   MT-5: {item: DEF-045, requirement: R-1, test: "manual: in a walkthrough, a release fix reaches the line with no command run by the person"}
 answers:
-  - {match: "where .*board|board .*(live|folder|go|kept)|data.?dir", pick: "In ../board, next to this project. Its remote is {board_remote}."}
+  - {match: "where .*board|board .*(live|folder|go|kept|location|path)|data.?dir", pick: "In ../board, next to this project. Its remote is {board_remote}."}
   - {match: "code .*remote|remote .*(code|repository|repo)|origin|where .*push", pick: "The code remote is {code_remote}."}
   - {match: "which process|process .*(use|want|follow)|workflow|togaf|agile|scrum", pick: "TOGAF, with sprints and releases."}
   - {match: "sprints? .*releases?|releases? .*sprints?|cadence|git model|branches", pick: "Yes: sprints and releases on, and the git model on."}

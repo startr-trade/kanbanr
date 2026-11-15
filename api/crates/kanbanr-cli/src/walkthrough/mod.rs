@@ -120,6 +120,9 @@ pub struct RunArgs {
     pub no_browser: bool,
 }
 
+/// The most answers one step's say gives before it records a finding and goes on.
+pub const MAX_ANSWERS_PER_STEP: usize = 20;
+
 /// One finding of a run: never a stop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
@@ -477,6 +480,10 @@ struct Running {
     checks: Vec<CheckResult>,
     started: Instant,
     max_minutes: u64,
+    /// The last question Claude asked, for the finding when setup never completes.
+    last_question: Option<String>,
+    /// Setup never made the board: the run stops and prepares no batch.
+    setup_failed: bool,
     lines: usize,
     stopped: Option<String>,
     pause: bool,
@@ -615,7 +622,11 @@ impl Running {
         let mut final_text = String::new();
         if let Some(say) = &step.say {
             let mut text = fill(say, &self.vars);
-            for round in 0..4 {
+            // A step's say goes on while Claude asks: a setup interview asks one question per turn.
+            // The same question answered three times without settling is a finding; twenty
+            // answers in one step is a runaway guard.
+            let mut seen: Vec<(String, u32)> = Vec::new();
+            for round in 0..=MAX_ANSWERS_PER_STEP {
                 let turn = self.session.say(&text)?;
                 self.lines += turn.lines;
                 final_text = turn.final_text.clone();
@@ -635,12 +646,28 @@ impl Running {
                 }
                 let Some(q) = &turn.asked else { break };
                 asked_here.push(q.text.clone());
-                if round == 3 {
+                self.last_question = Some(q.text.clone());
+                let key = q.text.to_lowercase();
+                let times = match seen.iter_mut().find(|(k, _)| *k == key) {
+                    Some((_, n)) => {
+                        *n += 1;
+                        *n
+                    }
+                    None => {
+                        seen.push((key, 1));
+                        1
+                    }
+                };
+                if times > 3 || round == MAX_ANSWERS_PER_STEP {
                     self.finding(
                         &id,
                         "question-unanswered",
                         format!("Claude kept asking: {}", q.text),
-                        "three answers did not settle it; the run goes on".into(),
+                        if times > 3 {
+                            "three answers did not settle it; the run goes on".into()
+                        } else {
+                            format!("{MAX_ANSWERS_PER_STEP} answers in one step; the run goes on")
+                        },
                     );
                     step_ok = false;
                     why.push("a question was not settled".into());
@@ -870,6 +897,36 @@ impl Running {
                 &mut step_ok,
                 &mut why,
             );
+        }
+        // A board that setup never made fails every later step for the same reason: stop here,
+        // say what Claude last asked, and prepare nothing on the target board.
+        if step
+            .expect
+            .as_ref()
+            .is_some_and(|e| e.board == Some(runbook::BoardClaim::ProjectExists))
+            && truth::board_claim(
+                &self.dirs.board(),
+                &self.project_name(),
+                &runbook::BoardClaim::ProjectExists,
+            )
+            .map(|r| r.is_err())
+            .unwrap_or(true)
+        {
+            let last = self
+                .last_question
+                .clone()
+                .unwrap_or_else(|| "none (Claude asked nothing)".into());
+            self.finding(
+                &id,
+                "setup-incomplete",
+                format!("setup did not complete: Claude's last question was \"{last}\""),
+                "the run stops; no batch is prepared".into(),
+            );
+            self.setup_failed = true;
+            self.stopped = Some(format!(
+                "setup did not complete: Claude's last question was \"{last}\""
+            ));
+            return Ok(false);
         }
         if let Some(marker) = &step.check {
             self.checks.push(CheckResult {
@@ -1205,6 +1262,8 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         findings: Vec::new(),
         checks: Vec::new(),
         started: Instant::now(),
+        last_question: None,
+        setup_failed: false,
         lines: 0,
         stopped: None,
         pause: args.pause_at_decisions,
@@ -1279,7 +1338,13 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     let manifest = capture::snapshot(&dirs, Some(&remotes))?;
     let derived = derive::tables(&dirs)?;
     // The batch on the target board.
-    let batch = prepare_batch(cli, &running.checks, &running.runbook, &name, &target_board);
+    // A run whose setup never made its board prepares nothing: its checks say nothing about the
+    // guide, only that the run could not follow it.
+    let batch = if running.setup_failed {
+        Ok(Vec::new())
+    } else {
+        prepare_batch(cli, &running.checks, &running.runbook, &name, &target_board)
+    };
     println!();
     println!(
         "run {name} done: {} step(s), {} finding(s), {} check(s) ({} passed), cost {cost:.2} USD, {} capture(s) in the manifest, {} decision row(s)",
@@ -1301,6 +1366,11 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
             crate::monitor_url(),
             target_project.as_deref().unwrap_or("<project>")
         ),
+        Ok(_) if running.setup_failed => {
+            println!(
+                "no batch prepared: setup did not complete, so the run says nothing about the guide"
+            )
+        }
         Ok(_) => println!("no check to prepare on the target board"),
         Err(e) => println!("the batch could not be prepared on the target board: {e}"),
     }

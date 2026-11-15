@@ -95,6 +95,8 @@ impl std::fmt::Display for StopReason {
 pub struct TextQuestion {
     pub text: String,
     pub options: Vec<String>,
+    /// The whole final message: the policy reads it when the question alone matches no rule.
+    pub context: String,
 }
 
 /// What one `say` got back.
@@ -419,46 +421,119 @@ fn option_label(line: &str) -> Option<String> {
     (!label.is_empty()).then_some(label)
 }
 
-/// A question asked in a final message (the live path under `-p`, see the module doc): the last
-/// line ending in `?`, when what follows it is only its options and at most one closing line
-/// ("Reply with your choice"). None when the message asks nothing.
+/// Markdown emphasis and code marks taken out, for reading a message as words.
+fn plain(line: &str) -> String {
+    line.replace("**", "").replace("__", "").replace('`', "")
+}
+
+/// The last sentence of `line` that ends in `?` (markdown stripped), or None.
+fn question_sentence(line: &str) -> Option<String> {
+    let p = plain(line);
+    let at = p.rfind('?')?;
+    let head = &p[..=at];
+    // The sentence starts after the last sentence end before the question mark.
+    let start = head[..head.len() - 1]
+        .rfind(['.', '!', '?', ':'])
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let q = head[start..].trim();
+    // "Question 1: what is this project for?" keeps its lead-in when the colon opens the line.
+    let q = if start > 0 && head[..start].split_whitespace().count() <= 3 {
+        head.trim()
+    } else {
+        q
+    };
+    (q.chars().filter(|c| c.is_alphabetic()).count() >= 3).then(|| q.to_string())
+}
+
+/// Phrases that ask for an answer without a question mark ("A reply of just 1 is enough",
+/// "I've asked for the board location twice", "setup is blocked on that one answer").
+const ASKING: &[&str] = &[
+    "a reply of",
+    "reply with",
+    "your answer",
+    "waiting for your",
+    "waiting on your",
+    "blocked on",
+    "i still need",
+    "need your answer",
+    "asked for",
+    "let me know",
+    "tell me which",
+];
+
+/// A question asked in a final message (the live path under `-p`, see the module doc). The last
+/// sentence ending in `?` anywhere in the message is the question, bold or not, with or without
+/// prose after it; its options are the numbered or bulleted lines that follow it. A message with
+/// no question mark still asks when it lists an option marked "(recommended)" or uses a phrase
+/// that asks for an answer: the question is then that sentence. Only a message that asks nothing
+/// at all is settled (None). `context` keeps the whole message for the policy.
 pub fn parse_text_question(text: &str) -> Option<TextQuestion> {
     let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
-    let q_idx = lines
+    let options_after = |from: usize| -> Vec<String> {
+        let mut out = Vec::new();
+        for l in &lines[from..] {
+            if l.trim().is_empty() {
+                if out.is_empty() {
+                    continue;
+                }
+                break;
+            }
+            match option_label(l) {
+                Some(label) => out.push(plain(&label).trim().to_string()),
+                None if out.is_empty() => {
+                    // Prose between the question and its list ("It's its own git repo…").
+                    continue;
+                }
+                None => break,
+            }
+        }
+        out
+    };
+    let context = text.to_string();
+    if let Some(idx) = lines
         .iter()
-        .rposition(|l| l.trim().ends_with('?') && option_label(l).is_none())?;
-    let mut options = Vec::new();
-    let mut closing = 0;
-    for l in &lines[q_idx + 1..] {
-        if l.trim().is_empty() {
-            continue;
-        }
-        if let Some(label) = option_label(l) {
-            options.push(label);
-            continue;
-        }
-        // One closing remark after the options is still a question; more prose is not.
-        closing += 1;
-        if closing > 1 || l.trim().ends_with('?') {
-            return None;
-        }
-        let low = l.to_ascii_lowercase();
-        if !(low.contains("reply")
-            || low.contains("pick")
-            || low.contains("choose")
-            || low.contains("let me know")
-            || low.contains("tell me")
-            || low.contains("your choice")
-            || low.contains("i haven't")
-            || low.contains("i'll"))
-        {
-            return None;
-        }
+        .rposition(|l| option_label(l).is_none() && question_sentence(l).is_some())
+    {
+        let question = question_sentence(lines[idx]).unwrap_or_default();
+        return Some(TextQuestion {
+            text: question,
+            options: options_after(idx + 1),
+            context,
+        });
     }
-    let question = lines[q_idx].trim().replace("**", "");
+    // No question mark: an option list with a recommendation, or a phrase that asks.
+    let all_options: Vec<String> = lines
+        .iter()
+        .filter_map(|l| option_label(l))
+        .map(|l| plain(&l).trim().to_string())
+        .collect();
+    let recommended = all_options
+        .iter()
+        .any(|o| o.to_ascii_lowercase().contains("(recommended)"));
+    let low = text.to_ascii_lowercase();
+    let phrase = ASKING.iter().find(|p| low.contains(*p));
+    if !recommended && phrase.is_none() {
+        return None;
+    }
+    let sentence = phrase
+        .and_then(|p| {
+            let p_low = low.find(p)?;
+            let start = low[..p_low]
+                .rfind(['.', '!', '\n'])
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            let end = low[p_low..]
+                .find(['.', '!', '\n'])
+                .map(|i| p_low + i + 1)
+                .unwrap_or(low.len());
+            Some(plain(&text[start..end]).trim().to_string())
+        })
+        .unwrap_or_else(|| "Which one?".to_string());
     Some(TextQuestion {
-        text: question,
-        options,
+        text: sentence,
+        options: if recommended { all_options } else { Vec::new() },
+        context,
     })
 }
 
@@ -612,11 +687,6 @@ pub(crate) mod tests {
         assert_eq!(bare.text, "Done. Shall I start the sprint today?");
         assert!(bare.options.is_empty());
         assert!(parse_text_question("The sprint is started. The item is at Vision.").is_none());
-        assert!(
-            parse_text_question("Is it done? Yes. Here is the board.\n\nThe item is at Vision.")
-                .is_none(),
-            "a question answered in the same breath is not asked"
-        );
         assert_eq!(option_label("3) Keep it"), Some("Keep it".into()));
         assert_eq!(option_label("not an option"), None);
     }

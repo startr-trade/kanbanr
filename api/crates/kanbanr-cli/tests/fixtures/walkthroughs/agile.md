@@ -27,7 +27,7 @@ checks:
   MT-7: {item: DOC-008, requirement: R-2, test: "manual: the agile walkthrough reaches its cut with no question about push order or the Record result form"}
   MT-8: {item: DOC-008, requirement: R-3, test: "manual: the agile walkthrough's proposed pipeline has separate rerunnable stages and stack caching"}
 answers:
-  - {match: "where .*board|board .*(live|folder|go|kept)|data.?dir", pick: "In ../board, next to this project. Its remote is {board_remote}."}
+  - {match: "where .*board|board .*(live|folder|go|kept|location|path)|data.?dir", pick: "In ../board, next to this project. Its remote is {board_remote}."}
   - {match: "code .*remote|remote .*(code|repository|repo)|origin|where .*push", pick: "The code remote is {code_remote}."}
   - {match: "which process|process .*(use|want|follow)|workflow|togaf|agile|scrum", pick: "Agile, with sprints and releases."}
   - {match: "sprints? .*releases?|releases? .*sprints?|cadence|git model|branches", pick: "Yes: sprints and releases on, and the git model on."}

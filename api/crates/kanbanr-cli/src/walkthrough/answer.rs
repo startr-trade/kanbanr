@@ -52,6 +52,9 @@ pub struct Question {
     pub options: Vec<QOption>,
     pub multi: bool,
     pub source: Source,
+    /// The whole message the question came in, when it came in text: rules that match nothing in
+    /// the question are tried on it.
+    pub context: String,
 }
 
 impl Question {
@@ -69,6 +72,7 @@ impl Question {
                 .collect(),
             multi: false,
             source: Source::Text,
+            context: q.context.clone(),
         }
     }
 
@@ -91,6 +95,7 @@ impl Question {
                     .collect(),
                 multi: q["multiSelect"].as_bool().unwrap_or(false),
                 source: Source::Dialog,
+                context: String::new(),
             })
             .collect()
     }
@@ -164,10 +169,22 @@ impl<'a> Policy<'a> {
     /// Answer a question: the first matching rule, else the recommended option(s), else the first,
     /// else the free-text pick.
     pub fn answer(&self, q: &Question) -> Picked {
-        if let Some(rule) = self.rules().into_iter().find(|r| r.matches(&q.text)) {
+        let rules = self.rules();
+        if let Some(rule) = rules.iter().find(|r| r.matches(&q.text)) {
             return Picked {
                 pick: self.fill(&rule.pick),
                 policy: "runbook",
+                rule: Some(rule.pattern.clone()),
+            };
+        }
+        // The question alone named nothing a rule knows ("Which one?"): the message it came in
+        // says what it is about.
+        if !q.context.is_empty()
+            && let Some(rule) = rules.iter().find(|r| r.matches(&q.context))
+        {
+            return Picked {
+                pick: self.fill(&rule.pick),
+                policy: "runbook-context",
                 rule: Some(rule.pattern.clone()),
             };
         }
@@ -354,6 +371,7 @@ mod tests {
                 .collect(),
             multi: false,
             source,
+            context: String::new(),
         }
     }
 
@@ -434,6 +452,47 @@ mod tests {
         assert_eq!((p.policy, p.pick.as_str()), ("free-text", FREE_TEXT_PICK));
     }
 
+    /// The four final texts of the first real TOGAF run (15 Nov 2026), paths replaced: each is
+    /// read as a question, and the runbook's board or purpose rule answers it, never the free-text
+    /// fallback. The run answered none of them, and so never made its board.
+    #[test]
+    fn the_real_togaf_runs_questions_are_detected_and_answered_by_rule() {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/walkthrough-texts/togaf-v070-preview-1.json");
+        let texts: Vec<serde_json::Value> =
+            serde_json::from_str(&std::fs::read_to_string(fixture).unwrap()).unwrap();
+        let runbook_text = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/walkthroughs/togaf.md"),
+        )
+        .unwrap();
+        let rb = Runbook::parse(&runbook_text).unwrap();
+        let policy = Policy::new(&rb, Some("1.1"));
+        assert!(texts.len() >= 4);
+        for t in &texts {
+            let text = t["text"].as_str().unwrap();
+            let want = t["rule"].as_str().unwrap();
+            let q = crate::walkthrough::driver::parse_text_question(text)
+                .unwrap_or_else(|| panic!("not read as a question: {text}"));
+            let picked = policy.answer(&Question::from_text(&q));
+            assert!(
+                picked.policy.starts_with("runbook"),
+                "{:?} answered by {} with {:?}",
+                q.text,
+                picked.policy,
+                picked.pick
+            );
+            assert_eq!(picked.rule.as_deref(), Some(want), "{:?}", q.text);
+            if t["recommended"].as_bool() == Some(true) {
+                assert!(
+                    q.options.iter().any(|o| o.contains("(recommended)")),
+                    "{:?}",
+                    q.options
+                );
+            }
+        }
+    }
+
     /// FTR-037 R-2: a question asked in text is parsed into the same `Question` and answered by the
     /// same policy as a dialog; both are logged as one row of `questions.tsv` naming the source,
     /// the options, the pick and the policy; and the hook answers an AskUserQuestion payload with
@@ -445,6 +504,7 @@ mod tests {
         let text = TextQuestion {
             text: "Which colour should the basket page use?".into(),
             options: vec!["Red".into(), "Blue (recommended)".into()],
+            context: String::new(),
         };
         let as_text = Question::from_text(&text);
         assert_eq!(as_text.source, Source::Text);
