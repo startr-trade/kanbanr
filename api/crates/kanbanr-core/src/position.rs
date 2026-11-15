@@ -287,32 +287,91 @@ fn nul_list(bytes: Vec<u8>) -> Vec<Vec<u8>> {
 /// An unborn HEAD gives commit None with every untracked, not ignored file counted. Reads only;
 /// no cache (katalogr's stat cache is not copied: see the SPK-001 result).
 pub fn read_position(root: &Path, repo: &str) -> Result<WorkingState> {
-    read_state(root, repo, 1).map(|(s, _)| s)
+    let (commit, head) = head_of_checkout(root)?;
+    let workers = workers_for(head.len());
+    read_from(root, repo, commit, head, workers).map(|(s, _)| s)
 }
 
-/// read_position's body: the state, and how many files it converted. `workers` is the number of
-/// threads that read the tracked files (1 reads on the calling thread).
-pub(crate) fn read_state(root: &Path, repo: &str, workers: usize) -> Result<(WorkingState, usize)> {
-    let _ = workers;
+/// The most threads that read a checkout's tracked files (DEF-066: four took about 3.5 times less
+/// time than one over 10,000 CRLF files, eight only 12-20 % less than four).
+const MAX_WORKERS: usize = 4;
+
+/// The worker count for `n` tracked paths: min(MAX_WORKERS, available_parallelism, ceil(n / 512)),
+/// at least 1. Below about 512 files a thread and a repository open are not worth it.
+fn workers_for(n: usize) -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+    MAX_WORKERS.min(cores).min(n.div_ceil(512)).max(1)
+}
+
+/// HEAD's commit, None when unborn, and its blobs.
+fn head_of_checkout(root: &Path) -> Result<(Option<String>, BTreeMap<Vec<u8>, String>)> {
     let commit = rev_parse(root, "HEAD").ok();
     let head = match &commit {
         Some(c) => head_blobs(root, c, "")?,
         None => BTreeMap::new(),
     };
-    let mut lines: BTreeMap<Vec<u8>, Option<String>> = BTreeMap::new();
+    Ok((commit, head))
+}
+
+/// read_position's body: the state, and how many files it converted. `workers` is the number of
+/// threads that read the tracked files (1 reads on the calling thread).
+pub(crate) fn read_state(root: &Path, repo: &str, workers: usize) -> Result<(WorkingState, usize)> {
+    let (commit, head) = head_of_checkout(root)?;
+    read_from(root, repo, commit, head, workers)
+}
+
+/// The tracked paths of `part` whose stored id differs from HEAD's, or that are deleted (None), in
+/// order, and how many files the read converted.
+fn read_tracked(root: &Path, part: &[(&[u8], &str)]) -> (Vec<(Vec<u8>, Option<String>)>, usize) {
     let mut form = RepoForm::new(root);
-    for (path, oid) in &head {
+    let mut out = Vec::new();
+    for (path, oid) in part {
         match stored_id(&mut form, root, path, Some(oid)) {
-            Some((id, _)) => {
-                if &id != oid {
-                    lines.insert(path.clone(), Some(id));
-                }
-            }
-            None => {
-                lines.insert(path.clone(), None);
-            }
+            Some((id, _)) if id == *oid => {}
+            Some((id, _)) => out.push((path.to_vec(), Some(id))),
+            None => out.push((path.to_vec(), None)),
         }
     }
+    (out, form.converted())
+}
+
+/// read_state with HEAD already listed: the tracked files on `workers` threads in contiguous
+/// chunks, joined in chunk order; untracked and staged-new paths on the calling thread.
+fn read_from(
+    root: &Path,
+    repo: &str,
+    commit: Option<String>,
+    head: BTreeMap<Vec<u8>, String>,
+    workers: usize,
+) -> Result<(WorkingState, usize)> {
+    let tracked: Vec<(&[u8], &str)> = head
+        .iter()
+        .map(|(p, o)| (p.as_slice(), o.as_str()))
+        .collect();
+    let workers = workers.max(1);
+    let parts: Vec<(Vec<(Vec<u8>, Option<String>)>, usize)> = if workers == 1 || tracked.len() < 2
+    {
+        vec![read_tracked(root, &tracked)]
+    } else {
+        let chunk = tracked.len().div_ceil(workers);
+        std::thread::scope(|s| {
+            let handles: Vec<_> = tracked
+                .chunks(chunk)
+                .map(|part| s.spawn(move || read_tracked(root, part)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+                .collect()
+        })
+    };
+    let mut lines: BTreeMap<Vec<u8>, Option<String>> = BTreeMap::new();
+    let mut converted = 0;
+    for (found, n) in parts {
+        converted += n;
+        lines.extend(found);
+    }
+    let mut form = RepoForm::new(root);
     let others = nul_list(git_raw(
         root,
         &["ls-files", "--others", "--exclude-standard", "-z"],
@@ -353,7 +412,7 @@ pub(crate) fn read_state(root: &Path, repo: &str, workers: usize) -> Result<(Wor
             },
             changed,
         },
-        form.converted(),
+        converted + form.converted(),
     ))
 }
 
@@ -1268,6 +1327,51 @@ mod tests {
         std::fs::write(d.join("docs/guide.md"), "# Guide\r\n\r\nAgain.\r\n").unwrap();
         let err = read_at(&d, &st, "docs/guide.md").unwrap_err().to_string();
         assert!(err.contains("position moved"), "{err}");
+        gone(&d);
+    }
+
+    /// DEF-066 R-4: one thread or four read the same position from a CRLF checkout with edits, a
+    /// deletion and untracked files.
+    #[test]
+    fn workers_do_not_change_the_position() {
+        let d = repo("workers");
+        for dir in 0..20 {
+            let folder = d.join(format!("d{dir:02}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            for f in 0..100 {
+                std::fs::write(
+                    folder.join(format!("f{f:03}.txt")),
+                    format!("file {dir} {f}\nsecond line\n"),
+                )
+                .unwrap();
+            }
+        }
+        git(&d, &["add", "-A"]).unwrap();
+        git(&d, &["commit", "-q", "-m", "2k"]).unwrap();
+        git(&d, &["config", "core.autocrlf", "true"]).unwrap();
+        for dir in 0..20 {
+            std::fs::remove_dir_all(d.join(format!("d{dir:02}"))).unwrap();
+        }
+        git(&d, &["checkout", "--", "."]).unwrap();
+        assert_eq!(
+            std::fs::read(d.join("d07/f042.txt")).unwrap(),
+            b"file 7 42\r\nsecond line\r\n"
+        );
+        let (clean1, _) = read_state(&d, "r", 1).unwrap();
+        let (clean4, _) = read_state(&d, "r", 4).unwrap();
+        assert!(clean1.position.is_clean());
+        assert_eq!(clean1, clean4);
+        std::fs::write(d.join("d00/f000.txt"), "edited\r\n").unwrap();
+        std::fs::write(d.join("d10/f050.txt"), "edited\n").unwrap();
+        std::fs::write(d.join("d19/f099.txt"), "edited\r\nagain\r\n").unwrap();
+        std::fs::remove_file(d.join("d13/f013.txt")).unwrap();
+        std::fs::write(d.join("d05/new.txt"), "new\r\n").unwrap();
+        std::fs::write(d.join("top.txt"), "top\n").unwrap();
+        let (one, _) = read_state(&d, "r", 1).unwrap();
+        let (four, _) = read_state(&d, "r", 4).unwrap();
+        assert_eq!(one.changed.len(), 6, "{:?}", one.changed);
+        assert_eq!(one, four);
+        assert_eq!(pos(&d), one);
         gone(&d);
     }
 
