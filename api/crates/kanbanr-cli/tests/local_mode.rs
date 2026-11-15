@@ -10587,13 +10587,21 @@ fn open_check_reports_a_monitor_that_is_down() {
 #[test]
 fn the_git_guard_leaves_a_scratch_repository_under_temp_alone() {
     let fx = ScopeFx::new("scratch-guard");
-    let scratch = std::env::temp_dir().join(format!("kanbanr-scratch-guard-{}", std::process::id()));
+    let scratch =
+        std::env::temp_dir().join(format!("kanbanr-scratch-guard-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch).unwrap();
     fx.ok_git(&scratch, &["init", "-q", "-b", "main"]);
     fx.ok_git(
         &scratch,
-        &["commit", "-q", "--allow-empty", "--no-verify", "-m", "initial"],
+        &[
+            "commit",
+            "-q",
+            "--allow-empty",
+            "--no-verify",
+            "-m",
+            "initial",
+        ],
     );
     // The hook runs in the project's checkout; the payload names where the command runs.
     let guard = |payload_cwd: &Path, command: &str| -> String {
@@ -10620,7 +10628,11 @@ fn the_git_guard_leaves_a_scratch_repository_under_temp_alone() {
     // The rule is live in the project's checkout: no reference, refused.
     assert!(guard(&fx.work, commit).contains("\"deny\""), "control");
     // A scratch repository is not this board's: left alone either way it is reached.
-    assert_eq!(guard(&scratch, commit), "", "payload cwd in the scratch repository");
+    assert_eq!(
+        guard(&scratch, commit),
+        "",
+        "payload cwd in the scratch repository"
+    );
     assert_eq!(
         guard(&fx.work, &format!("cd {} && {commit}", scratch.display())),
         "",

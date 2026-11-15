@@ -189,7 +189,9 @@ pub fn board_path_for(path: &str, root: &std::path::Path, cwd: &std::path::Path)
     // A linked worktree's file seen from the main checkout (DEF-065): judge it by its path inside
     // the worktree, or `docs/src/x.md` there counts as a loose note in the main checkout.
     let relative = match relative.as_slice() {
-        [claude, worktrees, _name, rest @ ..] if claude == ".claude" && worktrees == "worktrees" => {
+        [claude, worktrees, _name, rest @ ..]
+            if claude == ".claude" && worktrees == "worktrees" =>
+        {
             rest.join("/")
         }
         _ => relative.join("/"),
@@ -527,7 +529,11 @@ mod tests {
                 "/work/shop/.claude/worktrees/ftr/skill/kanbanr/SKILL.md",
                 "/work/shop/.claude/worktrees/ftr/crates/a/tests/fixtures/b.md",
             ] {
-                assert_eq!(board_path_for(path, root, root), None, "{path} from {root:?}");
+                assert_eq!(
+                    board_path_for(path, root, root),
+                    None,
+                    "{path} from {root:?}"
+                );
             }
             assert_eq!(
                 board_path_for("/work/shop/.claude/worktrees/ftr/notes.md", root, root).as_deref(),

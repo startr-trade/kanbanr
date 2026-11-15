@@ -44,11 +44,25 @@ fn a_linked_worktree_is_judged_by_its_own_root() {
     let beside = base.join("beside");
     git(
         &main,
-        &["worktree", "add", "-q", under.to_str().unwrap(), "-b", "ftr"],
+        &[
+            "worktree",
+            "add",
+            "-q",
+            under.to_str().unwrap(),
+            "-b",
+            "ftr",
+        ],
     );
     git(
         &main,
-        &["worktree", "add", "-q", beside.to_str().unwrap(), "-b", "beside"],
+        &[
+            "worktree",
+            "add",
+            "-q",
+            beside.to_str().unwrap(),
+            "-b",
+            "beside",
+        ],
     );
 
     for worktree in [&under, &beside] {
