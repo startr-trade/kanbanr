@@ -3373,7 +3373,15 @@ fn run_docs_guard(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
         return Ok(());
     };
     let root = project::project_root(&cwd, project::home_dir().as_deref());
-    let Some(suggestion) = kanbanr_core::claude::board_path_for(path, &root, &cwd) else {
+    // Only markdown is the guard's business, so only markdown costs a `git rev-parse` (DEF-065).
+    let markdown = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
+    if !markdown {
+        return Ok(());
+    }
+    let Some(suggestion) = kanbanr_core::claude::docs_guard_suggestion(path, &cwd, &root) else {
         return Ok(());
     };
     println!(
