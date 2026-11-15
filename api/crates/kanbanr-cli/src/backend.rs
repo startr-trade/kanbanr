@@ -137,8 +137,8 @@ impl Backend {
     /// A read that needs the project's code repository (FEAT-189: the git model reads its
     /// branches).
     pub fn get_in(&self, path: &str, repo: Option<&std::path::Path>) -> Result<String> {
-        dispatch::dispatch_in(&self.store, "GET", path, None, repo)
-            .map_err(|e| anyhow!(e.to_string()))
+        // The error stays typed (same text) so a caller can tell one CoreError from another (FTR-003).
+        dispatch::dispatch_in(&self.store, "GET", path, None, repo).map_err(anyhow::Error::new)
     }
 
     /// A read.

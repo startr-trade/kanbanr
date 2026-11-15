@@ -31,7 +31,40 @@ impl Scratch {
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+        let _ = std::fs::remove_dir_all(code_dir(&self.0));
     }
+}
+
+/// The scratch code repository beside a scratch board folder (FTR-003: the position and view
+/// routes read the repository the daemon was started in).
+fn code_dir(data: &std::path::Path) -> PathBuf {
+    let mut name = data.file_name().unwrap().to_os_string();
+    name.push("-code");
+    data.with_file_name(name)
+}
+
+/// A git repository under the system temporary directory with one commit and a doc.
+fn code_repo(data: &std::path::Path) -> PathBuf {
+    let root = code_dir(data);
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    std::fs::write(root.join("docs/guide.md"), "# Guide\n").unwrap();
+    for args in [
+        vec!["init", "-q", "--initial-branch=main"],
+        vec!["config", "user.name", "T"],
+        vec!["config", "user.email", "t@x"],
+        vec!["config", "core.autocrlf", "false"],
+        vec!["add", "-A"],
+        vec!["commit", "-q", "--no-verify", "-m", "docs"],
+    ] {
+        let o = std::process::Command::new("git")
+            .args(&args)
+            .current_dir(&root)
+            .output()
+            .expect("run git");
+        assert!(o.status.success(), "git {args:?}");
+    }
+    root.canonicalize().unwrap()
 }
 
 fn write(store: &kanbanr_core::Store, method: &str, path: &str, body: Value) -> Value {
@@ -184,9 +217,10 @@ fn serve(data: &std::path::Path) -> String {
         .port();
     let bind = format!("127.0.0.1:{port}");
     let (dir, addr) = (data.to_path_buf(), bind.clone());
+    let repo = Some(("shop".to_string(), code_repo(data)));
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(kanbanr_server::run(dir, addr, None, false, None))
+        rt.block_on(kanbanr_server::run(dir, addr, None, false, repo))
             .unwrap();
     });
     let url = format!("http://{bind}");

@@ -46,6 +46,9 @@ changelog saying so.
 - **Internal crates** — `kanbanr-core`, `kanbanr-server` and `kanbanr-cli` are not libraries;
   they are not published, and their Rust API changes freely. (`ears-classifier` and `mermaid-lint`
   are standalone, and versioned on their own.)
+- **Positions, view IDs and the katalogr contract** — `kanbanr position`, `kanbanr view`, the
+  position and view routes, and the position text and view ID formats shared with katalogr, until
+  they are used (ADR-0014).
 - **Anything marked experimental** in its own documentation.
 - **Undocumented behaviour**, including the order of items where no order is documented.
 

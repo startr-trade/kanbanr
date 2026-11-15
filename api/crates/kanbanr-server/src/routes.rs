@@ -269,6 +269,8 @@ fn reads_code_repo(dispatch_path: &str) -> bool {
             | ["projects", _, "drift"]
             | ["projects", _, "features", _, "drift"]
             | ["projects", _, "prepared"]
+            | ["projects", _, "position"]
+            | ["projects", _, "views", _]
     )
 }
 

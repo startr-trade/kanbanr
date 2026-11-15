@@ -51,6 +51,8 @@ types the routes answer with, so it cannot fall behind them.
 | `GET /api/projects/{project}/workflow` | `format=mermaid` | `text/plain` | The workflow as a Mermaid state diagram |
 | `GET /api/projects/{project}/gantt` | — | `text/plain` | The schedule as a Mermaid gantt diagram, by milestone |
 | `GET /api/projects/{project}/docs` | — | JSON `DocFolder` | The project's documentation tree |
+| `GET /api/projects/{project}/position` | — | JSON `PositionAnswer` | The live position of the code repository the daemon was started in: its commit plus a hash of the uncommitted changes, and the changed paths |
+| `GET /api/projects/{project}/views/docs` | `root` (optional), `max-nodes` (optional), `at` (optional) | JSON `ViewAnswer` | The markdown docs under a folder, drawn at the live position or at `at`, with an ID that repeats while the position, the board and the question repeat; an ID only when the answer is exact |
 | `GET /api/projects/{project}/docs/content` | `path` | `text/markdown` | A document's text |
 | `GET /api/projects/{project}/docs/raw` | `path` | the file's bytes | A documentation file's bytes, such as an image |
 | `GET /api/projects/{project}/activity` | `ref` (optional), `ongoing` (optional), `limit` (optional) | JSON `Activity[]` | Recent changes to the project, newest first |
@@ -79,9 +81,9 @@ A failed request answers with a status and a one-line, plain-text reason
 
 | Status | When |
 |---|---|
-| `400` | The request is malformed: a missing or invalid parameter, or an unsupported `format`. |
+| `400` | The request is malformed: a missing or invalid parameter (including a query parameter the route does not take), an `at` that is not a position, or an unsupported `format`. |
 | `404` | No such project, item, sprint or document — or no route answers the path. |
-| `409` | The board was written by a newer kanbanr than the daemon. Upgrade the binary and restart `kanbanr serve`. |
+| `409` | The board was written by a newer kanbanr than the daemon. Upgrade the binary and restart `kanbanr serve`. Or, for a position or view read, no checkout here holds the position asked for: the body reads `position <wanted> is not here: this checkout is at <position>` (or `… no checkout on this machine`). The CLI exits 6 for the same case and with `--json` prints `{"error":"position-unavailable","wanted":…,"available":[{repo,commit,dirty}]}`. |
 | `500` | The board could not be read. |
 
 A `GET` of a path under `/api` that no route answers is a `404`; releases before the read API was
