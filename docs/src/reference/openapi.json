@@ -1188,6 +1188,24 @@
           "note": {
             "type": "string"
           },
+          "permission_rules": {
+            "description": "The Claude Code allow rules this delegation's verdicts need to run in auto mode (DEF-060),\nwhatever its state.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "permission_rules_checked": {
+            "description": "The mode is delegated, the delegation is granted and the code repository is known, so\n`permission_rules_missing` says something.",
+            "type": "boolean"
+          },
+          "permission_rules_missing": {
+            "description": "The rules none of the project's or the user's Claude settings allows.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "proposed": {
             "$ref": "#/components/schemas/Stamp"
           },
