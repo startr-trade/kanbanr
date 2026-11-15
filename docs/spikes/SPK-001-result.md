@@ -117,16 +117,11 @@ Caveats: the machine was not idle (load about 6.6 on a 12-core machine, other bu
 
 ## Shared file outcome (R-1)
 
-All 8 cases of `position-v1.json` (clean, edited, deleted, untracked, ignored, staged_only, edited_and_staged, line_endings) give exactly their expected text, cold and on a second read, built with real git as katalogr's test builds them (fixed author, `@0 +0000`, message by stdin, config after the commit, index entries by `update-index --cacheinfo`). The ID vector `v1-096ec1a42f3e9b74ae0f0348152caeb2`, the dirty-hash vectors (`83ebb47e...`, `c09b5a87...`) and the blob id of `changed
-` (`5ea2ed41...`) match, and katalogr's twelve bad position texts are refused.
+All 8 cases of `position-v1.json` (clean, edited, deleted, untracked, ignored, staged_only, edited_and_staged, line_endings) give exactly their expected text, cold and on a second read, built with real git as katalogr's test builds them (fixed author, `@0 +0000`, message by stdin, config after the commit, index entries by `update-index --cacheinfo`). The ID vector `v1-096ec1a42f3e9b74ae0f0348152caeb2`, the dirty-hash vectors (`83ebb47e...`, `c09b5a87...`) and the blob id of `changed\n` (`5ea2ed41...`) match, and katalogr's twelve bad position texts are refused.
 
 ## Line endings
 
-The `line_endings` case: HEAD holds `a
-b
-`, the worktree `a
-b
-`, with `core.autocrlf=true` and `* text=auto`. `git status` calls it clean because it applies filters; a position hashes the raw worktree bytes, so it is dirty (`24decf67...+3323e56b...`). That is CD-2 as written and is what we match. Consequence for FTR-003: on a Windows checkout with autocrlf, every text file reads as changed, so the position is dirty and a view is exact only at the live working-tree position, never at the HEAD commit it would otherwise equal. FTR-003 should say so in its docs and not try to normalise; that is a katalogr decision.
+The `line_endings` case: HEAD holds `a\nb\n`, the worktree `a\r\nb\r\n`, with `core.autocrlf=true` and `* text=auto`. `git status` calls it clean because it applies filters; a position hashes the raw worktree bytes, so it is dirty (`24decf67...+3323e56b...`). That is CD-2 as written and is what we match. Consequence for FTR-003: on a Windows checkout with autocrlf, every text file reads as changed, so the position is dirty and a view is exact only at the live working-tree position, never at the HEAD commit it would otherwise equal. FTR-003 should say so in its docs and not try to normalise; that is a katalogr decision.
 
 ## Submodule gap
 
