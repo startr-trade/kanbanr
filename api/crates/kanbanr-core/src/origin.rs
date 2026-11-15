@@ -486,6 +486,16 @@ pub fn duplicate_approval(def: &FeatureDefinition, verdict: &str) -> Option<Earl
     })
 }
 
+/// Would ratifying `item` repeat the latest ratification on the definition as it stands? Never
+/// while an override Claude made waits for one (DEF-064): each override is ratified on its own,
+/// even at a revision the person already ratified. Returns the earlier record when it would.
+pub fn duplicate_ratification(item: &FeatureItem) -> Option<Earlier> {
+    if !crate::readiness::open_overrides(item).is_empty() {
+        return None;
+    }
+    duplicate_approval(item.definition.as_ref()?, "ratified")
+}
+
 /// Would giving sign-off `id` with `note` and `doc` repeat the current one? A repeat that brings a
 /// new note or a doc adds something and is not a duplicate.
 pub fn duplicate_signoff(item: &FeatureItem, id: &str, note: &str, doc: &str) -> Option<Earlier> {
@@ -878,6 +888,168 @@ mod tests {
         );
         assert!(rat.get("already_recorded").is_none());
         assert_eq!(def(&store, &code).approvals.len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// DEF-064 R-1: an override Claude made after the latest ratification, at the revision that
+    /// ratification covered, keeps a ratification from being a repeat; one new ratification
+    /// closes every override waiting on it, two at the same revision included.
+    #[test]
+    fn a_ratification_after_a_second_override_at_the_same_revision_is_not_a_repeat() {
+        use crate::models::{Approval, ApprovalEvent, Transition};
+        let (store, dir) = board();
+        let code = item(&store, true);
+        let mut f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        let _ = std::fs::remove_dir_all(dir);
+        let mut d = f.definition.clone().unwrap();
+        let rev = d.content_rev();
+        let event = |at: &str, verdict: &str| ApprovalEvent {
+            at: at.into(),
+            by: "Ada".into(),
+            verdict: verdict.into(),
+            rev: rev.clone(),
+            origin: "monitor".into(),
+            ..Default::default()
+        };
+        d.approvals = vec![
+            event("2026-11-13T10:00:00.000Z", "approved"),
+            event("2026-11-14T12:00:00.000Z", "ratified"),
+        ];
+        d.approval = Some(Approval {
+            by: "Ada".into(),
+            at: "2026-11-14T12:00:00.000Z".into(),
+            rev: rev.clone(),
+            ..Default::default()
+        });
+        d.started_unapproved = "why".into();
+        f.definition = Some(d);
+        let moved = |at: &str, why: &str| Transition {
+            at: at.into(),
+            from: "Planned".into(),
+            to: "Scheduled".into(),
+            override_reason: Some(why.into()),
+            origin: "conversation".into(),
+            ..Default::default()
+        };
+        f.history = vec![
+            moved("2026-11-14T10:00:00.000Z", "why 1"),
+            moved("2026-11-15T09:00:00.000Z", "why 2"),
+        ];
+
+        let open: Vec<&str> = crate::readiness::open_overrides(&f)
+            .iter()
+            .map(|t| t.at.as_str())
+            .collect();
+        assert_eq!(open, ["2026-11-15T09:00:00.000Z"]);
+        // The old rule alone calls this a repeat: the defect.
+        assert!(duplicate_approval(f.definition.as_ref().unwrap(), "ratified").is_some());
+        assert_eq!(duplicate_ratification(&f), None);
+
+        // A second override at the same ratified revision: both wait.
+        f.history.push(moved("2026-11-15T09:10:00.000Z", "why 3"));
+        assert_eq!(crate::readiness::open_overrides(&f).len(), 2);
+        assert_eq!(duplicate_ratification(&f), None);
+
+        // One ratification closes both; another would be the repeat.
+        f.definition
+            .as_mut()
+            .unwrap()
+            .approvals
+            .push(event("2026-11-15T09:30:00.000Z", "ratified"));
+        assert!(crate::readiness::open_overrides(&f).is_empty());
+        let earlier = duplicate_ratification(&f).expect("a repeat");
+        assert_eq!(
+            (earlier.what.as_str(), earlier.at.as_str()),
+            ("ratified", "2026-11-15T09:30:00.000Z")
+        );
+    }
+
+    /// DEF-064 R-1, R-2: a second override Claude made at a revision the person already ratified
+    /// is ratified again through the route, and leaves the queue; a true repeat still records
+    /// nothing.
+    #[test]
+    fn ratifying_a_second_override_at_a_ratified_revision_records_it_and_leaves_the_queue() {
+        let (store, dir) = board();
+        assert!(dir.starts_with(std::env::temp_dir()));
+        let code = item(&store, false);
+        let base = format!("/projects/demo/features/{code}");
+        let listed = |store: &Store| {
+            crate::review::pending(store, "demo", None)
+                .unwrap()
+                .into_iter()
+                .find(|e| e.code == code)
+        };
+        let first = post(
+            &store,
+            &format!("{base}/approve"),
+            json!({"by": "Ada"}),
+            Origin::Monitor,
+        );
+        assert!(first.get("already_recorded").is_none());
+
+        store
+            .move_feature_gated_as("demo", &code, "Scheduled", Some("why 1"), "conversation")
+            .unwrap();
+        let rat = post(
+            &store,
+            &format!("{base}/ratify"),
+            json!({"by": "Ada", "reason": "agreed"}),
+            Origin::Monitor,
+        );
+        assert!(rat.get("already_recorded").is_none(), "{rat}");
+        assert_eq!(def(&store, &code).approvals.len(), 2);
+        assert!(listed(&store).is_none());
+
+        store
+            .move_feature_gated_as("demo", &code, "Completed", Some("why 2"), "conversation")
+            .unwrap();
+        let entry = listed(&store).expect("asked again");
+        assert_eq!(entry.approval, crate::review::ApprovalKind::Unratified);
+        assert_eq!(entry.overrides.len(), 1);
+
+        // The defect: this answered `already_recorded` and recorded nothing.
+        let rat = post(
+            &store,
+            &format!("{base}/ratify"),
+            json!({"by": "Ada", "reason": "agreed again"}),
+            Origin::Monitor,
+        );
+        assert!(rat.get("already_recorded").is_none(), "{rat}");
+        let d = def(&store, &code);
+        assert_eq!(d.approvals.len(), 3);
+        let last = d.approvals.last().unwrap();
+        assert_eq!(
+            (
+                last.verdict.as_str(),
+                last.origin.as_str(),
+                last.rev.clone()
+            ),
+            ("ratified", "monitor", d.content_rev())
+        );
+        let f = store.load("demo").unwrap().feature(&code).unwrap().clone();
+        assert!(crate::readiness::open_overrides(&f).is_empty());
+        assert!(listed(&store).is_none());
+
+        // R-2: with nothing open, a repeat from a terminal records nothing and says who first.
+        let again = post(
+            &store,
+            &format!("{base}/ratify"),
+            json!({"by": "Ada", "reason": "once more"}),
+            Origin::Terminal,
+        );
+        let said = &again["already_recorded"];
+        assert_eq!(
+            (said["by"].as_str(), said["origin"].as_str()),
+            (Some("Ada"), Some("monitor"))
+        );
+        assert!(
+            said["sentence"]
+                .as_str()
+                .unwrap()
+                .ends_with("from the monitor"),
+            "{said}"
+        );
+        assert_eq!(def(&store, &code).approvals.len(), 3);
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -51,6 +51,19 @@ fn repeat_approval(
         .and_then(|d| crate::origin::duplicate_approval(d, verdict)))
 }
 
+/// The earlier ratification a repeat of `code`'s collides with, if any (DEF-028), unless an
+/// override Claude made waits for one (DEF-064).
+fn repeat_ratification(
+    store: &Store,
+    p: &str,
+    code: &str,
+) -> Result<Option<crate::origin::Earlier>> {
+    let project = store.load_meta(p)?;
+    Ok(crate::origin::duplicate_ratification(
+        project.feature(code)?,
+    ))
+}
+
 /// The answer to a verdict that adds nothing to the record: the item as it stands, with
 /// `already_recorded` saying who recorded it first, when and from where. Nothing was written.
 fn ser_already_item(
@@ -1210,7 +1223,7 @@ fn dispatch_routes(
             )?),
         ("POST", ["projects", p, "features", code, "ratify"]) => {
             shown_rev(store, p, code, b)?;
-            if let Some(earlier) = repeat_approval(store, p, code, "ratified")? {
+            if let Some(earlier) = repeat_ratification(store, p, code)? {
                 return ser_already(store, p, code, &earlier);
             }
             ser(&store.ratify_feature_as(
