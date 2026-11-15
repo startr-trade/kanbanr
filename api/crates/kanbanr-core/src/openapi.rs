@@ -88,7 +88,9 @@ pub const ERRORS: &[(u16, &str)] = &[
     (404, "No such project, item, sprint or document."),
     (
         409,
-        "The board was written by a newer kanbanr than this daemon; upgrade it.",
+        "The board was written by a newer kanbanr than this daemon; upgrade it. Or, for a view or \
+         position read, no checkout here holds the position asked for: the body names the position \
+         the checkout does hold.",
     ),
     (500, "The board could not be read."),
 ];
@@ -404,6 +406,47 @@ pub fn public_routes() -> Vec<RouteDoc> {
             summary: "The project's documentation tree",
             params: &[PROJECT],
             response: Response::Json(schema_of::<crate::docs::DocFolder>),
+        },
+        // ---- positions and views (FTR-003) ----
+        RouteDoc {
+            path: "/api/projects/{project}/position",
+            summary: "The live position of the code repository the daemon was started in: its \
+                      commit plus a hash of the uncommitted changes, and the changed paths",
+            params: &[PROJECT],
+            response: Response::Json(schema_of::<crate::position::PositionAnswer>),
+        },
+        RouteDoc {
+            path: "/api/projects/{project}/views/docs",
+            summary: "The markdown docs under a folder, drawn at the live position or at `at`, \
+                      with an ID that repeats while the position, the board and the question \
+                      repeat; an ID only when the answer is exact",
+            params: &[
+                PROJECT,
+                Param {
+                    name: "root",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "The folder whose markdown files are drawn (default docs).",
+                },
+                Param {
+                    name: "max-nodes",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::Integer,
+                    description: "The most files drawn (default 60).",
+                },
+                Param {
+                    name: "at",
+                    location: In::Query,
+                    required: false,
+                    kind: Kind::String,
+                    description: "A position text: a commit, or a commit plus `+` and a dirty \
+                                  hash. A clean commit is read from the repository; a dirty \
+                                  position only while the checkout is at it, else a 409.",
+                },
+            ],
+            response: Response::Json(schema_of::<crate::views::ViewAnswer>),
         },
         RouteDoc {
             path: "/api/projects/{project}/docs/content",
