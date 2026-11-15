@@ -11502,14 +11502,43 @@ fn decisions_propose_grant_and_take_under() {
 }
 
 /// DEF-043 R-2: a move with an override records where it was made: `conversation` inside a
-/// Claude Code session, `terminal` outside one.
+/// Claude Code session, `terminal` outside one. The override must be one the gate needed, or it
+/// is not recorded at all (DEF-056 R-2): so the item moved is defined and never approved, and the
+/// Business Arch gate, which asks for approval, blocks it.
 #[test]
 fn an_override_inside_a_claude_session_records_its_origin() {
     let moved = |tag: &str, claudecode: bool| {
         let (base, work) = togaf_scratch(tag);
         togaf_board(&base, &work);
+        let ok = |o: Output| {
+            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+            o
+        };
+        ok(run_in(
+            &base,
+            &work,
+            &["feature", "add", "--title", "Till", "--milestone", "MS-001"],
+        ));
+        let def = base.join("def2.yaml");
+        std::fs::write(&def, "statement: Take the money\n").unwrap();
+        ok(run_in(
+            &base,
+            &work,
+            &[
+                "feature",
+                "define",
+                "FEAT-002",
+                "--file",
+                def.to_str().unwrap(),
+            ],
+        ));
+        let blocked = run_in(&base, &work, &["move", "FEAT-002", "Business Arch"]);
+        assert!(
+            !blocked.status.success(),
+            "the gate blocks an unapproved item, so the override below is needed"
+        );
         let mut c = Command::new(cli());
-        c.args(["move", "FEAT-001", "Business Arch", "--override", "why"])
+        c.args(["move", "FEAT-002", "Business Arch", "--override", "why"])
             .current_dir(&work)
             .env("HOME", base.join("home"))
             .env_remove("CLAUDE_CONFIG_DIR")
@@ -11523,7 +11552,7 @@ fn an_override_inside_a_claude_session_records_its_origin() {
         }
         let o = c.output().unwrap();
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-        let shown = run_in(&base, &work, &["feature", "show", "FEAT-001", "--json"]);
+        let shown = run_in(&base, &work, &["feature", "show", "FEAT-002", "--json"]);
         let v: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
         let last = v["history"].as_array().unwrap().last().unwrap().clone();
         assert_eq!(last["override"], "why", "{last}");
@@ -11542,7 +11571,7 @@ fn an_override_inside_a_claude_session_records_its_origin() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|e| e["code"] == "FEAT-001" && e["approval"] == "unratified")
+            .any(|e| e["code"] == "FEAT-002" && e["approval"] == "unratified")
     };
     let (origin, pending) = moved("def043-session", true);
     assert_eq!(origin, "conversation");
