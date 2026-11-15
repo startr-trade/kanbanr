@@ -67,6 +67,73 @@ fn record_outcome(out: &mut BTreeMap<String, bool>, r: Reading) {
     }
 }
 
+/// The runner forms capture reads, as the hook's notice and the docs name them.
+pub const READABLE_RUNNERS: &str = "cargo test, pytest -v, python -m unittest -v, Vitest with \
+    --reporter=verbose and Playwright with --reporter=list";
+
+/// The test runner one simple command (its words, environment assignments already set aside)
+/// invokes, as a short label such as `python3 -m unittest`; None when it runs no tests. Whole
+/// words only, never substrings (L-23); the first word is read without its directory.
+pub fn test_runner(words: &[String]) -> Option<String> {
+    fn base(w: &str) -> &str {
+        w.rsplit(['/', '\\']).next().unwrap_or(w)
+    }
+    let mut words: Vec<&str> = words.iter().map(String::as_str).collect();
+    if let Some(first) = words.first_mut() {
+        *first = base(first);
+    }
+    // Wrappers that run the command after them.
+    let drop = match words.as_slice() {
+        ["uv" | "poetry" | "pipenv" | "pdm" | "hatch", "run", ..] | ["bundle", "exec", ..] => 2,
+        ["npx" | "pnpx" | "bunx", ..] => 1,
+        _ => 0,
+    };
+    let mut words = words.split_off(drop.min(words.len()));
+    if let Some(first) = words.first_mut() {
+        *first = base(first);
+    }
+    let w0 = *words.first()?;
+    let w1 = words.get(1).copied();
+    let has = |opts: &[&str]| words[1..].iter().find(|w| opts.contains(w)).copied();
+    let label = match (w0, w1) {
+        ("cargo", Some(sub @ ("test" | "nextest"))) => format!("cargo {sub}"),
+        ("pytest" | "py.test" | "vitest" | "jest" | "mocha", _) => w0.to_string(),
+        ("rspec" | "tox" | "nox" | "ctest", _) => w0.to_string(),
+        ("playwright" | "go" | "dotnet", Some("test")) => format!("{w0} test"),
+        ("make", Some(t @ ("test" | "check"))) => format!("make {t}"),
+        ("npm" | "pnpm" | "yarn" | "bun", Some("test")) => format!("{w0} test"),
+        ("npm" | "pnpm" | "yarn" | "bun", Some("run")) => {
+            let script = words.get(2).filter(|w| w.starts_with("test"))?;
+            format!("{w0} run {script}")
+        }
+        ("mvn" | "mvnw", _) => format!("{w0} {}", has(&["test", "verify"])?),
+        ("gradle" | "gradlew", _) => format!("{w0} {}", has(&["test", "check"])?),
+        (py, _) if py.starts_with("python") => {
+            let m = words.iter().position(|w| *w == "-m")?;
+            let module = words
+                .get(m + 1)
+                .filter(|w| matches!(**w, "pytest" | "unittest"))?;
+            format!("{py} -m {module}")
+        }
+        _ => return None,
+    };
+    Some(label)
+}
+
+/// What the capture hook tells Claude after `commands` printed no result it could read: None when
+/// `results_empty` is false or no command runs tests.
+pub fn unread_run_notice(commands: &[Vec<String>], results_empty: bool) -> Option<String> {
+    if !results_empty {
+        return None;
+    }
+    let label = commands.iter().find_map(|c| test_runner(c))?;
+    Some(format!(
+        "kanbanr capture read no test result from this run (`{label}`), so the board recorded \
+         nothing. It reads {READABLE_RUNNERS}. Run the tests in one of those forms and name each \
+         tracked test as that runner prints it; never record a result by hand."
+    ))
+}
+
 /// What one line says, once a reader owns it. `Unproven`: the line is a result that proves
 /// nothing (skipped, todo, ignored); owning it keeps a later reader from misreading it.
 /// (Named `Outcome`, not `Verdict`: a verdict is a person's decision elsewhere in kanbanr.)
@@ -807,6 +874,48 @@ FAILED (failures=2, errors=1, skipped=1, expected failures=1, unexpected success
         let r = parse_results(&big);
         eprintln!("10k-line unittest parse: {:?}", t.elapsed());
         assert_eq!(r, parse_results(UNITTEST_3_14));
+    }
+
+    #[test]
+    fn a_test_run_capture_cannot_read_is_named() {
+        let words = |c: &str| -> Vec<String> { c.split(' ').map(String::from).collect() };
+        let label = |c: &str| test_runner(&words(c));
+        for (cmd, want) in [
+            ("python3 -m unittest", "python3 -m unittest"),
+            ("/usr/bin/python3.12 -m pytest -q", "python3.12 -m pytest"),
+            ("uv run pytest", "pytest"),
+            ("npx vitest run", "vitest"),
+            ("npm run test:unit", "npm run test:unit"),
+            ("cargo nextest run", "cargo nextest"),
+            ("go test ./...", "go test"),
+            ("./gradlew check", "gradlew check"),
+            ("make test", "make test"),
+        ] {
+            assert_eq!(label(cmd).as_deref(), Some(want), "{cmd}");
+        }
+        // A quoted message is one word, as the shell splits it.
+        let commit: Vec<String> = ["git", "commit", "-m", "run pytest"]
+            .map(String::from)
+            .to_vec();
+        assert_eq!(test_runner(&commit), None);
+        for cmd in [
+            "python3 script.py",
+            "cargo build",
+            "npm install",
+            "echo go test",
+        ] {
+            assert_eq!(label(cmd), None, "{cmd}");
+        }
+        assert_eq!(
+            unread_run_notice(&[words("python3 -m unittest")], false),
+            None
+        );
+        assert_eq!(unread_run_notice(&[words("ls")], true), None);
+        let notice = unread_run_notice(&[words("cd x"), words("python3 -m unittest")], true)
+            .expect("a test run that recorded nothing is named");
+        assert!(notice.contains("`python3 -m unittest`"), "{notice}");
+        assert!(notice.contains("python -m unittest -v"), "{notice}");
+        assert!(notice.contains(READABLE_RUNNERS), "{notice}");
     }
 
     fn project_with_tests(tests: &str) -> Project {
