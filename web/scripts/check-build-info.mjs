@@ -18,6 +18,7 @@ const W = "web::check_build_info_the_warning_names_both_versions";
 
 // R-1
 expect(H, "version and commit", buildLabel({ writes: false, identity: null, version: "0.6.0", commit: "1138833" }), "v0.6.0 · 1138833");
+expect(H, "dirty", buildLabel({ writes: false, identity: null, version: "0.6.0", commit: "1138833", dirty: true }), "v0.6.0 · 1138833 (dirty)");
 expect(H, "version only", buildLabel({ writes: false, identity: null, version: "0.6.0" }), "v0.6.0");
 expect(H, "unknown commit", buildLabel({ writes: false, identity: null, version: "0.6.0", commit: "unknown" }), "v0.6.0");
 expect(H, "an older server", buildLabel({ writes: false, identity: null }), "");

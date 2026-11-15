@@ -6,7 +6,10 @@ export function buildLabel(meta: Meta | null): string {
   const version = meta?.version?.trim();
   if (!version) return "";
   const commit = meta?.commit?.trim();
-  return commit && commit !== "unknown" ? `v${version} · ${commit}` : `v${version}`;
+  const label = commit && commit !== "unknown" ? `v${version} · ${commit}` : `v${version}`;
+  // A build made from a modified tree already says so in its commit; the flag covers a daemon
+  // that reports the commit bare.
+  return meta?.dirty && !label.endsWith("-dirty") ? `${label} (dirty)` : label;
 }
 
 /** The warning shown when the board was last written by a newer kanbanr than this monitor runs,

@@ -19,6 +19,8 @@ pub struct Meta {
     pub version: String,
     /// The commit this daemon was built from, or `unknown`.
     pub commit: String,
+    /// Whether this daemon was built from a modified tree.
+    pub dirty: bool,
     /// The newest kanbanr that wrote the board, from its `writer.yaml`; null when none is recorded.
     pub board_writer: Option<BoardWriter>,
     /// Whether that writer is newer than this daemon: the monitor then warns.
@@ -32,6 +34,8 @@ pub struct BoardWriter {
     pub version: String,
     pub commit: String,
     pub at: String,
+    /// The writer was built from a modified tree.
+    pub dirty: bool,
 }
 
 /// A git identity.
@@ -55,8 +59,13 @@ impl Meta {
         let running = crate::writer::running();
         let recorded = crate::writer::recorded(data_dir);
         let writer_newer = recorded.as_ref().is_some_and(|w| {
-            let descends =
-                code_repo.and_then(|r| crate::writer::descends(r, &running.commit, &w.commit));
+            let descends = code_repo.and_then(|r| {
+                crate::writer::descends(
+                    r,
+                    crate::writer::base_commit(&running.commit),
+                    crate::writer::base_commit(&w.commit),
+                )
+            });
             crate::writer::newer(&running, w, descends)
         });
         Meta {
@@ -64,11 +73,13 @@ impl Meta {
             identity: crate::git::identity(data_dir).map(|(name, email)| Identity { name, email }),
             schema_version: crate::config::CURRENT_SCHEMA_VERSION,
             version: running.version,
+            dirty: crate::writer::is_dirty(&running.commit),
             commit: running.commit,
             board_writer: recorded.map(|w| BoardWriter {
                 version: w.version,
                 commit: w.commit,
                 at: w.at,
+                dirty: w.dirty,
             }),
             writer_newer,
         }

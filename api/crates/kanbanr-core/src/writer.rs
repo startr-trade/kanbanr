@@ -29,9 +29,22 @@ pub struct Writer {
     pub version: String,
     pub commit: String,
     pub at: String,
+    /// Whether the build was made from a modified tree (its `commit` ends in `-dirty`).
+    #[serde(default)]
+    pub dirty: bool,
     /// Fields a later kanbanr adds are kept on rewrite.
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+/// The commit a build names, without the `-dirty` mark of a build from a modified tree.
+pub fn base_commit(commit: &str) -> &str {
+    commit.strip_suffix("-dirty").unwrap_or(commit)
+}
+
+/// Whether a commit string names a build from a modified tree.
+pub fn is_dirty(commit: &str) -> bool {
+    commit.ends_with("-dirty")
 }
 
 static RUNNING: OnceLock<Build> = OnceLock::new();
@@ -71,7 +84,9 @@ pub fn newer(running: &Build, recorded: &Writer, descends: Option<bool>) -> bool
         parse_version(&recorded.version),
     ) {
         (Some(r), Some(w)) if w > r => true,
-        (Some(r), Some(w)) if w == r => running.commit != recorded.commit && descends == Some(true),
+        (Some(r), Some(w)) if w == r => {
+            base_commit(&running.commit) != base_commit(&recorded.commit) && descends == Some(true)
+        }
         _ => false,
     }
 }
@@ -93,13 +108,17 @@ pub fn recorded(data_dir: &Path) -> Option<Writer> {
 
 /// Write the record when `build` moves it forward; true when it wrote.
 pub fn stamp_as(data_dir: &Path, build: &Build, now: &str) -> bool {
-    if build.commit == "unknown" {
+    if base_commit(&build.commit) == "unknown" {
         return false;
     }
     if let Some(cur) = recorded(data_dir) {
         match (parse_version(&cur.version), parse_version(&build.version)) {
             (Some(c), Some(b)) if c > b => return false,
-            (Some(c), Some(b)) if c == b && cur.commit == build.commit => return false,
+            (Some(c), Some(b))
+                if c == b && base_commit(&cur.commit) == base_commit(&build.commit) =>
+            {
+                return false;
+            }
             _ => {}
         }
     }
@@ -107,6 +126,7 @@ pub fn stamp_as(data_dir: &Path, build: &Build, now: &str) -> bool {
         version: build.version.clone(),
         commit: build.commit.clone(),
         at: now.to_string(),
+        dirty: is_dirty(&build.commit),
         extra: recorded(data_dir).map(|w| w.extra).unwrap_or_default(),
     };
     match crate::yaml::to_string(&record) {
@@ -139,6 +159,7 @@ mod tests {
             version: v.into(),
             commit: c.into(),
             at: "2026-11-13T09:12:00Z".into(),
+            dirty: false,
             extra: Extra::new(),
         }
     }
@@ -195,6 +216,33 @@ mod tests {
         // an unreadable record is replaced
         std::fs::write(d.join(FILE), ":::\n- [").unwrap();
         assert!(stamp_as(&d, &build("0.1.0", "ddd"), t));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_dirty_build_compares_as_its_base_commit() {
+        assert_eq!(base_commit("abc123-dirty"), "abc123");
+        assert_eq!(base_commit("abc123"), "abc123");
+        let run = build("0.5.0", "aaa-dirty");
+        // the same base commit is not newer, even where ancestry would say so
+        assert!(!newer(&run, &rec("0.5.0", "aaa"), Some(true)));
+        assert!(newer(&run, &rec("0.5.0", "bbb-dirty"), Some(true)));
+        let d = scratch("dirty");
+        let t = "2026-11-13T09:12:00Z";
+        assert!(!stamp_as(&d, &build("0.6.0", "unknown-dirty"), t));
+        assert!(stamp_as(&d, &build("0.6.0", "aaa"), t));
+        assert!(!recorded(&d).unwrap().dirty);
+        // a dirty rebuild of the same commit leaves the record alone
+        assert!(!stamp_as(&d, &build("0.6.0", "aaa-dirty"), t));
+        assert_eq!(recorded(&d).unwrap().commit, "aaa");
+        // a dirty build of a new commit is kept as built, marked dirty
+        assert!(stamp_as(&d, &build("0.6.0", "bbb-dirty"), t));
+        let w = recorded(&d).unwrap();
+        assert_eq!((w.commit.as_str(), w.dirty), ("bbb-dirty", true));
+        assert!(!stamp_as(&d, &build("0.6.0", "bbb"), t));
+        // a record written before `dirty` existed reads as clean
+        std::fs::write(d.join(FILE), "version: 0.6.0\ncommit: ccc\nat: x\n").unwrap();
+        assert!(!recorded(&d).unwrap().dirty);
         let _ = std::fs::remove_dir_all(&d);
     }
 

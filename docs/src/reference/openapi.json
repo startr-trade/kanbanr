@@ -425,6 +425,10 @@
           "commit": {
             "type": "string"
           },
+          "dirty": {
+            "description": "The writer was built from a modified tree.",
+            "type": "boolean"
+          },
           "version": {
             "type": "string"
           }
@@ -432,7 +436,8 @@
         "required": [
           "version",
           "commit",
-          "at"
+          "at",
+          "dirty"
         ],
         "type": "object"
       },
@@ -2583,6 +2588,10 @@
             "description": "The commit this daemon was built from, or `unknown`.",
             "type": "string"
           },
+          "dirty": {
+            "description": "Whether this daemon was built from a modified tree.",
+            "type": "boolean"
+          },
           "identity": {
             "anyOf": [
               {
@@ -2619,6 +2628,7 @@
           "schema_version",
           "version",
           "commit",
+          "dirty",
           "board_writer",
           "writer_newer"
         ],
