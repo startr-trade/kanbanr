@@ -8,8 +8,8 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 
 | Command | What it does |
 |---|---|
-| `kanbanr init <name>` | data folder + git repo + identity + project, in one step |
-| `kanbanr project init/edit/list/use/delete` | create, rename, select (writes the `.kanbanr` marker) |
+| `kanbanr init <name> [--repository URL\|""] [--repository-private on\|off]` | data folder + git repo + identity + project, in one step; records the folder's git remote as the project's code repository, linked from the board README (`""` records none, `--repository-private on` names it without a link) |
+| `kanbanr project init/edit/list/use/delete` | create, rename, select (writes the `.kanbanr` marker); `edit` also takes `--repository URL\|""` and `--repository-private on\|off` |
 | `kanbanr where [--json]` | which board folder this directory uses, and why |
 | `kanbanr whoami` / `kanbanr identity` | the commit identity this data folder writes as |
 | `kanbanr config show / set-transition / displayed-states / default-state / no-op-states / workflow` | the workflow; `config workflow --preset <name>`, `--from-file`, `--export`, `--write-agreement` ([Processes](../using/processes.md)) |
@@ -95,7 +95,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 
 | Command | What it does |
 |---|---|
-| `kanbanr readme` | write or refresh the board's README: what it is, its projects, and how to install kanbanr and see it as a board; text outside its markers is kept |
+| `kanbanr readme` | write or refresh the board's README: it names the board's projects and links their code repositories, and says how to install kanbanr and see it as a board; text outside its markers is kept |
 | `kanbanr drift [--since DATE] [--item CODE]` | the docs and items that name something work changed (a flag, command, route, `KANBANR_` variable, setting, stage, status or file) and have not changed since, grouped by text, for the items with commits since `DATE` (from the start of that day, UTC; default: the latest shipped release's tag date, else 60 days back; with `--item`, all of that item's history). `--json` adds when it was generated. It flags what to read, never judges it, and exits 0 whatever it finds. Run it from the project folder: without the code repository it cannot check, and says so |
 | `kanbanr doctor` | every broken reference and every gap, across the board — including links in specs and docs to items, requirements, ADRs, goals or docs the board does not have, diagram problems: each Mermaid block in a spec or doc the lint rejects, with its file, diagram number, line and rule, and each coverage rule a view still fails, with its first ten uncovered subjects. Warns only about what each item's current stage asks; what later stages will ask is printed after the warnings as counts |
 | `kanbanr check [CODE]` | what one item has not said, and what it cannot yet show |
@@ -135,7 +135,7 @@ Everything the CLI does, grouped by what you are trying to find out. `--json` wo
 | `kanbanr git forward <VERSION>` | merge a release's fixes forward into the current line, naming the items they serve |
 | `kanbanr git model [--sprints on\|off] [--releases on\|off] [--json]` | the git model the cadence implies: main, the line finished items integrate into, where items branch, item branches, the lines that take merges only, what kanbanr merges, and that pushing is yours. With `--sprints` or `--releases`, the model that cadence would give, over this board's cadence or, with no board yet, over all-off: setup shows it before applying it |
 | `kanbanr commit -m "…"` | commit with the board reference filled in from the branch |
-| `kanbanr claude sync` | write the project's charter and stages into `CLAUDE.md` |
+| `kanbanr claude sync` | write the project's charter and stages into `CLAUDE.md`, and refresh the board README's generated block |
 | `kanbanr git guard` / `kanbanr claude guard` / `kanbanr git check-msg` / `kanbanr git check-branch` / `kanbanr git check-push` | the checks the hooks run (you never call them); `check-push` is the pre-push hook, which refuses a push from an agent's worktree |
 | `kanbanr scope issue <design\|build> <CODE> [--for 8h] [--note …] [--worktree PATH] [--json]` | issue an agent scope: record what one sub-agent may do and print the brief to paste into its brief (FEAT-214). `--worktree PATH` binds the scope to that worktree now, so its brief has no claim step (DEF-023) |
 | `kanbanr scope claim <SC-id>` | the agent's first command, in its own worktree: bind the scope to it (a build agent switches to its item's branch) |

@@ -6,6 +6,15 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A board's README leads with the project it tracks, not with kanbanr (DEF-053).** The heading
+  names the project, its line links the code repository recorded on the project (`kanbanr init`
+  records the folder's remote; `kanbanr project edit --repository URL`, `--repository-private on`
+  names a private one without a link), and kanbanr is named as the tool below. `kanbanr doctor`
+  names a project with no recorded repository on a shared board, and a README whose generated
+  block is out of date; `kanbanr readme` and `kanbanr claude sync` refresh it.
+
 ## [0.6.0] - 2026-11-14
 
 ### Added
