@@ -5832,6 +5832,52 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&repo);
     }
 
+    /// DEF-057 timing: the default plan of a candidate with release-prepare configured and the
+    /// preparation changed, three runs, median printed. Run on demand: `-- --ignored --nocapture`.
+    mod perf {
+        use super::*;
+
+        #[test]
+        #[ignore]
+        fn plan_promotion_on_a_candidate() {
+            let (store, dir, repo) = board_and_repo("def057perf");
+            prepare_fixture(&repo);
+            super::super::add(&store, "shop", "v0.2.0", "", "Gates").unwrap();
+            plan_done(&store, "v0.2.0");
+            configure(&store, THREE);
+            super::super::promote(
+                &store,
+                "shop",
+                "v0.2.0",
+                Some("candidate"),
+                "Ada",
+                "",
+                Some(&repo),
+            )
+            .unwrap();
+            configure(&store, &format!("{THREE}{PREPARE}"));
+            let mut ms = Vec::new();
+            for _ in 0..3 {
+                let t = std::time::Instant::now();
+                super::super::plan_promotion(
+                    &store,
+                    "shop",
+                    "v0.2.0",
+                    None,
+                    "",
+                    Some(&repo),
+                    super::super::Fetch::No,
+                )
+                .unwrap();
+                ms.push(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            println!("PERF plan_promotion median {:.1} ms (runs {:?})", ms[1], ms);
+            let _ = std::fs::remove_dir_all(&dir);
+            let _ = std::fs::remove_dir_all(&repo);
+        }
+    }
+
     /// A board and repo with a changelog configured and `changelog` committed on main; a finished
     /// feature and a finished defect planned into v0.1.0 when `ship` is set.
     fn changelog_fixture(tag: &str, changelog: &str, ship: bool) -> (Store, PathBuf, PathBuf) {
