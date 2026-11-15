@@ -134,8 +134,25 @@ if (!/openFor\(prepared, "promotion"/.test(button) || !/<PreparedPanel/.test(but
 }
 if (!/expect: tip/.test(button)) problems.push("ReleasesPage.tsx: a prepared promotion is not pinned to the release tip shown");
 
-if (problems.length) {
+// DEF-060: a granted delegation names the Claude Code rule auto mode needs, in delegated mode only.
+const permProblems = [];
+const decisionsHere = between(review, "function DecisionsHere(", "\nfunction ");
+const branch = decisionsHere.slice(decisionsHere.indexOf("permission_rules_checked") - 80);
+if (!/view\.mode === "delegated" && g\.permission_rules_checked/.test(decisionsHere)) {
+  permProblems.push("ReviewPage.tsx: the permission rule is not shown only in delegated mode, once checked");
+}
+if (!/auto mode/.test(branch) || !/\.claude\/settings\.local\.json/.test(branch) || !/permission_rules_missing/.test(branch)) {
+  permProblems.push("ReviewPage.tsx: a granted delegation does not name the missing rule, auto mode and .claude/settings.local.json");
+}
+const types = read("../src/types.ts");
+for (const f of ["permission_rules?: string[]", "permission_rules_checked?: boolean", "permission_rules_missing?: string[]"]) {
+  if (!types.includes(f)) permProblems.push(`types.ts: DelegationView does not declare ${f}`);
+}
+
+if (problems.length || permProblems.length) {
   for (const p of problems) console.error(`web::prepared — ${p}`);
+  for (const p of permProblems) console.error(`web::check_review_page_names_the_permission_rule_of_a_granted_delegation — ${p}`);
   process.exit(1);
 }
+console.log("web::check_review_page_names_the_permission_rule_of_a_granted_delegation — a granted delegation in delegated mode names the allow rule auto mode needs.");
 console.log("web::prepared — a prepared record shows filled in beside its button, with its sources as links, and is edited or rejected only on request.");
