@@ -6,8 +6,19 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`kanbanr claude permissions [--write]`: the Claude Code allow rules for delegated commands
+  (DEF-060).** In delegated mode it lists the rule each delegation in force needs
+  (`Bash(kanbanr signoff:*)` and the like) as allowed or missing; `--write` adds the missing ones to
+  the project's `.claude/settings.local.json`. The Review page and `kanbanr decisions grant` name
+  the missing rule.
+
 ### Fixed
 
+- **A granted delegation can be used when Claude Code runs in auto mode (DEF-060).** The allow rule
+  that lets the delegated command past auto mode's safety check is offered at the grant, and Claude
+  asks once before `kanbanr claude permissions --write` adds it.
 - **A board's README leads with the project it tracks, not with kanbanr (DEF-053).** The heading
   names the project, its line links the code repository recorded on the project (`kanbanr init`
   records the folder's remote; `kanbanr project edit --repository URL`, `--repository-private on`

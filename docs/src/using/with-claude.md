@@ -136,6 +136,16 @@ moves are delegated: when an item has moved back to an earlier stage, Claude ask
 deciding or changing anything for it, even if a delegation would cover it. You grant them on the
 Review page after setup, or don't.
 
+**Auto mode.** If Claude Code runs in auto mode, its safety check can stop a delegated command such
+as `kanbanr signoff … --under DLG-001` before kanbanr sees it, because the check cannot know you
+granted the delegation. When you grant a delegation in delegated mode, kanbanr offers the one
+allow rule that lets the command through, on the Review page and after `kanbanr decisions grant`.
+Say yes when Claude asks, or run `kanbanr claude permissions --write` yourself: it adds
+`Bash(kanbanr signoff:*)` (one rule per delegated verb) to the project's
+`.claude/settings.local.json`, which is this machine's and is never committed. Without the rule,
+Claude prepares the decision for your click instead. kanbanr's own guard is unchanged, so a rule
+left behind lets nothing through once the delegation ends.
+
 When Claude takes a decision under a delegation, it tells you which one and under which delegation,
 and the decision is recorded as delegated, by Claude, naming the delegation. It comes back on the
 Review page under **Delegated decisions to review**: **Keep** it, or **Undo** it, which withdraws
