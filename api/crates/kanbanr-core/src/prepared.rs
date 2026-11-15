@@ -2453,6 +2453,191 @@ mod tests {
         crate::yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
+    /// FTR-037 R-5: records prepared together carry their batch; the listing shows it; one
+    /// `POST …/prepared/batch/{batch}/confirm` as the person makes every record's verdict in one
+    /// board commit and keeps each answer; `…/reject` turns them all down and records nothing; a
+    /// record prepared alone is untouched by either; Claude cannot confirm a batch.
+    #[test]
+    fn a_batch_of_results_is_confirmed_or_rejected_at_once() {
+        use crate::models::{Requirement, TestRef, TestState};
+        let (store, dir, code) = board_with_item(false);
+        let tests: Vec<TestRef> = ["one", "two", "three", "alone"]
+            .iter()
+            .map(|n| TestRef {
+                name: format!("manual: check {n}"),
+                kind: "manual".into(),
+                ..Default::default()
+            })
+            .collect();
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(crate::models::FeatureDefinition {
+                    statement: "Keep a cart".into(),
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "x".into(),
+                        tests,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        let body = |test: &str, batch: Option<&str>| {
+            let mut b = serde_json::json!({"kind": "manual-test",
+                "subject": {"item": code, "requirement": "R-1", "test": format!("manual: check {test}")},
+                "fields": {"state": "green", "checked_rev": "abc1234"},
+                "sources": [{"label": format!("walkthrough run togaf-1 step {test}")}]});
+            if let Some(name) = batch {
+                b["batch"] = Value::String(name.into());
+            }
+            b
+        };
+        let one = prepare_as_claude(&store, body("one", Some("togaf-1")));
+        let two = prepare_as_claude(&store, body("two", Some("togaf-1")));
+        let three = prepare_as_claude(&store, body("three", Some("agile-1")));
+        let alone = prepare_as_claude(&store, body("alone", None));
+        // A batch name is part of a route.
+        let mut bad = body("one", Some("has space"));
+        bad["origin"] = Value::String("conversation".into());
+        assert!(prepare(&store, "demo", &bad, None).is_err());
+        // The listing carries the batch.
+        let views = list(&store, "demo", &ListQuery::default(), None).unwrap();
+        let batch_of = |id: &str| {
+            views
+                .iter()
+                .find(|v| v.record.id == id)
+                .unwrap()
+                .record
+                .batch
+                .clone()
+        };
+        assert_eq!(batch_of(&one).as_deref(), Some("togaf-1"));
+        assert_eq!(batch_of(&two).as_deref(), Some("togaf-1"));
+        assert_eq!(batch_of(&alone), None);
+        assert_eq!(
+            open_in_batch(&store, "demo", "togaf-1", None)
+                .unwrap()
+                .len(),
+            2
+        );
+        // Claude cannot confirm a batch.
+        assert!(
+            apply(
+                &store,
+                &dir,
+                "POST",
+                "/projects/demo/prepared/batch/togaf-1/confirm",
+                serde_json::json!({"by": "Ada L"}),
+                crate::origin::Origin::Conversation,
+            )
+            .is_err()
+        );
+        let commits = || {
+            let out = std::process::Command::new("git")
+                .args(["log", "--oneline"])
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).lines().count()
+        };
+        let before = commits();
+        // The person confirms the batch with one click: every record's verdict, one commit.
+        let out = apply(
+            &store,
+            &dir,
+            "POST",
+            "/projects/demo/prepared/batch/togaf-1/confirm",
+            serde_json::json!({"by": "Ada L"}),
+            crate::origin::Origin::Monitor,
+        )
+        .unwrap();
+        assert_eq!(out["batch"], "togaf-1");
+        let results = out["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2, "{out}");
+        assert!(results.iter().all(|r| r["error"].is_null()), "{out}");
+        assert!(results.iter().all(|r| r["verdict"] == "confirmed"));
+        assert_eq!(
+            commits(),
+            before + 1,
+            "one board commit for the whole batch"
+        );
+        let state_of = |name: &str| {
+            let p = store.load("demo").unwrap();
+            p.feature(&code)
+                .unwrap()
+                .definition
+                .as_ref()
+                .unwrap()
+                .requirements[0]
+                .tests
+                .iter()
+                .find(|t| t.name == format!("manual: check {name}"))
+                .unwrap()
+                .state
+        };
+        assert_eq!(state_of("one"), TestState::Green);
+        assert_eq!(state_of("two"), TestState::Green);
+        assert_eq!(state_of("three"), TestState::Planned, "another batch");
+        assert_eq!(state_of("alone"), TestState::Planned, "prepared alone");
+        for id in [&one, &two] {
+            let a = resolution_of(&store, id);
+            assert_eq!(a.verdict, Answer::Confirmed);
+            assert_eq!(a.by, "Ada L");
+            assert!(
+                a.made.starts_with("PUT /projects/demo/features/"),
+                "{}",
+                a.made
+            );
+        }
+        let kept = crate::manual::results(&store, "demo", None).unwrap();
+        assert_eq!(kept.len(), 2);
+        assert!(
+            kept.iter()
+                .all(|k| k.origin == "monitor" && k.by == "Ada L")
+        );
+        // An answered batch is gone; confirming it again finds nothing.
+        assert!(
+            apply(
+                &store,
+                &dir,
+                "POST",
+                "/projects/demo/prepared/batch/togaf-1/confirm",
+                serde_json::json!({"by": "Ada L"}),
+                crate::origin::Origin::Monitor,
+            )
+            .is_err()
+        );
+        // The other batch is rejected at once: answers kept, nothing recorded.
+        let out = apply(
+            &store,
+            &dir,
+            "POST",
+            "/projects/demo/prepared/batch/agile-1/reject",
+            serde_json::json!({"by": "Ada L", "reason": "the run was not representative"}),
+            crate::origin::Origin::Monitor,
+        )
+        .unwrap();
+        assert_eq!(out["results"].as_array().unwrap().len(), 1);
+        let a = resolution_of(&store, &three);
+        assert_eq!(
+            (a.verdict, a.reason.as_str()),
+            (Answer::Rejected, "the run was not representative")
+        );
+        assert_eq!(state_of("three"), TestState::Planned);
+        // The record prepared alone still waits, for its own button.
+        let views = list(&store, "demo", &ListQuery::default(), None).unwrap();
+        assert_eq!(
+            views
+                .iter()
+                .map(|v| v.record.id.as_str())
+                .collect::<Vec<_>>(),
+            [alone.as_str()]
+        );
+    }
+
     /// DEF-040 R-2: a result the person states in the conversation is prepared as a manual-test
     /// record, refused to confirm from the conversation, and confirmed from the monitor; the test
     /// takes the state, and the kept result names the person, the origin and the record.

@@ -269,10 +269,7 @@ pub fn check(
             for e in errors {
                 lines.push(TruthLine {
                     verdict: Verdict::Mismatch,
-                    check: format!(
-                        "git-doctor {}",
-                        e["code"].as_str().unwrap_or("-")
-                    ),
+                    check: format!("git-doctor {}", e["code"].as_str().unwrap_or("-")),
                     board: e["code"].as_str().unwrap_or("the board").to_string(),
                     truth: e["message"].as_str().unwrap_or("").to_string(),
                 });
@@ -402,7 +399,12 @@ pub fn claim(
                 .find(|r| &r.version == release)
                 .map(|r| r.tag_commit)
                 .unwrap_or_default();
-            let mut line = ci_line(release, &tag_commit, &format!("ci {}", if *passed { "passed" } else { "failed" }), ci);
+            let mut line = ci_line(
+                release,
+                &tag_commit,
+                &format!("ci {}", if *passed { "passed" } else { "failed" }),
+                ci,
+            );
             if !*passed && line.verdict != Verdict::Unknown {
                 line.verdict = match line.verdict {
                     Verdict::Ok => Verdict::Mismatch,
@@ -492,7 +494,11 @@ fn item_code(store: &Store, project: &str, sel: &ItemSel) -> Option<String> {
 
 /// A runbook step's `expect.board`, judged from the board's files: `Ok(())` when it holds, else
 /// what the board says instead.
-pub fn board_claim(board: &Path, project: &str, claim: &BoardClaim) -> Result<std::result::Result<(), String>> {
+pub fn board_claim(
+    board: &Path,
+    project: &str,
+    claim: &BoardClaim,
+) -> Result<std::result::Result<(), String>> {
     let store = Store::new(board);
     match claim {
         BoardClaim::ProjectExists => Ok(match store.load(project) {
@@ -527,22 +533,23 @@ pub fn board_claim(board: &Path, project: &str, claim: &BoardClaim) -> Result<st
         BoardClaim::ItemTitleContains(t) => {
             let p = store.load(project)?;
             let t = t.to_ascii_lowercase();
-            Ok(if p
-                .features
-                .iter()
-                .any(|f| f.title.to_ascii_lowercase().contains(&t))
-            {
-                Ok(())
-            } else {
-                Err(format!(
-                    "no item's title contains \"{t}\" (items: {})",
-                    p.features
-                        .iter()
-                        .map(|f| format!("{} {}", f.code, f.title))
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                ))
-            })
+            Ok(
+                if p.features
+                    .iter()
+                    .any(|f| f.title.to_ascii_lowercase().contains(&t))
+                {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "no item's title contains \"{t}\" (items: {})",
+                        p.features
+                            .iter()
+                            .map(|f| format!("{} {}", f.code, f.title))
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    ))
+                },
+            )
         }
         BoardClaim::ItemStatus { item, status } => {
             let p = store.load(project)?;
@@ -595,7 +602,12 @@ mod tests {
     }
 
     /// A board with the project and one release in the given state.
-    fn board_with_release(run: &RunDirs, state: ReleaseState, stage: &str, tag_commit: &str) -> Store {
+    fn board_with_release(
+        run: &RunDirs,
+        state: ReleaseState,
+        stage: &str,
+        tag_commit: &str,
+    ) -> Store {
         let store = Store::new(run.board());
         if store.load("shop").is_err() {
             store
@@ -639,7 +651,12 @@ mod tests {
         assert_eq!(ci.verdict, Verdict::Mismatch, "{ci}");
         assert!(ci.truth.contains("no run is recorded"), "{ci}");
         let written = std::fs::read_to_string(run.raw().join("truth.txt")).unwrap();
-        assert!(written.lines().any(|l| l.starts_with("MISMATCH tag v0.1.0 | board: ")), "{written}");
+        assert!(
+            written
+                .lines()
+                .any(|l| l.starts_with("MISMATCH tag v0.1.0 | board: ")),
+            "{written}"
+        );
         let parsed: Vec<TruthLine> = written.lines().filter_map(TruthLine::parse).collect();
         assert_eq!(parsed.len(), written.lines().count());
         assert_eq!(&parsed[0], tag);
@@ -654,7 +671,15 @@ mod tests {
         git(&["init", "-q", "-b", "main"]);
         std::fs::write(project.join("a.txt"), "a\n").unwrap();
         git(&["add", "."]);
-        git(&["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "a"]);
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "commit",
+            "-qm",
+            "a",
+        ]);
         git(&["tag", "v0.1.0"]);
         git(&["remote", "add", "origin", &remotes.code]);
         crate::walkthrough::guard::git_push(&project, "origin", "main").unwrap();
@@ -679,11 +704,39 @@ mod tests {
         assert!(lines.iter().any(|l| l.check == "doctor"), "{lines:?}");
         assert!(lines.iter().any(|l| l.check == "git-doctor"), "{lines:?}");
         // The step claims.
-        let t = claim(&run, "shop", &remotes, None, &cli(), &TruthClaim::Tag { release: "v0.1.0".into() });
+        let t = claim(
+            &run,
+            "shop",
+            &remotes,
+            None,
+            &cli(),
+            &TruthClaim::Tag {
+                release: "v0.1.0".into(),
+            },
+        );
         assert_eq!(t.verdict, Verdict::Ok, "{t}");
-        let t = claim(&run, "shop", &remotes, None, &cli(), &TruthClaim::Tag { release: "v9.9.9".into() });
+        let t = claim(
+            &run,
+            "shop",
+            &remotes,
+            None,
+            &cli(),
+            &TruthClaim::Tag {
+                release: "v9.9.9".into(),
+            },
+        );
         assert_eq!(t.verdict, Verdict::Mismatch, "{t}");
-        let t = claim(&run, "shop", &remotes, Some(&passed), &cli(), &TruthClaim::Ci { release: "v0.1.0".into(), passed: true });
+        let t = claim(
+            &run,
+            "shop",
+            &remotes,
+            Some(&passed),
+            &cli(),
+            &TruthClaim::Ci {
+                release: "v0.1.0".into(),
+                passed: true,
+            },
+        );
         assert_eq!(t.verdict, Verdict::Ok, "{t}");
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -695,39 +748,91 @@ mod tests {
         let (run, base) = scratch_run("claims");
         let store = board_with_release(&run, ReleaseState::Planned, "candidate", "");
         let board = run.board();
-        assert_eq!(board_claim(&board, "shop", &BoardClaim::ProjectExists).unwrap(), Ok(()));
-        assert!(board_claim(&board, "other", &BoardClaim::ProjectExists).unwrap().is_err());
         assert_eq!(
-            board_claim(&board, "shop", &BoardClaim::Release { version: "v0.1.0".into(), stage: "candidate".into() }).unwrap(),
+            board_claim(&board, "shop", &BoardClaim::ProjectExists).unwrap(),
             Ok(())
         );
-        let why = board_claim(&board, "shop", &BoardClaim::Release { version: "v0.1.0".into(), stage: "main".into() })
-            .unwrap()
-            .unwrap_err();
+        assert!(
+            board_claim(&board, "other", &BoardClaim::ProjectExists)
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(
+            board_claim(
+                &board,
+                "shop",
+                &BoardClaim::Release {
+                    version: "v0.1.0".into(),
+                    stage: "candidate".into()
+                }
+            )
+            .unwrap(),
+            Ok(())
+        );
+        let why = board_claim(
+            &board,
+            "shop",
+            &BoardClaim::Release {
+                version: "v0.1.0".into(),
+                stage: "main".into(),
+            },
+        )
+        .unwrap()
+        .unwrap_err();
         assert!(why.contains("at stage candidate"), "{why}");
-        let why = board_claim(&board, "shop", &BoardClaim::ItemTitleContains("basket".into()))
-            .unwrap()
-            .unwrap_err();
+        let why = board_claim(
+            &board,
+            "shop",
+            &BoardClaim::ItemTitleContains("basket".into()),
+        )
+        .unwrap()
+        .unwrap_err();
         assert!(why.contains("no item's title"), "{why}");
-        store.add_milestone("shop", "M", "", vec![], Some("M".into())).unwrap();
-        let f = store.add_feature("shop", "Saved basket", "spec", "M", None).unwrap();
+        store
+            .add_milestone("shop", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let f = store
+            .add_feature("shop", "Saved basket", "spec", "M", None)
+            .unwrap();
         assert_eq!(
-            board_claim(&board, "shop", &BoardClaim::ItemTitleContains("BASKET".into())).unwrap(),
+            board_claim(
+                &board,
+                "shop",
+                &BoardClaim::ItemTitleContains("BASKET".into())
+            )
+            .unwrap(),
             Ok(())
         );
         assert_eq!(
-            board_claim(&board, "shop", &BoardClaim::ItemStatus { item: ItemSel::Code(f.code.clone()), status: f.status.clone() }).unwrap(),
+            board_claim(
+                &board,
+                "shop",
+                &BoardClaim::ItemStatus {
+                    item: ItemSel::Code(f.code.clone()),
+                    status: f.status.clone()
+                }
+            )
+            .unwrap(),
             Ok(())
         );
-        let why = board_claim(&board, "shop", &BoardClaim::ItemStatus { item: ItemSel::TitleContains("basket".into()), status: "Migration".into() })
-            .unwrap()
-            .unwrap_err();
+        let why = board_claim(
+            &board,
+            "shop",
+            &BoardClaim::ItemStatus {
+                item: ItemSel::TitleContains("basket".into()),
+                status: "Migration".into(),
+            },
+        )
+        .unwrap()
+        .unwrap_err();
         assert!(why.contains("is at"), "{why}");
         let why = board_claim(&board, "shop", &BoardClaim::ReleasePrepareConfigured)
             .unwrap()
             .unwrap_err();
         assert!(why.contains("not configured"), "{why}");
-        let why = board_claim(&board, "shop", &BoardClaim::SprintActive).unwrap().unwrap_err();
+        let why = board_claim(&board, "shop", &BoardClaim::SprintActive)
+            .unwrap()
+            .unwrap_err();
         assert!(why.contains("no sprint is running"), "{why}");
         let _ = std::fs::remove_dir_all(&base);
     }

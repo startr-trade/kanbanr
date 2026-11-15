@@ -134,10 +134,17 @@ pub fn create(run: &RunDirs, prefix: Option<&str>, gh_program: &Path) -> Result<
     Ok(remotes)
 }
 
+/// What `clean` did: the repositories deleted, and those left with the reason each.
+#[derive(Debug, Default)]
+pub struct Cleaned {
+    pub deleted: Vec<Created>,
+    pub left: Vec<(Created, String)>,
+}
+
 /// Delete every repository the runs created, with `gh repo delete --yes`. Those it could not
 /// delete (no scope on the token, already gone) are returned for the person to remove; the file is
 /// rewritten with only those.
-pub fn clean(runs_dir: &Path, gh_program: &Path) -> Result<(Vec<Created>, Vec<(Created, String)>)> {
+pub fn clean(runs_dir: &Path, gh_program: &Path) -> Result<Cleaned> {
     let mut deleted = Vec::new();
     let mut left = Vec::new();
     for c in list(runs_dir) {
@@ -153,7 +160,7 @@ pub fn clean(runs_dir: &Path, gh_program: &Path) -> Result<(Vec<Created>, Vec<(C
             &left.iter().map(|(c, _)| c.clone()).collect::<Vec<_>>(),
         )?;
     }
-    Ok((deleted, left))
+    Ok(Cleaned { deleted, left })
 }
 
 #[cfg(test)]
@@ -189,10 +196,19 @@ mod tests {
             );
         }
         assert_eq!(RemotesEnv::read(&run).unwrap(), remotes);
-        assert_eq!(allowed_remotes(&run), [remotes.code.clone(), remotes.board.clone()]);
-        assert!(list(&base.join("runs")).is_empty(), "nothing was created on a server");
+        assert_eq!(
+            allowed_remotes(&run),
+            [remotes.code.clone(), remotes.board.clone()]
+        );
+        assert!(
+            list(&base.join("runs")).is_empty(),
+            "nothing was created on a server"
+        );
         // A second call keeps them.
-        assert_eq!(create(&run, None, Path::new("gh-that-is-not-run")).unwrap(), remotes);
+        assert_eq!(
+            create(&run, None, Path::new("gh-that-is-not-run")).unwrap(),
+            remotes
+        );
         // A push to the run's own remote lands.
         let project = run.project();
         kanbanr_core::coderepo::git(&project, &["init", "-q", "-b", "main"]).unwrap();
@@ -200,12 +216,21 @@ mod tests {
         kanbanr_core::coderepo::git(&project, &["add", "."]).unwrap();
         kanbanr_core::coderepo::git(
             &project,
-            &["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "a"],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-qm",
+                "a",
+            ],
         )
         .unwrap();
         kanbanr_core::coderepo::git(&project, &["remote", "add", "origin", &remotes.code]).unwrap();
         crate::walkthrough::guard::git_push(&project, "origin", "main").unwrap();
-        let refs = kanbanr_core::coderepo::git(Path::new(&remotes.code), &["branch", "--list"]).unwrap();
+        let refs =
+            kanbanr_core::coderepo::git(Path::new(&remotes.code), &["branch", "--list"]).unwrap();
         assert!(refs.contains("main"), "{refs}");
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -245,9 +270,9 @@ mod tests {
         assert_eq!(created[0].which, "code");
         assert_eq!(created[1].which, "board");
         assert_eq!(created[0].run, run.name());
-        let (deleted, left) = clean(&runs_dir, &fake).unwrap();
-        assert_eq!(deleted.len(), 2);
-        assert!(left.is_empty());
+        let cleaned = clean(&runs_dir, &fake).unwrap();
+        assert_eq!(cleaned.deleted.len(), 2);
+        assert!(cleaned.left.is_empty());
         assert!(list(&runs_dir).is_empty());
         let calls = std::fs::read_to_string(&log).unwrap();
         assert_eq!(calls.matches("repo delete").count(), 2, "{calls}");

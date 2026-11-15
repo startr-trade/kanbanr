@@ -86,7 +86,8 @@ impl RunDirs {
             self.raw(),
             self.results(),
         ] {
-            std::fs::create_dir_all(&d).with_context(|| format!("could not make {}", d.display()))?;
+            std::fs::create_dir_all(&d)
+                .with_context(|| format!("could not make {}", d.display()))?;
         }
         Ok(())
     }
@@ -159,19 +160,6 @@ pub struct Env {
     pub model: String,
     /// The `kanbanr` under test, for its version line: this very program in a run.
     pub kanbanr: PathBuf,
-}
-
-impl Env {
-    /// From the process environment: the fence, `claude` on PATH, this program.
-    pub fn from_process(target_board: Option<PathBuf>, model: &str) -> Env {
-        Env {
-            fence: project::fence(),
-            target_board,
-            claude: PathBuf::from("claude"),
-            model: model.to_string(),
-            kanbanr: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("kanbanr")),
-        }
-    }
 }
 
 /// `git push <remote> <refspec>` in `repo`, run directly: core's repository wrapper refuses every
@@ -339,7 +327,10 @@ pub fn remotes_env_value(allowed: &[String]) -> String {
 fn remote_key(remote: &str, cwd: &Path) -> String {
     let r = remote.trim();
     if r.contains("://") || (r.contains('@') && r.contains(':')) {
-        return r.trim_end_matches('/').trim_end_matches(".git").to_ascii_lowercase();
+        return r
+            .trim_end_matches('/')
+            .trim_end_matches(".git")
+            .to_ascii_lowercase();
     }
     let p = if Path::new(r).is_absolute() {
         PathBuf::from(r)
@@ -462,11 +453,11 @@ pub fn preflight(run: &RunDirs, env: &Env) -> Result<SetupLog> {
     log.push("claude", version_line(&env.claude, &["--version"]));
     log.push("model", env.model.clone());
     let rules = run.claude_config().join("CLAUDE.md");
-    log.push("rules_sha256 CLAUDE.md", sha256_file(&rules));
+    log.push("rules_sha256(CLAUDE.md)", sha256_file(&rules));
     if let Ok(text) = std::fs::read_to_string(&rules) {
         for import in rule_imports(&text) {
             log.push(
-                &format!("rules_sha256 {import}"),
+                &format!("rules_sha256({import})"),
                 sha256_file(&run.claude_config().join(&import)),
             );
         }
@@ -558,9 +549,12 @@ pub(crate) mod tests {
         // A fence that does not hold the run.
         let elsewhere = base.join("elsewhere");
         std::fs::create_dir_all(&elsewhere).unwrap();
-        let why = preflight(&run, &env(Some(project::normalize(&elsewhere)), None, claude.clone()))
-            .unwrap_err()
-            .to_string();
+        let why = preflight(
+            &run,
+            &env(Some(project::normalize(&elsewhere)), None, claude.clone()),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(
             why.contains("outside the fence") && why.contains("outside KANBANR_BOARD_FENCE"),
             "{why}"
@@ -579,7 +573,12 @@ pub(crate) mod tests {
         kanbanr_core::coderepo::git(&project_dir, &["init", "-q", "-b", "main"]).unwrap();
         kanbanr_core::coderepo::git(
             &project_dir,
-            &["remote", "add", "origin", "https://example.invalid/someone/shop.git"],
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://example.invalid/someone/shop.git",
+            ],
         )
         .unwrap();
         let why = preflight(&run, &env(Some(fence.clone()), None, claude.clone()))
@@ -611,18 +610,24 @@ pub(crate) mod tests {
         let log = preflight(&run, &env(Some(fence), Some(target.clone()), claude)).unwrap();
         let kanbanr = log.get("kanbanr").unwrap();
         assert!(kanbanr.starts_with("kanbanr "), "{kanbanr}");
-        assert!(kanbanr.contains("built"), "name, commit and date: {kanbanr}");
+        assert!(
+            kanbanr.contains("built"),
+            "name, commit and date: {kanbanr}"
+        );
         assert_eq!(log.get("claude"), Some("9.9.9 (Claude Code, fake)"));
         assert_eq!(log.get("model"), Some("sonnet"));
         let skill = log.get("skill_sha256").unwrap();
         assert_eq!(skill.len(), 64);
-        assert_eq!(skill, &sha256_tree(&run.claude_config().join("skills/kanbanr")));
         assert_eq!(
-            log.get("rules_sha256 CLAUDE.md"),
+            skill,
+            &sha256_tree(&run.claude_config().join("skills/kanbanr"))
+        );
+        assert_eq!(
+            log.get("rules_sha256(CLAUDE.md)"),
             Some(sha256_file(&run.claude_config().join("CLAUDE.md")).as_str())
         );
         assert_eq!(
-            log.get("rules_sha256 RTK.md"),
+            log.get("rules_sha256(RTK.md)"),
             Some(sha256_file(&run.claude_config().join("RTK.md")).as_str())
         );
         let head = kanbanr_core::coderepo::git(&target, &["rev-parse", "HEAD"]).unwrap();
@@ -633,10 +638,20 @@ pub(crate) mod tests {
         assert_eq!(path, run.setup_log());
         assert_eq!(SetupLog::read(&run).unwrap(), log);
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.lines().any(|l| l.starts_with("model sonnet")), "{text}");
+        assert!(
+            text.lines().any(|l| l.starts_with("model sonnet")),
+            "{text}"
+        );
         // The skill checksum changes with the skill.
-        std::fs::write(run.claude_config().join("skills/kanbanr/SKILL.md"), "# changed\n").unwrap();
-        assert_ne!(sha256_tree(&run.claude_config().join("skills/kanbanr")), *skill);
+        std::fs::write(
+            run.claude_config().join("skills/kanbanr/SKILL.md"),
+            "# changed\n",
+        )
+        .unwrap();
+        assert_ne!(
+            sha256_tree(&run.claude_config().join("skills/kanbanr")),
+            *skill
+        );
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -651,15 +666,31 @@ pub(crate) mod tests {
         assert_eq!(remotes_env_value(&allowed), allowed.join(";"));
         let project_dir = run.project();
         kanbanr_core::coderepo::git(&project_dir, &["init", "-q", "-b", "main"]).unwrap();
-        kanbanr_core::coderepo::git(&project_dir, &["remote", "add", "origin", &allowed[0]]).unwrap();
+        kanbanr_core::coderepo::git(&project_dir, &["remote", "add", "origin", &allowed[0]])
+            .unwrap();
         kanbanr_core::coderepo::git(
             &project_dir,
-            &["remote", "add", "public", "https://example.invalid/someone/shop.git"],
+            &[
+                "remote",
+                "add",
+                "public",
+                "https://example.invalid/someone/shop.git",
+            ],
         )
         .unwrap();
-        assert_eq!(push_refusal("git push origin main", &project_dir, &allowed), None);
+        assert_eq!(
+            push_refusal("git push origin main", &project_dir, &allowed),
+            None
+        );
         assert_eq!(push_refusal("git push", &project_dir, &allowed), None);
-        assert_eq!(push_refusal("git status && git push -u origin main", &project_dir, &allowed), None);
+        assert_eq!(
+            push_refusal(
+                "git status && git push -u origin main",
+                &project_dir,
+                &allowed
+            ),
+            None
+        );
         let direct = format!("git push {} v0.1.0", allowed[0]);
         assert_eq!(push_refusal(&direct, &project_dir, &allowed), None);
         let why = push_refusal("git push public main", &project_dir, &allowed).unwrap();
@@ -678,7 +709,10 @@ pub(crate) mod tests {
         // From another folder, `-C` names where the push runs.
         let cmd = format!("git -C {} push public main", project_dir.display());
         assert!(push_refusal(&cmd, &base, &allowed).is_some());
-        assert_eq!(push_refusal("git log --oneline", &project_dir, &allowed), None);
+        assert_eq!(
+            push_refusal("git log --oneline", &project_dir, &allowed),
+            None
+        );
         assert_eq!(push_refusal("kanbanr board", &project_dir, &allowed), None);
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -693,7 +727,9 @@ pub(crate) mod tests {
         assert_eq!(r.board, "/tmp/x/board.git");
         assert!(RemotesEnv::parse("CODE_REMOTE=x\n").is_err());
         assert_eq!(
-            rule_imports("@RTK.md\n@rust-ci-practices.md extra words\nnot an import\n  @indented.md\n"),
+            rule_imports(
+                "@RTK.md\n@rust-ci-practices.md extra words\nnot an import\n  @indented.md\n"
+            ),
             ["RTK.md", "rust-ci-practices.md", "indented.md"]
         );
     }

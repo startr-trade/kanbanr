@@ -3,7 +3,6 @@
 //! second derive over the same `raw/` is byte for byte the first. The confusion and class columns
 //! of SPK-002 need a person's judgement and are not derived here.
 
-use super::capture::Manifest;
 use super::guard::{RunDirs, SetupLog};
 use super::truth::{TruthLine, Verdict};
 use anyhow::{Context, Result};
@@ -114,7 +113,12 @@ fn decisions(raw: &Path, project: &str) -> Result<Vec<DecisionRow>> {
                     .get("id")
                     .is_some_and(|id| id.contains(subject) || !id.is_empty())
             })
-            .map(|r| format!("Claude (prepared {})", r.get("id").cloned().unwrap_or_default()))
+            .map(|r| {
+                format!(
+                    "Claude (prepared {})",
+                    r.get("id").cloned().unwrap_or_default()
+                )
+            })
             .unwrap_or_else(|| "runbook".to_string())
     };
     let where_taken = |origin: &str, route_part: &str| -> String {
@@ -140,15 +144,23 @@ fn decisions(raw: &Path, project: &str) -> Result<Vec<DecisionRow>> {
     for f in &p.features {
         let Some(def) = &f.definition else { continue };
         for a in &def.approvals {
+            // The event says `approved`, `withdrawn` or `ratified`; the row names the decision.
+            let kind = match a.verdict.as_str() {
+                "approved" => "approve",
+                "withdrawn" => "unapprove",
+                "ratified" => "ratify",
+                other => other,
+            }
+            .to_string();
             rows.push(DecisionRow {
                 at: a.at.clone(),
-                kind: a.verdict.clone(),
+                kind: kind.clone(),
                 subject: f.code.clone(),
                 name: String::new(),
                 by: a.by.clone(),
                 origin: origin_or_unknown(&a.origin),
-                asked_by: asked_by(&a.verdict, &f.code),
-                where_taken: where_taken(&a.origin, &format!("/features/{}/{}", f.code, a.verdict)),
+                asked_by: asked_by(&kind, &f.code),
+                where_taken: where_taken(&a.origin, &format!("/features/{}/{}", f.code, kind)),
                 truth: "-".into(),
             });
         }
@@ -161,7 +173,10 @@ fn decisions(raw: &Path, project: &str) -> Result<Vec<DecisionRow>> {
                 by: s.by.clone(),
                 origin: origin_or_unknown(&s.origin),
                 asked_by: asked_by("signoff", &f.code),
-                where_taken: where_taken(&s.origin, &format!("/features/{}/signoff/{}", f.code, s.id)),
+                where_taken: where_taken(
+                    &s.origin,
+                    &format!("/features/{}/signoff/{}", f.code, s.id),
+                ),
                 truth: "-".into(),
             });
         }
@@ -332,13 +347,30 @@ fn metrics_md(raw: &Path, rows: &[DecisionRow], project: &str) -> String {
             .unwrap_or_default();
         *per_policy.entry(policy).or_default() += 1;
     }
-    let by_source = |s: &str| questions.iter().filter(|q| q.get("source").map(String::as_str) == Some(s)).count();
-    let mismatches = truth.iter().filter(|l| l.verdict == Verdict::Mismatch).count();
-    let unknown = truth.iter().filter(|l| l.verdict == Verdict::Unknown).count();
-    let finding_count = findings.lines().filter(|l| l.trim_start().starts_with("- ")).count();
+    let by_source = |s: &str| {
+        questions
+            .iter()
+            .filter(|q| q.get("source").map(String::as_str) == Some(s))
+            .count()
+    };
+    let mismatches = truth
+        .iter()
+        .filter(|l| l.verdict == Verdict::Mismatch)
+        .count();
+    let unknown = truth
+        .iter()
+        .filter(|l| l.verdict == Verdict::Unknown)
+        .count();
+    let finding_count = findings
+        .lines()
+        .filter(|l| l.trim_start().starts_with("- "))
+        .count();
     let edited = prepared
         .iter()
-        .filter(|r| r.get("edited").is_some_and(|e| e != "none" && !e.is_empty()))
+        .filter(|r| {
+            r.get("edited")
+                .is_some_and(|e| e != "none" && !e.is_empty())
+        })
         .count();
     let wall = match (setup_log.get("started"), setup_log.get("ended")) {
         (Some(a), Some(b)) => match seconds_between(a, b) {
@@ -352,19 +384,35 @@ fn metrics_md(raw: &Path, rows: &[DecisionRow], project: &str) -> String {
     md.push_str("Derived from `raw/` alone; a second derive gives this file byte for byte.\n\n");
     md.push_str("## The run\n\n");
     md.push_str("| Measure | Value |\n|---|---|\n");
-    md.push_str(&format!("| kanbanr | {} |\n", setup_log.get("kanbanr").unwrap_or("unknown")));
-    md.push_str(&format!("| Claude Code | {} |\n", setup_log.get("claude").unwrap_or("unknown")));
-    md.push_str(&format!("| model | {} |\n", setup_log.get("model").unwrap_or("unknown")));
+    md.push_str(&format!(
+        "| kanbanr | {} |\n",
+        setup_log.get("kanbanr").unwrap_or("unknown")
+    ));
+    md.push_str(&format!(
+        "| Claude Code | {} |\n",
+        setup_log.get("claude").unwrap_or("unknown")
+    ));
+    md.push_str(&format!(
+        "| model | {} |\n",
+        setup_log.get("model").unwrap_or("unknown")
+    ));
     md.push_str(&format!("| user turns | {turns} |\n"));
-    md.push_str(&format!("| cost (USD, cumulative from the last result line) | {cost:.2} |\n"));
+    md.push_str(&format!(
+        "| cost (USD, cumulative from the last result line) | {cost:.2} |\n"
+    ));
     md.push_str(&format!("| session stops (error results) | {stops} |\n"));
-    md.push_str(&format!("| wall time (setup.log started to ended) | {wall} |\n"));
+    md.push_str(&format!(
+        "| wall time (setup.log started to ended) | {wall} |\n"
+    ));
     md.push_str(&format!("| pushes | {} |\n", pushes.len()));
     md.push_str(&format!("| findings | {finding_count} |\n"));
     md.push_str(&format!("| truth mismatches | {mismatches} |\n"));
     md.push_str(&format!("| truth unknown | {unknown} |\n\n"));
     md.push_str("## Decisions\n\n");
-    md.push_str(&format!("{} decision(s) on the board copy.\n\n", rows.len()));
+    md.push_str(&format!(
+        "{} decision(s) on the board copy.\n\n",
+        rows.len()
+    ));
     md.push_str("| Item or release | Decisions |\n|---|---|\n");
     for (k, n) in &per_item {
         md.push_str(&format!("| {k} | {n} |\n"));
@@ -457,13 +505,6 @@ pub fn tables(run: &RunDirs) -> Result<Derived> {
     Ok(d)
 }
 
-/// The manifest the fixture or a run carries, for a derive that wants to say what it read.
-pub fn manifest_of_run(run: &RunDirs) -> Option<Manifest> {
-    std::fs::read_to_string(run.raw().join(super::capture::MANIFEST))
-        .ok()
-        .map(|t| Manifest::parse(&t))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,12 +552,27 @@ mod tests {
             "results/metrics.md differs from the derive; regenerate it if the change is meant"
         );
         // What the rows say.
-        assert!(first.decisions_tsv.contains("\tapprove\tFEAT-001\t"), "{}", first.decisions_tsv);
-        assert!(first.decisions_tsv.contains("\tsignoff\tFEAT-001\tdesign-review\t"));
+        assert!(
+            first.decisions_tsv.contains("\tapprove\tFEAT-001\t"),
+            "{}",
+            first.decisions_tsv
+        );
+        assert!(
+            first
+                .decisions_tsv
+                .contains("\tsignoff\tFEAT-001\tdesign-review\t")
+        );
         assert!(first.decisions_tsv.contains("\tcut\tv0.1.0\ttag\t"));
         assert!(first.decisions_tsv.contains("\tgate-result\t"));
-        assert!(first.decisions_tsv.contains("Claude (prepared "), "a confirmed record names Claude as the asker");
-        assert!(first.metrics_md.contains("| user turns | 3 |"), "{}", first.metrics_md);
+        assert!(
+            first.decisions_tsv.contains("Claude (prepared "),
+            "a confirmed record names Claude as the asker"
+        );
+        assert!(
+            first.metrics_md.contains("| user turns | 3 |"),
+            "{}",
+            first.metrics_md
+        );
         assert!(first.metrics_md.contains("| runbook | 2 |"));
         assert!(first.metrics_md.contains("| truth mismatches | 1 |"));
         // Writing into the run folder lands both files under results/.

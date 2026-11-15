@@ -95,9 +95,7 @@ fn copy_tree(from: &Path, to: &Path) -> Result<()> {
 
 /// The slug Claude Code files a project's sessions under: the path with every `/` as `-`.
 pub fn session_slug(project: &Path) -> String {
-    project
-        .to_string_lossy()
-        .replace(['/', '\\'], "-")
+    project.to_string_lossy().replace(['/', '\\'], "-")
 }
 
 /// The `git ls-remote` listings of a remote: all refs, then tags only. A remote that cannot be
@@ -259,7 +257,15 @@ mod tests {
         git(&project, &["add", "."]);
         git(
             &project,
-            &["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "shop"],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "commit",
+                "-qm",
+                "shop",
+            ],
         );
         git(&project, &["tag", "v0.1.0"]);
         git(&project, &["remote", "add", "origin", &remotes.code]);
@@ -307,14 +313,23 @@ mod tests {
             "findings.md",
             "screenshots/1.1-before.png",
         ] {
-            assert!(manifest.has(wanted), "{wanted} is not in the manifest: {manifest:?}");
+            assert!(
+                manifest.has(wanted),
+                "{wanted} is not in the manifest: {manifest:?}"
+            );
         }
         assert!(!manifest.has(MANIFEST), "the manifest never lists itself");
-        assert!(!raw.join("board/.git").exists(), "the board copy has no .git");
+        assert!(
+            !raw.join("board/.git").exists(),
+            "the board copy has no .git"
+        );
         let tags = std::fs::read_to_string(raw.join("remote-tags.txt")).unwrap();
         assert!(tags.contains("refs/tags/v0.1.0"), "{tags}");
         let text = std::fs::read_to_string(raw.join(MANIFEST)).unwrap();
-        assert!(text.lines().all(|l| l.len() > 66 && &l[64..66] == "  "), "{text}");
+        assert!(
+            text.lines().all(|l| l.len() > 66 && &l[64..66] == "  "),
+            "{text}"
+        );
         assert_eq!(Manifest::parse(&text), manifest);
         verify(&run).unwrap();
         // A changed file and an added file are both named.
@@ -324,7 +339,14 @@ mod tests {
         assert!(why.contains("truth.txt: changed"), "{why}");
         assert!(why.contains("extra.txt: not in the manifest"), "{why}");
         // The bundle holds the tag: the capture is the repository, not a listing.
-        let heads = git(&project, &["bundle", "list-heads", &raw.join("code.bundle").display().to_string()]);
+        let heads = git(
+            &project,
+            &[
+                "bundle",
+                "list-heads",
+                &raw.join("code.bundle").display().to_string(),
+            ],
+        );
         assert!(heads.contains("refs/tags/v0.1.0"), "{heads}");
         assert!(!raw.join(FAILED).exists());
         let _ = std::fs::remove_dir_all(&base);

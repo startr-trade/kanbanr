@@ -335,7 +335,8 @@ pub fn run_hook(stdin: &str) -> Result<Option<String>> {
 
 /// The error a hook prints when it cannot answer: never a stop for the run, the tool goes on.
 pub fn hook_error(e: &anyhow::Error) -> String {
-    json!({"systemMessage": format!("kanbanr walkthrough answer could not answer: {e}")}).to_string()
+    json!({"systemMessage": format!("kanbanr walkthrough answer could not answer: {e}")})
+        .to_string()
 }
 
 #[cfg(test)]
@@ -387,21 +388,30 @@ mod tests {
         let p = Policy::new(&shared, Some("a"))
             .with_vars(vars)
             .answer(&question("Which remote?", &[], Source::Text));
-        assert_eq!((p.policy, p.pick.as_str()), ("runbook", "Its remote is /tmp/x/board.git."));
+        assert_eq!(
+            (p.policy, p.pick.as_str()),
+            ("runbook", "Its remote is /tmp/x/board.git.")
+        );
         // Another step's rule answers too, when the current step has none.
         let p = Policy::new(&rb, Some("5.8")).answer(&question(
             "What is the project for?",
             &["A shop", "A blog"],
             Source::Dialog,
         ));
-        assert_eq!((p.policy, p.pick.as_str()), ("runbook", "A small web shop."));
+        assert_eq!(
+            (p.policy, p.pick.as_str()),
+            ("runbook", "A small web shop.")
+        );
         // No rule: the recommended option, wherever it stands.
         let p = policy.answer(&question(
             "Which colour should the basket page use?",
             &["Red", "Blue (Recommended)"],
             Source::Dialog,
         ));
-        assert_eq!((p.policy, p.pick.as_str()), ("recommended", "Blue (Recommended)"));
+        assert_eq!(
+            (p.policy, p.pick.as_str()),
+            ("recommended", "Blue (Recommended)")
+        );
         // No recommendation: the first.
         let p = policy.answer(&question(
             "Which colour should the basket page use?",
@@ -419,7 +429,11 @@ mod tests {
         let p = policy.answer(&multi);
         assert_eq!(p.pick, "Lint (Recommended), Tests (Recommended)");
         // Free text with no rule.
-        let p = policy.answer(&question("What should the shop be called?", &[], Source::Text));
+        let p = policy.answer(&question(
+            "What should the shop be called?",
+            &[],
+            Source::Text,
+        ));
         assert_eq!((p.policy, p.pick.as_str()), ("free-text", FREE_TEXT_PICK));
     }
 
@@ -455,7 +469,10 @@ mod tests {
         log(&run, "1.1", &dialog, &b).unwrap();
         let tsv = std::fs::read_to_string(run.raw().join("questions.tsv")).unwrap();
         let lines: Vec<&str> = tsv.lines().collect();
-        assert_eq!(lines[0], "time\tstep\tsource\tquestion\toptions\tpick\tpolicy");
+        assert_eq!(
+            lines[0],
+            "time\tstep\tsource\tquestion\toptions\tpick\tpolicy"
+        );
         assert_eq!(lines.len(), 3);
         let row: Vec<&str> = lines[1].split('\t').collect();
         assert_eq!(row[1], "1.1");
@@ -483,7 +500,13 @@ mod tests {
             "../board, with the board remote from remotes.env"
         );
         assert_eq!(answers["Which colour?"], "Blue (Recommended)");
-        assert_eq!(out["hookSpecificOutput"]["updatedInput"]["questions"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            out["hookSpecificOutput"]["updatedInput"]["questions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
         assert_eq!(picked.len(), 2);
         assert_eq!(picked[0].0.source, Source::Dialog);
         // Not a question: nothing to say.

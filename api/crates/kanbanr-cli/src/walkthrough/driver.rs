@@ -335,13 +335,8 @@ impl Session {
         }
     }
 
-    /// Close stdin and wait for the process to end; kill it if it does not within 15 s.
-    pub fn close(mut self) -> Result<()> {
-        self.end();
-        Ok(())
-    }
-
-    /// The same as [`Session::close`], on a session that stays owned: nothing more is said to it.
+    /// Close stdin and wait for the process to end; kill it if it does not within 15 s. Nothing
+    /// more is said to the session afterwards.
     pub fn end(&mut self) {
         drop(self.stdin.take());
         let deadline = Instant::now() + Duration::from_secs(15);
@@ -415,20 +410,16 @@ fn assistant_text(ev: &Value) -> Option<String> {
 /// stripped. None for any other line.
 fn option_label(line: &str) -> Option<String> {
     let l = line.trim();
-    let rest = if let Some((n, rest)) = l.split_once(['.', ')'])
-        && !n.is_empty()
-        && n.chars().all(|c| c.is_ascii_digit())
-    {
-        rest
-    } else if let Some(rest) = l
-        .strip_prefix("- ")
-        .or_else(|| l.strip_prefix("* "))
-        .or_else(|| l.strip_prefix("• "))
-    {
-        rest
-    } else {
-        return None;
+    let numbered = l
+        .split_once(['.', ')'])
+        .filter(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+        .map(|(_, rest)| rest);
+    let bulleted = || {
+        l.strip_prefix("- ")
+            .or_else(|| l.strip_prefix("* "))
+            .or_else(|| l.strip_prefix("• "))
     };
+    let rest = numbered.or_else(bulleted)?;
     let label = rest.trim().replace("**", "");
     let label = label.trim().trim_end_matches('.').trim().to_string();
     (!label.is_empty()).then_some(label)
@@ -564,7 +555,7 @@ pub(crate) mod tests {
         );
         assert!(t2.cost_usd.abs() < 1e-9, "{t2:?}");
         assert_eq!(s.turns(), 2);
-        s.close().unwrap();
+        s.end();
         let transcript = std::fs::read_to_string(dir.join("raw/transcripts/stream.jsonl")).unwrap();
         assert_eq!(
             transcript
@@ -601,7 +592,7 @@ pub(crate) mod tests {
         let third = s.say("anything").unwrap();
         assert_eq!(third.stopped, Some(StopReason::Budget));
         assert_eq!(third.lines, 0, "nothing more is sent to a stopped session");
-        s.close().unwrap();
+        s.end();
         let transcript = std::fs::read_to_string(dir.join("raw/transcripts/stream.jsonl")).unwrap();
         assert!(transcript.contains("error_max_budget_usd"));
         let _ = std::fs::remove_dir_all(&dir);

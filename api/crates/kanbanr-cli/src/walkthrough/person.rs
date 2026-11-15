@@ -24,8 +24,14 @@ pub const WRITE_ROUTES: &[(&str, &str)] = &[
     ("POST", "/projects/{p}/features/{code}/unapprove"),
     ("POST", "/projects/{p}/features/{code}/ratify"),
     ("POST", "/projects/{p}/features/{code}/signoff/{name}"),
-    ("POST", "/projects/{p}/features/{code}/signoff/{name}/withdraw"),
-    ("PUT", "/projects/{p}/features/{code}/tests/{requirement}/{test}"),
+    (
+        "POST",
+        "/projects/{p}/features/{code}/signoff/{name}/withdraw",
+    ),
+    (
+        "PUT",
+        "/projects/{p}/features/{code}/tests/{requirement}/{test}",
+    ),
     ("POST", "/projects/{p}/adrs/{adr}/accept"),
     ("POST", "/projects/{p}/adrs/{adr}/reject"),
     ("POST", "/projects/{p}/releases"),
@@ -135,8 +141,14 @@ impl Monitor {
                 .open(&log_path)?,
         ));
         for stream in [
-            child.stdout.take().map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
-            child.stderr.take().map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
+            child
+                .stdout
+                .take()
+                .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
+            child
+                .stderr
+                .take()
+                .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
         ]
         .into_iter()
         .flatten()
@@ -352,21 +364,24 @@ impl Monitor {
     /// Is the button the guide names offered for the subject, as the page would show it? Reads the
     /// GET the Review or Releases page reads for that button. `decision` gives the release or kind
     /// an offer on the Releases page is about.
-    pub fn offers(&self, project: &str, offer: &Offer, decision: Option<&Decision>) -> Result<Found> {
+    pub fn offers(
+        &self,
+        project: &str,
+        offer: &Offer,
+        decision: Option<&Decision>,
+    ) -> Result<Found> {
         let button = norm(&offer.button);
         let subject = match &offer.subject {
             Some(sel) => match self.resolve(project, sel)? {
                 Some(item) => Some(item),
                 None => {
-                    return Ok(Found::Absent(format!(
-                        "no item matches {}",
-                        sel.describe()
-                    )));
+                    return Ok(Found::Absent(format!("no item matches {}", sel.describe())));
                 }
             },
             None => None,
         };
-        let starts = |label: &str| norm(label).starts_with(&button) || button.starts_with(&norm(label));
+        let starts =
+            |label: &str| norm(label).starts_with(&button) || button.starts_with(&norm(label));
         match offer.page.as_str() {
             "review" => {
                 let entries = self.review(project)?;
@@ -388,14 +403,17 @@ impl Monitor {
                         "unratified" => "ratify",
                         _ => "",
                     };
-                    let wanted = if starts("Ratify") { "ratify" } else { "approve" };
+                    let wanted = if starts("Ratify") {
+                        "ratify"
+                    } else {
+                        "approve"
+                    };
                     return Ok(if shown == wanted {
                         Found::Offered
                     } else {
                         Found::Absent(format!(
                             "{} shows approval={approval}, signoffs_needed={}",
-                            item.code,
-                            e["signoffs_needed"]
+                            item.code, e["signoffs_needed"]
                         ))
                     });
                 }
@@ -479,7 +497,9 @@ impl Monitor {
                         _ => String::new(),
                     };
                     let hit = waiting.iter().any(|w| {
-                        subject.as_ref().is_none_or(|i| w["code"] == i.code.as_str())
+                        subject
+                            .as_ref()
+                            .is_none_or(|i| w["code"] == i.code.as_str())
                             && w["test"]
                                 .as_str()
                                 .is_some_and(|t| norm(t).contains(&norm(&test_part)))
@@ -768,7 +788,10 @@ impl Monitor {
                     let id = g["id"].as_str().unwrap_or("");
                     let out = self.write(
                         "POST",
-                        &format!("/projects/{p}/decisions/delegations/{}/grant", urlencode(id)),
+                        &format!(
+                            "/projects/{p}/decisions/delegations/{}/grant",
+                            urlencode(id)
+                        ),
                         &json!({"rev": g["rev"].as_str().unwrap_or(""), "by": by}),
                     )?;
                     if !out.ok() {
@@ -961,9 +984,7 @@ fn gate_commit(plan: &Value) -> Option<String> {
         .into_iter()
         .flatten()
         .any(|c| c["check"] == "gate_passed" && c["holds"] != true);
-    if unmet_gate
-        && let Some(tip) = plan["release_tip"].as_str().filter(|t| !t.is_empty())
-    {
+    if unmet_gate && let Some(tip) = plan["release_tip"].as_str().filter(|t| !t.is_empty()) {
         return Some(tip.to_string());
     }
     if plan["tag"].is_object()
@@ -1001,10 +1022,17 @@ fn accept_untested(plan: &Value) -> Option<Vec<String>> {
 pub fn select(items: &[ItemBrief], sel: &ItemSel) -> Option<ItemBrief> {
     match sel {
         ItemSel::Newest => items.last().cloned(),
-        ItemSel::Code(c) => items.iter().find(|i| i.code.eq_ignore_ascii_case(c)).cloned(),
+        ItemSel::Code(c) => items
+            .iter()
+            .find(|i| i.code.eq_ignore_ascii_case(c))
+            .cloned(),
         ItemSel::TitleContains(t) => {
             let t = norm(t);
-            items.iter().rev().find(|i| norm(&i.title).contains(&t)).cloned()
+            items
+                .iter()
+                .rev()
+                .find(|i| norm(&i.title).contains(&t))
+                .cloned()
         }
     }
 }
@@ -1035,10 +1063,7 @@ pub fn path_matches(template: &str, path: &str) -> bool {
     let bare = path.split('?').next().unwrap_or(path);
     let t: Vec<&str> = template.split('/').filter(|s| !s.is_empty()).collect();
     let p: Vec<&str> = bare.split('/').filter(|s| !s.is_empty()).collect();
-    t.len() == p.len()
-        && t.iter()
-            .zip(&p)
-            .all(|(a, b)| a.starts_with('{') || a == b)
+    t.len() == p.len() && t.iter().zip(&p).all(|(a, b)| a.starts_with('{') || a == b)
 }
 
 /// The page token the monitor put in its page (DEF-024).
@@ -1137,12 +1162,10 @@ impl Browser {
 
     /// Open `url` in a new tab and wait for its text to settle (the monitor renders after load).
     pub fn page(&self, url: &str) -> Result<Page> {
-        let tab = self
-            .inner
-            .new_tab()
-            .map_err(|e| anyhow!("new tab: {e}"))?;
+        let tab = self.inner.new_tab().map_err(|e| anyhow!("new tab: {e}"))?;
         tab.set_default_timeout(Duration::from_secs(30));
-        tab.navigate_to(url).map_err(|e| anyhow!("open {url}: {e}"))?;
+        tab.navigate_to(url)
+            .map_err(|e| anyhow!("open {url}: {e}"))?;
         tab.wait_until_navigated()
             .map_err(|e| anyhow!("load {url}: {e}"))?;
         let page = Page { tab };
@@ -1183,17 +1206,6 @@ impl Page {
     /// The rendered text, as a person reads it.
     pub fn text(&self) -> Result<String> {
         self.eval_string("document.body ? document.body.innerText : ''")
-    }
-
-    /// Read the page again (after a click, the monitor re-renders on its own).
-    pub fn refresh(&self) -> Result<()> {
-        self.tab
-            .reload(false, None)
-            .map_err(|e| anyhow!("reload: {e}"))?;
-        self.tab
-            .wait_until_navigated()
-            .map_err(|e| anyhow!("reload: {e}"))?;
-        self.settle(Duration::from_secs(10))
     }
 
     /// Click the button whose label starts with `button`, within the card that names `subject`
@@ -1384,7 +1396,10 @@ pub(crate) mod tests {
     #[test]
     fn a_decision_goes_through_the_write_route_as_the_scripted_person() {
         let (run, base, monitor) = scratch_board("decide");
-        assert!(monitor.has_token(), "the page token is read from the served page");
+        assert!(
+            monitor.has_token(),
+            "the page token is read from the served page"
+        );
         let by = monitor.approver().unwrap();
         assert_eq!(by, "Tester");
         assert_eq!(
@@ -1392,7 +1407,13 @@ pub(crate) mod tests {
             Found::Offered
         );
         let out = monitor
-            .decide("shop", &Decision::Approve(ItemSel::Newest), &by, "4.2", Some(&run))
+            .decide(
+                "shop",
+                &Decision::Approve(ItemSel::Newest),
+                &by,
+                "4.2",
+                Some(&run),
+            )
             .unwrap();
         assert!(out.ok(), "{out:?}");
         assert_eq!(out.route, "POST /projects/shop/features/FEAT-001/approve");
@@ -1459,7 +1480,12 @@ pub(crate) mod tests {
         assert!(!why.is_empty());
         // The board is untouched: the item is still unapproved.
         let feature = monitor.feature("shop", "FEAT-001").unwrap();
-        assert!(feature["definition"]["approval"]["by"].as_str().unwrap_or("").is_empty());
+        assert!(
+            feature["definition"]["approval"]["by"]
+                .as_str()
+                .unwrap_or("")
+                .is_empty()
+        );
         monitor.stop();
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -1473,7 +1499,12 @@ pub(crate) mod tests {
         let decision = Decision::Approve(ItemSel::Code("FEAT-001".into()));
         assert!(
             !monitor
-                .wait_for_change("shop", &decision, Duration::from_millis(100), Duration::from_millis(600))
+                .wait_for_change(
+                    "shop",
+                    &decision,
+                    Duration::from_millis(100),
+                    Duration::from_millis(600)
+                )
                 .unwrap(),
             "nothing changed, so the wait ends false at its timeout"
         );
@@ -1485,10 +1516,17 @@ pub(crate) mod tests {
         let acting = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(500));
             let agent = ureq::AgentBuilder::new().build();
-            let html = agent.get(&format!("{url}/")).call().unwrap().into_string().unwrap();
+            let html = agent
+                .get(&format!("{url}/"))
+                .call()
+                .unwrap()
+                .into_string()
+                .unwrap();
             let token = page_token(&html).unwrap();
             agent
-                .post(&format!("{url}/api/write/projects/shop/features/FEAT-001/approve"))
+                .post(&format!(
+                    "{url}/api/write/projects/shop/features/FEAT-001/approve"
+                ))
                 .set("content-type", "application/json")
                 .set("x-kanbanr-token", &token)
                 .send_string(&json!({"by": by}).to_string())
@@ -1496,7 +1534,12 @@ pub(crate) mod tests {
         });
         let started = Instant::now();
         let changed = monitor
-            .wait_for_change("shop", &decision, Duration::from_millis(100), Duration::from_secs(20))
+            .wait_for_change(
+                "shop",
+                &decision,
+                Duration::from_millis(100),
+                Duration::from_secs(20),
+            )
             .unwrap();
         acting.join().unwrap();
         assert!(changed, "the wait ends when the board changed");
@@ -1577,7 +1620,10 @@ pub(crate) mod tests {
                 found += 1;
             }
         }
-        assert!(found >= 18, "only {found} write paths were read from api.ts");
+        assert!(
+            found >= 18,
+            "only {found} write paths were read from api.ts"
+        );
         assert!(path_matches(
             "/projects/{p}/features/{code}/approve",
             "/projects/shop/features/FEAT-001/approve"
@@ -1593,10 +1639,8 @@ pub(crate) mod tests {
     /// any other error.
     #[test]
     fn no_browser_makes_page_steps_findings() {
-        let bogus = std::env::temp_dir().join(format!(
-            "kanbanr-wt-no-chrome-{}",
-            std::process::id()
-        ));
+        let bogus =
+            std::env::temp_dir().join(format!("kanbanr-wt-no-chrome-{}", std::process::id()));
         let err = Browser::open_at(Some(bogus)).unwrap_err();
         assert!(is_no_browser(&err), "{err}");
         assert!(err.to_string().starts_with("no browser:"), "{err}");
@@ -1657,7 +1701,9 @@ pub(crate) mod tests {
             Err(e) => panic!("{e}"),
             Ok(browser) => {
                 let page = browser.page(&monitor.page_url("shop", "review")).unwrap();
-                let err = page.press("Sign off release", Some("FEAT-001")).unwrap_err();
+                let err = page
+                    .press("Sign off release", Some("FEAT-001"))
+                    .unwrap_err();
                 assert!(err.to_string().contains("no button named"), "{err}");
                 page.press("Approve", Some("FEAT-001")).unwrap();
                 let decision = Decision::Approve(ItemSel::Code("FEAT-001".into()));
@@ -1672,10 +1718,13 @@ pub(crate) mod tests {
                     }
                     std::thread::sleep(Duration::from_millis(200));
                 }
-                assert!(approved, "the press approved FEAT-001 as the monitor's identity");
+                assert!(
+                    approved,
+                    "the press approved FEAT-001 as the monitor's identity"
+                );
                 let feature = monitor.feature("shop", "FEAT-001").unwrap();
                 assert_eq!(feature["definition"]["approval"]["origin"], "monitor");
-                assert_eq!(monitor.fingerprint("shop", &decision).unwrap().is_empty(), false);
+                assert!(!monitor.fingerprint("shop", &decision).unwrap().is_empty());
             }
         }
         monitor.stop();
@@ -1699,13 +1748,23 @@ pub(crate) mod tests {
             },
         ];
         assert_eq!(select(&items, &ItemSel::Newest).unwrap().code, "FEAT-002");
-        assert_eq!(select(&items, &ItemSel::Code("feat-001".into())).unwrap().code, "FEAT-001");
         assert_eq!(
-            select(&items, &ItemSel::TitleContains("BASKET".into())).unwrap().code,
+            select(&items, &ItemSel::Code("feat-001".into()))
+                .unwrap()
+                .code,
+            "FEAT-001"
+        );
+        assert_eq!(
+            select(&items, &ItemSel::TitleContains("BASKET".into()))
+                .unwrap()
+                .code,
             "FEAT-001"
         );
         assert!(select(&items, &ItemSel::TitleContains("cart".into())).is_none());
-        assert_eq!(page_token("<meta name=\"kanbanr-token\" content=\"abc\">"), Some("abc".into()));
+        assert_eq!(
+            page_token("<meta name=\"kanbanr-token\" content=\"abc\">"),
+            Some("abc".into())
+        );
         assert_eq!(page_token("<html></html>"), None);
         assert_eq!(urlencode("manual: a b"), "manual%3A%20a%20b");
     }

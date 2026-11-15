@@ -2150,9 +2150,9 @@ fn command_access(cmd: &Command) -> Access {
             walkthrough::WalkthroughCmd::Run(_) => Outside(
                 "`kanbanr walkthrough run` drives a session and a monitor outside the board's write path",
             ),
-            walkthrough::WalkthroughCmd::Remotes(walkthrough::RemotesCmd::Clean { .. }) => {
-                Outside("`kanbanr walkthrough remotes clean` deletes repositories on the remote server")
-            }
+            walkthrough::WalkthroughCmd::Remotes(walkthrough::RemotesCmd::Clean { .. }) => Outside(
+                "`kanbanr walkthrough remotes clean` deletes repositories on the remote server",
+            ),
         },
         Command::Serve { allow_writes, .. } => {
             if *allow_writes {

@@ -176,8 +176,12 @@ pub fn read_runbook(cli: &crate::Cli, spec: &str) -> Result<(String, String)> {
         ));
     }
     let data_dir = kanbanr_core::project::resolve_data_dir(cli.data_dir.as_deref());
-    let project = kanbanr_core::project::resolve_project(cli.project.as_deref())
-        .ok_or_else(|| anyhow!("{spec} is not a file, and there is no project here to read it from as a board doc"))?;
+    let project =
+        kanbanr_core::project::resolve_project(cli.project.as_deref()).ok_or_else(|| {
+            anyhow!(
+                "{spec} is not a file, and there is no project here to read it from as a board doc"
+            )
+        })?;
     let path = kanbanr_core::Store::new(&data_dir)
         .project_dir(&project)
         .join("docs")
@@ -238,7 +242,10 @@ pub fn run_command(cli: &crate::Cli, cmd: &WalkthroughCmd) -> Result<()> {
         }
         WalkthroughCmd::Verify { run } => {
             capture::verify(&RunDirs::new(run))?;
-            println!("{}: every capture matches raw/MANIFEST.sha256", run.display());
+            println!(
+                "{}: every capture matches raw/MANIFEST.sha256",
+                run.display()
+            );
             Ok(())
         }
         WalkthroughCmd::Derive { run } => {
@@ -264,13 +271,13 @@ pub fn run_command(cli: &crate::Cli, cmd: &WalkthroughCmd) -> Result<()> {
         }
         WalkthroughCmd::Remotes(RemotesCmd::Clean { runs }) => {
             let dir = runs.clone().unwrap_or_else(default_runs_dir);
-            let (deleted, left) = remotes::clean(&dir, Path::new("gh"))?;
-            for c in deleted {
+            let cleaned = remotes::clean(&dir, Path::new("gh"))?;
+            for c in cleaned.deleted {
                 println!("deleted {}", c.url);
             }
-            if !left.is_empty() {
+            if !cleaned.left.is_empty() {
                 println!("could not delete, remove these yourself:");
-                for (c, why) in left {
+                for (c, why) in cleaned.left {
                     println!("  {}  ({why})", c.url);
                 }
             }
@@ -348,7 +355,9 @@ fn make_claude_config(run: &RunDirs, log: &mut Vec<String>) -> Result<()> {
     let dst = run.claude_config();
     std::fs::create_dir_all(&dst)?;
     let Some(src) = crate::hooks::claude_dir() else {
-        log.push("no Claude Code configuration folder was found: the session starts with none".into());
+        log.push(
+            "no Claude Code configuration folder was found: the session starts with none".into(),
+        );
         return Ok(());
     };
     let mut copied = Vec::new();
@@ -475,7 +484,9 @@ impl Running {
         {
             self.project = Some(p);
         }
-        self.project.clone().unwrap_or_else(|| self.runbook.name.clone())
+        self.project
+            .clone()
+            .unwrap_or_else(|| self.runbook.name.clone())
     }
 
     /// Start the monitor once the board exists (the first step makes it); started with the run's
@@ -616,12 +627,18 @@ impl Running {
                     .with_vars(self.vars.clone())
                     .answer(&question);
                 answer::log(&self.dirs, &id, &question, &picked)?;
-                eprintln!("step {id}: Claude asked \"{}\" -> {} ({})", q.text, picked.pick, picked.policy);
+                eprintln!(
+                    "step {id}: Claude asked \"{}\" -> {} ({})",
+                    q.text, picked.pick, picked.policy
+                );
                 text = picked.pick;
             }
         }
         // The monitor starts once the first step has made the board.
-        if (step.decide.is_some() || step.press.is_some() || step.expect.is_some() || step.say.is_some())
+        if (step.decide.is_some()
+            || step.press.is_some()
+            || step.expect.is_some()
+            || step.say.is_some())
             && !self.ensure_monitor()
         {
             step_ok = false;
@@ -629,7 +646,10 @@ impl Running {
         }
         let project = self.project_name();
         if let Some(decision) = &step.decide {
-            let offer = step.offer.clone().expect("lint: a decide step has an offer");
+            let offer = step
+                .offer
+                .clone()
+                .expect("lint: a decide step has an offer");
             self.screenshot(&id, &offer.page, "before");
             let found = match self.monitor.as_ref() {
                 Some(m) => m.offers(&project, &offer, Some(decision)),
@@ -642,16 +662,31 @@ impl Running {
                             "step {id}: waiting for you to press \"{}\" on the {} page ({})",
                             offer.button,
                             offer.page,
-                            self.monitor.as_ref().map(|m| m.page_url(&project, &offer.page)).unwrap_or_default()
+                            self.monitor
+                                .as_ref()
+                                .map(|m| m.page_url(&project, &offer.page))
+                                .unwrap_or_default()
                         );
                         let changed = self
                             .monitor
                             .as_ref()
-                            .map(|m| m.wait_for_change(&project, decision, Duration::from_secs(5), Duration::from_secs(60 * 60)))
+                            .map(|m| {
+                                m.wait_for_change(
+                                    &project,
+                                    decision,
+                                    Duration::from_secs(5),
+                                    Duration::from_secs(60 * 60),
+                                )
+                            })
                             .transpose()?
                             .unwrap_or(false);
                         if !changed {
-                            self.finding(&id, "decision-failed", format!("{} was not taken", decision.kind()), "nothing changed within an hour".into());
+                            self.finding(
+                                &id,
+                                "decision-failed",
+                                format!("{} was not taken", decision.kind()),
+                                "nothing changed within an hour".into(),
+                            );
                             step_ok = false;
                             why.push("the decision was not taken".into());
                         }
@@ -673,13 +708,23 @@ impl Running {
                                 eprintln!("step {id}: {} -> {}", o.route, o.status);
                             }
                             Ok(Some(o)) => {
-                                self.finding(&id, "decision-failed", format!("{} answered {}", o.route, o.status), o.body.chars().take(300).collect());
+                                self.finding(
+                                    &id,
+                                    "decision-failed",
+                                    format!("{} answered {}", o.route, o.status),
+                                    o.body.chars().take(300).collect(),
+                                );
                                 step_ok = false;
                                 why.push(format!("the route answered {}", o.status));
                             }
                             Ok(None) => {}
                             Err(e) => {
-                                self.finding(&id, "decision-failed", decision.kind().into(), e.to_string());
+                                self.finding(
+                                    &id,
+                                    "decision-failed",
+                                    decision.kind().into(),
+                                    e.to_string(),
+                                );
                                 step_ok = false;
                                 why.push(e.to_string());
                             }
@@ -690,14 +735,22 @@ impl Running {
                     self.finding(
                         &id,
                         "offer-missing",
-                        format!("the guide promises \"{}\" on the {} page", offer.button, offer.page),
+                        format!(
+                            "the guide promises \"{}\" on the {} page",
+                            offer.button, offer.page
+                        ),
                         instead,
                     );
                     step_ok = false;
                     why.push("the offer was missing".into());
                 }
                 Err(e) => {
-                    self.finding(&id, "offer-missing", format!("\"{}\" on the {} page", offer.button, offer.page), e.to_string());
+                    self.finding(
+                        &id,
+                        "offer-missing",
+                        format!("\"{}\" on the {} page", offer.button, offer.page),
+                        e.to_string(),
+                    );
                     step_ok = false;
                     why.push(e.to_string());
                 }
@@ -713,7 +766,11 @@ impl Running {
                     .map(|i| i.code),
                 None => None,
             };
-            let url = self.monitor.as_ref().map(|m| m.page_url(&project, &press.page)).unwrap_or_default();
+            let url = self
+                .monitor
+                .as_ref()
+                .map(|m| m.page_url(&project, &press.page))
+                .unwrap_or_default();
             let pressed = match self.browser() {
                 None => Err(None),
                 Some(b) => b
@@ -728,13 +785,26 @@ impl Running {
                     std::thread::sleep(Duration::from_secs(2));
                 }
                 Err(None) => {
-                    let why_not = self.browser_absent.clone().unwrap_or_else(|| "--no-browser".into());
-                    self.finding(&id, "no-browser", format!("press \"{}\" on {}", press.button, press.page), why_not);
+                    let why_not = self
+                        .browser_absent
+                        .clone()
+                        .unwrap_or_else(|| "--no-browser".into());
+                    self.finding(
+                        &id,
+                        "no-browser",
+                        format!("press \"{}\" on {}", press.button, press.page),
+                        why_not,
+                    );
                     step_ok = false;
                     why.push("no browser".into());
                 }
                 Err(Some(e)) => {
-                    self.finding(&id, "press-failed", format!("press \"{}\" on {}", press.button, press.page), e.to_string());
+                    self.finding(
+                        &id,
+                        "press-failed",
+                        format!("press \"{}\" on {}", press.button, press.page),
+                        e.to_string(),
+                    );
                     step_ok = false;
                     why.push(e.to_string());
                 }
@@ -756,28 +826,55 @@ impl Running {
                 }
                 Err(e) => {
                     append_push(&self.dirs, which, &push.refspec, false, &e.to_string())?;
-                    self.finding(&id, "push-failed", format!("push {which} {}", push.refspec), e.to_string());
+                    self.finding(
+                        &id,
+                        "push-failed",
+                        format!("push {which} {}", push.refspec),
+                        e.to_string(),
+                    );
                     step_ok = false;
                     why.push("the push failed".into());
                 }
             }
         }
         if let Some(expect) = &step.expect {
-            self.expect(&id, expect, &asked_here, &final_text, &mut step_ok, &mut why);
+            self.expect(
+                &id,
+                expect,
+                &asked_here,
+                &final_text,
+                &mut step_ok,
+                &mut why,
+            );
         }
         if let Some(marker) = &step.check {
             self.checks.push(CheckResult {
                 marker: marker.clone(),
                 step: id.clone(),
                 passed: step_ok,
-                why: if step_ok { "the step went through as the guide says".into() } else { why.join("; ") },
+                why: if step_ok {
+                    "the step went through as the guide says".into()
+                } else {
+                    why.join("; ")
+                },
             });
-            eprintln!("step {id}: check {marker} {}", if step_ok { "passed" } else { "failed" });
+            eprintln!(
+                "step {id}: check {marker} {}",
+                if step_ok { "passed" } else { "failed" }
+            );
         }
         Ok(true)
     }
 
-    fn expect(&mut self, id: &str, expect: &Expect, asked: &[String], final_text: &str, ok: &mut bool, why: &mut Vec<String>) {
+    fn expect(
+        &mut self,
+        id: &str,
+        expect: &Expect,
+        asked: &[String],
+        final_text: &str,
+        ok: &mut bool,
+        why: &mut Vec<String>,
+    ) {
         let project = self.project_name();
         if let Some(claim) = &expect.board {
             match truth::board_claim(&self.dirs.board(), &project, claim) {
@@ -788,14 +885,26 @@ impl Running {
                     why.push("a board claim failed".into());
                 }
                 Err(e) => {
-                    self.finding(id, "board-expect-failed", format!("{claim:?}"), e.to_string());
+                    self.finding(
+                        id,
+                        "board-expect-failed",
+                        format!("{claim:?}"),
+                        e.to_string(),
+                    );
                     *ok = false;
                     why.push(e.to_string());
                 }
             }
         }
         if let Some(claim) = &expect.truth {
-            let line = truth::claim(&self.dirs, &project, &self.remotes, self.ci.as_ref(), &self.kanbanr, claim);
+            let line = truth::claim(
+                &self.dirs,
+                &project,
+                &self.remotes,
+                self.ci.as_ref(),
+                &self.kanbanr,
+                claim,
+            );
             match line.verdict {
                 truth::Verdict::Ok => {}
                 truth::Verdict::Mismatch => {
@@ -811,7 +920,14 @@ impl Running {
                 claim.url.clone()
             } else {
                 let path = claim.url.replace("{project}", &project);
-                format!("{}{}", self.monitor.as_ref().map(|m| m.url.clone()).unwrap_or_default(), path)
+                format!(
+                    "{}{}",
+                    self.monitor
+                        .as_ref()
+                        .map(|m| m.url.clone())
+                        .unwrap_or_default(),
+                    path
+                )
             };
             let text = match self.browser() {
                 None => Err(None),
@@ -821,13 +937,21 @@ impl Running {
                 Ok(text) => {
                     let missing = person::check_page_claim(&text, claim);
                     if !missing.is_empty() {
-                        self.finding(id, "page-expect-failed", claim.url.clone(), missing.join("; "));
+                        self.finding(
+                            id,
+                            "page-expect-failed",
+                            claim.url.clone(),
+                            missing.join("; "),
+                        );
                         *ok = false;
                         why.push("a page claim failed".into());
                     }
                 }
                 Err(None) => {
-                    let why_not = self.browser_absent.clone().unwrap_or_else(|| "--no-browser".into());
+                    let why_not = self
+                        .browser_absent
+                        .clone()
+                        .unwrap_or_else(|| "--no-browser".into());
                     self.finding(id, "no-browser", format!("read {}", claim.url), why_not);
                     *ok = false;
                     why.push("no browser".into());
@@ -840,12 +964,29 @@ impl Running {
             }
         }
         if let Some(talk) = &expect.talk {
-            let re = |p: &str| regex::RegexBuilder::new(p).case_insensitive(true).build().ok();
+            let re = |p: &str| {
+                regex::RegexBuilder::new(p)
+                    .case_insensitive(true)
+                    .build()
+                    .ok()
+            };
             if let Some(p) = &talk.asked
                 && let Some(r) = re(p)
                 && !asked.iter().any(|q| r.is_match(q))
             {
-                self.finding(id, "talk-expect-failed", format!("a question matching /{p}/ was expected"), format!("asked: {}", if asked.is_empty() { "nothing".to_string() } else { asked.join(" | ") }));
+                self.finding(
+                    id,
+                    "talk-expect-failed",
+                    format!("a question matching /{p}/ was expected"),
+                    format!(
+                        "asked: {}",
+                        if asked.is_empty() {
+                            "nothing".to_string()
+                        } else {
+                            asked.join(" | ")
+                        }
+                    ),
+                );
                 *ok = false;
                 why.push("the expected question was not asked".into());
             }
@@ -853,7 +994,12 @@ impl Running {
                 && let Some(r) = re(p)
                 && let Some(q) = asked.iter().find(|q| r.is_match(q))
             {
-                self.finding(id, "talk-expect-failed", format!("no question matching /{p}/ was expected"), format!("asked: {q}"));
+                self.finding(
+                    id,
+                    "talk-expect-failed",
+                    format!("no question matching /{p}/ was expected"),
+                    format!("asked: {q}"),
+                );
                 *ok = false;
                 why.push("an unwanted question was asked".into());
             }
@@ -861,7 +1007,12 @@ impl Running {
                 && let Some(r) = re(p)
                 && !r.is_match(final_text)
             {
-                self.finding(id, "talk-expect-failed", format!("the answer was expected to match /{p}/"), final_text.chars().take(300).collect());
+                self.finding(
+                    id,
+                    "talk-expect-failed",
+                    format!("the answer was expected to match /{p}/"),
+                    final_text.chars().take(300).collect(),
+                );
                 *ok = false;
                 why.push("the answer did not say what was expected".into());
             }
@@ -878,13 +1029,20 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         for e in &errors {
             eprintln!("{e}");
         }
-        bail!("{shown} has {} lint error(s); fix them before a run", errors.len());
+        bail!(
+            "{shown} has {} lint error(s); fix them before a run",
+            errors.len()
+        );
     }
     let runs = args.runs.clone().unwrap_or_else(default_runs_dir);
     std::fs::create_dir_all(&runs)?;
     let name = args.name.clone().unwrap_or_else(|| {
         let now = kanbanr_core::now_rfc3339();
-        let stamp: String = now.chars().filter(|c| c.is_ascii_digit()).take(14).collect();
+        let stamp: String = now
+            .chars()
+            .filter(|c| c.is_ascii_digit())
+            .take(14)
+            .collect();
         format!(
             "{}-{}-{}",
             runbook.name,
@@ -906,23 +1064,30 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
             .map_err(|_| anyhow!("another run is using {}", dirs.root.display()))?;
     }
     // The fence: the person's, else the runs folder. Everything the run spawns gets it.
-    let fence = kanbanr_core::project::fence()
-        .unwrap_or_else(|| kanbanr_core::project::normalize(&runs));
+    let fence =
+        kanbanr_core::project::fence().unwrap_or_else(|| kanbanr_core::project::normalize(&runs));
     let fence = kanbanr_core::project::normalize(&fence);
     std::fs::write(dirs.root.join(answer::RUNBOOK_FILE), &text)?;
     let mut setup_notes: Vec<String> = Vec::new();
     // Remotes.
-    let prefix = args
-        .remotes
-        .clone()
-        .or_else(|| std::env::var("KANBANR_WALKTHROUGH_REMOTES").ok().filter(|s| !s.is_empty()));
+    let prefix = args.remotes.clone().or_else(|| {
+        std::env::var("KANBANR_WALKTHROUGH_REMOTES")
+            .ok()
+            .filter(|s| !s.is_empty())
+    });
     let gh = which("gh");
     if prefix.is_some() && gh.is_none() {
         bail!("--remotes needs `gh` on PATH to create the repositories");
     }
-    let remotes = remotes::create(&dirs, prefix.as_deref(), gh.as_deref().unwrap_or(Path::new("gh")))?;
+    let remotes = remotes::create(
+        &dirs,
+        prefix.as_deref(),
+        gh.as_deref().unwrap_or(Path::new("gh")),
+    )?;
     if prefix.is_none() {
-        setup_notes.push("remotes: two bare repositories under the run folder; CI truth is unknown".into());
+        setup_notes.push(
+            "remotes: two bare repositories under the run folder; CI truth is unknown".into(),
+        );
     }
     // The run project: a repository with the code remote, and the run's Claude Code settings.
     let project_dir = dirs.project();
@@ -938,7 +1103,10 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         // One commit, so `main` exists before the guide's first push.
         std::fs::write(
             project_dir.join("README.md"),
-            format!("# {}\n\nA scratch project of the walkthrough run {name}.\n", runbook.name),
+            format!(
+                "# {}\n\nA scratch project of the walkthrough run {name}.\n",
+                runbook.name
+            ),
         )?;
         git(&["add", "README.md"])?;
         git(&["commit", "-qm", "walkthrough: the scratch project"])?;
@@ -953,7 +1121,10 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     let env = Env {
         fence: Some(fence.clone()),
         target_board: Some(target_board.clone()),
-        claude: args.claude.clone().unwrap_or_else(|| PathBuf::from("claude")),
+        claude: args
+            .claude
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("claude")),
         model: model.clone(),
         kanbanr: kanbanr.clone(),
     };
@@ -983,7 +1154,10 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         std::env::set_var(guard::REMOTES_VAR, guard::remotes_env_value(&allowed));
     }
     let session = Session::start(&cfg)?;
-    let today = kanbanr_core::now_rfc3339().chars().take(10).collect::<String>();
+    let today = kanbanr_core::now_rfc3339()
+        .chars()
+        .take(10)
+        .collect::<String>();
     let mut vars = BTreeMap::new();
     vars.insert("board_remote".into(), remotes.board.clone());
     vars.insert("code_remote".into(), remotes.code.clone());
@@ -1015,7 +1189,12 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         ci: None,
         gh: gh.clone(),
     };
-    println!("run {name}: {} steps, model {model}, budget {} USD, fence {}", running.runbook.steps.len(), cfg.budget_usd, fence.display());
+    println!(
+        "run {name}: {} steps, model {model}, budget {} USD, fence {}",
+        running.runbook.steps.len(),
+        cfg.budget_usd,
+        fence.display()
+    );
     // The steps. An error here still gets the captures below.
     let steps = running.runbook.steps.clone();
     let mut step_error: Option<anyhow::Error> = None;
@@ -1032,6 +1211,8 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     // The tail: truth, snapshot, derive, the batch.
     let cost = running.session.cost_usd();
     let turns = running.session.turns();
+    let session_id = running.session.session_id().to_string();
+    let session_stop = running.session.stopped().map(|s| s.to_string());
     running.session.end();
     let project = running.project_name();
     if prefix.is_some()
@@ -1040,7 +1221,10 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         running.ci = truth::fetch_ci_runs(&dirs, &remotes.code, gh);
     }
     let truth_lines = truth::check(&dirs, &project, &remotes, running.ci.as_ref(), &kanbanr)?;
-    for l in truth_lines.iter().filter(|l| l.verdict == truth::Verdict::Mismatch) {
+    for l in truth_lines
+        .iter()
+        .filter(|l| l.verdict == truth::Verdict::Mismatch)
+    {
         running.finding("end", "truth-mismatch", l.board.clone(), l.truth.clone());
     }
     write_checks(&dirs, &running.checks)?;
@@ -1053,6 +1237,10 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     log.push("turns", turns.to_string());
     log.push("findings", running.findings.len().to_string());
     log.push("project", project.clone());
+    log.push("session_id", session_id);
+    if let Some(s) = session_stop {
+        log.push("session_stopped", s);
+    }
     if let Some(s) = &running.stopped {
         log.push("stopped", s.clone());
     }
@@ -1117,7 +1305,9 @@ fn prepare_batch(
     let repo = crate::scm::repo_root();
     let mut ids = Vec::new();
     for c in checks {
-        let Some(def) = runbook.checks.get(&c.marker) else { continue };
+        let Some(def) = runbook.checks.get(&c.marker) else {
+            continue;
+        };
         let body = serde_json::json!({
             "kind": "manual-test",
             "subject": {"item": def.item, "requirement": def.requirement, "test": def.test},
