@@ -1478,6 +1478,77 @@ mod tests {
         gone(&d);
     }
 
+    /// The decided budget (DEF-066 Q2) for one position read of a clean 10,000-file checkout that
+    /// `core.autocrlf=true` checked out with CRLF, warm (probe: about 180 ms at load 3).
+    const CRLF_BUDGET_MS: f64 = 300.0;
+
+    /// DEF-066 R-5: as R-10's test, but every file has a newline every 60 characters, is committed
+    /// LF and checked out again under `core.autocrlf=true`, so every file holds CRLF and converts.
+    /// A release-build figure: `cargo test --release -p kanbanr-core --lib
+    /// position::tests::read_position_10k -- --nocapture`.
+    #[test]
+    fn read_position_10k_crlf_files_within_budget() {
+        let d = repo("tenk-crlf");
+        let mut n = 0u32;
+        for dir in 0..100 {
+            let folder = d.join(format!("d{dir:03}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            for f in 0..100 {
+                // 200 to 2,000 bytes, deterministic, a newline after every 60 characters.
+                let len = 200 + (n as usize * 37) % 1801;
+                let body: String = (0..len)
+                    .map(|i| {
+                        if i % 61 == 60 {
+                            '\n'
+                        } else {
+                            char::from(b'a' + ((i as u32 + n) % 26) as u8)
+                        }
+                    })
+                    .collect();
+                std::fs::write(folder.join(format!("f{f:03}.txt")), body).unwrap();
+                n += 1;
+            }
+        }
+        git(&d, &["add", "-A"]).unwrap();
+        git(&d, &["commit", "-q", "-m", "10k"]).unwrap();
+        git(&d, &["config", "core.autocrlf", "true"]).unwrap();
+        for dir in 0..100 {
+            std::fs::remove_dir_all(d.join(format!("d{dir:03}"))).unwrap();
+        }
+        git(&d, &["checkout", "--", "."]).unwrap();
+        let sample = std::fs::read(d.join("d042/f017.txt")).unwrap();
+        assert!(sample.windows(2).any(|w| w == b"\r\n"), "no CRLF checked out");
+        // Warm the file cache, then time three reads.
+        let first = pos(&d);
+        assert!(first.position.is_clean(), "{:?}", &first.changed[..1.min(first.changed.len())]);
+        let (median, all) = median_ms(&d);
+        let load = std::fs::read_to_string("/proc/loadavg").unwrap_or_else(|_| "n/a".into());
+        let tracked = git(&d, &["ls-files"]).unwrap().lines().count();
+        println!(
+            "DEF-066 R-5: {tracked} tracked CRLF files, median {median:.1} ms of {all:?} ms, load {}",
+            load.trim()
+        );
+        assert_eq!(tracked, 10_001);
+        let load1: f64 = load
+            .split_whitespace()
+            .next()
+            .and_then(|l| l.parse().ok())
+            .unwrap_or(0.0);
+        #[allow(unused_variables)]
+        let budget = if load1 > 4.0 {
+            CRLF_BUDGET_MS * 2.0
+        } else {
+            CRLF_BUDGET_MS
+        };
+        #[cfg(not(debug_assertions))]
+        assert!(
+            median <= budget,
+            "median {median:.1} ms over the {budget} ms budget (load {load1})"
+        );
+        assert_eq!(pos(&d), first, "repeats");
+        gone(&d);
+    }
+
     /// R-10: a view ID is computed within 100 microseconds (median of 1,000 computations).
     #[test]
     fn view_id_under_100_microseconds() {
