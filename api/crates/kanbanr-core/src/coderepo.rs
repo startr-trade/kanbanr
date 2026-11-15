@@ -169,6 +169,8 @@ pub fn repo_facts(root: &Path, message: Option<String>) -> crate::scm::RepoFacts
         merging: merge_in_progress(root),
         has_commits: has_commits(root),
         message,
+        setup_pending: false,
+        staged: None,
     }
 }
 
