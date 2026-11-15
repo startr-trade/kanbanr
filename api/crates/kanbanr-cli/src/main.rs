@@ -9,6 +9,7 @@ mod mirror;
 mod scm;
 mod self_update;
 mod skill;
+mod walkthrough;
 
 use backend::{Backend, Method};
 use clap::{Args, Parser, Subcommand};
