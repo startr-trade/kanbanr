@@ -23,6 +23,8 @@ pub fn parse_results(text: &str) -> BTreeMap<String, bool> {
         let line = raw.trim();
         let readings = if let Some(r) = read_cargo(line) {
             vec![r]
+        } else if let Some(r) = read_pytest(line) {
+            vec![r]
         } else if let Some(r) = read_marked(line) {
             vec![r]
         } else {
@@ -72,6 +74,42 @@ fn read_cargo(line: &str) -> Option<Reading> {
         name: name.trim().to_string(),
         outcome,
     })
+}
+
+/// pytest -v: `<node id> PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS …`. Boundary: the first space
+/// followed by one of those words and then the end of the line or a space; the node id is the text
+/// before it, cut at ` <- ` (`-vv`), and must contain `::` and not start with `[` (xdist's
+/// `[gw0] …` puts the word first and is not read). Everything after the word is ignored.
+fn read_pytest(line: &str) -> Option<Reading> {
+    const WORDS: [(&str, Outcome); 6] = [
+        ("PASSED", Outcome::Passed),
+        ("FAILED", Outcome::Failed),
+        ("ERROR", Outcome::Failed),
+        ("SKIPPED", Outcome::Unproven),
+        ("XFAIL", Outcome::Unproven),
+        ("XPASS", Outcome::Unproven),
+    ];
+    for (i, _) in line.match_indices(' ') {
+        let rest = &line[i + 1..];
+        for (word, outcome) in WORDS {
+            let Some(after) = rest.strip_prefix(word) else {
+                continue;
+            };
+            if !(after.is_empty() || after.starts_with(' ')) {
+                continue;
+            }
+            let node = line[..i].trim();
+            let node = node.split_once(" <- ").map_or(node, |(n, _)| n.trim());
+            if !node.contains("::") || node.starts_with('[') {
+                return None;
+            }
+            return Some(Reading {
+                name: node.to_string(),
+                outcome,
+            });
+        }
+    }
+    None
 }
 
 /// A marked line: `✓|×|✗|↓|□|PASS|FAIL <name>`, Vitest's suffix removed. Boundary: the mark is
@@ -431,6 +469,46 @@ some unrelated line ... ok";
         let r = parse_results(&big);
         eprintln!("10k-line parse: {:?}", t.elapsed());
         assert_eq!(r, parse_results(VITEST_5_1));
+    }
+
+    /// Real lines from the pytest 9.2.0 `-v` run of DOC-001 (14 Nov 2026), fill spaces kept.
+    const PYTEST_9_2: &str = "\
+tests/test_basket_api.py::test_only_the_basket_cookie_is_set PASSED      [ 25%]
+tests/test_ci_workflow.py::test_publishes_nothing FAILED                 [ 42%]
+tests/test_repository.py::test_changelog_exists_with_unreleased_section PASSED [100%]";
+
+    #[test]
+    fn pytest_verbose_lines_are_read_as_node_ids() {
+        let r = parse_results(PYTEST_9_2);
+        assert_eq!(r.len(), 3, "{r:?}");
+        assert_eq!(
+            r.get("tests/test_basket_api.py::test_only_the_basket_cookie_is_set"),
+            Some(&true)
+        );
+        assert_eq!(
+            r.get("tests/test_ci_workflow.py::test_publishes_nothing"),
+            Some(&false)
+        );
+        assert_eq!(
+            r.get("tests/test_repository.py::test_changelog_exists_with_unreleased_section"),
+            Some(&true)
+        );
+        let one = |t: &str| parse_results(t);
+        assert_eq!(
+            one("tests/x.py::test_e ERROR [ 50%]").get("tests/x.py::test_e"),
+            Some(&false)
+        );
+        assert!(one("tests/x.py::test_s SKIPPED (no db) [ 50%]").is_empty());
+        assert!(one("tests/x.py::test_xf XFAIL").is_empty());
+        assert!(one("tests/x.py::test_xp XPASS").is_empty());
+        let r = one("tests/x.py::test_p[a b] PASSED [ 3/12]");
+        assert_eq!(r.get("tests/x.py::test_p[a b]"), Some(&true));
+        let r = one("tests/x.py::test_v <- src/x.py PASSED");
+        assert_eq!(r.get("tests/x.py::test_v"), Some(&true));
+        assert!(one("[gw0] [ 25%] PASSED tests/x.py::test_d").is_empty());
+        assert!(one("PASSED tests/x.py::test_r").is_empty());
+        assert!(one("FAILED tests/x.py::test_r - assert 1 == 2").is_empty());
+        assert!(one("the tests PASSED quickly").is_empty());
     }
 
     fn project_with_tests(tests: &str) -> Project {
