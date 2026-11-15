@@ -12,13 +12,9 @@
 use std::process::Command;
 
 fn main() {
-    // Re-run when HEAD moves. `.git/HEAD` covers a checkout; the packed ref covers a commit on the
-    // current branch. Neither existing is fine — the fallbacks below handle it.
-    for path in [".git/HEAD", ".git/refs/heads"] {
-        let p = std::path::Path::new("../../..").join(path);
-        if p.exists() {
-            println!("cargo:rerun-if-changed={}", p.display());
-        }
+    // Re-run when HEAD moves, in a plain clone and in a linked worktree (DEF-058).
+    for p in head_paths() {
+        println!("cargo:rerun-if-changed={}", p.display());
     }
     println!("cargo:rerun-if-env-changed=KANBANR_GIT_SHA");
     println!("cargo:rerun-if-env-changed=KANBANR_BUILD_DATE");
@@ -117,6 +113,27 @@ fn collect(
             out.push((rel, path.canonicalize().unwrap_or(path)));
         }
     }
+}
+
+/// The files whose change means HEAD moved, asked of git: in a linked worktree `.git` is a file, so
+/// fixed `.git/HEAD` paths do not exist and nothing would be watched (DEF-058). `HEAD` is the
+/// worktree's own; `refs/heads` and `packed-refs` live in the common dir. A path that does not exist
+/// is left out on purpose: cargo reruns the script on every build for a watched path that is
+/// missing. No git or no repository gives an empty list, and the stamp degrades to "unknown".
+fn head_paths() -> Vec<std::path::PathBuf> {
+    ["HEAD", "refs/heads", "packed-refs"]
+        .iter()
+        .filter_map(|name| git(&["rev-parse", "--git-path", name]))
+        .map(std::path::PathBuf::from)
+        .map(|p| {
+            if p.is_absolute() {
+                p
+            } else {
+                std::path::Path::new("../../..").join(p)
+            }
+        })
+        .filter(|p| p.exists())
+        .collect()
 }
 
 fn git(args: &[&str]) -> Option<String> {
