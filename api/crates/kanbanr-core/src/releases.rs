@@ -372,6 +372,32 @@ fn cadence_on(store: &Store, id: &str) -> Result<Project> {
     Ok(project)
 }
 
+/// What Claude still prepares for a project's first release (DEF-056): the lines `release add`
+/// says "next, for Claude". Empty for a later release, a patch, or when neither applies.
+pub fn first_release_hints(config: &crate::ProjectConfig, releases: &[Release]) -> Vec<String> {
+    if releases.iter().filter(|r| r.parent.is_empty()).count() != 1 {
+        return Vec::new();
+    }
+    let mut hints = Vec::new();
+    if config.cadence.release_prepare.writes_nothing() {
+        hints.push(
+            "no release files are configured: before Promote to candidate, propose them to the \
+             person and run `kanbanr config release-prepare --notes <path with {version}> \
+             --changelog CHANGELOG.md --version-file <manifest>`; the candidate drafts the \
+             version, changelog and notes from it, and nothing without it"
+                .to_string(),
+        );
+    }
+    if config.cadence.has_ci {
+        hints.push(
+            "the project has CI: propose the pipeline item (CI stages, scanning, the release \
+             workflow) planned into this release, before the cut"
+                .to_string(),
+        );
+    }
+    hints
+}
+
 /// Add a planned release.
 pub fn add(store: &Store, id: &str, version: &str, target: &str, name: &str) -> Result<Release> {
     cadence_on(store, id)?;
@@ -4624,6 +4650,33 @@ pub(crate) mod tests {
             .add_milestone("shop", "M", "", vec![], Some("M".into()))
             .unwrap();
         (store, dir)
+    }
+
+    /// DEF-056 R-1: the first release names the release files and the pipeline Claude prepares.
+    #[test]
+    fn the_first_release_names_the_release_files_and_the_pipeline_claude_prepares() {
+        let (store, dir) = plain_board("hints");
+        let first = super::add(&store, "shop", "v0.1.0", "", "").unwrap();
+        let mut config = store.load("shop").unwrap().config;
+        config.cadence.has_ci = true;
+        let hints = super::first_release_hints(&config, std::slice::from_ref(&first));
+        assert_eq!(hints.len(), 2, "{hints:?}");
+        assert!(hints[0].contains("release-prepare"));
+        assert!(hints[1].contains("pipeline item"));
+        // Prepare configured, no CI: nothing.
+        config.cadence.has_ci = false;
+        config.cadence.release_prepare.changelog = Some("CHANGELOG.md".into());
+        assert!(super::first_release_hints(&config, std::slice::from_ref(&first)).is_empty());
+        // A second release, or a patch, is not the first.
+        config.cadence.has_ci = true;
+        let second = super::add(&store, "shop", "v0.2.0", "", "").unwrap();
+        let both = [first.clone(), second];
+        assert!(super::first_release_hints(&config, &both).is_empty());
+        let mut patch = first;
+        patch.parent = "v0.1.0".into();
+        patch.version = "v0.1.1".into();
+        assert!(super::first_release_hints(&config, &[patch]).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// FTR-022 R-10: an empty planned release can be removed, and the others stay.

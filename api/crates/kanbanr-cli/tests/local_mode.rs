@@ -10476,6 +10476,52 @@ fn config_cadence_has_ci_sets_the_flag() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// DEF-056 R-1: `release add` says what the first release still needs, once, for Claude.
+#[test]
+fn release_add_says_what_the_first_release_still_needs() {
+    let (base, work) = togaf_scratch("first-hints");
+    // The test's own board, never the repository's.
+    assert!(work.starts_with(std::env::temp_dir()));
+    let ok = |args: &[&str]| -> Output {
+        let o = run_in(&base, &work, args);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        o
+    };
+    ok(&[
+        "init",
+        "shop",
+        "--author",
+        "A",
+        "--email",
+        "a@x",
+        "--no-hooks",
+    ]);
+    ok(&[
+        "config",
+        "cadence",
+        "--releases",
+        "on",
+        "--git-model",
+        "off",
+    ]);
+    ok(&["config", "cadence", "--has-ci", "on"]);
+    let out = String::from_utf8(ok(&["release", "add", "v0.1.0"]).stdout).unwrap();
+    assert!(out.contains("added release v0.1.0"), "{out}");
+    assert_eq!(out.matches("next, for Claude:").count(), 2, "{out}");
+    // --json carries `next` and prints no lines of its own.
+    ok(&["release", "remove", "v0.1.0"]);
+    let o = ok(&["--json", "release", "add", "v0.1.0"]);
+    let text = String::from_utf8(o.stdout).unwrap();
+    assert!(!text.contains("next, for Claude:"), "{text}");
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["next"].as_array().map(Vec::len), Some(2), "{text}");
+    // A later release has no hints, and once prepared nothing is said.
+    ok(&["config", "release-prepare", "--changelog", "CHANGELOG.md"]);
+    let out = String::from_utf8(ok(&["release", "add", "v0.2.0"]).stdout).unwrap();
+    assert!(!out.contains("next, for Claude:"), "{out}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// FTR-020 R-1: turning releases on gives candidate, main and tag with their gates, and nothing
 /// to warn about; an older board that names the four stages is told which two do nothing.
 #[test]
