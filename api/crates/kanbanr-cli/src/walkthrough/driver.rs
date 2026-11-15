@@ -38,6 +38,9 @@ pub struct SessionCfg {
     pub max_turns: Option<u32>,
     /// `--append-system-prompt-file`: the persona.
     pub persona_file: Option<PathBuf>,
+    /// `PATH` for the session and its hooks: the run's own `bin/` first, so `kanbanr` is the run's
+    /// binary (G-6). None keeps this process's `PATH`.
+    pub path: Option<std::ffi::OsString>,
     /// How long one turn may take before the session is given up as stalled.
     pub turn_timeout: Duration,
 }
@@ -55,6 +58,7 @@ impl SessionCfg {
             budget_usd: 40.0,
             max_turns: None,
             persona_file: None,
+            path: None,
             turn_timeout: Duration::from_secs(30 * 60),
         }
     }
@@ -166,6 +170,9 @@ impl Session {
                 continue;
             }
             cmd.env(k, v);
+        }
+        if let Some(path) = &cfg.path {
+            cmd.env("PATH", path);
         }
         cmd.env("CLAUDE_CONFIG_DIR", &cfg.config_dir)
             .env(kanbanr_core::project::FENCE_VAR, &cfg.fence)

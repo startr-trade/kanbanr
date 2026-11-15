@@ -25,7 +25,16 @@ fn fake_claude(dir: &Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    std::os::unix::fs::symlink(cli(), bin.join("kanbanr")).unwrap();
+    // An installed kanbanr that is not the run's binary, earlier on the test's PATH than nothing
+    // but the run's own bin/ (G-6): if the session ran it, the run would be testing the wrong
+    // product, and every kanbanr call in the fake would fail.
+    let impostor = bin.join("kanbanr");
+    std::fs::write(
+        &impostor,
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'kanbanr 0.0.0 (an installed impostor)'; exit 0; fi\necho 'the installed impostor was run' >&2; exit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&impostor, std::fs::Permissions::from_mode(0o755)).unwrap();
     let script = r#"#!/usr/bin/env python3
 import json, os, subprocess, sys
 def out(obj):
@@ -50,6 +59,7 @@ for line in sys.stdin:
         text = ""
     low = text.lower()
     if low.startswith("start using kanbanr"):
+        say("kanbanr here is: " + run("--version").stdout.strip())
         run("init", "shop", "--data-dir", "../board", "--author", "Dev", "--email", "dev@example.com", "--no-hooks")
         run("milestone", "add", "--name", "M1", "--code", "MS-1")
         run("feature", "add", "--title", "Saved basket", "--milestone", "MS-1")
@@ -323,6 +333,26 @@ fn every_question_asked_in_a_run_has_one_row_in_questions_tsv() {
     assert_eq!(dialog[3], "Which colour should the basket page use?");
     assert_eq!(dialog[5], "Blue (Recommended)");
     assert_eq!(dialog[6], "recommended");
+    // G-6: the session's kanbanr is the run's binary, not the one installed on PATH.
+    let own = Command::new(cli()).arg("--version").output().unwrap();
+    let own = String::from_utf8_lossy(&own.stdout)
+        .lines()
+        .next()
+        .unwrap()
+        .trim()
+        .to_string();
+    let stream_text = std::fs::read_to_string(run.join("raw/transcripts/stream.jsonl")).unwrap();
+    assert!(
+        stream_text.contains(&format!("kanbanr here is: {own}")),
+        "{stream_text}"
+    );
+    assert!(!stream_text.contains("impostor"), "{stream_text}");
+    let setup = std::fs::read_to_string(run.join("raw/setup.log")).unwrap();
+    assert!(setup.contains(&format!("session_kanbanr {own}")), "{setup}");
+    assert!(
+        setup.contains(&format!("session_path_first {}", run.join("bin").display())),
+        "{setup}"
+    );
     // The hook's answer reached the session: the transcript has it.
     let stream = std::fs::read_to_string(run.join("raw/transcripts/stream.jsonl")).unwrap();
     assert!(stream.contains("You picked Blue (Recommended)"), "{stream}");

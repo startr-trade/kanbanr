@@ -162,6 +162,53 @@ pub struct Env {
     pub kanbanr: PathBuf,
     /// The person's installed kanbanr skill, compared with the one the run uses (a note only).
     pub person_skill: Option<PathBuf>,
+    /// The session's `PATH` (the run's `bin/` first): `kanbanr` resolved through it must be the
+    /// run's binary, or the run does not start (G-6).
+    pub session_path: Option<std::ffi::OsString>,
+}
+
+/// `<run>/bin/kanbanr`, a link to `binary` (a copy where links are not available), and the `PATH`
+/// a session gets: that folder first, then this process's `PATH`. Every `kanbanr` the session and
+/// its hooks run is then the run's binary, never an installed one (G-6).
+pub fn run_bin(run: &RunDirs, binary: &Path) -> Result<std::ffi::OsString> {
+    let bin = run.root.join("bin");
+    std::fs::create_dir_all(&bin)?;
+    let name = if cfg!(windows) {
+        "kanbanr.exe"
+    } else {
+        "kanbanr"
+    };
+    let link = bin.join(name);
+    if std::fs::symlink_metadata(&link).is_ok() {
+        std::fs::remove_file(&link)?;
+    }
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(binary, &link)?;
+    #[cfg(not(unix))]
+    std::fs::copy(binary, &link)?;
+    let mut parts = vec![bin];
+    if let Some(p) = std::env::var_os("PATH") {
+        parts.extend(std::env::split_paths(&p));
+    }
+    Ok(std::env::join_paths(parts)?)
+}
+
+/// `kanbanr --version` as a session with `path` would resolve it.
+pub fn version_through_path(path: &std::ffi::OsStr) -> String {
+    match std::process::Command::new("kanbanr")
+        .arg("--version")
+        .env("PATH", path)
+        .output()
+    {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+        Ok(out) => format!("exit {}", out.status.code().unwrap_or(-1)),
+        Err(e) => format!("not found ({e})"),
+    }
 }
 
 /// `git push <remote> <refspec>` in `repo`, run directly: core's repository wrapper refuses every
@@ -441,8 +488,24 @@ pub fn preflight(run: &RunDirs, env: &Env) -> Result<SetupLog> {
     log.push("started", kanbanr_core::now_rfc3339());
     log.push("run", run.root.display().to_string());
     log.push("fence", fence.display().to_string());
-    log.push("kanbanr", version_line(&env.kanbanr, &["--version"]));
+    let own = version_line(&env.kanbanr, &["--version"]);
+    log.push("kanbanr", own.clone());
     log.push("kanbanr_path", env.kanbanr.display().to_string());
+    if let Some(path) = &env.session_path {
+        let first = std::env::split_paths(path)
+            .next()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        let theirs = version_through_path(path);
+        if theirs != own {
+            return Err(anyhow!(
+                "the session would run `{theirs}` as kanbanr, not the run's binary `{own}` (PATH \
+                 starts with {first}): a run tests the binary it was started with (G-6)"
+            ));
+        }
+        log.push("session_path_first", first);
+        log.push("session_kanbanr", theirs);
+    }
     let skill = run.claude_config().join("skills").join("kanbanr");
     let skill_sum = if skill.exists() {
         sha256_tree(&skill)
@@ -557,7 +620,49 @@ pub(crate) mod tests {
             model: "sonnet".into(),
             kanbanr,
             person_skill: None,
+            session_path: None,
         }
+    }
+
+    /// G-6: a session whose PATH would resolve `kanbanr` to another program than the run's binary
+    /// refuses to start; with the run's `bin/` first, setup.log names it and its version line.
+    #[cfg(unix)]
+    #[test]
+    fn a_session_that_would_run_another_kanbanr_refuses_to_start() {
+        let (run, base) = scratch_run("session-bin");
+        let claude = fake_version(&base, "claude", "9.9.9 (Claude Code, fake)");
+        let own = fake_version(
+            &base,
+            "kanbanr",
+            "kanbanr 0.7.0 (1111111, built 2026-11-15)",
+        );
+        let other = base.join("installed");
+        std::fs::create_dir_all(&other).unwrap();
+        fake_version(
+            &other,
+            "kanbanr",
+            "kanbanr 0.6.0 (6a973c6, built 2026-11-14)",
+        );
+        let mut e = env(Some(project::normalize(&base)), None, claude);
+        e.session_path = Some(std::env::join_paths([other.clone()]).unwrap());
+        let why = preflight(&run, &e).unwrap_err().to_string();
+        assert!(
+            why.contains("kanbanr 0.6.0") && why.contains("G-6"),
+            "{why}"
+        );
+        // The run's own bin/ first: accepted, and named.
+        let path = run_bin(&run, &own).unwrap();
+        e.session_path = Some(path);
+        let log = preflight(&run, &e).unwrap();
+        assert_eq!(
+            log.get("session_kanbanr"),
+            Some("kanbanr 0.7.0 (1111111, built 2026-11-15)")
+        );
+        assert_eq!(
+            log.get("session_path_first"),
+            Some(run.root.join("bin").display().to_string().as_str())
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// T16 (G-6): the run's config gets the skill this binary carries — a stamped copy, not a link

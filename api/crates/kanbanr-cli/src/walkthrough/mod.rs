@@ -1209,6 +1209,7 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         model: model.clone(),
         kanbanr: kanbanr.clone(),
         person_skill: crate::hooks::claude_dir().map(|d| d.join("skills").join("kanbanr")),
+        session_path: Some(guard::run_bin(&dirs, &kanbanr)?),
     };
     let mut log = guard::preflight(&dirs, &env)?;
     log.push("runbook", shown.clone());
@@ -1229,6 +1230,8 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     cfg.model = model.clone();
     cfg.budget_usd = args.budget_usd.unwrap_or(runbook.budget_usd);
     cfg.persona_file = Some(persona_file);
+    // The session and every hook it runs resolve `kanbanr` to this binary (G-6).
+    cfg.path = env.session_path.clone();
     // The allowed remotes reach the session's hooks (`kanbanr git guard`) through the environment
     // every child of this process inherits, so they are exported before the session starts.
     // SAFETY: this process is single-threaded here, before the session's reader thread exists.
