@@ -513,7 +513,12 @@ fn a_fake_claude_run_leaves_the_public_board_and_the_kanbanr_repository_untouche
             .join("projects/target/features/Planned/FEAT-001.yaml"),
     )
     .unwrap();
-    assert!(!item.contains("state: green"), "{item}");
+    // Read as YAML, never grepped: the writer quotes a value that would read as a number.
+    let first_test = |yaml: &str| -> serde_json::Value {
+        let v: serde_json::Value = kanbanr_core::yaml::from_str(yaml).unwrap();
+        v["definition"]["requirements"][0]["tests"][0].clone()
+    };
+    assert_ne!(first_test(&item)["state"], "green", "{item}");
     // A walkthrough-kind test is the run's own automated evidence: recorded, at the binary's
     // commit; a check on a step that checked nothing is put nowhere.
     let item2 = std::fs::read_to_string(
@@ -521,7 +526,8 @@ fn a_fake_claude_run_leaves_the_public_board_and_the_kanbanr_repository_untouche
             .join("projects/target/features/Planned/FEAT-002.yaml"),
     )
     .unwrap();
-    assert!(item2.contains("state: green"), "{item2}");
+    let test2 = first_test(&item2);
+    assert_eq!(test2["state"], "green", "{item2}");
     let own = Command::new(cli()).arg("--version").output().unwrap();
     let own = String::from_utf8_lossy(&own.stdout).to_string();
     let sha = own
@@ -535,9 +541,12 @@ fn a_fake_claude_run_leaves_the_public_board_and_the_kanbanr_repository_untouche
         .to_string();
     // The binary's commit is the evidence's revision; a dirty build names none.
     if sha.chars().all(|c| c.is_ascii_hexdigit()) {
-        assert!(item2.contains(&format!("checked_rev: {sha}")), "{item2}");
+        assert_eq!(test2["checked_rev"], sha.as_str(), "{item2}");
     } else {
-        assert!(!item2.contains("checked_rev:"), "{item2}");
+        assert!(
+            test2["checked_rev"].as_str().unwrap_or("").is_empty(),
+            "{item2}"
+        );
     }
     assert!(
         shown.contains("recorded walkthrough test: MT-W FEAT-002 R-1 green"),
