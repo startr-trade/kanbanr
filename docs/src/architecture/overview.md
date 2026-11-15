@@ -110,10 +110,10 @@ Two facts shape what a position can see. A **submodule's own state does not move
 (its gitlink is skipped, as katalogr's code skips it; committing a new submodule pointer does move
 it). And a checkout whose **filters change bytes** (`core.autocrlf`, `text=auto`) reads dirty where
 `git status` says clean, because a position hashes raw bytes, so there a view is exact only at the
-live position, never at the commit it would otherwise equal. Measured in a release build: one read
-of a clean checkout of 10,000 tracked files takes 141.8 ms (median of three, machine load about
-6.6), against a budget of 200 ms; a view ID takes well under 100 µs. A debug build is slower (224
-ms) and asserts nothing.
+live position, never at the commit it would otherwise equal. Measured in a release build: one read of a clean checkout of 10,000 tracked files takes 110.7 ms
+(median of three, machine load about 7; SPK-001 measured 141.8 ms on a busier machine), against a
+budget of 200 ms; a view ID takes about 6 µs against a budget of 100 µs. A debug build is slower
+(224 ms) and its test prints the figure and asserts nothing.
 
 ## Runtime: one writer, a read-only view, git
 
