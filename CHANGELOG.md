@@ -6,6 +6,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The Claude docs guard judges a file in a linked worktree by its own repository's path, so the
+  book, the changelog and the skill are no longer refused there (DEF-065).
+
 ## [0.6.0] - 2026-11-14
 
 ### Added
