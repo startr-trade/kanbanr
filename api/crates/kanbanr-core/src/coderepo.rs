@@ -169,9 +169,52 @@ pub fn repo_facts(root: &Path, message: Option<String>) -> crate::scm::RepoFacts
         merging: merge_in_progress(root),
         has_commits: has_commits(root),
         message,
-        setup_pending: false,
+        setup_pending: setup_pending(root),
         staged: None,
     }
+}
+
+/// As [`repo_facts`], with `staged` read from the index: what the pre-commit hook judges
+/// (DEF-067).
+pub fn repo_facts_staged(root: &Path, message: Option<String>) -> crate::scm::RepoFacts {
+    crate::scm::RepoFacts {
+        staged: staged_paths(root),
+        ..repo_facts(root, message)
+    }
+}
+
+/// Is setup's marker on disk and not yet in HEAD (DEF-067)? `root/.kanbanr` is a file, the
+/// repository has commits, and `git cat-file -e HEAD:.kanbanr` ran and said no. Fails safe: if
+/// git cannot be asked, the answer is `false`, so no exception opens (ADR-0004).
+pub fn setup_pending(root: &Path) -> bool {
+    if !root.join(crate::project::MARKER_FILE).is_file() || !has_commits(root) {
+        return false;
+    }
+    let spec = format!("HEAD:{}", crate::project::MARKER_FILE);
+    match run(root, &["cat-file", "-e", &spec]) {
+        Ok(o) => !o.status.success(),
+        Err(_) => false,
+    }
+}
+
+/// The paths staged for the next commit, repository-relative with `/` separators
+/// (`git diff --cached --name-only --no-renames -z`); `None` when git fails.
+pub fn staged_paths(root: &Path) -> Option<Vec<String>> {
+    let out = run(
+        root,
+        &["diff", "--cached", "--name-only", "--no-renames", "-z"],
+    )
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
 }
 
 /// The commit a revision names.
@@ -852,6 +895,49 @@ pub(crate) mod tests {
         std::fs::write(repo.join(file), content).unwrap();
         git(repo, &["add", file]).unwrap();
         git(repo, &["commit", "-q", "-m", message]).unwrap();
+    }
+
+    /// DEF-067 R-1: setup is pending from the moment the marker is on disk until it is committed,
+    /// never in a repository with no commits; the staged set is what `git add` staged.
+    #[test]
+    fn setup_is_pending_until_the_marker_is_committed() {
+        let repo = scratch_repo("setup-pending");
+        assert!(!setup_pending(&repo), "no marker yet");
+        std::fs::write(repo.join(".kanbanr"), "data_dir: x\n").unwrap();
+        assert!(setup_pending(&repo), "marker on disk, not in HEAD");
+        assert!(repo_facts(&repo, None).setup_pending);
+        std::fs::write(repo.join("CLAUDE.md"), "# p\n").unwrap();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src/x.txt"), "x\n").unwrap();
+        git(&repo, &["add", ".kanbanr", "CLAUDE.md"]).unwrap();
+        assert_eq!(
+            staged_paths(&repo),
+            Some(vec![".kanbanr".to_string(), "CLAUDE.md".to_string()])
+        );
+        git(&repo, &["add", "src/x.txt"]).unwrap();
+        assert_eq!(
+            repo_facts_staged(&repo, None).staged,
+            Some(vec![
+                ".kanbanr".to_string(),
+                "CLAUDE.md".to_string(),
+                "src/x.txt".to_string()
+            ])
+        );
+        assert_eq!(repo_facts(&repo, None).staged, None);
+        git(&repo, &["commit", "-q", "-m", "[no-ref] initial setup"]).unwrap();
+        assert!(!setup_pending(&repo), "the marker is in HEAD");
+        assert_eq!(staged_paths(&repo), Some(Vec::new()));
+        let _ = std::fs::remove_dir_all(&repo);
+
+        // A fresh `git init` has no commits: the root commit has its own exception (FEAT-105).
+        let fresh =
+            std::env::temp_dir().join(format!("kanbanr-coderepo-{}-fresh", std::process::id()));
+        let _ = std::fs::remove_dir_all(&fresh);
+        std::fs::create_dir_all(&fresh).unwrap();
+        git(&fresh, &["init", "-q", "--initial-branch=main"]).unwrap();
+        std::fs::write(fresh.join(".kanbanr"), "data_dir: x\n").unwrap();
+        assert!(!setup_pending(&fresh));
+        let _ = std::fs::remove_dir_all(&fresh);
     }
 
     /// DEF-033 R-2: the files a branch changed since the merge base, not what the line gained
