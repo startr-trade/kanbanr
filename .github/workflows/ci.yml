@@ -122,6 +122,13 @@ jobs:
       - name: Test
         run: cargo test --locked --workspace --no-fail-fast
 
+      # DEF-058: build.rs must restamp a build in a linked git worktree after HEAD moves. The test
+      # clones the repository, so it is #[ignore]d in the workspace run above (a minute or two) and
+      # runs here, on Linux only: the fix is in build.rs, not the platform.
+      - name: Build stamp follows HEAD in a worktree
+        if: runner.os == 'Linux'
+        run: cargo test --locked -p kanbanr-cli --test build_stamp -- --ignored
+
   # A contribution states why it exists and proves each requirement with a green test
   # (CONTRIBUTING.md). The definition travels in the PR body, because a contributor has no board
   # access, and `kanbanr check --file` validates it on its own.
