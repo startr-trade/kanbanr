@@ -1052,6 +1052,7 @@ dependencies = [
  "ears-classifier",
  "fs2",
  "git2",
+ "libgit2-sys",
  "mermaid-lint",
  "schemars",
  "serde",
