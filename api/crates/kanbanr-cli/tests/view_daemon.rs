@@ -1971,5 +1971,34 @@ fn the_daemon_serves_the_position_and_the_docs_view() {
     assert_eq!(get("/projects/shop/views/docs?at=zz").0, 400);
     assert_eq!(get("/projects/shop/views/docs?rooot=docs").0, 400);
     assert_eq!(get("/projects/shop/position?x=1").0, 400);
+
+    // Started outside any repository: 409, and the message says what to do.
+    let port2 = free_port();
+    let child2 = cli_cmd()
+        .args(["serve", "--bind", &format!("127.0.0.1:{port2}")])
+        .current_dir(&base)
+        .env("HOME", &home)
+        .env("KANBANR_DATA_DIR", &board)
+        .spawn()
+        .expect("spawn kanbanr serve");
+    let _daemon2 = Daemon(child2);
+    let url2 = format!("http://127.0.0.1:{port2}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while ureq::get(&format!("{url2}/api/projects")).call().is_err() {
+        assert!(Instant::now() < deadline, "daemon did not become ready");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    for route in ["position", "views/docs"] {
+        match ureq::get(&format!("{url2}/api/projects/shop/{route}")).call() {
+            Err(ureq::Error::Status(code, r)) => {
+                assert_eq!(code, 409, "{route}");
+                assert_eq!(
+                    r.into_string().unwrap(),
+                    "no checkout on this machine: a view needs the code repository (start `kanbanr serve` from the project folder) or a saved snapshot (FTR-016)"
+                );
+            }
+            other => panic!("{route}: expected a 409, got {other:?}"),
+        }
+    }
     let _ = std::fs::remove_dir_all(&base);
 }

@@ -117,7 +117,7 @@ pub enum CoreError {
 /// The words for [`CoreError::PositionUnavailable`]: what was asked for and what is held.
 fn position_unavailable_text(wanted: &str, available: &[crate::position::PositionRef]) -> String {
     if available.is_empty() {
-        format!("position {wanted} is not here: no checkout on this machine")
+        "no checkout on this machine: a view needs the code repository (start `kanbanr serve` from the project folder) or a saved snapshot (FTR-016)".to_string()
     } else {
         let held: Vec<String> = available.iter().map(|p| p.text()).collect();
         format!(

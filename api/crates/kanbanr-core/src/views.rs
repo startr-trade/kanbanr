@@ -716,7 +716,10 @@ mod tests {
             wanted: "w".into(),
             available: vec![],
         };
-        assert!(none.to_string().ends_with("no checkout on this machine"));
+        assert_eq!(
+            none.to_string(),
+            "no checkout on this machine: a view needs the code repository (start `kanbanr serve` from the project folder) or a saved snapshot (FTR-016)"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
