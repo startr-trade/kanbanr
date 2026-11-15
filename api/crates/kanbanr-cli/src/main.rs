@@ -2424,6 +2424,7 @@ fn prepare_board_repo(dir: &Path, given: Option<(&str, &str)>) -> anyhow::Result
 }
 
 /// One-shot local setup: data dir + git repo + identity + a first project, selected here.
+#[allow(clippy::too_many_arguments)]
 fn run_init(
     cli: &Cli,
     name: Option<String>,
