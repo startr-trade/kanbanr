@@ -5,9 +5,12 @@
 //! A spike's code: nothing here is reachable from the CLI, the daemon or the monitor yet. FTR-003
 //! takes it over.
 
+use crate::coderepo::{git_raw, rev_parse};
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 /// One repository's position (CD-2). Serialises as `{"repo","commit","dirty"}`, absent parts null.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -173,6 +176,144 @@ pub fn view_id(positions: &[PositionRef], facts: &str, q: &ViewQuery) -> String 
     format!("v1-{}", &hex(&digest)[..32])
 }
 
+/// A checkout's position and the paths that make its dirty part, sorted by path; the blob id is
+/// None for a deleted path. Paths are the repo-relative, '/'-separated bytes git prints, lossy
+/// UTF-8.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkingState {
+    pub position: PositionRef,
+    pub changed: Vec<(String, Option<String>)>,
+}
+
+#[cfg(unix)]
+fn path_of(root: &Path, path: &[u8]) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    root.join(std::ffi::OsStr::from_bytes(path))
+}
+
+#[cfg(not(unix))]
+fn path_of(root: &Path, path: &[u8]) -> PathBuf {
+    root.join(String::from_utf8_lossy(path).as_ref())
+}
+
+/// What git would hash for `path` with no filter applied: a symbolic link's target, a regular
+/// file's bytes; None for anything else (missing, a directory).
+fn raw_bytes(root: &Path, path: &[u8]) -> Option<Vec<u8>> {
+    let full = path_of(root, path);
+    let meta = std::fs::symlink_metadata(&full).ok()?;
+    if meta.file_type().is_symlink() {
+        let target = std::fs::read_link(&full).ok()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            return Some(target.as_os_str().as_bytes().to_vec());
+        }
+        #[cfg(not(unix))]
+        return Some(target.to_string_lossy().replace('\\', "/").into_bytes());
+    }
+    if meta.is_file() {
+        return std::fs::read(&full).ok();
+    }
+    None
+}
+
+/// The blobs of `ls-tree -r -z <commit> [-- prefix]`: path bytes to blob id; gitlinks skipped.
+fn head_blobs(root: &Path, commit: &str, prefix: &str) -> Result<BTreeMap<Vec<u8>, String>> {
+    let mut args = vec!["ls-tree", "-r", "-z", commit];
+    if !prefix.is_empty() {
+        args.push("--");
+        args.push(prefix);
+    }
+    let out = git_raw(root, &args)?;
+    let mut map = BTreeMap::new();
+    for rec in out.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+        let Some(tab) = rec.iter().position(|b| *b == b'\t') else {
+            continue;
+        };
+        let meta = String::from_utf8_lossy(&rec[..tab]);
+        let mut parts = meta.split(' ');
+        let (_mode, kind, oid) = (parts.next(), parts.next(), parts.next());
+        if kind == Some("blob")
+            && let Some(oid) = oid
+        {
+            map.insert(rec[tab + 1..].to_vec(), oid.to_string());
+        }
+    }
+    Ok(map)
+}
+
+fn nul_list(bytes: Vec<u8>) -> Vec<Vec<u8>> {
+    bytes
+        .split(|b| *b == 0)
+        .filter(|r| !r.is_empty())
+        .map(<[u8]>::to_vec)
+        .collect()
+}
+
+/// HEAD plus the CD-2 hash of the checkout at `root`, which must be the top of a git work tree.
+/// An unborn HEAD gives commit None with every untracked, not ignored file counted. Reads only;
+/// no cache (katalogr's stat cache is not copied: see the SPK-001 result).
+pub fn read_position(root: &Path, repo: &str) -> Result<WorkingState> {
+    let commit = rev_parse(root, "HEAD").ok();
+    let head = match &commit {
+        Some(c) => head_blobs(root, c, "")?,
+        None => BTreeMap::new(),
+    };
+    let mut lines: BTreeMap<Vec<u8>, Option<String>> = BTreeMap::new();
+    for (path, oid) in &head {
+        match raw_bytes(root, path) {
+            Some(bytes) => {
+                let id = blob_id(&bytes);
+                if &id != oid {
+                    lines.insert(path.clone(), Some(id));
+                }
+            }
+            None => {
+                lines.insert(path.clone(), None);
+            }
+        }
+    }
+    let others = nul_list(git_raw(
+        root,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )?);
+    let staged_new = match &commit {
+        Some(c) => nul_list(git_raw(
+            root,
+            &[
+                "diff-index",
+                "--cached",
+                "--diff-filter=A",
+                "--name-only",
+                "-z",
+                c,
+            ],
+        )?),
+        None => nul_list(git_raw(root, &["ls-files", "--cached", "-z"])?),
+    };
+    for path in others.into_iter().chain(staged_new) {
+        if head.contains_key(&path) || lines.contains_key(&path) {
+            continue;
+        }
+        if let Some(bytes) = raw_bytes(root, &path) {
+            lines.insert(path, Some(blob_id(&bytes)));
+        }
+    }
+    let dirty = dirty_hash(lines.iter().map(|(p, id)| (p.as_slice(), id.as_deref())));
+    let changed = lines
+        .into_iter()
+        .map(|(p, id)| (String::from_utf8_lossy(&p).into_owned(), id))
+        .collect();
+    Ok(WorkingState {
+        position: PositionRef {
+            repo: repo.to_string(),
+            commit,
+            dirty,
+        },
+        changed,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,5 +427,141 @@ mod tests {
         let mut q3 = q.clone();
         q3.op = "other".into();
         assert_ne!(view_id(&ps, "0123abcd", &q3), id);
+    }
+
+    // ---- scratch repositories (integration) ----
+
+    use crate::coderepo::{git, tests::commit_file, tests::scratch_repo};
+
+    /// A scratch repository that no global git setting can bend: no line-ending conversion and an
+    /// empty global ignore file. Removes itself with `gone`.
+    fn repo(name: &str) -> PathBuf {
+        let dir = scratch_repo(&format!("pos-{name}"));
+        let empty = dir.join(".git/empty-excludes");
+        std::fs::write(&empty, "").unwrap();
+        git(&dir, &["config", "core.autocrlf", "false"]).unwrap();
+        git(&dir, &["config", "core.excludesFile", empty.to_str().unwrap()]).unwrap();
+        dir
+    }
+
+    fn gone(dir: &Path) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn pos(dir: &Path) -> WorkingState {
+        read_position(dir, "r").unwrap()
+    }
+
+    /// A clean checkout has a commit and no dirty hash.
+    #[test]
+    fn clean_has_no_dirty_hash() {
+        let d = repo("clean");
+        let st = pos(&d);
+        assert!(st.position.commit.is_some());
+        assert!(st.position.is_clean());
+        assert!(st.changed.is_empty());
+        gone(&d);
+    }
+
+    #[test]
+    fn edit_changes_hash() {
+        let d = repo("edit");
+        std::fs::write(d.join("README"), "edited\n").unwrap();
+        let a = pos(&d);
+        assert!(a.position.dirty.is_some());
+        assert_eq!(a.changed.len(), 1);
+        std::fs::write(d.join("README"), "edited again\n").unwrap();
+        assert_ne!(pos(&d).position.dirty, a.position.dirty);
+        gone(&d);
+    }
+
+    #[test]
+    fn revert_to_head_is_clean() {
+        let d = repo("revert");
+        std::fs::write(d.join("README"), "edited\n").unwrap();
+        assert!(!pos(&d).position.is_clean());
+        std::fs::write(d.join("README"), "base\n").unwrap();
+        assert!(pos(&d).position.is_clean());
+        gone(&d);
+    }
+
+    /// R-1: staging a change alone moves nothing; the bytes on disk decide.
+    #[test]
+    fn staging_alone_changes_nothing() {
+        let d = repo("staging");
+        let before = pos(&d).position;
+        std::fs::write(d.join("README"), "edited\n").unwrap();
+        let edited = pos(&d).position;
+        git(&d, &["add", "README"]).unwrap();
+        assert_eq!(pos(&d).position, edited, "staging the edit changed it");
+        // Stage something other than the disk holds: the disk still decides.
+        std::fs::write(d.join("README"), "base\n").unwrap();
+        assert_eq!(pos(&d).position, before);
+        gone(&d);
+    }
+
+    /// R-1: an untracked file counts, an ignored one does not.
+    #[test]
+    fn untracked_counts_ignored_does_not() {
+        let d = repo("untracked");
+        commit_file(&d, ".gitignore", "*.log\n", "ignore");
+        let clean = pos(&d).position;
+        std::fs::write(d.join("x.log"), "noise\n").unwrap();
+        assert_eq!(pos(&d).position, clean);
+        std::fs::write(d.join("new.txt"), "new\n").unwrap();
+        let st = pos(&d);
+        assert_ne!(st.position, clean);
+        assert_eq!(st.changed.len(), 1);
+        assert_eq!(st.changed[0].0, "new.txt");
+        gone(&d);
+    }
+
+    /// R-1: a deleted tracked path is a line with `-`, not a blob id.
+    #[test]
+    fn deleted_uses_dash() {
+        let d = repo("deleted");
+        std::fs::remove_file(d.join("README")).unwrap();
+        let st = pos(&d);
+        assert_eq!(st.changed, vec![("README".to_string(), None)]);
+        assert_eq!(
+            st.position.dirty,
+            dirty_hash([(b"README".as_slice(), None)])
+        );
+        gone(&d);
+    }
+
+    /// R-1: a mode change with the same bytes is not a difference.
+    #[cfg(unix)]
+    #[test]
+    fn mode_change_does_not_count() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = repo("mode");
+        let p = d.join("README");
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(pos(&d).position.is_clean());
+        gone(&d);
+    }
+
+    /// R-1: before the first commit there is no commit, and untracked files count.
+    #[test]
+    fn unborn_head_has_no_commit() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-pos-{}-unborn", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git(&dir, &["init", "-q", "--initial-branch=main"]).unwrap();
+        git(&dir, &["config", "core.autocrlf", "false"]).unwrap();
+        let empty = pos(&dir);
+        assert_eq!(empty.position.commit, None);
+        assert_eq!(empty.position.dirty, None);
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        let st = pos(&dir);
+        assert_eq!(st.position.commit, None);
+        assert!(st.position.dirty.is_some());
+        assert!(st.position.text().starts_with("none+"));
+        // A path staged then removed from disk is simply absent.
+        git(&dir, &["add", "a.txt"]).unwrap();
+        std::fs::remove_file(dir.join("a.txt")).unwrap();
+        assert_eq!(pos(&dir).position.dirty, None);
+        gone(&dir);
     }
 }

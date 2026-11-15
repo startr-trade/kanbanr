@@ -85,6 +85,20 @@ pub fn git(root: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
+/// `git` in `root` with its stdout as bytes, untrimmed: for `-z` listings. A failure carries git's
+/// own reason, as [`git`] does.
+pub fn git_raw(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let out = run(root, args)?;
+    if !out.status.success() {
+        return Err(CoreError::Git(format!(
+            "git {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(out.stdout)
+}
+
 fn succeeds(root: &Path, args: &[&str]) -> bool {
     run(root, args).is_ok_and(|o| o.status.success())
 }
