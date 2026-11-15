@@ -236,19 +236,41 @@ fn resolve_lexically(path: &str, cwd: &std::path::Path) -> std::path::PathBuf {
 ///
 /// The file's own repository decides: in a linked worktree that is the worktree, so its
 /// `docs/src/x.md` is the book, not a stray note in the main checkout. The file, and often its
-/// folder, does not exist yet, so git is asked from the nearest existing ancestor. When git gives no
-/// answer, `fallback_root` is used, and the guard still never fails a write.
+/// folder, does not exist yet, so git is asked from the nearest existing ancestor. That top level is
+/// taken only when it shares `fallback_root`'s git common directory, so it is the session
+/// repository or one of its worktrees. Otherwise, or when git gives no answer, `fallback_root` is
+/// used, and the guard still never fails a write.
 pub fn docs_guard_suggestion(
     path: &str,
     cwd: &std::path::Path,
     fallback_root: &std::path::Path,
 ) -> Option<String> {
     let resolved = resolve_lexically(path, cwd);
-    let top_level = resolved
+    // One call for the file's top level and the repository it belongs to, one for the session's.
+    let rev_parse = |dir: &std::path::Path, args: &[&str]| {
+        let mut all = vec!["rev-parse", "--path-format=absolute"];
+        all.extend_from_slice(args);
+        crate::coderepo::git(dir, &all).ok()
+    };
+    let own = resolved
         .ancestors()
         .skip(1)
         .find(|dir| dir.is_dir())
-        .and_then(crate::coderepo::repo_root_in);
+        .and_then(|dir| rev_parse(dir, &["--show-toplevel", "--git-common-dir"]))
+        .and_then(|out| {
+            let mut lines = out.lines().map(|l| std::path::PathBuf::from(l.trim()));
+            Some((lines.next()?, lines.next()?))
+        });
+    // Only a worktree of the session's own repository is judged by its own root: a file in an
+    // unrelated repository, a scratch one under the temporary folder, stays outside the guard
+    // (FEAT-111 R-1).
+    let session = || {
+        rev_parse(fallback_root, &["--git-common-dir"])
+            .map(|out| crate::project::normalize(std::path::Path::new(out.trim())))
+    };
+    let top_level = own.and_then(|(top, common)| {
+        (session() == Some(crate::project::normalize(&common))).then_some(top)
+    });
     let root = top_level.as_deref().unwrap_or(fallback_root);
     board_path_for(path, root, cwd)
 }

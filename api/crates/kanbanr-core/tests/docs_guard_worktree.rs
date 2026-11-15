@@ -103,3 +103,35 @@ fn a_linked_worktree_is_judged_by_its_own_root() {
     }
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// DEF-065, FEAT-111 R-1: a file's own top level counts only for the session repository and its
+/// worktrees. A `notes.md` in an unrelated git repository under the temporary folder stays outside
+/// the guard, as it was before.
+#[test]
+fn an_unrelated_repository_is_outside_the_guard() {
+    if Command::new("git").arg("--version").output().is_err() {
+        eprintln!("git is not on PATH: skipped");
+        return;
+    }
+    let base = std::env::temp_dir().join(format!("kanbanr-guard-other-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (main, other) = (base.join("main"), base.join("other"));
+    for repo in [&main, &other] {
+        std::fs::create_dir_all(repo).unwrap();
+        git(repo, &["init", "-q"]);
+    }
+    let notes = other.join("notes.md");
+    assert_eq!(
+        docs_guard_suggestion(notes.to_str().unwrap(), &main, &main),
+        None,
+        "{} is not the session repository's",
+        notes.display()
+    );
+    // The session repository's own loose note is still refused.
+    let own = main.join("notes.md");
+    assert_eq!(
+        docs_guard_suggestion(own.to_str().unwrap(), &main, &main).as_deref(),
+        Some("notes")
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
