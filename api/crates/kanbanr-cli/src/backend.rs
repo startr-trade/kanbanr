@@ -416,6 +416,7 @@ impl Backend {
             .map(|(n, _)| n)
             .unwrap_or_else(|| "kanbanr".into());
         activity::append(&self.data_dir, project, &actor, &msg, None);
+        kanbanr_core::writer::stamp(&self.data_dir);
         let committed = git::commit_local(&self.data_dir, &msg); // architecture: allowed because gated by outside_core_refusal
         if committed {
             self.after_commit();
@@ -472,6 +473,7 @@ impl Backend {
             } else {
                 format!("rebuild index for {} projects", ids.len())
             };
+            kanbanr_core::writer::stamp(&self.data_dir);
             let committed = git::commit_local(&self.data_dir, &msg); // architecture: allowed because gated by outside_core_refusal
             if committed {
                 self.after_commit();

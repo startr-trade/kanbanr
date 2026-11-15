@@ -405,6 +405,8 @@ pub fn apply_as(
                 Some(s) => agentscope::with_trailer(&msg, s),
                 None => msg,
             };
+            // The writer record moves in the write's own commit (FTR-036).
+            crate::writer::stamp(data_dir);
             if git::commit_local(data_dir, &msg)
                 && let Some(outcome) = git::after_commit(data_dir, policy)
             {
