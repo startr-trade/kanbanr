@@ -1438,7 +1438,7 @@ kanbanr task list FEAT-001 [TL-001]
 Milestones (dependency DAG; cycles rejected) and documentation:
 ```
 kanbanr milestone add --name "Auth" [--code MS-002] [--depends-on MS-001]
-kanbanr milestone list ; kanbanr milestone edit MS-002 […] ; kanbanr milestone delete MS-002  # only if unreferenced
+kanbanr milestone list (newest first; `--oldest-first` for creation order) ; kanbanr milestone edit MS-002 […] ; kanbanr milestone delete MS-002  # only if unreferenced
 kanbanr doc folder design --name "Design" --description "…"
 kanbanr doc add design/overview.md --file notes.md      # or --content "# Title\n…"
 kanbanr doc tree | list | show <path> | rm <path>

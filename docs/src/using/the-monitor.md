@@ -222,7 +222,7 @@ flowchart TD
   Board["Board — a column per displayed status"]
   Status["Status page — features in that status, with their OPEN todo-lists"]
   Feature["Feature page — Specification + todo-list tiles (newest first) + export"]
-  Ms["Milestones — list"]
+  Ms["Milestones — list, newest first"]
   MsOne["Milestone — its dependencies + its feature items as tiles"]
   Sched["Schedule — milestones grouped by feature status (derived)"]
   Docs["Documentation — folders as tiles, files as links"]
@@ -315,7 +315,7 @@ it.
 | ![Review: approve, ratify, sign off](../images/review.png) | ![The charter, goals and lessons](../images/charter.png) | ![The workflow and its gates](../images/workflow.png) |
 | **Review** — approve, ratify, sign off | **Charter** — purpose, goals, lessons | **Workflow** — stages and their gates |
 | ![Milestones](../images/milestones.png) | ![A milestone](../images/milestone.png) | ![The derived schedule](../images/schedule.png) |
-| **Milestones** and their dependencies | **A milestone** and its items | **Schedule** — derived, never stored |
+| **Milestones**, newest first, and their dependencies | **A milestone** and its items | **Schedule** — derived, never stored |
 | ![The Gantt](../images/gantt.png) | ![A status page](../images/status.png) | ![The Ongoing stream](../images/ongoing.png) |
 | **Gantt** with the critical path | **A status**, grouped | **Ongoing** — work that never completes |
 | ![Docs](../images/docs.png) | ![A doc with an embedded image](../images/doc-file.png) | ![A doc with a Mermaid diagram](../images/doc-mermaid.png) |

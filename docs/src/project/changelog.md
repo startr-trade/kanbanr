@@ -6,6 +6,13 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Milestones are listed newest first (FTR-031).** `kanbanr milestone list` (text and `--json`) and
+  the monitor's Milestones page put the highest code first, so the milestone being worked on is at
+  the top; `--oldest-first` gives the creation order. The Schedule view and a milestone's
+  dependencies keep their dependency order.
+
 ## [0.6.0] - 2026-11-14
 
 ### Added
