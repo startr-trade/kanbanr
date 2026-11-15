@@ -500,8 +500,8 @@ pub fn tables_of(raw: &Path) -> Result<Derived> {
 pub fn tables(run: &RunDirs) -> Result<Derived> {
     let d = tables_of(&run.raw())?;
     std::fs::create_dir_all(run.results())?;
-    std::fs::write(run.results().join("decisions.tsv"), &d.decisions_tsv)?;
-    std::fs::write(run.results().join("metrics.md"), &d.metrics_md)?;
+    kanbanr_core::atomic::write(run.results().join("decisions.tsv"), &d.decisions_tsv)?;
+    kanbanr_core::atomic::write(run.results().join("metrics.md"), &d.metrics_md)?;
     Ok(d)
 }
 

@@ -138,7 +138,7 @@ pub fn fetch_ci_runs(run: &RunDirs, remote: &str, gh: &Path) -> Option<CiRuns> {
     }
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let _ = std::fs::create_dir_all(run.raw());
-    let _ = std::fs::write(run.raw().join("ci-runs.json"), &text);
+    let _ = kanbanr_core::atomic::write(run.raw().join("ci-runs.json"), &text);
     CiRuns::from_json(&text).ok()
 }
 
@@ -314,7 +314,7 @@ pub fn check(
     }
     std::fs::create_dir_all(run.raw())?;
     let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
-    std::fs::write(run.raw().join("truth.txt"), text)?;
+    kanbanr_core::atomic::write(run.raw().join("truth.txt"), text)?;
     Ok(lines)
 }
 

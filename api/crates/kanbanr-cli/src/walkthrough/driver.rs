@@ -135,14 +135,8 @@ impl Session {
         let transcripts = cfg.run_dir.join("raw").join("transcripts");
         std::fs::create_dir_all(&transcripts)
             .with_context(|| format!("could not make {}", transcripts.display()))?;
-        let transcript = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(transcripts.join("stream.jsonl"))?;
-        let stderr = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(transcripts.join("stderr.txt"))?;
+        let transcript = super::append_to(transcripts.join("stream.jsonl"))?;
+        let stderr = super::append_to(transcripts.join("stderr.txt"))?;
         let mut cmd = Command::new(&cfg.claude);
         cmd.arg("-p")
             .args(["--input-format", "stream-json"])

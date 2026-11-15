@@ -161,8 +161,8 @@ fn do_snapshot(run: &RunDirs, remotes: Option<&RemotesEnv>) -> Result<()> {
             refs.push_str(&format!("# {which}\n{}", ls_remote(url, false)));
             tags.push_str(&format!("# {which}\n{}", ls_remote(url, true)));
         }
-        std::fs::write(raw.join("remote-refs.txt"), refs)?;
-        std::fs::write(raw.join("remote-tags.txt"), tags)?;
+        kanbanr_core::atomic::write(raw.join("remote-refs.txt"), refs)?;
+        kanbanr_core::atomic::write(raw.join("remote-tags.txt"), tags)?;
     }
     Ok(())
 }
@@ -176,11 +176,11 @@ pub fn snapshot(run: &RunDirs, remotes: Option<&RemotesEnv>) -> Result<Manifest>
     let _ = std::fs::remove_file(raw.join(MANIFEST));
     if let Err(e) = do_snapshot(run, remotes) {
         std::fs::create_dir_all(&raw)?;
-        let _ = std::fs::write(raw.join(FAILED), format!("{e}\n"));
+        let _ = kanbanr_core::atomic::write(raw.join(FAILED), format!("{e}\n"));
         return Err(e.context("the snapshot failed; raw/ has SNAPSHOT-FAILED and no manifest"));
     }
     let manifest = manifest_of(&raw);
-    std::fs::write(raw.join(MANIFEST), manifest.to_text())?;
+    kanbanr_core::atomic::write(raw.join(MANIFEST), manifest.to_text())?;
     Ok(manifest)
 }
 

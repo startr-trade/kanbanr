@@ -28,10 +28,7 @@ pub fn created_file(runs_dir: &Path) -> PathBuf {
 fn append_created(runs_dir: &Path, rows: &[Created]) -> Result<()> {
     use std::io::Write;
     std::fs::create_dir_all(runs_dir)?;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(created_file(runs_dir))?;
+    let mut f = super::append_to(created_file(runs_dir))?;
     for r in rows {
         writeln!(f, "{}\t{}\t{}\t{}", r.at, r.run, r.which, r.url)?;
     }

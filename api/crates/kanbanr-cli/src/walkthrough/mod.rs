@@ -333,15 +333,20 @@ fn fill(text: &str, vars: &BTreeMap<String, String>) -> String {
     out
 }
 
+/// Open one of the run folder's append-only logs (a TSV, the transcript stream, a serve log,
+/// `raw/findings.md`) to add to it, creating it if need be. Rows are added while the run goes on,
+/// so the file is appended to, never rewritten (the one exception in `atomic_writes`).
+pub(crate) fn append_to(path: impl AsRef<Path>) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true).open(path)
+}
+
 /// Append one finding to `raw/findings.md`.
 fn append_finding(run: &RunDirs, f: &Finding) -> Result<()> {
     std::fs::create_dir_all(run.raw())?;
     let path = run.findings();
     let new = !path.exists();
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let mut file = append_to(&path)?;
     if new {
         writeln!(file, "# Findings\n")?;
     }
@@ -354,10 +359,7 @@ fn append_push(run: &RunDirs, repo: &str, refspec: &str, ok: bool, said: &str) -
     std::fs::create_dir_all(run.raw())?;
     let path = run.raw().join("pushes.tsv");
     let new = !path.exists();
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let mut f = append_to(&path)?;
     if new {
         writeln!(f, "time\trepo\trefspec\tok\tsaid")?;
     }
@@ -382,7 +384,7 @@ fn write_checks(run: &RunDirs, checks: &[CheckResult]) -> Result<()> {
             c.why.replace(['\t', '\n', '\r'], " ")
         ));
     }
-    std::fs::write(run.raw().join("checks.tsv"), text)?;
+    kanbanr_core::atomic::write(run.raw().join("checks.tsv"), text)?;
     Ok(())
 }
 
@@ -1089,7 +1091,7 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     let fence =
         kanbanr_core::project::fence().unwrap_or_else(|| kanbanr_core::project::normalize(&runs));
     let fence = kanbanr_core::project::normalize(&fence);
-    std::fs::write(dirs.root.join(answer::RUNBOOK_FILE), &text)?;
+    kanbanr_core::atomic::write(dirs.root.join(answer::RUNBOOK_FILE), &text)?;
     let mut setup_notes: Vec<String> = Vec::new();
     // Remotes.
     let prefix = args.remotes.clone().or_else(|| {
@@ -1123,7 +1125,7 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         git(&["config", "user.email", "walkthrough@localhost"])?;
         git(&["remote", "add", "origin", &remotes.code])?;
         // One commit, so `main` exists before the guide's first push.
-        std::fs::write(
+        kanbanr_core::atomic::write(
             project_dir.join("README.md"),
             format!(
                 "# {}\n\nA scratch project of the walkthrough run {name}.\n",
@@ -1164,7 +1166,7 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     let allowed = guard::allowed_remotes(&dirs);
     // The persona and the session.
     let persona_file = dirs.root.join("persona.md");
-    std::fs::write(&persona_file, persona(&runbook.process))?;
+    kanbanr_core::atomic::write(&persona_file, persona(&runbook.process))?;
     let mut cfg = SessionCfg::new(&project_dir, &dirs.claude_config(), &fence, &dirs.root);
     cfg.claude = env.claude.clone();
     cfg.model = model.clone();
@@ -1254,7 +1256,7 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     let merged = merge_checks(&running.checks);
     write_checks(&dirs, &merged)?;
     if !dirs.findings().exists() {
-        std::fs::write(dirs.findings(), "# Findings\n\nNone.\n")?;
+        kanbanr_core::atomic::write(dirs.findings(), "# Findings\n\nNone.\n")?;
     }
     let mut log = SetupLog::read(&dirs).unwrap_or_default();
     log.push("ended", kanbanr_core::now_rfc3339());

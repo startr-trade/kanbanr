@@ -134,12 +134,7 @@ impl Monitor {
             .spawn()
             .with_context(|| format!("could not start {} serve", kanbanr.display()))?;
         let (tx, rx) = channel::<String>();
-        let log = std::sync::Arc::new(std::sync::Mutex::new(
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)?,
-        ));
+        let log = std::sync::Arc::new(std::sync::Mutex::new(super::append_to(&log_path)?));
         for stream in [
             child
                 .stdout
@@ -917,10 +912,7 @@ pub fn append_prepared_row(
     std::fs::create_dir_all(run.raw())?;
     let path = run.raw().join("prepared.tsv");
     let new = !path.exists();
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let mut f = super::append_to(&path)?;
     if new {
         writeln!(f, "time\tstep\tid\tkind\tprepared_by\tconfirmed_by\tedited")?;
     }
@@ -1377,7 +1369,7 @@ impl Page<'_> {
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(file, png)?;
+        kanbanr_core::atomic::write(file, png)?;
         Ok(())
     }
 }

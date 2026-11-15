@@ -143,7 +143,7 @@ impl RemotesEnv {
     }
 
     pub fn write(&self, run: &RunDirs) -> Result<()> {
-        std::fs::write(run.remotes_env(), self.to_text())?;
+        kanbanr_core::atomic::write(run.remotes_env(), self.to_text())?;
         Ok(())
     }
 }
@@ -221,7 +221,7 @@ impl SetupLog {
     pub fn write(&self, run: &RunDirs) -> Result<PathBuf> {
         std::fs::create_dir_all(run.raw())?;
         let path = run.setup_log();
-        std::fs::write(&path, self.to_text())?;
+        kanbanr_core::atomic::write(&path, self.to_text())?;
         Ok(path)
     }
 

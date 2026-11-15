@@ -214,10 +214,7 @@ pub fn log(run: &RunDirs, step: &str, q: &Question, picked: &Picked) -> Result<(
     std::fs::create_dir_all(run.raw())?;
     let path = run.raw().join("questions.tsv");
     let new = !path.exists();
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let mut f = super::append_to(&path)?;
     if new {
         writeln!(f, "time\tstep\tsource\tquestion\toptions\tpick\tpolicy")?;
     }
@@ -284,13 +281,13 @@ pub const RUNBOOK_FILE: &str = "runbook.md";
 /// Note the step a run is at, for the hook.
 pub fn set_current_step(run: &RunDirs, step: &str) -> Result<()> {
     std::fs::create_dir_all(run.raw())?;
-    std::fs::write(run.raw().join(CURRENT_STEP_FILE), step)?;
+    kanbanr_core::atomic::write(run.raw().join(CURRENT_STEP_FILE), step)?;
     Ok(())
 }
 
 /// Keep the run's placeholder values, for the hook.
 pub fn write_vars(run: &RunDirs, vars: &BTreeMap<String, String>) -> Result<()> {
-    std::fs::write(
+    kanbanr_core::atomic::write(
         run.root.join(VARS_FILE),
         serde_json::to_string_pretty(vars)?,
     )?;
