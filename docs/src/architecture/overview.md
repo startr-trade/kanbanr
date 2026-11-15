@@ -90,6 +90,31 @@ checked against the same document. Every other read route is internal. See
 [HTTP API](../reference/http-api.md).
 
 
+### Positions and views
+
+A **position** names what a repository holds: a commit plus a hash of the uncommitted changes
+(`position.rs`; the text and the hash are chain decisions CD-2 of katalogr FEAT-043, and kanbanr
+and katalogr compute them byte for byte against one shared file,
+`fixtures/contract/position-v1.json`). It is read with git plumbing and raw blob ids, never
+`git status`: the tree, the untracked and the staged-new paths are listed by git, and the raw bytes
+are hashed in-process. A **view** (`views.rs`) is a function of its position, the board and the
+project's facts alone, so two exact answers to one question are byte-identical; only an exact
+answer carries an **ID** (`v1-` and 32 hex digits, CD-3), whose facts part is the SHA-256 of the
+board's HEAD commit and the project's facts revision. The binary's version takes no part.
+`--at` answers a clean commit from the repository's objects with nothing checked out, and a dirty
+position only while the checkout is still at it; any other position is exit 6 (HTTP 409).
+If a file changes while a view is read, the position is read once more, and failing that the
+answer is not exact, has no ID, and says so in a warning.
+
+Two facts shape what a position can see. A **submodule's own state does not move the position**
+(its gitlink is skipped, as katalogr's code skips it; committing a new submodule pointer does move
+it). And a checkout whose **filters change bytes** (`core.autocrlf`, `text=auto`) reads dirty where
+`git status` says clean, because a position hashes raw bytes, so there a view is exact only at the
+live position, never at the commit it would otherwise equal. Measured in a release build: one read
+of a clean checkout of 10,000 tracked files takes 141.8 ms (median of three, machine load about
+6.6), against a budget of 200 ms; a view ID takes well under 100 µs. A debug build is slower (224
+ms) and asserts nothing.
+
 ## Runtime: one writer, a read-only view, git
 
 ```mermaid

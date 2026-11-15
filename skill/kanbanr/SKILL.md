@@ -1290,12 +1290,23 @@ kanbanr open --check [--json]       # is the monitor up, with writes; its Review
 
 ## Command reference
 
+### Positions and views
+
+A position is a commit plus a hash of uncommitted changes (`kanbanr position`). `kanbanr view docs`
+draws the docs at a position and gives an ID only when the answer is exact: the same position, board
+and question give the same ID. `--at <position>` takes a commit position from any branch with
+nothing checked out; a dirty position is answerable only while the checkout is at it (exit 6 if no
+checkout holds the position, exit 2 for text that is not a position). Show the warnings; never treat
+an answer without an ID as repeatable.
+
 Setup / configuration:
 ```
 kanbanr project init <name> [--description D] [--statuses A,B,C] [--default-state A] [--displayed-states A,B] [--no-op-states X,Y]
 kanbanr project edit <name> [--name N] [--description D]
 kanbanr project list
 kanbanr project use <name>        # mark this directory as tracked by <name> (keeps the marker's data_dir)
+kanbanr position [--json]         # the checkout's position: commit + hash of uncommitted changes
+kanbanr view docs [--at P] [--json]  # the docs drawn at a position; an ID only when exact
 kanbanr where [--json]            # which board folder this directory uses (+ suggestions with --json)
 kanbanr charter show | set --file charter.yaml     # the project's purpose, goals, non-goals
 kanbanr feature define FEAT-001 --template --kind defect   # skeleton for that kind

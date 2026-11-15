@@ -6,6 +6,15 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A shared position and a view ID (FTR-003).** `kanbanr position` prints the checkout's position
+  (commit plus a hash of uncommitted changes), computed byte for byte as katalogr computes it;
+  `kanbanr view docs` is the first view answered for a position, with an ID that repeats whenever
+  the position, the board and the question repeat. `--at` answers a clean commit from the
+  repository with nothing checked out (exit 6, HTTP 409, for a position no checkout holds). The
+  daemon serves `GET /projects/{p}/position` and `GET /projects/{p}/views/docs`.
+
 ## [0.6.0] - 2026-11-14
 
 ### Added
