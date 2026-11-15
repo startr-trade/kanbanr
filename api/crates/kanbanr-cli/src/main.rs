@@ -4246,7 +4246,16 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     let Some(target) = commit_directory(command, &base, project::home_dir().as_deref()) else {
         return Ok(());
     };
-    let ctx = if project::normalize(&target) == project::normalize(&base) {
+    // The session's context only for the session's own repository (DEF-065 R-4): the hook can run
+    // in the main checkout while the commit lands in a scratch repository under the temporary
+    // folder, which is then judged by its own marker, and one with none is left alone.
+    let repo = |dir: &Path| coderepo::repo_root_in(dir).map(|r| project::normalize(&r));
+    let in_session = project::normalize(&target) == project::normalize(&base)
+        && std::env::current_dir()
+            .ok()
+            .and_then(|here| repo(&here))
+            .is_some_and(|here| repo(&target) == Some(here));
+    let ctx = if in_session {
         match client {
             Some(client) => scm_context(cli, client),
             None => return Ok(()),
