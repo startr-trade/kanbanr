@@ -1527,7 +1527,36 @@ mod tests {
     /// delegation covers; with no open override the delegated ratify stands.
     #[test]
     fn ratifying_claudes_override_is_never_delegated() {
-        let (store, dir, defect, _) = board();
+        let (store, dir, _, _) = board();
+        // The gate is enforced only once a charter is adopted and blocks, and an override only counts
+        // when a gate needed it (DEF-056): so the defect is made after the charter.
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::Charter {
+                purpose: "Because reasons".into(),
+                goals: vec![crate::Goal {
+                    statement: "Ship the thing".into(),
+                    ..crate::Goal::default()
+                }],
+                ..crate::Charter::default()
+            },
+        )
+        .unwrap();
+        let mut gates = std::collections::BTreeMap::new();
+        gates.insert(
+            "Scheduled".to_string(),
+            Gate {
+                signoffs: vec!["design-review".into()],
+                enforce: crate::config::Enforce::Block,
+                ..Default::default()
+            },
+        );
+        store.set_gates("demo", gates).unwrap();
+        let defect = store
+            .add_feature_of_kind("demo", "Bug two", "spec", "M", None, Some("defect"))
+            .unwrap()
+            .code;
         let ratify = route(&defect, "ratify");
         let under = json!({"delegation": "DLG-001"});
         let take = || judge(&store, "POST", &ratify, Some(&under), Origin::Conversation);
@@ -1558,6 +1587,7 @@ mod tests {
                 "conversation",
             )
             .unwrap();
+
         let why = take().unwrap_err();
         assert!(
             why.contains("DEF-043") && why.contains("prepare ratify"),
