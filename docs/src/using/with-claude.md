@@ -58,7 +58,7 @@ The plan quotes that output under *Branching*, lists which stage holds each role
 integrate, release) under *Process*, and says that the method's gates are on. Approving the plan
 applies it. What each role then asks for is in [The method by stage role](the-method.md#the-method-by-stage-role).
 
-Not sure which process to pick? [Choosing a guide](../guides/index.md) lists every process and its
+Start with agile unless your team already has a process of its own. Not sure which process to pick? [Choosing a guide](../guides/index.md) lists every process and its
 guides, and [Processes](processes.md) compares them and their gates.
 
 ## Starting work: a definition you approve
