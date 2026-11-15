@@ -5,9 +5,1146 @@
 //! (the fence and `setup.log`), `remotes` (the run's own repositories), `driver` (the developer's
 //! Claude Code session), `answer` (every question Claude asks), `person` (the scripted person on
 //! the monitor), `truth` and `capture` (what was really so, and the raw record of it), `derive` (the
-//! tables). The `run` command here strings them together.
-// The modules land task by task (W1–W9); until the `walkthrough` command is wired in W9, what they
-// export is used only by their tests.
-#![allow(dead_code)]
+//! tables). `run` here strings them together: preflight, remotes, the config copy, the session, the
+//! steps, then truth, snapshot, derive and the batch of checks prepared on the target board. Any
+//! error after preflight still runs truth, snapshot and derive, then exits non-zero.
 
+pub mod answer;
+pub mod capture;
+pub mod derive;
 pub mod driver;
+pub mod guard;
+pub mod person;
+pub mod remotes;
+pub mod runbook;
+pub mod truth;
+
+use anyhow::{Context, Result, anyhow, bail};
+use clap::{Args, Subcommand};
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use answer::{Policy, Question};
+use driver::{Session, SessionCfg, StopReason};
+use guard::{Env, RemotesEnv, RunDirs, SetupLog};
+use person::{Browser, Found, Monitor, is_no_browser};
+use runbook::{Expect, Runbook, Step, lint};
+
+/// `kanbanr walkthrough …`
+#[derive(Subcommand)]
+pub enum WalkthroughCmd {
+    /// Run a runbook headlessly: the developer's Claude Code session in a scratch project, every
+    /// question answered from the runbook, every decision taken on the scratch board by the scripted
+    /// person, everything captured, and the run's checks prepared on this board as one batch.
+    Run(RunArgs),
+    /// Check a runbook before a run: every step has an id and something to do, every check is
+    /// defined, every decision names its offer, every answer rule compiles.
+    Lint {
+        /// A board doc (`walkthroughs/togaf.md`) or a file.
+        runbook: String,
+    },
+    /// The PreToolUse hook a run gives its session: answers an AskUserQuestion from the runbook.
+    /// Reads the tool call on stdin; silent outside a run.
+    Answer,
+    /// The repositories runs created on the remote server.
+    #[command(subcommand)]
+    Remotes(RemotesCmd),
+    /// Re-check a run's `raw/MANIFEST.sha256`.
+    Verify {
+        /// The run folder.
+        run: PathBuf,
+    },
+    /// Derive a run's tables (`results/decisions.tsv`, `results/metrics.md`) from `raw/` again.
+    Derive {
+        /// The run folder.
+        run: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum RemotesCmd {
+    /// Every repository the runs created, oldest first.
+    List {
+        /// The runs folder (default: `--runs`'s default).
+        #[arg(long)]
+        runs: Option<PathBuf>,
+    },
+    /// Delete them with `gh repo delete --yes`; what cannot be deleted is listed for you.
+    Clean {
+        #[arg(long)]
+        runs: Option<PathBuf>,
+    },
+}
+
+#[derive(Args)]
+pub struct RunArgs {
+    /// A board doc (`walkthroughs/togaf.md`) or a file holding the runbook.
+    pub runbook: String,
+    /// The model for the session (default: the runbook's, `sonnet`).
+    #[arg(long)]
+    pub model: Option<String>,
+    /// Stop the session at this spend (default: the runbook's, 40).
+    #[arg(long)]
+    pub budget_usd: Option<f64>,
+    /// Stop the run after this many minutes of wall time (default: the runbook's, 180).
+    #[arg(long)]
+    pub max_minutes: Option<u64>,
+    /// Make the run's two remotes as private repositories under this prefix with `gh repo create`
+    /// (also `KANBANR_WALKTHROUGH_REMOTES`). Without it, two bare repositories under the run folder.
+    #[arg(long)]
+    pub remotes: Option<String>,
+    /// The command that takes a screenshot of a page (default: chromium, google-chrome or
+    /// chromium-browser on PATH, headless).
+    #[arg(long)]
+    pub screenshot_cmd: Option<String>,
+    /// Wait at each decision step until you have acted on the monitor, instead of the scripted
+    /// person acting.
+    #[arg(long)]
+    pub pause_at_decisions: bool,
+    /// Where runs are kept (default: `KANBANR_WALKTHROUGH_RUNS`, else `~/.cache/kanbanr-walkthroughs`).
+    #[arg(long)]
+    pub runs: Option<PathBuf>,
+    /// The run's name (default: `<runbook>-<date>-<time>`); also the batch's name on this board.
+    #[arg(long)]
+    pub name: Option<String>,
+    /// The `claude` program to drive (default: `claude` on PATH).
+    #[arg(long)]
+    pub claude: Option<PathBuf>,
+    /// A built monitor to serve, when this binary carries none.
+    #[arg(long)]
+    pub ui_dir: Option<PathBuf>,
+    /// Do not open a browser: every press and page step is the "no browser" finding.
+    #[arg(long)]
+    pub no_browser: bool,
+}
+
+/// One finding of a run: never a stop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Finding {
+    pub step: String,
+    /// `offer-missing`, `truth-mismatch`, `question-unanswered`, `budget-stop`,
+    /// `board-expect-failed`, `page-expect-failed`, `talk-expect-failed`, `no-browser`,
+    /// `decision-failed`, `press-failed`, `push-failed`, `setup`.
+    pub kind: &'static str,
+    /// What the board (or the runbook) said.
+    pub board: String,
+    /// What was true.
+    pub truth: String,
+    /// The transcript line the finding was at.
+    pub line: usize,
+}
+
+impl std::fmt::Display for Finding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "- step {} {}: {}; truth: {} (transcript line {})",
+            self.step, self.kind, self.board, self.truth, self.line
+        )
+    }
+}
+
+/// One `check` a step named, and how it came out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckResult {
+    pub marker: String,
+    pub step: String,
+    pub passed: bool,
+    pub why: String,
+}
+
+/// Where runs are kept by default: outside every repository and outside the temporary directory.
+pub fn default_runs_dir() -> PathBuf {
+    if let Some(d) = std::env::var_os("KANBANR_WALKTHROUGH_RUNS").filter(|d| !d.is_empty()) {
+        return PathBuf::from(d);
+    }
+    kanbanr_core::project::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".cache")
+        .join("kanbanr-walkthroughs")
+}
+
+/// The runbook's text: a file when `spec` names one, else the board doc of this project.
+pub fn read_runbook(cli: &crate::Cli, spec: &str) -> Result<(String, String)> {
+    let as_file = Path::new(spec);
+    if as_file.is_file() {
+        return Ok((
+            std::fs::read_to_string(as_file)?,
+            as_file.display().to_string(),
+        ));
+    }
+    let data_dir = kanbanr_core::project::resolve_data_dir(cli.data_dir.as_deref());
+    let project = kanbanr_core::project::resolve_project(cli.project.as_deref())
+        .ok_or_else(|| anyhow!("{spec} is not a file, and there is no project here to read it from as a board doc"))?;
+    let path = kanbanr_core::Store::new(&data_dir)
+        .project_dir(&project)
+        .join("docs")
+        .join(spec);
+    let text = std::fs::read_to_string(&path).with_context(|| {
+        format!(
+            "{spec} is neither a file nor a doc of {project} ({})",
+            path.display()
+        )
+    })?;
+    Ok((text, format!("{project} doc {spec}")))
+}
+
+/// `kanbanr walkthrough …`
+pub fn run_command(cli: &crate::Cli, cmd: &WalkthroughCmd) -> Result<()> {
+    match cmd {
+        WalkthroughCmd::Answer => {
+            let stdin = crate::hook_stdin();
+            match answer::run_hook(&stdin) {
+                Ok(Some(out)) => println!("{out}"),
+                Ok(None) => {}
+                Err(e) => println!("{}", answer::hook_error(&e)),
+            }
+            Ok(())
+        }
+        WalkthroughCmd::Lint { runbook } => {
+            let (text, shown) = read_runbook(cli, runbook)?;
+            let rb = Runbook::parse(&text)?;
+            let errors = lint(&rb);
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "runbook": rb.name,
+                        "steps": rb.steps.len(),
+                        "checks": rb.checks.keys().collect::<Vec<_>>(),
+                        "errors": errors.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+                    })
+                );
+            } else if errors.is_empty() {
+                println!(
+                    "{shown}: runbook {} lints clean: {} steps, {} checks ({})",
+                    rb.name,
+                    rb.steps.len(),
+                    rb.checks.len(),
+                    rb.check_markers().join(", ")
+                );
+            } else {
+                for e in &errors {
+                    println!("{e}");
+                }
+            }
+            if errors.is_empty() {
+                Ok(())
+            } else {
+                bail!("{} lint error(s) in {shown}", errors.len())
+            }
+        }
+        WalkthroughCmd::Verify { run } => {
+            capture::verify(&RunDirs::new(run))?;
+            println!("{}: every capture matches raw/MANIFEST.sha256", run.display());
+            Ok(())
+        }
+        WalkthroughCmd::Derive { run } => {
+            let dirs = RunDirs::new(run);
+            let d = derive::tables(&dirs)?;
+            println!(
+                "{}: {} decision row(s) in results/decisions.tsv, results/metrics.md written",
+                run.display(),
+                d.rows
+            );
+            Ok(())
+        }
+        WalkthroughCmd::Remotes(RemotesCmd::List { runs }) => {
+            let dir = runs.clone().unwrap_or_else(default_runs_dir);
+            let list = remotes::list(&dir);
+            if list.is_empty() {
+                println!("no repository was created by a run under {}", dir.display());
+            }
+            for c in list {
+                println!("{}\t{}\t{}\t{}", c.at, c.run, c.which, c.url);
+            }
+            Ok(())
+        }
+        WalkthroughCmd::Remotes(RemotesCmd::Clean { runs }) => {
+            let dir = runs.clone().unwrap_or_else(default_runs_dir);
+            let (deleted, left) = remotes::clean(&dir, Path::new("gh"))?;
+            for c in deleted {
+                println!("deleted {}", c.url);
+            }
+            if !left.is_empty() {
+                println!("could not delete, remove these yourself:");
+                for (c, why) in left {
+                    println!("  {}  ({why})", c.url);
+                }
+            }
+            Ok(())
+        }
+        WalkthroughCmd::Run(args) => run(cli, args),
+    }
+}
+
+/// `{board_remote}`, `{code_remote}`, `{monitor_url}`, `{today}` in a runbook text.
+fn fill(text: &str, vars: &BTreeMap<String, String>) -> String {
+    let mut out = text.to_string();
+    for (k, v) in vars {
+        out = out.replace(&format!("{{{k}}}"), v);
+    }
+    out
+}
+
+/// Append one finding to `raw/findings.md`.
+fn append_finding(run: &RunDirs, f: &Finding) -> Result<()> {
+    std::fs::create_dir_all(run.raw())?;
+    let path = run.findings();
+    let new = !path.exists();
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    if new {
+        writeln!(file, "# Findings\n")?;
+    }
+    writeln!(file, "{f}")?;
+    Ok(())
+}
+
+/// Append one push to `raw/pushes.tsv`.
+fn append_push(run: &RunDirs, repo: &str, refspec: &str, ok: bool, said: &str) -> Result<()> {
+    std::fs::create_dir_all(run.raw())?;
+    let path = run.raw().join("pushes.tsv");
+    let new = !path.exists();
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    if new {
+        writeln!(f, "time\trepo\trefspec\tok\tsaid")?;
+    }
+    writeln!(
+        f,
+        "{}\t{repo}\t{refspec}\t{ok}\t{}",
+        kanbanr_core::now_rfc3339(),
+        said.replace(['\t', '\n', '\r'], " ")
+    )?;
+    Ok(())
+}
+
+/// Write `raw/checks.tsv`: every check a step named and how it came out.
+fn write_checks(run: &RunDirs, checks: &[CheckResult]) -> Result<()> {
+    let mut text = String::from("marker\tstep\tpassed\twhy\n");
+    for c in checks {
+        text.push_str(&format!(
+            "{}\t{}\t{}\t{}\n",
+            c.marker,
+            c.step,
+            c.passed,
+            c.why.replace(['\t', '\n', '\r'], " ")
+        ));
+    }
+    std::fs::write(run.raw().join("checks.tsv"), text)?;
+    Ok(())
+}
+
+/// The run project's Claude Code configuration: a copy of the person's rules file and its imports,
+/// their `settings.json` and credentials, and the kanbanr skill linked — nothing else of theirs.
+fn make_claude_config(run: &RunDirs, log: &mut Vec<String>) -> Result<()> {
+    let dst = run.claude_config();
+    std::fs::create_dir_all(&dst)?;
+    let Some(src) = crate::hooks::claude_dir() else {
+        log.push("no Claude Code configuration folder was found: the session starts with none".into());
+        return Ok(());
+    };
+    let mut copied = Vec::new();
+    for name in ["CLAUDE.md", "settings.json", ".credentials.json"] {
+        let from = src.join(name);
+        if from.is_file() {
+            std::fs::copy(&from, dst.join(name))?;
+            copied.push(name.to_string());
+        }
+    }
+    if let Ok(rules) = std::fs::read_to_string(src.join("CLAUDE.md")) {
+        for import in guard::rule_imports(&rules) {
+            let from = src.join(&import);
+            if from.is_file() {
+                std::fs::copy(&from, dst.join(&import))?;
+                copied.push(import);
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let creds = dst.join(".credentials.json");
+        if creds.exists() {
+            let _ = std::fs::set_permissions(&creds, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+    let skills = dst.join("skills");
+    std::fs::create_dir_all(&skills)?;
+    let skill_src = src.join("skills").join("kanbanr");
+    let link = skills.join("kanbanr");
+    if skill_src.exists() && !link.exists() {
+        let target = std::fs::canonicalize(&skill_src).unwrap_or(skill_src.clone());
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link)?;
+        #[cfg(not(unix))]
+        copy_tree(&target, &link)?;
+        copied.push("skills/kanbanr".into());
+    } else if !skill_src.exists() {
+        log.push(format!(
+            "no kanbanr skill at {}: the session has no skill (install it with `kanbanr skill install`)",
+            skill_src.display()
+        ));
+    }
+    log.push(format!("claude-config copied: {}", copied.join(", ")));
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let src = e.path();
+        let dst = to.join(e.file_name());
+        if src.is_dir() {
+            copy_tree(&src, &dst)?;
+        } else {
+            std::fs::copy(&src, &dst)?;
+        }
+    }
+    Ok(())
+}
+
+/// The persona appended to the session's system prompt.
+fn persona(process: &str) -> String {
+    format!(
+        "You are a developer following this project's guide for the {process} process, with kanbanr. \
+         A person is working with you from the monitor: they take every decision there (approvals, \
+         sign-offs, promotions, the cut, CI results, delegations) and you never take one yourself, \
+         never record a verdict, and never ask them to type a command. Answer the person's questions \
+         in your own words, briefly. When you need something only they can decide, ask one question \
+         at a time, in text, with the options listed and the recommended one marked \
+         \"(recommended)\". The monitor is already running with writes on; never start another \
+         one, and never push unless the person says to.\n"
+    )
+}
+
+/// The run of one runbook.
+struct Running {
+    runbook: Runbook,
+    dirs: RunDirs,
+    fence: PathBuf,
+    remotes: RemotesEnv,
+    project: Option<String>,
+    monitor: Option<Monitor>,
+    browser: Option<Browser>,
+    browser_absent: Option<String>,
+    no_browser: bool,
+    session: Session,
+    vars: BTreeMap<String, String>,
+    findings: Vec<Finding>,
+    checks: Vec<CheckResult>,
+    started: Instant,
+    max_minutes: u64,
+    lines: usize,
+    stopped: Option<String>,
+    pause: bool,
+    screenshot_cmd: Option<String>,
+    ui_dir: Option<PathBuf>,
+    kanbanr: PathBuf,
+    ci: Option<truth::CiRuns>,
+    gh: Option<PathBuf>,
+}
+
+impl Running {
+    fn finding(&mut self, step: &str, kind: &'static str, board: String, truth: String) {
+        let f = Finding {
+            step: step.to_string(),
+            kind,
+            board,
+            truth,
+            line: self.lines,
+        };
+        eprintln!("finding: {f}");
+        let _ = append_finding(&self.dirs, &f);
+        self.findings.push(f);
+    }
+
+    fn project_name(&mut self) -> String {
+        if self.project.is_none()
+            && let Some(found) = kanbanr_core::project::find_marker(&self.dirs.project(), None)
+            && let Some(p) = found.marker.project
+        {
+            self.project = Some(p);
+        }
+        self.project.clone().unwrap_or_else(|| self.runbook.name.clone())
+    }
+
+    /// Start the monitor once the board exists (the first step makes it); started with the run's
+    /// board named, so a board not yet made is still the one it serves.
+    fn ensure_monitor(&mut self) -> bool {
+        if self.monitor.is_some() {
+            return true;
+        }
+        let project = self.project_name();
+        match Monitor::start(
+            &self.dirs,
+            &self.kanbanr,
+            &self.fence,
+            self.ui_dir.as_deref(),
+            Some(&self.dirs.board()),
+        ) {
+            Ok(m) => {
+                if !m.has_token() {
+                    self.finding(
+                        "-",
+                        "setup",
+                        "the monitor serves no page with its token".into(),
+                        "writes from the scripted person cannot go through; this binary carries no monitor (pass --ui-dir)".into(),
+                    );
+                }
+                self.vars.insert("monitor_url".into(), m.url.clone());
+                let _ = answer::write_vars(&self.dirs, &self.vars);
+                eprintln!("monitor: {} (project {project})", m.url);
+                self.monitor = Some(m);
+                true
+            }
+            Err(e) => {
+                self.finding("-", "setup", "no monitor".into(), e.to_string());
+                false
+            }
+        }
+    }
+
+    fn browser(&mut self) -> Option<&Browser> {
+        if self.no_browser {
+            return None;
+        }
+        if self.browser.is_none() && self.browser_absent.is_none() {
+            match Browser::open() {
+                Ok(b) => self.browser = Some(b),
+                Err(e) if is_no_browser(&e) => self.browser_absent = Some(e.to_string()),
+                Err(e) => self.browser_absent = Some(format!("the browser failed: {e}")),
+            }
+        }
+        self.browser.as_ref()
+    }
+
+    /// A screenshot of a page before or after a decision: through the browser when one is open,
+    /// else with the screenshot command; silently none when neither exists.
+    fn screenshot(&mut self, step: &str, page: &str, when: &str) {
+        if self.monitor.is_none() {
+            return;
+        }
+        let project = self.project_name();
+        let url = self
+            .monitor
+            .as_ref()
+            .map(|m| m.page_url(&project, page))
+            .unwrap_or_default();
+        let file = capture::screenshots_dir(&self.dirs).join(format!("{step}-{when}-{page}.png"));
+        if let Some(b) = self.browser() {
+            if let Ok(p) = b.page(&url) {
+                let _ = p.screenshot(&file);
+            }
+            return;
+        }
+        let cmd = self.screenshot_cmd.clone();
+        if let Some(m) = self.monitor.as_ref()
+            && let Err(e) = m.screenshot(&url, &file, cmd.as_deref())
+        {
+            eprintln!("screenshot {step} {when}: {e}");
+        }
+    }
+
+    fn over_time(&self) -> bool {
+        self.started.elapsed() > Duration::from_secs(self.max_minutes * 60)
+    }
+
+    /// One step. `Ok(false)` when the run must stop (budget, wall time, the session gone).
+    fn step(&mut self, step: &Step) -> Result<bool> {
+        let id = step.id.clone();
+        answer::set_current_step(&self.dirs, &id)?;
+        if self.over_time() {
+            self.finding(
+                &id,
+                "budget-stop",
+                format!("the run's wall time passed {} minutes", self.max_minutes),
+                "the session is stopped; the captures follow".into(),
+            );
+            self.session.kill();
+            self.stopped = Some("wall time".into());
+            return Ok(false);
+        }
+        let mut step_ok = true;
+        let mut why = Vec::new();
+        let mut asked_here: Vec<String> = Vec::new();
+        let mut final_text = String::new();
+        if let Some(say) = &step.say {
+            let mut text = fill(say, &self.vars);
+            for round in 0..4 {
+                let turn = self.session.say(&text)?;
+                self.lines += turn.lines;
+                final_text = turn.final_text.clone();
+                if let Some(stop) = &turn.stopped {
+                    let kind = match stop {
+                        StopReason::Budget => "budget-stop",
+                        _ => "session-stop",
+                    };
+                    self.finding(
+                        &id,
+                        kind,
+                        format!("the session stopped: {stop}"),
+                        "the captures follow".into(),
+                    );
+                    self.stopped = Some(stop.to_string());
+                    return Ok(false);
+                }
+                let Some(q) = &turn.asked else { break };
+                asked_here.push(q.text.clone());
+                if round == 3 {
+                    self.finding(
+                        &id,
+                        "question-unanswered",
+                        format!("Claude kept asking: {}", q.text),
+                        "three answers did not settle it; the run goes on".into(),
+                    );
+                    step_ok = false;
+                    why.push("a question was not settled".into());
+                    break;
+                }
+                let question = Question::from_text(q);
+                let picked = Policy::new(&self.runbook, Some(&id))
+                    .with_vars(self.vars.clone())
+                    .answer(&question);
+                answer::log(&self.dirs, &id, &question, &picked)?;
+                eprintln!("step {id}: Claude asked \"{}\" -> {} ({})", q.text, picked.pick, picked.policy);
+                text = picked.pick;
+            }
+        }
+        // The monitor starts once the first step has made the board.
+        if (step.decide.is_some() || step.press.is_some() || step.expect.is_some() || step.say.is_some())
+            && !self.ensure_monitor()
+        {
+            step_ok = false;
+            why.push("no monitor".into());
+        }
+        let project = self.project_name();
+        if let Some(decision) = &step.decide {
+            let offer = step.offer.clone().expect("lint: a decide step has an offer");
+            self.screenshot(&id, &offer.page, "before");
+            let found = match self.monitor.as_ref() {
+                Some(m) => m.offers(&project, &offer, Some(decision)),
+                None => Ok(Found::Absent("no monitor".into())),
+            };
+            match found {
+                Ok(Found::Offered) => {
+                    if self.pause {
+                        println!(
+                            "step {id}: waiting for you to press \"{}\" on the {} page ({})",
+                            offer.button,
+                            offer.page,
+                            self.monitor.as_ref().map(|m| m.page_url(&project, &offer.page)).unwrap_or_default()
+                        );
+                        let changed = self
+                            .monitor
+                            .as_ref()
+                            .map(|m| m.wait_for_change(&project, decision, Duration::from_secs(5), Duration::from_secs(60 * 60)))
+                            .transpose()?
+                            .unwrap_or(false);
+                        if !changed {
+                            self.finding(&id, "decision-failed", format!("{} was not taken", decision.kind()), "nothing changed within an hour".into());
+                            step_ok = false;
+                            why.push("the decision was not taken".into());
+                        }
+                    } else {
+                        let by = self
+                            .monitor
+                            .as_ref()
+                            .map(|m| m.approver())
+                            .transpose()
+                            .unwrap_or(None)
+                            .unwrap_or_else(|| "the person".into());
+                        let out = self
+                            .monitor
+                            .as_ref()
+                            .map(|m| m.decide(&project, decision, &by, &id, Some(&self.dirs)))
+                            .transpose();
+                        match out {
+                            Ok(Some(o)) if o.ok() => {
+                                eprintln!("step {id}: {} -> {}", o.route, o.status);
+                            }
+                            Ok(Some(o)) => {
+                                self.finding(&id, "decision-failed", format!("{} answered {}", o.route, o.status), o.body.chars().take(300).collect());
+                                step_ok = false;
+                                why.push(format!("the route answered {}", o.status));
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                self.finding(&id, "decision-failed", decision.kind().into(), e.to_string());
+                                step_ok = false;
+                                why.push(e.to_string());
+                            }
+                        }
+                    }
+                }
+                Ok(Found::Absent(instead)) => {
+                    self.finding(
+                        &id,
+                        "offer-missing",
+                        format!("the guide promises \"{}\" on the {} page", offer.button, offer.page),
+                        instead,
+                    );
+                    step_ok = false;
+                    why.push("the offer was missing".into());
+                }
+                Err(e) => {
+                    self.finding(&id, "offer-missing", format!("\"{}\" on the {} page", offer.button, offer.page), e.to_string());
+                    step_ok = false;
+                    why.push(e.to_string());
+                }
+            }
+            self.screenshot(&id, &offer.page, "after");
+        }
+        if let Some(press) = &step.press {
+            let subject = match &press.subject {
+                Some(sel) => self
+                    .monitor
+                    .as_ref()
+                    .and_then(|m| m.resolve(&project, sel).ok().flatten())
+                    .map(|i| i.code),
+                None => None,
+            };
+            let url = self.monitor.as_ref().map(|m| m.page_url(&project, &press.page)).unwrap_or_default();
+            let pressed = match self.browser() {
+                None => Err(None),
+                Some(b) => b
+                    .page(&url)
+                    .and_then(|p| p.press(&press.button, subject.as_deref()))
+                    .map_err(Some),
+            };
+            match pressed {
+                Ok(()) => {
+                    eprintln!("step {id}: pressed \"{}\" on {}", press.button, press.page);
+                    // The click posts on its own; give the board a moment to change.
+                    std::thread::sleep(Duration::from_secs(2));
+                }
+                Err(None) => {
+                    let why_not = self.browser_absent.clone().unwrap_or_else(|| "--no-browser".into());
+                    self.finding(&id, "no-browser", format!("press \"{}\" on {}", press.button, press.page), why_not);
+                    step_ok = false;
+                    why.push("no browser".into());
+                }
+                Err(Some(e)) => {
+                    self.finding(&id, "press-failed", format!("press \"{}\" on {}", press.button, press.page), e.to_string());
+                    step_ok = false;
+                    why.push(e.to_string());
+                }
+            }
+        }
+        if let Some(push) = &step.push {
+            let (repo, remote) = match push.repo {
+                runbook::CodeOrBoard::Code => (self.dirs.project(), self.remotes.code.clone()),
+                runbook::CodeOrBoard::Board => (self.dirs.board(), self.remotes.board.clone()),
+            };
+            let which = match push.repo {
+                runbook::CodeOrBoard::Code => "code",
+                runbook::CodeOrBoard::Board => "board",
+            };
+            match guard::git_push(&repo, &remote, &push.refspec) {
+                Ok(said) => {
+                    append_push(&self.dirs, which, &push.refspec, true, &said)?;
+                    eprintln!("step {id}: pushed {which} {}", push.refspec);
+                }
+                Err(e) => {
+                    append_push(&self.dirs, which, &push.refspec, false, &e.to_string())?;
+                    self.finding(&id, "push-failed", format!("push {which} {}", push.refspec), e.to_string());
+                    step_ok = false;
+                    why.push("the push failed".into());
+                }
+            }
+        }
+        if let Some(expect) = &step.expect {
+            self.expect(&id, expect, &asked_here, &final_text, &mut step_ok, &mut why);
+        }
+        if let Some(marker) = &step.check {
+            self.checks.push(CheckResult {
+                marker: marker.clone(),
+                step: id.clone(),
+                passed: step_ok,
+                why: if step_ok { "the step went through as the guide says".into() } else { why.join("; ") },
+            });
+            eprintln!("step {id}: check {marker} {}", if step_ok { "passed" } else { "failed" });
+        }
+        Ok(true)
+    }
+
+    fn expect(&mut self, id: &str, expect: &Expect, asked: &[String], final_text: &str, ok: &mut bool, why: &mut Vec<String>) {
+        let project = self.project_name();
+        if let Some(claim) = &expect.board {
+            match truth::board_claim(&self.dirs.board(), &project, claim) {
+                Ok(Ok(())) => {}
+                Ok(Err(instead)) => {
+                    self.finding(id, "board-expect-failed", format!("{claim:?}"), instead);
+                    *ok = false;
+                    why.push("a board claim failed".into());
+                }
+                Err(e) => {
+                    self.finding(id, "board-expect-failed", format!("{claim:?}"), e.to_string());
+                    *ok = false;
+                    why.push(e.to_string());
+                }
+            }
+        }
+        if let Some(claim) = &expect.truth {
+            let line = truth::claim(&self.dirs, &project, &self.remotes, self.ci.as_ref(), &self.kanbanr, claim);
+            match line.verdict {
+                truth::Verdict::Ok => {}
+                truth::Verdict::Mismatch => {
+                    self.finding(id, "truth-mismatch", line.board.clone(), line.truth.clone());
+                    *ok = false;
+                    why.push("a truth claim failed".into());
+                }
+                truth::Verdict::Unknown => eprintln!("step {id}: truth unknown: {line}"),
+            }
+        }
+        if let Some(claim) = &expect.page {
+            let url = if claim.url.starts_with("http") {
+                claim.url.clone()
+            } else {
+                let path = claim.url.replace("{project}", &project);
+                format!("{}{}", self.monitor.as_ref().map(|m| m.url.clone()).unwrap_or_default(), path)
+            };
+            let text = match self.browser() {
+                None => Err(None),
+                Some(b) => b.page(&url).and_then(|p| p.text()).map_err(Some),
+            };
+            match text {
+                Ok(text) => {
+                    let missing = person::check_page_claim(&text, claim);
+                    if !missing.is_empty() {
+                        self.finding(id, "page-expect-failed", claim.url.clone(), missing.join("; "));
+                        *ok = false;
+                        why.push("a page claim failed".into());
+                    }
+                }
+                Err(None) => {
+                    let why_not = self.browser_absent.clone().unwrap_or_else(|| "--no-browser".into());
+                    self.finding(id, "no-browser", format!("read {}", claim.url), why_not);
+                    *ok = false;
+                    why.push("no browser".into());
+                }
+                Err(Some(e)) => {
+                    self.finding(id, "page-expect-failed", claim.url.clone(), e.to_string());
+                    *ok = false;
+                    why.push(e.to_string());
+                }
+            }
+        }
+        if let Some(talk) = &expect.talk {
+            let re = |p: &str| regex::RegexBuilder::new(p).case_insensitive(true).build().ok();
+            if let Some(p) = &talk.asked
+                && let Some(r) = re(p)
+                && !asked.iter().any(|q| r.is_match(q))
+            {
+                self.finding(id, "talk-expect-failed", format!("a question matching /{p}/ was expected"), format!("asked: {}", if asked.is_empty() { "nothing".to_string() } else { asked.join(" | ") }));
+                *ok = false;
+                why.push("the expected question was not asked".into());
+            }
+            if let Some(p) = &talk.not_asked
+                && let Some(r) = re(p)
+                && let Some(q) = asked.iter().find(|q| r.is_match(q))
+            {
+                self.finding(id, "talk-expect-failed", format!("no question matching /{p}/ was expected"), format!("asked: {q}"));
+                *ok = false;
+                why.push("an unwanted question was asked".into());
+            }
+            if let Some(p) = &talk.said
+                && let Some(r) = re(p)
+                && !r.is_match(final_text)
+            {
+                self.finding(id, "talk-expect-failed", format!("the answer was expected to match /{p}/"), final_text.chars().take(300).collect());
+                *ok = false;
+                why.push("the answer did not say what was expected".into());
+            }
+        }
+    }
+}
+
+/// `kanbanr walkthrough run`.
+pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
+    let (text, shown) = read_runbook(cli, &args.runbook)?;
+    let runbook = Runbook::parse(&text)?;
+    let errors = lint(&runbook);
+    if !errors.is_empty() {
+        for e in &errors {
+            eprintln!("{e}");
+        }
+        bail!("{shown} has {} lint error(s); fix them before a run", errors.len());
+    }
+    let runs = args.runs.clone().unwrap_or_else(default_runs_dir);
+    std::fs::create_dir_all(&runs)?;
+    let name = args.name.clone().unwrap_or_else(|| {
+        let now = kanbanr_core::now_rfc3339();
+        let stamp: String = now.chars().filter(|c| c.is_ascii_digit()).take(14).collect();
+        format!(
+            "{}-{}-{}",
+            runbook.name,
+            &stamp[..8.min(stamp.len())],
+            &stamp[8.min(stamp.len())..]
+        )
+    });
+    let dirs = RunDirs::new(&runs.join(&name));
+    dirs.make()?;
+    // One run at a time per run folder.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(dirs.lock_file())?;
+    {
+        use fs2::FileExt;
+        lock.try_lock_exclusive()
+            .map_err(|_| anyhow!("another run is using {}", dirs.root.display()))?;
+    }
+    // The fence: the person's, else the runs folder. Everything the run spawns gets it.
+    let fence = kanbanr_core::project::fence()
+        .unwrap_or_else(|| kanbanr_core::project::normalize(&runs));
+    let fence = kanbanr_core::project::normalize(&fence);
+    std::fs::write(dirs.root.join(answer::RUNBOOK_FILE), &text)?;
+    let mut setup_notes: Vec<String> = Vec::new();
+    // Remotes.
+    let prefix = args
+        .remotes
+        .clone()
+        .or_else(|| std::env::var("KANBANR_WALKTHROUGH_REMOTES").ok().filter(|s| !s.is_empty()));
+    let gh = which("gh");
+    if prefix.is_some() && gh.is_none() {
+        bail!("--remotes needs `gh` on PATH to create the repositories");
+    }
+    let remotes = remotes::create(&dirs, prefix.as_deref(), gh.as_deref().unwrap_or(Path::new("gh")))?;
+    if prefix.is_none() {
+        setup_notes.push("remotes: two bare repositories under the run folder; CI truth is unknown".into());
+    }
+    // The run project: a repository with the code remote, and the run's Claude Code settings.
+    let project_dir = dirs.project();
+    if !project_dir.join(".git").exists() {
+        let git = |args: &[&str]| {
+            kanbanr_core::coderepo::git(&project_dir, args).map_err(|e| anyhow!("{e}"))
+        };
+        git(&["init", "-q", "-b", "main"])?;
+        // The session's commits need an identity; the run's own, never the person's.
+        git(&["config", "user.name", "walkthrough"])?;
+        git(&["config", "user.email", "walkthrough@localhost"])?;
+        git(&["remote", "add", "origin", &remotes.code])?;
+        // One commit, so `main` exists before the guide's first push.
+        std::fs::write(
+            project_dir.join("README.md"),
+            format!("# {}\n\nA scratch project of the walkthrough run {name}.\n", runbook.name),
+        )?;
+        git(&["add", "README.md"])?;
+        git(&["commit", "-qm", "walkthrough: the scratch project"])?;
+    }
+    crate::hooks::write_walkthrough_settings(&project_dir)?;
+    make_claude_config(&dirs, &mut setup_notes)?;
+    // Preflight and setup.log.
+    let model = args.model.clone().unwrap_or_else(|| runbook.model.clone());
+    let target_board = kanbanr_core::project::resolve_data_dir(cli.data_dir.as_deref());
+    let target_project = kanbanr_core::project::resolve_project(cli.project.as_deref());
+    let kanbanr = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("kanbanr"));
+    let env = Env {
+        fence: Some(fence.clone()),
+        target_board: Some(target_board.clone()),
+        claude: args.claude.clone().unwrap_or_else(|| PathBuf::from("claude")),
+        model: model.clone(),
+        kanbanr: kanbanr.clone(),
+    };
+    let mut log = guard::preflight(&dirs, &env)?;
+    log.push("runbook", shown.clone());
+    log.push("run_name", name.clone());
+    if let Some(p) = &target_project {
+        log.push("target_project", p.clone());
+    }
+    for n in &setup_notes {
+        log.push("note", n.clone());
+    }
+    log.write(&dirs)?;
+    let allowed = guard::allowed_remotes(&dirs);
+    // The persona and the session.
+    let persona_file = dirs.root.join("persona.md");
+    std::fs::write(&persona_file, persona(&runbook.process))?;
+    let mut cfg = SessionCfg::new(&project_dir, &dirs.claude_config(), &fence, &dirs.root);
+    cfg.claude = env.claude.clone();
+    cfg.model = model.clone();
+    cfg.budget_usd = args.budget_usd.unwrap_or(runbook.budget_usd);
+    cfg.persona_file = Some(persona_file);
+    // The allowed remotes reach the session's hooks (`kanbanr git guard`) through the environment
+    // every child of this process inherits, so they are exported before the session starts.
+    // SAFETY: this process is single-threaded here, before the session's reader thread exists.
+    unsafe {
+        std::env::set_var(guard::REMOTES_VAR, guard::remotes_env_value(&allowed));
+    }
+    let session = Session::start(&cfg)?;
+    let today = kanbanr_core::now_rfc3339().chars().take(10).collect::<String>();
+    let mut vars = BTreeMap::new();
+    vars.insert("board_remote".into(), remotes.board.clone());
+    vars.insert("code_remote".into(), remotes.code.clone());
+    vars.insert("today".into(), today);
+    vars.insert("monitor_url".into(), String::new());
+    answer::write_vars(&dirs, &vars)?;
+    let mut running = Running {
+        max_minutes: args.max_minutes.unwrap_or(runbook.max_minutes),
+        runbook,
+        dirs: dirs.clone(),
+        fence: fence.clone(),
+        remotes: remotes.clone(),
+        project: None,
+        monitor: None,
+        browser: None,
+        browser_absent: None,
+        no_browser: args.no_browser,
+        session,
+        vars,
+        findings: Vec::new(),
+        checks: Vec::new(),
+        started: Instant::now(),
+        lines: 0,
+        stopped: None,
+        pause: args.pause_at_decisions,
+        screenshot_cmd: args.screenshot_cmd.clone(),
+        ui_dir: args.ui_dir.clone(),
+        kanbanr: kanbanr.clone(),
+        ci: None,
+        gh: gh.clone(),
+    };
+    println!("run {name}: {} steps, model {model}, budget {} USD, fence {}", running.runbook.steps.len(), cfg.budget_usd, fence.display());
+    // The steps. An error here still gets the captures below.
+    let steps = running.runbook.steps.clone();
+    let mut step_error: Option<anyhow::Error> = None;
+    for step in &steps {
+        match running.step(step) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(e) => {
+                step_error = Some(e);
+                break;
+            }
+        }
+    }
+    // The tail: truth, snapshot, derive, the batch.
+    let cost = running.session.cost_usd();
+    let turns = running.session.turns();
+    running.session.end();
+    let project = running.project_name();
+    if prefix.is_some()
+        && let Some(gh) = &running.gh
+    {
+        running.ci = truth::fetch_ci_runs(&dirs, &remotes.code, gh);
+    }
+    let truth_lines = truth::check(&dirs, &project, &remotes, running.ci.as_ref(), &kanbanr)?;
+    for l in truth_lines.iter().filter(|l| l.verdict == truth::Verdict::Mismatch) {
+        running.finding("end", "truth-mismatch", l.board.clone(), l.truth.clone());
+    }
+    write_checks(&dirs, &running.checks)?;
+    if !dirs.findings().exists() {
+        std::fs::write(dirs.findings(), "# Findings\n\nNone.\n")?;
+    }
+    let mut log = SetupLog::read(&dirs).unwrap_or_default();
+    log.push("ended", kanbanr_core::now_rfc3339());
+    log.push("cost_usd", format!("{cost:.2}"));
+    log.push("turns", turns.to_string());
+    log.push("findings", running.findings.len().to_string());
+    log.push("project", project.clone());
+    if let Some(s) = &running.stopped {
+        log.push("stopped", s.clone());
+    }
+    log.write(&dirs)?;
+    if let Some(m) = running.monitor.take() {
+        m.stop();
+    }
+    drop(running.browser.take());
+    let manifest = capture::snapshot(&dirs, Some(&remotes))?;
+    let derived = derive::tables(&dirs)?;
+    // The batch on the target board.
+    let batch = prepare_batch(cli, &running.checks, &running.runbook, &name, &target_board);
+    println!();
+    println!(
+        "run {name} done: {} step(s), {} finding(s), {} check(s) ({} passed), cost {cost:.2} USD, {} capture(s) in the manifest, {} decision row(s)",
+        steps.len(),
+        running.findings.len(),
+        running.checks.len(),
+        running.checks.iter().filter(|c| c.passed).count(),
+        manifest.entries.len(),
+        derived.rows
+    );
+    for f in &running.findings {
+        println!("{f}");
+    }
+    match batch {
+        Ok(ids) if !ids.is_empty() => println!(
+            "prepared {} result(s) as batch {name} on {}: confirm them at {}/p/{}/review",
+            ids.len(),
+            target_project.as_deref().unwrap_or("the board"),
+            crate::monitor_url(),
+            target_project.as_deref().unwrap_or("<project>")
+        ),
+        Ok(_) => println!("no check to prepare on the target board"),
+        Err(e) => println!("the batch could not be prepared on the target board: {e}"),
+    }
+    println!("run folder: {}", dirs.root.display());
+    if let Some(e) = step_error {
+        return Err(e.context("the run stopped on an error; its captures are complete"));
+    }
+    if let Some(s) = running.stopped {
+        bail!("the run stopped early: {s}");
+    }
+    Ok(())
+}
+
+/// Prepare every check the run recorded as `manual-test` records on the target board, all in one
+/// batch named for the run (ADR-0018: the target board only ever receives prepared records).
+fn prepare_batch(
+    cli: &crate::Cli,
+    checks: &[CheckResult],
+    runbook: &Runbook,
+    batch: &str,
+    target_board: &Path,
+) -> Result<Vec<String>> {
+    if checks.is_empty() {
+        return Ok(Vec::new());
+    }
+    let project = kanbanr_core::project::resolve_project(cli.project.as_deref())
+        .ok_or_else(|| anyhow!("no project here to prepare the checks on; pass --project"))?;
+    let backend = crate::Backend::new(target_board.to_path_buf());
+    let repo = crate::scm::repo_root();
+    let mut ids = Vec::new();
+    for c in checks {
+        let Some(def) = runbook.checks.get(&c.marker) else { continue };
+        let body = serde_json::json!({
+            "kind": "manual-test",
+            "subject": {"item": def.item, "requirement": def.requirement, "test": def.test},
+            "fields": {"state": if c.passed { "green" } else { "red" }, "note": c.why},
+            "sources": [{"label": format!("walkthrough run {batch} step {}", c.step)}],
+            "by": "Claude",
+            "batch": batch,
+        });
+        match backend.write_in(
+            crate::Method::Post,
+            &format!("/projects/{project}/prepared"),
+            Some(body),
+            repo.as_deref(),
+        ) {
+            Ok(resp) => {
+                let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or_default();
+                ids.push(v["id"].as_str().unwrap_or("").to_string());
+            }
+            Err(e) => eprintln!("{}: could not prepare on the target board: {e}", c.marker),
+        }
+    }
+    Ok(ids)
+}
+
+fn which(program: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|d| d.join(program))
+        .find(|p| p.is_file())
+}

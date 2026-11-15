@@ -115,6 +115,11 @@ enum Command {
     /// the project exists.
     #[command(subcommand)]
     Process(ProcessCmd),
+    /// Walkthroughs that run themselves (FTR-037): a guide's runbook driven through a headless
+    /// Claude Code session on a scratch project, every decision taken on the scratch board by a
+    /// scripted person, everything captured, and the run's checks prepared on this board as one batch.
+    #[command(subcommand)]
+    Walkthrough(walkthrough::WalkthroughCmd),
     /// Set the commit identity (name + email) on this data repo.
     Identity {
         #[arg(long)]
@@ -1478,6 +1483,10 @@ enum PrepareCmd {
         /// `--source "conversation 12 Nov: the smoke test passed on staging"`. At least one.
         #[arg(long = "source", value_name = "S", required = true)]
         sources: Vec<String>,
+        /// The batch this result belongs to (FTR-037): a walkthrough run prepares its checks as one
+        /// batch, which the Review page confirms with one click. No slash or whitespace.
+        #[arg(long, value_name = "NAME")]
+        batch: Option<String>,
     },
     /// The prepared records waiting for the person, newest first.
     List {
@@ -2065,6 +2074,7 @@ fn runs_from_a_hook(command: &Command) -> bool {
                 GitCmd::Guard | GitCmd::CheckMsg { .. } | GitCmd::CheckBranch | GitCmd::CheckPush
             )
             | Command::Claude(ClaudeCmd::Guard)
+            | Command::Walkthrough(walkthrough::WalkthroughCmd::Answer)
     )
 }
 
@@ -2131,6 +2141,19 @@ fn command_access(cmd: &Command) -> Access {
             }
         },
         Command::Identity { .. } => Outside("`kanbanr identity` changes kanbanr itself"),
+        Command::Walkthrough(cmd) => match cmd {
+            walkthrough::WalkthroughCmd::Answer => Hook,
+            walkthrough::WalkthroughCmd::Lint { .. }
+            | walkthrough::WalkthroughCmd::Verify { .. }
+            | walkthrough::WalkthroughCmd::Derive { .. }
+            | walkthrough::WalkthroughCmd::Remotes(walkthrough::RemotesCmd::List { .. }) => Read,
+            walkthrough::WalkthroughCmd::Run(_) => Outside(
+                "`kanbanr walkthrough run` drives a session and a monitor outside the board's write path",
+            ),
+            walkthrough::WalkthroughCmd::Remotes(walkthrough::RemotesCmd::Clean { .. }) => {
+                Outside("`kanbanr walkthrough remotes clean` deletes repositories on the remote server")
+            }
+        },
         Command::Serve { allow_writes, .. } => {
             if *allow_writes {
                 Outside("`kanbanr serve --allow-writes` writes outside the board's write path")
@@ -4203,6 +4226,22 @@ fn run_guard(cli: &Cli, client: Option<&Backend>) -> anyhow::Result<()> {
     if let GuardDecision::Deny(why) = bash_guard_decision(&payload, board.as_deref()) {
         deny(why);
         return Ok(());
+    }
+    // Inside a walkthrough run, a push goes only to the run's own remotes (FTR-037 R-10): the run
+    // exports them, and anything else is refused before it runs.
+    if let Ok(allowed) = std::env::var(walkthrough::guard::REMOTES_VAR)
+        && !allowed.trim().is_empty()
+    {
+        let allowed: Vec<String> = allowed
+            .split(';')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        if let Some(why) = walkthrough::guard::push_refusal(command, &base, &allowed) {
+            deny(why);
+            return Ok(());
+        }
     }
     // A verdict is the person's, taken on the monitor: Claude never records one (FTR-024).
     if client.is_some() {
@@ -6497,6 +6536,11 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         Command::Hooks(cmd) => return run_hooks(cli, cmd),
         Command::Skill(cmd) => return run_skill(cli, cmd),
+        // The hook, a lint of a runbook file, a run folder's manifest or tables, and the remotes
+        // list need no board; a run prepares its batch on this board, so it goes below (FTR-037).
+        Command::Walkthrough(cmd) if !matches!(cmd, walkthrough::WalkthroughCmd::Run(_)) => {
+            return walkthrough::run_command(cli, cmd);
+        }
         Command::Editor(EditorCmd::Install {
             editors,
             if_installed,
@@ -6915,6 +6959,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(())
         }
         Command::Capture => run_capture(cli, &client),
+        Command::Walkthrough(cmd) => walkthrough::run_command(cli, cmd),
         Command::Check { code, file } => {
             if let Some(file) = file {
                 return check_definition_file(cli, file); // handled before the board opens
@@ -10587,6 +10632,7 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
             note,
             rev,
             sources: s,
+            batch,
         } => {
             let mut fields = json!({"state": if *failed { "red" } else { "green" }});
             if let Some(note) = note {
@@ -10595,15 +10641,16 @@ fn run_prepare(cli: &Cli, client: &Backend, cmd: &PrepareCmd) -> anyhow::Result<
             if let Some(rev) = rev {
                 fields["checked_rev"] = json!(rev);
             }
-            (
-                json!({
-                    "kind": "manual-test",
-                    "subject": {"item": code, "requirement": requirement, "test": test},
-                    "fields": fields,
-                    "sources": sources(s)?,
-                }),
-                format!("the result of {code} {requirement}"),
-            )
+            let mut body = json!({
+                "kind": "manual-test",
+                "subject": {"item": code, "requirement": requirement, "test": test},
+                "fields": fields,
+                "sources": sources(s)?,
+            });
+            if let Some(b) = batch {
+                body["batch"] = json!(b);
+            }
+            (body, format!("the result of {code} {requirement}"))
         }
         PrepareCmd::Ratify {
             code,
