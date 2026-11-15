@@ -712,11 +712,24 @@ mod tests {
 
     // ---- the shared file (R-1) ----
 
-    fn contract() -> serde_json::Value {
+    fn contract_bytes() -> Vec<u8> {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../fixtures/contract/position-v1.json");
-        serde_json::from_slice(&std::fs::read(path).expect("read position-v1.json"))
-            .expect("parse position-v1.json")
+        std::fs::read(path).expect("read position-v1.json")
+    }
+
+    fn contract() -> serde_json::Value {
+        serde_json::from_slice(&contract_bytes()).expect("parse position-v1.json")
+    }
+
+    /// DEF-066 R-1: the shared file is katalogr's copy at 04fe2e7 (its v0.2.0) byte for byte, so a
+    /// hand edit or a stale copy fails.
+    #[test]
+    fn shared_file_is_katalogrs_copy() {
+        assert_eq!(
+            blob_id(&contract_bytes()),
+            "3cd6f5d073717aa8142533f53819459f9258e29d"
+        );
     }
 
     fn files(v: &serde_json::Value) -> BTreeMap<String, String> {
