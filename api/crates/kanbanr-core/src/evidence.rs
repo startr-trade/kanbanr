@@ -97,6 +97,18 @@ pub fn capture_batch(ops: Vec<Value>) -> Option<Value> {
     Some(json!({ "operations": ops, "message": format!("record {n} test result(s) from a run") }))
 }
 
+/// The test kinds whose names are not in the repository: `manual`, a person's check, and
+/// `walkthrough`, a run's (FTR-037). Neither is searched for or set back to planned when absent.
+pub fn is_unsearchable(kind: &str) -> bool {
+    let k = kind.trim();
+    k.eq_ignore_ascii_case("manual") || k.eq_ignore_ascii_case("walkthrough")
+}
+
+/// The hint `kanbanr check` gives for a `walkthrough` test not yet green: a run proves it, never a
+/// person by hand (FTR-037 R-6).
+pub const WALKTHROUGH_HINT: &str =
+    "proved by a walkthrough run: kanbanr walkthrough run <runbook doc>";
+
 /// One tracked test and whether its name is still in the repository.
 #[derive(Debug, Clone, Serialize)]
 pub struct TrackedTest {
@@ -142,8 +154,10 @@ pub fn plan_stale_tests(project: &Project, repo_search: &dyn Fn(&str) -> bool) -
             for t in &r.tests {
                 let name = t.name.trim();
                 // A manual check is performed by a person and has no name in the repo to find;
-                // treating its absence as rot would push people to stop recording manual gates.
-                if name.is_empty() || t.kind.trim().eq_ignore_ascii_case("manual") {
+                // treating its absence as rot would push people to stop recording manual gates. A
+                // walkthrough test is proved by a run, which records it as any automated test, but
+                // its name is a sentence, not a symbol in the repository (FTR-037).
+                if name.is_empty() || is_unsearchable(&t.kind) {
                     continue;
                 }
                 let found = repo_search(name);
@@ -330,6 +344,38 @@ some unrelated line ... ok";
         let ops = plan_capture(&p, &results, Some("abc"));
         assert_eq!(ops.len(), 1, "{ops:?}");
         assert_eq!(ops[0]["test"], "a::passes");
+    }
+
+    /// FTR-037 R-6: a `walkthrough` test is automated evidence: a run's results record it as any
+    /// unit test's (unlike a manual one), it is never searched for in the repository nor set back to
+    /// planned for not being there, and it is not a manual check for the person.
+    #[test]
+    fn a_walkthrough_test_is_automated_evidence_not_a_manual_check() {
+        let p = project_with_tests(
+            "      - name: 'walkthrough: the togaf runbook completes with zero stops'\n\
+             \x20       kind: walkthrough\n        state: green\n        checked_rev: abc\n\
+             \x20     - name: 'manual: looks right'\n        kind: manual\n",
+        );
+        // A run that records it: captured, where a manual result never is.
+        let results = parse_results(
+            "✓ walkthrough: the togaf runbook completes with zero stops\n✓ manual: looks right\n",
+        );
+        let ops = plan_capture(&p, &results, Some("def"));
+        assert_eq!(ops.len(), 1, "{ops:?}");
+        assert_eq!(
+            ops[0]["test"],
+            "walkthrough: the togaf runbook completes with zero stops"
+        );
+        // Not in the repository, and not stale for it.
+        let plan = plan_stale_tests(&p, &|_| false);
+        assert!(plan.rows.is_empty(), "{:?}", plan.rows);
+        assert!(plan.ops.is_empty());
+        assert!(is_unsearchable("walkthrough") && is_unsearchable("manual"));
+        assert!(!is_unsearchable("unit"));
+        // Not a person's check: the open manual tests name only the manual one.
+        let open = crate::readiness::open_manual_tests(&p.features[0]);
+        assert_eq!(open, ["R-1: manual: looks right"]);
+        assert!(WALKTHROUGH_HINT.contains("kanbanr walkthrough run"));
     }
 
     #[test]

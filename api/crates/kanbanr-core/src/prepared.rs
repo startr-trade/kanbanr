@@ -54,6 +54,11 @@ pub struct Prepared {
     /// What it was prepared against: the definition's revision, the release tip or the commit.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub rev: String,
+    /// The batch it belongs to (FTR-037): a walkthrough run prepares its checks as one batch, named
+    /// for the run, which the Review page confirms or rejects with one click. None for a record
+    /// prepared alone; an older kanbanr keeps the key through `extra`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<String>,
     /// Keys this version does not know, kept and written back unchanged (FEAT-151).
     #[serde(flatten, default, skip_serializing_if = "Extra::is_empty")]
     #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
@@ -893,6 +898,25 @@ pub fn prepare(
             "a prepared record names who prepared it: pass `by`".into(),
         ));
     }
+    // The batch, when the record is one of several prepared together (FTR-037).
+    let batch = body
+        .get("batch")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .map(str::to_string);
+    if let Some(b) = &batch {
+        if b.chars().count() > MAX_LABEL {
+            return Err(unsupported(format!(
+                "a batch name is at most {MAX_LABEL} characters"
+            )));
+        }
+        if b.contains('/') || b.contains(char::is_whitespace) {
+            return Err(unsupported(
+                "a batch name has no slash or whitespace: it is part of a route".into(),
+            ));
+        }
+    }
     let record = Prepared {
         id: String::new(),
         kind: kind_name,
@@ -903,6 +927,7 @@ pub fn prepare(
         origin,
         at: crate::now_rfc3339(),
         rev,
+        batch,
         extra: Default::default(),
     };
     let path = write_record(store, p, &record)?;
@@ -1712,6 +1737,142 @@ fn percent_encode(s: &str) -> String {
         }
     }
     out
+}
+
+// ---- batches (FTR-037) ----------------------------------------------------------------------
+
+/// `(project, batch, "confirm" | "reject")` for a route that answers a whole batch.
+pub fn batch_route(method: &str, path: &str) -> Option<(String, String, String)> {
+    if !method.eq_ignore_ascii_case("POST") {
+        return None;
+    }
+    let seg: Vec<&str> = path
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    match seg.as_slice() {
+        [
+            "projects",
+            p,
+            "prepared",
+            "batch",
+            batch,
+            action @ ("confirm" | "reject"),
+        ] => Some((p.to_string(), batch.to_string(), action.to_string())),
+        _ => None,
+    }
+}
+
+/// The open records of a batch, oldest first.
+pub fn open_in_batch(
+    store: &Store,
+    p: &str,
+    batch: &str,
+    repo: Option<&std::path::Path>,
+) -> Result<Vec<PreparedView>> {
+    let mut views = standing(store, p, repo)?;
+    views.retain(|v| v.state == State::Open && v.record.batch.as_deref() == Some(batch));
+    Ok(views)
+}
+
+/// What answering one record of a batch did.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Resolved {
+    pub id: String,
+    pub kind: String,
+    pub verdict: Answer,
+    /// The verdict route it made; empty on a rejection or a failure.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub made: String,
+    /// Why this one could not be answered, when it could not; the rest of the batch still was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Keep the same answer for every open record of `batch`, each as its own `.resolved.yaml` with
+/// the record's id: how a batch is rejected, and how a batch's confirmations are kept once each
+/// verdict went through. Refused when the batch has no open record.
+pub fn resolve_batch(
+    store: &Store,
+    p: &str,
+    batch: &str,
+    resolution: &Resolution,
+) -> Result<Vec<Resolved>> {
+    let open = open_in_batch(store, p, batch, None)?;
+    if open.is_empty() {
+        return Err(unsupported(format!(
+            "no prepared record of batch {batch} waits for the person"
+        )));
+    }
+    let mut out = Vec::with_capacity(open.len());
+    for v in open {
+        let r = Resolution {
+            id: v.record.id.clone(),
+            ..resolution.clone()
+        };
+        let error = resolve(store, p, &r).err().map(|e| e.to_string());
+        out.push(Resolved {
+            id: v.record.id.clone(),
+            kind: v.record.kind.clone(),
+            verdict: resolution.verdict,
+            made: r.made.clone(),
+            error,
+        });
+    }
+    Ok(out)
+}
+
+/// Reject every open record of a batch (`POST /projects/{p}/prepared/batch/{batch}/reject`,
+/// `{by, reason?}`): the guard, then each record's answer is kept; nothing else changes.
+pub fn reject_batch(store: &Store, p: &str, batch: &str, body: &Value) -> Result<Vec<Resolved>> {
+    use crate::origin::{DecisionContext, Origin, Taker, Verdict, verdict_refusal};
+    let origin = Origin::parse(&crate::origin::from_body(body));
+    let taker = origin.map(Taker::of_origin).unwrap_or(Taker::Claude);
+    if let Some(why) = verdict_refusal(
+        Verdict::RejectPrepared,
+        taker,
+        &DecisionContext::monitor_mode(),
+    ) {
+        return Err(CoreError::Refused(why));
+    }
+    let by = body
+        .get("by")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .ok_or_else(|| unsupported("a rejection must name who gave it: pass `by`".into()))?
+        .to_string();
+    let reason = body
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if reason.chars().count() > MAX_TEXT {
+        return Err(unsupported(format!(
+            "a rejection's reason is at most {MAX_TEXT} characters"
+        )));
+    }
+    resolve_batch(
+        store,
+        p,
+        batch,
+        &Resolution {
+            id: String::new(),
+            verdict: Answer::Rejected,
+            by,
+            origin: origin.map(|o| o.as_str().to_string()).unwrap_or_default(),
+            at: crate::now_rfc3339(),
+            changed: Vec::new(),
+            reason,
+            made: String::new(),
+            extra: Default::default(),
+        },
+    )
 }
 
 /// Reject an open record (`POST /projects/{p}/prepared/{id}/reject`, `{by, reason?}`): the guard,

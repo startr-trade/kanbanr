@@ -256,6 +256,15 @@ pub fn apply_as(
             git::require_identity(data_dir).map_err(WriteError::Refused)?;
         }
         let body = held_body.as_ref().or(body);
+        // A whole batch of prepared records confirmed at once (FTR-037): each record expands into
+        // its verdict's own route and goes through as a direct verdict would, all in one commit.
+        if let Some((project, batch, action)) = prepared::batch_route(method, path)
+            && action == "confirm"
+        {
+            return confirm_batch(
+                store, data_dir, policy, &project, &batch, path, body, repo, sender, scope, origin,
+            );
+        }
         // Who may take a verdict is decided here, under the lock, by the one guard, against the
         // project's decision mode and delegations (FTR-028): a revoke and a delegated verdict are
         // ordered by the lock. Answering a prepared record is the person's alone (FTR-034).
@@ -415,6 +424,122 @@ pub fn apply_as(
         Ok(applied)
     })
     .map_err(|e| WriteError::Refused(format!("write lock: {e}")))?
+}
+
+/// Confirm every open record of a batch (FTR-037 R-5), under the lock the caller holds: the
+/// person's guard first, then every record is expanded before anything is written (a record that
+/// cannot be — stale, answered — refuses the whole batch); then each verdict is dispatched through
+/// its own route and its answer kept, one activity entry and one commit for the lot. A verdict the
+/// board refuses is reported in that record's `error` and the rest still go through.
+#[allow(clippy::too_many_arguments)]
+fn confirm_batch(
+    store: &Store,
+    data_dir: &Path,
+    policy: PushPolicy,
+    project: &str,
+    batch: &str,
+    path: &str,
+    body: Option<&Value>,
+    repo: Option<&Path>,
+    sender: &dyn eventing::WebhookSender,
+    scope: &ProcessScope,
+    origin: Origin,
+) -> Result<Applied, WriteError> {
+    if let Some(why) = origin::verdict_refusal(
+        Verdict::ConfirmPrepared,
+        Taker::of_origin(origin),
+        &DecisionContext::monitor_mode(),
+    ) {
+        return Err(WriteError::Refused(format!("refused: {why}")));
+    }
+    let open = prepared::open_in_batch(store, project, batch, None).map_err(WriteError::Core)?;
+    if open.is_empty() {
+        return Err(WriteError::Core(CoreError::Unsupported(format!(
+            "no prepared record of batch {batch} waits for the person"
+        ))));
+    }
+    let empty = Value::Object(Default::default());
+    let body = body.unwrap_or(&empty);
+    let mut expanded = Vec::with_capacity(open.len());
+    for v in &open {
+        expanded.push(
+            prepared::expand(store, project, &v.record.id, body, origin).map_err(WriteError::Core)?,
+        );
+    }
+    let mut results = Vec::with_capacity(expanded.len());
+    for (view, e) in open.iter().zip(expanded) {
+        let outcome = match judge(store, &e.method, &e.path, Some(&e.body), origin) {
+            Err(why) => Err(why.to_string()),
+            Ok(under) => {
+                let mut stamped = origin::stamp(&e.method, &e.path, Some(&e.body), origin);
+                if let Some(d) = &under
+                    && let Some(m) = stamped
+                        .get_or_insert_with(|| e.body.clone())
+                        .as_object_mut()
+                {
+                    m.insert("origin".into(), Value::String(Origin::Delegated.as_str().into()));
+                    m.insert("delegation".into(), Value::String(d.clone()));
+                }
+                let verdict_body = stamped.as_ref().unwrap_or(&e.body);
+                dispatch::dispatch_in(store, &e.method, &e.path, Some(verdict_body), repo)
+                    .map_err(|err| err.to_string())
+                    .and_then(|_| {
+                        prepared::resolve(store, project, &e.resolution).map_err(|err| err.to_string())
+                    })
+            }
+        };
+        results.push(prepared::Resolved {
+            id: view.record.id.clone(),
+            kind: view.record.kind.clone(),
+            verdict: prepared::Answer::Confirmed,
+            made: e.resolution.made.clone(),
+            error: outcome.err(),
+        });
+    }
+    let done = results.iter().filter(|r| r.error.is_none()).count();
+    let out = serde_json::json!({"batch": batch, "results": results}).to_string();
+    let msg = format!(
+        "confirm prepared batch {batch} ({done} of {} record(s))",
+        results.len()
+    );
+    let scoped = match scope {
+        ProcessScope::Scoped(s) => Some(s),
+        _ => None,
+    };
+    let by = scoped.map(|s| s.by_agent());
+    let actor = git::identity(data_dir)
+        .map(|(n, _)| n)
+        .unwrap_or_else(|| "kanbanr".into());
+    activity::append_with(
+        data_dir,
+        project,
+        &actor,
+        &msg,
+        None,
+        by.as_ref(),
+        origin.as_str(),
+    );
+    let events = eventing::record_with(store, data_dir, "POST", path, &out, by.as_ref(), origin.as_str());
+    let policy = match scope {
+        ProcessScope::Unscoped => policy,
+        _ => PushPolicy::Off,
+    };
+    let msg = agentscope::with_trailers(&msg, &[("Kanbanr-Origin", origin.as_str())]);
+    let msg = match scoped {
+        Some(s) => agentscope::with_trailer(&msg, s),
+        None => msg,
+    };
+    let mut applied = Applied {
+        body: out,
+        ..Default::default()
+    };
+    if git::commit_local(data_dir, &msg)
+        && let Some(outcome) = git::after_commit(data_dir, policy)
+    {
+        applied.push_failures = outcome.failures;
+    }
+    eventing::deliver_all(data_dir, &events, sender);
+    Ok(applied)
 }
 
 /// The one guard over a request (FTR-028): `Err` is its refusal; `Ok(Some(DLG-n))` says the
