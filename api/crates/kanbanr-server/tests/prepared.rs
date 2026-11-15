@@ -245,3 +245,69 @@ fn a_manual_result_recorded_from_the_monitor_matches_kanbanr_tests_record() {
         .unwrap();
     assert_eq!(listed.trim(), "[]");
 }
+
+/// DEF-049 R-1: the monitor confirms a prepared passed result for a tagged release that waits on
+/// its tag workflow; the release ships, and the answer says which version settled.
+#[test]
+fn confirming_a_passed_gate_result_ships_the_tagged_release() {
+    let s = Scratch::new("prepared-settle");
+    let data = board(&s);
+    write(
+        &data,
+        "/projects",
+        json!({"name": "demo"}),
+        kanbanr_core::Origin::Terminal,
+    );
+    let store = kanbanr_core::Store::new(data.clone());
+    // The tag stage is the last and a commit gate judges the tag.
+    let mut cadence = store.load_meta("demo").unwrap().config.cadence;
+    cadence.releases = true;
+    cadence.git_model = false;
+    cadence.release_stages = vec!["candidate".into(), "production".into()];
+    cadence.commit_gates = vec!["ci".into()];
+    store.set_cadence("demo", None, cadence).unwrap();
+    kanbanr_core::releases::add(&store, "demo", "v1", "", "").unwrap();
+    // The cut tagged it: set what the cut records, as the release file reads it.
+    let file = data.join("projects/demo/releases.yaml");
+    let mut releases = kanbanr_core::releases::load(&store, "demo").unwrap();
+    releases[0].stage = "production".into();
+    releases[0].tagged_at = "2026-11-14T10:00:00Z".into();
+    releases[0].tag_commit = SHA.into();
+    std::fs::write(&file, kanbanr_core::yaml::to_string(&releases).unwrap()).unwrap();
+    assert!(
+        kanbanr_core::releases::load(&store, "demo").unwrap()[0].waits_on_tag(),
+        "tagged, waiting"
+    );
+
+    let prepared = write(
+        &data,
+        "/projects/demo/prepared",
+        json!({
+            "kind": "gate-result",
+            "subject": {"gate": "ci", "commit": SHA},
+            "fields": {"passed": true, "url": "https://ci.example/run/9"},
+            "sources": [{"label": "tag run", "url": "https://ci.example/run/9"}],
+        }),
+        kanbanr_core::Origin::Conversation,
+    );
+    let id = prepared["id"].as_str().unwrap().to_string();
+    let url = serve(&s, &data);
+    let token = page_token(&url);
+    let r = ureq::post(&format!(
+        "{url}/api/write/projects/demo/prepared/{id}/confirm"
+    ))
+    .set("x-kanbanr-token", &token)
+    .set("Origin", &url)
+    .set("content-type", "application/json")
+    .send_string(&json!({"by": "Tester"}).to_string());
+    let answer = match r {
+        Ok(r) => r.into_string().unwrap(),
+        Err(ureq::Error::Status(code, r)) => panic!("{code}: {}", r.into_string().unwrap()),
+        Err(e) => panic!("{e}"),
+    };
+    let answer: Value = serde_json::from_str(&answer).unwrap();
+    assert_eq!(answer["settled"], "v1", "{answer}");
+    let release = &kanbanr_core::releases::load(&store, "demo").unwrap()[0];
+    assert_eq!(release.state, kanbanr_core::releases::ReleaseState::Shipped);
+    assert_eq!(release.shipped_by, "Tester");
+}

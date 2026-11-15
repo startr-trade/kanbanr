@@ -10675,15 +10675,19 @@ fn run_gate(cli: &Cli, client: &Backend, cmd: &GateCmd) -> anyhow::Result<()> {
                     ("source", source.clone().map(|s| json!(s))),
                 ])),
             )?;
-            print_write(
-                cli,
-                &resp,
-                format!(
-                    "gate {name} {} on {}, recorded by {by}",
-                    if *passed { "passed" } else { "failed" },
-                    &sha[..7]
-                ),
+            let mut said = format!(
+                "gate {name} {} on {}, recorded by {by}",
+                if *passed { "passed" } else { "failed" },
+                &sha[..7]
             );
+            // The result shipped the release that waited on it (DEF-049).
+            let settled = serde_json::from_str::<Value>(&resp)
+                .ok()
+                .and_then(|v| v["settled"].as_str().map(str::to_string));
+            if let Some(version) = &settled {
+                said.push_str(&format!("; {version} shipped"));
+            }
+            print_write(cli, &resp, said);
             Ok(())
         }
         GateCmd::List { name, commit } => {
@@ -10904,8 +10908,16 @@ fn run_release(cli: &Cli, client: &Backend, cmd: &ReleaseCmd) -> anyhow::Result<
                     .count();
                 // The stage it is at (FEAT-183); none yet reads as not yet a candidate.
                 let stage = r["stage"].as_str().filter(|s| !s.is_empty()).unwrap_or("—");
+                // Tagged, not shipped: it waits for the workflow its tag started (DEF-049).
+                let waiting = match project.config.cadence.tag_gate_name() {
+                    Some(gate) if release_waits_on_tag(&r) => {
+                        format!("  tagged, waiting for {gate}")
+                    }
+                    _ if release_waits_on_tag(&r) => "  tagged, not released yet".to_string(),
+                    _ => String::new(),
+                };
                 println!(
-                    "{:<12} {:<8} {:<12} target {:<10}  {planned} item(s)",
+                    "{:<12} {:<8} {:<12} target {:<10}  {planned} item(s){waiting}",
                     version,
                     r["state"].as_str().unwrap_or(""),
                     stage,
@@ -11222,7 +11234,7 @@ fn promote_release(
             urlencode_segment(version)
         ),
         Some(obj(vec![
-            ("stage", Some(json!(stage))),
+            ("stage", (!stage.is_empty()).then(|| json!(stage))),
             ("by", Some(json!(by))),
             ("reason", reason.map(|r| json!(r))),
             (
@@ -11233,7 +11245,11 @@ fn promote_release(
         repo.as_deref(),
     )?;
     let v: Value = serde_json::from_str(&resp)?;
-    let mut said = format!("{version} -> {stage}");
+    let mut said = if stage.is_empty() {
+        format!("{version} shipped")
+    } else {
+        format!("{version} -> {stage}")
+    };
     if let Some(b) = v["branch_created"].as_str() {
         said.push_str(&format!("; created {b}"));
     }
@@ -11268,7 +11284,7 @@ fn promote_release(
             v["release"]["branch"].as_str().unwrap_or_default()
         );
     }
-    if v["tagged"].is_string() {
+    if v["release"]["state"] == "shipped" {
         let release = &v["release"];
         let shipped = release["shipped"].as_array().map_or(0, Vec::len);
         println!(
@@ -11330,16 +11346,29 @@ fn promote_release(
     Ok(())
 }
 
+/// A release as the API reads it that is tagged, not shipped and not superseded (DEF-049).
+fn release_waits_on_tag(r: &Value) -> bool {
+    r["tagged_at"].as_str().is_some_and(|t| !t.is_empty())
+        && r["state"].as_str().unwrap_or("planned") == "planned"
+        && r["superseded_by"].as_str().is_none_or(str::is_empty)
+}
+
 /// The stage after the one a release is at, as `release promote` with none named moves it to.
 fn next_release_stage(client: &Backend, p: &str, version: &str) -> anyhow::Result<String> {
-    let stages = get_project(client, p)?.config.cadence.stages();
+    let cadence = get_project(client, p)?.config.cadence;
+    let stages = cadence.stages();
     let releases: Vec<Value> =
         serde_json::from_str(&client.get(&format!("/projects/{p}/releases"))?)?;
-    let current = releases
-        .iter()
-        .find(|r| r["version"] == version)
-        .and_then(|r| r["stage"].as_str())
-        .unwrap_or("");
+    let found = releases.iter().find(|r| r["version"] == version);
+    let current = found.and_then(|r| r["stage"].as_str()).unwrap_or("");
+    // Tagged at the last stage and waiting for its workflow: no stage names the move, the server
+    // ships it once the tag's result is passed (DEF-049).
+    if cadence.tag_waits()
+        && found.is_some_and(release_waits_on_tag)
+        && stages.last().is_some_and(|l| l == current)
+    {
+        return Ok(String::new());
+    }
     let next = stages
         .iter()
         .position(|s| s == current)

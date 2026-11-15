@@ -61,6 +61,9 @@ export default function ReleasesPage() {
     // A superseded release never ships: its tag stays, and the patch carries on (FTR-026).
     if (r.state === "shipped" || r.superseded_by) return null;
     const at = r.stage ? stages.indexOf(r.stage) : -1;
+    // Tagged at the last stage, it waits for its tag workflow's result and ships on it (DEF-049):
+    // the stage it is at is the one the button still speaks for.
+    if (r.tagged_at && at >= 0 && at + 1 === stages.length) return stages[at];
     return at + 1 < stages.length ? stages[at + 1] : null;
   };
   // The same core promotion as the CLI, through the daemon's promote route (FEAT-183), carrying
@@ -72,7 +75,7 @@ export default function ReleasesPage() {
       const done = (await api.promoteRelease(project, r.version, who, to, expect, note, acceptUntested)) as {
         next?: string;
       };
-      setOutcome((o) => ({ ...o, [r.version]: `promoted to ${to}${done?.next ? ` — ${done.next}` : ""}` }));
+      setOutcome((o) => ({ ...o, [r.version]: `${to ? `promoted to ${to}` : `promoted: ${r.version} shipped`}${done?.next ? ` — ${done.next}` : ""}` }));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setOutcome((o) => ({
@@ -277,10 +280,12 @@ function ReleaseButton({
   };
   // A confirmation after the tag that Claude prepared (FTR-034): what was checked, filled in, beside
   // the one button, pinned to the release tip this plan showed.
-  const preparedPromotion = action.confirm
+  const preparedPromotion = action.confirm && !plan.data.awaiting
     ? openFor(prepared, "promotion", { release: release.version, stage: plan.data.to })
     : undefined;
   const tip = plan.data.release_tip;
+  // The release waiting at its last stage is shipped with no stage named (DEF-049).
+  const promoteTo = plan.data.awaiting ? "" : plan.data.to;
   const confirmPromotion = async (view: PreparedView, edits: Record<string, unknown>) => {
     if (!who) return;
     try {
@@ -363,7 +368,7 @@ function ReleaseButton({
             onClick={() =>
               action.confirm
                 ? setAsking(true)
-                : onPromote(release, plan.data!.to, plan.data!.release_tip, "", accepted ? action.accept : undefined)
+                : onPromote(release, promoteTo, plan.data!.release_tip, "", accepted ? action.accept : undefined)
             }
             disabled={!enabled || busy != null}
             title={enabled ? action.does.join("; ") : "not ready: see what is missing"}
@@ -398,7 +403,7 @@ function ReleaseButton({
               disabled={busy != null}
               onClick={() => {
                 setAsking(false);
-                onPromote(release, plan.data!.to, plan.data!.release_tip, note.trim());
+                onPromote(release, promoteTo, plan.data!.release_tip, note.trim());
                 setNote("");
               }}
             >

@@ -6,6 +6,11 @@ All notable changes to kanbanr are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A release whose tag stage is last now reads as tagged until its tag workflow's passed result is
+  recorded, then ships (DEF-049).
+
 ## [0.6.0] - 2026-11-14
 
 ### Added
