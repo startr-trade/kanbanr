@@ -386,10 +386,9 @@ fn current_stage_gaps(
     feature: &crate::FeatureItem,
     ctx: &crate::readiness::Context,
 ) -> Vec<crate::readiness::Gap> {
-    let gates = project.config.effective_gates();
-    let Some(gate) = gates
-        .get(&feature.status)
-        .filter(|g| g.applies_to(feature.kind.as_deref()))
+    let Some(gate) = project
+        .config
+        .gate_for_kind(&feature.status, feature.kind.as_deref())
     else {
         return Vec::new();
     };
@@ -1315,6 +1314,236 @@ mod tests {
         )
         .unwrap();
         (store, dir)
+    }
+
+    /// A fresh board on a built-in process, with the method, a milestone and the fixture's charter;
+    /// under the system temp folder (L-41).
+    fn preset_board(p: &str) -> (Store, std::path::PathBuf) {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "kanbanr-doctor-path-{p}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            dir.starts_with(std::env::temp_dir()),
+            "the board is the test's own"
+        );
+        let store = Store::new(dir.clone());
+        store
+            .init_project(
+                "demo",
+                crate::config::preset(p).unwrap().into_config("demo"),
+            )
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::Charter {
+                purpose: "Keep the reasoning with the work.".into(),
+                goals: vec![crate::charter::Goal {
+                    id: "G-1".into(),
+                    statement: "Nothing is built on reasoning nobody agreed to".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        (store, dir)
+    }
+
+    /// An item of `kind` with a statement, goal G-1 and one EARS requirement naming no test, and a
+    /// spec with no Design heading.
+    fn item_without_design(store: &Store, kind: Option<&str>) -> String {
+        let code = store
+            .add_feature_of_kind(
+                "demo",
+                "Pin the toolchain",
+                "# Pin the toolchain\n\n## Why\n\nBuilds drift.\n",
+                "M",
+                None,
+                kind,
+            )
+            .unwrap()
+            .code;
+        store
+            .set_feature_definition(
+                "demo",
+                &code,
+                Some(FeatureDefinition {
+                    statement: "A pinned toolchain, for the builder, so that builds agree".into(),
+                    goals: vec!["G-1".into()],
+                    requirements: vec![Requirement {
+                        id: "R-1".into(),
+                        text: "WHEN the project builds, THE SYSTEM SHALL use the pinned toolchain"
+                            .into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            )
+            .unwrap();
+        code
+    }
+
+    fn said_of(store: &Store, code: &str) -> Vec<String> {
+        run_project(store, "demo")
+            .unwrap()
+            .issues
+            .into_iter()
+            .filter(|i| i.code.as_deref() == Some(code))
+            .map(|i| i.message)
+            .collect()
+    }
+
+    /// What the item's current stage's FULL effective gate (unstripped, as doctor judged before
+    /// DEF-069) asks and the item lacks, by the rules `current_stage_gaps` uses.
+    fn full_gate_gaps(
+        project: &Project,
+        charter: &crate::Charter,
+        feature: &crate::FeatureItem,
+        ctx: &crate::readiness::Context,
+    ) -> Vec<crate::readiness::Gap> {
+        let gates = project.config.effective_gates();
+        let Some(gate) = gates
+            .get(&feature.status)
+            .filter(|g| g.applies_to(feature.kind.as_deref()))
+        else {
+            return Vec::new();
+        };
+        let goal_ids = charter.goal_ids();
+        let mut gaps = crate::readiness::evaluate_entering(
+            feature,
+            Some(&goal_ids),
+            &gate.requires,
+            ctx,
+            &feature.status,
+        );
+        gaps.extend(crate::readiness::evaluate_entering(
+            feature,
+            Some(&goal_ids),
+            &gate.warns,
+            ctx,
+            &feature.status,
+        ));
+        gaps.retain(doctor_relevant);
+        gaps
+    }
+
+    /// DEF-069 R-1, R-2: on every built-in process, at the build stage, a feature (no path) is
+    /// judged by the full gate as before; a chore is judged by the full gate less exactly what its
+    /// path leaves out (the Design section), so every other condition the stage asks still warns.
+    #[test]
+    fn a_chore_is_judged_by_its_own_path() {
+        use crate::readiness::{Check, Condition};
+        for p in ["togaf", "agile", "scrum", "design-control"] {
+            let (store, dir) = preset_board(p);
+            let chore = item_without_design(&store, Some("chore"));
+            let feature = item_without_design(&store, None);
+            let config = store.load("demo").unwrap().config;
+            let build = config
+                .role_status(crate::config::Role::Build)
+                .unwrap_or_else(|| panic!("{p} has a build stage"));
+
+            let stages = config.path_for(Some("chore")).unwrap().stages.clone();
+            let at = stages
+                .iter()
+                .position(|s| *s == build)
+                .unwrap_or_else(|| panic!("{p}: the chore path {stages:?} passes {build}"));
+            for stage in &stages[1..=at] {
+                store.move_feature("demo", &chore, stage).unwrap();
+            }
+            let shown = &config.displayed_states;
+            let at = shown.iter().position(|s| *s == build).unwrap();
+            for stage in &shown[1..=at] {
+                store.move_feature("demo", &feature, stage).unwrap();
+            }
+
+            let project = store.load("demo").unwrap();
+            let charter = crate::charter::load(&store, "demo").unwrap();
+            let ctx = crate::readiness::Context::load(&store, "demo", &project.config);
+            let judged = |code: &str| {
+                let f = project.feature(code).unwrap();
+                (
+                    current_stage_gaps(&project, &charter, f, &ctx),
+                    full_gate_gaps(&project, &charter, f, &ctx),
+                )
+            };
+
+            // A feature has no path: judged exactly as before, the Design section included.
+            let (now, before) = judged(&feature);
+            assert_eq!(now, before, "{p}: a feature is judged as before");
+            assert!(
+                now.iter().any(|g| g.check == Check::SpecSections),
+                "{p}: {now:?}"
+            );
+
+            // A chore: the full gate's gaps less those its path leaves out, and nothing else.
+            let (now, before) = judged(&chore);
+            assert!(
+                before.iter().any(|g| g.check == Check::SpecSections),
+                "{p}: the full gate asks a chore for the Design section (the DEF-069 warning)"
+            );
+            let expected: Vec<_> = before
+                .into_iter()
+                .filter(|g| g.check != Check::SpecSections)
+                .collect();
+            assert_eq!(
+                now, expected,
+                "{p}: a chore loses only what its path leaves out"
+            );
+            assert!(
+                !now.iter().any(|g| g.message.contains("'Design' section")),
+                "{p}: {now:?}"
+            );
+            // The stage's own conditions all still stand for the chore (approved, in_sprint,
+            // zachman, tests_named, … as the preset asks), only the Design section is gone.
+            let full = config.effective_gates()[&build].clone();
+            let mut kept = full.requires.clone();
+            kept.retain_mut(|c| match c {
+                Condition::Check(Check::SpecSections) => false,
+                Condition::SpecSections { spec_sections } => {
+                    spec_sections.retain(|s| !s.trim().eq_ignore_ascii_case("Design"));
+                    !spec_sections.is_empty()
+                }
+                _ => true,
+            });
+            let gate = config.gate_for_kind(&build, Some("chore")).unwrap();
+            assert_eq!(gate.requires, kept, "{p}");
+            assert_eq!(gate.warns, full.warns, "{p}: warns are not stripped (Q2)");
+            assert!(!kept.is_empty(), "{p}: the stage still asks something");
+
+            // And doctor's report says the same for the chore.
+            let said = said_of(&store, &chore);
+            assert!(
+                !said.iter().any(|m| m.contains("'Design' section")),
+                "{p}: {said:?}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// DEF-069 R-2: a feature, which has no path, is still warned at the build stage that its spec
+    /// has no Design section.
+    #[test]
+    fn a_feature_at_the_build_stage_still_needs_its_design() {
+        let (store, dir) = preset_board("togaf");
+        let code = item_without_design(&store, None);
+        for stage in ["Business Arch", "System Design", "Implementation"] {
+            store.move_feature("demo", &code, stage).unwrap();
+        }
+        let said = said_of(&store, &code);
+        assert!(
+            said.iter()
+                .any(|m| m.contains("the spec has no 'Design' section")),
+            "{said:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A board with releases and sprints on, and v1 added.

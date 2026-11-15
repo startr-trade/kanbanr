@@ -2423,7 +2423,11 @@ mod tests {
             .expect("Implementation has a gate for a chore");
         assert!(!names_design(&chore), "{chore:?}");
         assert!(!review(&chore), "{chore:?}");
-        assert!(chore.requires.contains(&Condition::Check(Check::TestsNamed)));
+        assert!(
+            chore
+                .requires
+                .contains(&Condition::Check(Check::TestsNamed))
+        );
         assert!(chore.requires.contains(&Condition::Check(Check::Approved)));
 
         let feature = togaf
