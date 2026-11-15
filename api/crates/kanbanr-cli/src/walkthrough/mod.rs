@@ -155,6 +155,43 @@ pub struct CheckResult {
     pub why: String,
 }
 
+/// The checks of a run, one per marker: a marker named on several steps passed only if every one
+/// of them passed; `step` names them all (`2.2b+2.2c`), and the reason joins the failed steps',
+/// each prefixed with its step id. Markers keep the order they were first named in.
+pub fn merge_checks(checks: &[CheckResult]) -> Vec<CheckResult> {
+    let mut out: Vec<(CheckResult, Vec<String>)> = Vec::new();
+    for c in checks {
+        match out.iter_mut().find(|(m, _)| m.marker == c.marker) {
+            Some((m, failed)) => {
+                m.step = format!("{}+{}", m.step, c.step);
+                if !c.passed {
+                    m.passed = false;
+                    failed.push(format!("{}: {}", c.step, c.why));
+                }
+            }
+            None => {
+                let failed = if c.passed {
+                    Vec::new()
+                } else {
+                    vec![format!("{}: {}", c.step, c.why)]
+                };
+                out.push((c.clone(), failed));
+            }
+        }
+    }
+    out.into_iter()
+        .map(|(mut m, failed)| {
+            let several = m.step.contains('+');
+            if !m.passed {
+                m.why = failed.join("; ");
+            } else if several {
+                m.why = "every step went through as the guide says".into();
+            }
+            m
+        })
+        .collect()
+}
+
 /// Where runs are kept by default: outside every repository and outside the temporary directory.
 pub fn default_runs_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("KANBANR_WALKTHROUGH_RUNS").filter(|d| !d.is_empty()) {
@@ -385,41 +422,26 @@ fn make_claude_config(run: &RunDirs, log: &mut Vec<String>) -> Result<()> {
             let _ = std::fs::set_permissions(&creds, std::fs::Permissions::from_mode(0o600));
         }
     }
-    let skills = dst.join("skills");
-    std::fs::create_dir_all(&skills)?;
-    let skill_src = src.join("skills").join("kanbanr");
-    let link = skills.join("kanbanr");
-    if skill_src.exists() && !link.exists() {
-        let target = std::fs::canonicalize(&skill_src).unwrap_or(skill_src.clone());
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&target, &link)?;
-        #[cfg(not(unix))]
-        copy_tree(&target, &link)?;
-        copied.push("skills/kanbanr".into());
-    } else if !skill_src.exists() {
-        log.push(format!(
-            "no kanbanr skill at {}: the session has no skill (install it with `kanbanr skill install`)",
-            skill_src.display()
-        ));
-    }
+    log.push(install_run_skill(run)?);
     log.push(format!("claude-config copied: {}", copied.join(", ")));
     Ok(())
 }
 
-#[cfg(not(unix))]
-fn copy_tree(from: &Path, to: &Path) -> Result<()> {
-    std::fs::create_dir_all(to)?;
-    for e in std::fs::read_dir(from)? {
-        let e = e?;
-        let src = e.path();
-        let dst = to.join(e.file_name());
-        if src.is_dir() {
-            copy_tree(&src, &dst)?;
+/// The skill this binary carries, installed into the run's own config folder with the code
+/// `kanbanr skill install` runs (T16, G-6): a run exercises the skill and the binary that ship
+/// together, never the person's installed copy. A link or copy an earlier run left is replaced.
+pub fn install_run_skill(run: &RunDirs) -> Result<String> {
+    let dir = run.claude_config().join("skills").join("kanbanr");
+    if let Ok(meta) = std::fs::symlink_metadata(&dir)
+        && (meta.file_type().is_symlink() || !dir.join(".kanbanr-skill").exists())
+    {
+        if meta.file_type().is_symlink() || meta.is_file() {
+            std::fs::remove_file(&dir)?;
         } else {
-            std::fs::copy(&src, &dst)?;
+            std::fs::remove_dir_all(&dir)?;
         }
     }
-    Ok(())
+    crate::skill::install_at(&dir)
 }
 
 /// The persona appended to the session's system prompt.
@@ -1127,6 +1149,7 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
             .unwrap_or_else(|| PathBuf::from("claude")),
         model: model.clone(),
         kanbanr: kanbanr.clone(),
+        person_skill: crate::hooks::claude_dir().map(|d| d.join("skills").join("kanbanr")),
     };
     let mut log = guard::preflight(&dirs, &env)?;
     log.push("runbook", shown.clone());
@@ -1227,7 +1250,9 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     {
         running.finding("end", "truth-mismatch", l.board.clone(), l.truth.clone());
     }
-    write_checks(&dirs, &running.checks)?;
+    // One result per marker, in checks.tsv as on the target board.
+    let merged = merge_checks(&running.checks);
+    write_checks(&dirs, &merged)?;
     if !dirs.findings().exists() {
         std::fs::write(dirs.findings(), "# Findings\n\nNone.\n")?;
     }
@@ -1258,8 +1283,8 @@ pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
         "run {name} done: {} step(s), {} finding(s), {} check(s) ({} passed), cost {cost:.2} USD, {} capture(s) in the manifest, {} decision row(s)",
         steps.len(),
         running.findings.len(),
-        running.checks.len(),
-        running.checks.iter().filter(|c| c.passed).count(),
+        merged.len(),
+        merged.iter().filter(|c| c.passed).count(),
         manifest.entries.len(),
         derived.rows
     );
@@ -1296,6 +1321,7 @@ fn prepare_batch(
     batch: &str,
     target_board: &Path,
 ) -> Result<Vec<String>> {
+    let checks = merge_checks(checks);
     if checks.is_empty() {
         return Ok(Vec::new());
     }
@@ -1304,7 +1330,7 @@ fn prepare_batch(
     let backend = crate::Backend::new(target_board.to_path_buf());
     let repo = crate::scm::repo_root();
     let mut ids = Vec::new();
-    for c in checks {
+    for c in &checks {
         let Some(def) = runbook.checks.get(&c.marker) else {
             continue;
         };
@@ -1337,4 +1363,64 @@ fn which(program: &str) -> Option<PathBuf> {
     std::env::split_paths(&paths)
         .map(|d| d.join(program))
         .find(|p| p.is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check(marker: &str, step: &str, passed: bool, why: &str) -> CheckResult {
+        CheckResult {
+            marker: marker.into(),
+            step: step.into(),
+            passed,
+            why: why.into(),
+        }
+    }
+
+    /// T16: a marker named on two steps is one result — passed only if both passed, naming both
+    /// steps, with the failed step's reason prefixed by its id — and markers keep their order.
+    #[test]
+    fn a_check_named_on_two_steps_is_one_result() {
+        let merged = merge_checks(&[
+            check(
+                "MT-7",
+                "2.2b",
+                true,
+                "the step went through as the guide says",
+            ),
+            check(
+                "MT-1",
+                "3.1",
+                true,
+                "the step went through as the guide says",
+            ),
+            check("MT-7", "2.2c", false, "the offer was missing"),
+            check("MT-7", "2.2d", false, "a board claim failed"),
+        ]);
+        assert_eq!(merged.len(), 2, "{merged:?}");
+        assert_eq!(merged[0].marker, "MT-7");
+        assert_eq!(merged[0].step, "2.2b+2.2c+2.2d");
+        assert!(!merged[0].passed);
+        assert_eq!(
+            merged[0].why,
+            "2.2c: the offer was missing; 2.2d: a board claim failed"
+        );
+        assert_eq!(
+            merged[1],
+            check(
+                "MT-1",
+                "3.1",
+                true,
+                "the step went through as the guide says"
+            )
+        );
+        let both = merge_checks(&[
+            check("MT-2", "1.3", true, "ok"),
+            check("MT-2", "4.1", true, "ok"),
+        ]);
+        assert_eq!(both.len(), 1);
+        assert!(both[0].passed);
+        assert_eq!(both[0].step, "1.3+4.1");
+    }
 }

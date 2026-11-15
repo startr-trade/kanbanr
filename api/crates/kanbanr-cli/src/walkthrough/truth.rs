@@ -489,6 +489,11 @@ fn item_code(store: &Store, project: &str, sel: &ItemSel) -> Option<String> {
                 .find(|f| f.title.to_ascii_lowercase().contains(&t))
                 .map(|f| f.code.clone())
         }
+        ItemSel::TitleMatches(_) => items
+            .iter()
+            .rev()
+            .find(|f| sel.title_fits(&f.title))
+            .map(|f| f.code.clone()),
     }
 }
 
@@ -528,6 +533,22 @@ pub fn board_claim(
                         ))
                     }
                 }
+            })
+        }
+        BoardClaim::ItemTitleMatches(pat) => {
+            let p = store.load(project)?;
+            let sel = ItemSel::TitleMatches(pat.clone());
+            Ok(if p.features.iter().any(|f| sel.title_fits(&f.title)) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "no item's title matches /{pat}/ (items: {})",
+                    p.features
+                        .iter()
+                        .map(|f| format!("{} {}", f.code, f.title))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ))
             })
         }
         BoardClaim::ItemTitleContains(t) => {
@@ -802,6 +823,25 @@ mod tests {
             )
             .unwrap(),
             Ok(())
+        );
+        // T16: a title pattern, case-insensitive.
+        assert_eq!(
+            board_claim(
+                &board,
+                "shop",
+                &BoardClaim::ItemTitleMatches("^saved b".into())
+            )
+            .unwrap(),
+            Ok(())
+        );
+        assert!(
+            board_claim(
+                &board,
+                "shop",
+                &BoardClaim::ItemTitleMatches("^basket".into())
+            )
+            .unwrap()
+            .is_err()
         );
         assert_eq!(
             board_claim(

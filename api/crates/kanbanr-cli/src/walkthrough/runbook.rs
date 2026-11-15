@@ -29,6 +29,16 @@ pub enum ItemSel {
     Code(String),
     /// The item whose title contains this text (case-insensitive); the newest when several do.
     TitleContains(String),
+    /// The item whose title matches this pattern (case-insensitive); the newest when several do.
+    TitleMatches(String),
+}
+
+/// A title pattern compiled case-insensitively; an invalid one matches nothing (lint names it).
+pub fn title_regex(pattern: &str) -> Option<regex::Regex> {
+    regex::RegexBuilder::new(pattern)
+        .case_insensitive(true)
+        .build()
+        .ok()
 }
 
 impl ItemSel {
@@ -38,6 +48,16 @@ impl ItemSel {
             ItemSel::Newest => "the newest item".into(),
             ItemSel::Code(c) => c.clone(),
             ItemSel::TitleContains(t) => format!("the item titled like \"{t}\""),
+            ItemSel::TitleMatches(p) => format!("the item whose title matches /{p}/"),
+        }
+    }
+
+    /// Does an item with this title satisfy the selector (ignoring Newest and Code)?
+    pub fn title_fits(&self, title: &str) -> bool {
+        match self {
+            ItemSel::TitleContains(t) => title.to_lowercase().contains(&t.to_lowercase()),
+            ItemSel::TitleMatches(p) => title_regex(p).is_some_and(|r| r.is_match(title)),
+            _ => false,
         }
     }
 }
@@ -163,6 +183,8 @@ pub enum BoardClaim {
     Release { version: String, stage: String },
     /// An item exists whose title contains this text (W2b).
     ItemTitleContains(String),
+    /// An item exists whose title matches this pattern, case-insensitive (T16).
+    ItemTitleMatches(String),
     /// The item is at this status.
     ItemStatus { item: ItemSel, status: String },
     /// Release preparation (notes, changelog, version files) is configured (W2b).
@@ -274,6 +296,7 @@ pub struct Runbook {
 enum RawItemSel {
     Word(String),
     Titled { title_contains: String },
+    TitledLike { title_matches: String },
 }
 
 impl RawItemSel {
@@ -282,6 +305,7 @@ impl RawItemSel {
             RawItemSel::Word(w) if w.eq_ignore_ascii_case("newest") => ItemSel::Newest,
             RawItemSel::Word(w) => ItemSel::Code(w),
             RawItemSel::Titled { title_contains } => ItemSel::TitleContains(title_contains),
+            RawItemSel::TitledLike { title_matches } => ItemSel::TitleMatches(title_matches),
         }
     }
 }
@@ -459,6 +483,8 @@ struct RawItemClaim {
     #[serde(default)]
     title_contains: Option<String>,
     #[serde(default)]
+    title_matches: Option<String>,
+    #[serde(default)]
     item: Option<RawItemSel>,
     #[serde(default)]
     status: Option<String>,
@@ -498,15 +524,16 @@ impl RawBoardClaim {
             });
         }
         if let Some(i) = self.item {
-            match (i.title_contains, i.item, i.status) {
-                (Some(t), None, None) => out.push(BoardClaim::ItemTitleContains(t)),
-                (None, Some(sel), Some(status)) => out.push(BoardClaim::ItemStatus {
+            match (i.title_contains, i.title_matches, i.item, i.status) {
+                (Some(t), None, None, None) => out.push(BoardClaim::ItemTitleContains(t)),
+                (None, Some(p), None, None) => out.push(BoardClaim::ItemTitleMatches(p)),
+                (None, None, Some(sel), Some(status)) => out.push(BoardClaim::ItemStatus {
                     item: sel.into_sel(),
                     status,
                 }),
                 _ => {
                     return Err(anyhow!(
-                        "step {step}: an item claim is `{{title_contains: …}}` or `{{item: …, status: …}}`"
+                        "step {step}: an item claim is `{{title_contains: …}}`, `{{title_matches: …}}` or `{{item: …, status: …}}`"
                     ));
                 }
             }
@@ -777,6 +804,44 @@ impl std::fmt::Display for LintError {
     }
 }
 
+/// Every `title_matches` pattern a step names: in its decision, press, offer and board claim.
+fn title_patterns(s: &Step) -> Vec<String> {
+    let mut sels: Vec<&ItemSel> = Vec::new();
+    if let Some(d) = &s.decide {
+        match d {
+            Decision::Approve(i) | Decision::Ratify(i) => sels.push(i),
+            Decision::Signoff { item, .. } | Decision::RecordManual { item, .. } => sels.push(item),
+            _ => {}
+        }
+    }
+    sels.extend(s.press.as_ref().and_then(|p| p.subject.as_ref()));
+    sels.extend(s.offer.as_ref().and_then(|o| o.subject.as_ref()));
+    let mut out: Vec<String> = sels
+        .into_iter()
+        .filter_map(|i| match i {
+            ItemSel::TitleMatches(p) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+    if let Some(e) = &s.expect {
+        match &e.board {
+            Some(BoardClaim::ItemTitleMatches(p)) => out.push(p.clone()),
+            Some(BoardClaim::ItemStatus {
+                item: ItemSel::TitleMatches(p),
+                ..
+            }) => out.push(p.clone()),
+            _ => {}
+        }
+        if let Some(TruthClaim::Merged {
+            item: ItemSel::TitleMatches(p),
+        }) = &e.truth
+        {
+            out.push(p.clone());
+        }
+    }
+    out
+}
+
 /// Everything a run would stumble on; empty for a runbook a run can follow.
 pub fn lint(rb: &Runbook) -> Vec<LintError> {
     let mut out = Vec::new();
@@ -864,6 +929,14 @@ pub fn lint(rb: &Runbook) -> Vec<LintError> {
                 out.push(err(
                     &s.id,
                     format!("answer rule `{}` does not compile: {e}", rule.pattern),
+                ));
+            }
+        }
+        for p in title_patterns(s) {
+            if let Err(why) = regex::RegexBuilder::new(&p).case_insensitive(true).build() {
+                out.push(err(
+                    &s.id,
+                    format!("title_matches `{p}` does not compile: {why}"),
                 ));
             }
         }
@@ -1143,6 +1216,30 @@ steps:
         assert_eq!(talk.asked.as_deref(), Some("style|look"));
         assert_eq!(talk.not_asked.as_deref(), Some("push order"));
         assert_eq!(lint(&rb), Vec::<LintError>::new());
+        // T16: a title pattern, in a board claim and in a selector; lint names a bad one.
+        let re = Runbook::parse(
+            "```yaml\nrunbook: x\nprocess: y\nsteps:\n  - id: a\n    expect: {board: {item: {title_matches: \"basket|cart\"}}}\n  - id: b\n    decide: {approve: {item: {title_matches: \"^saved\"}}}\n    offer: {page: review, button: Approve, subject: {item: {title_matches: \"^saved\"}}}\n  - id: c\n    expect: {board: {item: {title_matches: \"(unclosed\"}}}\n```",
+        )
+        .unwrap();
+        assert_eq!(
+            re.steps[0].expect.as_ref().unwrap().board,
+            Some(BoardClaim::ItemTitleMatches("basket|cart".into()))
+        );
+        assert_eq!(
+            re.steps[1].decide,
+            Some(Decision::Approve(ItemSel::TitleMatches("^saved".into())))
+        );
+        assert!(ItemSel::TitleMatches("^saved".into()).title_fits("Saved basket"));
+        assert!(!ItemSel::TitleMatches("^saved".into()).title_fits("A saved basket"));
+        let errors = lint(&re);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0]
+                .to_string()
+                .starts_with("step c: title_matches `(unclosed` does not compile"),
+            "{}",
+            errors[0]
+        );
         // A wrong word is refused at parse time, with the step named.
         let bad = "```yaml\nrunbook: x\nprocess: y\nsteps:\n  - id: a\n    expect: {board: {config: {release_prepare: maybe}}}\n```";
         let why = Runbook::parse(bad).unwrap_err().to_string();

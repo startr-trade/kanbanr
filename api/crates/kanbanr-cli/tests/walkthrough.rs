@@ -245,6 +245,9 @@ fn run_walkthrough(w: &World, runbook: &Path, name: &str) -> Output {
         ])
         .current_dir(&w.target_project)
         .env("KANBANR_BOARD_FENCE", &w.root)
+        // The person's Claude Code folder is a stand-in under the temporary directory: a test run
+        // never copies anyone's rules or credentials.
+        .env("CLAUDE_CONFIG_DIR", w.root.join("person-claude"))
         .env(
             "PATH",
             format!(

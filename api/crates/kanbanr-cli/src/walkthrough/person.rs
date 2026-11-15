@@ -1100,6 +1100,11 @@ pub fn select(items: &[ItemBrief], sel: &ItemSel) -> Option<ItemBrief> {
                 .find(|i| norm(&i.title).contains(&t))
                 .cloned()
         }
+        ItemSel::TitleMatches(_) => items
+            .iter()
+            .rev()
+            .find(|i| sel.title_fits(&i.title))
+            .cloned(),
     }
 }
 

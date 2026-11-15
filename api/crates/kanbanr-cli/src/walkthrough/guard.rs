@@ -160,6 +160,8 @@ pub struct Env {
     pub model: String,
     /// The `kanbanr` under test, for its version line: this very program in a run.
     pub kanbanr: PathBuf,
+    /// The person's installed kanbanr skill, compared with the one the run uses (a note only).
+    pub person_skill: Option<PathBuf>,
 }
 
 /// `git push <remote> <refspec>` in `repo`, run directly: core's repository wrapper refuses every
@@ -442,14 +444,36 @@ pub fn preflight(run: &RunDirs, env: &Env) -> Result<SetupLog> {
     log.push("kanbanr", version_line(&env.kanbanr, &["--version"]));
     log.push("kanbanr_path", env.kanbanr.display().to_string());
     let skill = run.claude_config().join("skills").join("kanbanr");
+    let skill_sum = if skill.exists() {
+        sha256_tree(&skill)
+    } else {
+        "missing".to_string()
+    };
+    log.push("skill_sha256", skill_sum.clone());
+    // The run's skill is the one this binary carries (T16): its stamp says so.
+    let stamped = std::fs::read_to_string(skill.join(".kanbanr-skill")).is_ok();
     log.push(
-        "skill_sha256",
-        if skill.exists() {
-            sha256_tree(&skill)
+        "skill_source",
+        if stamped {
+            format!("the skill this binary carries ({})", env.kanbanr.display())
         } else {
-            "missing".to_string()
+            "not the binary's: no kanbanr stamp in the run's skill folder".to_string()
         },
     );
+    if let Some(theirs) = &env.person_skill
+        && theirs.exists()
+    {
+        let their_sum = sha256_tree(theirs);
+        if their_sum != skill_sum {
+            log.push(
+                "skill_note",
+                format!(
+                    "the installed skill at {} differs from this binary's (sha256 {their_sum})",
+                    theirs.display()
+                ),
+            );
+        }
+    }
     log.push("claude", version_line(&env.claude, &["--version"]));
     log.push("model", env.model.clone());
     let rules = run.claude_config().join("CLAUDE.md");
@@ -532,7 +556,56 @@ pub(crate) mod tests {
             claude,
             model: "sonnet".into(),
             kanbanr,
+            person_skill: None,
         }
+    }
+
+    /// T16 (G-6): the run's config gets the skill this binary carries — a stamped copy, not a link
+    /// to the person's installed one — `setup.log` names its checksum as the binary's, and a person's
+    /// installed copy that differs is noted, never refused.
+    #[cfg(unix)]
+    #[test]
+    fn the_run_uses_the_skill_this_binary_carries() {
+        let (run, base) = scratch_run("own-skill");
+        let skill = run.claude_config().join("skills").join("kanbanr");
+        // An earlier run's link to someone's copy is replaced.
+        std::fs::remove_dir_all(&skill).unwrap();
+        let theirs = base.join("their-skill");
+        std::fs::create_dir_all(&theirs).unwrap();
+        std::fs::write(theirs.join("SKILL.md"), "# an older skill\n").unwrap();
+        std::os::unix::fs::symlink(&theirs, &skill).unwrap();
+        let said = crate::walkthrough::install_run_skill(&run).unwrap();
+        assert!(said.starts_with("installed the kanbanr skill"), "{said}");
+        let meta = std::fs::symlink_metadata(&skill).unwrap();
+        assert!(!meta.file_type().is_symlink() && meta.is_dir());
+        assert!(skill.join(".kanbanr-skill").exists());
+        assert!(skill.join("SKILL.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(theirs.join("SKILL.md")).unwrap(),
+            "# an older skill\n",
+            "the person's copy is untouched"
+        );
+        let claude = fake_version(&base, "claude", "9.9.9 (Claude Code, fake)");
+        fake_version(
+            &base,
+            "kanbanr",
+            "kanbanr 0.7.0 (0000000, built 2026-11-15)",
+        );
+        let mut e = env(Some(project::normalize(&base)), None, claude);
+        e.person_skill = Some(theirs.clone());
+        let log = preflight(&run, &e).unwrap();
+        assert_eq!(log.get("skill_sha256"), Some(sha256_tree(&skill).as_str()));
+        assert!(
+            log.get("skill_source")
+                .unwrap()
+                .starts_with("the skill this binary carries")
+        );
+        let note = log.get("skill_note").unwrap();
+        assert!(note.contains("differs from this binary's"), "{note}");
+        // The same copy as the binary's: no note.
+        e.person_skill = Some(skill.clone());
+        assert_eq!(preflight(&run, &e).unwrap().get("skill_note"), None);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// FTR-037 R-1: no fence, or a run whose board or project resolves outside it, or a target
