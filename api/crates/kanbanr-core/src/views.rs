@@ -1,13 +1,13 @@
-//! The spike's views (SPK-001): one generated view, the markdown docs under a folder at a
-//! position, in the shape of katalogr's `ViewAnswer`, and the proof that it repeats.
-//!
-//! Nothing here is reachable from the CLI, the daemon or the monitor.
+//! Views at a position (SPK-001, taken over by FTR-003): one generated view, the markdown docs
+//! under a folder at a position, in the shape of katalogr's `ViewAnswer`, and the proof that it
+//! repeats.
 
 use crate::diagrams;
-use crate::error::Result;
+use crate::error::{CoreError, Result};
 use crate::hash::stable_hash;
 use crate::position::{
-    PositionRef, ViewQuery, WorkingState, blob_id, read_at, read_position, tree_at, view_id,
+    PositionRef, ViewQuery, WorkingState, blob_id, read_at, read_position, resolve_position,
+    tree_at, view_id,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -26,10 +26,31 @@ pub fn facts_version(board_commit: &str, facts_rev: &str) -> String {
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The facts part for a project: the board's HEAD commit (or "none") and the project's facts
+/// revision, through [`facts_version`]. FTR-005's facts record does not exist in this build, so the
+/// revision is "" (the Design's rule while the record is absent); when it lands, `facts_rev` reads
+/// `Facts::content_rev()` here and nothing else changes.
+pub fn project_facts(store: &crate::Store, _project: &str) -> String {
+    let board = crate::git::head_commit(store.data_dir());
+    let facts_rev = "";
+    facts_version(board.as_deref().unwrap_or("none"), facts_rev)
+}
+
+/// The one text for a repository answered from an imported snapshot with no checkout here
+/// (katalogr FEAT-097): its position is the snapshot's commit and uncommitted changes cannot be
+/// seen. FTR-016 prefixes it "katalogr: " when it forwards a katalogr answer.
+pub fn snapshot_warning(repo: &str, commit: &str) -> String {
+    format!(
+        "{repo} has no checkout on this machine: its position is the imported snapshot's commit \
+         {commit}; uncommitted changes there cannot be seen"
+    )
+}
+
 /// What a view answers with: the same shape as katalogr's ViewAnswer, so one renderer draws both.
 /// Field order is the wire order; no `serde_json::Value` is in it (its key order would follow the
 /// build's `preserve_order` feature and break "same bytes").
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ViewAnswer {
     pub schema: u32,
     pub view_format: u32,
@@ -45,12 +66,14 @@ pub struct ViewAnswer {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ViewQueryJson {
     pub op: String,
     pub args: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ViewGraph {
     pub edges: Vec<GraphEdge>,
     pub nodes: Vec<GraphNode>,
@@ -60,6 +83,7 @@ pub struct ViewGraph {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GraphNode {
     pub id: String,
     /// "folder" or "doc".
@@ -76,6 +100,7 @@ pub struct GraphNode {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GraphEdge {
     pub from: String,
     /// "holds".
@@ -236,6 +261,62 @@ pub fn docs_view(
     ))
 }
 
+/// A view at the live checkout, or at `at` (a position text, see [`resolve_position`]): reads the
+/// position, builds the view, and if an uncommitted file changed under it reads the position once
+/// more and tries again. After that it answers `exact: false`, no `view_id`, the last position
+/// read, and the warning [`MOVED_WARNING`].
+pub fn docs_view_live(
+    root: &Path,
+    repo: &str,
+    facts: &str,
+    at: Option<&str>,
+    docs_root: &str,
+    max_nodes: usize,
+) -> Result<ViewAnswer> {
+    docs_view_hooked(root, repo, facts, at, docs_root, max_nodes, &mut |_| {})
+}
+
+/// What a not-exact answer says.
+pub const MOVED_WARNING: &str = "the checkout changed while the view was read; try again";
+
+/// [`docs_view_live`] with a hook (given the attempt number, 0 or 1) that runs between the
+/// position read and the file reads: the test's way to edit the checkout in the middle.
+fn docs_view_hooked(
+    root: &Path,
+    repo: &str,
+    facts: &str,
+    at: Option<&str>,
+    docs_root: &str,
+    max_nodes: usize,
+    between: &mut dyn FnMut(u32),
+) -> Result<ViewAnswer> {
+    let mut last = None;
+    for attempt in 0..2 {
+        let resolved = resolve_position(root, repo, at)?;
+        between(attempt);
+        match docs_view(root, resolved.state(), facts, docs_root, max_nodes) {
+            Ok(answer) => return Ok(answer),
+            Err(CoreError::Git(why)) if why.starts_with("position moved") => {
+                last = Some(resolved.state().position.clone());
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    let position = last.unwrap_or_else(|| PositionRef::at_commit(repo, ""));
+    let mut answer = render(
+        &position,
+        facts,
+        docs_root.trim_matches('/'),
+        max_nodes,
+        0,
+        &[],
+    );
+    answer.exact = false;
+    answer.view_id = None;
+    answer.warnings.push(MOVED_WARNING.to_string());
+    Ok(answer)
+}
+
 /// The bytes a view is printed, stored and compared as: compact JSON of `ViewAnswer` in field
 /// order.
 pub fn answer_bytes(a: &ViewAnswer) -> Vec<u8> {
@@ -374,6 +455,7 @@ impl ProofTable {
 mod tests {
     use super::*;
     use crate::coderepo::{git, tests::commit_file, tests::scratch_repo};
+    use crate::position::Resolved;
     use crate::position::read_position;
     use std::path::PathBuf;
 
@@ -534,6 +616,275 @@ mod tests {
         assert_eq!(n, 1);
         assert!(!t.ok);
         assert!(!t.rows[0].id_repeat);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    fn docs_repo(name: &str) -> PathBuf {
+        let d = repo(name);
+        std::fs::create_dir_all(d.join("docs")).unwrap();
+        commit_file(&d, "docs/overview.md", "# Overview\n", "overview");
+        commit_file(&d, "docs/guide.md", "# Guide\n", "guide");
+        d
+    }
+
+    /// R-6: `--at <main's commit>` while a branch with other content is checked out shows main's
+    /// docs from objects; HEAD and the index do not move; the ID equals the one computed when main
+    /// was checked out.
+    #[test]
+    fn at_a_clean_commit_answers_from_objects() {
+        let d = docs_repo("at-clean");
+        let facts = facts_version("board0", "");
+        let main = read_position(&d, "r").unwrap();
+        let on_main = docs_view(&d, &main, &facts, "docs", 60).unwrap();
+        git(&d, &["checkout", "-q", "-b", "feat/x"]).unwrap();
+        commit_file(&d, "docs/extra.md", "# Extra\n", "extra");
+        let head = git(&d, &["rev-parse", "HEAD"]).unwrap();
+        let status = git(&d, &["status", "--porcelain=v1"]).unwrap();
+        let text = main.position.text();
+        let Resolved::Commit(st) = resolve_position(&d, "r", Some(&text)).unwrap() else {
+            panic!("a clean commit elsewhere resolves from objects");
+        };
+        let there = docs_view(&d, &st, &facts, "docs", 60).unwrap();
+        assert!(there.exact);
+        assert_eq!(there.view_id, on_main.view_id);
+        assert_eq!(answer_bytes(&there), answer_bytes(&on_main));
+        assert_eq!(there.graph.shown, 2, "main has two docs, the branch three");
+        assert_eq!(git(&d, &["rev-parse", "HEAD"]).unwrap(), head);
+        assert_eq!(git(&d, &["status", "--porcelain=v1"]).unwrap(), status);
+        assert!(!d.join("docs/extra.md").exists() || head != main.position.text());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// R-6: the live dirty position's own text answers, as the live state.
+    #[test]
+    fn at_the_live_dirty_position_answers() {
+        let d = docs_repo("at-live");
+        std::fs::write(d.join("docs/overview.md"), "# Overview, edited\n").unwrap();
+        let live = read_position(&d, "r").unwrap();
+        assert!(live.position.dirty.is_some());
+        let text = live.position.text();
+        let Resolved::Live(st) = resolve_position(&d, "r", Some(&text)).unwrap() else {
+            panic!("the live text resolves live");
+        };
+        assert_eq!(st, live);
+        let a = docs_view(&d, &st, &facts_version("b", ""), "docs", 60).unwrap();
+        assert!(a.exact && a.view_id.is_some());
+        assert!(matches!(
+            resolve_position(&d, "r", None).unwrap(),
+            Resolved::Live(_)
+        ));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// R-6: an old dirty text and an unknown commit both name the live position; bad text is a
+    /// usage error, not an unavailable position.
+    #[test]
+    fn at_an_unavailable_position_lists_the_live_one() {
+        let d = docs_repo("at-gone");
+        std::fs::write(d.join("docs/overview.md"), "# one\n").unwrap();
+        let old = read_position(&d, "r").unwrap().position.text();
+        std::fs::write(d.join("docs/overview.md"), "# two\n").unwrap();
+        let live = read_position(&d, "r").unwrap().position;
+        let unknown = format!("{}", "1".repeat(40));
+        for wanted in [old, unknown] {
+            match resolve_position(&d, "r", Some(&wanted)) {
+                Err(crate::error::CoreError::PositionUnavailable {
+                    wanted: w,
+                    available,
+                }) => {
+                    assert_eq!(w, wanted);
+                    assert_eq!(available, vec![live.clone()]);
+                }
+                other => panic!("expected PositionUnavailable, got {other:?}"),
+            }
+        }
+        let err = resolve_position(&d, "r", Some("zz")).unwrap_err();
+        assert_eq!(err.status(), 400);
+        let e = crate::error::CoreError::PositionUnavailable {
+            wanted: "w".into(),
+            available: vec![live.clone()],
+        };
+        assert_eq!(e.status(), 409);
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "position w is not here: this checkout is at {}",
+                live.text()
+            )
+        );
+        let none = crate::error::CoreError::PositionUnavailable {
+            wanted: "w".into(),
+            available: vec![],
+        };
+        assert!(none.to_string().ends_with("no checkout on this machine"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// R-4: F depends on the board commit and the facts revision and on nothing else.
+    #[test]
+    fn facts_cover_board_commit_and_facts_record_not_the_binary() {
+        let a = facts_version("c0", "r0");
+        assert_ne!(a, facts_version("c1", "r0"));
+        assert_ne!(a, facts_version("c0", "r1"));
+        assert_eq!(a, facts_version("c0", "r0"));
+        // Fixed hex: SHA-256 of "board0\0" - the inputs are the two strings, never a version.
+        assert_eq!(
+            facts_version("board0", ""),
+            "19b30b50475b4f566d70653bb06b03a528277e6d09c8dc8ccc34aa632784b06a"
+        );
+        // The board commit is the board's HEAD, "none" before it has one.
+        let dir = std::env::temp_dir().join(format!("kanbanr-views-{}-facts", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = crate::Store::new(dir.canonicalize().unwrap());
+        assert_eq!(super::project_facts(&store, "p"), facts_version("none", ""));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R-9: warnings round-trip through the bytes and are absent when empty; the snapshot text is
+    /// fixed.
+    #[test]
+    fn warnings_travel_with_the_answer() {
+        let mut a = render(&PositionRef::at_commit("r", C), "f", "docs", 60, 0, &[]);
+        assert!(
+            !String::from_utf8(answer_bytes(&a))
+                .unwrap()
+                .contains("warnings")
+        );
+        a.warnings.push("first".into());
+        a.warnings.push("second".into());
+        let back: ViewAnswer = serde_json::from_slice(&answer_bytes(&a)).unwrap();
+        assert_eq!(back.warnings, vec!["first", "second"]);
+        assert_eq!(
+            snapshot_warning("app", C),
+            format!(
+                "app has no checkout on this machine: its position is the imported snapshot's \
+                 commit {C}; uncommitted changes there cannot be seen"
+            )
+        );
+    }
+
+    /// R-7: an answer that is not exact has no `view_id` key.
+    #[test]
+    fn id_only_when_exact() {
+        let mut a = render(&PositionRef::at_commit("r", C), "f", "docs", 60, 0, &[]);
+        assert!(
+            String::from_utf8(answer_bytes(&a))
+                .unwrap()
+                .contains("\"view_id\"")
+        );
+        a.exact = false;
+        a.view_id = None;
+        assert!(
+            !String::from_utf8(answer_bytes(&a))
+                .unwrap()
+                .contains("view_id\":")
+        );
+    }
+
+    /// R-7: with a file edited between the position read and the file read, the answer is not
+    /// exact, has no ID and carries the warning; an edit on the first attempt only is retried and
+    /// exact; with no hook it is exact.
+    #[test]
+    fn a_file_changed_during_the_read_gives_no_id() {
+        let d = docs_repo("moved");
+        std::fs::write(d.join("docs/new.md"), "# New\n").unwrap();
+        let facts = facts_version("b", "");
+        let plain = docs_view_live(&d, "r", &facts, None, "docs", 60).unwrap();
+        assert!(plain.exact && plain.view_id.is_some() && plain.warnings.is_empty());
+        let mut n = 0;
+        let hook = |d: &Path, k: &mut u32| {
+            *k += 1;
+            std::fs::write(d.join("docs/new.md"), format!("# New {k}\n")).unwrap();
+        };
+        let a =
+            docs_view_hooked(&d, "r", &facts, None, "docs", 60, &mut |_| hook(&d, &mut n)).unwrap();
+        assert_eq!(n, 2, "read twice, then gave up");
+        assert!(!a.exact);
+        assert_eq!(a.view_id, None);
+        assert_eq!(a.warnings, vec![MOVED_WARNING.to_string()]);
+        assert_eq!(a.positions.len(), 1);
+        // One edit, on the first attempt only: the second read is exact.
+        let mut m = 0;
+        let b = docs_view_hooked(&d, "r", &facts, None, "docs", 60, &mut |attempt| {
+            if attempt == 0 {
+                hook(&d, &mut m);
+            }
+        })
+        .unwrap();
+        assert!(b.exact && b.view_id.is_some() && b.warnings.is_empty());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// R-5: two answers at one position and board commit are byte-identical.
+    #[test]
+    fn docs_view_repeats_byte_for_byte() {
+        let d = docs_repo("bytes");
+        std::fs::write(d.join("docs/new.md"), "# New\n").unwrap();
+        let facts = facts_version("b", "");
+        let a = docs_view_live(&d, "r", &facts, None, "docs", 60).unwrap();
+        let b = docs_view_live(&d, "r", &facts, None, "docs", 60).unwrap();
+        assert_eq!(answer_bytes(&a), answer_bytes(&b));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// R-5: the body holds no scratch root, temporary directory, host name or date.
+    #[test]
+    fn docs_view_body_holds_no_clock_host_or_absolute_path() {
+        let d = docs_repo("body");
+        let a = docs_view_live(&d, "r", &facts_version("b", ""), None, "docs", 60).unwrap();
+        let body = String::from_utf8(answer_bytes(&a)).unwrap();
+        for bad in [
+            d.display().to_string(),
+            d.canonicalize().unwrap().display().to_string(),
+            std::env::temp_dir().display().to_string(),
+        ] {
+            assert!(!body.contains(&bad), "{bad} in the body");
+        }
+        let host = std::fs::read_to_string("/etc/hostname").unwrap_or_default();
+        let host = host.trim();
+        assert!(
+            host.len() < 3 || !body.contains(host),
+            "host name in the body"
+        );
+        let year = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1970, |t| 1970 + t.as_secs() / 31_556_952);
+        assert!(!body.contains(&format!("{year}-")), "a date in the body");
+        assert!(!body.contains("T0") && !body.contains(".000Z"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// R-4: an edit, a commit, another `max-nodes`, another board commit each change the ID;
+    /// repeating any state repeats it.
+    #[test]
+    fn id_changes_with_position_question_and_facts() {
+        let d = docs_repo("ids");
+        let f0 = facts_version("board0", "");
+        let id = |facts: &str, max: usize| {
+            docs_view_live(&d, "r", facts, None, "docs", max)
+                .unwrap()
+                .view_id
+                .unwrap()
+        };
+        let base = id(&f0, 60);
+        assert_eq!(id(&f0, 60), base);
+        assert_ne!(id(&facts_version("board1", ""), 60), base, "board commit");
+        assert_ne!(
+            id(&facts_version("board0", "rev"), 60),
+            base,
+            "facts record"
+        );
+        assert_ne!(id(&f0, 1), base, "question");
+        std::fs::write(d.join("docs/overview.md"), "# edited\n").unwrap();
+        let edited = id(&f0, 60);
+        assert_ne!(edited, base, "uncommitted edit");
+        git(&d, &["add", "-A"]).unwrap();
+        git(&d, &["commit", "-q", "-m", "edit"]).unwrap();
+        let committed = id(&f0, 60);
+        assert_ne!(committed, edited, "a commit");
+        assert_ne!(committed, base);
+        assert_eq!(id(&f0, 60), committed);
         let _ = std::fs::remove_dir_all(&d);
     }
 }
