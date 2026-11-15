@@ -830,6 +830,20 @@ branches; fix it before going on.
   `items_finished`, `prepared`, `main_at_release`, `pushed`, `items_merged` (every planned item at the integrate
   stage or later), or name earlier stages in `--after` (the release must have been promoted into each), and do `branch`, `prepare`,
   `move_main`, `tag` on entry. A refusal lists every missing condition with its fix; nothing changed.
+- **Before a candidate's release sign-off, run the walkthroughs** (FTR-037):
+  `kanbanr walkthrough run walkthroughs/<process>.md` drives the guide headlessly on a scratch
+  project inside a fence, takes each decision on the scratch board as the scripted person, and
+  prepares its checks on this board as one batch. Tell the person the batch waits on the Review page
+  (**Confirm all N**) and read `findings.md` with them; file items from findings only when they
+  agree. A runbook is a board doc under `walkthroughs/` whose first fenced yaml block holds the
+  steps. Draft one from a guide: each "you say" becomes a `say` step in the guide's words; each
+  monitor decision a `decide` with the `offer` the guide names (page and button); each push a `push`
+  to `code` or `board`; each manual check a `check: MT-n` defined under `checks` with its item,
+  requirement and exact test name; the setup interview's answers go under `answers` as
+  `{match, pick}` rules, `{board_remote}`, `{code_remote}`, `{monitor_url}` and `{today}` filled in
+  by the run. `kanbanr walkthrough lint <doc>` before the first run. A run acts only on a board
+  inside a fence and copies nothing of the person's configuration beyond their rules, settings and
+  credentials into its own folder.
 - **A release prepares itself.** The stage with `prepare` commits the version files, the dated
   changelog heading and a notes draft onto `release/<V>` (`kanbanr config release-prepare`). Never
   make a feature item to prepare a release.
@@ -998,6 +1012,13 @@ refuses it. If they tell you the result in the conversation, prepare it with
 `kanbanr prepare test <CODE> <R-n> "<test>" --passed|--failed --source "conversation: <what they
 said>"` and tell them to confirm it on the Review page. A failed check is recorded red; ask the
 user whether to file a defect, and file one only when they say so.
+
+**At most one manual test per item, and only for a person's judgement** (does this read well, is
+this confusing). Anything a run can see — a button offered, a decision taken with nothing typed, a
+question asked or not asked, a board claim, a tag on the remote — is a test of kind `walkthrough`,
+named `walkthrough: <what the run shows>`: automated evidence, proved by
+`kanbanr walkthrough run <runbook doc>`, never asked of the person, and never searched for in the
+repository (FTR-037). `kanbanr check` says so for one not yet green.
 
 ## Every change points back at the reason for it
 
@@ -1303,6 +1324,9 @@ kanbanr feature define FEAT-001 --file def.yaml | --clear  # write / clear the d
 kanbanr review FEAT-001           # the one-screen decision brief — show this BEFORE building
 kanbanr check [FEAT-001]          # what this item has not said and cannot yet show
 kanbanr test FEAT-001 R-1 cart::retains green [--rev <sha>] [--note T]   # normally the capture hook does this; a manual test is the person's, on the Review page
+kanbanr prepare test FEAT-001 R-1 "manual: looks right" --passed --source "conversation: …" [--batch NAME]   # the person confirms it on the Review page; a batch with one click
+kanbanr walkthrough run walkthroughs/togaf.md [--model M] [--budget-usd B] [--max-minutes N] [--remotes PREFIX] [--pause-at-decisions]   # a guide's run, headless; its checks prepared as one batch
+kanbanr walkthrough lint <runbook-doc> | verify <run> | derive <run> | remotes list|clean   # the runbook, a run's manifest and tables, the repositories runs made
 kanbanr report [--since 14d]      # throughput, cycle time, rework, escape rate, coverage
 kanbanr tests [--write]           # tracked tests that no longer exist; --write un-proves them
 kanbanr retro [MS-006] [--since 14d] [--label x] [--write] | --due
