@@ -384,6 +384,46 @@ function ReleaseButton({
           </span>
         ) : null}
       </div>
+      {action.again ? (
+        <div className="small release-again">
+          {writable ? (
+            <button
+              className="btn"
+              onClick={() => onPromote(release, action.again!.stage, plan.data!.release_tip)}
+              disabled={!action.again.enabled || busy != null}
+              title={action.again.does.join("; ")}
+            >
+              {action.again.label}
+            </button>
+          ) : null}
+          {action.again.does[0] ? (
+            <>
+              {" "}
+              <Inline text={action.again.does[0]} />
+            </>
+          ) : null}
+          {writable ? null : (
+            <>
+              {" "}
+              <code>{action.again.command}</code>
+            </>
+          )}
+          {action.again.missing.length ? (
+            <>
+              <p>
+                <strong>Needs:</strong>
+              </p>
+              <ul className="dep-list">
+                {action.again.missing.map((m) => (
+                  <li key={m.text}>
+                    <Inline text={m.text} />
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </div>
+      ) : null}
       {asking && action.confirm ? (
         <div className="small">
           <p>

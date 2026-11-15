@@ -803,6 +803,17 @@ export interface ReleasePlan {
   empty: boolean;
   /** Worth knowing, not stopping: e.g. the notes carry an earlier date (DEF-001). */
   warnings?: string[];
+  /** Entering the stage it is at again would redo something (DEF-057): only on the default plan. */
+  again?: AgainOffer;
+}
+
+/** Entering a release's current stage again: what the second button says and does (DEF-057). */
+export interface AgainOffer {
+  stage: string;
+  button: string;
+  does: string[];
+  ready: boolean;
+  missing: string[];
 }
 
 /** The stages an item of one kind passes, what its first move asks, and the method parts left out. */

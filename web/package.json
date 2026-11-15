@@ -14,6 +14,7 @@
     "check:read-only": "node scripts/check-read-only.mjs",
     "check:card-text": "node scripts/check-card-text.mjs",
     "check:release-action": "node scripts/check-release-action.mjs",
+    "check:release-again": "node scripts/check-release-again.mjs",
     "check:release-notes": "node scripts/check-release-notes.mjs",
     "check:release-line": "node scripts/check-release-line.mjs",
     "check:sprint-filter": "node scripts/check-sprint-filter.mjs",
