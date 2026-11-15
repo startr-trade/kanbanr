@@ -1521,7 +1521,7 @@ mod tests {
 
         crate::claude::add_permission_rules(
             &repo.join(".claude").join("settings.local.json"),
-            &[rule.clone()],
+            std::slice::from_ref(&rule),
         )
         .unwrap();
         let g = one(Some(&repo));

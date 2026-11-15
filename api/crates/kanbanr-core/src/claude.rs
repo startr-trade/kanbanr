@@ -721,7 +721,7 @@ mod tests {
 
         // Absent: created with the rule.
         assert_eq!(
-            add_permission_rules(&path, &[rule.clone()]).unwrap(),
+            add_permission_rules(&path, std::slice::from_ref(&rule)).unwrap(),
             vec![rule.clone()]
         );
         let v: serde_json::Value =
@@ -735,7 +735,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            add_permission_rules(&path, &[rule.clone()]).unwrap().len(),
+            add_permission_rules(&path, std::slice::from_ref(&rule))
+                .unwrap()
+                .len(),
             1
         );
         let text = std::fs::read_to_string(&path).unwrap();
@@ -750,7 +752,7 @@ mod tests {
         assert_eq!(keys, ["theme", "hooks", "permissions"]);
         // A second add changes nothing.
         assert!(
-            add_permission_rules(&path, &[rule.clone()])
+            add_permission_rules(&path, std::slice::from_ref(&rule))
                 .unwrap()
                 .is_empty()
         );
@@ -758,7 +760,7 @@ mod tests {
 
         // Invalid JSON: an error naming the file, text unchanged.
         std::fs::write(&path, "{ not json").unwrap();
-        let err = add_permission_rules(&path, &[rule.clone()])
+        let err = add_permission_rules(&path, std::slice::from_ref(&rule))
             .unwrap_err()
             .to_string();
         assert!(err.contains("settings.local.json"), "{err}");
@@ -766,10 +768,10 @@ mod tests {
 
         // allows / rules_missing read the result.
         let ok = dir.join("ok.json");
-        add_permission_rules(&ok, &[rule.clone()]).unwrap();
-        assert!(rules_missing(&[ok.clone(), path.clone()], &[rule.clone()]).is_empty());
+        add_permission_rules(&ok, std::slice::from_ref(&rule)).unwrap();
+        assert!(rules_missing(&[ok.clone(), path.clone()], std::slice::from_ref(&rule)).is_empty());
         assert_eq!(
-            rules_missing(&[path.clone()], &[rule.clone()]),
+            rules_missing(std::slice::from_ref(&path), std::slice::from_ref(&rule)),
             vec![rule.clone()]
         );
 
