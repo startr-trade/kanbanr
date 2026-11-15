@@ -84,6 +84,13 @@ enum Command {
         /// than overwriting the only pointer this project has to its board (FEAT-085).
         #[arg(long)]
         force: bool,
+        /// The code repository the board README names and links (default: the folder's git
+        /// remote). `""` records none.
+        #[arg(long)]
+        repository: Option<String>,
+        /// `on`: the repository is private, so the README names it and never links it.
+        #[arg(long, value_parser = ["on", "off"])]
+        repository_private: Option<String>,
     },
     /// Replace this binary with the one the release publishes.
     ///
@@ -818,6 +825,12 @@ enum ProjectCmd {
         new_name: Option<String>,
         #[arg(long)]
         description: Option<String>,
+        /// The code repository the board README names and links; `""` removes it.
+        #[arg(long)]
+        repository: Option<String>,
+        /// `on`: the repository is private, so the README names it and never links it.
+        #[arg(long, value_parser = ["on", "off"])]
+        repository_private: Option<String>,
     },
     /// List all projects.
     List,
@@ -2411,6 +2424,7 @@ fn prepare_board_repo(dir: &Path, given: Option<(&str, &str)>) -> anyhow::Result
 }
 
 /// One-shot local setup: data dir + git repo + identity + a first project, selected here.
+#[allow(clippy::too_many_arguments)]
 fn run_init(
     cli: &Cli,
     name: Option<String>,
@@ -2419,6 +2433,8 @@ fn run_init(
     email: Option<String>,
     no_hooks: bool,
     force: bool,
+    repository: Option<String>,
+    repository_private: Option<bool>,
 ) -> anyhow::Result<()> {
     let cwd = std::env::current_dir()?;
     let (dir, record) = choose_init_data_dir(cli, &cwd)?;
@@ -2443,12 +2459,37 @@ fn run_init(
         .or_else(|| project::resolve_project(None))
         .unwrap_or_else(|| "myproject".to_string());
     let backend = Backend::new(dir.clone());
+    // The code folder's remote is recorded and linked by default (DEF-053); `--repository ""`
+    // records none.
+    let repository = repository.or_else(|| {
+        kanbanr_core::git::remote_url(&project::project_root(&cwd, project::home_dir().as_deref()))
+    });
     let body = obj(vec![
         ("name", Some(json!(proj))),
         ("description", description.map(|d| json!(d))),
+        ("repository", repository.clone().map(|r| json!(r))),
+        ("repository_private", repository_private.map(|p| json!(p))),
     ]);
     match backend.write(Method::Post, "/projects", Some(body)) {
-        Ok(_) => println!("✓ created project '{proj}'"),
+        Ok(_) => {
+            println!("✓ created project '{proj}'");
+            if let Some(url) = repository.as_deref().filter(|u| !u.trim().is_empty()) {
+                let repo = kanbanr_core::config::CodeRepository {
+                    url: url.trim().to_string(),
+                    private: repository_private.unwrap_or(false),
+                    ..Default::default()
+                };
+                let how = match repo.web() {
+                    Some(web) => format!("linked from the board README as {web}"),
+                    None if repo.private => "named, not linked (private)".to_string(),
+                    None => "named, not linked".to_string(),
+                };
+                println!("✓ code repository: {} — {how}", repo.url);
+                println!(
+                    "  change it: kanbanr project edit {proj} --repository <URL|\"\"> [--repository-private on|off]"
+                );
+            }
+        }
         Err(e) if e.to_string().contains("already exists") => {
             println!("• project '{proj}' already exists — using it")
         }
@@ -3217,6 +3258,19 @@ fn ui_dir_for_review() -> Option<String> {
         .map(|d| d.display().to_string())
 }
 
+/// Refresh the board README's generated block after `claude sync` (DEF-053). A failure is a
+/// warning: the CLAUDE.md result stands.
+fn refresh_readme(client: &Backend) {
+    match client.write(Method::Post, "/readme", Some(json!({}))) {
+        Ok(resp) => {
+            if serde_json::from_str::<Value>(&resp).is_ok_and(|v| v["changed"] == true) {
+                println!("readme: refreshed");
+            }
+        }
+        Err(e) => eprintln!("warning: could not refresh the board README: {e}"),
+    }
+}
+
 /// The board's reasoning, placed where the agent reads its instructions (FEAT-065).
 fn run_claude(cli: &Cli, client: &Backend, cmd: &ClaudeCmd) -> anyhow::Result<()> {
     match cmd {
@@ -3225,6 +3279,10 @@ fn run_claude(cli: &Cli, client: &Backend, cmd: &ClaudeCmd) -> anyhow::Result<()
             let resp = client.get(&format!("/projects/{p}/claude-block"))?;
             let block: Option<String> = serde_json::from_str(&resp)?;
             let Some(block) = block else {
+                // A board with no charter still has a README (DEF-053).
+                if !*show {
+                    refresh_readme(client);
+                }
                 anyhow::bail!(
                     "this project has no charter, so there is nothing to put in front of anyone. \
                      Write one first: `kanbanr charter set --file charter.yaml`."
@@ -3245,18 +3303,19 @@ fn run_claude(cli: &Cli, client: &Backend, cmd: &ClaudeCmd) -> anyhow::Result<()
             let merged = kanbanr_core::claude::merge(&existing, &block);
             if merged == existing {
                 println!("{} is already current", path.display());
-                return Ok(());
+            } else {
+                kanbanr_core::atomic::write(&path, &merged)?;
+                println!(
+                    "{} {} — regenerate it with `kanbanr claude sync` whenever the charter changes",
+                    if existing.trim().is_empty() {
+                        "wrote"
+                    } else {
+                        "refreshed the kanbanr block in"
+                    },
+                    path.display()
+                );
             }
-            kanbanr_core::atomic::write(&path, &merged)?;
-            println!(
-                "{} {} — regenerate it with `kanbanr claude sync` whenever the charter changes",
-                if existing.trim().is_empty() {
-                    "wrote"
-                } else {
-                    "refreshed the kanbanr block in"
-                },
-                path.display()
-            );
+            refresh_readme(client);
             Ok(())
         }
         ClaudeCmd::Guard => run_docs_guard(cli, client),
@@ -5485,7 +5544,19 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
     // ask: each has an obvious answer, and an obvious answer is still the user's to give.
     let tracked =
         resolved.source == project::DataDirSource::Marker && data_dir.join("projects").is_dir();
-    let ask = project::setup_questions(tracked, git_name.is_some() && git_email.is_some());
+    let remote = kanbanr_core::git::remote_url(&project::project_root(&cwd, home));
+    let ask = project::setup_questions(
+        tracked,
+        git_name.is_some() && git_email.is_some(),
+        remote.is_some(),
+    );
+    let suggested_repository = remote.map(|url| {
+        let repo = kanbanr_core::config::CodeRepository {
+            url,
+            ..Default::default()
+        };
+        json!({ "url": repo.url, "name": repo.name(), "web": repo.web() })
+    });
     let out = json!({
         "data_dir": show(&data_dir),
         "source": resolved.source,
@@ -5509,6 +5580,7 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
             .iter()
             .map(|p| show(p))
             .collect::<Vec<_>>(),
+        "suggested_repository": suggested_repository,
         "git_identity": { "name": git_name, "email": git_email },
         "ask_the_user": ask,
     });
@@ -6480,6 +6552,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             email,
             no_hooks,
             force,
+            repository,
+            repository_private,
         } => {
             return run_init(
                 cli,
@@ -6489,6 +6563,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 email.clone(),
                 *no_hooks,
                 *force,
+                repository.clone(),
+                repository_private.as_deref().map(|v| v == "on"),
             );
         }
         Command::SelfUpdate { check, tag } => {
@@ -8823,10 +8899,17 @@ fn run_project(cli: &Cli, client: &Backend, cmd: &ProjectCmd) -> anyhow::Result<
             name,
             new_name,
             description,
+            repository,
+            repository_private,
         } => {
             let body = obj(vec![
                 ("name", new_name.clone().map(|n| json!(n))),
                 ("description", description.clone().map(|d| json!(d))),
+                ("repository", repository.clone().map(|r| json!(r))),
+                (
+                    "repository_private",
+                    repository_private.as_deref().map(|v| json!(v == "on")),
+                ),
             ]);
             let resp = client.write(Method::Patch, &format!("/projects/{name}"), Some(body))?;
             print_write(cli, &resp, format!("updated project '{name}'"));

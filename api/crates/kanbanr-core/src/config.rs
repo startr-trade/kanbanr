@@ -66,6 +66,10 @@ pub struct ProjectConfig {
     pub name: String,
     #[serde(default)]
     pub description: String,
+    /// The code repository this project tracks (DEF-053). Absent unless recorded, and absent
+    /// stays absent on disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<CodeRepository>,
     pub statuses: Vec<String>,
     /// The status assigned to a newly-created feature item. Must be one of `statuses`.
     #[serde(default)]
@@ -140,6 +144,53 @@ pub struct ProjectConfig {
     )]
     #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
     pub extra: crate::models::Extra,
+}
+
+/// The code repository a project tracks (DEF-053): named and linked from the board README.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CodeRepository {
+    /// The git remote URL as recorded: `git@host:o/r.git`, `https://host/o/r.git`, or a path.
+    pub url: String,
+    /// The person said the repository is private: the README names it and never links it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
+    #[serde(
+        flatten,
+        default,
+        skip_serializing_if = "crate::models::Extra::is_empty"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::models::ExtraSchema"))]
+    pub extra: crate::models::Extra,
+}
+
+impl CodeRepository {
+    /// The repository's name: the path after the host without `.git` (`acme/shop`); for a URL with
+    /// no host (a local path) the last path component.
+    pub fn name(&self) -> String {
+        let t = self.url.trim().trim_end_matches('/');
+        let t = t.strip_suffix(".git").unwrap_or(t);
+        let path = if let Some(rest) = t.strip_prefix("git@") {
+            rest.split_once(':').map(|(_, p)| p)
+        } else if let Some((_, rest)) = t.split_once("://") {
+            rest.split_once('/').map(|(_, p)| p)
+        } else {
+            None
+        };
+        match path {
+            Some(p) => p.trim_matches('/').to_string(),
+            None => t.rsplit('/').next().unwrap_or(t).to_string(),
+        }
+    }
+
+    /// The browsable address, unless the repository is private or has none.
+    pub fn web(&self) -> Option<String> {
+        if self.private {
+            None
+        } else {
+            crate::git::web_url(&self.url)
+        }
+    }
 }
 
 /// Where a saved process lives (FEAT-169), in the order a name is looked up.
@@ -968,6 +1019,7 @@ impl WorkflowFile {
             schema_version: BASE_SCHEMA_VERSION,
             name: name.to_string(),
             description: String::new(),
+            repository: None,
             statuses: self.statuses,
             default_state: self.default_state,
             transitions: self.transitions,
@@ -3136,5 +3188,52 @@ mod tests {
             config.default_affects_docs("Scheduled"),
             vec!["architecture/zachman.md"]
         );
+    }
+
+    /// DEF-053: the repository is written only when set; `private` only when true.
+    #[test]
+    fn a_code_repository_round_trips_and_an_absent_one_stays_absent() {
+        let none = ProjectConfig::default_for("demo");
+        let yaml = crate::yaml::to_string(&none).unwrap();
+        assert!(!yaml.contains("repository"));
+        let mut c = none;
+        c.repository = Some(CodeRepository {
+            url: "git@git.example.invalid:acme/shop.git".into(),
+            ..Default::default()
+        });
+        let yaml = crate::yaml::to_string(&c).unwrap();
+        assert!(yaml.contains("repository:") && !yaml.contains("private"));
+        let back: ProjectConfig = crate::yaml::from_str(&yaml).unwrap();
+        assert_eq!(back.repository, c.repository);
+        c.repository.as_mut().unwrap().private = true;
+        assert!(
+            crate::yaml::to_string(&c)
+                .unwrap()
+                .contains("private: true")
+        );
+
+        let repo = |u: &str| CodeRepository {
+            url: u.into(),
+            ..Default::default()
+        };
+        for u in [
+            "git@git.example.invalid:acme/shop.git",
+            "https://git.example.invalid/acme/shop.git",
+            "ssh://git@git.example.invalid/acme/shop.git",
+            "https://git.example.invalid/acme/shop/",
+        ] {
+            assert_eq!(repo(u).name(), "acme/shop", "{u}");
+            assert_eq!(
+                repo(u).web().as_deref(),
+                Some("https://git.example.invalid/acme/shop"),
+                "{u}"
+            );
+        }
+        assert_eq!(repo("/srv/repos/shop.git").name(), "shop");
+        assert_eq!(repo("/srv/repos/shop.git").web(), None);
+        let mut private = repo("https://git.example.invalid/acme/shop.git");
+        private.private = true;
+        assert_eq!(private.web(), None);
+        assert_eq!(private.name(), "acme/shop");
     }
 }

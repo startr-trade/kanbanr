@@ -6303,7 +6303,7 @@ requirements:
         ));
         assert!(
             store
-                .set_project_meta("demo", Some("Demo".into()), None)
+                .set_project_meta("demo", Some("Demo".into()), None, None, None)
                 .is_err(),
             "nothing is written to it either"
         );
