@@ -5485,7 +5485,7 @@ fn run_where(cli: &Cli) -> anyhow::Result<()> {
     // ask: each has an obvious answer, and an obvious answer is still the user's to give.
     let tracked =
         resolved.source == project::DataDirSource::Marker && data_dir.join("projects").is_dir();
-    let ask = project::setup_questions(tracked, git_name.is_some() && git_email.is_some());
+    let ask = project::setup_questions(tracked, git_name.is_some() && git_email.is_some(), false);
     let out = json!({
         "data_dir": show(&data_dir),
         "source": resolved.source,

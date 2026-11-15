@@ -518,6 +518,19 @@ fn list_summaries(store: &Store) -> Result<Vec<ProjectSummary>> {
 // ---- config builders shared with the server's create-project / workflow routes --------------
 
 fn build_project_config(store: &Store, name: &str, body: &Value) -> Result<ProjectConfig> {
+    let mut config = build_base_config(store, name, body)?;
+    // The code repository the project tracks (DEF-053); an empty URL records none.
+    if let Some(url) = str_field(body, "repository").filter(|u| !u.trim().is_empty()) {
+        config.repository = Some(crate::config::CodeRepository {
+            url: url.trim().to_string(),
+            private: bool_field(body, "repository_private").unwrap_or(false),
+            ..Default::default()
+        });
+    }
+    Ok(config)
+}
+
+fn build_base_config(store: &Store, name: &str, body: &Value) -> Result<ProjectConfig> {
     // A process chosen at creation: `"workflow": "<preset>"` (FEAT-116). An unknown name is refused
     // with the list, where it used to fall back silently to the default.
     if let Some(preset) = str_field(body, "workflow") {
@@ -1001,9 +1014,13 @@ fn dispatch_routes(
                 _ => Ok(export::project_to_markdown(&project)),
             }
         }
-        ("PATCH", ["projects", p]) => {
-            ser(&store.set_project_meta(p, str_field(b, "name"), str_field(b, "description"))?)
-        }
+        ("PATCH", ["projects", p]) => ser(&store.set_project_meta(
+            p,
+            str_field(b, "name"),
+            str_field(b, "description"),
+            str_field(b, "repository"),
+            bool_field(b, "repository_private"),
+        )?),
         ("DELETE", ["projects", p]) => {
             store.delete_project(p)?;
             Ok(String::new())
