@@ -59,6 +59,7 @@ pub mod models;
 pub mod openapi;
 pub mod origin;
 pub mod portfolio;
+pub mod position;
 pub mod prepared;
 pub mod project;
 pub mod query;
@@ -76,6 +77,7 @@ pub mod sprints;
 pub mod store;
 pub mod trace;
 pub mod validate;
+pub mod views;
 pub mod write;
 pub mod yaml;
 
