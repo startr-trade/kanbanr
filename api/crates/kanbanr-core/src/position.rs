@@ -896,4 +896,69 @@ mod tests {
         assert_eq!(a[0].1, blob_id(b"a edited\n"));
         gone(&d);
     }
+
+    // ---- the measurement (R-6) ----
+
+    fn median_ms(root: &Path) -> (f64, Vec<f64>) {
+        let mut ms: Vec<f64> = (0..3)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                let st = pos(root);
+                assert!(st.position.commit.is_some());
+                t.elapsed().as_secs_f64() * 1000.0
+            })
+            .collect();
+        ms.sort_by(f64::total_cmp);
+        (ms[1], ms)
+    }
+
+    /// R-6: one position read of a clean 10,000-file checkout, warm, three times; the median is
+    /// printed with the load average. No budget is asserted: the number is the finding. Run it
+    /// with `--release --nocapture` for the figure the result doc records.
+    #[test]
+    fn read_position_10k_files_is_measured() {
+        let d = repo("tenk");
+        let mut n = 0u32;
+        for dir in 0..100 {
+            let folder = d.join(format!("d{dir:03}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            for f in 0..100 {
+                // 200 to 2,000 bytes, deterministic.
+                let len = 200 + (n as usize * 37) % 1801;
+                let body: String = (0..len)
+                    .map(|i| char::from(b'a' + ((i as u32 + n) % 26) as u8))
+                    .collect();
+                std::fs::write(folder.join(format!("f{f:03}.txt")), body).unwrap();
+                n += 1;
+            }
+        }
+        git(&d, &["add", "-A"]).unwrap();
+        git(&d, &["commit", "-q", "-m", "10k"]).unwrap();
+        // Warm the file cache, then time three reads.
+        let first = pos(&d);
+        assert!(first.position.is_clean());
+        let (median, all) = median_ms(&d);
+        let load = std::fs::read_to_string("/proc/loadavg").unwrap_or_else(|_| "n/a".into());
+        let tracked = git(&d, &["ls-files"]).unwrap().lines().count();
+        println!(
+            "SPK-001 R-6: {tracked} tracked files, median {median:.1} ms of {all:?} ms, load {}",
+            load.trim()
+        );
+        assert_eq!(tracked, 10_001);
+        assert_eq!(pos(&d), first, "repeats");
+        // This repository, for scale (informational).
+        let here = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        if let Ok(here) = here.canonicalize()
+            && here.join(".git").exists()
+        {
+            let files = git(&here, &["ls-files"]).map_or(0, |s| s.lines().count());
+            let t = std::time::Instant::now();
+            let ok = read_position(&here, "kanbanr").is_ok();
+            println!(
+                "SPK-001 R-6: this repository, {files} tracked files: {:.1} ms (ok: {ok})",
+                t.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        gone(&d);
+    }
 }
