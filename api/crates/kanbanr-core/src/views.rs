@@ -685,7 +685,7 @@ mod tests {
         let old = read_position(&d, "r").unwrap().position.text();
         std::fs::write(d.join("docs/overview.md"), "# two\n").unwrap();
         let live = read_position(&d, "r").unwrap().position;
-        let unknown = format!("{}", "1".repeat(40));
+        let unknown = "1".repeat(40);
         for wanted in [old, unknown] {
             match resolve_position(&d, "r", Some(&wanted)) {
                 Err(crate::error::CoreError::PositionUnavailable {
