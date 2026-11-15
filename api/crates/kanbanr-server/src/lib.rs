@@ -92,6 +92,7 @@ pub async fn run_with(
     std::fs::create_dir_all(data_dir.join("projects"))?;
     let store = Arc::new(Store::new(data_dir.clone()));
     let (tx, _rx) = broadcast::channel::<String>(256);
+    let meta_repo: Option<PathBuf> = code_repo.as_ref().map(|(_, p)| p.clone());
     let state = AppState {
         store,
         data_dir: data_dir.clone(),
@@ -178,6 +179,7 @@ pub async fn run_with(
                 axum::Json(kanbanr_core::server::Meta::for_board(
                     &meta_dir,
                     allow_writes,
+                    meta_repo.as_deref(),
                 ))
             }),
         )

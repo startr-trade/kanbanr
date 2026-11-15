@@ -15,6 +15,23 @@ pub struct Meta {
     pub identity: Option<Identity>,
     /// The board schema this build understands (FEAT-072).
     pub schema_version: u32,
+    /// The kanbanr version this daemon runs (FTR-036).
+    pub version: String,
+    /// The commit this daemon was built from, or `unknown`.
+    pub commit: String,
+    /// The newest kanbanr that wrote the board, from its `writer.yaml`; null when none is recorded.
+    pub board_writer: Option<BoardWriter>,
+    /// Whether that writer is newer than this daemon: the monitor then warns.
+    pub writer_newer: bool,
+}
+
+/// The board's writer record, as the monitor shows it (FTR-036).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct BoardWriter {
+    pub version: String,
+    pub commit: String,
+    pub at: String,
 }
 
 /// A git identity.
@@ -27,11 +44,33 @@ pub struct Identity {
 
 impl Meta {
     /// The answer for a daemon over `data_dir`.
-    pub fn for_board(data_dir: &std::path::Path, writes: bool) -> Self {
+    ///
+    /// `code_repo` is the project's code repository, which lets a same-version writer be told
+    /// apart by commit ancestry (FTR-036); without it only a higher version counts as newer.
+    pub fn for_board(
+        data_dir: &std::path::Path,
+        writes: bool,
+        code_repo: Option<&std::path::Path>,
+    ) -> Self {
+        let running = crate::writer::running();
+        let recorded = crate::writer::recorded(data_dir);
+        let writer_newer = recorded.as_ref().is_some_and(|w| {
+            let descends =
+                code_repo.and_then(|r| crate::writer::descends(r, &running.commit, &w.commit));
+            crate::writer::newer(&running, w, descends)
+        });
         Meta {
             writes,
             identity: crate::git::identity(data_dir).map(|(name, email)| Identity { name, email }),
             schema_version: crate::config::CURRENT_SCHEMA_VERSION,
+            version: running.version,
+            commit: running.commit,
+            board_writer: recorded.map(|w| BoardWriter {
+                version: w.version,
+                commit: w.commit,
+                at: w.at,
+            }),
+            writer_newer,
         }
     }
 }
