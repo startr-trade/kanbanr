@@ -34,6 +34,11 @@ const EXCEPTIONS: &[(&str, &str, &str)] = &[
         "replaces the running binary by staging and renaming it, keeping the old one aside; the executable bit is set before the rename",
     ),
     (
+        "kanbanr-cli/src/walkthrough/guard.rs",
+        "std::fs::copy(binary, &link)?;",
+        "where links are not available (Windows), copies the run's own kanbanr executable into the run's bin/, outside any board, keeping its mode; a link elsewhere",
+    ),
+    (
         "kanbanr-cli/src/skill.rs",
         "std::fs::write(&path, bytes)",
         "writes a whole folder into a staging folder, then renames the folder",
