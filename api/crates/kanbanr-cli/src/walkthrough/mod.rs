@@ -251,6 +251,9 @@ pub fn run_command(cli: &crate::Cli, cmd: &WalkthroughCmd) -> Result<()> {
             let (text, shown) = read_runbook(cli, runbook)?;
             let rb = Runbook::parse(&text)?;
             let errors = lint(&rb);
+            for w in runbook::lint_warnings(&rb) {
+                eprintln!("warning: {w}");
+            }
             if cli.json {
                 println!(
                     "{}",
@@ -845,9 +848,14 @@ impl Running {
                     why.push("the offer was missing".into());
                 }
                 Err(e) => {
+                    let kind = if e.to_string().starts_with("ambiguous") {
+                        "ambiguous-selector"
+                    } else {
+                        "offer-missing"
+                    };
                     self.finding(
                         &id,
-                        "offer-missing",
+                        kind,
                         format!("\"{}\" on the {} page", offer.button, offer.page),
                         e.to_string(),
                     );
@@ -858,55 +866,68 @@ impl Running {
             self.screenshot(&id, &offer.page, "after");
         }
         if let Some(press) = &step.press {
-            let subject = match &press.subject {
-                Some(sel) => self
-                    .monitor
-                    .as_ref()
-                    .and_then(|m| m.resolve(&project, sel).ok().flatten())
-                    .map(|i| i.code),
-                None => None,
+            let subject = match (&press.subject, self.monitor.as_ref()) {
+                (Some(sel), Some(m)) => match m.resolve(&project, sel) {
+                    Ok(found) => found.map(|i| i.code),
+                    Err(e) => {
+                        self.finding(
+                            &id,
+                            "ambiguous-selector",
+                            format!("press \"{}\"", press.button),
+                            e.to_string(),
+                        );
+                        step_ok = false;
+                        why.push("the press's subject was ambiguous".into());
+                        Some(String::new())
+                    }
+                },
+                _ => None,
             };
+            // An ambiguous subject is never pressed for (the empty marker above).
+            let ambiguous = subject.as_deref() == Some("");
             let url = self
                 .monitor
                 .as_ref()
                 .map(|m| m.page_url(&project, &press.page))
                 .unwrap_or_default();
-            let pressed = match self.browser() {
-                None => Err(None),
-                Some(b) => b
-                    .page(&url)
-                    .and_then(|p| p.press(&press.button, subject.as_deref()))
-                    .map_err(Some),
-            };
-            match pressed {
-                Ok(()) => {
-                    eprintln!("step {id}: pressed \"{}\" on {}", press.button, press.page);
-                    // The click posts on its own; give the board a moment to change.
-                    std::thread::sleep(Duration::from_secs(2));
-                }
-                Err(None) => {
-                    let why_not = self
-                        .browser_absent
-                        .clone()
-                        .unwrap_or_else(|| "--no-browser".into());
-                    self.finding(
-                        &id,
-                        "no-browser",
-                        format!("press \"{}\" on {}", press.button, press.page),
-                        why_not,
-                    );
-                    step_ok = false;
-                    why.push("no browser".into());
-                }
-                Err(Some(e)) => {
-                    self.finding(
-                        &id,
-                        "press-failed",
-                        format!("press \"{}\" on {}", press.button, press.page),
-                        e.to_string(),
-                    );
-                    step_ok = false;
-                    why.push(e.to_string());
+            if !ambiguous {
+                let pressed = match self.browser() {
+                    None => Err(None),
+                    Some(b) => b
+                        .page(&url)
+                        .and_then(|p| p.press(&press.button, subject.as_deref()))
+                        .map_err(Some),
+                };
+                match pressed {
+                    Ok(()) => {
+                        eprintln!("step {id}: pressed \"{}\" on {}", press.button, press.page);
+                        // The click posts on its own; give the board a moment to change.
+                        std::thread::sleep(Duration::from_secs(2));
+                    }
+                    Err(None) => {
+                        let why_not = self
+                            .browser_absent
+                            .clone()
+                            .unwrap_or_else(|| "--no-browser".into());
+                        self.finding(
+                            &id,
+                            "no-browser",
+                            format!("press \"{}\" on {}", press.button, press.page),
+                            why_not,
+                        );
+                        step_ok = false;
+                        why.push("no browser".into());
+                    }
+                    Err(Some(e)) => {
+                        self.finding(
+                            &id,
+                            "press-failed",
+                            format!("press \"{}\" on {}", press.button, press.page),
+                            e.to_string(),
+                        );
+                        step_ok = false;
+                        why.push(e.to_string());
+                    }
                 }
             }
         }
@@ -1154,6 +1175,9 @@ impl Running {
 pub fn run(cli: &crate::Cli, args: &RunArgs) -> Result<()> {
     let (text, shown) = read_runbook(cli, &args.runbook)?;
     let runbook = Runbook::parse(&text)?;
+    for w in runbook::lint_warnings(&runbook) {
+        eprintln!("warning: {w}");
+    }
     let errors = lint(&runbook);
     if !errors.is_empty() {
         for e in &errors {

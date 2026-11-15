@@ -414,7 +414,18 @@ pub fn claim(
             line
         }
         TruthClaim::Merged { item } => {
-            let code = item_code(&store, project, item).unwrap_or_else(|| item.describe());
+            let code = match item_code(&store, project, item) {
+                Ok(Some(c)) => c,
+                Ok(None) => item.describe(),
+                Err(why) => {
+                    return TruthLine {
+                        verdict: Verdict::Mismatch,
+                        check: format!("merged {}", item.describe()),
+                        board: item.describe(),
+                        truth: why,
+                    };
+                }
+            };
             match doctor_json(kanbanr, run, project, &["git", "doctor"]) {
                 Ok(issues) => {
                     let about: Vec<String> = issues
@@ -470,30 +481,26 @@ pub fn claim(
     }
 }
 
-/// The code of the item a selector names on the board.
-fn item_code(store: &Store, project: &str, sel: &ItemSel) -> Option<String> {
-    let p = store.load(project).ok()?;
+/// The code of the item a selector names on the board: `Err` names the candidates when several
+/// fit equally well (RC6).
+fn item_code(
+    store: &Store,
+    project: &str,
+    sel: &ItemSel,
+) -> std::result::Result<Option<String>, String> {
+    let Ok(p) = store.load(project) else {
+        return Ok(None);
+    };
     let mut items: Vec<_> = p.features.iter().collect();
     items.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.code.cmp(&b.code)));
-    match sel {
-        ItemSel::Newest => items.last().map(|f| f.code.clone()),
-        ItemSel::Code(c) => items
-            .iter()
-            .find(|f| f.code.eq_ignore_ascii_case(c))
-            .map(|f| f.code.clone()),
-        ItemSel::TitleContains(t) => {
-            let t = t.to_ascii_lowercase();
-            items
-                .iter()
-                .rev()
-                .find(|f| f.title.to_ascii_lowercase().contains(&t))
-                .map(|f| f.code.clone())
-        }
-        ItemSel::TitleMatches(_) => items
-            .iter()
-            .rev()
-            .find(|f| sel.title_fits(&f.title))
-            .map(|f| f.code.clone()),
+    match sel.pick(&items, |f| &f.code, |f| &f.title) {
+        super::runbook::Pick::One(f) => Ok(Some(f.code.clone())),
+        super::runbook::Pick::None => Ok(None),
+        super::runbook::Pick::Ambiguous(v) => Err(sel.ambiguity(
+            &v.iter()
+                .map(|f| (f.code.clone(), f.title.clone()))
+                .collect::<Vec<_>>(),
+        )),
     }
 }
 
@@ -575,8 +582,9 @@ pub fn board_claim(
         BoardClaim::ItemStatus { item, status } => {
             let p = store.load(project)?;
             Ok(match item_code(&store, project, item) {
-                None => Err(format!("no item matches {}", item.describe())),
-                Some(code) => {
+                Err(why) => Err(why),
+                Ok(None) => Err(format!("no item matches {}", item.describe())),
+                Ok(Some(code)) => {
                     let f = p.feature(&code).map_err(|e| anyhow!("{e}"))?;
                     if f.status.eq_ignore_ascii_case(status) {
                         Ok(())

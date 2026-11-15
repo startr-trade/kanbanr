@@ -8,7 +8,7 @@
 //! POST or PUT the page posts, with the same body.
 
 use super::guard::RunDirs;
-use super::runbook::{Decision, DelegationSel, ItemSel, Offer, PageClaim};
+use super::runbook::{Decision, DelegationSel, ItemSel, Offer, PageClaim, Pick};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
@@ -303,7 +303,14 @@ impl Monitor {
     /// The item a selector names, if any.
     pub fn resolve(&self, project: &str, sel: &ItemSel) -> Result<Option<ItemBrief>> {
         let items = self.items(project)?;
-        Ok(select(&items, sel))
+        match pick(&items, sel) {
+            Pick::One(i) => Ok(Some(i)),
+            Pick::None => Ok(None),
+            Pick::Ambiguous(v) => Err(anyhow!(
+                "{}",
+                sel.ambiguity(&v.into_iter().map(|i| (i.code, i.title)).collect::<Vec<_>>())
+            )),
+        }
     }
 
     fn review(&self, project: &str) -> Result<Vec<Value>> {
@@ -1110,26 +1117,21 @@ fn accept_untested(plan: &Value) -> Option<Vec<String>> {
 }
 
 /// The item a selector picks from the board's items (oldest first).
+/// The item a selector picks, when exactly one fits (the tests' view).
+#[cfg(test)]
 pub fn select(items: &[ItemBrief], sel: &ItemSel) -> Option<ItemBrief> {
-    match sel {
-        ItemSel::Newest => items.last().cloned(),
-        ItemSel::Code(c) => items
-            .iter()
-            .find(|i| i.code.eq_ignore_ascii_case(c))
-            .cloned(),
-        ItemSel::TitleContains(t) => {
-            let t = norm(t);
-            items
-                .iter()
-                .rev()
-                .find(|i| norm(&i.title).contains(&t))
-                .cloned()
-        }
-        ItemSel::TitleMatches(_) => items
-            .iter()
-            .rev()
-            .find(|i| sel.title_fits(&i.title))
-            .cloned(),
+    match pick(items, sel) {
+        Pick::One(i) => Some(i),
+        _ => None,
+    }
+}
+
+/// The item a selector picks, or every candidate when several fit equally well (RC6).
+pub fn pick(items: &[ItemBrief], sel: &ItemSel) -> Pick<ItemBrief> {
+    match sel.pick(items, |i| &i.code, |i| &i.title) {
+        Pick::One(i) => Pick::One(i.clone()),
+        Pick::None => Pick::None,
+        Pick::Ambiguous(v) => Pick::Ambiguous(v.into_iter().cloned().collect()),
     }
 }
 
@@ -1967,6 +1969,70 @@ pub(crate) mod tests {
         assert!(matches!(
             release_offer(&json!({"empty": true}), "v0.1.0", "Cut v0.1.0"),
             Found::Absent(_)
+        ));
+    }
+
+    /// RC6: with several items whose titles name "basket", a whole-word and an exact title win over a
+    /// substring, and when several still fit equally the pick is ambiguous — named, not acted on.
+    #[test]
+    fn an_ambiguous_selector_is_a_finding_not_a_pick() {
+        let item = |code: &str, title: &str| ItemBrief {
+            code: code.into(),
+            title: title.into(),
+            status: "Vision".into(),
+            created_at: format!("2026-01-0{}T00:00:00Z", &code[code.len() - 1..]),
+        };
+        let items = vec![
+            item("FEAT-001", "A shopper finds their basket kept"),
+            item(
+                "FEAT-003",
+                "Chore: a README that says where the basket page is",
+            ),
+            item("FEAT-004", "The basket's form address moves to /cart"),
+            item("FEAT-005", "Baskets"),
+        ];
+        let sel = ItemSel::TitleContains("basket".into());
+        let Pick::Ambiguous(v) = pick(&items, &sel) else {
+            panic!("several whole-word matches")
+        };
+        assert_eq!(
+            v.iter().map(|i| i.code.as_str()).collect::<Vec<_>>(),
+            ["FEAT-001", "FEAT-003", "FEAT-004"]
+        );
+        let why = sel.ambiguity(
+            &v.iter()
+                .map(|i| (i.code.clone(), i.title.clone()))
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            why.starts_with("ambiguous: the item titled like \"basket\" matches FEAT-001"),
+            "{why}"
+        );
+        assert!(why.contains("nothing was acted on"));
+        assert!(select(&items, &sel).is_none(), "never a silent pick");
+        // An exact title wins; a whole word beats a substring.
+        assert_eq!(
+            select(&items, &ItemSel::TitleContains("baskets".into()))
+                .unwrap()
+                .code,
+            "FEAT-005"
+        );
+        assert_eq!(
+            select(&items, &ItemSel::TitleContains("readme".into()))
+                .unwrap()
+                .code,
+            "FEAT-003"
+        );
+        // A pattern that fits one is a pick; one that fits two is ambiguous.
+        assert_eq!(
+            select(&items, &ItemSel::TitleMatches("basket kept".into()))
+                .unwrap()
+                .code,
+            "FEAT-001"
+        );
+        assert!(matches!(
+            pick(&items, &ItemSel::TitleMatches("readme|cart".into())),
+            Pick::Ambiguous(_)
         ));
     }
 

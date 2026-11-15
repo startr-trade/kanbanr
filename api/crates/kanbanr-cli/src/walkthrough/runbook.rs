@@ -33,6 +33,83 @@ pub enum ItemSel {
     TitleMatches(String),
 }
 
+/// What a selector picked from the board's items.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pick<T> {
+    One(T),
+    None,
+    /// Several items fit equally well: a finding, never a silent pick (RC6).
+    Ambiguous(Vec<T>),
+}
+
+/// Does `title` hold `word` as a whole word (case-insensitive)?
+pub fn has_word(title: &str, word: &str) -> bool {
+    regex::RegexBuilder::new(&format!(r"\b{}\b", regex::escape(word.trim())))
+        .case_insensitive(true)
+        .build()
+        .is_ok_and(|r| r.is_match(title))
+}
+
+impl ItemSel {
+    /// The item this selector names among `items` (oldest first). A title selector prefers an exact
+    /// title, then a whole-word match, then a substring; when more than one item fits at the best
+    /// level, the pick is ambiguous. A pattern that fits several items is ambiguous too.
+    pub fn pick<'a, T>(
+        &self,
+        items: &'a [T],
+        code: impl Fn(&T) -> &str,
+        title: impl Fn(&T) -> &str,
+    ) -> Pick<&'a T> {
+        let of = |v: Vec<&'a T>| match v.len() {
+            0 => Pick::None,
+            1 => Pick::One(v[0]),
+            _ => Pick::Ambiguous(v),
+        };
+        match self {
+            ItemSel::Newest => items.last().map(Pick::One).unwrap_or(Pick::None),
+            ItemSel::Code(c) => items
+                .iter()
+                .find(|i| code(i).eq_ignore_ascii_case(c))
+                .map(Pick::One)
+                .unwrap_or(Pick::None),
+            ItemSel::TitleContains(t) => {
+                let want = t.trim().to_lowercase();
+                let exact: Vec<&T> = items
+                    .iter()
+                    .filter(|i| title(i).trim().to_lowercase() == want)
+                    .collect();
+                if !exact.is_empty() {
+                    return of(exact);
+                }
+                let word: Vec<&T> = items.iter().filter(|i| has_word(title(i), t)).collect();
+                if !word.is_empty() {
+                    return of(word);
+                }
+                of(items
+                    .iter()
+                    .filter(|i| title(i).to_lowercase().contains(&want))
+                    .collect())
+            }
+            ItemSel::TitleMatches(_) => {
+                of(items.iter().filter(|i| self.title_fits(title(i))).collect())
+            }
+        }
+    }
+
+    /// The finding for an ambiguous pick, naming every candidate.
+    pub fn ambiguity(&self, candidates: &[(String, String)]) -> String {
+        format!(
+            "ambiguous: {} matches {}; nothing was acted on",
+            self.describe(),
+            candidates
+                .iter()
+                .map(|(c, t)| format!("{c} \"{t}\""))
+                .collect::<Vec<_>>()
+                .join(" and ")
+        )
+    }
+}
+
 /// A title pattern compiled case-insensitively; an invalid one matches nothing (lint names it).
 pub fn title_regex(pattern: &str) -> Option<regex::Regex> {
     regex::RegexBuilder::new(pattern)
@@ -811,6 +888,92 @@ impl std::fmt::Display for LintError {
     }
 }
 
+/// Every item selector a step uses: its decision's, press's, offer's and claims'.
+fn selectors(s: &Step) -> Vec<&ItemSel> {
+    let mut sels: Vec<&ItemSel> = Vec::new();
+    if let Some(d) = &s.decide {
+        match d {
+            Decision::Approve(i) | Decision::Ratify(i) => sels.push(i),
+            Decision::Signoff { item, .. } | Decision::RecordManual { item, .. } => sels.push(item),
+            _ => {}
+        }
+    }
+    sels.extend(s.press.as_ref().and_then(|p| p.subject.as_ref()));
+    sels.extend(s.offer.as_ref().and_then(|o| o.subject.as_ref()));
+    if let Some(e) = &s.expect {
+        if let Some(BoardClaim::ItemStatus { item, .. }) = &e.board {
+            sels.push(item);
+        }
+        if let Some(TruthClaim::Merged { item }) = &e.truth {
+            sels.push(item);
+        }
+    }
+    sels
+}
+
+/// Does a `say` ask Claude to create an item?
+fn creates_item(say: &str) -> bool {
+    let l = say.to_lowercase();
+    [
+        "add an item",
+        "as a defect",
+        "it's a chore",
+        "as an item",
+        "file a ",
+        "file an ",
+    ]
+    .iter()
+    .any(|p| l.contains(p))
+}
+
+/// What a run may stumble on but can still follow (RC6): a title selector that the item a
+/// later-created item would also fit, where the runbook's own words show it — the says of two
+/// item-creating steps before the selector name it, or one does and the selector was already in use
+/// before that step. Warnings never stop a run.
+pub fn lint_warnings(rb: &Runbook) -> Vec<LintError> {
+    let mut out = Vec::new();
+    let fits = |sel: &ItemSel, say: &str| match sel {
+        ItemSel::TitleContains(t) => has_word(say, t),
+        ItemSel::TitleMatches(_) => sel.title_fits(say),
+        _ => false,
+    };
+    let mut warned = std::collections::BTreeSet::new();
+    for (i, s) in rb.steps.iter().enumerate() {
+        for sel in selectors(s) {
+            if matches!(sel, ItemSel::Newest | ItemSel::Code(_)) {
+                continue;
+            }
+            let creators: Vec<usize> = (0..i)
+                .filter(|&j| {
+                    rb.steps[j]
+                        .say
+                        .as_deref()
+                        .is_some_and(|say| creates_item(say) && fits(sel, say))
+                })
+                .collect();
+            let Some(&first) = creators.first() else {
+                continue;
+            };
+            let used_before = rb.steps[..first]
+                .iter()
+                .any(|k| selectors(k).contains(&sel));
+            if (creators.len() >= 2 || used_before) && warned.insert((s.id.clone(), sel.describe()))
+            {
+                let other = if used_before { first } else { creators[1] };
+                out.push(LintError {
+                    step: s.id.clone(),
+                    message: format!(
+                        "{} may also match the item step {} asks for; use a longer title_contains or a title_matches",
+                        sel.describe(),
+                        rb.steps[other].id
+                    ),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// Every `title_matches` pattern a step names: in its decision, press, offer and board claim.
 fn title_patterns(s: &Step) -> Vec<String> {
     let mut sels: Vec<&ItemSel> = Vec::new();
@@ -1173,6 +1336,7 @@ steps:
             defined.sort();
             assert_eq!(used, defined, "{file}: every check is placed");
             assert_eq!(lint(&rb), Vec::<LintError>::new(), "{file}");
+            assert_eq!(lint_warnings(&rb), Vec::<LintError>::new(), "{file}");
             for word in ["/home/", "github.com", "@", "http://", "https://"] {
                 assert!(
                     !text.contains(word),
@@ -1249,6 +1413,21 @@ steps:
                 .starts_with("step c: title_matches `(unclosed` does not compile"),
             "{}",
             errors[0]
+        );
+        // RC6: a selector two item-creating steps would fit is a warning, not an error.
+        let warn = Runbook::parse(
+            "```yaml\nrunbook: w\nprocess: p\nsteps:\n  - id: a\n    decide: {approve: {item: {title_contains: basket}}}\n    offer: {page: review, button: Approve, subject: {item: {title_contains: basket}}}\n  - id: b\n    say: \"Add a README that names the basket page: it's a chore.\"\n  - id: c\n    say: \"Add an item to rename the cart page.\"\n  - id: d\n    decide: {approve: {item: {title_contains: basket}}}\n    offer: {page: review, button: Approve, subject: {item: {title_contains: basket}}}\n  - id: e\n    decide: {approve: {item: {title_contains: cart}}}\n    offer: {page: review, button: Approve, subject: {item: {title_contains: cart}}}\n```",
+        )
+        .unwrap();
+        assert!(lint(&warn).is_empty());
+        let w = lint_warnings(&warn);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(
+            w[0].to_string().starts_with(
+                "step d: the item titled like \"basket\" may also match the item step b asks for"
+            ),
+            "{}",
+            w[0]
         );
         // A wrong word is refused at parse time, with the step named.
         let bad = "```yaml\nrunbook: x\nprocess: y\nsteps:\n  - id: a\n    expect: {board: {config: {release_prepare: maybe}}}\n```";

@@ -150,7 +150,7 @@ steps:
   - id: "6.7"
     say: "Run the full checks over the release."
   - id: "6.8"
-    say: "While the release is a candidate we found that the basket page's title does not name the shop: it should read \"Saved basket - our shop\". Add it as a defect with that in its title, and fix it in the release. Take the defect as far as it goes and tell me what waits for me on the Review page."
+    say: "While the release is a candidate we found that the basket page's title does not name the shop: it should read \"Your basket - the corner shop\". Add it as a defect with that in its title, and fix it in the release. Take the defect as far as it goes and tell me what waits for me on the Review page."
     expect: {board: {item: {title_matches: "\\btitle\\b"}}}
     check: MT-5
   - id: "6.9"
