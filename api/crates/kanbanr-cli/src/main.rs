@@ -4833,7 +4833,7 @@ fn run_check_branch(cli: &Cli, client: &Backend) -> anyhow::Result<()> {
     let Ok(ctx) = scm_context(cli, client) else {
         return Ok(());
     };
-    let facts = coderepo::repo_facts(&ctx.root, None);
+    let facts = coderepo::repo_facts_staged(&ctx.root, None);
     if let Some(why) = kanbanr_core::scm::branch_verdict(&facts, &ctx.project).refusal {
         anyhow::bail!("{why}");
     }
