@@ -11506,6 +11506,93 @@ fn an_override_inside_a_claude_session_records_its_origin() {
     assert!(!listed(&pending), "{pending}");
 }
 
+/// DEF-064 R-1: a second override Claude made at a definition the person already ratified is
+/// ratified again from the terminal, and leaves the Review page; a true repeat records nothing.
+#[test]
+fn a_second_override_at_a_ratified_revision_is_ratified_again_from_the_terminal() {
+    let (base, work) = togaf_scratch("def064-ratify-again");
+    assert!(base.starts_with(std::env::temp_dir()));
+    togaf_board(&base, &work);
+    // A move inside a Claude Code session, as `an_override_inside_a_claude_session_records_its_origin`
+    // makes it.
+    let claude_move = |to: &str, why: &str| {
+        let o = Command::new(cli())
+            .args(["move", "FEAT-001", to, "--override", why])
+            .current_dir(&work)
+            .env("HOME", base.join("home"))
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("KANBANR_DATA_DIR")
+            .env_remove("KANBANR_PROJECT")
+            .env_remove("KANBANR_PROCESSES_DIR")
+            .env("CLAUDECODE", "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    let ratify = || {
+        let o = run_in(&base, &work, &["ratify", "FEAT-001"]);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).to_string()
+    };
+    let unratified = || {
+        let o = run_in(&base, &work, &["--json", "review", "--pending"]);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+        v.as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["code"] == "FEAT-001" && e["approval"] == "unratified")
+    };
+    let listed = || {
+        let o = run_in(&base, &work, &["--json", "review", "--pending"]);
+        let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+        v.as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["code"] == "FEAT-001")
+    };
+    let approvals = || {
+        let o = run_in(&base, &work, &["feature", "show", "FEAT-001", "--json"]);
+        let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+        v["definition"]["approvals"].as_array().unwrap().clone()
+    };
+
+    claude_move("Business Arch", "why 1");
+    let out = ratify();
+    assert!(
+        out.contains("ratified by") && !out.contains("already"),
+        "{out}"
+    );
+    assert!(!listed());
+
+    claude_move("System Design", "why 2");
+    assert!(unratified());
+    // The defect: this printed `already ratified …; nothing recorded`.
+    let out = ratify();
+    assert!(
+        out.contains("ratified by") && !out.contains("already"),
+        "{out}"
+    );
+    let a = approvals();
+    assert_eq!(a.len(), 3, "{a:?}");
+    let last = a.last().unwrap();
+    assert_eq!(
+        (last["verdict"].as_str(), last["origin"].as_str()),
+        (Some("ratified"), Some("terminal")),
+        "{last}"
+    );
+    assert!(!listed());
+
+    let out = ratify();
+    assert!(
+        out.contains("already ratified") && out.contains("nothing recorded"),
+        "{out}"
+    );
+    assert_eq!(approvals().len(), 3);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// DEF-055: a code repository with the git model on and FEAT-001 started, its spec linking
 /// `docs/src/cart.md` under `Affects docs`, one task complete, and that doc changed on its branch.
 /// The `docs-folded` sign-off is offered at the Completed stage.
