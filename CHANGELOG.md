@@ -10,6 +10,9 @@ All notable changes to kanbanr are documented here. The format follows
 
 - A release whose tag stage is last now reads as tagged until its tag workflow's passed result is
   recorded, then ships (DEF-049).
+- The Releases page offers Promote to candidate again when a candidate's release-prepare
+  configuration changed since it was prepared; `release promote --plan` says the same under
+  `again:` (DEF-057).
 
 ## [0.6.0] - 2026-11-14
 

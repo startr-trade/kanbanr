@@ -832,7 +832,11 @@ branches; fix it before going on.
   `move_main`, `tag` on entry. A refusal lists every missing condition with its fix; nothing changed.
 - **A release prepares itself.** The stage with `prepare` commits the version files, the dated
   changelog heading and a notes draft onto `release/<V>` (`kanbanr config release-prepare`). Never
-  make a feature item to prepare a release.
+  make a feature item to prepare a release. When the release-prepare configuration changes after
+  a release entered candidate (version files added, a changelog or notes path set), the Releases
+  page offers **Promote to candidate again**, which redoes the preparation on `release/<V>`;
+  `kanbanr release promote <V> --plan` shows the same under `again:`. Tell the person what it will
+  redo; the promotion is theirs, never yours.
 - **The notes are read and edited from the release.** They live on `release/<V>`, not in the
   checkout: `kanbanr release notes <V>` shows them and where they are; `--file F` (or `-`) or
   `--edit` commits new text there, nothing checked out, until the cut. When the user asks where

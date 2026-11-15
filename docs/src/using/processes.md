@@ -462,7 +462,7 @@ cadence:
 | action | does |
 |---|---|
 | `branch` | makes `release/<V>` from the line of integration, nothing checked out |
-| `prepare` | one commit on `release/<V>`: the version files, the dated changelog heading and its copies, the notes draft and its listings (see below) |
+| `prepare` | one commit on `release/<V>`: the version files, the dated changelog heading and its copies, the notes draft and its listings (see below); entering the stage again redoes it when the configuration changed since, which the Releases page offers as Promote to candidate again |
 | `move_main` | fast-forwards main to the release tip; refused if main has commits the release lacks (a patch of an older release leaves main where it is) |
 | `tag` | tags the release tip `<V>` ("Release <V>"); the stage holding it is the cut, and any stage after it only confirms |
 
