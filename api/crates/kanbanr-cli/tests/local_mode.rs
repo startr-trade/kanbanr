@@ -11508,11 +11508,59 @@ fn an_override_inside_a_claude_session_records_its_origin() {
 
 /// DEF-064 R-1: a second override Claude made at a definition the person already ratified is
 /// ratified again from the terminal, and leaves the Review page; a true repeat records nothing.
+/// Each override is one its gate needed, or it would not be recorded at all (DEF-056 R-2): the
+/// workflow here asks for an estimate at Business Arch and System Design, which FEAT-001 never
+/// gets, and an estimate is no part of the definition, so the ratified revision stays the same.
 #[test]
 fn a_second_override_at_a_ratified_revision_is_ratified_again_from_the_terminal() {
     let (base, work) = togaf_scratch("def064-ratify-again");
     assert!(base.starts_with(std::env::temp_dir()));
     togaf_board(&base, &work);
+    let process = base.join("process-estimated.yaml");
+    std::fs::write(
+        &process,
+        r#"statuses: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+default_state: Vision
+displayed_states: [Vision, Business Arch, System Design, Implementation, Migration, Operations]
+terminal_states: [Operations]
+transitions:
+  Vision: [Business Arch]
+  Business Arch: [System Design, Vision]
+  System Design: [Implementation, Business Arch]
+  Implementation: [Migration, System Design]
+  Migration: [Operations, Implementation]
+  Operations: [Migration]
+gates:
+  Business Arch:
+    requires: [definition, approved, estimated]
+  System Design:
+    requires: [approved, estimated]
+  Implementation:
+    requires: [approved]
+    on_enter: [branch]
+  Migration:
+    requires: [approved]
+"#,
+    )
+    .unwrap();
+    let o = run_in(
+        &base,
+        &work,
+        &[
+            "config",
+            "workflow",
+            "--from-file",
+            process.to_str().unwrap(),
+        ],
+    );
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let blocked = |to: &str| {
+        let o = run_in(&base, &work, &["move", "FEAT-001", to]);
+        assert!(
+            !o.status.success(),
+            "the gate blocks a move to {to}, so the override is needed"
+        );
+    };
     // A move inside a Claude Code session, as `an_override_inside_a_claude_session_records_its_origin`
     // makes it.
     let claude_move = |to: &str, why: &str| {
@@ -11558,6 +11606,7 @@ fn a_second_override_at_a_ratified_revision_is_ratified_again_from_the_terminal(
         v["definition"]["approvals"].as_array().unwrap().clone()
     };
 
+    blocked("Business Arch");
     claude_move("Business Arch", "why 1");
     let out = ratify();
     assert!(
@@ -11566,6 +11615,7 @@ fn a_second_override_at_a_ratified_revision_is_ratified_again_from_the_terminal(
     );
     assert!(!listed());
 
+    blocked("System Design");
     claude_move("System Design", "why 2");
     assert!(unratified());
     // The defect: this printed `already ratified …; nothing recorded`.

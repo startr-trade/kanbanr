@@ -966,12 +966,45 @@ mod tests {
 
     /// DEF-064 R-1, R-2: a second override Claude made at a revision the person already ratified
     /// is ratified again through the route, and leaves the queue; a true repeat still records
-    /// nothing.
+    /// nothing. Each override is one its gate needed, or it would not be recorded at all (DEF-056
+    /// R-2): Scheduled and Completed ask for an estimate, which the item never gets, and an
+    /// estimate is no part of the definition, so the revision the person ratified stays the same.
     #[test]
     fn ratifying_a_second_override_at_a_ratified_revision_records_it_and_leaves_the_queue() {
         let (store, dir) = board();
         assert!(dir.starts_with(std::env::temp_dir()));
+        // Gates are enforced only under an adopted charter, and only on items made after it.
+        crate::charter::save(
+            &store,
+            "demo",
+            &crate::Charter {
+                purpose: "Because reasons".into(),
+                goals: vec![crate::Goal {
+                    statement: "Ship the thing".into(),
+                    ..crate::Goal::default()
+                }],
+                ..crate::Charter::default()
+            },
+        )
+        .unwrap();
         let code = item(&store, false);
+        let estimated = || crate::config::Gate {
+            requires: vec![crate::readiness::Condition::Check(
+                crate::readiness::Check::Estimated,
+            )],
+            ..Default::default()
+        };
+        store
+            .set_gates(
+                "demo",
+                [
+                    ("Scheduled".to_string(), estimated()),
+                    ("Completed".to_string(), estimated()),
+                ]
+                .into_iter()
+                .collect(),
+            )
+            .unwrap();
         let base = format!("/projects/demo/features/{code}");
         let listed = |store: &Store| {
             crate::review::pending(store, "demo", None)
@@ -987,6 +1020,12 @@ mod tests {
         );
         assert!(first.get("already_recorded").is_none());
 
+        assert!(
+            store
+                .move_feature_gated_as("demo", &code, "Scheduled", None, "conversation")
+                .is_err(),
+            "the gate blocks, so the override below is needed"
+        );
         store
             .move_feature_gated_as("demo", &code, "Scheduled", Some("why 1"), "conversation")
             .unwrap();
@@ -1000,6 +1039,12 @@ mod tests {
         assert_eq!(def(&store, &code).approvals.len(), 2);
         assert!(listed(&store).is_none());
 
+        assert!(
+            store
+                .move_feature_gated_as("demo", &code, "Completed", None, "conversation")
+                .is_err(),
+            "the gate blocks, so the override below is needed"
+        );
         store
             .move_feature_gated_as("demo", &code, "Completed", Some("why 2"), "conversation")
             .unwrap();
