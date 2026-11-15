@@ -16,6 +16,7 @@
 
 use crate::coderepo::{self, Commit};
 use crate::error::{CoreError, Result};
+use crate::gitmodel;
 use crate::models::FeatureItem;
 use crate::scm::{RepoFacts, Verdict};
 use crate::store::{Project, Store};
@@ -487,12 +488,7 @@ fn item_branch(
 ) -> Result<(String, bool)> {
     let config = &project.config;
     let pattern = config.branch_pattern();
-    let main = config
-        .cadence
-        .main_branch
-        .clone()
-        .filter(|m| !m.trim().is_empty())
-        .unwrap_or_else(|| coderepo::default_branch(root));
+    let main = gitmodel::main_of(config, root);
     let facts = coderepo::branch_facts(root, &main)?;
     if let Some(existing) = facts.branches.keys().find(|b| {
         crate::scm::item_code_from_branch(pattern, b).as_deref() == Some(item.code.as_str())
@@ -1431,36 +1427,46 @@ pub fn last_task_change(item: &FeatureItem) -> Option<String> {
         .max_by(|a, b| crate::cmp_instants(a, b))
 }
 
-/// Every non-revoked build scope whose branch is ahead of its item's tasks. Expired ones count:
-/// their work may still be unrecorded.
+/// A scope's drift is its branch's own non-merge commits that no line (main, the integration
+/// branch, a sprint or a release branch) holds, committed after the later of its item's last task
+/// change and the scope's issue. A catch-up merge, and what it brings in, is never drift
+/// (DEF-063). Every non-revoked build scope counts; expired ones too: their work may still be
+/// unrecorded.
 pub fn drift(store: &Store, id: &str, root: &Path, now: &str) -> Result<Vec<Drift>> {
     let _ = now;
     let project = store.load_meta(id)?;
+    let candidates: Vec<(Scope, String, &FeatureItem)> = load(store, id)?
+        .into_iter()
+        .filter(|s| s.role == Role::Build && s.revoked_at.is_none())
+        .filter_map(|s| {
+            let branch = s.branch.clone()?;
+            let item = project.feature(&s.item).ok()?;
+            Some((s, branch, item))
+        })
+        .collect();
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let branches = coderepo::local_branches(root)?;
+    let main = gitmodel::main_of(&project.config, root);
+    let lines = gitmodel::line_branches(&project.config, &main, &branches);
     let mut out = Vec::new();
-    for s in load(store, id)? {
-        if s.role != Role::Build || s.revoked_at.is_some() {
-            continue;
-        }
-        let (Some(branch), Ok(item)) = (&s.branch, project.feature(&s.item)) else {
-            continue;
-        };
-        if !coderepo::branch_exists(root, branch) {
+    for (s, branch, item) in candidates {
+        if !branches.contains_key(&branch) {
             continue;
         }
         let since = match last_task_change(item) {
             Some(t) if crate::before(&s.issued_at, &t) => t,
             _ => s.issued_at.clone(),
         };
-        let range = match &s.base {
-            Some(base) => format!("{base}..{branch}"),
-            None => branch.clone(),
-        };
-        let commits = coderepo::commits_since(root, &range, &since)?;
+        let mut excluding = lines.clone();
+        excluding.extend(s.base.clone());
+        let commits = coderepo::work_since(root, &branch, &excluding, &since)?;
         if !commits.is_empty() {
             out.push(Drift {
                 scope: s.id.clone(),
                 item: s.item.clone(),
-                branch: branch.clone(),
+                branch,
                 since,
                 commits,
             });
@@ -2531,6 +2537,127 @@ mod tests {
         s.revoked_at = Some(NOW.into());
         save(&store, "demo", &[s]).unwrap();
         assert!(drift(&store, "demo", &repo, NOW).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// DEF-063 R-1, R-2, R-3: a catch-up merge, and what it brings in, is not agent work ahead of
+    /// the board; a commit of the agent's own after it is.
+    #[test]
+    fn a_catch_up_merge_is_not_agent_work_ahead_of_the_board() {
+        let dir =
+            std::env::temp_dir().join(format!("kanbanr-scope-catchup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (board, repo) = (dir.join("board"), dir.join("repo"));
+        std::fs::create_dir_all(&board).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let store = Store::new(board);
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let f = store.add_feature("demo", "Cart", "", "M", None).unwrap();
+        let list = store.add_todo_list("demo", &f.code, "w", None).unwrap();
+        store
+            .add_task("demo", &f.code, &list.code, "one", None)
+            .unwrap();
+        store
+            .set_task_state(
+                "demo",
+                &f.code,
+                &list.code,
+                "T1",
+                crate::models::TaskState::InProgress,
+            )
+            .unwrap();
+        let changed = last_task_change(store.load("demo").unwrap().feature(&f.code).unwrap())
+            .expect("the change is stamped");
+        let at = |hours: i64| {
+            (OffsetDateTime::parse(&changed, &Rfc3339).unwrap() + time::Duration::hours(hours))
+                .format(&Rfc3339)
+                .unwrap()
+        };
+        let git = |date: &str, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_AUTHOR_NAME", "T")
+                .env("GIT_AUTHOR_EMAIL", "t@x")
+                .env("GIT_COMMITTER_NAME", "T")
+                .env("GIT_COMMITTER_EMAIL", "t@x")
+                .env("GIT_COMMITTER_DATE", date)
+                .env("GIT_AUTHOR_DATE", date)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&at(-3), &["init", "-q", "-b", "main"]);
+        git(&at(-3), &["commit", "-q", "--allow-empty", "-m", "base"]);
+        git(&at(-3), &["branch", "sprint/SP-001", "main"]);
+        git(&at(-3), &["switch", "-q", "-c", "feat/FEAT-001-cart"]);
+        git(&at(-1), &["commit", "-q", "--allow-empty", "-m", "before"]);
+        let base = coderepo::rev_parse(&repo, "feat/FEAT-001-cart").unwrap();
+        git(&at(1), &["switch", "-q", "sprint/SP-001"]);
+        git(
+            &at(1),
+            &["commit", "-q", "--allow-empty", "-m", "sprint one"],
+        );
+        git(
+            &at(1),
+            &["commit", "-q", "--allow-empty", "-m", "sprint two"],
+        );
+        git(&at(1), &["switch", "-q", "feat/FEAT-001-cart"]);
+        git(
+            &at(1),
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                "Merge sprint/SP-001 into feat/FEAT-001-cart\n\nRefs: kanbanr:FEAT-001",
+                "sprint/SP-001",
+            ],
+        );
+
+        let mut s = scope(Role::Build);
+        s.project = "demo".into();
+        s.item = f.code.clone();
+        s.branch = Some("feat/FEAT-001-cart".into());
+        s.base = Some(base);
+        s.issued_at = at(-2);
+        save(&store, "demo", std::slice::from_ref(&s)).unwrap();
+
+        assert!(drift(&store, "demo", &repo, NOW).unwrap().is_empty());
+        let issues = drift_issues(&store, "demo", &repo, NOW);
+        assert!(
+            issues.iter().all(|i| !i.message.contains("commit(s)")),
+            "{issues:?}"
+        );
+
+        git(
+            &at(2),
+            &["commit", "-q", "--allow-empty", "-m", "after the catch-up"],
+        );
+        let found = drift(&store, "demo", &repo, NOW).unwrap();
+        assert_eq!(found.len(), 1, "{found:?}");
+        let subjects: Vec<&str> = found[0]
+            .commits
+            .iter()
+            .map(|c| c.subject.as_str())
+            .collect();
+        assert_eq!(subjects, ["after the catch-up"]);
+        assert!(
+            found[0].line().starts_with(
+                "FEAT-001: 1 commit(s) on feat/FEAT-001-cart since its tasks last changed at"
+            ),
+            "{}",
+            found[0].line()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

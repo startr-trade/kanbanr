@@ -146,16 +146,48 @@ pub fn derive(config: &ProjectConfig, sprints: &[Sprint], facts: &BranchFacts) -
     }
 }
 
-/// The model and the facts it was derived from, for a project and its repository.
-pub fn load(store: &Store, id: &str, repo: &Path) -> Result<(GitModel, BranchFacts)> {
-    let config = store.load_meta(id)?.config;
-    let sprints = crate::sprints::load(store, id)?;
-    let main = config
+/// The main branch: `cadence.main_branch` when set and not blank, else the repository's default
+/// branch (DEF-063).
+pub fn main_of(config: &ProjectConfig, repo: &Path) -> String {
+    config
         .cadence
         .main_branch
         .clone()
         .filter(|m| !m.trim().is_empty())
-        .unwrap_or_else(|| crate::coderepo::default_branch(repo));
+        .unwrap_or_else(|| crate::coderepo::default_branch(repo))
+}
+
+/// The lines of the model among `branches`, in map order: main, the integration branch, every
+/// sprint and release branch. By name, whatever the topology: a person can merge a line into an
+/// item branch by hand under any model (DEF-063).
+pub fn line_branches(
+    config: &ProjectConfig,
+    main: &str,
+    branches: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let integration = config
+        .cadence
+        .integration_branch
+        .clone()
+        .filter(|b| !b.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_INTEGRATION_BRANCH.to_string());
+    branches
+        .keys()
+        .filter(|b| {
+            b.as_str() == main
+                || **b == integration
+                || b.starts_with(SPRINT_PREFIX)
+                || b.starts_with(RELEASE_PREFIX)
+        })
+        .cloned()
+        .collect()
+}
+
+/// The model and the facts it was derived from, for a project and its repository.
+pub fn load(store: &Store, id: &str, repo: &Path) -> Result<(GitModel, BranchFacts)> {
+    let config = store.load_meta(id)?.config;
+    let sprints = crate::sprints::load(store, id)?;
+    let main = main_of(&config, repo);
     let facts = crate::coderepo::branch_facts(repo, &main)?;
     Ok((derive(&config, &sprints, &facts), facts))
 }
@@ -814,12 +846,7 @@ pub fn catch_up(store: &Store, id: &str, sprint: &str, repo: &Path) -> Result<Ve
     let config = &project.config;
     let sprints = crate::sprints::load(store, id)?;
     let line = sprint_branch(sprint);
-    let main = config
-        .cadence
-        .main_branch
-        .clone()
-        .filter(|m| !m.trim().is_empty())
-        .unwrap_or_else(|| crate::coderepo::default_branch(repo));
+    let main = main_of(config, repo);
     let facts = crate::coderepo::branch_facts(repo, &main)?;
     if !facts.branches.contains_key(&line) {
         return Ok(Vec::new());
@@ -920,12 +947,7 @@ pub fn sprint_close(
                 }
                 Some(_) => {}
             }
-            let main = config
-                .cadence
-                .main_branch
-                .clone()
-                .filter(|m| !m.trim().is_empty())
-                .unwrap_or_else(|| crate::coderepo::default_branch(repo));
+            let main = main_of(&config, repo);
             if !crate::coderepo::is_ancestor(repo, &main, &line) {
                 return Err(CoreError::Unsupported(format!(
                     "main has commits {line} lacks, so closing {code} cannot fast-forward it: merge \
@@ -1068,6 +1090,37 @@ mod tests {
         c.cadence.releases = releases;
         c.cadence.git_model = true;
         c
+    }
+
+    /// DEF-063 R-1: the lines of the model that exist, by name.
+    #[test]
+    fn line_branches_names_main_integration_sprints_and_releases_that_exist() {
+        let map = |names: &[&str]| -> BTreeMap<String, String> {
+            names.iter().map(|b| (b.to_string(), "0".into())).collect()
+        };
+        let all = map(&[
+            "main",
+            "develop",
+            "integration",
+            "sprint/SP-001",
+            "release/v0.1.0",
+            "feat/FEAT-001-x",
+        ]);
+        let mut c = ProjectConfig::default_for("p");
+        assert_eq!(
+            line_branches(&c, "main", &all),
+            ["integration", "main", "release/v0.1.0", "sprint/SP-001"]
+        );
+        c.cadence.integration_branch = Some("develop".into());
+        assert_eq!(
+            line_branches(&c, "main", &all),
+            ["develop", "main", "release/v0.1.0", "sprint/SP-001"]
+        );
+        assert_eq!(
+            line_branches(&c, "main", &map(&["feat/A", "sprint/SP-001"])),
+            ["sprint/SP-001"]
+        );
+        assert!(line_branches(&c, "main", &BTreeMap::new()).is_empty());
     }
 
     fn sprint(code: &str, state: SprintState) -> Sprint {
