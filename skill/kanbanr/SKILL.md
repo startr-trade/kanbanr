@@ -111,14 +111,20 @@ project"** (or anything equivalent):
      and the built-in processes come after them. A team's agreed process is usually the answer;
      recommend it when the board has one.
    - *Workflow*: a preset (`kanbanr config workflow --preset list` describes them):
-     - **default**: Planned → In Progress → Completed, plus Deferred and Ongoing.
-     - **scheduled**: Planned → Scheduled → Completed.
+     - **agile** (recommended for a new project): Plan → Design → Develop → Test → Review →
+       Released.
      - **togaf**: architecture phases, where the definition grows phase by phase.
-     - **pdca**: Plan → Do → Check → Act.
-     - **design-control**: modelled on ISO 9001 §8.3, with sign-offs.
      - **scrum**: Backlog → Ready → In Progress → Review → Testing → Done → Released, worked in
        sprints. Ready is the Definition of Ready, and Done is the Definition of Done.
-     - **agile**: Plan → Design → Develop → Test → Review → Released.
+     - **default**: Planned → In Progress → Completed, plus Deferred and Ongoing.
+     - **scheduled**: Planned → Scheduled → Completed.
+     - **pdca**: Plan → Do → Check → Act.
+     - **design-control**: modelled on ISO 9001 §8.3, with sign-offs.
+
+     Recommend **agile** for a new project: it asked the person for the fewest decisions in the
+     TOGAF-and-agile walkthrough (`notes/developer-path-togaf-vs-agile.md` on the kanbanr board).
+     Offer TOGAF, Scrum and the rest as the other options, and never drop them. A saved process of
+     the board or the person stays the first option when one exists (a team's agreed process wins).
 
      Or **"our own process"**: design it with the user now — see "Designing a process with the
      user" — and the plan saves it and applies it. An organisation's existing process file is
@@ -883,7 +889,8 @@ branches; fix it before going on.
   or a promotion says it is needed (`next, for Claude: …`), run `kanbanr git forward <V>` yourself
   at once, and tell the user what merged: from, into, the commit. It is a local merge; the user
   still pushes. If it reports a conflict, nothing changed: say which files conflict and ask how
-  to resolve them. Never hand the user the command.
+  to resolve them. Never hand the user the command. A patch starts at candidate when created; tell
+  the person, and ask for the confirmation in conversation.
 - In the sprints-only model, `kanbanr sprint close <SP>` is the cut: main fast-forwards to
   `sprint/<SP>`, tagged with the sprint's code.
 - **Designing CI or a release workflow.** When the user asks for a pipeline, design it as
