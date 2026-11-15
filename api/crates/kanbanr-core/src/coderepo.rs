@@ -210,13 +210,8 @@ pub fn delete_branch(root: &Path, name: &str) -> Result<()> {
     git(root, &["branch", "-D", name]).map(|_| ())
 }
 
-/// The local branches with their tips, and which of them `main` already contains (FEAT-189): one
-/// `for-each-ref` and one `branch --merged`.
-pub fn branch_facts(root: &Path, main: &str) -> Result<crate::gitmodel::BranchFacts> {
-    let mut facts = crate::gitmodel::BranchFacts {
-        main: main.to_string(),
-        ..Default::default()
-    };
+/// The local branches with their tips: name to sha, from one `for-each-ref` (DEF-063).
+pub fn local_branches(root: &Path) -> Result<std::collections::BTreeMap<String, String>> {
     let refs = git(
         root,
         &[
@@ -225,11 +220,21 @@ pub fn branch_facts(root: &Path, main: &str) -> Result<crate::gitmodel::BranchFa
             "refs/heads",
         ],
     )?;
-    for line in refs.lines() {
-        if let Some((name, sha)) = line.rsplit_once(' ') {
-            facts.branches.insert(name.to_string(), sha.to_string());
-        }
-    }
+    Ok(refs
+        .lines()
+        .filter_map(|l| l.rsplit_once(' '))
+        .map(|(n, s)| (n.to_string(), s.to_string()))
+        .collect())
+}
+
+/// The local branches with their tips, and which of them `main` already contains (FEAT-189): one
+/// `for-each-ref` and one `branch --merged`.
+pub fn branch_facts(root: &Path, main: &str) -> Result<crate::gitmodel::BranchFacts> {
+    let mut facts = crate::gitmodel::BranchFacts {
+        main: main.to_string(),
+        ..Default::default()
+    };
+    facts.branches = local_branches(root)?;
     if facts.branches.contains_key(main) {
         let merged = git(
             root,
@@ -469,11 +474,24 @@ pub fn worktree_facts(cwd: &Path) -> Option<crate::agentscope::WorktreeFacts> {
     })
 }
 
-/// The commits of `range` committed after `since` (an RFC3339 instant), newest first (FEAT-214:
-/// agent drift). Compared as instants here rather than by `git log --since`, which reads only to
-/// the second and parses fractions loosely.
-pub fn commits_since(root: &Path, range: &str, since: &str) -> Result<Vec<Commit>> {
-    let out = git(root, &["log", "--format=%H%x1f%cI%x1f%s%x1f%B%x1e", range])?;
+/// The non-merge commits of `head` that none of `excluding` reaches, committed after `since` (an
+/// RFC3339 instant), newest first (FEAT-214: agent drift; DEF-063). Compared as instants here
+/// rather than by `git log --since`, which reads only to the second and parses fractions loosely.
+pub fn work_since(
+    root: &Path,
+    head: &str,
+    excluding: &[String],
+    since: &str,
+) -> Result<Vec<Commit>> {
+    let mut args = vec![
+        "log".to_string(),
+        "--no-merges".to_string(),
+        "--format=%H%x1f%cI%x1f%s%x1f%B%x1e".to_string(),
+        head.to_string(),
+    ];
+    args.extend(excluding.iter().map(|e| format!("^{e}")));
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = git(root, &args)?;
     Ok(out
         .split('\u{1e}')
         .map(str::trim)
@@ -850,6 +868,47 @@ pub(crate) mod tests {
         std::fs::write(repo.join(file), content).unwrap();
         git(repo, &["add", file]).unwrap();
         git(repo, &["commit", "-q", "-m", message]).unwrap();
+    }
+
+    /// DEF-063 R-1, R-2: a branch's own non-merge commits, not a catch-up merge or what it brought.
+    #[test]
+    fn work_since_counts_only_a_branchs_own_non_merge_commits() {
+        let repo = scratch_repo("work-since");
+        create_branch_from(&repo, "sprint/SP-001", "main").unwrap();
+        create_branch_from(&repo, "feat/A", "main").unwrap();
+        git(&repo, &["checkout", "-q", "sprint/SP-001"]).unwrap();
+        commit_file(&repo, "s.txt", "s\n", "sprint work");
+        git(&repo, &["checkout", "-q", "feat/A"]).unwrap();
+        commit_file(&repo, "a.txt", "a\n", "item one");
+        merge_no_ff(&repo, "feat/A", "sprint/SP-001", "Merge sprint into A").unwrap();
+        let since = "2000-01-01T00:00:00Z";
+        let subjects = |ex: &[&str]| -> Vec<String> {
+            let ex: Vec<String> = ex.iter().map(|s| s.to_string()).collect();
+            work_since(&repo, "feat/A", &ex, since)
+                .unwrap()
+                .into_iter()
+                .map(|c| c.subject)
+                .collect()
+        };
+        assert_eq!(subjects(&["main", "sprint/SP-001"]), vec!["item one"]);
+        let mut both = subjects(&["main"]);
+        both.sort();
+        assert_eq!(both, vec!["item one", "sprint work"]);
+        commit_file(&repo, "b.txt", "b\n", "item two");
+        assert_eq!(
+            subjects(&["main", "sprint/SP-001"]),
+            vec!["item two", "item one"]
+        );
+        let branches = local_branches(&repo).unwrap();
+        assert_eq!(
+            branches.keys().cloned().collect::<Vec<_>>(),
+            vec!["feat/A", "main", "sprint/SP-001"]
+        );
+        assert_eq!(
+            branches["feat/A"],
+            git(&repo, &["rev-parse", "feat/A"]).unwrap().trim()
+        );
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     /// DEF-033 R-2: the files a branch changed since the merge base, not what the line gained
