@@ -1,66 +1,31 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useLocation } from "react-router-dom";
-import { api } from "./api";
 import { type BoardIndex, makeIndex } from "./boardRefs";
-import type { DocFolder } from "./types";
+import { useQuery } from "./data/useQuery";
+import { TAGS, urls } from "./data/urls";
+import type { CompactIndex } from "./types";
 
 /**
  * What a project's references can point at, for linking its markdown (FEAT-181). Built from the
- * routes the monitor already reads, once per project and shared by every `Markdown` on the page;
- * refetched when older than a few seconds, so a new item soon links without a live connection per
- * rendered block.
+ * project's compact index (DEF-081), read once through the shared cache however many `Markdown`
+ * blocks ask, and re-read when a live change names one of the index's tags, so a new item soon
+ * links without a timer or a whole-board fetch.
  */
-const FRESH_MS = 5000;
-const cache = new Map<string, { at: number; index: Promise<BoardIndex | null> }>();
-
-function docPaths(folder: DocFolder): string[] {
-  return [...folder.docs.map((d) => d.path), ...folder.folders.flatMap(docPaths)];
-}
-
-async function load(project: string): Promise<BoardIndex | null> {
-  try {
-    const [p, charter, adrs, docs] = await Promise.all([
-      api.getProject(project),
-      api.getCharter(project).catch(() => null),
-      api.getAdrs(project).catch(() => []),
-      api.getDocTree(project).catch(() => null),
-    ]);
-    return makeIndex({
-      project,
-      items: p.features.map((f) => ({
-        code: f.code,
-        requirements: (f.definition?.requirements ?? []).map((r) => r.id),
-      })),
-      milestones: p.milestones.map((m) => m.code),
-      adrs: adrs.filter((a) => a.path).map((a) => ({ id: a.id, path: a.path as string })),
-      goals: (charter?.goals ?? []).map((g) => g.id),
-      docs: docs ? docPaths(docs) : [],
-      codes: p.config.codes,
-    });
-  } catch {
-    return null;
-  }
-}
-
 export function useBoardIndex(project: string | undefined): BoardIndex | null {
-  const [index, setIndex] = useState<BoardIndex | null>(null);
-  useEffect(() => {
-    if (!project) {
-      setIndex(null);
-      return;
-    }
-    let entry = cache.get(project);
-    if (!entry || Date.now() - entry.at > FRESH_MS) {
-      entry = { at: Date.now(), index: load(project) };
-      cache.set(project, entry);
-    }
-    let live = true;
-    entry.index.then((i) => live && setIndex(i));
-    return () => {
-      live = false;
-    };
-  }, [project]);
-  return index;
+  const p = project ?? null;
+  const { data } = useQuery<CompactIndex>(p, p ? urls.index(p) : null, TAGS.index);
+  return useMemo(() => {
+    if (!p || !data) return null;
+    return makeIndex({
+      project: p,
+      items: data.items.map((i) => ({ code: i.code, requirements: i.requirements ?? [] })),
+      milestones: data.milestones.map((m) => m.code),
+      adrs: (data.adrs ?? []).filter((a) => a.path).map((a) => ({ id: a.id, path: a.path })),
+      goals: data.goals.map((g) => g.id),
+      docs: data.docs,
+      codes: data.config.codes,
+    });
+  }, [p, data]);
 }
 
 /** Bring `#R-3` or `#G-1` into view once the page has drawn it — the router does not scroll. */

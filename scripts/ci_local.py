@@ -102,6 +102,8 @@ PLAN: dict[str, dict[str, dict[str, str]]] = {
             "A prepared answer shows its outcome once": LOCAL,
             "The Workflow page shows the cadence, the git model and the guard rails": LOCAL,
             "The monitor shows agent scopes and who made each change": LOCAL,
+            "Live updates settle before the monitor refetches": LOCAL,
+            "The monitor's data cache shares reads and re-reads only changed slices": LOCAL,
             "The monitor's types match the published API": LOCAL,
         },
         "vscode": {
