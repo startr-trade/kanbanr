@@ -110,6 +110,7 @@ pub fn is_verdict_route(method: &str, path: &str) -> bool {
             | ["projects", _, "gate-results"]
             | ["projects", _, "prepared", _, "confirm" | "reject"]
             | ["projects", _, "prepared", "batch", _, "confirm" | "reject"]
+            | ["projects", _, "review", "decide"]
     )
 }
 
@@ -171,11 +172,14 @@ pub enum Verdict {
     GrantDelegation,
     /// Keeping or undoing a delegated decision (FTR-028).
     ReviewDecision,
+    /// One decision for several rows of a Review page group (FTR-038): each row's own verdict,
+    /// in one commit. The person's alone in every mode.
+    GroupDecision,
 }
 
 impl Verdict {
     /// Every verdict, for a check that must cover them all.
-    pub const ALL: [Verdict; 17] = [
+    pub const ALL: [Verdict; 18] = [
         Verdict::Approve,
         Verdict::Ratify,
         Verdict::Unapprove,
@@ -193,6 +197,7 @@ impl Verdict {
         Verdict::SetDecisionMode,
         Verdict::GrantDelegation,
         Verdict::ReviewDecision,
+        Verdict::GroupDecision,
     ];
 
     /// Is this verdict taken on the Releases page (rather than the Review page)?
@@ -272,6 +277,18 @@ pub fn verdict_refusal(verdict: Verdict, taker: Taker, ctx: &DecisionContext) ->
             )),
         };
     }
+    // A group decision is the person's in every mode (FTR-038): no delegation covers it as a
+    // whole, and each verdict it expands into is judged on its own by the write path.
+    if verdict == Verdict::GroupDecision {
+        return match taker {
+            Taker::Person => None,
+            Taker::Claude => Some(format!(
+                "a verdict is the person's own, recorded on the monitor, never by Claude \
+                 (FTR-024). {PREPARE_INSTEAD} A group decision on the Review page is the \
+                 person's in every mode: link them the group (FTR-038)."
+            )),
+        };
+    }
     let (Some(d), Some(project)) = (ctx.decisions, ctx.project) else {
         return match taker {
             Taker::Person => None,
@@ -335,6 +352,8 @@ pub fn verdict_of_route(method: &str, path: &str) -> Option<Verdict> {
         // A whole batch at once (FTR-037): the same verdicts, the person's alone.
         ("POST", ["projects", _, "prepared", "batch", _, "confirm"]) => Verdict::ConfirmPrepared,
         ("POST", ["projects", _, "prepared", "batch", _, "reject"]) => Verdict::RejectPrepared,
+        // One decision for several rows of a Review group (FTR-038).
+        ("POST", ["projects", _, "review", "decide"]) => Verdict::GroupDecision,
         _ => return None,
     })
 }
@@ -745,6 +764,89 @@ mod tests {
             .expect("Claude is refused the undo");
         assert!(why.contains("kanbanr prepare"), "{why}");
         assert_eq!(verdict_refusal(verdict, Taker::Person, &ctx), None);
+    }
+
+    /// FTR-038 R-4: a group decision is a verdict route, stamped with its origin, and refused to
+    /// Claude in every mode, a granted delegation for every verdict included; a person is never
+    /// refused it.
+    #[test]
+    fn a_group_decision_is_a_verdict_refused_to_claude() {
+        let route = "/projects/demo/review/decide";
+        assert_eq!(
+            verdict_of_route("POST", route),
+            Some(Verdict::GroupDecision)
+        );
+        assert_eq!(verdict_of_route("GET", route), None);
+        assert!(is_verdict_route("POST", route));
+        assert!(!is_verdict_route("GET", route));
+        assert!(stamps_origin("POST", route));
+        assert!(!is_verdict_route("POST", "/projects/demo/review"));
+        assert!(Verdict::ALL.contains(&Verdict::GroupDecision));
+        assert_eq!(
+            Verdict::ALL.len(),
+            Verdict::ALL
+                .iter()
+                .filter(|v| **v != Verdict::GroupDecision)
+                .count()
+                + 1
+        );
+
+        // Run by Claude (CLAUDECODE set), as the sibling tests read it.
+        let claude = Origin::of_cli_in(|k| (k == "CLAUDECODE").then(|| "1".to_string()));
+        assert_eq!(Taker::of_origin(claude), Taker::Claude);
+
+        let (store, dir) = board();
+        let project = store.load_meta("demo").unwrap();
+        let ctx = DecisionContext::monitor_mode();
+        let why = verdict_refusal(Verdict::GroupDecision, Taker::of_origin(claude), &ctx)
+            .expect("Claude is refused a group decision");
+        assert!(why.contains("kanbanr prepare"), "{why}");
+        assert_eq!(
+            verdict_refusal(Verdict::GroupDecision, Taker::Person, &ctx),
+            None
+        );
+        let body = json!({"by": "Claude", "delegation": "DLG-001", "group": "approve"});
+        for mode in ["monitor", "delegated", "conversation"] {
+            let d: crate::decisions::Decisions = crate::yaml::from_str(&format!(
+                "modes:\n- {{mode: {mode}, by: Ada, at: '2026-11-01T00:00:00Z', origin: monitor}}\n\
+                 delegations:\n- id: DLG-001\n  verdicts: [approve, ratify]\n  all: true\n  \
+                 until: '2099-01-01T00:00:00Z'\n  \
+                 proposed: {{by: Claude, at: '2026-11-01T00:00:00Z', origin: conversation}}\n  \
+                 granted: {{by: Ada, at: '2026-11-01T00:00:00Z', origin: monitor}}\n"
+            ))
+            .unwrap();
+            for origin in [Origin::Conversation, Origin::Delegated] {
+                let ctx = DecisionContext {
+                    decisions: Some(&d),
+                    project: Some(&project),
+                    method: "POST",
+                    path: route,
+                    body: Some(&body),
+                    origin: Some(origin),
+                    now: "2026-11-17T00:00:00Z".into(),
+                };
+                let why = verdict_refusal(Verdict::GroupDecision, Taker::of_origin(origin), &ctx)
+                    .unwrap_or_else(|| panic!("{mode}/{origin:?}: Claude took a group decision"));
+                assert!(why.contains("group decision"), "{mode}: {why}");
+            }
+            for origin in [Origin::Monitor, Origin::Terminal] {
+                let ctx = DecisionContext {
+                    decisions: Some(&d),
+                    project: Some(&project),
+                    method: "POST",
+                    path: route,
+                    body: Some(&body),
+                    origin: Some(origin),
+                    now: "2026-11-17T00:00:00Z".into(),
+                };
+                assert_eq!(
+                    verdict_refusal(Verdict::GroupDecision, Taker::Person, &ctx),
+                    None,
+                    "{mode}/{origin:?}"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     // ---- a scratch board -----------------------------------------------------------------

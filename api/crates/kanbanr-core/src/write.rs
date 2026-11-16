@@ -13,7 +13,7 @@
 use crate::agentscope::{self, ProcessScope};
 use crate::git::{self, PushPolicy};
 use crate::origin::{self, DecisionContext, Origin, Taker, Verdict};
-use crate::{CoreError, Store, activity, decisions, dispatch, eventing, prepared};
+use crate::{CoreError, Store, activity, decisions, dispatch, eventing, prepared, reviewgroups};
 use serde_json::Value;
 use std::path::Path;
 
@@ -281,6 +281,13 @@ pub fn apply_as(
                 store, data_dir, policy, &project, &batch, path, body, repo, sender, scope, origin,
             );
         }
+        // One decision for several rows of a Review group (FTR-038): each row's own verdict,
+        // through its own route, all in one commit.
+        if let Some(project) = reviewgroups::decide_route(method, path) {
+            return decide_group(
+                store, data_dir, policy, &project, path, body, repo, sender, scope, origin,
+            );
+        }
         // Who may take a verdict is decided here, under the lock, by the one guard, against the
         // project's decision mode and delegations (FTR-028): a revoke and a delegated verdict are
         // ordered by the lock. Answering a prepared record is the person's alone (FTR-034).
@@ -464,8 +471,8 @@ pub fn apply_as(
 
 /// Confirm every open record of a batch (FTR-037 R-5), under the lock the caller holds: the
 /// person's guard first, then every record is expanded before anything is written (a record that
-/// cannot be — stale, answered — refuses the whole batch); then each verdict is dispatched through
-/// its own route and its answer kept, one activity entry and one commit for the lot. A verdict the
+/// cannot be — stale, answered — refuses the whole batch); then [`apply_verdict_ops`] makes each
+/// verdict through its own route, one activity entry and one commit for the lot. A verdict the
 /// board refuses is reported in that record's `error` and the rest still go through.
 #[allow(clippy::too_many_arguments)]
 fn confirm_batch(
@@ -496,15 +503,93 @@ fn confirm_batch(
     }
     let empty = Value::Object(Default::default());
     let body = body.unwrap_or(&empty);
-    let mut expanded = Vec::with_capacity(open.len());
+    let mut ops = Vec::with_capacity(open.len());
     for v in &open {
-        expanded.push(
-            prepared::expand(store, project, &v.record.id, body, origin)
-                .map_err(WriteError::Core)?,
-        );
+        let e = prepared::expand(store, project, &v.record.id, body, origin)
+            .map_err(WriteError::Core)?;
+        ops.push(reviewgroups::VerdictOp {
+            key: v.record.id.clone(),
+            method: e.method,
+            path: e.path,
+            body: e.body,
+            resolution: Some(e.resolution),
+        });
     }
-    let mut results = Vec::with_capacity(expanded.len());
-    for (view, e) in open.iter().zip(expanded) {
+    let made: Vec<String> = ops
+        .iter()
+        .map(|op| {
+            op.resolution
+                .as_ref()
+                .map(|r| r.made.clone())
+                .unwrap_or_default()
+        })
+        .collect();
+    apply_verdict_ops(
+        store,
+        data_dir,
+        policy,
+        project,
+        path,
+        ops,
+        repo,
+        sender,
+        scope,
+        origin,
+        |outcomes| {
+            let results: Vec<prepared::Resolved> = open
+                .iter()
+                .zip(outcomes)
+                .zip(made)
+                .map(|((view, o), made)| prepared::Resolved {
+                    id: view.record.id.clone(),
+                    kind: view.record.kind.clone(),
+                    verdict: prepared::Answer::Confirmed,
+                    made,
+                    error: o.error.clone(),
+                })
+                .collect();
+            let done = results.iter().filter(|r| r.error.is_none()).count();
+            let msg = format!(
+                "confirm prepared batch {batch} ({done} of {} record(s))",
+                results.len()
+            );
+            (
+                serde_json::json!({"batch": batch, "results": results}).to_string(),
+                msg,
+            )
+        },
+    )
+}
+
+/// What one verdict of a multi-verdict write did.
+struct OpOutcome {
+    /// The route it made, `POST /projects/…`.
+    made: String,
+    /// Why it could not be made; the rest still were.
+    error: Option<String>,
+}
+
+/// Make each verdict in `ops` through its own route, under the lock the caller holds: each is
+/// judged by [`judge`] as the person (or under a delegation), stamped with its origin, dispatched,
+/// and its prepared record resolved when it has one. A verdict the board refuses is kept in that
+/// op's outcome and the rest still go through. `answer` turns the outcomes into the response body
+/// and the commit message; then one activity entry and one commit for the lot (FTR-037, FTR-038).
+#[allow(clippy::too_many_arguments)]
+fn apply_verdict_ops(
+    store: &Store,
+    data_dir: &Path,
+    policy: PushPolicy,
+    project: &str,
+    path: &str,
+    ops: Vec<reviewgroups::VerdictOp>,
+    repo: Option<&Path>,
+    sender: &dyn eventing::WebhookSender,
+    scope: &ProcessScope,
+    origin: Origin,
+    answer: impl FnOnce(&[OpOutcome]) -> (String, String),
+) -> Result<Applied, WriteError> {
+    let mut results = Vec::with_capacity(ops.len());
+    for e in ops {
         let outcome = match judge(store, &e.method, &e.path, Some(&e.body), origin) {
             Err(why) => Err(why.to_string()),
             Ok(under) => {
@@ -523,26 +608,20 @@ fn confirm_batch(
                 let verdict_body = stamped.as_ref().unwrap_or(&e.body);
                 dispatch::dispatch_in(store, &e.method, &e.path, Some(verdict_body), repo)
                     .map_err(|err| err.to_string())
-                    .and_then(|_| {
-                        prepared::resolve(store, project, &e.resolution)
-                            .map_err(|err| err.to_string())
+                    .and_then(|_| match &e.resolution {
+                        Some(r) => {
+                            prepared::resolve(store, project, r).map_err(|err| err.to_string())
+                        }
+                        None => Ok(()),
                     })
             }
         };
-        results.push(prepared::Resolved {
-            id: view.record.id.clone(),
-            kind: view.record.kind.clone(),
-            verdict: prepared::Answer::Confirmed,
-            made: e.resolution.made.clone(),
+        results.push(OpOutcome {
+            made: format!("{} {}", e.method, e.path),
             error: outcome.err(),
         });
     }
-    let done = results.iter().filter(|r| r.error.is_none()).count();
-    let out = serde_json::json!({"batch": batch, "results": results}).to_string();
-    let msg = format!(
-        "confirm prepared batch {batch} ({done} of {} record(s))",
-        results.len()
-    );
+    let (out, msg) = answer(&results);
     let scoped = match scope {
         ProcessScope::Scoped(s) => Some(s),
         _ => None,
@@ -589,6 +668,76 @@ fn confirm_batch(
     }
     eventing::deliver_all(data_dir, &events, sender);
     Ok(applied)
+}
+
+/// One decision for the selected rows of one Review group (FTR-038 R-3, R-4), under the lock the
+/// caller holds: refused to Claude in every mode; then [`reviewgroups::ops`] reads the group as it
+/// is now and builds each row's own verdict (refusing the whole request, with nothing written,
+/// when a row is no longer waiting or the rows would make different verdicts); then
+/// [`apply_verdict_ops`] records them, one commit. The answer is `{group, action, results:
+/// [{key, made?, error?}]}`.
+#[allow(clippy::too_many_arguments)]
+fn decide_group(
+    store: &Store,
+    data_dir: &Path,
+    policy: PushPolicy,
+    project: &str,
+    path: &str,
+    body: Option<&Value>,
+    repo: Option<&Path>,
+    sender: &dyn eventing::WebhookSender,
+    scope: &ProcessScope,
+    origin: Origin,
+) -> Result<Applied, WriteError> {
+    if let Some(why) = origin::verdict_refusal(
+        Verdict::GroupDecision,
+        Taker::of_origin(origin),
+        &DecisionContext::monitor_mode(),
+    ) {
+        return Err(WriteError::Refused(format!("refused: {why}")));
+    }
+    let d: reviewgroups::GroupDecision = serde_json::from_value(
+        body.cloned()
+            .unwrap_or_else(|| Value::Object(Default::default())),
+    )
+    .map_err(|e| {
+        WriteError::Core(CoreError::Unsupported(format!(
+            "a group decision is {{group, action, by, target?, items: [{{key, code, rev, \
+             spec_rev, …}}]}}: {e}"
+        )))
+    })?;
+    let ops = reviewgroups::ops(store, project, &d, origin).map_err(WriteError::Core)?;
+    let keys: Vec<String> = ops.iter().map(|op| op.key.clone()).collect();
+    let (group, action) = (d.group.clone(), d.action.trim().to_string());
+    apply_verdict_ops(
+        store,
+        data_dir,
+        policy,
+        project,
+        path,
+        ops,
+        repo,
+        sender,
+        scope,
+        origin,
+        |outcomes| {
+            let results: Vec<Value> = keys
+                .iter()
+                .zip(outcomes)
+                .map(|(key, o)| match &o.error {
+                    Some(err) => serde_json::json!({"key": key, "error": err}),
+                    None => serde_json::json!({"key": key, "made": o.made}),
+                })
+                .collect();
+            let done = outcomes.iter().filter(|o| o.error.is_none()).count();
+            let msg = format!("decide {group}: {action} ({done} of {})", outcomes.len());
+            (
+                serde_json::json!({"group": group, "action": action, "results": results})
+                    .to_string(),
+                msg,
+            )
+        },
+    )
 }
 
 /// The one guard over a request (FTR-028): `Err` is its refusal; `Ok(Some(DLG-n))` says the
@@ -1416,5 +1565,159 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// FTR-038 R-3: three approvals in one group decision make three approval records, each at
+    /// the revision the page showed and stamped as the monitor's, in exactly one new board commit;
+    /// a row whose definition changed after it was shown is reported, and the other two land.
+    #[test]
+    fn a_group_decision_records_one_verdict_per_item_in_one_commit() {
+        let dir = std::env::temp_dir().join(format!("kanbanr-write-group-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = std::fs::canonicalize(&dir).unwrap();
+        assert!(
+            root.starts_with(std::fs::canonicalize(std::env::temp_dir()).unwrap()),
+            "a test board lives in the temp dir (L-41): {}",
+            root.display()
+        );
+        git::ensure_repo_as(&dir, Some(("Ada", "ada@example.com")));
+        let store = Store::new(dir.clone());
+        store
+            .init_project("demo", crate::ProjectConfig::default_for("demo"))
+            .unwrap();
+        store
+            .add_milestone("demo", "M", "", vec![], Some("M".into()))
+            .unwrap();
+        let mut codes = Vec::new();
+        for title in ["One", "Two", "Three"] {
+            let f = store.add_feature("demo", title, "", "M", None).unwrap();
+            store
+                .set_feature_definition(
+                    "demo",
+                    &f.code,
+                    Some(crate::models::FeatureDefinition {
+                        statement: format!("{title} is agreed"),
+                        ..Default::default()
+                    }),
+                )
+                .unwrap();
+            codes.push(f.code);
+        }
+        assert!(git::commit_local(&dir, "board"));
+        let slice = reviewgroups::slice(&store, "demo", "approve", None).unwrap();
+        assert_eq!(slice.rows.len(), 3, "{slice:?}");
+        let commits = |dir: &Path| {
+            crate::coderepo::git(dir, &["rev-list", "--count", "HEAD"])
+                .unwrap()
+                .trim()
+                .parse::<usize>()
+                .unwrap()
+        };
+        let before = commits(&dir);
+        // The third is shown at a revision its definition has since moved on from.
+        let items: Vec<Value> = slice
+            .rows
+            .iter()
+            .map(|r| {
+                let rev = if r.code == codes[2] {
+                    "0000000".to_string()
+                } else {
+                    r.rev.clone()
+                };
+                json!({"key": r.key, "code": r.code, "rev": rev})
+            })
+            .collect();
+        let out = apply_as(
+            &store,
+            &dir,
+            PushPolicy::Off,
+            "POST",
+            "/projects/demo/review/decide",
+            Some(&json!({"group": "approve", "action": "Approve", "by": "Ada", "items": items})),
+            None,
+            &eventing::NullSender,
+            &ProcessScope::Unscoped,
+            Origin::Monitor,
+        )
+        .unwrap();
+        let answer: Value = serde_json::from_str(&out.body).unwrap();
+        assert_eq!(
+            (answer["group"].as_str(), answer["action"].as_str()),
+            (Some("approve"), Some("Approve"))
+        );
+        let results = answer["results"].as_array().unwrap();
+        assert_eq!(results.len(), 3, "{answer}");
+        for r in results {
+            let key = r["key"].as_str().unwrap();
+            if key == codes[2] {
+                assert!(
+                    r["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains("changed after it was shown"),
+                    "{r}"
+                );
+                assert!(r.get("made").is_none(), "{r}");
+            } else {
+                assert_eq!(
+                    r["made"],
+                    Value::String(format!("POST /projects/demo/features/{key}/approve")),
+                    "{r}"
+                );
+            }
+        }
+        assert_eq!(commits(&dir), before + 1, "one press, one commit");
+        let project = store.load("demo").unwrap();
+        for row in &slice.rows {
+            let def = project
+                .feature(&row.code)
+                .unwrap()
+                .definition
+                .clone()
+                .unwrap();
+            if row.code == codes[2] {
+                assert!(def.approval.is_none(), "the stale row was approved");
+                continue;
+            }
+            let a = def.approval.expect("approved");
+            assert_eq!((a.by.as_str(), a.origin.as_str()), ("Ada", "monitor"));
+            assert_eq!(a.rev, row.rev, "each verdict pins its own revision");
+        }
+        let log = crate::coderepo::git(&dir, &["log", "-1", "--format=%B"]).unwrap();
+        assert!(log.starts_with("decide approve: Approve (2 of 3)"), "{log}");
+        assert!(log.contains("Kanbanr-Origin: monitor"), "{log}");
+
+        // Claude is refused it whole, and nothing is written.
+        let again = slice.rows[2].clone();
+        let before = commits(&dir);
+        let e = apply_as(
+            &store,
+            &dir,
+            PushPolicy::Off,
+            "POST",
+            "/projects/demo/review/decide",
+            Some(
+                &json!({"group": "approve", "action": "Approve", "by": "Claude",
+                         "items": [{"key": again.key, "code": again.code, "rev": again.rev}]}),
+            ),
+            None,
+            &eventing::NullSender,
+            &ProcessScope::Unscoped,
+            Origin::Conversation,
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("refused"), "{e}");
+        assert_eq!(commits(&dir), before);
+        // Outside the write path the route only says where it is taken.
+        let e = dispatch::dispatch(
+            &store,
+            "POST",
+            "/projects/demo/review/decide",
+            Some(&json!({"group": "approve"})),
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("write path"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
