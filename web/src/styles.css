@@ -9,7 +9,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font: var(--fs-2)/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 a { color: var(--accent); text-decoration: none; }
@@ -30,7 +30,7 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   top: 0;
   z-index: 10;
 }
-.brand a { font-weight: 700; color: var(--text); font-size: 16px; display: inline-flex; align-items: center; gap: 8px; }
+.brand a { font-weight: 700; color: var(--text); font-size: var(--fs-3); display: inline-flex; align-items: center; gap: 8px; }
 /* The k-mark (FEAT-133): a column of three cards for the stem, the thread for the arms. */
 .brand-mark { width: 22px; height: 22px; flex: none; }
 .brand-mark .card { fill: var(--panel); stroke: var(--brand-ink); stroke-width: 9; }
@@ -57,7 +57,7 @@ code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   border-radius: 8px;
   width: 34px;
   height: 30px;
-  font-size: 15px;
+  font-size: var(--fs-3);
   line-height: 1;
   cursor: pointer;
   flex: none;
@@ -87,13 +87,13 @@ input:focus-visible,
 .content:has(> .board-page) { max-width: none; }
 
 .page-head { display: flex; align-items: center; gap: 12px; }
-.page-head h1 { font-size: 22px; margin: 0 0 4px; }
+.page-head h1 { font-size: var(--fs-5); margin: 0 0 4px; }
 .muted { color: var(--muted); }
-.small { font-size: 12px; }
+.small { font-size: var(--fs-1); }
 .pad { padding: 10px 0; }
 .error { color: #ff7b72; }
 .spacer { flex: 1; }
-.build { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.build { font-size: var(--fs-1); color: var(--muted); white-space: nowrap; }
 
 .livedot {
   width: 9px; height: 9px; border-radius: 50%;
@@ -123,8 +123,8 @@ input:focus-visible,
   border-radius: var(--radius);
   padding: 16px;
 }
-.tile-title { font-size: 16px; font-weight: 700; color: var(--text); }
-.tile-desc { margin: 0; color: var(--muted); font-size: 13px; }
+.tile-title { font-size: var(--fs-3); font-weight: 700; color: var(--text); }
+.tile-desc { margin: 0; color: var(--muted); font-size: var(--fs-1); }
 .tile-primary { font-weight: 600; }
 .tile-states { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .statelink {
@@ -132,13 +132,13 @@ input:focus-visible,
   border: 1px solid var(--border);
   border-radius: 20px;
   padding: 3px 10px;
-  font-size: 12px;
+  font-size: var(--fs-1);
   color: var(--text);
 }
 .statelink b { color: var(--accent); margin-left: 3px; }
 .statelink.noop { border-style: dashed; color: var(--muted); }
 .tile-states.other { margin-top: -2px; opacity: 0.85; }
-.tile-states.other .statelink { font-size: 11px; }
+.tile-states.other .statelink { font-size: var(--fs-1); }
 .other-states {
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border);
@@ -149,7 +149,7 @@ input:focus-visible,
 }
 .folder-tile { text-decoration: none; }
 .folder-tile:hover { border-color: var(--accent); text-decoration: none; }
-.folder-icon { font-size: 22px; }
+.folder-icon { font-size: var(--fs-5); }
 
 /* ---- board ---- */
 .board {
@@ -170,7 +170,7 @@ input:focus-visible,
 .column-head:hover { color: var(--accent); text-decoration: none; }
 .column-head .count {
   background: var(--panel-2); color: var(--muted);
-  border-radius: 12px; padding: 0 8px; font-size: 12px; font-weight: 600;
+  border-radius: 12px; padding: 0 8px; font-size: var(--fs-1); font-weight: 600;
 }
 .column-body { padding: 10px; display: flex; flex-direction: column; gap: 10px; min-height: 40px; }
 
@@ -183,13 +183,13 @@ input:focus-visible,
   color: var(--text);
 }
 .card:hover { border-color: var(--accent); text-decoration: none; }
-.card-code { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }
+.card-code { font-size: var(--fs-1); color: var(--muted); font-family: ui-monospace, monospace; }
 .card-title { font-weight: 600; margin: 2px 0 6px; }
 .card-meta { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .chip {
   background: var(--panel-2); border: 1px solid var(--border);
-  border-radius: 20px; padding: 2px 9px; font-size: 12px; color: var(--muted);
+  border-radius: 20px; padding: 2px 9px; font-size: var(--fs-1); color: var(--muted);
 }
 .chip.status { color: var(--text); }
 .chip.tasks { color: var(--accent); }
@@ -197,7 +197,7 @@ input:focus-visible,
 .chip.blocked { color: var(--warn); border-color: rgba(210,153,34,0.4); }
 /* What a card's next stage needs (FEAT-205): plain text, not a pill, so it never reads as the item's
    status — a status is the column the card sits in. */
-.hint { font-size: 12px; font-style: italic; padding: 2px 2px; color: var(--muted); }
+.hint { font-size: var(--fs-1); font-style: italic; padding: 2px 2px; color: var(--muted); }
 .hint-needs, .hint-waiting { color: var(--warn); }
 .hint-ready { color: var(--done); }
 /* A control, and it must be one at a glance (FEAT-081). Its own raised surface and a shadow, so it
@@ -206,7 +206,7 @@ input:focus-visible,
    label surface did not deliver. */
 .btn {
   background: var(--control); border: 1px solid var(--border);
-  border-radius: 8px; padding: 6px 12px; color: var(--text); font-size: 13px;
+  border-radius: 8px; padding: 6px 12px; color: var(--text); font-size: var(--fs-1);
   font-family: inherit; font-weight: 500; cursor: pointer;
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
@@ -283,10 +283,10 @@ input:focus-visible,
 .tasklist.big li { padding: 9px 0; }
 .taskkey {
   background: var(--panel-2); border: 1px solid var(--border);
-  border-radius: 6px; padding: 1px 7px; font-size: 12px; color: var(--muted);
+  border-radius: 6px; padding: 1px 7px; font-size: var(--fs-1); color: var(--muted);
 }
 .tasktext { flex: 1; }
-.taskbadge { font-size: 11px; border-radius: 12px; padding: 2px 9px; border: 1px solid var(--border); }
+.taskbadge { font-size: var(--fs-1); border-radius: 12px; padding: 2px 9px; border: 1px solid var(--border); }
 .taskbadge.todo { color: var(--todo); }
 .taskbadge.wip { color: var(--wip); border-color: rgba(210,153,34,0.4); }
 .taskbadge.done { color: var(--done); border-color: rgba(63,185,80,0.4); }
@@ -311,7 +311,7 @@ input:focus-visible,
 /* ---- feature page ---- */
 .feature-meta { display: flex; align-items: center; gap: 8px; margin: 10px 0 18px; flex-wrap: wrap; }
 .section { margin: 18px 0; }
-.section h2 { font-size: 16px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.section h2 { font-size: var(--fs-3); border-bottom: 1px solid var(--border); padding-bottom: 6px; }
 
 /* ---- milestones / schedule ---- */
 .ms-list, .sched-card, .ms-card { margin-top: 14px; }
@@ -366,19 +366,19 @@ input:focus-visible,
 /* A diagram that does not draw (FEAT-200): its source, and the error with its line under it. */
 .markdown .diagram-failed { margin: 14px 0; }
 .markdown pre.diagram-source { margin: 0; border-color: var(--warn); }
-.diagram-error { color: var(--warn); font-size: 13px; margin-top: 6px; }
+.diagram-error { color: var(--warn); font-size: var(--fs-1); margin-top: 6px; }
 /* The review page's list of diagrams that do not parse; Approve waits for it to empty. */
 .diagram-problems {
   margin: 12px 0; padding: 8px 14px;
   border: 1px solid var(--warn); border-radius: var(--radius); background: var(--panel-2);
 }
-.diagram-problems h3 { font-size: 14px; margin: 4px 0 6px; color: var(--warn); }
+.diagram-problems h3 { font-size: var(--fs-2); margin: 4px 0 6px; color: var(--warn); }
 .diagram-problems ul { margin: 0; padding-left: 18px; }
 .diagram-problems li { margin: 4px 0; }
 .markdown { max-width: var(--prose-max); }
 .markdown img { max-width: 100%; height: auto; border-radius: 6px; }
-.markdown h1 { font-size: 22px; }
-.markdown h2 { font-size: 18px; }
+.markdown h1 { font-size: var(--fs-5); }
+.markdown h2 { font-size: var(--fs-4); }
 .markdown pre {
   background: var(--bg); border: 1px solid var(--border);
   border-radius: 8px; padding: 12px; overflow-x: auto;
@@ -394,7 +394,7 @@ input:focus-visible,
 /* ---- recent activity panel ---- */
 .activity { margin-top: 26px; }
 .activity h2 {
-  font-size: 15px; color: var(--muted); font-weight: 600;
+  font-size: var(--fs-3); color: var(--muted); font-weight: 600;
   border-bottom: 1px solid var(--border); padding-bottom: 6px;
 }
 .activity-list { list-style: none; margin: 10px 0 0; padding: 0; }
@@ -404,11 +404,11 @@ input:focus-visible,
 }
 .activity-list li:first-child { border-top: none; }
 .activity-msg { color: var(--text); }
-.activity-meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.activity-meta { color: var(--muted); font-size: var(--fs-1); white-space: nowrap; }
 
 /* ---- feature field badges (kind / priority / labels) ---- */
 .badge {
-  font-size: 11px; border-radius: 6px; padding: 1px 7px;
+  font-size: var(--fs-1); border-radius: 6px; padding: 1px 7px;
   border: 1px solid var(--border); color: var(--muted);
 }
 .badge.kind { color: var(--accent); border-color: rgba(91,140,255,0.4); text-transform: lowercase; }
@@ -431,7 +431,7 @@ input:focus-visible,
 .board-search:focus { outline: none; border-color: var(--accent); }
 
 /* ---- per-page selector ---- */
-.per-page { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.per-page { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: var(--fs-1); }
 .per-page select {
   padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border);
   background: var(--panel-2); color: var(--text); font: inherit; cursor: pointer;
@@ -444,7 +444,7 @@ input:focus-visible,
   padding: 8px 10px; border-top: 1px solid var(--border);
 }
 .pager button {
-  width: 26px; height: 24px; line-height: 1; font-size: 15px;
+  width: 26px; height: 24px; line-height: 1; font-size: var(--fs-3);
   border-radius: 6px; border: 1px solid var(--border);
   background: var(--panel-2); color: var(--text); cursor: pointer;
 }
@@ -455,7 +455,7 @@ input:focus-visible,
 .markdown pre { position: relative; }
 .code-copy {
   position: absolute; top: 6px; right: 6px;
-  font-size: 11px; padding: 2px 8px; border-radius: 6px; cursor: pointer;
+  font-size: var(--fs-1); padding: 2px 8px; border-radius: 6px; cursor: pointer;
   background: var(--panel); border: 1px solid var(--border); color: var(--muted);
   opacity: 0; transition: opacity 0.15s;
 }
@@ -478,7 +478,7 @@ input:focus-visible,
     padding: 8px 12px;
   }
   .tabs { margin-left: 0; order: 3; width: 100%; overflow-x: auto; }
-  .crumbs { font-size: 13px; }
+  .crumbs { font-size: var(--fs-1); }
   /* On a phone the spacer would push the toggle to its own row; keep it inline. */
   .topbar .spacer { display: none; }
   .topbar .build { display: none; }
@@ -486,7 +486,7 @@ input:focus-visible,
 
   .content { padding: 14px; }
   .page-head { flex-wrap: wrap; }
-  .page-head h1 { font-size: 19px; }
+  .page-head h1 { font-size: var(--fs-4); }
 
   /* Stack the board columns vertically so each is full-width and scrolls the page, not sideways. */
   .board {
@@ -504,7 +504,7 @@ input:focus-visible,
 
 /* ---- portfolio / program hierarchy (FEAT-030) ---- */
 .portfolio section { margin-bottom: 28px; }
-.portfolio h2 { font-size: 1.05rem; margin: 0 0 10px; }
+.portfolio h2 { font-size: var(--fs-3); margin: 0 0 10px; }
 .rollup-program { margin-bottom: 14px; }
 .rollup-row { display: flex; align-items: center; gap: 12px; padding: 3px 0; }
 .rollup-row.program { font-weight: 600; }
@@ -513,7 +513,7 @@ input:focus-visible,
 .rollup-name { flex: 0 0 240px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rollup-bar { position: relative; flex: 1; height: 16px; background: var(--panel-2); border-radius: 8px; overflow: hidden; min-width: 80px; }
 .rollup-bar-fill { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 8px; }
-.rollup-pct { position: relative; display: block; font-size: 0.72rem; line-height: 16px; padding-left: 6px; color: var(--text); }
+.rollup-pct { position: relative; display: block; font-size: var(--fs-1); line-height: 16px; padding-left: 6px; color: var(--text); }
 .board-lanes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 /* The portfolio's lanes and cards match the project board's columns and cards (FEAT-096). They
    used `--surface`/`--surface-2`, which the theme never defines — so the light fallbacks applied in
@@ -523,7 +523,7 @@ input:focus-visible,
 .lane-cards { display: flex; flex-direction: column; gap: 8px; }
 .board-card { display: block; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; text-decoration: none; color: var(--text); }
 .board-card:hover { border-color: var(--accent); text-decoration: none; }
-.card-top { display: flex; justify-content: space-between; font-size: 0.72rem; opacity: 0.7; }
+.card-top { display: flex; justify-content: space-between; font-size: var(--fs-1); opacity: 0.7; }
 .card-title { font-weight: 500; margin: 2px 0; }
 .card-meta { display: flex; gap: 10px; flex-wrap: wrap; }
 .global-nav { display: flex; gap: 4px; margin-left: 8px; }
@@ -558,7 +558,7 @@ input:focus-visible,
 .notes-editor {
   max-width: 100%;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.85rem;
+  font-size: var(--fs-2);
 }
 
 /* ---- sprint burndown (FEAT-123) ---- */
@@ -569,22 +569,22 @@ input:focus-visible,
 .bd-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .bd-dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
 .bd-hit { fill: transparent; cursor: default; }
-.bd-label { fill: var(--muted); font-size: 11px; }
+.bd-label { fill: var(--muted); font-size: var(--fs-1); }
 .bd-table { border-collapse: collapse; margin-top: 6px; }
 .bd-table th, .bd-table td { padding: 2px 10px; text-align: left; }
 
 /* ---- workflow page: cadence, git model, guard rails (FEAT-213) ---- */
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 4px 0 0; }
 .facts-row { display: contents; }
-.facts dt { color: var(--muted); font-size: 13px; }
-.facts dd { margin: 0; color: var(--text); font-size: 13px; }
+.facts dt { color: var(--muted); font-size: var(--fs-1); }
+.facts dd { margin: 0; color: var(--text); font-size: var(--fs-1); }
 .facts code, .guard-list code, .warn-box code, .workflow-page p code {
   background: var(--panel-2); padding: 1px 5px; border-radius: 4px; color: var(--text);
 }
 .guard-list { list-style: none; padding: 0; margin: 0; }
 .guard-list li {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px;
-  padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; color: var(--text);
+  padding: 6px 0; border-top: 1px solid var(--border); font-size: var(--fs-1); color: var(--text);
 }
 .guard-list li:first-child { border-top: none; }
 .warn-box {
